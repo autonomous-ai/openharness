@@ -1,7 +1,13 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/terminal/terminal_binary.dart';
+import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/widgets/pane_grid.dart';
+import 'package:harness/widgets/terminal_panel.dart';
+import 'package:xterm/xterm.dart';
 
 import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show createApp;
@@ -11,20 +17,24 @@ import 'swarm_state_test.dart' show createApp;
 /// pretending the start failed.
 void main() {
   late AppNotifier app;
+  late List<TerminalBinaryFrame> input;
+  late TerminalSession session;
 
   setUp(() {
     app = createApp();
     app.stateOf('m')!
       ..nodeOnline = true
       ..terminalCapabilityAvailable = true;
-    app.adoptSessionForTest(terminal('a0', []));
+    input = [];
+    session = terminal('a0', input);
+    app.adoptSessionForTest(session);
   });
 
   tearDown(() => app.dispose());
 
   /// Through the daemon's own push, so the window-band rule in `_upsertAgent`
   /// is exercised rather than stepped over.
-  Future<void> agentWith({required String launchError}) =>
+  Future<void> agentWith({String? launchError, String state = 'failed'}) =>
       app.handleEventForTest('m', {
         'type': 'agent_synced',
         'payload': {
@@ -34,7 +44,7 @@ void main() {
             'engine': 'codex',
             'terminal': {'available': true},
             'launch': {
-              'state': 'failed',
+              'state': state,
               'error': launchError,
               'detail': 'The daemon said so.',
             },
@@ -59,15 +69,90 @@ void main() {
   testWidgets('a resume the daemon could not confirm offers Check again', (
     tester,
   ) async {
-    // The engine is usually still running in the pane — output keeps arriving
-    // while the keyboard is locked — so the pane says that and offers the cheap
-    // question, not a relaunch.
     await agentWith(launchError: 'RESUME_UNCONFIRMED');
     await pump(tester);
     expect(find.text('Not confirmed'), findsWidgets);
-    expect(find.textContaining('still running here'), findsWidgets);
+    expect(find.textContaining('Answer setup prompts below'), findsWidgets);
     expect(find.widgetWithText(FilledButton, 'Check again'), findsOneWidget);
     expect(find.text('Start failed'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  for (final state in ['starting', 'RESUME_UNCONFIRMED', 'LAUNCH_TIMEOUT']) {
+    testWidgets(
+      '$state keeps setup prompts visible and accepts keyboard input',
+      (tester) async {
+        await agentWith(
+          state: state == 'starting' ? 'starting' : 'failed',
+          launchError: state,
+        );
+        session.terminal.write('[oh-my-zsh] Would you like to update? [Y/n] ');
+        await pump(tester);
+        final panel = tester.widget<TerminalPanel>(find.byType(TerminalPanel));
+        expect(panel.readOnly, isFalse);
+        expect(session.acceptsInput, isTrue);
+        expect(
+          tester.getTopLeft(find.byType(TerminalView)).dy,
+          greaterThan(
+            tester
+                .getBottomLeft(
+                  find
+                      .textContaining(
+                        state == 'starting'
+                            ? 'You can answer setup prompts'
+                            : state == 'RESUME_UNCONFIRMED'
+                            ? 'Answer setup prompts below'
+                            : 'The daemon said so.',
+                      )
+                      .last,
+                )
+                .dy,
+          ),
+        );
+        await tester.tap(find.byType(TerminalView));
+        await tester.pump();
+        expect(session.acceptsInput, isTrue, reason: '${session.status}');
+        expect(
+          tester.widget<TerminalView>(find.byType(TerminalView)).readOnly,
+          isFalse,
+        );
+        expect(
+          tester
+              .widget<TerminalView>(find.byType(TerminalView))
+              .focusNode!
+              .hasFocus,
+          isTrue,
+        );
+        tester.testTextInput.enterText('y');
+        // setUp constructs the session outside the widget fake-async zone.
+        // Let its ordered transport tail complete in that same zone.
+        await tester.runAsync(() async {});
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(utf8.decode(input.expand((frame) => frame.bytes).toList()), 'y');
+        await agentWith(state: 'ready');
+        await tester.pump();
+        expect(
+          tester.widget<TerminalPanel>(find.byType(TerminalPanel)).notice,
+          isNull,
+        );
+        expect(app.panes.single.session, same(session));
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
+  testWidgets('an offline startup still keeps its terminal read only', (
+    tester,
+  ) async {
+    await agentWith(state: 'starting');
+    app.stateOf('m')!.nodeOnline = false;
+    await pump(tester);
+    expect(
+      tester.widget<TerminalPanel>(find.byType(TerminalPanel)).readOnly,
+      isTrue,
+    );
+    expect(input, isEmpty);
     await tester.pumpWidget(const SizedBox());
   });
 

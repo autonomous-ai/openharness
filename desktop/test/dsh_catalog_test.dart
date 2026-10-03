@@ -318,6 +318,56 @@ void main() {
     },
   );
 
+  test('only an explicit verified:false marks a package unverified', () {
+    expect(DshEntry.fromJson(_circuit)!.unverified, isFalse);
+    expect(
+      DshEntry.fromJson({..._circuit, 'verified': true})!.unverified,
+      isFalse,
+    );
+    expect(
+      DshEntry.fromJson({..._circuit, 'verified': false})!.unverified,
+      isTrue,
+    );
+  });
+
+  test(
+    'an unreviewed package is not installed or updated until the person trusts it',
+    () async {
+      const community = {
+        'id': 'someone/thing',
+        'name': 'Thing',
+        'engine': 'claude',
+        'installed': false,
+        'verified': false,
+      };
+      final connection = _Connection()
+        ..answer = (type, _) => Future.value(
+          type == 'dsh_list'
+              ? {
+                  'dsh': [
+                    {...community, 'installed': true},
+                  ],
+                }
+              : {'ok': true},
+        );
+      final app = createApp(connectionForTest: (_) => connection);
+      addTearDown(app.dispose);
+      app.stateOf('m')!.dsh.replace([DshEntry.fromJson(community)!]);
+
+      final refused = await app.installDsh('m', 'someone/thing');
+      expect(refused, contains('not reviewed by Harness'));
+      expect(await app.updateDsh('m', 'someone/thing'), isNotNull);
+      expect(connection.calls, isEmpty);
+      expect(app.stateOf('m')!.dsh.runs['someone/thing'], isNull);
+
+      expect(
+        await app.installDsh('m', 'someone/thing', trustUnverified: true),
+        isNull,
+      );
+      expect(connection.calls.first.$1, 'dsh_install');
+    },
+  );
+
   test('a refused install says so and stays retryable', () async {
     final connection = _Connection()
       ..answer = (type, _) => Future.error(

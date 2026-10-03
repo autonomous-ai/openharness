@@ -28,7 +28,11 @@ environment:
 # the latest version available on pub.dev. To see which dependencies have newer
 # versions available, run `flutter pub outdated`.
 dependencies:
+  web: ^1.1.1
+  archive: ^4.0.9
   flutter:
+    sdk: flutter
+  flutter_web_plugins:
     sdk: flutter
   # Natural ordering for numbered agents, projects, and completion candidates.
   collection: ^1.19.1
@@ -49,6 +53,11 @@ dependencies:
   # Pure Dart, so it registers no native plugin and leaves the macOS SPM
   # package list untouched — see CLAUDE.md on what a plugin costs here.
   unorm_dart: ^0.3.2
+  # The QR in Harness ▸ Add Phone… (`widgets/add_phone_dialog.dart`). The bare
+  # encoder, NOT `qr_flutter`: the dialog paints the modules itself in a few
+  # lines, and pure Dart registers no native plugin — see CLAUDE.md on what a
+  # plugin costs here.
+  qr: ^3.0.2
   # Keep the terminal core in-tree until the upstream circular-buffer ownership
   # fix is released. See third_party/xterm/lib/src/core/buffer/buffer.dart.
   xterm:
@@ -59,6 +68,8 @@ dependencies:
   # XDG portal on Linux. Used ONLY for a machine that is this computer — see
   # `widgets/new_agent_dialog.dart`.
   file_selector: ^1.0.3
+  # `core/process_responsibility.dart`: a native buffer for `proc_pidpath`. Pure Dart, no plugin.
+  ffi: ^2.2.0
   # Reads OpenCode's own database for the usage ledger — `usage/ledger/`. The
   # Dart-only FFI package on purpose, NOT `sqlite3_flutter_libs`: this dlopens
   # the sqlite the OS already ships (every macOS has one, every Ubuntu desktop
@@ -102,12 +113,23 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
+  fonts:
+    - family: Roboto Mono
+      fonts:
+        - asset: assets/fonts/roboto-mono/RobotoMono.ttf
+        - asset: assets/fonts/roboto-mono/RobotoMono-Italic.ttf
+          style: italic
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
   assets:
+    - assets/daemon-art/alignment.json
+    - assets/daemon-art/styles.json
+    - assets/daemon-art/slot/
+    - assets/daemon-art/portrait/
+    - assets/fonts/roboto-mono/OFL.txt
     - assets/machines.svg
     - assets/models.svg
     - assets/harnesses.svg
@@ -124,7 +146,11 @@ flutter:
     - assets/harnesses.png
     - assets/models.png
     - assets/model-icons/
+    - assets/octicons/
+    # The marks on the login screen's two buttons (`widgets/sign_in_provider_button.dart`).
+    - assets/sign-in/
     - assets/harness_device_studio.jpg
+    - assets/devices/
     - assets/harness_store_card.jpg
     - assets/swarm-wallpapers/
 

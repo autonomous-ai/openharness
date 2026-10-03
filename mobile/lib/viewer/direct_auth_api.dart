@@ -1,6 +1,5 @@
 import 'package:dio/dio.dart';
 
-import '../api/api_client.dart';
 import '../core/config.dart';
 import '../logging/http_log.dart';
 
@@ -17,7 +16,7 @@ class DirectAuthException implements Exception {
   String toString() => message;
 }
 
-/// What `/api/auth/exchange` and `/api/auth/refresh` hand back.
+/// What `/api/auth/refresh` and `/api/auth/handoff/redeem` hand back.
 class IssuedTokens {
   const IssuedTokens({
     required this.token,
@@ -72,36 +71,44 @@ class DirectAuthApi {
       'Could not renew your sign-in. That is usually the sign-in service having a moment — '
       'if it keeps happening, sign out and sign in again.';
 
-  Future<({String authorizeUrl, String tx})> authorizeNative(
-    String redirectUri,
-  ) async {
-    final data = unwrapApiResponse(
-      await _dio.post(
-        '/api/auth/authorize-native',
-        data: {'redirectUri': redirectUri, 'autonomousEnv': config.autonomousEnv},
-      ),
-    );
-    final url = data is Map ? data['authorizeUrl'] : null;
-    final tx = data is Map ? data['tx'] : null;
-    if (url is! String || url.isEmpty || tx is! String || tx.isEmpty) {
-      throw const DirectAuthException('The server did not return a sign-in page.');
+  /// Trade the one-time code in a signed-in computer's Add Phone QR for a
+  /// session of this phone's own — scan to sign in, no emailed code. [label]
+  /// is what the phone calls itself, for the account's list of devices.
+  ///
+  /// A spent or expired code is the backend's 401 and its own sentence.
+  Future<IssuedTokens> redeemHandoff(
+    String code, {
+    required String label,
+  }) async {
+    final Response<dynamic> res;
+    try {
+      res = await _dio.post(
+        '/api/auth/handoff/redeem',
+        data: {'code': code, 'label': label},
+      );
+    } on DioException {
+      throw const DirectAuthException(
+        'Could not reach Harness. Check your connection and scan again.',
+      );
     }
-    return (authorizeUrl: url, tx: tx);
+    final body = res.data is Map ? res.data as Map : const {};
+    final tokens = body['success'] == true
+        ? IssuedTokens.fromData(body['data'])
+        : null;
+    if (tokens != null) return tokens;
+    final error = body['error'] is Map ? body['error'] as Map : const {};
+    final message = error['message'];
+    throw DirectAuthException(
+      message is String && message.isNotEmpty
+          ? message
+          : 'That code didn’t work. Scan the new one.',
+    );
   }
 
-  Future<IssuedTokens> exchange({
-    required String code,
-    required String state,
-    required String tx,
-  }) async {
-    final data = unwrapApiResponse(
-      await _dio.post(
-        '/api/auth/exchange',
-        data: {'code': code, 'state': state, 'tx': tx},
-      ),
-    );
-    return IssuedTokens.fromData(data) ??
-        (throw const DirectAuthException('Sign-in returned no access token.'));
+  /// End a session the backend issued itself ([SessionIssuer.harness]).
+  /// Best effort: the caller clears this phone's copy whatever the answer.
+  Future<void> revoke(String refreshToken) async {
+    await _dio.post('/api/auth/revoke', data: {'refreshToken': refreshToken});
   }
 
   /// authSession.ts `refreshRequest`, down to its one subtle rule: only a 401 or

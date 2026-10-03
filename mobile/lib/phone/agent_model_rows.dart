@@ -86,7 +86,7 @@ class ModelSectionHeading extends StatelessWidget {
 ///
 /// ⚠️ **The tick takes the leading slot, and the row wears the accent wash.**
 /// Both, because that is this app's own way of saying "this is the one" — see
-/// [AppMenuItem], where the tick replaces the row's glyph rather than sitting
+/// the desktop's `AppMenuItem`, where the tick replaces the row's glyph rather than sitting
 /// beside it so the column keeps one left edge. A fourth column for the tick
 /// would leave every unselected row with a gap the eye must cross to reach the
 /// name; the wash alone would be easy to miss at arm's length.
@@ -269,7 +269,7 @@ class ModelSheetTitle extends StatelessWidget {
           ),
           Text(
             agentName == null
-                ? 'Where this agent runs'
+                ? 'Where this harness runs'
                 : 'Where $agentName runs',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,

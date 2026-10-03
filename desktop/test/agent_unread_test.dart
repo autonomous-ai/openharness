@@ -16,10 +16,56 @@ void main() {
     expect(unread.kindFor('m1', 'a1'), isNull);
   });
 
+  test(
+    'fresh same-kind events and app instances cannot reuse a read token',
+    () {
+      unread.mark('m1', 'a', AlertKind.done);
+      final first = unread.readTokenFor('m1', 'a');
+      unread.mark('m1', 'a', AlertKind.done);
+      expect(unread.readTokenFor('m1', 'a'), first);
+      unread.mark('m1', 'a', AlertKind.done, fresh: true);
+      final second = unread.readTokenFor('m1', 'a')!;
+      expect(second, isNot(first));
+      expect(second.length, lessThan(64));
+      expect(RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(second), isTrue);
+      final other = AgentUnread()..mark('m1', 'a', AlertKind.done);
+      expect(other.readTokenFor('m1', 'a'), isNot(second));
+      other.dispose();
+      unread.clear('m1', 'a');
+      expect(unread.readTokenFor('m1', 'a'), isNull);
+    },
+  );
+
   test('a mark says WHICH kind of news it is', () {
     unread.mark('m1', 'a1', AlertKind.done);
     expect(unread.kindFor('m1', 'a1'), AlertKind.done);
     expect(unread.count, 1);
+  });
+
+  test('preview and time belong to the unread receipt and leave with it', () {
+    final first = DateTime(2026, 9, 30, 12);
+    unread.mark('m1', 'a1', AlertKind.done, message: 'First result', at: first);
+    unread.mark(
+      'm1',
+      'a1',
+      AlertKind.done,
+      message: 'Duplicate',
+      at: first.add(const Duration(minutes: 1)),
+    );
+    expect(unread.messageFor('m1', 'a1'), 'First result');
+    expect(unread.receivedAtFor('m1', 'a1'), first);
+    unread.mark('m1', 'a1', AlertKind.done, fresh: true);
+    expect(
+      unread.messageFor('m1', 'a1'),
+      isNull,
+      reason: 'Never reuse a previous turn\'s message',
+    );
+    unread.clear('m1', 'a1');
+    expect(unread.receivedAtFor('m1', 'a1'), isNull);
+    unread.mark('m1', 'a1', AlertKind.done, message: 'New result');
+    unread.clearAll();
+    expect(unread.messageFor('m1', 'a1'), isNull);
+    expect(unread.receivedAtFor('m1', 'a1'), isNull);
   });
 
   test('the newest kind wins — a finished agent that then asks is waiting', () {
@@ -74,20 +120,26 @@ void main() {
     expect(rebuilds, 1);
   });
 
-  // ── Parity with the dial ───────────────────────────────────────────────────
-  // The badge here and the pill there count the same finished turns, so this
-  // store holds as many agents as the dial's drawer holds rows, and lets go of
-  // them the same way.
-
-  group('as many as the dial holds', () {
-    test('at most as many agents as the dial has rows', () {
-      for (var i = 0; i < AgentUnread.capacity + 3; i++) {
+  group('bounded desktop inbox', () {
+    test('retains nine notifications without the dial drawer evicting one', () {
+      for (var i = 0; i < 9; i++) {
         unread.mark('m1', 'a$i', AlertKind.done);
+      }
+      expect(unread.count, 9);
+      expect(unread.kindFor('m1', 'a0'), AlertKind.done);
+    });
+
+    test('evicts the oldest entry only at the desktop capacity', () {
+      for (var i = 0; i < AgentUnread.capacity + 3; i++) {
+        unread.mark('m1', 'a$i', AlertKind.done, message: 'Result $i');
       }
 
       expect(unread.count, AgentUnread.capacity);
       expect(unread.kindFor('m1', 'a0'), isNull, reason: 'the oldest went');
       expect(unread.kindFor('m1', 'a2'), isNull);
+      expect(unread.messageFor('m1', 'a2'), isNull);
+      expect(unread.receivedAtFor('m1', 'a2'), isNull);
+      expect(unread.messageFor('m1', 'a3'), 'Result 3');
       expect(unread.kindFor('m1', 'a3'), isNotNull, reason: 'the rest stayed');
     });
 

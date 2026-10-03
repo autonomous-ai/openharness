@@ -8,6 +8,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/widgets/harness_start_page.dart';
+import 'package:harness/widgets/swarm_switcher.dart';
 
 import 'support/real_fonts.dart';
 import 'swarm_state_test.dart' show createApp;
@@ -121,8 +123,9 @@ void main() {
         // card follows it on the same row, never wrapped below it.
         expect(storeRect.left, closeTo(fieldRect.left, 1));
         expect(deviceRect.left, closeTo(storeRect.right + 16, 1));
-        expect(deviceRect.bottom, closeTo(height - 80, 1));
-        expect(storeRect.bottom, closeTo(height - 80, 1));
+        final pageRect = tester.getRect(find.byType(HarnessStartPage));
+        expect(deviceRect.bottom, closeTo(pageRect.bottom - 80, 1));
+        expect(storeRect.bottom, closeTo(pageRect.bottom - 80, 1));
         expect(find.text('Meet the\nHarness device'), findsOneWidget);
         expect(create.hitTestable(), findsOneWidget);
         expect(open.hitTestable(), findsOneWidget);
@@ -152,7 +155,26 @@ void main() {
         await tester.pump();
         final results = find.byKey(const ValueKey('harness-start-results'));
         expect(results, findsOneWidget);
-        expect(tester.getRect(results).height, greaterThan(140));
+        // Even the shortest workspace keeps multiple complete choices visible
+        // above the fixed footer; the status bar consumes its own window space.
+        final choices = tester
+            .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+            .search
+            .rows
+            .take(2)
+            .toList();
+        expect(choices, hasLength(2));
+        for (final choice in choices) {
+          final rowRect = tester.getRect(find.byKey(ValueKey(choice.id)));
+          expect(
+            rowRect.top,
+            greaterThanOrEqualTo(tester.getRect(results).top),
+          );
+          expect(
+            rowRect.bottom,
+            lessThanOrEqualTo(tester.getRect(results).bottom),
+          );
+        }
         expect(tester.getRect(results).width, tester.getRect(field).width);
         expect(tester.getRect(field).left, closeTo(fieldRect.left, 1));
         expect(tester.getRect(field).right, closeTo(fieldRect.right, 1));

@@ -189,9 +189,33 @@ Escape or Cmd-Shift-J closes the experimental prompt.
     tabs, the selected one should remain visible. A manually renamed tab
     should keep its name when panes are added.
 16. **Arrange panes.** Use Cmd-H/J/K/L to focus directionally,
-    Cmd-Shift-arrows to move a pane, Cmd-Enter to zoom/restore, and Cmd-; to
-    return to the previous pane. Moves should preserve the other panes and
-    the running sessions.
+    Cmd-Shift-arrows to move a pane, and Cmd-Enter to zoom/restore. Run Return
+    to the last pane to switch back. Moves should preserve the other panes and
+    the running sessions. Cmd-I opens Models in Cmd-P with `:` already entered.
+    Models have Subscriptions, APIs, Your models, the downloads (headed
+    `Get for this Mac · 64 GB`) and Shared with you sections, with downloaded
+    models first in Your models. Downloads fit half of shared memory (all of
+    an NVIDIA card's free VRAM) with a 64K context; the top five are listed — 3-bit quants or better, fast enough
+    (~20 tok/s or more) first, then bigger, one version per model; the rest
+    appear when expanding [ More models (N) ] or searching explicitly;
+    [ Show fewer ] collapses them. No download is another quantization of a
+    model already there. Rows line up size and speed columns; usable rows say
+    Use, downloadable rows Get, the pane's own model ● In use, and only live
+    rows are green. Other models
+    are dimmed; Enter must not switch focus or operate on them. Duplicate
+    subscriptions include their account label. Shared rows include the machine
+    name. From a live harness, Enter uses a model for that pane, starting
+    installed weights when needed; Get prepares uninstalled weights and stays
+    open — unless a live harness can run the model, when Get downloads, starts
+    and switches in one step and Esc stops only the switch. The right pane
+    shows the download size against free disk, whether it fits in memory, the
+    estimated speed and context, and has one contextual Get/Use/Stop button. Tab switches
+    panes; arrows navigate within the active pane. Verify this in Cmd-N as well
+    as Cmd-P's model and machine scopes, including inline API and machine forms.
+    Search a host by either its Harness name (M2) or Grid hostname (mac.lan);
+    inventory and controls should be the same. Legacy Get explains when it
+    downloads and starts together. Add/edit/delete API forms stay in Cmd-P.
+
 17. **Resize panes.** Run Resize panes. Use arrows, Shift-arrows for larger
     changes, Tab to change divider, and Escape to finish. The temporary key
     guide should explain the mode and disappear afterward.

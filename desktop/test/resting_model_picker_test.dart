@@ -3,6 +3,7 @@
 // row whose computers seem offline — and, with a daemon that sends none of it, the menu it always
 // drew.
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
@@ -77,16 +78,16 @@ void main() {
     expect(textsUnder(tester), [
       'Qwen3.5-4B',
       'Search models or machines',
-      'SUBSCRIPTION',
+      'Subscription',
       'Anthropic',
       'Checking usage…',
-      'ON YOUR MACHINES',
+      'On your machines',
       '2',
       'Qwen3.5-4B',
       'macbook',
       'LFM2.5-8B',
       'studio · seems offline',
-      'SHARED · TEAM',
+      'Shared · team',
       '1',
       'DeepSeek-V4-Flash',
       'scholes-60001',
@@ -125,8 +126,7 @@ void main() {
         ),
       ]);
       await open(tester);
-      const subtitle =
-          'Asleep · starts when you send a message (about 10–30 s) · list from 9 h ago';
+      const subtitle = 'Asleep 9h ago';
       expect(find.text(subtitle), findsOneWidget);
       expect(
         find.byTooltip(
@@ -136,7 +136,7 @@ void main() {
       );
       // Under the heading, above the list it describes — and the list is still there to pick from.
       expect(
-        top(tester, find.text('ON YOUR MACHINES')) <
+        top(tester, find.text('On your machines')) <
             top(tester, find.text(subtitle)),
         isTrue,
       );
@@ -157,7 +157,7 @@ void main() {
       ]);
       await open(tester);
       // A shared section that lists nothing is drawn while it has something to offer.
-      expect(find.text('SHARED · TEAM'), findsOneWidget);
+      expect(find.text('Shared · team'), findsOneWidget);
       expect(find.text('Show models'), findsOneWidget);
       expect(find.text('usually 15–40 s'), findsOneWidget);
       expect(saysGrid, findsNothing);
@@ -203,7 +203,7 @@ void main() {
       section('team', state: 'asleep', lastKnownAge: 3600),
     ]);
     await open(tester);
-    expect(find.text('SHARED · TEAM'), findsOneWidget);
+    expect(find.text('Shared · team'), findsOneWidget);
     expect(
       find.text('Nobody was serving here when it went to sleep'),
       findsOneWidget,
@@ -322,7 +322,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Switch anyway?'), findsOneWidget);
       expect(saysGrid, findsNothing);
-      await tester.tap(find.text('Cancel'));
+      expect(
+        Focus.of(tester.element(find.text('Cancel'))).hasPrimaryFocus,
+        isTrue,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       expect(find.text('Switch anyway?'), findsNothing);
       expect(picked, isNull);

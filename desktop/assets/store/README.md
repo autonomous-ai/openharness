@@ -147,6 +147,7 @@ screenshots, with the corresponding software notices preserved.
 | `covers/orca-slicer.jpg` | `store/showcase/orca-slicer/review.jpg` |
 | `covers/score.jpg` | `store/showcase/score/ensemble.jpg` |
 | `covers/yosys.jpg` | `store/showcase/yosys/fibonacci-cpu.jpg` |
+| `covers/trailofbits-skills.jpg` | `store/showcase/trailofbits-skills/nodegoat-audit.jpg` |
 
 For wrapped tools with no useful published artwork, the cover shows an original project
 output or Harness's own viewer. For example, Godogen's upstream thumbnail is a text title

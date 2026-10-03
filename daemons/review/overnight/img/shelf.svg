@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="440" height="159" viewBox="0 0 440 159" role="img" aria-label="daemon zoo">
+  <rect x="0.5" y="0.5" width="439" height="158" rx="6" fill="#121212" stroke="#3a3a3a"/>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" font-variant-ligatures="none">
+  <text x="18" y="34" fill="#d0d0d0" xml:space="preserve">zoo: drop 1 unix  4/9  +secret</text>
+  <text x="18" y="51" fill="#d0d0d0" xml:space="preserve"></text>
+  <text x="18" y="68" xml:space="preserve"><tspan fill="#5faf5f">\[o|o]/   </tspan><tspan fill="#5fafaf">&gt;&lt;((o)&gt;   </tspan><tspan fill="#626262">[ ? ]     </tspan><tspan fill="#626262">[ ? ]     </tspan><tspan fill="#87af5f">&lt; o_o &gt;_</tspan></text>
+  <text x="18" y="85" fill="#d0d0d0" xml:space="preserve">tim       fish      #03       #04       vim</text>
+  <text x="18" y="102" fill="#d0d0d0" xml:space="preserve"></text>
+  <text x="18" y="119" xml:space="preserve"><tspan fill="#626262">[ ? ]     </tspan><tspan fill="#626262">[ ? ]     </tspan><tspan fill="#87afd7">&gt; ;o;o;   </tspan><tspan fill="#626262">[ ? ]     </tspan><tspan fill="#949494">.   .</tspan></text>
+  <text x="18" y="136" fill="#d0d0d0" xml:space="preserve">#06       #07       fzf       #09       grue</text>
+  </g>
+</svg>

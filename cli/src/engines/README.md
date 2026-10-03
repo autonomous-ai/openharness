@@ -250,10 +250,10 @@ the bare name silently finds nothing.
 
 ### Process identity matrix
 
-Process discovery is evidence-based and shared by tmux and Herdr. Resolve commands in the same
-interactive shell used to launch them, follow symlinks, then compare the running image by local
-`(device,inode)` identity (`/proc/<pid>/exe` on Linux, batched `lsof` on macOS). Basename and package
-entrypoint rules remain fallbacks for launchers that exec an interpreter or rewrite their process title.
+Process discovery is evidence-based. Resolve commands in the same interactive shell used to launch
+them, follow symlinks, then compare the running image by local `(device,inode)` identity
+(`/proc/<pid>/exe` on Linux, batched `lsof` on macOS). Basename and package entrypoint rules remain
+fallbacks for launchers that exec an interpreter or rewrite their process title.
 
 | Engine | Supported runtime evidence |
 |---|---|

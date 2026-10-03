@@ -88,6 +88,7 @@ class DshEntry {
     this.installedCommit,
     this.availableCommit,
     this.updateAvailable = false,
+    this.unverified = false,
   });
 
   /// `owner/name` — the install directory on the machine and the wire id.
@@ -149,6 +150,15 @@ class DshEntry {
   final bool updateAvailable;
   bool get hasUpdate => installed && !linked && updateAvailable;
 
+  /// The machine says Harness has NOT reviewed this package (`verified: false`
+  /// in `dsh_list`): a community entry whose code lives in someone else's
+  /// repository. Installing or updating it runs that code's setup script as
+  /// the person, so it is never done without their say-so. The daemon decides
+  /// it — an entry cannot mark itself verified (cli `parseStoreCatalog`). An
+  /// older daemon that sends no `verified` at all offered built-ins only, so
+  /// only an explicit false counts.
+  final bool unverified;
+
   static DshEntry? fromJson(Object? raw) {
     if (raw is! Map) return null;
     final id = raw['id'];
@@ -190,6 +200,7 @@ class DshEntry {
       installedCommit: _commit(raw['installedCommit']),
       availableCommit: _commit(raw['availableCommit']),
       updateAvailable: raw['updateAvailable'] == true,
+      unverified: raw['verified'] == false,
       name: name is String && name.trim().isNotEmpty
           ? name.trim().substring(0, name.trim().length.clamp(0, 40))
           : id.substring(id.indexOf('/') + 1),

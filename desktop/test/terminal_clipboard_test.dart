@@ -171,7 +171,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.keyV, cmd: true);
       expect(reads, 1);
       await mount(tester, app, next);
-      read.complete({'text': 'original agent only'});
+      read.complete({'text': 'original harness only'});
       await tester.pump(const Duration(milliseconds: 20));
       expect(originalFrames, isEmpty);
       expect(nextFrames, isEmpty);
@@ -279,7 +279,7 @@ void main() {
         expect(frames, isEmpty);
         expect(
           kTerminalOwnedKeys.firstWhere((item) => item.label == 'Paste').chord,
-          apple ? ['⌘', 'V'] : ['⌃', '⇧', 'V'],
+          apple ? ['⌘', 'V'] : ['Ctrl', 'Shift', 'V'],
         );
         await tester.pumpWidget(const SizedBox());
         session.dispose();

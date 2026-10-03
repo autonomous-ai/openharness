@@ -1,6 +1,6 @@
 # Picker verification — 2026-09-23
 
-Scope: Cmd-N New Harness and Cmd-O Open Harness redesign, plus Cmd-P command
+Scope: Cmd-N New Harness and Cmd-P Open Harness, Cmd-O Open Project, plus Cmd-Shift-P command
 execution, editing and focus regressions.
 This is a scenario audit, not a claim that every possible runtime state has
 been tested. Line coverage is measured separately from native UI testing.

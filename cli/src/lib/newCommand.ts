@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { isAbsolute, join, resolve } from 'node:path'
+import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { projectFolderSlug } from './agentNames.js'
+import { permissionModeFlags } from './engineLaunch.js'
+
+/** Engine names, so an unknown word is judged rather than cast (the shape `registry.ts` uses). */
+const ENGINE_NAMES: ReadonlySet<string> = new Set(ENGINES)
 
 /**
  * `harness new` — make a harness from a shell, in the words the app's box uses:
@@ -26,6 +31,9 @@ export interface NewArgs {
   /** A new project: its name, or '' to let the clock name it; null when `cwd` is given. */
   projectName: string | null
   mode: string
+  /** True when `--mode`/`--plan` was typed by the person. The default `auto` is not a request: see
+   *  [newAgentPayload]. */
+  modeGiven: boolean
   prompt: string | null
   name: string | null
   json: boolean
@@ -65,6 +73,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string })
   let folder: string | null = null
   let projectName: string | null = null
   let mode = 'auto'
+  let modeGiven = false
   let prompt: string | null = null
   let name: string | null = null
   let json = false
@@ -83,8 +92,8 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string })
       break
     }
     if (word === '--json') json = true
-    else if (word === '--plan') mode = 'plan'
-    else if (word === '--mode') { mode = value(word, i); i++ }
+    else if (word === '--plan') { mode = 'plan'; modeGiven = true }
+    else if (word === '--mode') { mode = value(word, i); modeGiven = true; i++ }
     else if (word === '--prompt' || word === '--task') { prompt = value(word, i); i++ }
     else if (word === '--name') { name = value(word, i); i++ }
     else if (word === '--new') {
@@ -132,7 +141,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string })
     if (machine === null) cwd = env.cwd
     else projectName = ''
   }
-  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, prompt, name, json }
+  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, modeGiven, prompt, name, json }
 }
 
 /** The `agent_create` payload for [args]: the same fields the app's box sends. [baseEngine] is the
@@ -141,15 +150,29 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string })
 export function newAgentPayload(args: NewArgs, cwd: string | null, baseEngine = 'claude'): Record<string, unknown> {
   const harness = args.agent.includes('/') ? args.agent : null
   const terminal = args.agent === 'terminal'
+  const engine = harness ? baseEngine : args.agent
+  // A mode is only an engine's to take. The usage says `--mode` applies "where the agent has it", but
+  // the default `auto` went to every engine, and the daemon refuses a mode an engine has no
+  // `PERMISSION_MODES` row for (`INVALID_PERMISSION_MODE` in backendSocket.ts) — so the ten engines
+  // without a row (hermes, pi, amp, muse, kilo, grok, devin, commandcode, agy, copilot) could not be
+  // created from the CLI at all, and neither could a store harness running on one of them.
+  // An unasked-for default is therefore left out: the engine opens in its own default mode. A mode the
+  // person typed is still sent, so the daemon's refusal — "refused rather than quietly launched in
+  // some other mode" — stays the answer where a choice was actually made.
+  const hasMode = ENGINE_NAMES.has(engine) && permissionModeFlags(engine as AgentEngine, args.mode) !== null
+  const mode = args.modeGiven || hasMode ? args.mode : null
+  // A row that keeps claiming Auto while running without the flag is the more expensive lie, so the
+  // bypass is only claimed where the engine really has the mode it was asked for.
+  const approves = mode !== null && (mode === 'auto' || mode === 'full') && hasMode
   return {
-    engine: harness ? baseEngine : args.agent,
+    engine,
     ...(harness ? { dsh: harness } : {}),
     ...(cwd !== null ? { cwd } : terminal ? {} : {
       projectSource: 'new',
       ...(args.projectName ? { projectName: projectFolderSlug(args.projectName) } : {}),
     }),
-    bypassPermission: !terminal && (args.mode === 'auto' || args.mode === 'full'),
-    ...(terminal ? {} : { permissionMode: args.mode }),
+    bypassPermission: !terminal && approves,
+    ...(terminal || mode === null ? {} : { permissionMode: mode }),
     ...(args.prompt ? { prompt: args.prompt } : {}),
     ...(args.name ? { name: args.name } : {}),
     creationId: randomUUID(),
@@ -215,7 +238,7 @@ const ERRORS: Record<string, string> = {
 }
 
 /** One loopback session with the daemon: select the machine, then ask, one request at a time. */
-function daemonSession(deps: NewCommandDeps, machineId: string): Promise<{
+export function daemonSession(deps: Pick<NewCommandDeps, 'port' | 'connect' | 'timeoutMs'>, machineId: string): Promise<{
   request: (type: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>
   close: () => void
 }> {

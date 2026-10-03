@@ -1,0 +1,42 @@
+{
+  "kind": "synthetic-memory-performance",
+  "mode": "owner-notebooks",
+  "records": 10000,
+  "projects": 10,
+  "notebooks": 100,
+  "node": "v22.23.2",
+  "platform": "darwin",
+  "arch": "arm64",
+  "seedMs": 35354.470458,
+  "samples": {
+    "coldIndex": {
+      "p50Ms": 63.533917000000656,
+      "p95Ms": 66.10558399999718,
+      "maxMs": 66.10558399999718
+    },
+    "coldDetail": {
+      "p50Ms": 11.840457999998762,
+      "p95Ms": 12.469499999999243,
+      "maxMs": 12.469499999999243
+    },
+    "warmIndex": {
+      "p50Ms": 20.278582999999344,
+      "p95Ms": 21.88233300000138,
+      "maxMs": 25.833208999996714
+    },
+    "warmDetail": {
+      "p50Ms": 9.922875000003842,
+      "p95Ms": 10.910209000001487,
+      "maxMs": 11.737667000001238
+    }
+  },
+  "requests": 220,
+  "timeouts": 0,
+  "largestPageBytes": 9024,
+  "parentEventLoopP95Ms": 1.275903,
+  "limitations": [
+    "Synthetic queued notebooks; generated-prose detail cost is not measured.",
+    "Cold means a new worker for the index, not an emptied OS disk cache; its detail follows in the same worker.",
+    "One local machine; no native model calls, semantic quality or comparative task benefit measured."
+  ]
+}

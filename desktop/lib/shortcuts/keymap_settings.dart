@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:harness/terminal/terminal_text.dart';
@@ -72,7 +73,7 @@ class KeymapSettings extends StatelessWidget {
             if (keymap?.store != null)
               TextButton.icon(
                 onPressed: () => openKeyboardConfig(context),
-                icon: const Icon(Icons.edit_outlined, size: 16),
+                icon: const Icon(AppIcons.pencil, size: 16),
                 label: const Text('Edit keyboard config'),
                 style: TextButton.styleFrom(
                   foregroundColor: grid.AppPalette.textPrimary,
@@ -99,7 +100,14 @@ class KeymapSettings extends StatelessWidget {
           const SizedBox(height: 8),
           SelectableText(
             keymap!.error!,
-            style: grid.AppType.body(color: Colors.orangeAccent),
+            // Orange is error ink on a dark page only: on a light one it is
+            // under 2:1, so light takes the danger red (≥5:1).
+            style: grid.AppType.body(
+              color: grid.AppTheme.pick(
+                grid.AppPalette.dangerFill,
+                Colors.orangeAccent,
+              ),
+            ),
           ),
         ],
         const SizedBox(height: 16),

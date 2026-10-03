@@ -27,20 +27,20 @@ describe('deriveTurnSummary', () => {
     expect(p.recap.startsWith('Đã cập nhật')).toBe(true)
   })
 
-  it('marks a cut with an ellipsis and keeps to the budget', () => {
-    const long = 'Đã cập nhật đường retry trong src/api/client.ts, chạy lại toàn bộ test và mọi thứ đều xanh.'
+  it('marks a cut with a plus and keeps to the budget', () => {
+    const long = 'Đã cập nhật đường retry trong src/api/client.ts, chạy lại toàn bộ test và kiểm tra lại các trường hợp ngoại lệ trước khi triển khai bản cập nhật mới cùng các thay đổi về kết nối, trạng thái, thông báo, đầu vào giọng nói và khôi phục sau lỗi trên thiết bị.'
     const p = parts(long)!
     expect(p.recap.length).toBeLessThanOrEqual(RECAP_MAX_CHARS)
-    expect(p.recap.endsWith('…')).toBe(true)
+    expect(p.recap.endsWith(' +')).toBe(true)
     // The cut lands between words, not through one.
-    expect(p.recap.slice(0, -1)).toBe(p.recap.slice(0, -1).trimEnd())
-    expect(long.startsWith(p.recap.slice(0, -1))).toBe(true)
+    expect(p.recap.slice(0, -2)).toBe(p.recap.slice(0, -2).trimEnd())
+    expect(long.startsWith(p.recap.slice(0, -2))).toBe(true)
   })
 
   it('leaves something that already fits completely alone', () => {
     const p = parts('SJC hôm nay bán ra 149,1 triệu đồng/lượng.')!
     expect(p.recap).toBe('SJC hôm nay bán ra 149,1 triệu đồng/lượng.')
-    expect(p.recap.endsWith('…')).toBe(false)
+    expect(p.recap.endsWith('+')).toBe(false)
   })
 
   it('caps the body too, since the window is where anyone reads the whole thing', () => {
@@ -57,7 +57,7 @@ describe('deriveTurnSummary', () => {
 
   it('does not let one unbroken token collapse the line to nothing', () => {
     // A word-boundary cut would leave almost nothing here, so the budget wins over the boundary.
-    const p = parts('/Users/example/go/src/github.com/autonomous-ai/autonomous-harness/cli/src/lib/x.ts')!
+    const p = parts('/Users/example/' + 'project/'.repeat(RECAP_MAX_CHARS) + 'x.ts')!
     expect(p.recap.length).toBeGreaterThan(RECAP_MAX_CHARS - 5)
   })
 

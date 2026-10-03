@@ -1,42 +1,28 @@
 /**
- * Bring this machine's grid sign-in into line with its harness sign-in — on every daemon start.
+ * Bring this machine's grid sign-in into line with its harness sign-in — when a grid feature needs it.
  *
- * The harness sign-in and the grid sign-in used to be one act, wired to the login *event*
- * (`attachGridToSignIn` in `cli.ts`). A machine that signed in to the harness before grid existed
- * never re-runs that event, so after an update it has a `grid` binary but no grid credentials and no
- * grid to point at — the Local model picker reads "No local models on this account yet." and there
- * is nothing a person can do about it but `harness logout` / `harness login`.
+ * Grid is an add-on to Harness, not part of signing in: a person who never touches local or shared
+ * models never gets a `grid` binary, a grid sign-in or a grid of their own. The first time something
+ * does need grid — "Set up" on the models picker's local and shared models, a local model's Get or
+ * Use, an agent moved onto a grid model, the Model Manager — the daemon calls [GridAccess.ensure],
+ * which installs `grid` if it is missing, hands this machine's harness token to `grid login --harness`
+ * over stdin (no second browser, `gridHandoff.ts`), and — only for what needs one — makes sure the
+ * account's private grid exists. It used to run on every daemon start and every backend reconnect,
+ * and signing in to Harness did it too; neither does now.
  *
- * This is the reconcile that removes that step. It runs once per daemon start (the point every update
- * path — `harness start`, `harness update`, the self-update restart, the desktop's re-probe — passes
- * through) and answers one question: *is this machine already signed in to grid as the right account,
- * with the account's private grid present?* If yes, it does nothing but publish the name. If no, it
- * hands the harness token to `grid login --harness` and makes sure the grid exists — the same two
- * steps the login event does, now driven by state rather than by an event that will not fire again.
+ * **Silent account switch.** When this machine is signed in to grid as a *different* account, the
+ * hand-off overwrites it without asking, matching `grid login`'s own rule (a swap is a line, never a
+ * refusal): Harness's grid features run as the Harness account or not at all. `grid login --harness`
+ * never touches a running `grid join --serve` child; it only warns about one whose grid has gone.
  *
- * **Best-effort by construction.** A machine with no `grid`, an older backend that mints no name, a
- * control plane having a bad minute — each is a log line and a daemon that runs exactly as before.
- * Nothing here can fail a daemon start.
- *
- * **Convergence, not a timer.** The gate below is almost entirely offline (a file read and one
- * `grid ls` that makes no network call), so the common path — a machine already set up — costs one
- * `POST /api/grid/name` (idempotent, mostly a read) and nothing else. A grid sign-in is created or
- * refreshed only when the gate says it is missing or belongs to another account.
- *
- * ⚠️ It converges only where the grid CAN exist. An account that cannot hold this grid at all — the
- * free-plan network limit is the real case — never satisfies the gate, so every daemon start signs in
- * again and tries again. That costs a token rotation per start, not a loop within one, and it is the
- * deliberate trade: the alternative is remembering a failure across starts on disk, which would also
- * remember it after the account was fixed. `ensure`'s own message says which limit was hit.
- *
- * **Overwrite is deliberate.** When this machine is signed in to grid as a *different* account, the
- * hand-off overwrites it, matching `grid login`'s own rule (a swap is a line, never a refusal) and
- * the harness's "grid sign-in is part of harness sign-in" contract. `grid login --harness` never
- * touches a running `grid join --serve` child; it only warns about one whose grid has gone.
+ * **Cheap when there is nothing to do.** The gate is almost entirely offline (a file read and one
+ * `grid ls` that makes no network call) plus one idempotent `POST /api/grid/name`, and a success is
+ * remembered for the daemon's life ([createGridAccess]), so the acts that ask again pay nothing.
  */
+
 import { gridJson } from './gridExec.js'
 import type { GridHandoffResult } from './gridHandoff.js'
-import type { EnsureResult } from './gridEnsure.js'
+import type { EnsureResult, EnsureStatus } from './gridEnsure.js'
 
 export type GridAttachStatus =
   /** No `grid` on this machine — there is nothing to attach a sign-in to. */
@@ -46,8 +32,8 @@ export type GridAttachStatus =
   /** This machine's `grid` already knows the account's grid — signed in as the right account, grid
    *  present. Nothing was changed. */
   | 'converged'
-  /** The token was handed over (a fresh sign-in, a re-sign-in, or an account swap), then the grid
-   *  ensured. */
+  /** The token was handed over (a fresh sign-in, a re-sign-in, or an account swap) — then, when it
+   *  was asked for, the account's grid ensured ([GridAttachResult.ownGrid]). */
   | 'signed-in'
   /** The hand-off was needed and did not succeed. The harness sign-in is untouched. */
   | 'handoff-failed'
@@ -58,6 +44,9 @@ export interface GridAttachResult {
   name: string | null
   /** One sentence for a caller that wants to log the outcome. Never contains a credential. */
   detail: string
+  /** What making sure the account's own grid exists came to, when it was asked for; absent when only
+   *  a sign-in was needed. `converged` means the grid is there already. */
+  ownGrid?: EnsureStatus
 }
 
 /**
@@ -66,10 +55,10 @@ export interface GridAttachResult {
  * which alone holds the HTTP helpers and the live `BackendSocket`.
  */
 export interface GridAttachDeps {
-  /** Awaited first: the managed grid runtime may still be landing, and the hand-off must run on the
-   *  pinned binary rather than whatever PATH had a moment earlier. A rejection is ignored — a failed
-   *  download is the binary check's story to tell, not this await's. */
-  managedGridReady: Promise<unknown>
+  /** Awaited first: puts `grid` on a machine that has none (the pinned managed runtime, else grid's
+   *  own installer), so the hand-off runs on the binary that will serve. A rejection is ignored — a
+   *  failed download is the binary check's story to tell, not this await's. */
+  installCli: () => Promise<unknown>
   /** Is there a `grid` to run at all? */
   gridAvailable: () => boolean
   /** `POST /api/grid/name` — the account's private grid name, minted if this is its first ask. Null
@@ -100,9 +89,12 @@ function msg(err: unknown): string {
  * Reconcile this machine's grid sign-in with its harness account. See the module comment for the
  * shape of the decision; the branches below are exactly its four answers.
  */
-export async function reconcileGridAttach(deps: GridAttachDeps): Promise<GridAttachResult> {
-  // A download must not hold this back, but the hand-off below needs whatever it produced.
-  try { await deps.managedGridReady } catch { /* the binary check answers a failed download */ }
+export async function reconcileGridAttach(
+  deps: GridAttachDeps,
+  opts: { ownGrid?: boolean; signedInThisRun?: boolean } = {},
+): Promise<GridAttachResult> {
+  const ownGrid = opts.ownGrid ?? true
+  try { await deps.installCli() } catch { /* the binary check answers a failed download */ }
 
   if (!deps.gridAvailable()) {
     deps.log('no grid CLI on this machine yet — nothing to attach a sign-in to')
@@ -142,6 +134,13 @@ export async function reconcileGridAttach(deps: GridAttachDeps): Promise<GridAtt
   if (email && names.includes(name)) {
     deps.onName(name)
     deps.log(`already signed in with grid '${name}' — nothing to do`)
+    return { status: 'converged', name, detail: '', ...(ownGrid ? { ownGrid: 'existed' as const } : {}) }
+  }
+  // Signed in as this account earlier in this daemon's life, and nothing here needs the account's own
+  // grid: the sign-in is all there is to have. (A grid of its own is not proof this machine is signed
+  // in — the gate above — only for an account that has one.)
+  if (!ownGrid && email && opts.signedInThisRun) {
+    deps.onName(name)
     return { status: 'converged', name, detail: '' }
   }
 
@@ -151,113 +150,109 @@ export async function reconcileGridAttach(deps: GridAttachDeps): Promise<GridAtt
   // (decision 1, and the module comment). When it was already the right account but the grid was
   // merely missing locally, this re-fetches the account's grids before ensuring — a small redundancy
   // that only recurs until the grid is created and synced, after which the converged path skips it.
-  let token: string
-  try {
-    token = await deps.accessToken()
-  } catch (err) {
-    deps.log(`no harness token to hand to grid (${msg(err)})`)
-    return { status: 'handoff-failed', name, detail: msg(err) }
+  // Signed in as this account already this run: only the grid is missing, so no second hand-off —
+  // each one rotates the account's grid token.
+  if (!(email && opts.signedInThisRun)) {
+    let token: string
+    try {
+      token = await deps.accessToken()
+    } catch (err) {
+      deps.log(`no harness token to hand to grid (${msg(err)})`)
+      return { status: 'handoff-failed', name, detail: msg(err) }
+    }
+    const handoff = await deps.handoff(token)
+    if (handoff.code !== 'OK') {
+      deps.log(`grid sign-in did not happen: ${handoff.message}`)
+      return { status: 'handoff-failed', name, detail: handoff.message }
+    }
   }
-  const handoff = await deps.handoff(token)
-  if (handoff.code !== 'OK') {
-    deps.log(`grid sign-in did not happen: ${handoff.message}`)
-    return { status: 'handoff-failed', name, detail: handoff.message }
+  if (!ownGrid) {
+    deps.onName(name)
+    deps.log(`signed grid in as this account ('${name}' not needed yet)`)
+    return { status: 'signed-in', name, detail: '' }
   }
   const ensured = await deps.ensure(name)
   deps.onName(name)
   deps.log(`signed grid in and ensured '${name}': ${ensured.status}${ensured.message ? ` — ${ensured.message}` : ''}`)
-  return { status: 'signed-in', name, detail: ensured.message }
+  return { status: 'signed-in', name, detail: ensured.message, ownGrid: ensured.status }
 }
 
-/**
- * The grid names this machine's `grid` knows locally. `grid --remote ls` reads the stored registry
- * and makes no network call (autonomous-grid `cli/remote_grid.py`), so the reconcile's gate stays
- * cheap. An unparsable answer is no names, which the caller treats as "ensure it".
- */
-export interface GridAttachRunnerOptions {
-  /** Runs one reconcile. Injected so the coordination below is testable without a daemon. */
-  attempt: () => Promise<GridAttachResult>
-  /** How many attempts this runner will ever make before it stops trying. */
-  maxAttempts: number
-  /** The soonest a new attempt may START after the previous one did. */
-  minIntervalMs: number
-  /** How long an in-flight attempt is worth making an RPC wait for, from when it started. */
-  ceilingMs: number
-  /** Injected clock, for tests. */
-  now?: () => number
+/** A grid of the account's own is there: made, found, or won by another machine's create. */
+const OWN_GRID_THERE: ReadonlySet<string> = new Set(['created', 'existed', 'adopted'])
+
+export interface GridAccessOptions {
+  /** Runs one reconcile ([reconcileGridAttach]). Injected so the coordination is testable alone. */
+  attempt: (request: { ownGrid: boolean; signedInThisRun: boolean }) => Promise<GridAttachResult>
+  /** Whether `grid` still holds a sign-in on this machine (a file read) — a `grid logout` run by hand
+   *  since forgets what this daemon remembered. */
+  signedIn: () => boolean
   log: (line: string) => void
 }
 
-export interface GridAttachRunner {
-  /** Start an attempt if one is warranted. Safe to call as often as a reconnect fires. */
-  run: () => void
-  /** The in-flight attempt while it is still worth waiting for, else null. */
-  probe: () => Promise<unknown> | null
-  /** How many attempts have been started. Diagnostics and tests. */
-  attempts: () => number
+export interface GridAccess {
+  /** Have grid ready for what the caller is about to do: signed in as this account, and — `ownGrid` —
+   *  the account's grid there too. Resolves with what happened; never rejects. */
+  ensure: (request?: { ownGrid?: boolean }) => Promise<GridAttachResult>
 }
 
 /**
- * Decides WHEN to reconcile, as opposed to {@link reconcileGridAttach}, which decides what to do.
+ * When to reconcile, as opposed to {@link reconcileGridAttach}, which decides what to do: on demand,
+ * one at a time, and never twice for what is already done.
  *
- * Its own unit because the daemon calls `run()` from two places — once at start, then on every
- * backend reconnect — and every interesting property is about the interaction of those calls: two
- * attempts must not overlap, a burst of reconnects must not turn into a burst of grid sign-ins, and
- * the whole thing must eventually stop rather than rotate this account's tokens forever.
- *
- * **A burst collapses into one attempt, it does not burn the budget.** A laptop waking, changing
- * network or toggling a VPN produces several reconnects in seconds. Counting each as an attempt
- * spent the entire allowance on one moment of ordinary churn and then went quiet for the daemon's
- * life — which can be days. Requests inside `minIntervalMs` are therefore DEFERRED to the end of
- * that window rather than dropped, so the churn yields exactly one attempt and the opportunity is
- * not lost either. The timer is unref'd: it must never be a reason a process stays alive.
- *
- * **It gives up out loud.** Reaching the cap says so once. Silence there was indistinguishable from
- * a feature that was working.
+ * - **One at a time.** Calls queue behind the one in flight and each then reads what it left behind,
+ *   so a picker's Set up and a Get pressed a moment later make one sign-in, not two token rotations.
+ * - **Remembered.** A sign-in as this account, and the account's grid once it is there, hold for the
+ *   daemon's life — until `grid` no longer holds a sign-in at all, which a hand-run `grid logout`
+ *   leaves behind.
+ * - **Failures are not remembered.** Every ask is a person acting, so the next one simply tries again.
  */
-export function createGridAttachRunner(opts: GridAttachRunnerOptions): GridAttachRunner {
-  const now = opts.now ?? Date.now
-  let inFlight: Promise<unknown> | null = null
-  let deferred: ReturnType<typeof setTimeout> | null = null
-  let done = false
-  let attempts = 0
-  let lastStartedAt = Number.NEGATIVE_INFINITY
-  let deadline = 0
-  let saidGaveUp = false
+export function createGridAccess(opts: GridAccessOptions): GridAccess {
+  let signedIn = false
+  let ownGridThere = false
+  let last: GridAttachResult | null = null
+  let queue: Promise<unknown> = Promise.resolve()
 
-  const run = (): void => {
-    if (done || inFlight || deferred) return
-    if (attempts >= opts.maxAttempts) {
-      if (!saidGaveUp) {
-        saidGaveUp = true
-        opts.log(`no grid after ${attempts} attempts — giving up until this machine restarts, or you sign in to Harness again`)
-      }
-      return
+  const once = async (ownGrid: boolean): Promise<GridAttachResult> => {
+    if (!opts.signedIn()) signedIn = ownGridThere = false
+    if (last && signedIn && (!ownGrid || ownGridThere)) return last
+    let result: GridAttachResult
+    try {
+      result = await opts.attempt({ ownGrid, signedInThisRun: signedIn })
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err)
+      opts.log(`attempt failed: ${detail}`)
+      return { status: 'handoff-failed', name: null, detail }
     }
-    const wait = opts.minIntervalMs - (now() - lastStartedAt)
-    if (wait > 0) {
-      deferred = setTimeout(() => { deferred = null; run() }, wait)
-      deferred.unref?.()
-      return
+    if (result.status === 'converged' || result.status === 'signed-in') {
+      signedIn = true
+      if (result.ownGrid && OWN_GRID_THERE.has(result.ownGrid)) ownGridThere = true
+      last = result
     }
-    attempts += 1
-    lastStartedAt = now()
-    deadline = lastStartedAt + opts.ceilingMs
-    inFlight = opts.attempt()
-      .then((result) => {
-        // Only an outcome that actually attached stops the retries. `no-cli`, `no-name` and
-        // `handoff-failed` are all "this machine or the control plane was not ready", which is
-        // exactly what a later connect may have fixed.
-        if (result.status === 'converged' || result.status === 'signed-in') done = true
-      })
-      .catch((err) => { opts.log(`attempt failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`) })
-      .finally(() => { inFlight = null })
+    return result
   }
 
   return {
-    run,
-    probe: () => (inFlight && now() < deadline ? inFlight : null),
-    attempts: () => attempts,
+    ensure: (request = {}) => {
+      const next = queue.then(() => once(request.ownGrid ?? false))
+      queue = next.catch(() => {})
+      return next
+    },
+  }
+}
+
+/**
+ * Start a grid set-up and wait for it at most [waitMs]. Past that it carries on — the access queue
+ * remembers it when it lands, and a later `ensure` waits for it — so a caller that must answer in seconds
+ * (a Model Manager being created) is never held for a first install. Never throws: what failed is said by
+ * the next thing that uses grid.
+ */
+export async function setUpWithin(setUp: () => Promise<unknown>, waitMs: number): Promise<'done' | 'pending'> {
+  let timer: NodeJS.Timeout | undefined
+  const waited = new Promise<'pending'>((resolve) => { timer = setTimeout(() => resolve('pending'), waitMs) })
+  try {
+    return await Promise.race([setUp().then(() => 'done' as const, () => 'done' as const), waited])
+  } finally {
+    clearTimeout(timer)
   }
 }
 

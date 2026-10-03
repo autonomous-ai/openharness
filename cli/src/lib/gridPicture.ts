@@ -100,15 +100,20 @@ const hasUpperCase = (id: string): boolean => id !== id.toLowerCase()
  * `caseMap` with `ids` folded in. The first spelling of a name wins, except that one carrying an
  * upper-case letter always replaces an all-lower-case one: the lower-case form is what the overview
  * already showed, so it is never the better answer — and it never overwrites a better one.
+ *
+ * `current` ids are the name as it is served right now — this computer's live alias, the relay's own
+ * routing name — and replace whatever was remembered. The relay matches a name exactly: a model once
+ * advertised as `Gemma-4-E2B` and now as `gemma-4-e2b` kept the old spelling, an agent was moved onto
+ * it, and every request answered "No providers available for this model" [run].
  */
-export function withSpellings(caseMap: Record<string, string>, ids: readonly string[]): Record<string, string> {
+export function withSpellings(caseMap: Record<string, string>, ids: readonly string[], current = false): Record<string, string> {
   let next = caseMap
   for (const raw of ids) {
     const exact = raw.trim()
     const key = idKey(exact)
     if (!key) continue
     const known = next[key]
-    if (known === undefined || (!hasUpperCase(known) && hasUpperCase(exact))) {
+    if (known === undefined || (current && known !== exact) || (!hasUpperCase(known) && hasUpperCase(exact))) {
       if (next === caseMap) next = { ...caseMap }
       next[key] = exact
     }
@@ -223,7 +228,13 @@ export interface LocalRecord {
   pid: number | null
   /** Whether that pid is a live process. False for a null pid. */
   alive: boolean
+  /** `ids` are the aliases it advertises, exactly as given (`advertise_as`), not names derived from files. */
+  advertised?: boolean
 }
+
+/** The names this computer advertises right now, exactly: its live records' own aliases. */
+export const advertisedNow = (records: readonly LocalRecord[]): string[] =>
+  records.filter((record) => record.alive && record.advertised).flatMap((record) => record.ids)
 
 /**
  * What this computer's own records prove about a grid's rows — never decided by hostname, the machine
@@ -298,7 +309,7 @@ export type SeemsOffline = (name: string) => OfflineReading | null
  */
 export function sectionView(picture: GridPicture, here: ServedHere, now: number, seemsOffline: SeemsOffline = () => null): SectionView {
   const awake = picture.state === 'awake'
-  const caseMap = withSpellings(picture.caseMap, here.records.flatMap((record) => record.ids))
+  const caseMap = withSpellings(withSpellings(picture.caseMap, here.records.flatMap((record) => record.ids)), advertisedNow(here.records), true)
   /** key → the node entries serving it, in the order the picture lists them; `namedBy` → the one whose
    *  name the row shows (the first to list it, or this computer for a model only its records serve). */
   const serving = new Map<string, PictureNode[]>()

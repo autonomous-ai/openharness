@@ -1,0 +1,982 @@
+{
+  "baselineSha": "aad71fc576a0a9b0d9b52a2b206d02d08b481967",
+  "sourceSha256": {
+    "baseline": "0156bf993b28ac3421c8aede6f240fb0c22286be440ff027163d9ebf23469882",
+    "candidate": "11d66660996894ccd0339fd429416dbbc6f3ef38d6ab5c38b921bc84261dff8c"
+  },
+  "finishedAt": "2026-10-02T17:28:59.172Z",
+  "node": "v22.23.2",
+  "platform": "darwin",
+  "arch": "arm64",
+  "scope": "Real loopback WebSocket, synthetic ACK/alive frames, fake backend. CPU includes client and server. Allocation sampling runs separately. No live daemon or app changed.",
+  "rows": [
+    {
+      "variant": "baseline",
+      "trial": 0,
+      "mode": "timing",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 184.186,
+      "cpuUs": 224535,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 111149056,
+        "heapTotal": 56901632,
+        "heapUsed": 29586736,
+        "external": 4197370,
+        "arrayBuffers": 411037
+      },
+      "afterMemory": {
+        "rss": 121815040,
+        "heapTotal": 57163776,
+        "heapUsed": 31131432,
+        "external": 4286784,
+        "arrayBuffers": 500411
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "candidate",
+      "trial": 0,
+      "mode": "timing",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 195.801417,
+      "cpuUs": 233321,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 111378432,
+        "heapTotal": 57163776,
+        "heapUsed": 28566640,
+        "external": 4182353,
+        "arrayBuffers": 396020
+      },
+      "afterMemory": {
+        "rss": 122028032,
+        "heapTotal": 57425920,
+        "heapUsed": 25930184,
+        "external": 4122350,
+        "arrayBuffers": 335977
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "candidate",
+      "trial": 1,
+      "mode": "timing",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 185.106416,
+      "cpuUs": 218851,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 110297088,
+        "heapTotal": 56901632,
+        "heapUsed": 28557640,
+        "external": 4182298,
+        "arrayBuffers": 395965
+      },
+      "afterMemory": {
+        "rss": 121012224,
+        "heapTotal": 57163776,
+        "heapUsed": 25866896,
+        "external": 4121530,
+        "arrayBuffers": 335157
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "baseline",
+      "trial": 1,
+      "mode": "timing",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 182.397292,
+      "cpuUs": 221784,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 111312896,
+        "heapTotal": 57163776,
+        "heapUsed": 29582680,
+        "external": 4197370,
+        "arrayBuffers": 411037
+      },
+      "afterMemory": {
+        "rss": 120832000,
+        "heapTotal": 57425920,
+        "heapUsed": 31081496,
+        "external": 4286028,
+        "arrayBuffers": 499655
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "baseline",
+      "trial": 2,
+      "mode": "timing",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 178.41716599999998,
+      "cpuUs": 219949,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 111362048,
+        "heapTotal": 57425920,
+        "heapUsed": 29579400,
+        "external": 4197254,
+        "arrayBuffers": 410921
+      },
+      "afterMemory": {
+        "rss": 121110528,
+        "heapTotal": 57688064,
+        "heapUsed": 31120640,
+        "external": 4286552,
+        "arrayBuffers": 500179
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "candidate",
+      "trial": 2,
+      "mode": "timing",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 183.159875,
+      "cpuUs": 222702,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 110198784,
+        "heapTotal": 56639488,
+        "heapUsed": 28572712,
+        "external": 4182353,
+        "arrayBuffers": 396020
+      },
+      "afterMemory": {
+        "rss": 120782848,
+        "heapTotal": 56901632,
+        "heapUsed": 25865568,
+        "external": 4120306,
+        "arrayBuffers": 333933
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "candidate",
+      "trial": 3,
+      "mode": "timing",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 188.43008300000002,
+      "cpuUs": 226508,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 110919680,
+        "heapTotal": 56639488,
+        "heapUsed": 28570608,
+        "external": 4182353,
+        "arrayBuffers": 396020
+      },
+      "afterMemory": {
+        "rss": 121569280,
+        "heapTotal": 56901632,
+        "heapUsed": 25929376,
+        "external": 4121706,
+        "arrayBuffers": 335333
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "baseline",
+      "trial": 3,
+      "mode": "timing",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 188.73499999999999,
+      "cpuUs": 225303,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 111280128,
+        "heapTotal": 56901632,
+        "heapUsed": 29584424,
+        "external": 4197370,
+        "arrayBuffers": 411037
+      },
+      "afterMemory": {
+        "rss": 121110528,
+        "heapTotal": 57163776,
+        "heapUsed": 31189000,
+        "external": 4287428,
+        "arrayBuffers": 501055
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "baseline",
+      "trial": 4,
+      "mode": "timing",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 181.326916,
+      "cpuUs": 221302,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 111165440,
+        "heapTotal": 56901632,
+        "heapUsed": 29567568,
+        "external": 4197254,
+        "arrayBuffers": 410921
+      },
+      "afterMemory": {
+        "rss": 120684544,
+        "heapTotal": 57163776,
+        "heapUsed": 31146472,
+        "external": 4286784,
+        "arrayBuffers": 500411
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "candidate",
+      "trial": 4,
+      "mode": "timing",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 189.30058300000002,
+      "cpuUs": 224874,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 110592000,
+        "heapTotal": 56901632,
+        "heapUsed": 28573400,
+        "external": 4182353,
+        "arrayBuffers": 396020
+      },
+      "afterMemory": {
+        "rss": 121290752,
+        "heapTotal": 57163776,
+        "heapUsed": 24877024,
+        "external": 4086246,
+        "arrayBuffers": 299873
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "candidate",
+      "trial": 5,
+      "mode": "timing",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 219.559166,
+      "cpuUs": 249670,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 111034368,
+        "heapTotal": 57163776,
+        "heapUsed": 28561328,
+        "external": 4182351,
+        "arrayBuffers": 396018
+      },
+      "afterMemory": {
+        "rss": 121929728,
+        "heapTotal": 57425920,
+        "heapUsed": 25938440,
+        "external": 4122515,
+        "arrayBuffers": 336142
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "baseline",
+      "trial": 5,
+      "mode": "timing",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 192.891625,
+      "cpuUs": 231574,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 110903296,
+        "heapTotal": 56639488,
+        "heapUsed": 29577512,
+        "external": 4197370,
+        "arrayBuffers": 411037
+      },
+      "afterMemory": {
+        "rss": 120553472,
+        "heapTotal": 56901632,
+        "heapUsed": 31090728,
+        "external": 4286084,
+        "arrayBuffers": 499711
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "baseline",
+      "trial": 0,
+      "mode": "timing",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 244.64566700000003,
+      "cpuUs": 256921,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 115605504,
+        "heapTotal": 56901632,
+        "heapUsed": 33453312,
+        "external": 4777972,
+        "arrayBuffers": 991639
+      },
+      "afterMemory": {
+        "rss": 121765888,
+        "heapTotal": 57163776,
+        "heapUsed": 25968904,
+        "external": 4308421,
+        "arrayBuffers": 522048
+      },
+      "dispatched": 65000
+    },
+    {
+      "variant": "candidate",
+      "trial": 0,
+      "mode": "timing",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 239.31120800000002,
+      "cpuUs": 246401,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 111624192,
+        "heapTotal": 56639488,
+        "heapUsed": 29941528,
+        "external": 4701023,
+        "arrayBuffers": 914690
+      },
+      "afterMemory": {
+        "rss": 121192448,
+        "heapTotal": 56639488,
+        "heapUsed": 32062264,
+        "external": 4956100,
+        "arrayBuffers": 1169727
+      },
+      "dispatched": 65000
+    },
+    {
+      "variant": "candidate",
+      "trial": 1,
+      "mode": "timing",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 245.600917,
+      "cpuUs": 250782,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 112394240,
+        "heapTotal": 56901632,
+        "heapUsed": 29968192,
+        "external": 4701023,
+        "arrayBuffers": 914690
+      },
+      "afterMemory": {
+        "rss": 121962496,
+        "heapTotal": 56901632,
+        "heapUsed": 32632632,
+        "external": 5004990,
+        "arrayBuffers": 1218617
+      },
+      "dispatched": 65000
+    },
+    {
+      "variant": "baseline",
+      "trial": 1,
+      "mode": "timing",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 246.938958,
+      "cpuUs": 260071,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 115212288,
+        "heapTotal": 57425920,
+        "heapUsed": 33453712,
+        "external": 4789752,
+        "arrayBuffers": 1003419
+      },
+      "afterMemory": {
+        "rss": 121176064,
+        "heapTotal": 57425920,
+        "heapUsed": 27470056,
+        "external": 4414271,
+        "arrayBuffers": 627898
+      },
+      "dispatched": 65000
+    },
+    {
+      "variant": "baseline",
+      "trial": 2,
+      "mode": "timing",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 243.734333,
+      "cpuUs": 252237,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 115785728,
+        "heapTotal": 56639488,
+        "heapUsed": 33456616,
+        "external": 4789752,
+        "arrayBuffers": 1003419
+      },
+      "afterMemory": {
+        "rss": 121782272,
+        "heapTotal": 56639488,
+        "heapUsed": 26935168,
+        "external": 4389339,
+        "arrayBuffers": 602966
+      },
+      "dispatched": 65000
+    },
+    {
+      "variant": "candidate",
+      "trial": 2,
+      "mode": "timing",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 242.68029099999998,
+      "cpuUs": 249462,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 112705536,
+        "heapTotal": 57163776,
+        "heapUsed": 30189208,
+        "external": 4712924,
+        "arrayBuffers": 926591
+      },
+      "afterMemory": {
+        "rss": 121847808,
+        "heapTotal": 57163776,
+        "heapUsed": 31935288,
+        "external": 4939605,
+        "arrayBuffers": 1153232
+      },
+      "dispatched": 65000
+    },
+    {
+      "variant": "candidate",
+      "trial": 3,
+      "mode": "timing",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 245.96175,
+      "cpuUs": 250692,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 113639424,
+        "heapTotal": 56901632,
+        "heapUsed": 30162696,
+        "external": 4712924,
+        "arrayBuffers": 926591
+      },
+      "afterMemory": {
+        "rss": 122945536,
+        "heapTotal": 56901632,
+        "heapUsed": 32874976,
+        "external": 5017036,
+        "arrayBuffers": 1230663
+      },
+      "dispatched": 65000
+    },
+    {
+      "variant": "baseline",
+      "trial": 3,
+      "mode": "timing",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 241.28799999999998,
+      "cpuUs": 253882,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 115458048,
+        "heapTotal": 57163776,
+        "heapUsed": 33450424,
+        "external": 4789752,
+        "arrayBuffers": 1003419
+      },
+      "afterMemory": {
+        "rss": 121700352,
+        "heapTotal": 57163776,
+        "heapUsed": 26202248,
+        "external": 4332257,
+        "arrayBuffers": 545884
+      },
+      "dispatched": 65000
+    },
+    {
+      "variant": "baseline",
+      "trial": 4,
+      "mode": "timing",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 255.667542,
+      "cpuUs": 264703,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 116391936,
+        "heapTotal": 56901632,
+        "heapUsed": 33425096,
+        "external": 4789752,
+        "arrayBuffers": 1003419
+      },
+      "afterMemory": {
+        "rss": 122503168,
+        "heapTotal": 56901632,
+        "heapUsed": 27104728,
+        "external": 4397588,
+        "arrayBuffers": 611215
+      },
+      "dispatched": 65000
+    },
+    {
+      "variant": "candidate",
+      "trial": 4,
+      "mode": "timing",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 244.4445,
+      "cpuUs": 255167,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 111624192,
+        "heapTotal": 56901632,
+        "heapUsed": 30111040,
+        "external": 4701144,
+        "arrayBuffers": 914811
+      },
+      "afterMemory": {
+        "rss": 120995840,
+        "heapTotal": 56901632,
+        "heapUsed": 32846360,
+        "external": 5017036,
+        "arrayBuffers": 1230663
+      },
+      "dispatched": 65000
+    },
+    {
+      "variant": "candidate",
+      "trial": 5,
+      "mode": "timing",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 239.602167,
+      "cpuUs": 247644,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 111493120,
+        "heapTotal": 56377344,
+        "heapUsed": 30185384,
+        "external": 4712924,
+        "arrayBuffers": 926591
+      },
+      "afterMemory": {
+        "rss": 120668160,
+        "heapTotal": 56377344,
+        "heapUsed": 32246136,
+        "external": 4959954,
+        "arrayBuffers": 1173581
+      },
+      "dispatched": 65000
+    },
+    {
+      "variant": "baseline",
+      "trial": 5,
+      "mode": "timing",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 250.46754199999998,
+      "cpuUs": 258295,
+      "allocationBytes": null,
+      "beforeMemory": {
+        "rss": 115933184,
+        "heapTotal": 56901632,
+        "heapUsed": 33377488,
+        "external": 4789751,
+        "arrayBuffers": 1003418
+      },
+      "afterMemory": {
+        "rss": 122159104,
+        "heapTotal": 56901632,
+        "heapUsed": 26801360,
+        "external": 4393734,
+        "arrayBuffers": 607361
+      },
+      "dispatched": 65000
+    },
+    {
+      "variant": "baseline",
+      "trial": 0,
+      "mode": "allocations",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 239.62333399999997,
+      "cpuUs": 269715,
+      "allocationBytes": 54916696,
+      "beforeMemory": {
+        "rss": 113442816,
+        "heapTotal": 56901632,
+        "heapUsed": 29594224,
+        "external": 4197254,
+        "arrayBuffers": 410921
+      },
+      "afterMemory": {
+        "rss": 124223488,
+        "heapTotal": 57163776,
+        "heapUsed": 31157208,
+        "external": 4287308,
+        "arrayBuffers": 500935
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "candidate",
+      "trial": 0,
+      "mode": "allocations",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 230.465458,
+      "cpuUs": 262468,
+      "allocationBytes": 50293944,
+      "beforeMemory": {
+        "rss": 110526464,
+        "heapTotal": 56901632,
+        "heapUsed": 28592520,
+        "external": 4182353,
+        "arrayBuffers": 396020
+      },
+      "afterMemory": {
+        "rss": 122322944,
+        "heapTotal": 57163776,
+        "heapUsed": 25915240,
+        "external": 4121650,
+        "arrayBuffers": 335277
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "candidate",
+      "trial": 1,
+      "mode": "allocations",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 238.20437499999997,
+      "cpuUs": 264985,
+      "allocationBytes": 50291928,
+      "beforeMemory": {
+        "rss": 110051328,
+        "heapTotal": 56901632,
+        "heapUsed": 28585064,
+        "external": 4182353,
+        "arrayBuffers": 396020
+      },
+      "afterMemory": {
+        "rss": 122388480,
+        "heapTotal": 57163776,
+        "heapUsed": 25869688,
+        "external": 4121006,
+        "arrayBuffers": 334633
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "baseline",
+      "trial": 1,
+      "mode": "allocations",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 239.948917,
+      "cpuUs": 269375,
+      "allocationBytes": 54934984,
+      "beforeMemory": {
+        "rss": 111788032,
+        "heapTotal": 56901632,
+        "heapUsed": 29599792,
+        "external": 4197370,
+        "arrayBuffers": 411037
+      },
+      "afterMemory": {
+        "rss": 122748928,
+        "heapTotal": 57163776,
+        "heapUsed": 31102912,
+        "external": 4286028,
+        "arrayBuffers": 499655
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "baseline",
+      "trial": 2,
+      "mode": "allocations",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 240.03670900000003,
+      "cpuUs": 271579,
+      "allocationBytes": 54923744,
+      "beforeMemory": {
+        "rss": 111706112,
+        "heapTotal": 56901632,
+        "heapUsed": 29596784,
+        "external": 4197252,
+        "arrayBuffers": 410919
+      },
+      "afterMemory": {
+        "rss": 122535936,
+        "heapTotal": 57163776,
+        "heapUsed": 31198160,
+        "external": 4287187,
+        "arrayBuffers": 500814
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "candidate",
+      "trial": 2,
+      "mode": "allocations",
+      "batch": 1,
+      "count": 6000,
+      "durationMs": 242.70366700000002,
+      "cpuUs": 269772,
+      "allocationBytes": 50411592,
+      "beforeMemory": {
+        "rss": 110444544,
+        "heapTotal": 56639488,
+        "heapUsed": 28589008,
+        "external": 4182351,
+        "arrayBuffers": 396018
+      },
+      "afterMemory": {
+        "rss": 122552320,
+        "heapTotal": 56901632,
+        "heapUsed": 25862800,
+        "external": 4120765,
+        "arrayBuffers": 334392
+      },
+      "dispatched": 7500
+    },
+    {
+      "variant": "baseline",
+      "trial": 0,
+      "mode": "allocations",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 351.00879199999997,
+      "cpuUs": 361362,
+      "allocationBytes": 223778336,
+      "beforeMemory": {
+        "rss": 116162560,
+        "heapTotal": 56639488,
+        "heapUsed": 33457032,
+        "external": 4789752,
+        "arrayBuffers": 1003419
+      },
+      "afterMemory": {
+        "rss": 127107072,
+        "heapTotal": 56639488,
+        "heapUsed": 28212384,
+        "external": 4475019,
+        "arrayBuffers": 688646
+      },
+      "dispatched": 65000
+    },
+    {
+      "variant": "candidate",
+      "trial": 0,
+      "mode": "allocations",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 330.7920419999999,
+      "cpuUs": 336989,
+      "allocationBytes": 179219672,
+      "beforeMemory": {
+        "rss": 114114560,
+        "heapTotal": 57163776,
+        "heapUsed": 30099968,
+        "external": 4701144,
+        "arrayBuffers": 914811
+      },
+      "afterMemory": {
+        "rss": 127254528,
+        "heapTotal": 57163776,
+        "heapUsed": 32531000,
+        "external": 4988495,
+        "arrayBuffers": 1202122
+      },
+      "dispatched": 65000
+    },
+    {
+      "variant": "candidate",
+      "trial": 1,
+      "mode": "allocations",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 331.02845899999994,
+      "cpuUs": 337814,
+      "allocationBytes": 179647928,
+      "beforeMemory": {
+        "rss": 112066560,
+        "heapTotal": 56901632,
+        "heapUsed": 30137688,
+        "external": 4701444,
+        "arrayBuffers": 915111
+      },
+      "afterMemory": {
+        "rss": 125222912,
+        "heapTotal": 56901632,
+        "heapUsed": 32268936,
+        "external": 4948474,
+        "arrayBuffers": 1162101
+      },
+      "dispatched": 65000
+    },
+    {
+      "variant": "baseline",
+      "trial": 1,
+      "mode": "allocations",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 380.814833,
+      "cpuUs": 389620,
+      "allocationBytes": 223563704,
+      "beforeMemory": {
+        "rss": 115654656,
+        "heapTotal": 56639488,
+        "heapUsed": 33412608,
+        "external": 4778272,
+        "arrayBuffers": 991939
+      },
+      "afterMemory": {
+        "rss": 125992960,
+        "heapTotal": 56639488,
+        "heapUsed": 28508216,
+        "external": 4475639,
+        "arrayBuffers": 689266
+      },
+      "dispatched": 65000
+    },
+    {
+      "variant": "baseline",
+      "trial": 2,
+      "mode": "allocations",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 382.009959,
+      "cpuUs": 391742,
+      "allocationBytes": 225631392,
+      "beforeMemory": {
+        "rss": 115736576,
+        "heapTotal": 56901632,
+        "heapUsed": 33322344,
+        "external": 4789752,
+        "arrayBuffers": 1003419
+      },
+      "afterMemory": {
+        "rss": 126009344,
+        "heapTotal": 56901632,
+        "heapUsed": 29037440,
+        "external": 4512051,
+        "arrayBuffers": 725678
+      },
+      "dispatched": 65000
+    },
+    {
+      "variant": "candidate",
+      "trial": 2,
+      "mode": "allocations",
+      "batch": 100,
+      "count": 60000,
+      "durationMs": 336.49366699999996,
+      "cpuUs": 342848,
+      "allocationBytes": 179608824,
+      "beforeMemory": {
+        "rss": 112508928,
+        "heapTotal": 57163776,
+        "heapUsed": 30218864,
+        "external": 4689535,
+        "arrayBuffers": 903202
+      },
+      "afterMemory": {
+        "rss": 125534208,
+        "heapTotal": 57163776,
+        "heapUsed": 33173104,
+        "external": 5025776,
+        "arrayBuffers": 1239403
+      },
+      "dispatched": 65000
+    }
+  ],
+  "summary": [
+    {
+      "batch": 1,
+      "metric": "durationMs",
+      "baseline": 183.29164600000001,
+      "candidate": 188.86533300000002,
+      "reductionPercent": -3.0408843619637693
+    },
+    {
+      "batch": 1,
+      "metric": "cpuUs",
+      "baseline": 223159.5,
+      "candidate": 225691,
+      "reductionPercent": -1.1343904247858694
+    },
+    {
+      "batch": 1,
+      "metric": "allocationBytes",
+      "baseline": 54923744,
+      "candidate": 50293944,
+      "reductionPercent": 8.429505461244592
+    },
+    {
+      "batch": 100,
+      "metric": "durationMs",
+      "baseline": 245.79231250000004,
+      "candidate": 243.56239549999998,
+      "reductionPercent": 0.9072362667974287
+    },
+    {
+      "batch": 100,
+      "metric": "cpuUs",
+      "baseline": 257608,
+      "candidate": 250077,
+      "reductionPercent": 2.9234340548430215
+    },
+    {
+      "batch": 100,
+      "metric": "allocationBytes",
+      "baseline": 223778336,
+      "candidate": 179608824,
+      "reductionPercent": 19.738064367410434
+    }
+  ],
+  "validation": {
+    "scope": "Typecheck, affected real-socket/relay/terminal/liveness tests locally; full CLI and OS/Node matrix in CI before merge. No production deployment.",
+    "localReceipt": ".harness/validation/20261002T172805.569874Z-43894/receipt.json",
+    "tests": {
+      "files": 7,
+      "passed": 189,
+      "failed": 0,
+      "localWebSocketCases": 47,
+      "newLocalWebSocketCases": 13
+    },
+    "typecheck": "passed",
+    "initialFixtureFailure": {
+      "receipt": ".harness/validation/20261002T172640.119595Z-19381/receipt.json",
+      "description": "Two new late-acquire cases resumed after client close but before server close; fixture corrected to wait for server-side close. Final cases pass."
+    }
+  },
+  "limitations": [
+    "Synthetic component benchmark, not whole-app energy or retained RAM.",
+    "Both variants use the candidate dependency graph; only localWsServer.ts differs.",
+    "Six paired alternating timing trials and three paired allocation trials per traffic shape.",
+    "Allocation sampling includes collected objects and runs separately from timing.",
+    "Live app and daemon were not replaced, restarted, or upgraded.",
+    "No release authorized."
+  ]
+}

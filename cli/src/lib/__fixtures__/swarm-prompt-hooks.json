@@ -1,0 +1,45 @@
+{
+  "recordedAt": "2026-09-28",
+  "method": "Installed binaries, isolated temporary profiles, synthetic prompt; capture hook blocks before any model call. Claude and Codex additionally use a loopback-only model endpoint.",
+  "claude": {
+    "version": "2.1.283",
+    "input": {
+      "session_id": "619944cd-afcd-418f-b063-4e2d2eeea2d4",
+      "transcript_path": "/tmp/harness-swarm-native-hook-probes/claude/projects/-private-tmp-harness-swarm-native-hook-probes-claude/619944cd-afcd-418f-b063-4e2d2eeea2d4.jsonl",
+      "cwd": "/private/tmp/harness-swarm-native-hook-probes/claude",
+      "prompt_id": "5272a2fe-8065-4c7e-8581-1cc69aaaeed6",
+      "permission_mode": "default",
+      "hook_event_name": "UserPromptSubmit",
+      "prompt": "HARNESS_SWARM_HOOK_PROBE"
+    }
+  },
+  "codex": {
+    "version": "0.154.0",
+    "input": {
+      "session_id": "01a0e886-c03b-7872-8ecd-89e90927e861",
+      "turn_id": "01a0e886-c04a-70c3-99c8-e2c1c5958cd2",
+      "transcript_path": null,
+      "cwd": "/private/tmp/harness-swarm-native-hook-probes/codex",
+      "hook_event_name": "UserPromptSubmit",
+      "model": "gpt-5.4",
+      "permission_mode": "bypassPermissions",
+      "prompt": "HARNESS_SWARM_HOOK_PROBE"
+    }
+  },
+  "grok": {
+    "version": "1.0.34 (3736acbc8658)",
+    "input": {
+      "hookEventName": "user_prompt_submit",
+      "sessionId": "01a0e86f-a503-7d70-ab37-5b45120548f2",
+      "cwd": "/private/tmp/harness-swarm-grok-hook-probe",
+      "workspaceRoot": "/private/tmp/harness-swarm-grok-hook-probe",
+      "timestamp": "2026-09-28T14:33:46.224011+00:00",
+      "promptId": "97e93307-28c9-4f90-9ecb-7f674462e405",
+      "permissionMode": "default",
+      "prompt": "HARNESS_SWARM_HOOK_PROBE",
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "01a0e86f-a503-7d70-ab37-5b45120548f2",
+      "permission_mode": "default"
+    }
+  }
+}

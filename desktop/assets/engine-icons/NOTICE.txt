@@ -116,6 +116,11 @@ autonomous/simskill
 License: MIT
 Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/simskill.svg
 
+autonomous/trailofbits-skills
+© 2026 OpenHarness contributors
+License: MIT
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/trailofbits-skills.svg
+
 autonomous/harness-monitor
 © 2026 OpenHarness contributors
 License: MIT

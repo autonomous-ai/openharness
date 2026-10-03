@@ -247,6 +247,26 @@ export class DeviceLink {
   }
 
   /**
+   * Fire-and-forget for a frame carrying what the person said or chose — a turn, an answer, a stop.
+   *
+   * NEVER IN THE CLEAR TO A LINKED MACHINE. `send()` falls back to plaintext while a session is down, and
+   * the far daemon refuses anything from the relay it cannot open. So this handshakes first and drops the
+   * frame, with a line, if there is still no session. A machine with no pinned peer is one the backend
+   * runs itself, where there is no daemon to seal for and plaintext is the only form it reads.
+   */
+  async sendSealed(frame: DeviceFrame & { machineId: string }): Promise<void> {
+    try { await this.establish(frame.machineId) } catch (err) {
+      this.opts.log(`device: dropped ${frame.type ?? '?'} for ${frame.machineId} — ${(err as Error).message}`)
+      return
+    }
+    if (this.opts.peer(frame.machineId) && !this.sessions.get(frame.machineId)?.ready) {
+      this.opts.log(`device: dropped ${frame.type ?? '?'} for ${frame.machineId} — no E2EE session`)
+      return
+    }
+    this.send(frame)
+  }
+
+  /**
    * One request/response, correlated by `requestId`. Rejects on timeout or an `error` in the reply.
    *
    * `machineId` names the machine to ask; omitted means the attached one. Passing it is what makes an RPC

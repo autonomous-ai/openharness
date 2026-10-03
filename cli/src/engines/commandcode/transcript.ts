@@ -1,4 +1,5 @@
 import { join } from 'path'
+import slugify from '@sindresorhus/slugify'
 import { env } from '../../config/env.js'
 
 /**
@@ -6,9 +7,8 @@ import { env } from '../../config/env.js'
  *
  *   <COMMANDCODE_HOME>/projects/<cwd slug>/<sessionId>.jsonl
  *
- * where the slug is the working directory lowercased with every run of non-alphanumerics collapsed to a
- * dash ("/Users/me/Working/Tmux/Agent-6" → "users-me-working-tmux-agent-6", and "/Users/me/.harness/cli"
- * → "users-me-machine-cli").
+ * Command Code 1.66.0 uses @sindresorhus/slugify with its defaults and falls back to "root". This
+ * splits camelCase and acronyms and transliterates Unicode; simply replacing punctuation loses paths.
  *
  * Deriving it matters because the CLI fires SessionStart BEFORE the file exists, and a path that is not on
  * disk fails the registry's realpath check — so the path used to arrive only with the first Stop hook, i.e.
@@ -17,7 +17,7 @@ import { env } from '../../config/env.js'
  * accept this message" and produced no recap.
  */
 export function commandcodeProjectSlug(cwd: string): string {
-  return cwd.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  return slugify(cwd) || 'root'
 }
 
 /** null when there is not enough to build a path, or when either part could escape the projects root. */

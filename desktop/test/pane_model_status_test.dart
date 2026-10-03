@@ -102,11 +102,11 @@ void main() {
     tester,
   ) async {
     await pane(tester, {'model': 'Qwen3.5-4B', 'webSearch': 'on'});
-    // The header as it was drawn before this ticket, nothing added — its order is main's since
-    // #329, which put the model after the machine.
-    expect(textsUnder(tester), ['Desktop', 'Test host', 'Qwen3.5-4B']);
+    // Engine identity remains beside the model; no startup label is added.
+    // The activity mark is offline because the fixture is not connected.
+    expect(textsUnder(tester), ['Desktop', '⊘', 'Test host', 'Codex', 'Qwen3.5-4B']);
     await event(tester, 'turn_started', payload: {'userMessage': 'hi'});
-    expect(textsUnder(tester), ['Desktop', 'Test host', 'Qwen3.5-4B']);
+    expect(textsUnder(tester), ['Desktop', '⊘', 'Test host', 'Codex', 'Qwen3.5-4B']);
     await settle(tester);
   });
 
@@ -294,7 +294,7 @@ void main() {
       await tester.tap(find.text('Pick another'));
       await tester.pumpAndSettle();
       // The pane's own model picker, open on its models.
-      expect(find.text('SUBSCRIPTION'), findsOneWidget);
+      expect(find.text('Subscription'), findsOneWidget);
       expect(find.text('Gemma-4-12B'), findsOneWidget);
     },
   );

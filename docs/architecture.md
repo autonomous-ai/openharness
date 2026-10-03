@@ -1,22 +1,124 @@
 # How it works
 
+One execution system, with several interfaces. Work belongs to the machine running it;
+opening or closing a view does not determine whether that work runs.
+
+## System overview
+
+Conceptual architecture, recorded September 27, 2026. The founder identifies the TUI as part
+of current development; this diagram describes its intended client role. The web app is now
+a browser target of the existing desktop Flutter package, available as a public preview at
+[harness.autonomous.ai](https://harness.autonomous.ai).
+[Public shared-session pages](product-direction.md#web-shared-sessions-as-an-acquisition-loop)
+remain the next acquisition experiment beyond authenticated workspace access and private invitations.
+The [product direction and roadmap](product-direction.md)
+describe the larger bet and its proposed sequence.
+
+```text
+                            HUMAN
+                              |
+          +-------------------+-------------------+
+          |                   |                   |
+     DEEP WORK           QUICK CONTROL        AUTOMATION
+          |                   |                   |
+   +------+------+     +------+------+         +-----+
+   | Desktop     |     | Mobile      |         | CLI |
+   | TUI (dev)   |     | Web         |         +--+--+
+   +------+------+     +------+------+            |
+          |                   |                   |
+          +-------------------+-------------------+
+                              |
+                SHARED COMMAND + EVENT CONTRACT
+                start / resume / stop / answer
+                status / questions / results
+                              |
+             +----------------+----------------+
+             |                                 |
+        Local socket                  Encrypted remote access
+             |                        P2P for terminal traffic
+             |                        Relay path / fallback
+             |                                 |
+             v                                 v
+   +-----------------------+       +-----------------------+
+   | DAEMON: laptop        |       | DAEMON: workstation   |
+   |                       |       |                       |
+   | Work + harnesses       |       | Work + harnesses       |
+   | Status + questions    |       | Status + questions    |
+   | Engine adapters       |       | Engine adapters       |
+   | Tool/viewer lifecycle |       | Tool/viewer lifecycle |
+   +-----------+-----------+       +-----------+-----------+
+       ^       |                               |
+       |       v                               v
+       |  +--------------------+    +--------------------+
+       |  | Agent processes    |    | Agent processes    |
+       |  | Domain tools       |    | Domain tools       |
+       |  | Project files      |    | Project files      |
+       |  | Artifacts + checks |    | Artifacts + checks |
+       |  +--------------------+    +--------------------+
+       |
+      USB
+       |
+   +-----------------------+
+   | HARNESS DEVICE        |
+   | Glance at progress    |
+   | Answer questions      |
+   | Speak instructions    |
+   +-----------------------+
+
+
+   SUPPORTING SERVICES
+   +----------------------------------------------------+
+   | Backend: accounts, machine discovery, shared swarms |
+   | Relay: connection signaling + encrypted forwarding |
+   | Store: domain packages, tools, skills, viewers      |
+   +----------------------------------------------------+
 ```
-                                ( ◉ )   Harness device (USB)
-                                  │
-   ┌─────────── this computer ───────────┐
-   │  Harness app ── loopback ──▶ harness daemon ──▶ tmux ──▶ claude · codex · …   │
-   └──────────────────────────────┬──────┘
-                                  │ WebSocket (E2EE)
-                        ╔═════════╧═════════╗
-                        ║   Harness Relay   ║   store and forward, no keys
-                        ╚═════════╤═════════╝
-          ┌───────────────────────┼───────────────────────┐
-     your server             your platform            harness.autonomous.ai
-   harness daemon            your HTTP API             the web client
-   tmux · hermes · muse      (provider)                (paired browser)
-          ▲
-          └── terminal traffic goes direct over WebRTC when ICE succeeds
-```
+
+The contract in the diagram is an API boundary, not an extra server. The daemon already
+exposes commands and events through its [local socket](cli.md#automation). A common contract
+does not require every client to expose every operation.
+
+The diagram groups interfaces by their main job; the CLI is also useful for interactive
+administration, and desktop work includes quick decisions. Actual connection paths differ:
+
+- **Desktop and local CLI commands** reach the local daemon. Desktop access to another
+  machine goes through that local daemon's encrypted link.
+- **Mobile** is a standalone client that authenticates and terminates encryption itself.
+  It hosts no agents. See [the mobile architecture](../mobile/README.md).
+- **Web** shares desktop's Flutter screens, state, and terminal renderer in `desktop/`.
+  It authenticates and terminates encryption in the browser, reaching machines through
+  the relay. Browser sign-in, storage, and native capability adapters are separate;
+  there is no browser daemon. This first target does not negotiate WebRTC.
+- **Remote terminal traffic** can use direct WebRTC or TURN; the encrypted relay path
+  remains available. Other command/event traffic uses the supported daemon/relay paths.
+- **The device** communicates over USB with its host daemon. It does not connect to the
+  backend or execute agents.
+
+## Ownership boundaries
+
+| Component | Responsibility |
+| --- | --- |
+| Daemon | Authoritative machine execution state, agent lifecycle, question state, engine integration, and tool/viewer processes. |
+| CLI | Scriptable operations and machine administration over the execution system. |
+| Desktop | Rich interaction, terminal presentation, artifact inspection, and local window layout. |
+| Mobile | Remote access, focused interaction, and decisions while away from the desktop. |
+| Device | Desk status, questions, and voice input through the host. |
+| TUI, in development | Interactive access inside a terminal, using the same operations. |
+| Web, public preview | The shared desktop workspace of swarms and harnesses in a browser, including private read-only invitations; public session pages for discovery and acquisition follow separately. |
+| Backend and relay | Identity, discovery, selected shared metadata, signaling, and encrypted forwarding. |
+| Domain packages | Instructions, skills, toolchain setup, project templates, checks, and viewers. |
+
+Window layouts belong to clients; account-level swarm membership is shared through the backend.
+Runtime truth belongs to the daemon owning the work. A question answered through one interface
+must resolve for the others. Closing an interface leaves execution running on an available host;
+it does not make a sleeping or disconnected host capable of continuing work elsewhere.
+
+The current [orchestrator](../cli/src/orchestrator/service.ts) already persists local project
+runs, task dependencies, and artifact handoffs. Cross-machine orchestration, project migration,
+and universal engine-session portability are separate capabilities; access to a remote terminal
+does not provide them automatically.
+
+## Daemon, sessions, and transport
 
 **The daemon** runs detached under your account. Every five seconds it reconciles the `harness-*`
 tmux sessions with its registry; a pane has to be missing on two scans before its agent is marked
@@ -43,23 +145,25 @@ to it. Encryption is on for every path and has no switch:
 - A **per-process group key** so one event encrypts once for many readers.
 - **ChaCha20-Poly1305** on every frame, with the associated data binding frame type and session.
 
-The crypto core lives in [`cli/src/lib/e2ee/`](cli/src/lib/e2ee/) and is a byte-identical twin of the
+The crypto core lives in [`cli/src/lib/e2ee/`](../cli/src/lib/e2ee/) and is a byte-identical twin of the
 browser's copy, with a drift-guard test and committed self-vectors.
 
 ## Providers, relay, web
 
-- **`provider/`** — the spec ([`spec/README.md`](provider/spec/README.md)), the deterministic
-  [`reference-provider`](provider/reference-provider/) with the conformance runner on port 4319, and
-  [`example-provider`](provider/example-provider/), a real one backed by the local `claude` CLI on
+- **`provider/`** — the spec ([`spec/README.md`](../provider/spec/README.md)), the deterministic
+  [`reference-provider`](../provider/reference-provider/) with the conformance runner on port 4319, and
+  [`example-provider`](../provider/example-provider/), a real one backed by the local `claude` CLI on
   port 4502 (read its README before running it; it skips permissions). `provider/e2e` runs both.
-- **`backend/`** — the relay: Node, MongoDB via Prisma, Redis. It terminates four WebSocket paths
-  (`/api/adapter-ws` for daemons, `/api/web-ws`, `/api/device-ws`, `/api/manager-ws`), signals WebRTC
+- **`desktop/`** — one Flutter package for native desktop and web, with shared product UI
+  and platform adapters. See [web development](../desktop/README.md#web-development).
+- **`backend/`** — the relay: Node, MongoDB via Prisma, Redis. Its WebSocket paths include
+  `/api/adapter-ws` for daemons, `/api/web-ws`, `/api/observer-ws` for private sharing,
+  `/api/device-ws`, and `/api/manager-ws`. It signals WebRTC
   and hands out STUN/TURN, and persists machines, agent names and counters. `npm install && npm run
-  dev` on `:8085`; [`backend/README.md`](backend/README.md) and `.env.example` for the rest.
+  dev` on `:8085`; [`backend/README.md`](../backend/README.md) and `.env.example` for the rest.
   `harness-api.autonomous.ai` is the hosted instance.
-- **The web client** at [harness.autonomous.ai](https://harness.autonomous.ai) reaches the same
-  machines from a browser after `harness pair <code>` or a `harness browser-link`. It is not in this
-  repository; it also hosts the CLI installer and the desktop downloads.
+- **[harness.autonomous.ai](https://harness.autonomous.ai)** is the download page: it hosts the CLI
+  installer and the desktop downloads. It is not in this repository.
 
 ## The Harness device
 
@@ -78,5 +182,5 @@ and Boss mode routes it. A voice turn can carry a mode — `/goal` runs an instr
 
 Firmware updates travel over the same cable in 16 KB credit windows, offered from the published
 metadata and never for a dev build. `harness flash` re-flashes a device from a USB port. The firmware
-is ESP-IDF ≥ 5.5 under [`devices/harness-device/firmware/`](devices/harness-device/firmware/) (`idf.py set-target esp32s3 &&
+is ESP-IDF ≥ 5.5 under [`devices/harness-device/firmware/`](../devices/harness-device/firmware/) (`idf.py set-target esp32s3 &&
 idf.py build`); `make device-test` runs the host-side tests with no board attached.

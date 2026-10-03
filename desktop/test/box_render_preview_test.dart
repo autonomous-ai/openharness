@@ -1,8 +1,10 @@
 import 'support/open_harness.dart';
 import 'support/launch_menu.dart';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/shared/theme/prompt_style.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 
 import 'dart:async';
 import 'dart:io';
@@ -22,6 +24,10 @@ import 'package:harness/state/pane_preset.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/grid_model_picker.dart';
 import 'package:harness/widgets/engine_identity.dart';
+import 'package:harness/widgets/delete_agent_dialog.dart';
+import 'package:harness/widgets/restart_agent_action.dart';
+import 'package:harness/widgets/fork_agent_dialog.dart';
+import 'package:harness/widgets/machine_actions.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'swarm_interactions_test.dart' show chord;
@@ -174,6 +180,196 @@ Future<void> loadPreviewFonts() async {
 
 void main() {
   final dir = Platform.environment['BOX_RENDER_DIR'];
+
+  // Isolated synthetic fixtures let the confirmation family be reviewed without
+  // navigating unrelated surfaces or connecting to a real machine.
+  for (final brightness in Brightness.values) {
+    for (final scale in [1.0, 1.7]) {
+      testWidgets(
+        'desktop confirmations render in ${brightness.name} at $scale',
+        skip: dir == null,
+        variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+        (tester) async {
+          await tester.runAsync(loadPreviewFonts);
+          final oldBrightness = grid.AppTheme.brightness.value;
+          grid.AppTheme.brightness.value = brightness;
+          addTearDown(() => grid.AppTheme.brightness.value = oldBrightness);
+          final oldShadows = debugDisableShadows;
+          debugDisableShadows = false;
+          addTearDown(() => debugDisableShadows = oldShadows);
+          tester.view.devicePixelRatio = 1;
+          tester.view.physicalSize = scale == 1
+              ? const Size(900, 700)
+              : const Size(480, 360);
+          addTearDown(tester.view.reset);
+
+          Future<void> open(void Function(BuildContext) show) async {
+            await tester.pumpWidget(
+              MaterialApp(
+                debugShowCheckedModeBanner: false,
+                theme: grid.buildAppTheme(brightness: brightness),
+                builder: (context, child) => MediaQuery(
+                  data: MediaQuery.of(context)
+                      .copyWith(textScaler: TextScaler.linear(scale)),
+                  child: child!,
+                ),
+                home: Scaffold(
+                  body: Builder(
+                    builder: (context) => TextButton(
+                      onPressed: () => show(context),
+                      child: const Text('Open fixture'),
+                    ),
+                  ),
+                ),
+              ),
+            );
+            await tester.tap(find.text('Open fixture'));
+            await tester.pumpAndSettle();
+          }
+
+          Future<void> shot(String name, String closeLabel) async {
+            expect(find.text(closeLabel).hitTestable(), findsOneWidget);
+            expect(tester.takeException(), isNull);
+            await tester.pump(const Duration(milliseconds: 50));
+            await expectLater(
+              find.byType(MaterialApp),
+              matchesGoldenFile(
+                Uri.file(
+                  '$dir/confirmation-$name-${brightness.name}-$scale.png',
+                ),
+              ),
+            );
+          }
+
+          Future<void> close() async {
+            await key(tester, LogicalKeyboardKey.escape);
+            await tester.pumpAndSettle();
+            await tester.pumpWidget(const SizedBox());
+          }
+
+          AppNotifier fixture(WsConn connection) {
+            final app = createApp(connectionForTest: (_) => connection);
+            app.stateOf('m')!
+              ..nodeOnline = true
+              ..agents = const [
+                Agent(
+                  id: 'a0',
+                  name: 'Improve search and keyboard navigation',
+                  engine: 'codex',
+                  terminalAvailable: true,
+                ),
+              ];
+            app.adoptSessionForTest(terminal('a0', []));
+            addTearDown(app.dispose);
+            return app;
+          }
+
+          final stopping = StopConnection();
+          final stopApp = fixture(stopping);
+          await open((context) {
+            confirmDeleteAgent(
+              context,
+              stopApp,
+              'm',
+              'a0',
+              'Improve search and keyboard navigation',
+              engine: 'codex',
+            );
+          });
+          await shot('stop', 'Cancel');
+          await tester.tap(find.byKey(const Key('agent-stop-confirm')));
+          await tester.pumpAndSettle();
+          await shot('stop-pending', 'Close');
+          stopping.stopReplies.single.complete({
+            'error': 'OFFLINE',
+            'detail': 'Reconnect to this machine and try again.',
+          });
+          await tester.pumpAndSettle();
+          await shot('stop-error', 'Cancel');
+          await tester.tap(find.byKey(const Key('agent-stop-confirm')));
+          await tester.pumpAndSettle();
+          stopping.stopReplies.last.complete({
+            'error': 'OFFLINE',
+            'detail': List.generate(
+              12,
+              (index) =>
+                  'Diagnostic ${index + 1}: reconnect to this machine and try again.',
+            ).join('\n'),
+          });
+          await tester.pumpAndSettle();
+          await shot('stop-long-error', 'Cancel');
+          await close();
+
+          final restarting = RestartConnection();
+          final restartApp = fixture(restarting);
+          await open(
+            (context) => restartHarness(context, restartApp, 'm', 'a0'),
+          );
+          await shot('restart-pending', 'Close');
+          restarting.restartReplies.single.completeError(
+            const WsRequestTimeout('agent_restart'),
+          );
+          await tester.pumpAndSettle();
+          await shot('restart-uncertain', 'Close');
+          await tester.tap(find.byKey(const Key('restart-again')));
+          await tester.pumpAndSettle();
+          await shot('restart-again', 'Cancel');
+          await key(tester, LogicalKeyboardKey.escape);
+          await tester.pumpAndSettle();
+          await close();
+
+          final forking = ForkConnection();
+          final forkApp = fixture(forking);
+          await open((context) {
+            forkHarness(
+              context,
+              forkApp,
+              'm',
+              'a0',
+              'Improve search and keyboard navigation',
+              engine: 'codex',
+            );
+          });
+          await shot('fork', 'Cancel');
+          await tester.enterText(
+            find.byKey(const ValueKey('fork-task')),
+            'Explore a simpler search layout.\nKeep the keyboard shortcuts.',
+          );
+          await key(tester, LogicalKeyboardKey.enter);
+          await shot('fork-pending', 'Close');
+          forking.forkReplies.single.completeError(
+            const WsRequestTimeout('agent_fork'),
+          );
+          await tester.pumpAndSettle();
+          await shot('fork-uncertain', 'Close');
+          await close();
+
+          final machineApp = fixture(_PreviewConnection());
+          final machineApi = MachineApi()..deleteReply = Completer<void>();
+          machineApp.api = machineApi;
+          await open(
+            (context) => confirmDeleteMachine(
+              context,
+              machineApp,
+              machineId: 'm',
+              displayName: 'Studio Mac · Development and release builds',
+            ),
+          );
+          await shot('delete-machine', 'Cancel');
+          await tester.tap(find.byKey(const Key('machine-delete-confirm')));
+          await tester.pumpAndSettle();
+          await shot('delete-machine-pending', 'Close');
+          machineApi.deleteReply!.completeError(
+            ApiException('Could not reach your account. Try again.'),
+          );
+          await tester.pumpAndSettle();
+          await shot('delete-machine-error', 'Cancel');
+          await close();
+          debugDisableShadows = oldShadows;
+        },
+      );
+    }
+  }
 
   testWidgets(
     'renders the box to PNGs',
@@ -593,7 +789,7 @@ void main() {
       await tester.pump();
       tester
           .widget<IconButton>(
-            find.widgetWithIcon(IconButton, Icons.more_horiz).first,
+            find.widgetWithIcon(IconButton, AppIcons.ellipsis).first,
           )
           .focusNode!
           .requestFocus();
@@ -1030,7 +1226,7 @@ void main() {
         'state': 'failed',
         'failure': {
           'code': 'AGENT_BUSY',
-          'detail': 'Another operation is changing this agent. Wait for it to finish, then retry.',
+          'detail': 'Another operation is changing this harness. Wait for it to finish, then retry.',
         },
       });
       await tester.pumpAndSettle();

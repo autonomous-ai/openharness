@@ -11,6 +11,7 @@ import 'package:harness/logging/redact.dart';
 import 'package:harness/models/api_connections_controller.dart';
 import 'package:harness/models/model_manager_controller.dart';
 import 'package:harness/models/models_panel.dart';
+import 'package:harness/widgets/api_picker_form.dart';
 import 'package:harness/usage/models_menu_controller.dart';
 import 'package:harness/ws/ws_conn.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -40,8 +41,9 @@ class _ApiApp extends ModelManagerTestApp {
   @override
   Future<Map<String, dynamic>> apiConnections(
     String machineId,
-    Map<String, dynamic> payload,
-  ) async {
+    Map<String, dynamic> payload, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
     expect(machineId, 'm');
     requests.add(payload);
     if (failure != null) throw failure!;
@@ -106,6 +108,205 @@ void main() {
         ))
         .load();
   });
+  testWidgets(
+    'inline API setup masks the key, reports errors, and saves once',
+    (tester) async {
+      final app = _ApiApp();
+      final controller = ApiConnectionsController(app);
+      final closed = <String?>[];
+      try {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: ApiPickerForm(
+                controller: controller,
+                onClose: closed.add,
+                onFocusChanged: (_) {},
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.byType(Dialog), findsNothing);
+        await tester.tap(
+          find.byKey(const ValueKey('api-form:provider:openrouter')),
+        );
+        await tester.pumpAndSettle();
+        final key = find.byKey(const ValueKey('api-form-input:key'));
+        expect(tester.widget<TextField>(key).focusNode!.hasFocus, isTrue);
+        expect(tester.widget<TextField>(key).obscureText, isTrue);
+        await tester.enterText(key, 'fixture-only-key');
+        app.response = {'error': 'fixture', 'detail': 'Try saving again.'};
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(find.text('Try saving again.'), findsOneWidget);
+        expect(closed, isEmpty);
+        expect(
+          tester.widget<TextField>(key).controller!.text,
+          'fixture-only-key',
+        );
+        app.response = null;
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(closed, ['openrouter']);
+        expect(
+          app.requests.where((row) => row['action'] == 'save'),
+          hasLength(2),
+        );
+        expect(
+          controller.connections.single.data.containsKey('apiKey'),
+          isFalse,
+        );
+        expect(tester.widget<TextField>(key).controller!.text, isEmpty);
+        expect(tester.takeException(), isNull);
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        controller.dispose();
+        app.dispose();
+      }
+    },
+  );
+
+  testWidgets(
+    'inline API form validates custom URLs and keeps a saved key on edit',
+    (tester) async {
+      final app = _ApiApp();
+      final controller = ApiConnectionsController(app);
+      final closed = <String?>[];
+      await controller.refresh();
+      try {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: ApiPickerForm(
+                controller: controller,
+                onClose: closed.add,
+                onFocusChanged: (_) {},
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey('api-form:provider:custom')),
+        );
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const ValueKey('api-form-input:name')),
+          'Example',
+        );
+        await tester.enterText(
+          find.byKey(const ValueKey('api-form-input:url')),
+          'https://example.test/v1?key=bad',
+        );
+        await tester.enterText(
+          find.byKey(const ValueKey('api-form-input:key')),
+          'fixture-only-key',
+        );
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Take the ? or # part off the end of the URL.'),
+          findsOneWidget,
+        );
+        expect(app.requests.where((row) => row['action'] == 'save'), isEmpty);
+        await tester.enterText(
+          find.byKey(const ValueKey('api-form-input:url')),
+          'https://example.test/v1',
+        );
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(closed, ['custom-fixture']);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: ApiPickerForm(
+                key: const ValueKey('edit-api'),
+                controller: controller,
+                connectionId: 'custom-fixture',
+                onClose: closed.add,
+                onFocusChanged: (_) {},
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final key = find.byKey(const ValueKey('api-form-input:key'));
+        expect(tester.widget<TextField>(key).controller!.text, isEmpty);
+        await tester.enterText(
+          find.byKey(const ValueKey('api-form-input:name')),
+          'Renamed',
+        );
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(controller.connections.single.name, 'Renamed');
+        expect((app.requests.last['connection'] as Map)['apiKey'], isEmpty);
+        expect(tester.takeException(), isNull);
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        controller.dispose();
+        app.dispose();
+      }
+    },
+  );
+
+  testWidgets(
+    'leaving a pending inline API save cannot reopen or refocus the editor',
+    (tester) async {
+      final app = _ApiApp();
+      final controller = ApiConnectionsController(app);
+      final closed = <String?>[];
+      await controller.refresh();
+      final reply = Completer<Map<String, dynamic>>();
+      try {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: ApiPickerForm(
+                controller: controller,
+                onClose: closed.add,
+                onFocusChanged: (_) {},
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey('api-form:provider:openrouter')),
+        );
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const ValueKey('api-form-input:key')),
+          'fixture-only-key',
+        );
+        app.held = reply;
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pump();
+        expect(controller.saving, isTrue);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pump();
+        expect(closed, [null]);
+        await tester.pumpWidget(const SizedBox());
+        reply.complete({
+          'connections': [
+            {...preset, 'id': 'openrouter'},
+          ],
+          'presets': [preset],
+        });
+        await tester.pumpAndSettle();
+        expect(closed, [null]);
+        expect(controller.saving, isFalse);
+        expect(tester.takeException(), isNull);
+      } finally {
+        if (!reply.isCompleted) {
+          reply.complete({'connections': [], 'presets': []});
+        }
+        await tester.pumpWidget(const SizedBox());
+        controller.dispose();
+        app.dispose();
+      }
+    },
+  );
   test('metadata and frame logging strip credentials', () {
     final value = ApiConnection.fromJson({
       ...preset,
@@ -895,7 +1096,10 @@ void main() {
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(
-        find.text('Enter an API URL without credentials or query parameters.'),
+        find.text(
+          'Enter the full URL, starting with https://, '
+          'for example https://openrouter.ai/api/v1.',
+        ),
         findsOneWidget,
       );
       expect(tester.takeException(), isNull);

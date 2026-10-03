@@ -3,6 +3,7 @@ import 'support/open_harness.dart';
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,6 +13,7 @@ import 'package:harness/terminal/terminal_font_store.dart';
 import 'package:harness/terminal/terminal_session.dart';
 
 import 'swarm_interactions_test.dart' show chord;
+import 'keymap_host_test.dart' show key;
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 import 'terminal_find_test.dart' show terminalView;
@@ -159,7 +161,14 @@ void main() {
         PanePreset.columns,
         PanePreset.rows,
       ]) {
-        await chord(tester, LogicalKeyboardKey.keyL, shift: true);
+        final linux = defaultTargetPlatform == TargetPlatform.linux;
+        await key(
+          tester,
+          LogicalKeyboardKey.keyL,
+          cmd: !linux,
+          alt: linux,
+          shift: true,
+        );
         await tester.pump(const Duration(milliseconds: 200));
         await tester.tap(find.text(preset.label));
         await tester.pump();

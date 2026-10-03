@@ -1,0 +1,1239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="daemon-review-source" content="32d0bbbaed8d2a0c3e16d316883ec34009117921e8a35e262e89963470f0ec6d">
+<title>Build report · Daemons review</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #1c1c1c;
+  --panel: #262626;
+  --deep: #121212;
+  --line: #3a3a3a;
+  --faint: #626262;
+  --dim: #949494;
+  --ink: #d0d0d0;
+  --bright: #eeeeee;
+  --green: #5faf5f;
+  --yellow: #d7af5f;
+  --cyan: #5fafaf;
+  --red: #d75f5f;
+  --blue: #87afd7;
+  --mono: "IBM Plex Mono", Menlo, Consolas, monospace;
+  --sans: "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
+  --vt: "VT323", "IBM Plex Mono", monospace;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 16px/1.6 var(--sans);
+  padding-inline: 20px;
+  padding-block: 20px 72px;
+  margin: 0;
+}
+.wrap {
+  max-width: 1040px;
+  margin: 0 auto;
+  display: grid;
+  gap: 8px;
+}
+a {
+  color: var(--blue);
+}
+code,
+.mono {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: 0.92em;
+  color: var(--bright);
+}
+p {
+  margin: 0;
+  max-width: 70ch;
+}
+.manline {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font: 13px/1.5 var(--mono);
+  color: var(--dim);
+  padding-block: 6px;
+  border-bottom: 1px solid var(--line);
+}
+h1 {
+  font: 400 52px/1 var(--vt);
+  letter-spacing: 0.04em;
+  color: var(--bright);
+  margin: 28px 0 6px;
+}
+h2 {
+  font: 400 30px/1 var(--vt);
+  letter-spacing: 0.08em;
+  color: var(--bright);
+  margin: 44px 0 6px;
+  text-transform: uppercase;
+}
+h3 {
+  font: 500 13px var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--dim);
+  margin: 18px 0 4px;
+}
+.lede {
+  font-size: 19px;
+  color: var(--bright);
+  max-width: 62ch;
+  text-wrap: balance;
+}
+.note {
+  font: 13px/1.5 var(--mono);
+  color: var(--dim);
+}
+.prs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.pr {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 12px 14px;
+  display: grid;
+  gap: 4px;
+  align-content: start;
+}
+.pr .n {
+  font: 600 15px var(--mono);
+  color: var(--bright);
+}
+.pr .s {
+  font: 11px/1.6 var(--mono);
+  color: var(--yellow);
+  border: 1px solid currentColor;
+  padding: 0 6px;
+  justify-self: start;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.pr p {
+  font-size: 14px;
+  color: var(--ink);
+}
+figure {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+figure img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border: 1px solid var(--line);
+  background: var(--deep);
+}
+figcaption {
+  font: 13px/1.5 var(--mono);
+  color: var(--dim);
+}
+.g2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 16px;
+  align-items: start;
+}
+.g3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 14px;
+  align-items: start;
+}
+.phone img {
+  max-width: 300px;
+}
+ul {
+  margin: 0;
+  padding-left: 1.1em;
+  display: grid;
+  gap: 6px;
+  max-width: 76ch;
+}
+li::marker {
+  color: var(--faint);
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 14px;
+}
+th {
+  text-align: left;
+  font: 500 11.5px var(--mono);
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 6px 12px 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+td {
+  padding: 8px 12px 8px 0;
+  border-bottom: 1px solid var(--panel);
+  vertical-align: top;
+}
+td:first-child {
+  font-family: var(--mono);
+  color: var(--bright);
+  white-space: nowrap;
+}
+.tbl {
+  overflow-x: auto;
+}
+.num {
+  font-variant-numeric: tabular-nums;
+}
+.ok {
+  color: var(--green);
+}
+.warn {
+  color: var(--yellow);
+}
+
+/* Shared by the standalone pages; build.mjs embeds this file. */
+:root {
+  color-scheme: dark;
+  --bg: #1c1c1c;
+  --panel: #262626;
+  --deep: #0c0c0c;
+  --line: #424242;
+  --faint: #a0a0a0;
+  --dim: #aaa;
+  --ink: #d0d0d0;
+  --bright: #eee;
+  --green: #87af87;
+  --yellow: #d7af5f;
+  --blue: #9bbddd;
+  --mono: Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --vt: var(--mono);
+}
+* {
+  box-sizing: border-box;
+}
+html {
+  scroll-padding-top: 20px;
+}
+body {
+  margin: 0;
+  padding: 24px 24px 64px;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.65 var(--sans);
+}
+[hidden] {
+  display: none !important;
+}
+a {
+  color: var(--blue);
+  text-underline-offset: 4px;
+}
+a:hover {
+  color: var(--bright);
+}
+button,
+input,
+select {
+  font: inherit;
+}
+button,
+select {
+  cursor: pointer;
+}
+button {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 7px 12px;
+  color: var(--ink);
+  font: 13px/1.5 var(--mono);
+}
+button:hover {
+  background: var(--panel);
+  color: var(--bright);
+}
+button[aria-pressed="true"] {
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+:focus-visible {
+  outline: 2px solid var(--yellow);
+  outline-offset: 4px;
+}
+pre,
+code,
+kbd {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
+}
+pre {
+  margin: 0;
+}
+code {
+  color: var(--bright);
+}
+p {
+  max-width: 72ch;
+}
+h1,
+h2,
+h3 {
+  color: var(--bright);
+}
+h2 {
+  margin-top: 40px;
+  font: 600 19px/1.5 var(--mono);
+  letter-spacing: 0;
+}
+h3 {
+  font: 600 16px/1.5 var(--mono);
+}
+.wrap,
+.review-header,
+.review-footer {
+  max-width: 1080px;
+  margin-inline: auto;
+  min-width: 0;
+}
+.review-header {
+  padding-bottom: 24px;
+  margin-bottom: 28px;
+  border-bottom: 1px solid var(--line);
+}
+.review-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  margin: 0 0 26px;
+  font: 13px/1.5 var(--mono);
+}
+.review-nav a {
+  padding-block: 8px;
+  text-decoration: none;
+}
+.review-nav [aria-current="page"] {
+  color: var(--yellow);
+  text-decoration: underline;
+}
+.review-nav button {
+  margin-left: auto;
+}
+.review-kicker {
+  font: 12px/1.5 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  color: var(--yellow);
+}
+.review-header h1 {
+  font: 600 clamp(28px, 5vw, 44px) / 1.2 var(--sans);
+  letter-spacing: -0.03em;
+  margin: 10px 0 12px;
+}
+.review-header p {
+  margin: 0;
+  color: var(--dim);
+  max-width: 75ch;
+}
+.review-footer {
+  margin-top: 48px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  color: var(--dim);
+  font: 12px/1.7 var(--mono);
+}
+.review-footer a {
+  display: inline-block;
+  margin-right: 18px;
+}
+.review-skip {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 100;
+  padding: 10px;
+  background: var(--deep);
+  transform: translateY(-150%);
+}
+.review-skip:focus {
+  transform: none;
+}
+.review-notice {
+  border-left: 2px solid var(--yellow);
+  padding: 10px 16px;
+  margin: 18px 0;
+  background: var(--panel);
+  color: var(--ink);
+  font: 14px/1.7 var(--sans);
+}
+.review-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 20px 0;
+  font: 13px/1.5 var(--mono);
+}
+.review-empty {
+  padding: 32px 0;
+  color: var(--dim);
+}
+.review-index {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr));
+  gap: 16px;
+}
+.review-destination {
+  padding: 28px;
+  border: 1px solid var(--line);
+  text-decoration: none;
+  color: var(--ink);
+  background: var(--deep);
+}
+.review-destination:hover {
+  border-color: var(--yellow);
+}
+.review-destination h2 {
+  margin: 14px 0;
+  font: 600 24px/1.3 var(--sans);
+}
+.review-destination p {
+  font-size: 14px;
+  color: var(--dim);
+}
+.review-destination > span:last-child {
+  font: 13px var(--mono);
+  color: var(--blue);
+}
+.review-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+.lbl,
+.note {
+  font: 13px/1.6 var(--mono);
+  color: var(--dim);
+}
+.lbl {
+  min-width: 6ch;
+}
+.lede {
+  font-size: 18px;
+  color: var(--bright);
+}
+.ind {
+  padding-left: 0;
+}
+.states,
+.grid6,
+.tims-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
+  gap: 12px;
+}
+.states figure,
+.sample-card {
+  margin: 0;
+  min-width: 0;
+  background: var(--deep);
+  border: 1px solid var(--line);
+  padding: 18px 12px;
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  align-content: start;
+}
+.states pre {
+  min-height: 190px;
+  display: flex;
+  align-items: center;
+  font: 7.6px/1.2 var(--mono);
+}
+.states figcaption {
+  text-align: center;
+  font: 13px/1.6 var(--mono);
+  color: var(--dim);
+}
+.states figcaption b {
+  color: var(--bright);
+}
+.sample-card pre {
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  font: 8.5px/1.2 var(--mono);
+}
+.sample-card .flags {
+  text-align: center;
+  font: 12px/1.6 var(--mono);
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}
+.sample-card .flags b {
+  color: var(--yellow);
+}
+.sample-card .seed {
+  font: 11px/1.5 var(--mono);
+  color: var(--dim);
+}
+.sample-card .rare {
+  font: 600 13px/1.5 var(--mono);
+  color: var(--bright);
+}
+.one {
+  white-space: pre;
+  font: 13px/1.5 var(--mono);
+  background: #5faf5f;
+  color: #080808;
+  padding: 2px 8px;
+}
+.sp {
+  margin: 36px 0;
+}
+.sp h3 small {
+  color: var(--dim);
+  font: 12px var(--mono);
+  margin-left: 12px;
+}
+.cat {
+  color: var(--dim);
+  font: 12px/1.8 var(--mono);
+  margin: 10px 0 18px;
+}
+.cat b {
+  color: var(--ink);
+}
+.traits-filter {
+  display: flex;
+  align-items: end;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 16px 0;
+  border-block: 1px solid var(--line);
+}
+.traits-filter label {
+  display: grid;
+  min-width: 0;
+  max-width: 100%;
+  gap: 4px;
+  font: 12px/1.5 var(--mono);
+  color: var(--dim);
+}
+.traits-filter select,
+.traits-filter input {
+  background: var(--deep);
+  color: var(--bright);
+  border: 1px solid var(--line);
+  padding: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+.eggs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 145px), 1fr));
+  gap: 10px;
+  margin: 18px 0;
+}
+.eggs-grid button {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 14px 8px;
+  background: var(--deep);
+}
+.eggs-grid pre {
+  display: flex;
+  align-items: center;
+  min-height: 120px;
+  font: 6.4px/1.2 var(--mono);
+}
+.eggs-grid .nm {
+  color: var(--bright);
+}
+.eggs-grid .how {
+  color: var(--dim);
+  font: 11px/1.5 var(--mono);
+}
+.egg-player {
+  border: 1px solid var(--line);
+  background: var(--deep);
+  padding: clamp(12px, 3vw, 24px);
+}
+.egg-stage {
+  min-height: 370px;
+  display: grid;
+  place-items: center;
+  padding: 12px 0;
+  background: var(--deep);
+}
+.egg-stage.dark {
+  background: #000;
+}
+.egg-stage pre {
+  font: 11px/1.2 var(--mono);
+  white-space: pre;
+}
+.egg-stage pre > span {
+  display: block;
+}
+.egg-caption {
+  min-height: 3.3em;
+  font: 13px/1.6 var(--mono);
+  color: var(--dim);
+}
+.egg-scrub {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0;
+  font: 12px/1.5 var(--mono);
+}
+.egg-scrub input {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--yellow);
+}
+.egg-controls {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+.egg-status {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.egg-status .note {
+  flex: 1;
+}
+.tbl {
+  max-width: 100%;
+  overflow-x: auto;
+}
+table {
+  border-collapse: collapse;
+}
+th,
+td {
+  padding: 10px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+img {
+  max-width: 100%;
+  height: auto;
+}
+section {
+  min-width: 0;
+}
+.states,
+.grid6,
+.tims-grid,
+.g2 {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
+}
+@media (max-width: 600px) {
+  body {
+    padding: 16px 14px 48px;
+  }
+  .review-nav {
+    gap: 4px 15px;
+  }
+  .review-nav button {
+    margin-left: 0;
+  }
+  .review-header {
+    padding-bottom: 20px;
+  }
+  .egg-stage {
+    min-height: 300px;
+  }
+  .egg-scrub {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 12px;
+  }
+  .egg-scrub > span {
+    grid-column: 1 / -1;
+  }
+  .show-stage,
+  .hatch {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .plate-box {
+    min-width: 0;
+  }
+}
+@media (pointer: coarse) {
+  button,
+  select,
+  .review-nav a {
+    min-height: 44px;
+  }
+  input[type="range"] {
+    min-height: 32px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition: none !important;
+    animation: none !important;
+  }
+}
+@media print {
+  body {
+    background: white;
+    color: black;
+  }
+  .review-nav button,
+  .egg-controls,
+  .traits-filter {
+    display: none;
+  }
+  .review-header h1,
+  h2,
+  h3 {
+    color: black;
+  }
+  .sample-card,
+  figure {
+    break-inside: avoid;
+  }
+}
+
+</style>
+
+</head>
+<body>
+<a class="review-skip" href="#review-main">Skip to content</a><header class="review-header"><nav class="review-nav" aria-label="Review pages"><a href="../index.html">Overview</a><a href="../eggs.html">Eggs</a><a href="../traits.html">Traits</a><a href="../lookbook.html">Lookbook</a><a href="../overnight/index.html" aria-current="page">Build report</a></nav><div class="review-kicker">Archive / 26–27 September 2026</div><h1>One night of building.</h1><p>The original overnight report, preserved with its screenshots. A historical snapshot, with a link to the later handoff.</p></header>
+<main class="wrap" id="review-main" tabindex="-1">
+  <div class="manline">
+    <span>DAEMONS(6)</span><span>overnight build · 26–27 Sep 2026</span
+    ><span>DAEMONS(6)</span>
+  </div>
+
+  <aside class="review-notice">
+    <strong>Historical record.</strong> This report predates drop init and
+    individual daemons. Its screenshots, test counts, draft labels, and open
+    questions describe 26–27 September, not the current build. Duplicate merging
+    and the old unix roster were superseded. hn was subsequently implemented.
+    <a href="../../../docs/research/2026-09-27-daemons-handoff.md"
+      >Read the continuation and validation handoff →</a
+    >
+  </aside>
+  <h2>Original report · 26–27 September</h2>
+  <p class="lede">
+    The pair-programming buddies that hatch from your work are built end to end:
+    the server, the brain on every machine, learning, the economy, the desktop
+    and the phone. Everything is in draft PRs. Nothing is merged.
+  </p>
+
+  <div class="prs">
+    <div class="pr">
+      <span class="n"
+        ><a href="https://github.com/autonomous-ai/openharness/pull/369"
+          >#369</a
+        >
+        Daemons</span
+      ><span class="s">draft</span>
+      <p>
+        The core: design, roster and art, server zoo, the pair brain, learning,
+        economy, phone, security hardening. 85 commits.
+      </p>
+    </div>
+    <div class="pr">
+      <span class="n"
+        ><a href="https://github.com/autonomous-ai/openharness/pull/370"
+          >#370</a
+        >
+        Daemons on the desktop</span
+      ><span class="s">draft</span>
+      <p>
+        Stacked on #369: status line, hatch reveal, the four-tab panel, consent,
+        the brain's keys.
+      </p>
+    </div>
+    <div class="pr">
+      <span class="n"
+        ><a href="https://github.com/autonomous-ai/openharness/pull/367"
+          >#367</a
+        >
+        Stale answers</span
+      ><span class="s">draft</span>
+      <p>
+        A late answer can no longer be typed into the next dialog. Also inside
+        #369.
+      </p>
+    </div>
+    <div class="pr">
+      <span class="n"
+        ><a href="https://github.com/autonomous-ai/openharness/pull/366"
+          >#366</a
+        >
+        Tab and launch fixes</span
+      ><span class="s">draft</span>
+      <p>
+        A tab closes with its last pane; the New Harness form shows launch
+        progress.
+      </p>
+    </div>
+  </div>
+  <p class="note">
+    The current local lookbook:
+    <a href="../lookbook.html">Terminal Creatures</a>. Start reading the code at
+    <code>daemons/README.md</code>.
+  </p>
+
+  <h2>Look first</h2>
+  <div class="g2">
+    <figure>
+      <a href="img/status-brain.jpg"
+        ><img
+          src="img/status-brain.jpg"
+          alt="Status line lines: a need with keys first, a proposal, a lesson, a reply, an automatic action, a count"
+          width="1100"
+          height="219"
+          loading="lazy"
+          decoding="async"
+      /></a>
+      <figcaption>
+        The status line. Keys first, facts first, the daemon's tag last. Only
+        needs and failures take over the line.
+      </figcaption>
+    </figure>
+    <figure>
+      <a href="img/status-detail-armed.jpg"
+        ><img
+          src="img/status-detail-armed.jpg"
+          alt="A need line with its full command shown under the status line"
+          width="1100"
+          height="312"
+          loading="lazy"
+          decoding="async"
+      /></a>
+      <figcaption>
+        Every approval shows the harness and the exact command. Keys arm 450 ms
+        after the line is drawn.
+      </figcaption>
+    </figure>
+  </div>
+  <div class="g3" style="margin-top: 14px">
+    <figure>
+      <a href="img/hatch-tell-legendary-pop.jpg"
+        ><img
+          src="img/hatch-tell-legendary-pop.jpg"
+          alt="An egg popping with yellow sparks"
+          width="1040"
+          height="555"
+          loading="lazy"
+          decoding="async"
+      /></a>
+      <figcaption>
+        The crack tells the rarity: yellow sparks for a legendary.
+      </figcaption>
+    </figure>
+    <figure>
+      <a href="img/hatch-7-banner.jpg"
+        ><img
+          src="img/hatch-7-banner.jpg"
+          alt="The hatchling and its name in the banner face"
+          width="1040"
+          height="555"
+          loading="lazy"
+          decoding="async"
+      /></a>
+      <figcaption>The name in the new banner face.</figcaption>
+    </figure>
+    <figure>
+      <a href="img/hatch-8-card.jpg"
+        ><img
+          src="img/hatch-8-card.jpg"
+          alt="The hatch card"
+          width="1040"
+          height="960"
+          loading="lazy"
+          decoding="async"
+      /></a>
+      <figcaption>
+        The card: portrait, number, rarity, lineage, first words. Copies as a
+        code block.
+      </figcaption>
+    </figure>
+  </div>
+
+  <h2>The status line</h2>
+  <figure>
+    <a href="img/status-slot.jpg"
+      ><img
+        src="img/status-slot.jpg"
+        alt="The daemon slot in every state"
+        width="1100"
+        height="948"
+        loading="lazy"
+        decoding="async"
+    /></a>
+    <figcaption>
+      Eight cells in the bar's own colour: the nest filling with habits, egg
+      kinds, versions, moods, the +N count, a shiny marker.
+    </figcaption>
+  </figure>
+
+  <h2>Hatching and growing</h2>
+  <div class="g2">
+    <figure>
+      <a href="img/hatch-consent.jpg"
+        ><img
+          src="img/hatch-consent.jpg"
+          alt="The consent screen after a hatch"
+          width="1040"
+          height="907"
+          loading="lazy"
+          decoding="async"
+      /></a>
+      <figcaption>
+        After the first hatch: what it sees, reads and writes. Nothing is
+        watched until you say yes; it starts at watch.
+      </figcaption>
+    </figure>
+    <figure>
+      <a href="img/hatch-levelup-held.jpg"
+        ><img
+          src="img/hatch-levelup-held.jpg"
+          alt="A level-up to a new version"
+          width="1040"
+          height="559"
+          loading="lazy"
+          decoding="async"
+      /></a>
+      <figcaption>
+        A level-up morphs to the new version, with a changelog line.
+      </figcaption>
+    </figure>
+  </div>
+
+  <h2>The panel</h2>
+  <div class="g2">
+    <figure>
+      <a href="img/panel-tab-2-zoo.jpg"
+        ><img
+          src="img/panel-tab-2-zoo.jpg"
+          alt="The zoo tab"
+          width="1100"
+          height="1334"
+          loading="lazy"
+          decoding="async"
+      /></a>
+      <figcaption>
+        2:zoo. The back of the box: numbered slots, the secret's slot, versions,
+        duplicates, meters to the next egg.
+      </figcaption>
+    </figure>
+    <figure>
+      <a href="img/panel-tab-4-settings.jpg"
+        ><img
+          src="img/panel-tab-4-settings.jpg"
+          alt="The settings tab"
+          width="1100"
+          height="1142"
+          loading="lazy"
+          decoding="async"
+      /></a>
+      <figcaption>
+        4:settings. Quiet, motion, nap, the autonomy dial with its floor,
+        consent, rules.
+      </figcaption>
+    </figure>
+  </div>
+
+  <h2>The phone</h2>
+  <div class="g3 phone">
+    <figure>
+      <a href="img/phone-sheet.jpg"
+        ><img
+          src="img/phone-sheet.jpg"
+          alt="The phone's daemon sheet"
+          width="1100"
+          height="2380"
+          loading="lazy"
+          decoding="async"
+      /></a>
+      <figcaption>The sheet: portrait, line, eggs, the shelf.</figcaption>
+    </figure>
+    <figure>
+      <a href="img/phone-duplicate.jpg"
+        ><img
+          src="img/phone-duplicate.jpg"
+          alt="A duplicate hatch merging into the original"
+          width="1100"
+          height="1587"
+          loading="lazy"
+          decoding="async"
+      /></a>
+      <figcaption>
+        A duplicate merges: +150 xp, shiny carried over, level up.
+      </figcaption>
+    </figure>
+    <figure>
+      <a href="img/phone-consent.jpg"
+        ><img
+          src="img/phone-consent.jpg"
+          alt="The phone's consent screen"
+          width="1100"
+          height="2179"
+          loading="lazy"
+          decoding="async"
+      /></a>
+      <figcaption>The same consent, on the phone.</figcaption>
+    </figure>
+  </div>
+
+  <h2>Cards</h2>
+  <p>
+    Text for a code block, SVG for X, previews and a GitHub profile README. A
+    card never shows a live mood.
+  </p>
+  <div class="g3" style="margin-top: 10px">
+    <figure>
+      <a href="img/tim.svg"
+        ><img
+          src="img/tim.svg"
+          alt="tim's card as SVG"
+          style="border: 0; background: none"
+          width="389"
+          height="312"
+          loading="lazy"
+          decoding="async"
+      /></a>
+      <figcaption>
+        <code>node daemons/tools/card.mjs tim --version 2.0 --svg</code>
+      </figcaption>
+    </figure>
+    <figure>
+      <a href="img/zsh.svg"
+        ><img
+          src="img/zsh.svg"
+          alt="zsh's card as SVG"
+          style="border: 0; background: none"
+          width="389"
+          height="312"
+          loading="lazy"
+          decoding="async"
+      /></a>
+      <figcaption>zsh, redrawn as a hermit crab.</figcaption>
+    </figure>
+    <figure>
+      <a href="img/shelf.svg"
+        ><img
+          src="img/shelf.svg"
+          alt="A zoo shelf as SVG"
+          style="border: 0; background: none"
+          width="440"
+          height="159"
+          loading="lazy"
+          decoding="async"
+      /></a>
+      <figcaption>
+        A shelf: owned daemons in colour, numbered empty slots, the secret.
+      </figcaption>
+    </figure>
+  </div>
+
+  <h2>What got built</h2>
+  <div class="tbl">
+    <table>
+      <thead>
+        <tr>
+          <th>area</th>
+          <th>what</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>design</td>
+          <td>
+            <code>daemons/</code>: the contract, <code>roster.json</code> (drop
+            1 “unix”, three portraits per daemon, slot-template lines), the
+            reference renderer, banner face, cards, and a generator that checks
+            every frame and writes the copies and fixtures every client must
+            match byte for byte.
+          </td>
+        </tr>
+        <tr>
+          <td>server</td>
+          <td>
+            The zoo API, the server-side draw, eggs earned from work, bond and
+            versions, duplicates, mint serials, consent.
+          </td>
+        </tr>
+        <tr>
+          <td>brain</td>
+          <td>
+            Model-free sensing on every machine, triage with one-key answers,
+            the return brief, <code>harness pair</code> and an MCP server, the
+            pair harness you can talk to, the autonomy dial and rules.
+          </td>
+        </tr>
+        <tr>
+          <td>learning</td>
+          <td>
+            Notice real signals, propose in one line, teach every agent with
+            SKILL.md only with your yes, revert; borrow, usage, curator and
+            export as opt-ins.
+          </td>
+        </tr>
+        <tr>
+          <td>security</td>
+          <td>
+            Two review rounds. One-time yes only on allow-listed prompts (shell
+            tokenizer, realpath); keys valid only for lines a window showed;
+            confirmations for autonomy and rules; lessons need your key and a
+            nonce; redaction; consent first.
+          </td>
+        </tr>
+        <tr>
+          <td>clients</td>
+          <td>
+            Desktop (status line, reveal, panel) and phone (chip, sheet, reveal,
+            consent). <code>hn</code> later, as agreed.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <h3>Tests</h3>
+  <p class="num">
+    CLI <span class="ok">5341 passed</span> (TMUX unset, stub tmux) · backend
+    <span class="ok">683 passed</span> · phone
+    <span class="ok">541 passed</span> · desktop daemon tests
+    <span class="ok">195 passed</span>, full desktop suite
+    <span class="ok">3848 passed</span> with the same
+    <span class="warn">24 failures</span> that already fail on the base branch ·
+    tsc clean · debug build compiles. The app was never launched against your
+    real account.
+  </p>
+
+  <h2>Decided for you</h2>
+  <p>You said to pick what is best. Change any of these.</p>
+  <ul>
+    <li>
+      <b>Names:</b> daemons, the zoo, “hatch” with
+      <code>fork() returned 0.</code>, and <code>harnessd</code> as the
+      background service's name in UI copy.
+    </li>
+    <li>
+      <b>Drop 1 “unix”:</b> tim, fish, ping, bat (common); vim, zsh, biff
+      (rare); fzf, tldr (legendary); grue (secret, <code>#S/09</code>, outside
+      the set).
+    </li>
+    <li>
+      <b>First hour:</b> the first egg after 3 of 8 habits, a finished turn
+      among them; tim is four times as likely from it; a setup egg at 6.
+    </li>
+    <li>
+      <b>Eggs from work:</b> a turn egg every 40 counted turns (20 a day, plus
+      one per 10 agent-minutes); week, marathon, night (your agents finishing
+      while you're away) and history eggs.
+    </li>
+    <li>
+      <b>Rarity:</b> secrets only from night and easter eggs, guaranteed by the
+      8th; shiny 1 in 256; duplicates merge (+150 xp); serials minted on the
+      server.
+    </li>
+    <li>
+      <b>Voice:</b> silent by default, facts before jokes, one unsolicited line
+      per two minutes at most, no idle animation, blinks only as answers.
+    </li>
+    <li>
+      <b>Trust:</b> watch until you say otherwise; model calls opt-in; lessons
+      never go into tracked files by default.
+    </li>
+  </ul>
+
+  <h2>Open questions</h2>
+  <ul>
+    <li>Keep <code>harnessd</code> as the service's user-facing name?</li>
+    <li>
+      Are the economy numbers right for real use (3 habits, 40 turns an egg, 20
+      a day)? They need a week of real play to tune.
+    </li>
+    <li>
+      Approved lessons reach Store-harness sessions and project notes; exporting
+      to <code>~/.claude/skills</code> is opt-in. Should approval export by
+      default?
+    </li>
+    <li>
+      The brain's keys work only over the Unix socket, so not on Windows yet.
+    </li>
+    <li>
+      A public card-verify endpoint for serials, and the bold ideas from the
+      review (collab drops with the fish, fzf and bat maintainers; artisan
+      keycaps): pursue?
+    </li>
+  </ul>
+
+  <h2>Next, as recorded then</h2>
+  <ul>
+    <li>
+      <strong>Superseded:</strong> the original report proposed testing the
+      desktop build against an installed account. Follow the handoff’s isolated
+      test setup instead; do not launch a review build against real user state.
+    </li>
+    <li>
+      <code>hn</code>: read the same roster, check against the same frames,
+      speak the same daemon frames.
+    </li>
+    <li>Merge order when ready: #366 and #367, then #369, then #370.</li>
+  </ul>
+
+  <div
+    class="manline"
+    style="
+      border-top: 1px solid var(--line);
+      border-bottom: 0;
+      margin-top: 48px;
+    "
+  >
+    <span>Harness</span><span>September 27, 2026</span><span>DAEMONS(6)</span>
+  </div>
+</main>
+
+<noscript><p class="review-notice">Enable JavaScript to use the interactive previews. All data is included in this file; no network connection is needed.</p></noscript>
+<footer class="review-footer"><a href="../index.html">All reviews</a><a href="../../../docs/research/2026-09-27-daemons-handoff.md">Build handoff</a><span>Local files · no account, server, or external assets required</span></footer>
+</body>
+</html>

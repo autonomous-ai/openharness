@@ -29,8 +29,8 @@ VoiceMicAction voiceMicAction(
 /// Tap to talk, tap Send — [VoiceMicMode.tapToToggle].
 ///
 /// The second tap ends the take and sends what was heard as a composer turn —
-/// the daemon pastes it into the prompt and presses Return. `×` in the pill
-/// beside the mic is the way out while it listens.
+/// the daemon pastes it into the prompt and presses Return. A swipe down on the
+/// mic is the way out while it listens (see `VoiceMicButton.onSwipeDown`).
 ///
 /// ⚠️ **A composer turn, never keystrokes typed into the pane.** Typing the
 /// words and pressing Return from here puts both on the wire in the same
@@ -46,7 +46,8 @@ VoiceMicAction voiceMicAction(
 /// the person's back is worse than asking for one more tap.
 VoiceMicAction _tapAction(VoiceInputController voice, TerminalSession session) {
   final canSend = session.acceptsInput;
-  void send() => unawaited(voice.submit(session.sendComposerText));
+  void send() =>
+      unawaited(voice.submit(session.voiceDeliver ?? session.sendComposerText));
   if (voice.isSending) return _face(VoiceMicFace.sending);
   return switch (voice.status) {
     VoiceInputStatus.transcribing => _face(VoiceMicFace.busy),
@@ -131,7 +132,9 @@ VoiceMicAction _holdAction(
         : VoiceMicFace.talk,
     onPressed: live ? _live : null,
     onHoldStart: live
-        ? () => unawaited(voice.startHold(session.sendComposerText))
+        ? () => unawaited(
+            voice.startHold(session.voiceDeliver ?? session.sendComposerText),
+          )
         : null,
     onHoldFinish: live ? _release(voice, session) : null,
   );
@@ -158,7 +161,7 @@ void Function({required bool cancelled}) _release(
     voice.cancelHold();
     return;
   }
-  unawaited(voice.finishHold(session.sendComposerText));
+  unawaited(voice.finishHold(session.voiceDeliver ?? session.sendComposerText));
 };
 
 /// Marks the button live in hold mode without giving it anything to do on tap.
@@ -180,30 +183,3 @@ VoiceMicAction _face(
   onHoldStart: onHoldStart,
   onHoldFinish: onHoldFinish,
 );
-
-/// What the mic is doing, in a word or two — null with it at rest.
-///
-/// In hold-to-talk the listening line says what the RELEASE will do instead of
-/// naming the state: the thumb is already down and holding, so "Listening…" is
-/// the one thing the person can see for themselves, and what happens when they
-/// let go is the thing they cannot.
-String? voiceActivityLabel(VoiceInputController voice) {
-  if (voice.isSending) return 'Sending…';
-  return switch (voice.status) {
-    // ⚠️ "Wait" rather than "Starting…" in hold mode, and it is the difference
-    // between working and not. Opening the microphone is real hardware time, and
-    // somebody holding a button starts talking the instant they press it — so
-    // the first word lands before anything is recording and the take comes back
-    // as half a sentence that transcribes to nothing. The line has to ASK them
-    // to wait, and the buzz when [VoiceInputStatus.listening] arrives is what
-    // tells them to go.
-    VoiceInputStatus.starting =>
-      micHoldsToTalk ? 'Opening the mic — wait for the buzz' : 'Starting…',
-    VoiceInputStatus.listening =>
-      micHoldsToTalk
-          ? 'Listening… release to send, slide off to cancel'
-          : 'Listening… tap to send',
-    VoiceInputStatus.transcribing => 'Transcribing…',
-    VoiceInputStatus.idle || VoiceInputStatus.unavailable => null,
-  };
-}

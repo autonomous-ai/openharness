@@ -1,0 +1,40 @@
+{
+  "name": "frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "prebuild": "node scripts/fetch-harness-web.mjs",
+    "prepare:web": "node scripts/fetch-harness-web.mjs",
+    "dev": "next dev",
+    "build": "next build && rm -rf .next/standalone/.next/static .next/standalone/public && cp -R .next/static .next/standalone/.next/static && cp -R public .next/standalone/public",
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "start": "next start"
+  },
+  "dependencies": {
+    "lucide-react": "^0.562.0",
+    "next": "16.1.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "lightningcss": "1.31.1"
+    }
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.1",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5.1.2",
+    "eslint": "^9",
+    "eslint-config-next": "16.1.1",
+    "jsdom": "^27.4.0",
+    "typescript": "^5",
+    "vitest": "^4.0.17"
+  }
+}

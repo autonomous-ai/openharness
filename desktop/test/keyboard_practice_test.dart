@@ -78,7 +78,9 @@ void main() {
         for (final binding in map.current.bindingsFor(context)) {
           if (binding.command == 'navigation.command_bar' ||
               binding.command == 'app.debug' ||
-              harnessCommandById[binding.command]?.hidden == true) {
+              harnessCommandById[binding.command]?.hidden == true ||
+              // The daemon's exist only while daemons are on (off here).
+              !harnessCommandActive(binding.command!)) {
             continue;
           }
           expect(
@@ -96,6 +98,15 @@ void main() {
         lessons.any((l) => l.command == 'agent.stop' && l.bindings.isEmpty),
         isTrue,
       );
+      expect(lessons.any((l) => l.command == 'app.daemon_talk'), isFalse);
+      daemonCommandsActive.value = true;
+      addTearDown(() => daemonCommandsActive.value = false);
+      expect(
+        keyboardLessons(map).any((l) => l.command == 'app.daemon_talk'),
+        isTrue,
+        reason: 'with daemons on, ⌘⌥T is practised too',
+      );
+      daemonCommandsActive.value = false;
       expect(
         lessons.any((l) => l.command == 'navigation.command_bar'),
         isFalse,
@@ -123,7 +134,7 @@ void main() {
       expect(app.swarms, [original]);
       expect(original.panes, panes);
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
-      expect(find.text('[x] New Tab'), findsOneWidget);
+      expect(find.byKey(const ValueKey('practice-completed')), findsOneWidget);
       await key(tester, LogicalKeyboardKey.escape);
       await openLesson(tester, 'Stop Harness');
       await tester.enterText(
@@ -131,7 +142,7 @@ void main() {
         'Stop Harness',
       );
       await key(tester, LogicalKeyboardKey.enter);
-      expect(find.text('[x] Stop Harness'), findsOneWidget);
+      expect(find.byKey(const ValueKey('practice-completed')), findsOneWidget);
       expect(app.swarms, [original]);
       expect(original.panes, panes);
       expect(input, isEmpty);
@@ -158,10 +169,10 @@ void main() {
     await openLesson(tester, 'New Tab');
     expect(find.text('Press ctrl-X ctrl-T'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.keyT, cmd: true);
-    expect(find.text('[x] New Tab'), findsNothing);
+    expect(find.byKey(const ValueKey('practice-completed')), findsNothing);
     await key(tester, LogicalKeyboardKey.keyX, ctrl: true);
     await key(tester, LogicalKeyboardKey.keyT, ctrl: true);
-    expect(find.text('[x] New Tab'), findsOneWidget);
+    expect(find.byKey(const ValueKey('practice-completed')), findsOneWidget);
     map.apply('''{"bindings":[{"keys":"cmd+t","command":null}]}''');
     await tester.pump();
     expect(find.byKey(const ValueKey('practice-command')), findsOneWidget);
@@ -170,7 +181,7 @@ void main() {
       'New Tab',
     );
     await key(tester, LogicalKeyboardKey.enter);
-    expect(find.text('[x] New Tab'), findsOneWidget);
+    expect(find.byKey(const ValueKey('practice-completed')), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -180,12 +191,12 @@ void main() {
     await tester.pumpWidget(const MaterialApp(home: KeyboardPractice()));
     await openLesson(tester, 'Close search');
     await key(tester, LogicalKeyboardKey.escape);
-    expect(find.text('[x] Close search'), findsOneWidget);
+    expect(find.byKey(const ValueKey('practice-completed')), findsOneWidget);
     await key(tester, LogicalKeyboardKey.escape);
     expect(filter, findsOneWidget);
     await openLesson(tester, 'Erase the previous word');
     await key(tester, LogicalKeyboardKey.keyW, ctrl: true);
-    expect(find.text('[x] Erase the previous word'), findsOneWidget);
+    expect(find.byKey(const ValueKey('practice-completed')), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -310,85 +321,183 @@ void main() {
     },
   );
 
-  for (final (size, scale) in [
-    (const Size(1000, 800), 1.0),
-    (const Size(480, 420), 1.7),
+  for (final (size, scale, brightness) in [
+    (const Size(1000, 800), 1.0, Brightness.dark),
+    (const Size(1000, 800), 1.0, Brightness.light),
+    (const Size(480, 420), 1.7, Brightness.dark),
+    (const Size(480, 420), 1.7, Brightness.light),
   ]) {
-    testWidgets('practice stays readable at $size and $scale text', (
-      tester,
-    ) async {
-      await tester.runAsync(loadRealFonts);
-      tester.view.physicalSize = size;
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.reset);
-      final boundary = GlobalKey();
-      final storage = LearningMemoryStore();
-      final map = MemoryKeymap();
-      addTearDown(map.dispose);
-      map.apply('''{"version":1,"bindings":[
+    testWidgets(
+      'practice stays readable at $size and $scale text in $brightness',
+      (tester) async {
+        await tester.runAsync(() async {
+          if (Platform.isMacOS) {
+            final sans = ByteData.sublistView(
+              await File('/System/Library/Fonts/SFNS.ttf').readAsBytes(),
+            );
+            for (final family in [grid.AppType.sansFamily, 'SF Pro Text']) {
+              await (FontLoader(family)..addFont(Future.value(sans))).load();
+            }
+            final mono = ByteData.sublistView(
+              await File('/System/Library/Fonts/SFNSMono.ttf').readAsBytes(),
+            );
+            for (final family in ['.AppleSystemUIFontMonospaced', 'SF Mono']) {
+              await (FontLoader(family)..addFont(Future.value(mono))).load();
+            }
+            await (FontLoader('Menlo')..addFont(
+                  Future.value(
+                    ByteData.sublistView(
+                      await File('/System/Library/Fonts/Menlo.ttc')
+                          .readAsBytes(),
+                    ),
+                  ),
+                ))
+                .load();
+          } else {
+            await loadRealFonts();
+          }
+          await (FontLoader('MaterialIcons')
+                ..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf')))
+              .load();
+        });
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        final savedBrightness = grid.AppTheme.brightness.value;
+        grid.AppTheme.brightness.value = brightness;
+        addTearDown(() => grid.AppTheme.brightness.value = savedBrightness);
+        final boundary = GlobalKey();
+        final storage = LearningMemoryStore();
+        final map = MemoryKeymap();
+        addTearDown(map.dispose);
+        map.apply('''{"version":1,"bindings":[
         {"keys":"alt+j","command":"picker.page_down","when":"picker"},
         {"keys":"alt+k","command":"picker.page_up","when":"picker"}
       ]}''');
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: ThemeData.dark(),
-          builder: (context, child) => MediaQuery(
-            data: MediaQuery.of(context)
-                .copyWith(textScaler: TextScaler.linear(scale)),
-            child: child!,
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: grid.buildAppTheme(brightness: brightness),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                textScaler: TextScaler.linear(scale),
+                highContrast: brightness == Brightness.light && scale > 1,
+                disableAnimations: scale > 1,
+              ),
+              child: child!,
+            ),
+            home: RepaintBoundary(
+              key: boundary,
+              child: KeyboardPractice(storage: storage, keymap: map),
+            ),
           ),
-          home: RepaintBoundary(
-            key: boundary,
-            child: KeyboardPractice(storage: storage, keymap: map),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-      Future<void> snap(String name) =>
-          capture(tester, boundary, '$name-${size.width.toInt()}');
-
-      await snap('practice-list');
-      await openLesson(tester, 'New Tab');
-      await snap('practice-key');
-      await key(tester, LogicalKeyboardKey.keyT, cmd: true);
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-      await snap('practice-result');
-      if (size.width < 500) {
-        final details = tester.widget<SingleChildScrollView>(
-          find.byType(SingleChildScrollView),
         );
-        final scrolling = details.controller!;
-        expect(scrolling.position.maxScrollExtent, greaterThan(0));
-        await key(tester, LogicalKeyboardKey.pageDown);
-        expect(scrolling.offset, greaterThan(0));
-        await snap('practice-read');
-        await key(tester, LogicalKeyboardKey.pageUp);
-        expect(scrolling.offset, 0);
-        await key(tester, LogicalKeyboardKey.pageDown);
-        await key(tester, LogicalKeyboardKey.escape);
-        await openLesson(tester, 'New Pane');
-        expect(scrolling.offset, 0);
-        await key(tester, LogicalKeyboardKey.escape);
-        await openLesson(tester, 'Next result');
-        await key(tester, LogicalKeyboardKey.arrowDown);
         await tester.pumpAndSettle();
-        final cell = terminalCellSizeOf(
-          tester.element(find.byType(KeyboardPractice)),
+        expect(tester.takeException(), isNull);
+        final semantics = tester.ensureSemantics();
+        try {
+          await tester.pump();
+          final first = keyboardLessons(map).first;
+          final node = tester
+              .getSemantics(
+                find.byKey(
+                  ValueKey('practice-${first.context.name}-${first.command}'),
+                ),
+              )
+              .getSemanticsData();
+          expect(node.label, '${first.label}, ${first.keys}');
+          expect(node.value, 'Not practiced');
+          expect(node.hasAction(ui.SemanticsAction.tap), isTrue);
+        } finally {
+          semantics.dispose();
+        }
+        Future<void> snap(String name) => capture(
+          tester,
+          boundary,
+          '$name-${brightness.name}-${size.width.toInt()}',
         );
-        await key(tester, LogicalKeyboardKey.arrowDown, shift: true);
-        expect(scrolling.offset, closeTo(cell.height, .01));
-        await key(tester, LogicalKeyboardKey.arrowUp, shift: true);
-        expect(scrolling.offset, 0);
-        await key(tester, LogicalKeyboardKey.keyJ, alt: true);
-        expect(scrolling.offset, greaterThan(cell.height));
-        await key(tester, LogicalKeyboardKey.keyK, alt: true);
-        expect(scrolling.offset, 0);
-      }
-      expect(storage.values.values.any((v) => v.contains('swarm.new')), isTrue);
-      await tester.pumpWidget(const SizedBox());
-    });
+
+        await snap('practice-list');
+        await openLesson(tester, 'New Tab');
+        await snap('practice-key');
+        await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        await snap('practice-result');
+        if (size.width < 500) {
+          final details = tester.widget<SingleChildScrollView>(
+            find.byType(SingleChildScrollView),
+          );
+          final scrolling = details.controller!;
+          expect(scrolling.position.maxScrollExtent, greaterThan(0));
+          await key(tester, LogicalKeyboardKey.pageDown);
+          expect(scrolling.offset, greaterThan(0));
+          await snap('practice-read');
+          await key(tester, LogicalKeyboardKey.pageUp);
+          expect(scrolling.offset, 0);
+          await key(tester, LogicalKeyboardKey.pageDown);
+          await key(tester, LogicalKeyboardKey.escape);
+          await openLesson(tester, 'New Pane');
+          expect(scrolling.offset, 0);
+          await key(tester, LogicalKeyboardKey.escape);
+          await openLesson(tester, 'Next result');
+          await key(tester, LogicalKeyboardKey.arrowDown);
+          await tester.pumpAndSettle();
+          final cell = terminalCellSizeOf(
+            tester.element(find.byType(KeyboardPractice)),
+          );
+          await key(tester, LogicalKeyboardKey.arrowDown, shift: true);
+          expect(scrolling.offset, closeTo(cell.height, .01));
+          await key(tester, LogicalKeyboardKey.arrowUp, shift: true);
+          expect(scrolling.offset, 0);
+          await key(tester, LogicalKeyboardKey.keyJ, alt: true);
+          expect(scrolling.offset, greaterThan(cell.height));
+          await key(tester, LogicalKeyboardKey.keyK, alt: true);
+          expect(scrolling.offset, 0);
+        }
+        expect(
+          storage.values.values.any((v) => v.contains('swarm.new')),
+          isTrue,
+        );
+        await key(tester, LogicalKeyboardKey.escape);
+        for (final command in [
+          'agent.new',
+          'creation.project',
+          'creation.project_existing',
+          'creation.project_browse',
+          'creation.project_recent_1',
+          'creation.task',
+          'creation.options',
+          'picker.more_options',
+        ]) {
+          final label = harnessCommandById[command]!.label;
+          await openLesson(tester, label);
+          switch (command) {
+            case 'agent.new':
+              await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+            case 'creation.project_browse':
+              await key(tester, LogicalKeyboardKey.keyO, ctrl: true);
+            case 'picker.more_options':
+              await key(tester, LogicalKeyboardKey.period, cmd: true);
+            default:
+              await tester.enterText(
+                find.byKey(const ValueKey('practice-command')),
+                label,
+              );
+              await key(tester, LogicalKeyboardKey.enter);
+          }
+          await tester.pumpAndSettle();
+          expect(
+            find.byKey(const ValueKey('practice-completed')),
+            findsOneWidget,
+          );
+          expect(find.text(label), findsOneWidget);
+          expect(tester.takeException(), isNull);
+          await key(tester, LogicalKeyboardKey.escape);
+          expect(filter, findsOneWidget);
+        }
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
   }
 
   testWidgets(

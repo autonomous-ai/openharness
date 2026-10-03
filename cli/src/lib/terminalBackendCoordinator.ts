@@ -49,7 +49,6 @@ export class TerminalBackendCoordinator {
   constructor(
     backends: readonly TerminalBackend[],
     private readonly backendOrder: readonly string[],
-    private herdrSessionOrder: readonly string[],
   ) {
     this.replaceBackends(backends)
   }
@@ -57,14 +56,6 @@ export class TerminalBackendCoordinator {
   replaceBackends(backends: readonly TerminalBackend[]): void {
     this.byInstance.clear()
     for (const backend of backends) this.byInstance.set(backend.instanceId, backend)
-  }
-
-  /**
-   * The session order is only a deterministic tie-break between two runtimes of the same backend, but it
-   * has to track discovery: with sessions adopted as they start, the set is no longer fixed at boot.
-   */
-  setHerdrSessionOrder(order: readonly string[]): void {
-    this.herdrSessionOrder = order
   }
 
   instances(): TerminalBackend[] {
@@ -103,9 +94,6 @@ export class TerminalBackendCoordinator {
       const ab = this.backendOrder.indexOf(a.backend)
       const bb = this.backendOrder.indexOf(b.backend)
       if (ab !== bb) return (ab < 0 ? Number.MAX_SAFE_INTEGER : ab) - (bb < 0 ? Number.MAX_SAFE_INTEGER : bb)
-      if (a.backend === 'herdr' && b.backend === 'herdr') {
-        return this.herdrSessionOrder.indexOf(a.sessionName) - this.herdrSessionOrder.indexOf(b.sessionName)
-      }
       return terminalRouteKey(a).localeCompare(terminalRouteKey(b))
     })
   }
@@ -152,8 +140,6 @@ export class TerminalBackendCoordinator {
     if (lease.agentId !== session.agentId || lease.generation !== runtimeGeneration(session)) return false
     const current = session.runtimes.find((runtime) => terminalPlacementKey(runtime) === lease.placementKey)
     if (!current) return false
-    // Herdr's pane route is mutable. Refresh it under the stable endpoint + terminal placement rather
-    // than splitting a pinned interaction across a different placement.
     lease.runtime = current
     return true
   }
@@ -184,7 +170,7 @@ export class TerminalBackendCoordinator {
     return backend ? backend.capture(lease.runtime, options) : { state: 'failed', reason: 'leased terminal backend is disabled' }
   }
 
-  /** Open a byte stream on the first validated streaming-capable runtime. MVP deliberately skips Herdr. */
+  /** Open a byte stream on the first validated streaming-capable runtime. */
   async openStream(
     session: RegisteredSession,
     size: TerminalStreamSize,

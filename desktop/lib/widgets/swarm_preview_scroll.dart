@@ -19,6 +19,11 @@ class SwarmPreviewScrollController extends ScrollController {
 
   final SwarmSearchController search;
   final double Function() lineHeight;
+
+  /// A preview that starts at its bottom (a session's latest turns) is a
+  /// reversed list: offset 0 is the bottom, and up is a larger offset. Set by
+  /// the preview as it builds; keys still mean what they say on screen.
+  bool reversed = false;
   String? _selectedId;
   int _lastPage = 0, _lastLine = 0;
   int _pendingPages = 0, _pendingLines = 0;
@@ -77,15 +82,17 @@ class SwarmPreviewScrollController extends ScrollController {
       return;
     }
     // Flutter can hand a replacement controller the previous scroll position.
-    // A new search or selection must begin at the new preview's first line.
+    // A new search or selection must begin at the new preview's first line —
+    // its last, for a reversed one.
     if (_resetScroll) {
       _resetScroll = false;
       jumpTo(0);
     }
     if (_pendingPages == 0 && _pendingLines == 0) return;
     final distance =
-        _pendingLines * lineHeight() +
-        _pendingPages * position.viewportDimension * .8;
+        (reversed ? -1 : 1) *
+        (_pendingLines * lineHeight() +
+            _pendingPages * position.viewportDimension * .8);
     _pendingPages = _pendingLines = 0;
     jumpTo(
       (position.pixels + distance).clamp(

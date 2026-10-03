@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { processStartMarker } from './processLiveness.js'
 
 let dataDir = ''
 
@@ -127,7 +128,7 @@ describe('daemon spawn lock', () => {
     const lock = await loadLock()
     mkdirSync(lockDir(), { mode: 0o700 })
     writeFileSync(ownerFile(), JSON.stringify({
-      pid: process.pid, startMarker: 'different-process-generation', token: 'stale', purpose: 'start', since: Date.now(),
+      pid: process.pid, startMarker: '', generationMarker: `${processStartMarker(process.pid)}-earlier`, token: 'stale', purpose: 'start', since: Date.now(),
     }), { mode: 0o600 })
     const release = await lock.acquireSpawnLock('start', { waitMs: 1000 })
     expect(lock.readSpawnLockOwner()?.token).not.toBe('stale')
@@ -188,6 +189,21 @@ describe('daemon spawn lock', () => {
     // Not a lock at all is not going to clear itself: no "try again", a terminal instead.
     expect(lock.describeSpawnLockBusyPlainly(new lock.SpawnLockBusyError(null, 'not a lock this CLI made: /x — remove it by hand')))
       .toBe('Harness cannot sign in on this computer right now. Run `harness login --force` in a terminal to see why.')
+  })
+
+  it('tells a sign-in that waits on the lock what it waits for, in a person\'s words', async () => {
+    // The desktop shows the waiting line verbatim while a sign-in sits behind the lock, so it names
+    // what Harness is doing — and, when the holder is another sign-in, says exactly that.
+    const lock = await loadLock()
+    const owner = (purpose: 'start' | 'update' | 'handoff' | 'stop' | 'login') =>
+      ({ pid: 4242, startMarker: '', token: 't', purpose, since: Date.now() })
+    for (const purpose of ['start', 'update', 'handoff', 'stop', 'login'] as const) {
+      const said = lock.describeSpawnLockWaitPlainly(owner(purpose))
+      expect(said).toMatch(/^[^.]+ — waiting for it to finish…$/)
+      expect(said).not.toMatch(/pid|4242|lock/)
+    }
+    expect(lock.describeSpawnLockWaitPlainly(owner('login'))).toMatch(/^Another sign-in/)
+    expect(lock.describeSpawnLockWaitPlainly(owner('update'))).toBe('Harness is still updating on this computer — waiting for it to finish…')
   })
 
   it('serializes two real spawners racing for the lock', async () => {

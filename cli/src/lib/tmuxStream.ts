@@ -13,9 +13,9 @@ import {
   type TmuxRuntimeRef,
 } from './terminalTypes.js'
 
-const MIN_COLS = 40
+const MIN_COLS = 1
 const MAX_COLS = 300
-const MIN_ROWS = 12
+const MIN_ROWS = 1
 const MAX_ROWS = 120
 // One `send-keys -H` line carries two hex characters plus a space per byte. tmux accepts a command
 // line built from 8192 such bytes and rejects 16384 with `%error`, so this leaves a 4x margin.
@@ -25,6 +25,17 @@ const SNAPSHOT_BUFFER_MAX_BYTES = 2 * 1024 * 1024
 const SNAPSHOT_QUIET_MS = 8
 const SNAPSHOT_QUIET_MAX_MS = 40
 const SNAPSHOT_HISTORY_LINES = 500
+/** Grok only exposes PageUp/PageDown while the prompt is focused, so a wheel
+ *  burst is one page, never a stack of them. The desktop may still emit
+ *  several `terminal_scroll` frames per flick (16ms coalesce on shipped
+ *  builds); the interval below drops the extras. */
+const TUI_SCROLL_MIN_INTERVAL_MS = 180
+
+/** How many PageUp/PageDown keys a coalesced wheel burst should become. */
+export function tuiScrollPageCount(lines: number): number {
+  if (!Number.isFinite(lines) || lines <= 0) return 0
+  return 1
+}
 const PANE_META_FORMAT = [
   '#{session_id}', '#{window_id}', '#{window_panes}', '#{window_width}', '#{window_height}',
   '#{pane_width}', '#{pane_height}', '#{alternate_on}', '#{cursor_x}', '#{cursor_y}',
@@ -104,29 +115,39 @@ export function decodeTmuxControlData(encoded: string): Uint8Array {
   return decodeTmuxControlBytes(Buffer.from(encoded, 'utf8'))
 }
 
+function octalEscapeAt(input: Uint8Array, offset: number): boolean {
+  return input[offset] === 0x5c && offset + 3 < input.length
+    && input[offset + 1] >= 0x30 && input[offset + 1] <= 0x37
+    && input[offset + 2] >= 0x30 && input[offset + 2] <= 0x37
+    && input[offset + 3] >= 0x30 && input[offset + 3] <= 0x37
+}
+
 /** Decode control-mode escaping without first interpreting payload bytes as
  * UTF-8. A Unicode scalar may be split across separate `%output` records; a
  * string decoder would permanently replace both halves with U+FFFD. */
 export function decodeTmuxControlBytes(encoded: Uint8Array): Uint8Array {
-  const input = Buffer.from(encoded)
-  const chunks: Buffer[] = []
-  let plainStart = 0
-  for (let i = 0; i < input.length; i++) {
-    if (input[i] !== 0x5c
-      || i + 3 >= input.length
-      || input[i + 1] < 0x30 || input[i + 1] > 0x37
-      || input[i + 2] < 0x30 || input[i + 2] > 0x37
-      || input[i + 3] < 0x30 || input[i + 3] > 0x37) continue
-    if (i > plainStart) chunks.push(input.subarray(plainStart, i))
-    const value = ((input[i + 1] - 0x30) << 6)
-      | ((input[i + 2] - 0x30) << 3)
-      | (input[i + 3] - 0x30)
-    chunks.push(Buffer.from([value]))
-    i += 3
-    plainStart = i + 1
+  // Own the returned bytes without allocating a Buffer for every escaped byte.
+  // Decoding only shortens the input, so unread bytes stay ahead of the write.
+  const output = Buffer.from(encoded)
+  let read = output.indexOf(0x5c)
+  // Ordinary backslashes do not require a bytewise rewrite either.
+  while (read >= 0 && !octalEscapeAt(output, read)) read = output.indexOf(0x5c, read + 1)
+  if (read < 0) return output
+  let write = read
+  while (read < output.length) {
+    if (octalEscapeAt(output, read)) {
+      output[write++] = ((output[read + 1] - 0x30) << 6)
+        | ((output[read + 2] - 0x30) << 3)
+        | (output[read + 3] - 0x30)
+      read += 4
+    } else {
+      output[write++] = output[read++]
+    }
   }
-  if (plainStart < input.length) chunks.push(input.subarray(plainStart))
-  return Buffer.concat(chunks)
+  const decoded = output.subarray(0, write)
+  // Escape-heavy output can shrink to one quarter of its wire size. Avoid
+  // retaining that larger allocation when a consumer keeps the decoded frame.
+  return write * 2 < output.length ? Buffer.from(decoded) : decoded
 }
 
 export function parseTmuxControlOutput(lineBytes: Uint8Array): { paneId: string; data: Uint8Array } | null {
@@ -427,9 +448,7 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
   private snapshotPostCut: Buffer[] = []
   private snapshotPostCutBytes = 0
   private snapshotLastOutputAt = 0
-  // Set by scroll() when it enters tmux copy-mode. Copy-mode swallows keyboard input for its own
-  // navigation, so writeRaw() must exit it before the next real keystroke — see writeRaw()'s doc.
-  private inCopyMode = false
+  private lastTuiScrollAt = 0
 
   private constructor(
     paneId: string,
@@ -593,7 +612,7 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
     }
   }
 
-  async snapshot(): Promise<TerminalReadResult<TerminalStreamSnapshot>> {
+  async snapshot(options?: { tuiOwnsScrollback?: boolean }): Promise<TerminalReadResult<TerminalStreamSnapshot>> {
     return this.serializeOperation(async () => {
       if (!this.snapshotGated) return { state: 'failed', reason: 'tmux snapshot gate is not active' }
       // -N is required for TUI fidelity: styled blank cells (for example the
@@ -617,7 +636,14 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
       // local scrollback. It preserves SGR attributes without replaying old
       // TUI cursor movement. Read it before the authoritative visible-grid cut
       // so concurrent output is included there or in a post-cut delta.
-      const history = meta.alternateOn
+      //
+      // Grok (and any TUI that paints in the normal buffer) is the other
+      // history trap: tmux reports alternate_on=0, so a naive capture would
+      // seed hundreds of prior full-screen repaint frames. The window then
+      // shows stacked empty chrome above the live header, and the wheel
+      // scrolls that junk locally instead of the program.
+      const tuiOwnsScrollback = options?.tuiOwnsScrollback === true
+      const history = (meta.alternateOn || tuiOwnsScrollback)
         ? Buffer.alloc(0)
         : (await this.runControlCommand(
             `capture-pane -p -e -N -t ${this.runtime.paneId} -S -${SNAPSHOT_HISTORY_LINES} -E -1`,
@@ -629,10 +655,11 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
         this.snapshotPostCutBytes = 0
       })
       if (!capture.ok) return { state: 'failed', reason: 'tmux snapshot failed' }
+      const screenMeta = tuiOwnsScrollback ? { ...meta, alternateOn: true } : meta
       return {
         state: 'succeeded',
         value: {
-          bytes: synthesizeTmuxSnapshot(capture.stdout, meta, history),
+          bytes: synthesizeTmuxSnapshot(capture.stdout, screenMeta, history),
           cols: meta.paneWidth,
           rows: meta.paneHeight,
         },
@@ -667,16 +694,7 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
     if (this.readOnly) return terminalActionNotStarted('VIEW_ONLY')
     if (this.closed) return terminalActionNotStarted('terminal stream is closed')
     if (bytes.length === 0) return TERMINAL_ACTION_SUCCEEDED
-    // scroll() below leaves the pane in copy-mode, which captures all keyboard input for its own
-    // navigation. Cancel it before the very next real keystroke, queued ahead of the input chunks
-    // (the ControlCommandQueue is strict FIFO) so the pane is back to normal by the time tmux
-    // applies them — otherwise the first keystroke after a scroll silently vanishes into copy-mode
-    // instead of reaching the program, trading "can't scroll" for "can't type".
     const sends: Array<Promise<ControlCommandResult>> = []
-    if (this.inCopyMode) {
-      this.inCopyMode = false
-      sends.push(this.runControlCommand(`send-keys -X -t ${this.runtime.paneId} cancel`))
-    }
     // Every chunk is handed to the queue before any reply is awaited, so a paste costs one
     // round-trip rather than one per chunk. tmux applies them in the order they were written.
     for (let offset = 0; offset < bytes.length; offset += INPUT_CHUNK_BYTES) {
@@ -708,24 +726,33 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
       : terminalActionNotStarted('tmux paste-buffer could not be sent')
   }
 
-  /** Scroll via tmux's own copy-mode rather than writing bytes into the pty. Some remote CLIs (e.g.
-   *  Claude Code) declare terminal mouse-tracking and correctly handle SGR wheel reports themselves;
-   *  others declare it but don't (confirmed live for Grok: it echoes the raw escape bytes into its
-   *  own prompt as literal characters instead of scrolling) — copy-mode works regardless, since it
-   *  never depends on the program in the pane understanding anything about the bytes at all. */
+  /** Scroll a full-screen TUI by sending PageUp/PageDown into the pty.
+   *
+   *  Grok declares mouse-tracking but echoes SGR wheel reports as literal
+   *  characters, so the desktop does not send wheel bytes. tmux copy-mode is
+   *  the wrong substitute: for an alt-screen TUI, tmux history is prior
+   *  full-screen repaint frames, which stacked as empty Grok chrome above the
+   *  live screen. Grok's own PageUp/PageDown scroll the conversation even
+   *  while the prompt is focused. */
   async scroll(direction: 'up' | 'down', lines: number): Promise<TerminalActionResult> {
     if (this.readOnly) return terminalActionNotStarted('VIEW_ONLY')
     if (this.closed) return terminalActionNotStarted('terminal stream is closed')
-    if (lines <= 0) return TERMINAL_ACTION_SUCCEEDED
-    // Idempotent — safe even if already in copy-mode from a previous scroll.
-    const entered = await this.runControlCommand(`copy-mode -t ${this.runtime.paneId}`)
-    if (!entered.ok) return terminalActionNotStarted('tmux copy-mode could not be entered')
-    this.inCopyMode = true
-    const command = direction === 'up' ? 'scroll-up' : 'scroll-down'
-    const scrolled = await this.runControlCommand(
-      `send-keys -N ${lines} -X -t ${this.runtime.paneId} ${command}`,
+    const pages = tuiScrollPageCount(lines)
+    if (pages <= 0) return TERMINAL_ACTION_SUCCEEDED
+    const now = Date.now()
+    if (now - this.lastTuiScrollAt < TUI_SCROLL_MIN_INTERVAL_MS) return TERMINAL_ACTION_SUCCEEDED
+    this.lastTuiScrollAt = now
+    // Leave copy-mode if an older daemon (or a leftover gesture) parked there.
+    // `send-keys -X` fails when the pane is not in a mode; that is the common
+    // case and is ignored. Both commands are queued before either reply so
+    // cancel still runs first (the queue is FIFO) without an extra round-trip.
+    const key = direction === 'up' ? 'PageUp' : 'PageDown'
+    const cancel = this.runControlCommand(`send-keys -X -t ${this.runtime.paneId} cancel`)
+    const scrolled = this.runControlCommand(
+      `send-keys -N ${pages} -t ${this.runtime.paneId} ${key}`,
     )
-    if (!scrolled.ok) return terminalActionPossiblyExecuted('tmux scroll did not complete')
+    await cancel
+    if (!(await scrolled).ok) return terminalActionPossiblyExecuted('tmux TUI scroll did not complete')
     return TERMINAL_ACTION_SUCCEEDED
   }
 

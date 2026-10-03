@@ -43,6 +43,18 @@ describe('project folder preparation', () => {
     expect(await readdir(root)).toEqual(['My-Game-v2'])
   })
 
+  it('numbers a suggested name past a folder that exists, instead of refusing it', async () => {
+    expect(parseProjectFolder({ projectSource: 'new', projectName: 'robot-noi-chuyen', projectNameMode: 'suggested' }))
+      .toEqual({ source: 'new', name: 'robot-noi-chuyen', suggested: true })
+    // Any other mode is an ordinary chosen name.
+    expect(parseProjectFolder({ projectSource: 'new', projectName: 'robot', projectNameMode: 'mine' }))
+      .toEqual({ source: 'new', name: 'robot' })
+    const suggested = { source: 'new', name: 'robot-noi-chuyen', suggested: true } as const
+    await writeFile(join(root, 'robot-noi-chuyen-2'), 'a file takes the name too')
+    expect(await prepareProjectFolder(suggested, { root, label: 'Codex', now })).toBe(join(root, 'robot-noi-chuyen'))
+    expect(await prepareProjectFolder(suggested, { root, label: 'Codex', now })).toBe(join(root, 'robot-noi-chuyen-3'))
+  })
+
   it('gives two projects in the same minute the seconds, then a suffix, and never takes a file’s name', async () => {
     await writeFile(join(root, 'codex-2026-09-03-09-05'), 'keep')
     const folders = await Promise.all([1, 2, 3].map(() => prepareProjectFolder({ source: 'new' }, { root, label: 'Codex', now })))

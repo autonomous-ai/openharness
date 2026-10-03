@@ -1,0 +1,10 @@
+node_modules
+.next
+.git
+.env*
+npm-debug.log*
+Dockerfile
+.dockerignore
+README.md
+coverage
+public/harness-web

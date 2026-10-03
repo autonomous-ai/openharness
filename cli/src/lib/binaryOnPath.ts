@@ -3,9 +3,6 @@
  *
  * Resolved by reading PATH rather than by spawning: callers use it on the startup path and in error
  * reporting, where launching a process to ask would be both slower and noisier.
- *
- * The same shape already lives in `herdrBinaryAvailable` (lib/herdrSessions.ts), which keeps its own
- * copy because it is exported API with its own tests.
  */
 import { accessSync, constants } from 'node:fs'
 import { delimiter, join } from 'node:path'

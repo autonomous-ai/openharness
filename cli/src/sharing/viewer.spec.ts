@@ -53,7 +53,7 @@ describe('private viewer capture', () => {
   })
   it('launches an isolated, credential-free renderer and sends only constrained screenshot commands', async () => {
     await capture.start('http://localhost:1234/')
-    expect(m.spawn.mock.calls[0][1]).toEqual(expect.arrayContaining(['--headless=new', '--disable-sync', '--disable-extensions', '--remote-debugging-address=127.0.0.1', '--user-data-dir=/tmp/share-viewer-fixture']))
+    expect(m.spawn.mock.calls[0][1]).toEqual(expect.arrayContaining(['--headless=new', '--disable-sync', '--disable-extensions', '--use-mock-keychain', '--password-store=basic', '--remote-debugging-address=127.0.0.1', '--user-data-dir=/tmp/share-viewer-fixture']))
     expect(await capture.capture()).toBe('jpeg')
     const requests = m.sockets[0].send.mock.calls.map((args: any[]) => JSON.parse(args[0]))
     expect(requests.find((r: any) => r.method === 'Page.navigate')).toMatchObject({ sessionId: 'session', params: { url: 'http://localhost:1234/' } })

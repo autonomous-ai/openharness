@@ -223,7 +223,7 @@ describe('installDsh, every way it can go', () => {
       const registry = (id: string): DshRegistryEntry | undefined => entries[id]
       expect(resolveInstallSource('acme/whole', registry)).toEqual({ source: 'https://example.com/whole.git', ref: 'v1', id: 'acme/whole' })
       expect(resolveInstallSource('acme/folder', registry)).toEqual({ source: HARNESS_MONOREPO, ref: 'main', path: 'store/agents/folder', id: 'acme/folder' })
-      expect(resolveInstallSource('/Users/example/code/thing', registry)).toEqual({ source: '/Users/example/code/thing' })
+      expect(resolveInstallSource('/tmp/example/code/thing', registry)).toEqual({ source: '/tmp/example/code/thing' })
       expect(resolveInstallSource('', registry)).toBeNull()
       expect(resolveInstallSource('https://example.com/x', registry)).toBeNull()
     })
@@ -537,7 +537,9 @@ describe('installDsh, every way it can go', () => {
       const seen: string[] = []
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       const pending = runDshDoctor(slow, (line) => seen.push(line))
-      vi.advanceTimersByTime(DOCTOR_TIMEOUT_MS)
+      // Interactive shells can ignore SIGTERM. Keep the fake clock through the
+      // process group's three-second SIGKILL grace period before restoring it.
+      vi.advanceTimersByTime(DOCTOR_TIMEOUT_MS + 3_000)
       vi.useRealTimers()
       const result = await pending
       expect(result.ok).toBe(false)
@@ -546,7 +548,7 @@ describe('installDsh, every way it can go', () => {
       // and with no one listening for lines
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       const quiet = runDshDoctor(slow)
-      vi.advanceTimersByTime(DOCTOR_TIMEOUT_MS)
+      vi.advanceTimersByTime(DOCTOR_TIMEOUT_MS + 3_000)
       vi.useRealTimers()
       expect((await quiet).lines.at(-1)).toBe(said)
     })

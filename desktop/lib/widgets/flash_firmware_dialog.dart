@@ -1,8 +1,8 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../flash/flasher.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -191,13 +191,13 @@ class _FlashDialogState extends State<_FlashDialog> {
         'Checking the USB ports on this Mac.',
       ),
       _Phase.ready => (
-        LucideIcons.zap300,
+        AppIcons.zap,
         grid.AppPalette.accentOnSurface,
         'Flash firmware to the dial',
         'Writes the latest circle release over USB.',
       ),
       _Phase.noBoard => (
-        LucideIcons.usb300,
+        AppIcons.usb,
         grid.AppPalette.warn,
         'No dial found',
         _problem ??
@@ -213,7 +213,7 @@ class _FlashDialogState extends State<_FlashDialog> {
         'Don’t unplug the dial.',
       ),
       _Phase.done => (
-        LucideIcons.circleCheck300,
+        AppIcons.circleCheck,
         grid.AppPalette.online,
         _version == null
             ? 'The dial is flashed'
@@ -221,7 +221,7 @@ class _FlashDialogState extends State<_FlashDialog> {
         'Harness is running again. Your machines are back.',
       ),
       _Phase.failed => (
-        LucideIcons.triangleAlert300,
+        AppIcons.triangleAlert,
         grid.AppPalette.dangerFill,
         'Flash failed',
         _problem ?? 'Nothing else was changed. Harness has been started again.',
@@ -380,11 +380,7 @@ class _FlashDialogState extends State<_FlashDialog> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            LucideIcons.triangleAlert300,
-            size: 14,
-            color: grid.AppPalette.warn,
-          ),
+          Icon(AppIcons.triangleAlert, size: 14, color: grid.AppPalette.warn),
           const SizedBox(width: 9),
           Expanded(
             child: RichText(
@@ -450,8 +446,8 @@ class _FlashDialogState extends State<_FlashDialog> {
             child: Row(
               children: [
                 Icon(
-                  LucideIcons.squareTerminal300,
-                  size: 13,
+                  AppIcons.squareTerminal,
+                  size: 14,
                   color: grid.AppPalette.textFaint,
                 ),
                 const SizedBox(width: 8),
@@ -640,11 +636,7 @@ class _StepRow extends StatelessWidget {
     grid.AppTheme.watch(context);
     final (Widget mark, Color ink) = switch (state) {
       _StepState.done => (
-        Icon(
-          LucideIcons.circleCheck300,
-          size: 14,
-          color: grid.AppPalette.online,
-        ),
+        Icon(AppIcons.circleCheck, size: 14, color: grid.AppPalette.online),
         grid.AppPalette.textSecondary,
       ),
       _StepState.running => (
@@ -660,7 +652,7 @@ class _StepRow extends StatelessWidget {
       ),
       _StepState.failed => (
         Icon(
-          LucideIcons.triangleAlert300,
+          AppIcons.triangleAlert,
           size: 14,
           color: grid.AppPalette.dangerFill,
         ),

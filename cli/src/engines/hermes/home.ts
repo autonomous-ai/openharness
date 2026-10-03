@@ -27,9 +27,10 @@ import { isAbsolute, join } from 'node:path'
 import { env } from '../../config/env.js'
 import { sqliteReadAll } from '../../lib/sqliteRead.js'
 import type { AgentEngine } from '../types.js'
+import { HERMES_HISTORY_ID_RE } from './reader.js'
 
-/** `YYYYMMDD_HHMMSS_<hex>` — the same shape `reader.ts` guards its queries with. */
-const SESSION_ID_RE = /^[0-9]{8}_[0-9]{6}_[0-9a-fA-F]{4,16}$/
+/** `YYYYMMDD_HHMMSS_<hex>`, or an editor's (ACP) uuid — the shapes `reader.ts` reads history for. */
+const SESSION_ID_RE = HERMES_HISTORY_ID_RE
 /** How long a homes listing is reused. A profile is created by hand, minutes apart; this is a `readdir`. */
 const HOMES_TTL_MS = 30_000
 /** A person with hundreds of profile folders has a different problem; this keeps the scan bounded. */

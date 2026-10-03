@@ -36,17 +36,6 @@ class Skeleton extends StatelessWidget {
     this.shape = BoxShape.rectangle,
   });
 
-  /// A round placeholder — an avatar, a status dot.
-  ///
-  /// ⚠️ Only for slots that ARE round. A 10-radius badge wants a 10-radius
-  /// [Skeleton], or the one detail that changes shape when data lands is the
-  /// one the eye catches.
-  const Skeleton.circle({super.key, required double size})
-    : width = size,
-      height = size,
-      radius = 0,
-      shape = BoxShape.circle;
-
   /// A line of text: the tighter radius the app's type scale wants.
   const Skeleton.text({super.key, this.width, this.height = 12})
     : radius = 4,
@@ -84,24 +73,6 @@ class Skeleton extends StatelessWidget {
   }
 }
 
-/// A text line as a fraction of the row it sits in.
-///
-/// Fractions, not pixels, so a set of lines keeps its proportions in a 284px
-/// menu and a 900px table alike. Needs a bounded width from its parent.
-class SkeletonLine extends StatelessWidget {
-  const SkeletonLine({super.key, this.widthFactor = 1, this.height = 12});
-
-  final double widthFactor;
-  final double height;
-
-  @override
-  Widget build(BuildContext context) => FractionallySizedBox(
-    alignment: Alignment.centerLeft,
-    widthFactor: widthFactor,
-    child: Skeleton.text(height: height),
-  );
-}
-
 /// A text line that occupies exactly the line box of [style].
 ///
 /// The bar is drawn shorter than the line — text has ascenders and descenders
@@ -109,7 +80,7 @@ class SkeletonLine extends StatelessWidget {
 /// style with a real [TextPainter], under the ambient [DefaultTextStyle] and
 /// text scaler. That is what makes a skeleton row and a real row the same
 /// height whatever font the fallback chain lands on: read a height off the
-/// code and you get the arithmetic, which [AppMenuRowMetrics] documents is
+/// code and you get the arithmetic, which the desktop's `AppMenuRowMetrics` documents is
 /// wrong by a fraction of a pixel per line.
 ///
 /// Give it a [width] (pixels) or a [widthFactor] (share of a bounded parent);
@@ -193,78 +164,11 @@ class SkeletonText extends StatelessWidget {
 double skeletonFade(int i, int rows, {double depth = 0.65}) =>
     rows <= 0 ? 1 : 1 - (i / rows) * depth;
 
-/// The gentler fade for a block that is capped short — a menu, a popover.
-const double skeletonFadeLight = 0.5;
-
-/// One list row: a round or square leading slot and two lines of unequal
-/// width (0.42 / 0.68), the shape of most "icon + name + summary" rows.
-///
-/// Wear the real row's surface and padding around this — a bare skeleton
-/// list draws grey bars with no home on the page ground, and the cards then
-/// *appear* when data lands, which is exactly the shift a skeleton exists to
-/// prevent.
-class SkeletonListTile extends StatelessWidget {
-  const SkeletonListTile({
-    super.key,
-    this.leading = 30,
-    this.leadingRadius,
-    this.subtitle = true,
-    this.titleFactor = 0.42,
-    this.subtitleFactor = 0.68,
-    this.padding = const EdgeInsets.symmetric(vertical: 8),
-  });
-
-  /// Size of the leading slot; 0 for none.
-  final double leading;
-
-  /// Null draws a circle; a value draws a rounded square with that radius —
-  /// match the real badge.
-  final double? leadingRadius;
-
-  final bool subtitle;
-  final double titleFactor;
-  final double subtitleFactor;
-  final EdgeInsets padding;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: padding,
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (leading > 0) ...[
-          leadingRadius == null
-              ? Skeleton.circle(size: leading)
-              : Skeleton(
-                  width: leading,
-                  height: leading,
-                  radius: leadingRadius!,
-                ),
-          const SizedBox(width: 12),
-        ],
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SkeletonLine(widthFactor: titleFactor, height: 13),
-              if (subtitle) ...[
-                const SizedBox(height: 6),
-                SkeletonLine(widthFactor: subtitleFactor, height: 11),
-              ],
-            ],
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
 /// A column of [rows] placeholders, already faded towards the bottom and
 /// deaf to the pointer.
 ///
-/// [itemBuilder] gets the row index and builds its shape; the default is a
-/// [SkeletonListTile]. Pick [rows] from what it replaces, not from habit: a
+/// [itemBuilder] gets the row index and builds its shape. Pick [rows] from what it replaces, not
+/// from habit: a
 /// long list pane wants 5–7, a capped block (dialog, popover) wants 3 — a
 /// skeleton *taller* than the list it stands in for causes an upward jump,
 /// which is worse than a downward one.
@@ -272,14 +176,14 @@ class SkeletonList extends StatelessWidget {
   const SkeletonList({
     super.key,
     this.rows = 5,
-    this.itemBuilder,
+    required this.itemBuilder,
     this.fadeDepth = 0.65,
     this.padding = EdgeInsets.zero,
     this.semanticsLabel = 'Loading',
   });
 
   final int rows;
-  final IndexedWidgetBuilder? itemBuilder;
+  final IndexedWidgetBuilder itemBuilder;
   final double fadeDepth;
   final EdgeInsetsGeometry padding;
   final String semanticsLabel;
@@ -300,7 +204,7 @@ class SkeletonList extends StatelessWidget {
           for (var i = 0; i < rows; i++)
             Opacity(
               opacity: skeletonFade(i, rows, depth: fadeDepth),
-              child: itemBuilder?.call(context, i) ?? const SkeletonListTile(),
+              child: itemBuilder(context, i),
             ),
         ],
       ),

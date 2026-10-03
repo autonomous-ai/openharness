@@ -196,8 +196,16 @@ export function plausibleBranchName(name: unknown): name is string {
 
 /** The folder for a project somebody named: their words with spaces as dashes and nothing a path or
  *  a shell reads specially. Null when nothing usable is left. Mirrors `projectFolderSlug` in
- *  desktop/lib/core/project_folder.dart. */
+ *  desktop/lib/core/project_folder.dart. Accented letters keep their base letter (`nói` → `noi`)
+ *  rather than being dropped. */
 export function projectFolderSlug(name: string): string | null {
-  const slug = name.trim().replace(/\s+/g, '-').replace(/[^A-Za-z0-9._-]+/g, '').replace(/^[.-]+|[.-]+$/g, '')
+  const slug = foldDiacritics(name).trim().replace(/\s+/g, '-').replace(/[^A-Za-z0-9._-]+/g, '').replace(/^[.-]+|[.-]+$/g, '')
   return slug ? slug.slice(0, 64) : null
+}
+
+/** [text] with Latin letters' accents removed — `đ` and `ß` by hand, since neither decomposes. Mirrors
+ *  `foldDiacritics` in desktop/lib/core/project_folder.dart. */
+export function foldDiacritics(text: string): string {
+  return text.normalize('NFD').replace(/\p{M}+/gu, '')
+    .replace(/đ/g, 'd').replace(/Đ/g, 'D').replace(/ß/g, 'ss').replace(/ø/g, 'o').replace(/Ø/g, 'O')
 }

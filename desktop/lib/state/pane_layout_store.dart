@@ -32,6 +32,11 @@ class PaneLayoutStore {
   /// bytes of dead JSON costs less than a file this build has to migrate.
   static const _presetsKey = 'terminal_pane_presets';
 
+  /// Which computer this window is showing. Absent or empty is every machine.
+  /// A separate key from the desk: the desk stays the account's full tab list,
+  /// and this is only the window's choice of which of those tabs to draw.
+  static const machineProfileKey = 'machine_profile_v1';
+
   /// The ceiling on tiles, enforced on the way IN as well as out: a file written
   /// by a future build that allows more must not make this one try to open
   /// terminals it has nowhere to put.
@@ -163,17 +168,19 @@ class PaneLayoutStore {
   ///
   /// [dropOthers] is the sign-out: a guest has no machine to attach a remote
   /// tile to, and a tile waiting forever reads as broken, not as signed out.
-  Future<void> rekeyMachine({
+  /// Returns false when the rewritten layout could not be saved. Callers must
+  /// retain the old machine identity and retry before restoring account content.
+  Future<bool> rekeyMachine({
     required String from,
     required String to,
     bool dropOthers = false,
   }) async {
     await flushSwarms();
     final saved = await loadSwarms();
-    if (saved == null) return;
+    if (saved == null) return true;
     var changed = false;
     final swarms = saved['swarms'];
-    if (swarms is! List) return;
+    if (swarms is! List) return true;
     for (final raw in swarms) {
       if (raw is! Map || raw['panes'] is! List) continue;
       final kept = <Object?>[];
@@ -191,12 +198,12 @@ class PaneLayoutStore {
       }
       raw['panes'] = kept;
     }
-    if (!changed) return;
+    if (!changed) return true;
     try {
       await _storage.write('swarm_layout_v1', jsonEncode(saved));
+      return true;
     } catch (_) {
-      // The desk comes back under the old ids at the next launch, where the
-      // remembered id (above) gets another chance at it.
+      return false;
     }
   }
 
@@ -297,6 +304,24 @@ class PaneLayoutStore {
     // listener must start a fresh drain rather than join an already-ended one.
     _swarmSave = null;
     completion.complete();
+  }
+
+  Future<String?> loadMachineProfile() async {
+    try {
+      final raw = await _storage.read(machineProfileKey);
+      if (raw == null || raw.isEmpty) return null;
+      return raw;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> saveMachineProfile(String? machineId) async {
+    try {
+      await _storage.write(machineProfileKey, machineId ?? '');
+    } catch (_) {
+      // The choice still applies for this run.
+    }
   }
 
   Future<void> save(List<PaneLayoutEntry> entries) async {

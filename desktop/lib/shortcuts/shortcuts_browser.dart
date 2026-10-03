@@ -1,16 +1,18 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
-import '../terminal/terminal_text.dart';
+import '../widgets/desktop_chrome.dart';
 import 'app_keymap.dart';
 import 'key_cap.dart';
 import 'keymap_commands.dart';
 import 'keymap_settings.dart';
 import 'keyboard_practice.dart';
+import 'shortcut_recorder.dart';
 
 /// Searchable help built from the same resolved bindings that handle input.
 /// Shared by the shortcut dialog and Settings; no separate shortcut catalog.
@@ -122,20 +124,64 @@ class _ShortcutsBrowserState extends State<ShortcutsBrowser> {
     if (_scroll.hasClients) _scroll.jumpTo(0);
   }
 
-  Widget _lessonRow(KeyboardLesson lesson) => _ShortcutBrowserRow(
-    key: _rowKeys.putIfAbsent(lesson.id, GlobalKey.new),
-    lesson: lesson,
-    selected: _cursor >= 0 && _visible[_cursor].id == lesson.id,
-    onTap: () => _practice(lesson),
-  );
+  /// The row whose key is being changed, by command and context — not by
+  /// [KeyboardLesson.id], which spells the keys and so changes on save.
+  String? _editing;
+
+  String _editKey(KeyboardLesson lesson) =>
+      '${lesson.context.name}:${lesson.command}';
+
+  void _closeEditor() {
+    setState(() => _editing = null);
+    _input.requestFocus();
+  }
+
+  Future<void> _resetAll() async {
+    final store = _keymap.store;
+    if (store == null || !await confirmResetAllShortcuts(context)) return;
+    if (!mounted) return;
+    setState(() => _editing = null);
+    try {
+      await store.resetAll();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text('Couldn’t reset shortcuts. $error')),
+        );
+      }
+    }
+    if (mounted) _input.requestFocus();
+  }
+
+  Widget _lessonRow(KeyboardLesson lesson) {
+    final keymap = _keymap;
+    final editable =
+        keymap.store != null && harnessCommandById.containsKey(lesson.command);
+    if (editable && _editing == _editKey(lesson)) {
+      return ShortcutRecorder(
+        key: _rowKeys.putIfAbsent(lesson.id, GlobalKey.new),
+        keymap: keymap,
+        lesson: lesson,
+        onClose: _closeEditor,
+      );
+    }
+    return _ShortcutBrowserRow(
+      key: _rowKeys.putIfAbsent(lesson.id, GlobalKey.new),
+      lesson: lesson,
+      selected: _cursor >= 0 && _visible[_cursor].id == lesson.id,
+      onTap: () => _practice(lesson),
+      onEdit: editable
+          ? () => setState(() => _editing = _editKey(lesson))
+          : null,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    TerminalFontScope.watch(context);
     final keymap = KeymapTheme.of(context) ?? _fallback;
     return ListenableBuilder(
-      listenable: Listenable.merge([keymap, terminalFontStore]),
+      listenable: keymap,
       builder: (context, _) {
         final query = _query.text.trim().toLowerCase();
         final groups = <String, List<KeyboardLesson>>{};
@@ -166,198 +212,221 @@ class _ShortcutsBrowserState extends State<ShortcutsBrowser> {
         }
         _visible = [for (final name in names) ...groups[name]!];
         if (_cursor >= _visible.length) _cursor = _visible.length - 1;
-        final scale = terminalTextScaleOf(context);
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
-              child: Row(
-                children: [
-                  if (widget.onClose != null)
-                    IconButton(
-                      onPressed: widget.onClose,
-                      tooltip: 'Close keyboard shortcuts',
-                      icon: Icon(Icons.arrow_back, size: 20 * scale),
-                    )
-                  else
-                    Padding(
-                      padding: const EdgeInsets.only(right: 12),
-                      child: Icon(
-                        Icons.search,
-                        size: 20 * scale,
-                        color: grid.AppPalette.textSecondary,
-                      ),
+        final scale = grid.appTextScaleOf(context);
+        return DesktopChrome(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Semantics(
+                            header: true,
+                            child: Text(
+                              'Keyboard shortcuts',
+                              style: DesktopChrome.heading(),
+                            ),
+                          ),
+                        ),
+                        if (keymap.store case final store?
+                            when store.hasOverrides || keymap.error != null)
+                          TextButton(
+                            key: const ValueKey('shortcuts-reset-all'),
+                            onPressed: _resetAll,
+                            child: const Text('Reset all'),
+                          ),
+                        if (keymap.store != null)
+                          IconButton(
+                            tooltip: 'Edit keyboard shortcuts',
+                            icon: const Icon(
+                              AppIcons.slidersHorizontal,
+                              size: 20,
+                            ),
+                            onPressed: () => openKeyboardConfig(context),
+                          ),
+                        if (widget.onClose != null)
+                          IconButton(
+                            onPressed: widget.onClose,
+                            tooltip: 'Close keyboard shortcuts',
+                            icon: const Icon(AppIcons.close, size: 20),
+                          ),
+                      ],
                     ),
-                  Expanded(
-                    child: TextField(
+                    const SizedBox(height: 12),
+                    TextField(
                       key: const ValueKey('shortcuts-search'),
                       controller: _query,
                       focusNode: _input,
                       autofocus: widget.autofocus,
-                      style: terminalTextStyle(
-                        color: grid.AppPalette.textPrimary,
-                      ),
+                      style: DesktopChrome.control(),
                       onChanged: _filterChanged,
                       decoration: InputDecoration(
-                        hintText: 'Search keyboard shortcuts…',
-                        hintStyle: terminalTextStyle(
-                          color: grid.AppPalette.textFaint,
+                        hintText: 'Search actions or keys',
+                        hintStyle: DesktopChrome.control(
+                          color: DesktopChrome.muted,
                         ),
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        filled: false,
+                        prefixIcon: Icon(
+                          AppIcons.search,
+                          size: 18 * scale,
+                          color: DesktopChrome.muted,
+                        ),
+                        suffixIcon: _query.text.isEmpty
+                            ? null
+                            : IconButton(
+                                tooltip: 'Clear search',
+                                icon: const Icon(AppIcons.close, size: 18),
+                                onPressed: () {
+                                  _query.clear();
+                                  _filterChanged('');
+                                  _input.requestFocus();
+                                },
+                              ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(
+                            DesktopChrome.controlRadius,
+                          ),
+                          borderSide: BorderSide(
+                            color: MediaQuery.highContrastOf(context)
+                                ? DesktopChrome.muted
+                                : DesktopChrome.rim,
+                            width: 1.5,
+                          ),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(
+                            DesktopChrome.controlRadius,
+                          ),
+                          borderSide: BorderSide(
+                            color: DesktopChrome.accent,
+                            width: 1.5,
+                          ),
+                        ),
+                        fillColor: DesktopChrome.field,
+                        filled: true,
                         isDense: true,
                         contentPadding: const EdgeInsets.symmetric(
-                          vertical: 12,
+                          horizontal: 12,
+                          vertical: 10,
                         ),
                       ),
                     ),
-                  ),
-                  if (_query.text.isNotEmpty)
-                    IconButton(
-                      tooltip: 'Clear search',
-                      icon: Icon(Icons.close, size: 18 * scale),
-                      onPressed: () {
-                        _query.clear();
-                        _filterChanged('');
-                        _input.requestFocus();
-                      },
-                    ),
-                  if (keymap.store != null)
-                    IconButton(
-                      tooltip: 'Edit keyboard shortcuts',
-                      icon: Icon(Icons.tune, size: 20 * scale),
-                      onPressed: () => openKeyboardConfig(context),
-                    ),
-                ],
-              ),
-            ),
-            Divider(height: 1, color: grid.AppGlass.hair),
-            if (keymap.error != null)
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  keymap.error!,
-                  style: terminalTextStyle(
-                    color: grid.AppPalette.textSecondary,
-                  ),
+                  ],
                 ),
               ),
-            Expanded(
-              child: _visible.isEmpty
-                  ? Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Text(
-                          'No shortcuts found. Try an action or a key.',
-                          style: terminalTextStyle(
-                            color: grid.AppPalette.textSecondary,
+              Divider(height: 1, color: grid.AppGlass.hair),
+              if (keymap.error != null)
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(keymap.error!, style: DesktopChrome.metadata()),
+                ),
+              Expanded(
+                child: _visible.isEmpty
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Text(
+                            'No shortcuts found. Try an action or a key.',
+                            style: DesktopChrome.text(
+                              color: DesktopChrome.muted,
+                            ),
                           ),
                         ),
-                      ),
-                    )
-                  : LayoutBuilder(
-                      builder: (context, constraints) {
-                        final columns =
-                            constraints.maxWidth >= 760 * math.max(1, scale)
-                            ? 2
-                            : 1;
-                        return Scrollbar(
-                          controller: _scroll,
-                          child: ListView(
+                      )
+                    : LayoutBuilder(
+                        builder: (context, constraints) {
+                          final columns =
+                              constraints.maxWidth >= 760 * math.max(1, scale)
+                              ? 2
+                              : 1;
+                          return Scrollbar(
                             controller: _scroll,
-                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                            children: [
-                              for (final name in names) ...[
-                                Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    12,
-                                    20,
-                                    12,
-                                    10,
-                                  ),
-                                  child: Text(
-                                    name == 'Essentials' ? 'General' : name,
-                                    style: terminalTextStyle(
-                                      color: grid.AppPalette.textSecondary,
-                                    ),
-                                  ),
-                                ),
-                                for (
-                                  var row = 0;
-                                  row < groups[name]!.length;
-                                  row += columns
-                                )
+                            child: ListView(
+                              controller: _scroll,
+                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                              children: [
+                                for (final name in names) ...[
                                   Padding(
-                                    padding: EdgeInsets.only(
-                                      bottom:
-                                          row + columns < groups[name]!.length
-                                          ? 4
-                                          : 0,
+                                    padding: const EdgeInsets.fromLTRB(
+                                      12,
+                                      20,
+                                      12,
+                                      10,
                                     ),
-                                    child: Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        for (
-                                          var column = 0;
-                                          column < columns;
-                                          column++
-                                        ) ...[
-                                          if (column > 0)
-                                            const SizedBox(width: 20),
-                                          if (row + column >=
-                                              groups[name]!.length)
-                                            const Expanded(child: SizedBox())
-                                          else
-                                            Expanded(
-                                              child: _lessonRow(
-                                                groups[name]![row + column],
-                                              ),
-                                            ),
-                                        ],
-                                      ],
+                                    child: Text(
+                                      name == 'Essentials' ? 'General' : name,
+                                      style: DesktopChrome.control(
+                                        medium: true,
+                                        color: DesktopChrome.muted,
+                                      ),
                                     ),
                                   ),
+                                  for (
+                                    var row = 0;
+                                    row < groups[name]!.length;
+                                    row += columns
+                                  )
+                                    Padding(
+                                      padding: EdgeInsets.only(
+                                        bottom:
+                                            row + columns < groups[name]!.length
+                                            ? 4
+                                            : 0,
+                                      ),
+                                      child: Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          for (
+                                            var column = 0;
+                                            column < columns;
+                                            column++
+                                          ) ...[
+                                            if (column > 0)
+                                              const SizedBox(width: 20),
+                                            if (row + column >=
+                                                groups[name]!.length)
+                                              const Expanded(child: SizedBox())
+                                            else
+                                              Expanded(
+                                                child: _lessonRow(
+                                                  groups[name]![row + column],
+                                                ),
+                                              ),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
+                                ],
                               ],
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-            ),
-            Divider(height: 1, color: grid.AppGlass.hair),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              child: Wrap(
-                spacing: 24,
-                runSpacing: 8,
-                children: [
-                  Text(
-                    '↑↓ select',
-                    style: terminalTextStyle(
-                      color: grid.AppPalette.textSecondary,
-                    ),
-                  ),
-                  Text(
-                    '↵ practice',
-                    style: terminalTextStyle(
-                      color: grid.AppPalette.textSecondary,
-                    ),
-                  ),
-                  if (widget.onClose != null)
-                    Text(
-                      'esc close',
-                      style: terminalTextStyle(
-                        color: grid.AppPalette.textSecondary,
+                            ),
+                          );
+                        },
                       ),
-                    ),
-                ],
               ),
-            ),
-          ],
+              Divider(height: 1, color: grid.AppGlass.hair),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
+                child: Wrap(
+                  spacing: 24,
+                  runSpacing: 8,
+                  children: [
+                    Text('↑↓ Browse', style: DesktopChrome.metadata()),
+                    Text('Return Practice', style: DesktopChrome.metadata()),
+                    if (widget.onClose != null)
+                      Text('Esc Close', style: DesktopChrome.metadata()),
+                  ],
+                ),
+              ),
+            ],
+          ),
         );
       },
     );
@@ -370,43 +439,98 @@ class _ShortcutBrowserRow extends StatelessWidget {
     required this.lesson,
     required this.selected,
     required this.onTap,
+    this.onEdit,
   });
   final KeyboardLesson lesson;
   final bool selected;
   final VoidCallback onTap;
 
+  /// Null where keys cannot be changed from here: the browser build, and the
+  /// practice-only rows that are not app commands.
+  final VoidCallback? onEdit;
+
   @override
   Widget build(BuildContext context) {
+    final row = _practiceButton(context);
+    final edit = onEdit;
+    if (edit == null) return row;
+    return Row(
+      children: [
+        Expanded(child: row),
+        IconButton(
+          key: ValueKey(
+            'shortcut-edit-${lesson.context.name}:${lesson.command}',
+          ),
+          tooltip: 'Change shortcut',
+          icon: Icon(AppIcons.pencil, size: 16, color: DesktopChrome.muted),
+          onPressed: edit,
+        ),
+      ],
+    );
+  }
+
+  Widget _practiceButton(BuildContext context) {
     final chords = [
       for (final binding in lesson.bindings)
         binding.keys.length == 1
             ? describeKeyStrokeKeys(binding.keys.single)
             : [describeKeyBinding(binding)],
     ];
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: '${lesson.label}, ${lesson.keys}. Practice shortcut',
-      child: Material(
-        animationDuration: Duration.zero,
-        color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
-        borderRadius: BorderRadius.circular(6),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(6),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    return MergeSemantics(
+      child: Semantics(
+        button: true,
+        selected: selected,
+        label: '${lesson.label}, ${lesson.keys}. Practice shortcut',
+        child: TextButton(
+          onPressed: onTap,
+          style:
+              TextButton.styleFrom(
+                alignment: Alignment.centerLeft,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                backgroundColor: selected
+                    ? DesktopChrome.selection
+                    : Colors.transparent,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(
+                    DesktopChrome.controlRadius,
+                  ),
+                ),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                splashFactory: NoSplash.splashFactory,
+              ).copyWith(
+                side: WidgetStateProperty.resolveWith(
+                  (states) => BorderSide(
+                    width: 1.5,
+                    color: states.contains(WidgetState.focused)
+                        ? DesktopChrome.accent
+                        : Colors.transparent,
+                  ),
+                ),
+                overlayColor: WidgetStateProperty.resolveWith(
+                  (states) => DesktopChrome.foreground.withValues(
+                    alpha: states.contains(WidgetState.pressed)
+                        ? .12
+                        : states.contains(WidgetState.hovered)
+                        ? .05
+                        : 0,
+                  ),
+                ),
+              ),
+          child: ExcludeSemantics(
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final keys = KeyChordView(
                   chords: chords,
-                  textStyle: terminalTextStyle(),
+                  textStyle: DesktopChrome.control(),
                 );
                 final label = Text(
                   lesson.label,
-                  style: terminalTextStyle(color: grid.AppPalette.textPrimary),
+                  style: DesktopChrome.control(),
                 );
-                if (constraints.maxWidth < 330 * terminalTextScaleOf(context)) {
+                if (constraints.maxWidth < 330 * grid.appTextScaleOf(context)) {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [label, const SizedBox(height: 8), keys],

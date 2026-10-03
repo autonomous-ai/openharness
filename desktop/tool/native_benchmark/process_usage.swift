@@ -20,8 +20,9 @@ guard !FileManager.default.fileExists(atPath: args[4]) else {
 
 struct Sample: Codable {
   let elapsedSeconds: Double
-  let userNanoseconds: UInt64
-  let systemNanoseconds: UInt64
+  let processStartMachTicks: UInt64
+  let userMachTicks: UInt64
+  let systemMachTicks: UInt64
   let physicalFootprintBytes: UInt64
   let residentBytes: UInt64
   let interruptWakeups: UInt64
@@ -30,6 +31,13 @@ struct Sample: Codable {
   let diskWriteBytes: UInt64
 }
 
+// proc_pid_rusage exposes task CPU time in Mach absolute ticks. On this
+// Apple Silicon host one tick is 125/3 ns; treating ticks as ns understated
+// CPU by 41.67x. Retain both the raw counters and their clock conversion.
+var timebase = mach_timebase_info_data_t()
+guard mach_timebase_info(&timebase) == KERN_SUCCESS, timebase.denom > 0 else {
+  fail("Could not read the Mach clock timebase")
+}
 let began = ProcessInfo.processInfo.systemUptime
 let startedAt = ISO8601DateFormatter().string(from: Date())
 func sample() -> Sample {
@@ -42,8 +50,9 @@ func sample() -> Sample {
   guard status == 0 else { fail("proc_pid_rusage failed (errno \(errno)); process may have exited") }
   return Sample(
     elapsedSeconds: ProcessInfo.processInfo.systemUptime - began,
-    userNanoseconds: usage.ri_user_time,
-    systemNanoseconds: usage.ri_system_time,
+    processStartMachTicks: usage.ri_proc_start_abstime,
+    userMachTicks: usage.ri_user_time,
+    systemMachTicks: usage.ri_system_time,
     physicalFootprintBytes: usage.ri_phys_footprint,
     residentBytes: usage.ri_resident_size,
     interruptWakeups: usage.ri_interrupt_wkups,
@@ -53,16 +62,25 @@ func sample() -> Sample {
 }
 
 var samples = [sample()]
+FileHandle.standardError.write(Data("Sampling process \(target) for \(seconds) seconds\n".utf8))
 for tick in 1...seconds {
   let remaining = began + Double(tick) - ProcessInfo.processInfo.systemUptime
   if remaining > 0 { Thread.sleep(forTimeInterval: remaining) }
-  samples.append(sample())
+  let current = sample()
+  let previous = samples.last!
+  guard current.processStartMachTicks == previous.processStartMachTicks,
+        current.userMachTicks >= previous.userMachTicks,
+        current.systemMachTicks >= previous.systemMachTicks else {
+    fail("Process identity or CPU counters changed during sampling")
+  }
+  samples.append(current)
 }
 let first = samples.first!
 let last = samples.last!
 let elapsed = last.elapsedSeconds - first.elapsedSeconds
-let cpuSeconds = Double(last.userNanoseconds - first.userNanoseconds
-  + last.systemNanoseconds - first.systemNanoseconds) / 1_000_000_000
+let cpuTicks = Double(last.userMachTicks - first.userMachTicks)
+  + Double(last.systemMachTicks - first.systemMachTicks)
+let cpuSeconds = cpuTicks * Double(timebase.numer) / Double(timebase.denom) / 1_000_000_000
 let footprints = samples.map { Double($0.physicalFootprintBytes) / 1_048_576 }.sorted()
 let summary: [String: Any] = [
   "elapsedSeconds": elapsed,
@@ -79,16 +97,26 @@ let summary: [String: Any] = [
 ]
 let encodedSamples = try JSONEncoder().encode(samples)
 let output: [String: Any] = [
-  "schema": 1, "success": true, "label": args[3], "pid": target,
+  "schema": 2, "success": true, "label": args[3], "pid": target,
   "startedAt": startedAt, "os": ProcessInfo.processInfo.operatingSystemVersionString,
-  "boundary": "proc_pid_rusage for this process only; CPU 100% = one core; excludes daemon, agents, and GPU energy",
+  "boundary": "proc_pid_rusage for this process only; CPU 100% = one core; excludes other processes and GPU energy",
+  "cpuClock": ["unit": "mach_absolute_time", "timebaseNumer": timebase.numer, "timebaseDenom": timebase.denom] as [String: Any],
   "sampleIntervalSeconds": 1, "summary": summary,
   "samples": try JSONSerialization.jsonObject(with: encodedSamples),
 ]
 let data = try JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])
-guard FileManager.default.createFile(atPath: args[4], contents: data,
-                                    attributes: [.posixPermissions: 0o600]) else {
-  fail("Could not write result")
+// Another sample may have chosen this filename after our startup check.
+// Reserve it exclusively, so completing later cannot overwrite its evidence.
+let descriptor = open(args[4], O_WRONLY | O_CREAT | O_EXCL, mode_t(0o600))
+guard descriptor >= 0 else {
+  fail("Could not create fresh output (errno \(errno)); existing evidence is preserved")
+}
+let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+do {
+  try handle.write(contentsOf: data)
+  try handle.close()
+} catch {
+  fail("Could not write result: \(error)")
 }
 let summaryData = try JSONSerialization.data(withJSONObject: summary, options: [.sortedKeys])
 print(String(data: summaryData, encoding: .utf8)!)

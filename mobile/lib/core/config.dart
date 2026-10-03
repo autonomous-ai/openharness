@@ -1,15 +1,10 @@
-/// Runtime configuration for the desktop app.
+/// Runtime configuration for the phone app.
 class AppConfig {
   /// Base URL of the central backend (control plane + ws hub).
   final String apiBaseUrl;
   final String autonomousEnv;
-  final String localCliBaseUrl;
 
-  const AppConfig({
-    required this.apiBaseUrl,
-    this.autonomousEnv = 'prod',
-    this.localCliBaseUrl = 'http://127.0.0.1:18473',
-  });
+  const AppConfig({required this.apiBaseUrl, this.autonomousEnv = 'prod'});
 
   static const AppConfig dev = AppConfig(
     apiBaseUrl: 'https://harness-api.autonomous.ai',

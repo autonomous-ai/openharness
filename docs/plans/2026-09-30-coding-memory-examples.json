@@ -1,0 +1,690 @@
+{
+  "schema_version": 1,
+  "status": "Synthetic design examples, not production memories or an implemented wire schema.",
+  "data_policy": "Invented users, projects, source events, revisions, and outcomes. No profile describes the current user. Source roles are fixture data.",
+  "source_events": [
+    {
+      "id": "source_style_a",
+      "profileId": "example_a",
+      "role": "user",
+      "content": "For concurrency bugs, first spell out the state transitions and what must remain true, then reproduce the bug and verify the fix. This helps me review the race."
+    },
+    {
+      "id": "source_style_b",
+      "profileId": "example_b",
+      "role": "user",
+      "content": "For reproducible bugs, start with the smallest failing test, make a small fix, verify it, then explain why it works. Concrete feedback helps me review it."
+    },
+    {
+      "id": "source_cache_decision",
+      "profileId": "example_service",
+      "role": "user",
+      "content": "For this single-process preview server, choose the in-process cache to avoid operating another service. We considered Redis but do not need it yet. We expect fewer repeated renders. Revisit the choice if we add independent workers."
+    },
+    {
+      "id": "source_cache_test",
+      "profileId": "example_service",
+      "role": "tool",
+      "content": "At revision example_r1, in the single-process test fixture: two sequential requests for the same unchanged input invoke the renderer once. Test passed. No latency benchmark or concurrent-worker test was run."
+    },
+    {
+      "id": "source_benchmark_hypothesis",
+      "profileId": "example_measurement",
+      "role": "assistant",
+      "content": "The cache size might be causing the slow queries. I propose testing a larger cache. This is a hypothesis."
+    },
+    {
+      "id": "source_benchmark_result",
+      "profileId": "example_measurement",
+      "role": "tool",
+      "content": "Synthetic benchmark report: revision example_search_r1, workload fixture Q, 100 requests. Run A used cache 128 MB on machine A and median latency was 80 ms. Run B used cache 512 MB on machine B and median latency was 40 ms. Hardware and cache size both changed. No controlled rerun has occurred."
+    },
+    {
+      "id": "source_guide_authority",
+      "profileId": "example_service",
+      "role": "user",
+      "content": "For preview verification, docs/preview-checks.md is our canonical project guide. Read it when changing the preview renderer. Keep setup commands there rather than making another copy."
+    },
+    {
+      "id": "source_guide_observation",
+      "profileId": "example_service",
+      "role": "tool",
+      "content": "In project preview_example, docs/preview-checks.md exists at example_guide_r2. This observation verifies file presence and revision only; host discovery, loading, and command execution have not been checked."
+    },
+    {
+      "id": "source_experiment_objective",
+      "profileId": "example_measurement",
+      "role": "user",
+      "content": "Compare training loss with evaluator eval_v1 on data_v1, lower is better, on GPU_A under a 300-second training budget excluding startup and compilation. This comparison is exploratory, not an adopted architecture decision."
+    },
+    {
+      "id": "source_typed_experiment_runs",
+      "profileId": "example_measurement",
+      "role": "tool",
+      "content": "Synthetic report report_runs_v1: baseline commit train_r1 completed on GPU_A with evaluator eval_v1, data_v1, seed 7, budget 300 training seconds excluding startup and compilation, score 1.2. Candidate train_r2 under the same configured conditions crashed with OOM before evaluation; its CSV score is placeholder 0.0 and no valid score exists. No repeated runs or uncertainty estimates."
+    }
+  ],
+  "records": [
+    {
+      "schemaVersion": 1,
+      "id": "memory_style_a",
+      "revision": 1,
+      "kind": "working_preference",
+      "facet": "reasoning_and_feedback",
+      "assertionType": "stated_preference",
+      "scope": {
+        "profileId": "example_a"
+      },
+      "claim": "For concurrency bugs, the developer prefers examining the state model before the reproducer and fix.",
+      "rationale": "The developer says this helps them review the race.",
+      "futureAction": "Start with the relevant state transitions and invariant, then reproduce and verify the repair.",
+      "applicability": {
+        "taskType": "debugging",
+        "problemClass": "concurrency"
+      },
+      "exceptions": [],
+      "details": {
+        "style": {
+          "preferredSequence": [
+            "state_model",
+            "reproducer",
+            "fix",
+            "verification"
+          ]
+        }
+      },
+      "evidenceClass": "user_stated",
+      "evidence": [
+        {
+          "sourceEventId": "source_style_a",
+          "relation": "supports",
+          "paths": [
+            "/claim",
+            "/rationale",
+            "/applicability",
+            "/details/style"
+          ]
+        }
+      ],
+      "state": "active",
+      "conflictKey": "example_a:concurrency:feedback_sequence",
+      "publication": "private",
+      "validity": {
+        "validFrom": null,
+        "validUntil": null,
+        "lastVerifiedAt": null
+      },
+      "supersedes": []
+    },
+    {
+      "schemaVersion": 1,
+      "id": "memory_style_b",
+      "revision": 1,
+      "kind": "working_preference",
+      "facet": "reasoning_and_feedback",
+      "assertionType": "stated_preference",
+      "scope": {
+        "profileId": "example_b"
+      },
+      "claim": "For reproducible bugs, the developer prefers a minimal failing test before a small fix and explanation.",
+      "rationale": "The developer says concrete feedback helps them review the work.",
+      "futureAction": "Begin with the focused reproducer, make the bounded change, and explain its correctness.",
+      "applicability": {
+        "taskType": "debugging",
+        "reproducible": true
+      },
+      "exceptions": [],
+      "details": {
+        "style": {
+          "preferredSequence": [
+            "reproducer",
+            "bounded_fix",
+            "verification_and_explanation"
+          ]
+        }
+      },
+      "evidenceClass": "user_stated",
+      "evidence": [
+        {
+          "sourceEventId": "source_style_b",
+          "relation": "supports",
+          "paths": [
+            "/claim",
+            "/rationale",
+            "/applicability",
+            "/details/style"
+          ]
+        }
+      ],
+      "state": "active",
+      "conflictKey": "example_b:reproducible_bug:feedback_sequence",
+      "publication": "private",
+      "validity": {
+        "validFrom": null,
+        "validUntil": null,
+        "lastVerifiedAt": null
+      },
+      "supersedes": []
+    },
+    {
+      "schemaVersion": 1,
+      "id": "memory_cache_decision",
+      "revision": 1,
+      "kind": "project_decision",
+      "facet": "architecture",
+      "assertionType": "accepted_decision",
+      "scope": {
+        "profileId": "example_service",
+        "projectId": "preview_example"
+      },
+      "claim": "The preview server selected an in-process cache for its single-process deployment.",
+      "rationale": "Avoid operating another service while the deployment does not need shared cache coordination.",
+      "futureAction": "Preserve the rationale while these conditions apply; reconsider cache coordination for independent workers.",
+      "applicability": {
+        "component": "preview_server",
+        "deployment": "single_process"
+      },
+      "exceptions": [],
+      "details": {
+        "decision": {
+          "problem": "Avoid repeated rendering without adding unnecessary operational work.",
+          "alternatives": [
+            {
+              "option": "in_process_cache",
+              "disposition": "chosen"
+            },
+            {
+              "option": "Redis",
+              "disposition": "deferred",
+              "reason": "Shared coordination is not needed for the current deployment."
+            }
+          ],
+          "expectedOutcome": "Fewer repeated renders.",
+          "observedOutcome": "The sequential unchanged-input fixture invoked the renderer once for two requests.",
+          "revisitWhen": [
+            "The deployment gains independent workers."
+          ],
+          "unknowns": [
+            "Concurrent-worker behavior",
+            "End-to-end latency effect"
+          ]
+        }
+      },
+      "evidenceClass": "user_stated",
+      "evidence": [
+        {
+          "sourceEventId": "source_cache_decision",
+          "relation": "supports",
+          "paths": [
+            "/claim",
+            "/rationale",
+            "/applicability",
+            "/details/decision/problem",
+            "/details/decision/alternatives",
+            "/details/decision/expectedOutcome",
+            "/details/decision/revisitWhen"
+          ]
+        },
+        {
+          "sourceEventId": "source_cache_test",
+          "relation": "supports",
+          "paths": [
+            "/details/decision/observedOutcome",
+            "/details/decision/unknowns"
+          ],
+          "verification": {
+            "method": "test",
+            "result": "passed",
+            "artifact": "source_cache_test",
+            "revision": "example_r1",
+            "environment": "single-process test fixture",
+            "coverage": "Two sequential requests with the same unchanged input.",
+            "limitations": [
+              "No latency benchmark",
+              "No independent-worker test"
+            ]
+          }
+        }
+      ],
+      "state": "active",
+      "conflictKey": "example_service:preview_example:cache_choice",
+      "publication": "private",
+      "validity": {
+        "validFrom": null,
+        "validUntil": null,
+        "lastVerifiedAt": null,
+        "recheckWhen": [
+          "Worker topology changes",
+          "Input invalidation contract changes"
+        ]
+      },
+      "supersedes": []
+    },
+    {
+      "schemaVersion": 1,
+      "id": "memory_open_experiment",
+      "revision": 1,
+      "kind": "working_continuity",
+      "facet": "verification",
+      "assertionType": "temporary_state",
+      "scope": {
+        "profileId": "example_measurement",
+        "projectId": "search_example",
+        "taskId": "investigation_example"
+      },
+      "claim": "The cache investigation has a comparison that changed both cache size and hardware; the isolated cache effect remains unknown.",
+      "rationale": "The observed comparison cannot isolate which change caused the difference.",
+      "futureAction": "Check the current benchmark setup and, if still relevant, compare cache sizes with hardware and workload held constant.",
+      "applicability": {
+        "taskId": "investigation_example",
+        "component": "search"
+      },
+      "exceptions": [],
+      "details": {
+        "experiment": {
+          "hypothesis": "A larger cache reduces query latency.",
+          "hypothesisStatus": "unresolved",
+          "intervention": [
+            "Cache size 128 MB to 512 MB",
+            "Machine A to machine B"
+          ],
+          "result": "Median latency changed from 80 ms to 40 ms in the reported runs.",
+          "limitations": [
+            "Two factors changed",
+            "No controlled rerun",
+            "No statistical uncertainty estimate supplied"
+          ]
+        }
+      },
+      "evidenceClass": "observed_verified",
+      "evidence": [
+        {
+          "sourceEventId": "source_benchmark_hypothesis",
+          "relation": "references",
+          "paths": [
+            "/details/experiment/hypothesis"
+          ]
+        },
+        {
+          "sourceEventId": "source_benchmark_result",
+          "relation": "supports",
+          "paths": [
+            "/claim",
+            "/details/experiment/hypothesisStatus",
+            "/details/experiment/intervention",
+            "/details/experiment/result",
+            "/details/experiment/limitations"
+          ],
+          "verification": {
+            "method": "benchmark",
+            "result": "comparison_observed_cause_unresolved",
+            "artifact": "source_benchmark_result",
+            "revision": "example_search_r1",
+            "environment": "Machines A and B; fixture Q; 100 requests per run",
+            "coverage": "Reported medians for these two runs only",
+            "limitations": [
+              "Hardware and cache size changed together"
+            ]
+          }
+        }
+      ],
+      "state": "active",
+      "conflictKey": "example_measurement:investigation_example:current_state",
+      "publication": "private",
+      "validity": {
+        "validFrom": null,
+        "validUntil": null,
+        "lastVerifiedAt": null,
+        "recheckWhen": [
+          "Task completes",
+          "A controlled rerun is available"
+        ]
+      },
+      "supersedes": []
+    },
+    {
+      "schemaVersion": 1,
+      "id": "memory_preview_guide",
+      "revision": 1,
+      "kind": "reference",
+      "facet": "verification",
+      "assertionType": "project_constraint",
+      "scope": {
+        "profileId": "example_service",
+        "projectId": "preview_example"
+      },
+      "claim": "The project identifies docs/preview-checks.md as the canonical preview verification guide.",
+      "rationale": "The developer wants setup commands maintained in one project location.",
+      "futureAction": "Read the current guide for preview renderer changes and check actual host delivery before claiming it was loaded.",
+      "applicability": {
+        "component": "preview_renderer"
+      },
+      "exceptions": [],
+      "details": {
+        "reference": {
+          "resourceType": "canonical_project_guide",
+          "locator": "docs/preview-checks.md",
+          "authority": "user_identified_project_guidance",
+          "sourceRevision": "example_guide_r2",
+          "readWhen": [
+            "changing_preview_renderer"
+          ],
+          "availability": {
+            "presence": "verified",
+            "hostDiscovery": "unknown",
+            "loaded": "unknown",
+            "execution": "unknown"
+          }
+        }
+      },
+      "evidenceClass": "user_stated",
+      "evidence": [
+        {
+          "sourceEventId": "source_guide_authority",
+          "relation": "supports",
+          "paths": [
+            "/claim",
+            "/rationale",
+            "/applicability",
+            "/details/reference/authority",
+            "/details/reference/readWhen"
+          ]
+        },
+        {
+          "sourceEventId": "source_guide_observation",
+          "relation": "supports",
+          "paths": [
+            "/details/reference/locator",
+            "/details/reference/sourceRevision",
+            "/details/reference/availability"
+          ],
+          "verification": {
+            "method": "manual_check",
+            "result": "file_observed",
+            "artifact": "source_guide_observation",
+            "revision": "example_guide_r2",
+            "environment": "Authorized synthetic project checkout",
+            "coverage": "Presence and observed revision only",
+            "limitations": [
+              "No host discovery, loading, or command-execution verification"
+            ]
+          }
+        }
+      ],
+      "state": "active",
+      "conflictKey": "example_service:preview_example:verification_guide",
+      "publication": "private",
+      "validity": {
+        "validFrom": null,
+        "validUntil": null,
+        "lastVerifiedAt": null,
+        "recheckWhen": [
+          "Guide changes",
+          "Project guidance identifies a different resource",
+          "Host or adapter changes"
+        ]
+      },
+      "supersedes": []
+    },
+    {
+      "schemaVersion": 1,
+      "id": "memory_typed_experiment",
+      "revision": 1,
+      "kind": "working_continuity",
+      "facet": "verification",
+      "assertionType": "temporary_state",
+      "scope": {
+        "profileId": "example_measurement",
+        "projectId": "training_example",
+        "taskId": "trial_example"
+      },
+      "claim": "The baseline has a completed measurement; the candidate crashed and has no valid score.",
+      "rationale": "An exported numeric placeholder must not be ranked as an evaluated result.",
+      "futureAction": "Keep the baseline observation and the candidate failure separate; inspect the OOM before a further authorized experiment.",
+      "applicability": {
+        "taskId": "trial_example"
+      },
+      "exceptions": [],
+      "details": {
+        "experiment": {
+          "objective": {
+            "metric": "validation_loss",
+            "direction": "lower"
+          },
+          "evaluator": {
+            "revision": "eval_v1"
+          },
+          "dataset": {
+            "revision": "data_v1"
+          },
+          "environment": {
+            "hardware": "GPU_A",
+            "seed": 7
+          },
+          "budget": {
+            "value": 300,
+            "unit": "seconds",
+            "includes": "training",
+            "excludes": [
+              "startup",
+              "compilation"
+            ]
+          },
+          "runs": [
+            {
+              "id": "baseline",
+              "codeRevision": "train_r1",
+              "status": "completed",
+              "score": 1.2,
+              "disposition": "pending",
+              "artifact": "source_typed_experiment_runs"
+            },
+            {
+              "id": "candidate",
+              "codeRevision": "train_r2",
+              "status": "crashed",
+              "score": null,
+              "failure": "OOM before evaluation",
+              "disposition": "pending",
+              "artifact": "source_typed_experiment_runs"
+            }
+          ],
+          "result": "One completed baseline; no candidate comparison is possible.",
+          "limitations": [
+            "Single baseline run",
+            "No uncertainty estimate",
+            "No successful candidate evaluation",
+            "No adopted architecture decision"
+          ]
+        }
+      },
+      "evidenceClass": "observed_verified",
+      "evidence": [
+        {
+          "sourceEventId": "source_experiment_objective",
+          "relation": "supports",
+          "paths": [
+            "/details/experiment/objective",
+            "/details/experiment/evaluator",
+            "/details/experiment/dataset",
+            "/details/experiment/budget",
+            "/details/experiment/limitations/3"
+          ]
+        },
+        {
+          "sourceEventId": "source_typed_experiment_runs",
+          "relation": "supports",
+          "paths": [
+            "/claim",
+            "/details/experiment/environment",
+            "/details/experiment/runs",
+            "/details/experiment/result",
+            "/details/experiment/limitations/0",
+            "/details/experiment/limitations/1",
+            "/details/experiment/limitations/2"
+          ],
+          "verification": {
+            "method": "benchmark",
+            "result": "baseline_completed_candidate_crashed",
+            "artifact": "source_typed_experiment_runs",
+            "revision": "train_r1 and train_r2",
+            "environment": "GPU_A; eval_v1; data_v1; seed 7; 300 training seconds",
+            "coverage": "One baseline observation and one failed run",
+            "limitations": [
+              "No valid candidate score",
+              "No proven comparative improvement"
+            ]
+          }
+        }
+      ],
+      "state": "active",
+      "conflictKey": "example_measurement:trial_example:state",
+      "publication": "private",
+      "validity": {
+        "validFrom": null,
+        "validUntil": null,
+        "lastVerifiedAt": null,
+        "recheckWhen": [
+          "New run available",
+          "Evaluator, dataset, hardware, seed, or budget changes",
+          "Task completes"
+        ]
+      },
+      "supersedes": []
+    }
+  ],
+  "pairing_examples": [
+    {
+      "id": "matched_feedback_styles",
+      "currentTask": "Fix the reproducible duplicate event delivery race in queue fixture Q. Preserve the ownership contract and verify the fix.",
+      "fixedControls": [
+        "Repository revision",
+        "Requirements",
+        "Engine/model",
+        "Inference budget",
+        "Tool environment"
+      ],
+      "variants": [
+        {
+          "profileId": "example_a",
+          "memoryIds": [
+            "memory_style_a"
+          ],
+          "expectedFirstMove": "Explain the affected state transitions and ownership invariant before constructing the reproducer."
+        },
+        {
+          "profileId": "example_b",
+          "memoryIds": [
+            "memory_style_b"
+          ],
+          "expectedFirstMove": "Construct the minimal failing reproducer before the bounded fix and correctness explanation."
+        }
+      ],
+      "sharedAcceptance": [
+        "Correct repair",
+        "Meaningful regression checks",
+        "No invented preference outside the stated conditions",
+        "No cross-profile memory access"
+      ]
+    },
+    {
+      "id": "changed_decision_condition",
+      "profileId": "example_service",
+      "currentTask": "The preview server now has four independent workers. Ensure cached content is refreshed consistently after an edit.",
+      "recallFragment": {
+        "memoryId": "memory_cache_decision",
+        "revision": 1,
+        "disposition": "historical_decision_to_reconsider",
+        "selectionReason": "Same component; the current requirement matches the decision's explicit revisit condition.",
+        "caution": "Single-process applicability no longer holds. Neither a distributed cache nor any particular vendor is automatically required."
+      },
+      "expectedBehavior": "Inspect the current invalidation contract, compare suitable coordination options, and explain how the new worker topology changes the original tradeoff. Do not infer that the developer now prefers Redis globally."
+    },
+    {
+      "id": "honest_investigation_handoff",
+      "profileId": "example_measurement",
+      "currentTask": "Continue the search latency investigation in the other framework.",
+      "recallFragment": {
+        "memoryId": "memory_open_experiment",
+        "revision": 1,
+        "disposition": "investigation_lead",
+        "selectionReason": "Same unfinished task.",
+        "caution": "Active memory status records the investigation state; it does not confirm the cache hypothesis."
+      },
+      "expectedBehavior": "Preserve the observation and its confounds, check the current setup, and propose or run an authorized controlled comparison. Do not report a proven twofold cache speedup."
+    },
+    {
+      "id": "current_workspace_guidance",
+      "profileId": "example_service",
+      "currentTask": "Verify a preview renderer change in the other framework. The canonical guide now has revision example_guide_r3.",
+      "recallFragment": {
+        "memoryId": "memory_preview_guide",
+        "revision": 1,
+        "disposition": "resource_pointer_to_refresh",
+        "selectionReason": "Same project component and verification task.",
+        "caution": "Observed guide revision and host-delivery state may be stale."
+      },
+      "expectedBehavior": "Read current authorized project guidance, update the reference observation, and use the applicable checks. Do not claim a saved pointer proves that the other host loaded the guide."
+    },
+    {
+      "id": "failed_experiment_handoff",
+      "profileId": "example_measurement",
+      "currentTask": "Continue the training experiment in the other framework.",
+      "recallFragment": {
+        "memoryId": "memory_typed_experiment",
+        "revision": 1,
+        "disposition": "investigation_lead",
+        "selectionReason": "Same unfinished experiment.",
+        "caution": "The candidate has no valid performance score and there is no adopted design decision."
+      },
+      "expectedBehavior": "Preserve baseline and failure evidence, check present evaluator and resource conditions, and avoid ranking a failed run by its imported numeric placeholder."
+    }
+  ],
+  "derived_topic_examples": [
+    {
+      "id": "topic_preview_cache",
+      "status": "synthetic_projection",
+      "profileId": "example_service",
+      "topic": "Why the preview server uses a local cache",
+      "revision": 1,
+      "dependencies": [
+        {
+          "memoryId": "memory_cache_decision",
+          "revision": 1
+        }
+      ],
+      "statements": [
+        {
+          "text": "The single-process preview server chose an in-process cache to avoid operating another service.",
+          "supports": [
+            {
+              "memoryId": "memory_cache_decision",
+              "revision": 1,
+              "paths": [
+                "/claim",
+                "/rationale"
+              ]
+            }
+          ]
+        },
+        {
+          "text": "A sequential unchanged-input fixture invoked the renderer once for two requests; distributed invalidation remains unverified.",
+          "supports": [
+            {
+              "memoryId": "memory_cache_decision",
+              "revision": 1,
+              "paths": [
+                "/details/decision/observedOutcome",
+                "/details/decision/unknowns"
+              ]
+            }
+          ]
+        }
+      ],
+      "authority": "derived_view_only",
+      "independentEvidence": false,
+      "invalidation": "A dependency correction, exclusion, supersession, or forget invalidates the page, index, and owned projections before future delivery. Regeneration rechecks revisions and access.",
+      "projectId": "preview_example"
+    }
+  ]
+}

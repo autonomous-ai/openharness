@@ -1,0 +1,40 @@
+{
+  "kind": "synthetic-memory-performance",
+  "mode": "prepare-and-owner-activity",
+  "retainedReceipts": 5000,
+  "ratedContexts": 0,
+  "records": 10000,
+  "projects": 10,
+  "node": "v22.23.2",
+  "platform": "darwin",
+  "arch": "arm64",
+  "seedMs": 41453.811708,
+  "cold": {
+    "p50Ms": 48.41275000000314,
+    "p95Ms": 49.79349999999977,
+    "maxMs": 49.79349999999977
+  },
+  "warm": {
+    "p50Ms": 20.006792000000132,
+    "p95Ms": 23.060583999998926,
+    "maxMs": 45.331167000003916
+  },
+  "requests": 310,
+  "timeouts": 0,
+  "largestPacketBytes": 2642,
+  "parentEventLoopP95Ms": 1.377279,
+  "latestAttempts": 5000,
+  "openSessions": 128,
+  "activityAfterRecall": {
+    "p50Ms": 1.8244580000027781,
+    "p95Ms": 3.682042000000365,
+    "maxMs": 4.828499999995984
+  },
+  "activityRequests": 310,
+  "largestActivityBytes": 37401,
+  "limitations": [
+    "Synthetic lexical matches, not a retrieval-quality benchmark.",
+    "Cold means a new worker, not an emptied OS disk cache.",
+    "One local machine; provider extraction and native hook delivery are not measured."
+  ]
+}

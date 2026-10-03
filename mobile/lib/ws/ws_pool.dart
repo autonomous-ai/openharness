@@ -9,6 +9,7 @@ import 'ws_conn.dart';
 
 /// Owns one SSO-authenticated [WsConn] per machine.
 class WsPool {
+  final WsChannelFactory? connectChannel;
   final String wsBaseUrl;
   final String autonomousEnv;
 
@@ -30,6 +31,7 @@ class WsPool {
 
   WsPool({
     required this.wsBaseUrl,
+    this.connectChannel,
     required this.autonomousEnv,
     this.relayCodecs,
     this.transportPlugins,
@@ -40,16 +42,8 @@ class WsPool {
     required this.onStatus,
   });
 
-  WsConn connFor(
-    String machineId, {
-    WsTransportKind transportKind = WsTransportKind.cloudE2ee,
-    Uri? localWsUri,
-    String? localApiKey,
-    int localProtocolVersion = 1,
-  }) {
-    final desiredKey = transportKind == WsTransportKind.localPlaintext
-        ? 'local:${localWsUri.toString()}'
-        : 'cloud:$wsBaseUrl:$autonomousEnv';
+  WsConn connFor(String machineId) {
+    final desiredKey = 'cloud:$wsBaseUrl:$autonomousEnv';
     final current = _conns[machineId];
     if (current != null &&
         current.endpointKey == desiredKey &&
@@ -63,31 +57,43 @@ class WsPool {
       appLog.warn(
         'ws',
         'replacing connection $machineId '
-        '(was ${current.endpointKey}, now $desiredKey)',
+            '(was ${current.endpointKey}, now $desiredKey)',
       );
       unawaited(current.close());
     }
-    final conn = WsConn(
+    // ⚠️ Once another connection holds this machine, this one speaks for nothing. A connection's
+    // last word — the `disconnected` from its socket closing — can land after its successor has
+    // come up, and it marked that working connection's machine as lost ("Connection lost.
+    // Reconnecting…"). The desktop's pool shuts a replaced connection up the same way. One that
+    // was only closed, with nothing in its place yet, still reports its end: the app reads it.
+    late final WsConn conn;
+    bool replaced() {
+      final owner = _conns[machineId];
+      return owner != null && !identical(owner, conn);
+    }
+
+    conn = WsConn(
       wsBaseUrl: wsBaseUrl,
+      connectChannel: connectChannel,
       autonomousEnv: autonomousEnv,
-      relayCodecs: transportKind == WsTransportKind.cloudE2ee
-          ? relayCodecs
-          : null,
-      transportPlugins: transportKind == WsTransportKind.cloudE2ee
-          ? transportPlugins
-          : null,
+      relayCodecs: relayCodecs,
+      transportPlugins: transportPlugins,
       machineId: machineId,
       accessTokenProvider: accessTokenProvider,
-      onAuthFailure: onAuthFailure,
+      onAuthFailure: (message) {
+        if (!replaced()) onAuthFailure(message);
+      },
       onLocalFailure: onLocalFailure == null
           ? null
-          : (code, reason) => onLocalFailure!(machineId, code, reason),
-      onEvent: (event) => onEvent(machineId, event),
-      onStatus: (status) => onStatus(machineId, status),
-      transportKind: transportKind,
-      localWsUri: localWsUri,
-      localApiKey: localApiKey,
-      localProtocolVersion: localProtocolVersion,
+          : (code, reason) {
+              if (!replaced()) onLocalFailure!(machineId, code, reason);
+            },
+      onEvent: (event) {
+        if (!replaced()) return onEvent(machineId, event);
+      },
+      onStatus: (status) {
+        if (!replaced()) onStatus(machineId, status);
+      },
     );
     _conns[machineId] = conn;
     unawaited(conn.connect());

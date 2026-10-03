@@ -221,6 +221,9 @@ class _PasswordLinkRun {
     final ours = jsonEncode({
       'id': b64e(identity.pub),
       'sig': b64e(await pairBindSig(identity, transcript)),
+      // A viewer, not a machine: it dials out and is never dialed, so the machine trusts it and
+      // does not pin it back. A machine that predates the field ignores it.
+      'kind': 'viewer',
     });
     _send('e2e_pw_pake', {
       'sid': _sidB64,

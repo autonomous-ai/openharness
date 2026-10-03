@@ -2,68 +2,62 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="hps-token" content="__HPS_TOKEN__">
-  <title>Harness Monitor · your fleet</title>
+  <title>Harness Monitor</title>
   <link rel="stylesheet" href="app.css">
-  <script type="module" src="app.js"></script>
 </head>
 <body>
-  <div id="app">
-    <header class="bar">
-      <div class="identity">
-        <span class="mark" aria-hidden="true"></span>
-        <h1>Harness Monitor</h1>
-        <span class="where" id="where">reading the fleet…</span>
-      </div>
-      <div class="gauges" id="gauges" aria-live="polite"></div>
-      <div class="tools">
-        <div class="segmented" role="tablist" aria-label="View">
-          <button type="button" id="view-lanes" role="tab" aria-selected="true" data-view="lanes">Lanes</button>
-          <button type="button" id="view-table" role="tab" aria-selected="false" data-view="table">Table</button>
-        </div>
-        <div class="filter">
-          <span aria-hidden="true">/</span>
-          <input id="filter" type="search" placeholder="filter by name, project, engine" autocomplete="off" spellcheck="false" aria-label="Filter harnesses">
-        </div>
-        <button type="button" class="ghost toggle" id="show-all" aria-pressed="false" title="Also show what the policy hides: idle past the hide line, and harnesses whose pane is gone">show all</button>
-        <button type="button" class="ghost" id="refresh" title="Refresh now">↻</button>
-      </div>
-    </header>
-
-    <section class="view" id="lanes-view" aria-label="The lanes">
-      <div class="lanes-head">
-        <div class="axis-label">PROJECT</div>
-        <div class="axis" id="axis">
-          <div class="rule" id="rule-pause" data-rule="pause" tabindex="0" role="slider" aria-label="Pause after" aria-valuetext="4h"><span class="rule-grip"></span><span class="rule-tag">pause</span></div>
-          <div class="rule" id="rule-hide" data-rule="hide" tabindex="0" role="slider" aria-label="Hide after" aria-valuetext="14d"><span class="rule-grip"></span><span class="rule-tag">hide</span></div>
-        </div>
-      </div>
-      <div class="lanes" id="lane-list"></div>
-      <div class="lanes-empty" id="lanes-empty" hidden>
-        <p class="big">Nothing is running here yet.</p>
-        <p>Ask the agent beside this pane to show your fleet, or open a harness and come back.</p>
-      </div>
-    </section>
-
-    <section class="view" id="table" hidden aria-label="The table">
-      <div class="grid" id="grid" role="grid" tabindex="0"></div>
-    </section>
-
-    <div class="policybar" id="policybar" hidden>
-      <span class="policy-preview" id="policy-preview"></span>
-      <button type="button" class="primary" id="policy-save">Save policy</button>
-      <button type="button" class="ghost" id="policy-reset">Reset</button>
+  <header>
+    <div class="heading"><h1>Harness Monitor</h1><span id="live-status" class="live">Connecting</span></div>
+    <div class="search-field"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="search" type="search" placeholder="Search harnesses, agents, machines…" aria-label="Search harnesses" autocomplete="off" spellcheck="false"></div>
+    <details id="assistant-info"><summary>Assistant model</summary><div class="menu">
+      <p>New monitors use OpenCode with Muse Spark 1.3 Contributor Free. This limited-time free model allows Meta to use prompts and responses for training. Existing sessions keep their selected agent and model.</p>
+      <p>Use the assistant’s model menu to choose a different model. No prompt is sent when the table opens, and there is no automatic paid fallback.</p>
+    </div></details>
+  </header>
+  <nav aria-label="Monitor controls">
+    <div class="segmented" role="group" aria-label="Column presets"><button data-preset="overview" aria-pressed="true">Overview</button><button data-preset="resources" aria-pressed="false">Resources</button><button data-preset="ai" aria-pressed="false">AI usage</button></div>
+    <label class="sr-only" for="machine">Machine</label><select id="machine"><option value="all">All machines</option></select>
+    <label class="sr-only" for="filter">Status</label><select id="filter">
+      <option value="all">Open harnesses</option><option value="stopped">Stopped harnesses</option><option value="working">Working</option><option value="needsInput">Needs you</option>
+      <option value="idle">Idle</option><option value="done">Done</option><option value="starting">Starting</option><option value="failed">Failed</option><option value="unknown">Unknown</option>
+    </select>
+    <span class="spacer"></span>
+    <button id="inspect" disabled title="Inspect selected harness (Enter)">Inspect</button>
+    <details id="columns"><summary>Columns</summary><div id="column-options" class="menu"></div></details>
+    <button id="freeze" title="Hold the displayed readings; running work continues">Freeze updates</button><button id="refresh" title="Refresh all machines">Refresh</button>
+  </nav>
+  <div id="problems" role="status" hidden></div>
+  <main id="grid" tabindex="0" aria-label="Open harnesses. Arrow keys select, Enter inspects, Delete reviews permanent deletion.">
+    <table id="table" aria-label="Open harnesses"><colgroup id="colgroup"></colgroup><thead id="head"></thead><tbody id="body"></tbody></table>
+    <div id="empty"><strong>Connecting to your machines…</strong><p>Open harnesses will appear here.</p></div>
+  </main>
+  <section id="summary" aria-label="Resource totals for shown sessions"></section>
+  <details id="shared" hidden><summary id="shared-title">Shared servers</summary><div id="shared-body"></div></details>
+  <footer><span id="count"></span><span id="message" role="status" aria-live="polite"></span><span id="updated"></span></footer>
+  <dialog id="inspector" aria-labelledby="inspect-title">
+    <div class="dialog-heading"><h2 id="inspect-title">Harness details</h2><button id="inspect-close" aria-label="Close details">Close</button></div>
+    <p id="inspect-context" class="muted"></p><div id="inspect-content"></div>
+    <div class="dialog-actions"><button id="inspect-stop">Stop</button><button id="inspect-delete" class="danger">Delete</button></div>
+  </dialog>
+  <dialog id="stop-dialog" aria-labelledby="stop-title">
+    <h2 id="stop-title">Stop harness?</h2><p id="stop-context"></p><p id="stop-description"></p><p id="stop-storage" class="muted"></p>
+    <div id="delete-choices" hidden>
+      <section class="delete-choice">
+        <label><input id="delete-session" type="checkbox" disabled> <strong>Session data</strong> <span id="delete-session-size"></span></label>
+        <div id="delete-session-paths" class="delete-paths"></div><p id="delete-session-note" class="muted"></p>
+      </section>
+      <section class="delete-choice">
+        <label><input id="delete-worktree" type="checkbox" disabled> <strong>Worktree data</strong> <span id="delete-worktree-size"></span></label>
+        <div id="delete-worktree-path" class="delete-paths"></div><p id="delete-worktree-note" class="muted"></p>
+      </section>
+      <pre id="worktree-changes" hidden></pre>
+      <label id="worktree-discard-label" hidden><input id="worktree-discard" type="checkbox"> Permanently discard all uncommitted changes and untracked files.</label>
     </div>
-
-    <footer class="statusbar" id="statusbar">
-      <span id="status-left" class="mono"></span>
-      <span id="status-actions" class="actions" hidden></span>
-      <span id="status-right" class="keys mono"></span>
-    </footer>
-
-    <aside class="inspector" id="inspector" hidden aria-label="Harness details"></aside>
-    <div class="toast" id="toast" role="status" hidden></div>
-  </div>
+    <p id="stop-result" role="status" aria-live="polite"></p>
+    <div class="dialog-actions"><button id="stop-cancel" autofocus>Cancel</button><button id="stop-confirm" class="danger filled">Stop</button></div>
+  </dialog>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

@@ -1,4 +1,5 @@
 import '../core/models.dart';
+import '../core/runtime_model_name.dart';
 import '../shared/theme/prompt_style.dart';
 import '../shared/theme/status_line_style.dart';
 import '../widgets/engine_identity.dart';
@@ -10,6 +11,8 @@ import 'terminal_pane.dart';
 /// for their owner. Ties follow pane order, independently of keyboard focus.
 String tabHarnessType(AppNotifier app, Swarm tab) {
   if (tab.isStore) return 'store';
+  if (tab.isCompanions) return 'companions';
+  if (tab.isDevices) return 'devices';
   if (tab.isOrchestrator) return 'orchestrator';
   final counts = <String, int>{};
   for (final pane in tab.panes) {
@@ -101,10 +104,14 @@ Map<String, String> workspaceTabNames(AppNotifier app) {
           ? tab.name
           : tab.isStore
           ? 'store'
+          : tab.isCompanions
+          ? 'companions'
+          : tab.isDevices
+          ? Swarm.devicesName
           : tab.isOrchestrator
           ? 'orchestrator'
           : candidates[tab.id]!.isEmpty
-          ? 'new'
+          ? Swarm.defaultName
           : candidates[tab.id]!.reduce((a, b) {
               if (b.count != a.count) return b.count > a.count ? b : a;
               return repetitions(b) < repetitions(a) ? b : a;
@@ -138,24 +145,50 @@ class WorkspacePaneContext {
   final String machineName, provider, location, detail;
   final String projectName;
   final String? branch;
-  String? get agentId => pane.isWeb ? pane.ownerAgentId : pane.agentId;
+  String? get agentId => pane.isViewer ? pane.ownerAgentId : pane.agentId;
   String? get engine => agent?.engine ?? pane.session?.engineId;
+  String get modelLabel => modelLabelWithEffort(
+    provider,
+    agent?.gridModel == null && agent?.modelName != null
+        ? agent?.modelEffort
+        : null,
+  );
   String get suffix => branch == null ? '' : '  ($branch)';
   String get text => '$location$suffix';
-  StatusLineParts format(PromptPrefs prefs) => statusLineParts(
-    provider: '',
-    machine: prefs.machine ? machineName : '',
-    project: prefs.project ? projectName : '',
-    branch: prefs.branch ? branch : null,
-    style: prefs.statusStyle,
-    separateMachine: true,
-  );
+  StatusLineParts format(PromptPrefs prefs) {
+    final note =
+        prefs.branch &&
+            agent?.gitContext != null &&
+            project?.shownBranch == null
+        ? branch
+        : null;
+    final parts = statusLineParts(
+      provider: '',
+      machine: prefs.machine ? machineName : '',
+      project: prefs.project ? projectName : '',
+      branch: prefs.branch && note == null ? branch : null,
+      style: prefs.statusStyle,
+      separateMachine: true,
+    );
+    if (note == null) return parts;
+    return StatusLineParts(parts.style, [
+      ...parts.segments,
+      if (!parts.style.segmented && parts.segments.isNotEmpty)
+        const StatusLineSegment('  '),
+      StatusLineSegment(
+        note,
+        foreground: StatusLineTone.muted,
+        background: parts.style.segmented ? StatusLineTone.black : null,
+        field: StatusLineField.branch,
+      ),
+    ]);
+  }
 
   static WorkspacePaneContext? focused(AppNotifier app) {
     final pane = app.focusedPane;
     if (pane == null) return null;
     final machine = app.stateOf(pane.machineId);
-    final agentId = pane.isWeb ? pane.ownerAgentId : pane.agentId;
+    final agentId = pane.isViewer ? pane.ownerAgentId : pane.agentId;
     final agent = _agentFor(app, pane.machineId, agentId);
     final project = agent == null ? null : machine?.projectOf(agent);
     final machineName = machine?.machine.displayName ?? pane.machineId;
@@ -170,7 +203,7 @@ class WorkspacePaneContext {
           _ => engineIdentity(engine).label,
         };
     final projectName = project?.label ?? '';
-    final branch = project?.shownBranch;
+    final branch = agent?.gitContext?.branchLabel ?? project?.shownBranch;
     return WorkspacePaneContext(
       pane: pane,
       agent: agent,
@@ -185,8 +218,7 @@ class WorkspacePaneContext {
         if (provider.isNotEmpty) provider,
         machineName,
         if (project != null) 'Project: ${project.label}',
-        if (project != null) project.cwd,
-        ?project?.branchDetail,
+        if (agent?.gitContext case final git?) git.explanation,
       ].join('\n'),
     );
   }

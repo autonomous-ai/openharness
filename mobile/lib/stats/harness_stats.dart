@@ -1,7 +1,11 @@
 /// How much work this app has done: agents started, turns taken, time spent.
 ///
-/// Ported from Orca's `src/main/stats/` — same three cards, same "tracking
-/// since" line, same balanced start/stop accounting for the clock.
+/// Ported from Orca's `src/main/stats/` — same three figures, same "tracking
+/// since" date, same balanced start/stop accounting for the clock.
+///
+/// ⚠️ **Nothing on the phone draws them.** The Stats page that showed the three
+/// cards had no way in and was deleted; the counters are still kept and written
+/// to disk, so bringing a page back needs only a reader.
 ///
 /// **What it counts and what it does not.** These are the app's OWN events, not
 /// a vendor's and not a file on disk: the ledger beside it (`usage/ledger/`)
@@ -19,7 +23,7 @@
 /// 2. **No event log is kept.** Orca persists up to 10,000 individual events
 ///    beside its aggregates, for per-repo breakdowns it does not yet draw. That
 ///    costs a ~900KB rewrite every few seconds on a busy session, so what is
-///    persisted here is the aggregates alone. [firstEventAt] is the reason Orca
+///    persisted here is the aggregates alone. The first event's time is the reason Orca
 ///    needed the log to be lossy-safe, and it is stored directly here for the
 ///    same reason: it is set once and never moves, so trimming can never drag
 ///    "tracking since" forward.
@@ -44,36 +48,6 @@ const kStatsWriteDebounce = Duration(seconds: 5);
 /// snapshot rather than reading one that means something slightly different.
 const _kStatsVersion = 1;
 
-/// The three figures and the date under them.
-@immutable
-class StatsSummary {
-  const StatsSummary({
-    this.agentsSpawned = 0,
-    this.turns = 0,
-    this.timeWorked = Duration.zero,
-    this.firstEventAt,
-  });
-
-  /// Agents this app has created. Counted at creation, not at first message —
-  /// an agent that was launched and never spoken to was still launched.
-  final int agentsSpawned;
-
-  /// Turns started. One per time somebody set an agent working.
-  final int turns;
-
-  /// Time agents spent working, summed across every finished turn.
-  final Duration timeWorked;
-
-  /// When the first event landed, or null before any has.
-  ///
-  /// Set once and never moved, so the "Tracking since" line means what it says
-  /// however much is later forgotten.
-  final DateTime? firstEventAt;
-
-  /// Nothing has happened yet — what the empty state keys on.
-  bool get isEmpty => agentsSpawned == 0 && turns == 0;
-}
-
 class HarnessStats extends ChangeNotifier {
   HarnessStats({SnapshotStore? store})
     : _store = store ?? FileSnapshotStore('harness-stats');
@@ -96,13 +70,6 @@ class HarnessStats extends ChangeNotifier {
 
   Timer? _writeTimer;
   bool _disposed = false;
-
-  StatsSummary get summary => StatsSummary(
-    agentsSpawned: _agentsSpawned,
-    turns: _turns,
-    timeWorked: Duration(milliseconds: _workedMs),
-    firstEventAt: _firstEventAt,
-  );
 
   /// Read the counters back off disk. Never throws.
   Future<void> load() async {
@@ -219,7 +186,7 @@ class HarnessStats extends ChangeNotifier {
 
 /// The app's own counters.
 ///
-/// A singleton like `analytics` and `terminalFontStore`, for the same reason: the
+/// A singleton like `appLog` and `terminalFontStore`, for the same reason: the
 /// call sites are `AppNotifier`'s event dispatcher and one settings pane, and
 /// threading an instance from one to the other would mean handing a `Ref` to a
 /// widget that has no other use for one.

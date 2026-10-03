@@ -100,11 +100,12 @@ class EscapeParser {
     'E'.charCode: _escHandleNextLine,
     'H'.charCode: _escHandleTabSet,
     'M'.charCode: _escHandleReverseIndex,
-    'P'.charCode: _escHandleStringSequence, // DCS (incl. Sixel, tmux passthrough)
+    'P'.charCode:
+        _escHandleStringSequence, // DCS (incl. Sixel, tmux passthrough)
     '_'.charCode: _escHandleStringSequence, // APC
     '^'.charCode: _escHandleStringSequence, // PM
     'X'.charCode: _escHandleStringSequence, // SOS
-    // 'c'.charCode: _unsupportedHandler,
+    'c'.charCode: _escHandleFullReset,
     // '#'.charCode: _unsupportedHandler,
     '('.charCode: _escHandleDesignateCharset0, //  SCS - G0
     ')'.charCode: _escHandleDesignateCharset1, //  SCS - G1
@@ -181,6 +182,14 @@ class EscapeParser {
   /// https://terminalguide.namepad.de/seq/a_esc_ch/
   bool _escHandleTabSet() {
     handler.setTapStop();
+    return true;
+  }
+
+  /// `ESC c` Full Reset (RIS) — only the part a leaked OSC 8 needs: an open
+  /// hyperlink ends, so a link whose close never arrived stops at `reset`.
+  /// The rest of a full reset remains unsupported, as before.
+  bool _escHandleFullReset() {
+    handler.setHyperlink(null);
     return true;
   }
 
@@ -1116,6 +1125,11 @@ class EscapeParser {
           return true;
         case '2':
           handler.setTitle(pt);
+          return true;
+        case '8':
+          // OSC 8 ; params ; URI — the URI is the rest, semicolons included.
+          final uri = _osc.length > 2 ? _osc.sublist(2).join(';') : '';
+          handler.setHyperlink(uri.isEmpty ? null : uri);
           return true;
       }
     }

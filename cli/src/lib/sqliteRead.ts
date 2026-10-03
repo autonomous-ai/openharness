@@ -21,7 +21,8 @@
  */
 
 import { execFile } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readSync, statSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
@@ -55,7 +56,29 @@ interface DatabaseLike {
   exec(sql: string): void
   close(): void
 }
-interface DatabaseConstructor { new (path: string, options: { readOnly: boolean }): DatabaseLike }
+interface DatabaseConstructor { new (path: string | URL, options: { readOnly: boolean }): DatabaseLike }
+
+/**
+ * A WAL store its engine is not using right now: its header says WAL (file format versions 2) and no
+ * `-wal` file is beside it. Opening one read-only would CREATE `-wal` and `-shm` in the engine's
+ * folder — and a handle held open keeps the engine from tidying them away when it next closes the
+ * store. Opened immutable it creates nothing, and nothing can be changing it: a writer would have
+ * made the `-wal` first. A store in the older journal mode is never opened immutable, since a writer
+ * may be changing it in place; it gets the ordinary locked read.
+ */
+export function idleWalStore(dbPath: string): boolean {
+  if (existsSync(`${dbPath}-wal`)) return false
+  let fd: number | null = null
+  try {
+    fd = openSync(dbPath, 'r')
+    const header = Buffer.alloc(20)
+    return readSync(fd, header, 0, 20, 0) === 20 && header[18] === 2 && header[19] === 2
+  } catch {
+    return false
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
+}
 
 let builtin: DatabaseConstructor | null | undefined
 
@@ -88,7 +111,7 @@ export function builtinSqlite(): DatabaseConstructor | null {
   return builtin
 }
 
-interface Handle { db: DatabaseLike; dev: number; ino: number }
+interface Handle { db: DatabaseLike; dev: number; ino: number; immutable: boolean; stamp: string }
 
 /** One open handle per store: the readers poll every second, and opening is the expensive part. */
 const handles = new Map<string, Handle>()
@@ -99,14 +122,22 @@ const handles = new Map<string, Handle>()
  * from a database nobody writes to any more — a poller that never sees another row, with no error.
  */
 function openHandle(Database: DatabaseConstructor, dbPath: string, busyTimeoutMs: number): DatabaseLike {
-  const { dev, ino } = statSync(dbPath)
+  const { dev, ino, size, mtimeMs, ctimeMs } = statSync(dbPath)
+  const stamp = `${size}:${mtimeMs}:${ctimeMs}`
+  // An idle store is read immutable; once its engine opens it again (a `-wal` appears), it is read live.
+  const immutable = idleWalStore(dbPath)
   const cached = handles.get(dbPath)
-  if (cached && cached.dev === dev && cached.ino === ino) return cached.db
+  // A writer can open, checkpoint, and close between polls, leaving no WAL. An immutable handle
+  // never checks for writes itself, so reuse it only while the main file's fingerprint holds.
+  if (cached && cached.dev === dev && cached.ino === ino && cached.immutable === immutable
+    && (!immutable || cached.stamp === stamp)) return cached.db
   if (cached) dropHandle(dbPath)
-  const db = new Database(dbPath, { readOnly: true })
+  const url = pathToFileURL(dbPath)
+  url.search = 'immutable=1'
+  const db = new Database(immutable ? url : dbPath, { readOnly: true })
   // Not a write: the pragma is per-connection state, accepted on a read-only handle.
   db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.trunc(busyTimeoutMs))}`)
-  handles.set(dbPath, { db, dev, ino })
+  handles.set(dbPath, { db, dev, ino, immutable, stamp })
   return db
 }
 
@@ -191,7 +222,7 @@ async function readCli(
     // `mode=ro` so a path that does not exist yet is an error, not a freshly created empty store.
     ;({ stdout } = await execFileAsync(
       'sqlite3',
-      ['-json', '-cmd', '.timeout 3000', '-cmd', 'PRAGMA query_only=1', `file:${uriPath(dbPath)}?mode=ro`, inlined],
+      ['-json', '-cmd', '.timeout 3000', '-cmd', 'PRAGMA query_only=1', `file:${uriPath(dbPath)}?mode=ro${idleWalStore(dbPath) ? '&immutable=1' : ''}`, inlined],
       { maxBuffer, timeout: timeoutMs, killSignal: 'SIGKILL' },
     ))
   } catch (err) {

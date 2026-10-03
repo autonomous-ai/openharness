@@ -1,0 +1,536 @@
+{
+  "scope": "Finite abstract owner wait sets, not native adapter or policy-quality validation",
+  "assumptions": [
+    "Two already necessary admitted dependencies; their outcomes and context provenance are trusted abstract events",
+    "A new wait cites dependencies already adopted under current authority; adoption and old tool-invocation authentication are outside this model",
+    "Supported registration and authorized yield; native goal scheduling and arbitrary existing-terminal attachment are not exercised",
+    "Current input, outcome, and wait state is visible at the serialized effect boundary",
+    "Owner progress is distinguishable from a peer contribution; human inspection is not agent result delivery",
+    "No remote propagation, crash recovery, real handle encoding, arbitrary dependency graph, or token cost is modeled"
+  ],
+  "families": {
+    "any_coalesces_owner_resume": {
+      "traces": 1260,
+      "violations": 0
+    },
+    "all_waits_for_both": {
+      "traces": 1260,
+      "violations": 0
+    },
+    "failure_breaks_all_wait": {
+      "traces": 1260,
+      "violations": 0
+    },
+    "clarification_breaks_all_wait": {
+      "traces": 10080,
+      "violations": 0
+    },
+    "current_fact_changes_while_waiting": {
+      "traces": 720,
+      "violations": 0
+    },
+    "outcome_changes_after_staging": {
+      "traces": 24,
+      "violations": 0
+    },
+    "new_human_input": {
+      "traces": 10080,
+      "violations": 0
+    },
+    "owner_progress_ends_wait": {
+      "traces": 10080,
+      "violations": 0
+    },
+    "same_wait_is_idempotent": {
+      "traces": 360,
+      "violations": 0
+    },
+    "observation_is_not_owner_progress": {
+      "traces": 120,
+      "violations": 0
+    },
+    "finished_owner_is_not_restarted": {
+      "traces": 120,
+      "violations": 0
+    }
+  },
+  "positive_paths": {
+    "any_batches_ready_results": {
+      "events": [
+        "wait_any",
+        "answer_a",
+        "answer_b",
+        "stage",
+        "write"
+      ],
+      "owner_wakes": 1,
+      "inline_returns": 0,
+      "wake_outcomes": [
+        {
+          "cycle": 1,
+          "epoch": 0,
+          "outcomes": {
+            "a": [
+              "answer",
+              1
+            ],
+            "b": [
+              "answer",
+              1
+            ]
+          }
+        }
+      ]
+    },
+    "any_does_not_leave_second_wake": {
+      "events": [
+        "wait_any",
+        "answer_a",
+        "stage",
+        "write",
+        "answer_b",
+        "owner_idle",
+        "stage",
+        "write"
+      ],
+      "owner_wakes": 1,
+      "inline_returns": 0,
+      "wake_outcomes": [
+        {
+          "cycle": 1,
+          "epoch": 0,
+          "outcomes": {
+            "a": [
+              "answer",
+              1
+            ]
+          }
+        }
+      ]
+    },
+    "remaining_dependency_needs_new_wait": {
+      "events": [
+        "wait_any",
+        "answer_a",
+        "stage",
+        "write",
+        "wait_b",
+        "answer_b",
+        "stage",
+        "write"
+      ],
+      "owner_wakes": 2,
+      "inline_returns": 0,
+      "wake_outcomes": [
+        {
+          "cycle": 1,
+          "epoch": 0,
+          "outcomes": {
+            "a": [
+              "answer",
+              1
+            ]
+          }
+        },
+        {
+          "cycle": 2,
+          "epoch": 0,
+          "outcomes": {
+            "b": [
+              "answer",
+              1
+            ]
+          }
+        }
+      ]
+    },
+    "all_waits_for_complete_step": {
+      "events": [
+        "wait_all",
+        "answer_a",
+        "stage",
+        "write",
+        "answer_b",
+        "stage",
+        "write"
+      ],
+      "owner_wakes": 1,
+      "inline_returns": 0,
+      "wake_outcomes": [
+        {
+          "cycle": 1,
+          "epoch": 0,
+          "outcomes": {
+            "a": [
+              "answer",
+              1
+            ],
+            "b": [
+              "answer",
+              1
+            ]
+          }
+        }
+      ]
+    },
+    "all_returns_failure_promptly": {
+      "events": [
+        "wait_all",
+        "decline_a",
+        "stage",
+        "write"
+      ],
+      "owner_wakes": 1,
+      "inline_returns": 0,
+      "wake_outcomes": [
+        {
+          "cycle": 1,
+          "epoch": 0,
+          "outcomes": {
+            "a": [
+              "declined",
+              1
+            ]
+          }
+        }
+      ]
+    },
+    "all_returns_clarification_promptly": {
+      "events": [
+        "wait_all",
+        "clarify_a",
+        "stage",
+        "write",
+        "parameter_a",
+        "answer_b",
+        "wait_all",
+        "answer_a",
+        "stage",
+        "write"
+      ],
+      "owner_wakes": 2,
+      "inline_returns": 0,
+      "wake_outcomes": [
+        {
+          "cycle": 1,
+          "epoch": 0,
+          "outcomes": {
+            "a": [
+              "needs_parameter",
+              1
+            ]
+          }
+        },
+        {
+          "cycle": 2,
+          "epoch": 0,
+          "outcomes": {
+            "a": [
+              "answer",
+              3
+            ],
+            "b": [
+              "answer",
+              1
+            ]
+          }
+        }
+      ]
+    },
+    "tracked_mutable_fact_can_invalidate_wait": {
+      "events": [
+        "answer_a",
+        "wait_b_watch_a",
+        "invalidate_a",
+        "stage",
+        "write"
+      ],
+      "owner_wakes": 1,
+      "inline_returns": 0,
+      "wake_outcomes": [
+        {
+          "cycle": 1,
+          "epoch": 0,
+          "outcomes": {
+            "a": [
+              "invalidated",
+              2
+            ]
+          }
+        }
+      ]
+    },
+    "untracked_change_does_not_create_a_wake": {
+      "events": [
+        "answer_a",
+        "wait_b",
+        "invalidate_a",
+        "stage",
+        "write"
+      ],
+      "owner_wakes": 0,
+      "inline_returns": 0,
+      "wake_outcomes": []
+    },
+    "different_parallel_wait_is_explicit_conflict": {
+      "events": [
+        "wait_all",
+        "wait_b"
+      ],
+      "owner_wakes": 0,
+      "inline_returns": 0,
+      "wake_outcomes": []
+    },
+    "ready_set_returns_inline": {
+      "events": [
+        "answer_a",
+        "answer_b",
+        "wait_all",
+        "stage",
+        "write"
+      ],
+      "owner_wakes": 0,
+      "inline_returns": 1,
+      "wake_outcomes": []
+    },
+    "owner_progress_retires_future_wake": {
+      "events": [
+        "wait_any",
+        "owner_progress",
+        "answer_a",
+        "owner_idle",
+        "stage",
+        "write"
+      ],
+      "owner_wakes": 0,
+      "inline_returns": 0,
+      "wake_outcomes": []
+    },
+    "inspection_and_peer_help_preserve_wait": {
+      "events": [
+        "wait_all",
+        "inspect",
+        "heartbeat",
+        "peer_contribution",
+        "answer_a",
+        "answer_b",
+        "stage",
+        "write"
+      ],
+      "owner_wakes": 1,
+      "inline_returns": 0,
+      "wake_outcomes": [
+        {
+          "cycle": 1,
+          "epoch": 0,
+          "outcomes": {
+            "a": [
+              "answer",
+              1
+            ],
+            "b": [
+              "answer",
+              1
+            ]
+          }
+        }
+      ]
+    },
+    "write_uses_current_outcomes": {
+      "events": [
+        "wait_all",
+        "answer_a",
+        "answer_b",
+        "stage",
+        "invalidate_a",
+        "write"
+      ],
+      "owner_wakes": 1,
+      "inline_returns": 0,
+      "wake_outcomes": [
+        {
+          "cycle": 1,
+          "epoch": 0,
+          "outcomes": {
+            "a": [
+              "invalidated",
+              2
+            ],
+            "b": [
+              "answer",
+              1
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "counterexamples": {
+    "grant_per_dependency": {
+      "family": "any_coalesces_owner_resume",
+      "events": [
+        "wait_any",
+        "answer_a",
+        "answer_b",
+        "stage",
+        "write",
+        "owner_idle",
+        "stage",
+        "write"
+      ],
+      "violations": [
+        "owner_wait_cycle_woke_twice"
+      ],
+      "owner_wakes": [
+        {
+          "cycle": 1,
+          "epoch": 0,
+          "outcomes": {
+            "a": [
+              "answer",
+              1
+            ]
+          }
+        },
+        {
+          "cycle": 1,
+          "epoch": 0,
+          "outcomes": {
+            "b": [
+              "answer",
+              1
+            ]
+          }
+        }
+      ]
+    },
+    "wake_all_on_first": {
+      "family": "all_waits_for_both",
+      "events": [
+        "wait_all",
+        "answer_a",
+        "owner_idle",
+        "stage",
+        "stage",
+        "write",
+        "answer_b",
+        "write"
+      ],
+      "violations": [
+        "all_wait_resumed_before_required_answers"
+      ],
+      "owner_wakes": [
+        {
+          "cycle": 1,
+          "epoch": 0,
+          "outcomes": {
+            "a": [
+              "answer",
+              1
+            ]
+          }
+        }
+      ]
+    },
+    "freeze_payload": {
+      "family": "any_coalesces_owner_resume",
+      "events": [
+        "wait_any",
+        "answer_a",
+        "owner_idle",
+        "stage",
+        "answer_b",
+        "write",
+        "stage",
+        "write"
+      ],
+      "violations": [
+        "outdated_outcome_at_write_boundary"
+      ],
+      "owner_wakes": [
+        {
+          "cycle": 1,
+          "epoch": 0,
+          "outcomes": {
+            "a": [
+              "answer",
+              1
+            ]
+          }
+        }
+      ]
+    },
+    "retain_old_input": {
+      "family": "new_human_input",
+      "events": [
+        "wait_any",
+        "answer_a",
+        "answer_b",
+        "human",
+        "owner_idle",
+        "stage",
+        "stage",
+        "write",
+        "write"
+      ],
+      "violations": [
+        "owner_resumed_after_input_changed"
+      ],
+      "owner_wakes": [
+        {
+          "cycle": 1,
+          "epoch": 0,
+          "outcomes": {
+            "a": [
+              "answer",
+              1
+            ],
+            "b": [
+              "answer",
+              1
+            ]
+          }
+        }
+      ]
+    },
+    "ignore_attention:all_returns_failure_promptly": {
+      "events": [
+        "wait_all",
+        "decline_a",
+        "stage",
+        "write"
+      ],
+      "owner_wakes": 0,
+      "kind": "liveness contrast; a necessary intervention remains hidden behind the all-results barrier"
+    },
+    "ignore_attention:all_returns_clarification_promptly": {
+      "events": [
+        "wait_all",
+        "clarify_a",
+        "stage",
+        "write",
+        "parameter_a",
+        "answer_b",
+        "wait_all",
+        "answer_a",
+        "stage",
+        "write"
+      ],
+      "owner_wakes": 0,
+      "kind": "liveness contrast; a necessary intervention remains hidden behind the all-results barrier"
+    },
+    "ignore_attention:tracked_mutable_fact_can_invalidate_wait": {
+      "events": [
+        "answer_a",
+        "wait_b_watch_a",
+        "invalidate_a",
+        "stage",
+        "write"
+      ],
+      "owner_wakes": 0,
+      "kind": "liveness contrast; a necessary intervention remains hidden behind the all-results barrier"
+    }
+  },
+  "total_traces": 35364,
+  "violations": 0
+}

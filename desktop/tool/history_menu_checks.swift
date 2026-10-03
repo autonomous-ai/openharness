@@ -51,8 +51,8 @@ private extension SwarmTitlebar {
     updateHistory(recent, closed: closed)
     try checkHistory(historyMenu.items[0] === back && historyMenu.items[1] === forward && historyMenu.items.last === full,
       "Closed updates retain installed command items")
-    try checkHistory(back.keyEquivalent == "[" && forward.keyEquivalent == "]" && full.keyEquivalent == "y",
-      "Navigation and full-history shortcuts remain installed while closed")
+    try checkHistory(back.keyEquivalent == "[" && forward.keyEquivalent == "]" && full.keyEquivalent.isEmpty,
+      "Back and forward retain their shortcuts; full history has no default shortcut")
     try checkHistory(validateMenuItem(back) && !validateMenuItem(forward) && validateMenuItem(reopen),
       "Command availability updates independently of row construction")
     try checkHistory(historyMenu.items.allSatisfy { $0.action != #selector(historyAction(_:)) },
@@ -163,7 +163,7 @@ let historyCheckWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, h
   styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
 historyCheckWindow.isReleasedWhenClosed = false
 private let historyCheckMessenger = HistoryCheckMessenger()
-let historyCheckTitlebar = SwarmTitlebar(window: historyCheckWindow, messenger: historyCheckMessenger)
+let historyCheckTitlebar = SwarmTitlebar(window: historyCheckWindow, messenger: historyCheckMessenger, installStatusItem: false)
 do {
   if CommandLine.arguments.contains("--history-performance") {
     try historyCheckTitlebar.benchmarkHistoryUpdates()

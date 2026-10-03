@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
@@ -419,7 +420,13 @@ class _StepRow extends StatelessWidget {
                 color: grid.AppPalette.online,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.check, size: 12, color: Colors.black),
+              // Black reads on the bright dark-mode green; the deep light-mode
+              // green needs white.
+              child: Icon(
+                AppIcons.check,
+                size: 12,
+                color: grid.AppTheme.pick(Colors.white, Colors.black),
+              ),
             ),
             _StepState.failed => Container(
               decoration: BoxDecoration(
@@ -427,7 +434,7 @@ class _StepRow extends StatelessWidget {
                 shape: BoxShape.circle,
               ),
               child: const Icon(
-                Icons.priority_high,
+                AppIcons.circleAlert,
                 size: 12,
                 color: Colors.white,
               ),

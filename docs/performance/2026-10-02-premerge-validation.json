@@ -1,0 +1,112 @@
+{
+  "schema": 1,
+  "baseCommit": "f537725295864d8150d439289dc24cf4f870e226",
+  "runnerSha256": "6cacfbdbf7401d445f47231372561681b452934c16c0626225ff423d844d4ca0",
+  "environment": "macOS arm64; Flutter 3.47.2; Dart 3.13.2; locally cached dependencies prepared with --offline --enforce-lockfile",
+  "scope": "Real native-toolbar and status-menu unit tests; unrelated documentation added between runs; no product implementation changes",
+  "limitations": [
+    "Execution then reuse, not a controlled cold/warm performance benchmark",
+    "Initial tests, mutable integration checks and platform verification are not skipped",
+    "Unexplained hours in the original toolbar handoff are not attributed to testing"
+  ],
+  "runs": [
+    {
+      "started_at": "2026-10-02T14:50:24.161149+00:00",
+      "finished_at": "2026-10-02T14:50:54.068634+00:00",
+      "duration_seconds": 29.632,
+      "status": "passed",
+      "source": {
+        "commit": "f537725295864d8150d439289dc24cf4f870e226",
+        "tree": "885e4c0fc11f7cbef5038aba9392802a3a0d12c8",
+        "working_changes_sha256": "5aa746bb9336c6f71882ceb803b9aee63a31f1a378cbf63af28ea8dd07dd0b75",
+        "dirty": true
+      },
+      "source_after": {
+        "commit": "f537725295864d8150d439289dc24cf4f870e226",
+        "tree": "885e4c0fc11f7cbef5038aba9392802a3a0d12c8",
+        "working_changes_sha256": "5aa746bb9336c6f71882ceb803b9aee63a31f1a378cbf63af28ea8dd07dd0b75",
+        "dirty": true
+      },
+      "check": {
+        "name": "desktop-toolbar",
+        "argv": [
+          "flutter",
+          "test",
+          "--no-pub",
+          "--concurrency=2",
+          "--timeout=60s",
+          "test/native_toolbar_sync_test.dart",
+          "test/status_menu_test.dart"
+        ],
+        "reuse": {
+          "inputs": [
+            "desktop"
+          ],
+          "toolchain": [
+            [
+              "flutter",
+              "--version",
+              "--machine"
+            ]
+          ]
+        },
+        "started_at": "2026-10-02T14:50:26.240060+00:00",
+        "finished_at": "2026-10-02T14:50:51.971860+00:00",
+        "duration_seconds": 25.69,
+        "status": "passed",
+        "reuse_key": "658eb6a165146836f7ccef8a4df4dcc41be947bc061968a3152f4604496aeea7",
+        "log_sha256": "bd5f224436133f2f3f482ca5ef79a0595a3d26ed972a2afe5a2f56ce3235d51b"
+      }
+    },
+    {
+      "started_at": "2026-10-02T14:52:09.933522+00:00",
+      "finished_at": "2026-10-02T14:52:14.140729+00:00",
+      "duration_seconds": 3.929,
+      "status": "passed",
+      "source": {
+        "commit": "f537725295864d8150d439289dc24cf4f870e226",
+        "tree": "885e4c0fc11f7cbef5038aba9392802a3a0d12c8",
+        "working_changes_sha256": "97b30ccf96729738d026a529fae69a4fdbee66f0b5855cf845e6fd4e95dbb5d9",
+        "dirty": true
+      },
+      "source_after": {
+        "commit": "f537725295864d8150d439289dc24cf4f870e226",
+        "tree": "885e4c0fc11f7cbef5038aba9392802a3a0d12c8",
+        "working_changes_sha256": "97b30ccf96729738d026a529fae69a4fdbee66f0b5855cf845e6fd4e95dbb5d9",
+        "dirty": true
+      },
+      "check": {
+        "name": "desktop-toolbar",
+        "argv": [
+          "flutter",
+          "test",
+          "--no-pub",
+          "--concurrency=2",
+          "--timeout=60s",
+          "test/native_toolbar_sync_test.dart",
+          "test/status_menu_test.dart"
+        ],
+        "reuse": {
+          "inputs": [
+            "desktop"
+          ],
+          "toolchain": [
+            [
+              "flutter",
+              "--version",
+              "--machine"
+            ]
+          ]
+        },
+        "started_at": "2026-10-02T14:50:26.240060+00:00",
+        "finished_at": "2026-10-02T14:50:51.971860+00:00",
+        "duration_seconds": 0,
+        "status": "reused",
+        "reuse_key": "658eb6a165146836f7ccef8a4df4dcc41be947bc061968a3152f4604496aeea7",
+        "log_sha256": "bd5f224436133f2f3f482ca5ef79a0595a3d26ed972a2afe5a2f56ce3235d51b",
+        "original_duration_seconds": 25.69,
+        "reused_at": "2026-10-02T14:52:12.022570+00:00"
+      }
+    }
+  ]
+}

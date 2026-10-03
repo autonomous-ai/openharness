@@ -1,0 +1,105 @@
+{
+  "kind": "native_optimized_geometry_and_offscreen_drawing",
+  "date": "2026-10-01",
+  "baselineRevision": "24128bec34cf24d83f18b6d93f1e20801eac5ca0",
+  "baselineSourceSha256": "40cfb9d3063bbf5c79cbfca91fd31245170fc3fe374f96dda01f0e404ff3461a",
+  "candidateSourceSha256": "4f08da3ef32b69041b970051a608f536f4a6162862f708dfc1aca8920a75f41a",
+  "warmupsPerWorkload": 2,
+  "measuredSamplesPerWorkload": 9,
+  "before": {
+    "checksum": 11472865.325174332,
+    "geometry": {
+      "distribution": {
+        "maxMs": 1029.9154999956954,
+        "medianMs": 505.5080416641431,
+        "minMs": 500.4567500000121
+      },
+      "framesPerSample": 400,
+      "samplesMs": [
+        508.55895833228715,
+        504.4144999992568,
+        505.5080416641431,
+        503.64900000568014,
+        1029.9154999956954,
+        635.2457083266927,
+        500.4567500000121,
+        500.9061666642083,
+        506.6379583440721
+      ],
+      "tabsPerFrame": 8
+    },
+    "kind": "native_optimized_geometry_and_offscreen_drawing",
+    "offscreenDrawing": {
+      "distribution": {
+        "maxMs": 268.38179166952614,
+        "medianMs": 266.2456249963725,
+        "minMs": 261.26520833349787
+      },
+      "framesPerSample": 80,
+      "samplesMs": [
+        268.38179166952614,
+        267.659958335571,
+        268.35870833019726,
+        266.83745832997374,
+        263.0457083287183,
+        261.26520833349787,
+        263.4036249946803,
+        266.2456249963725,
+        262.57270833593793
+      ],
+      "tabsPerFrame": 8
+    },
+    "os": "Version 26.6.2 (Build 25G83)"
+  },
+  "after": {
+    "checksum": 11472865.325174332,
+    "geometry": {
+      "distribution": {
+        "maxMs": 1.6524999955436215,
+        "medianMs": 1.5353333292296156,
+        "minMs": 1.463166656321846
+      },
+      "framesPerSample": 400,
+      "samplesMs": [
+        1.6524999955436215,
+        1.6227916639763862,
+        1.574916677782312,
+        1.5979583258740604,
+        1.5343333361670375,
+        1.5353333292296156,
+        1.4855416666250676,
+        1.464666667743586,
+        1.463166656321846
+      ],
+      "tabsPerFrame": 8
+    },
+    "kind": "native_optimized_geometry_and_offscreen_drawing",
+    "offscreenDrawing": {
+      "distribution": {
+        "maxMs": 28.966124998987652,
+        "medianMs": 28.71466666692868,
+        "minMs": 28.189249991555698
+      },
+      "framesPerSample": 80,
+      "samplesMs": [
+        28.804791669244878,
+        28.71466666692868,
+        28.966124998987652,
+        28.88024999992922,
+        28.80879167059902,
+        28.67912499641534,
+        28.206416667671874,
+        28.506125003332272,
+        28.189249991555698
+      ],
+      "tabsPerFrame": 8
+    },
+    "os": "Version 26.6.2 (Build 25G83)"
+  },
+  "validation": {
+    "nativeChecksBefore": 4544,
+    "nativeChecksAfter": 4544,
+    "byteIdenticalRenderedPngs": 28
+  },
+  "scope": "Eight synthetic native tabs. Geometry and offscreen drawing include production activity updates. No Flutter engine, real session, compositor/display timing, or whole-app energy measurement."
+}

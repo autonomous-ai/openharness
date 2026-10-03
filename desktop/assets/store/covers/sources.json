@@ -395,5 +395,12 @@
     "credit": "OpenHarness example",
     "sha256": "d0656e998e639c26013d26ef671e5e661bfc35bad5f5b2445f7c589908cf30f8",
     "harness": "autonomous/yosys"
+  },
+  {
+    "asset": "trailofbits-skills.jpg",
+    "source": "store/showcase/trailofbits-skills/nodegoat-audit.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "6b9deb00f2c2b0568b0e903b93bd86afc149eef135a81a7a4d0873ce9ca46ad0",
+    "harness": "autonomous/trailofbits-skills"
   }
 ]

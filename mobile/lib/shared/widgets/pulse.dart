@@ -94,35 +94,3 @@ class _PulseState extends State<Pulse> with SingleTickerProviderStateMixin {
     ),
   );
 }
-
-/// A soft-glowing dot that blinks to signal "live" — the status LED used by the
-/// playground pill and anywhere else a thing is running.
-class PulseDot extends StatelessWidget {
-  const PulseDot({super.key, required this.color, this.size = 6});
-
-  final Color color;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    return Pulse(
-      builder: (context, t, _) {
-        final opacity = 0.4 + 0.6 * t;
-        return Container(
-          width: size,
-          height: size,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: color.withValues(alpha: opacity),
-            boxShadow: [
-              BoxShadow(
-                color: color.withValues(alpha: 0.5 * opacity),
-                blurRadius: size * 0.85,
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-}

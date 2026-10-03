@@ -12,8 +12,6 @@ import 'package:integration_test/integration_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/test_run.dart';
 import 'package:harness/state/app_state.dart';
-import 'package:harness/state/swarm_navigation.dart';
-import 'package:harness/widgets/harness_session_manager.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -198,22 +196,20 @@ void main() {
         expect(attached['pane'], previous['pane']);
         expect(await app.deleteAgent('m', id), isNull);
 
-        // Exercise the actual manager against native engine processes and disk
-        // history, including rapid double clicks and repeated background resume.
-        final toggle = find.byKey(
-          ValueKey('session-toggle:${agentDestinationId('m', id)}'),
-        );
+        // The monitor uses these same lifecycle coordinators. Exercise repeated
+        // and concurrent intents against isolated native engines and disk history;
+        // monitor tab/host navigation is covered by harness_monitor_test.dart.
         for (var cycle = 0; cycle < 3; cycle++) {
-          debugPrint('Native manager $engine cycle ${cycle + 1}/3');
           await until(
             () =>
                 app.stateOf('m')!.agents.any((a) => a.id == id && a.isStopped),
-            '$engine saved row before manager cycle $cycle',
+            '$engine saved row before lifecycle cycle $cycle',
           );
-          await tester.tap(find.byTooltip('Harnesses'));
-          await tester.pump();
-          await tester.tap(toggle);
-          await tester.tap(toggle);
+          final resumes = await Future.wait([
+            app.resumeAgent('m', id),
+            app.resumeAgent('m', id),
+          ]);
+          expect(resumes.every((result) => result.error == null), isTrue);
           await until(
             () => app
                 .stateOf('m')!
@@ -221,67 +217,32 @@ void main() {
                 .any(
                   (a) => a.id == id && !a.isStopped && a.launchState == 'ready',
                 ),
-            '$engine manager resume $cycle',
+            '$engine confirmed resume $cycle',
           );
-          await until(
-            () => !app.restartAttempt('m', id).busy,
-            '$engine resume receipt $cycle',
-          );
-          expect(find.byType(HarnessSessionManager), findsOneWidget);
           expect(
             app.allPanes.any((p) => p.agentId == id),
             isFalse,
-            reason: 'Play resumes in the background',
+            reason: 'The lifecycle coordinator resumes without adding a view',
           );
           final resumed = await get('/verify?id=$id');
           expect(resumed['sessionId'], fixture['sessionId']);
           expect(resumed['pid'], isNot(previous['pid']));
           previous = resumed;
-
-          expect(
-            tester
-                .widget<Semantics>(
-                  find.byKey(
-                    ValueKey('session-open:${agentDestinationId('m', id)}'),
-                  ),
-                )
-                .properties
-                .enabled,
-            isTrue,
-          );
-          await tester.tap(
-            find.byKey(ValueKey('session-open:${agentDestinationId('m', id)}')),
-          );
-          await until(
-            () => app.allPanes.any(
-              (p) =>
-                  p.agentId == id &&
-                  (p.session?.terminal.buffer.getText().contains(marker) ??
-                      false),
-            ),
-            '$engine manager restores original terminal history $cycle',
-          );
+          await open(LogicalKeyboardKey.keyP);
           expect(app.allPanes.any((p) => p.agentId == anchorId), isTrue);
-          expect(find.byType(HarnessSessionManager), findsNothing);
-          await tester.tap(find.byTooltip('Harnesses'));
-          await tester.pump();
-          await tester.tap(toggle);
-          await tester.tap(toggle);
+          final stops = await Future.wait([
+            app.pauseAgent('m', id),
+            app.pauseAgent('m', id),
+          ]);
+          expect(stops, [null, null]);
           await until(
             () =>
-                app
-                    .stateOf('m')!
-                    .agents
-                    .any((a) => a.id == id && a.isStopped) &&
-                app.pendingAgentPause('m', id) == null,
-            '$engine manager pause $cycle',
+                app.stateOf('m')!.agents.any((a) => a.id == id && a.isStopped),
+            '$engine confirmed stop $cycle',
           );
           expect((await get('/verify?id=$id'))['stopped'], true);
           expect(app.allPanes.any((p) => p.agentId == id), isFalse);
           expect(app.allPanes.any((p) => p.agentId == anchorId), isTrue);
-          expect(find.byType(HarnessSessionManager), findsOneWidget);
-          await tester.tap(find.byTooltip('Close harnesses'));
-          await tester.pump();
         }
       }
       await tester.pumpWidget(const SizedBox());

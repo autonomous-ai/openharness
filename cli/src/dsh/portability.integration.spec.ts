@@ -14,7 +14,8 @@ import { buildLaunchOverrides } from '../lib/launchOverrides.js'
 import { createAndRegisterPane } from '../lib/createAgentPane.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { InstalledDsh } from './installed.js'
-import { readDshManifest, dshSupportedEngines } from './manifest.js'
+import { readDshManifest, dshSupportedEngines, expandDshValue } from './manifest.js'
+import { harnessAdapter } from './adapters.js'
 import { materializeWorkspace, skillDirsIn } from './materialize.js'
 import { prepareHarnessLaunch } from './runtime.js'
 import { dshListRows } from './wire.js'
@@ -38,7 +39,6 @@ describe('the whole store × engine matrix', () => {
   for (const name of readdirSync(store).sort().filter(name => existsSync(join(store, name, 'harness.json')))) {
     it(`${name} exposes its content on every integrated engine without an opt-in`, () => {
       const original = installed(join(store, name))
-      expect(original.manifest.agent?.args ?? []).toEqual([])
       const dir = join(root, name)
       write(join(dir, 'harness.json'), JSON.stringify(original.manifest))
       if (original.manifest.agent?.instructions) {
@@ -65,6 +65,14 @@ describe('the whole store × engine matrix', () => {
       for (const engine of PROCESS_ENGINES) {
         const launch = prepareHarnessLaunch(pkg, workspace, engine, engine)
         launches.set(engine, launch)
+        // Packages may configure their default engine (KiCad does). Those flags must survive
+        // its launch, but never leak into another engine; only its context flags belong there.
+        const packageArgs = engine === original.manifest.engine ? original.manifest.agent?.args ?? [] : []
+        expect(launch.args).toEqual([
+          ...packageArgs.map(arg => expandDshValue(arg, { dsh: dir, workspace })),
+          ...(harnessAdapter(engine).contextArgs?.(launch.env.HARNESS_CONTEXT_FILE!) ?? []),
+          ...(harnessAdapter(engine).envArgs?.(launch.env) ?? []),
+        ])
         expect(launch.env.HARNESS_DSH).toBe(pkg.id)
         const context = readFileSync(launch.env.HARNESS_CONTEXT_FILE!, 'utf8')
         expect(context).toContain(pkg.id)
@@ -95,6 +103,8 @@ describe('the whole store × engine matrix', () => {
   }
 })
 
+// Each case runs several real child processes. The 5s unit-test default can expire under a full
+// suite's load even when every child succeeds; keep an explicit bounded integration-test budget.
 for (const engine of PROCESS_ENGINES) it(`${engine}: prepare → spawn → tool → verdict → restart → fork`, async () => {
   const dir = join(root, 'package')
   write(join(dir, 'harness.json'), JSON.stringify({ spec: 1, id: 'test/portable', name: 'Portable', engine: 'claude',
@@ -142,4 +152,4 @@ for (const engine of PROCESS_ENGINES) it(`${engine}: prepare → spawn → tool 
   expect(fork.env.HARNESS_CONTEXT_FILE).not.toBe(launch.env.HARNESS_CONTEXT_FILE)
   expect(readFileSync(join(workspace, 'scene.txt'), 'utf8')).toBe('drawn by test/portable\n')
   expect((await materializeWorkspace(pkg, workspace, {}, engine)).initLines).toEqual([])
-})
+}, 15_000)

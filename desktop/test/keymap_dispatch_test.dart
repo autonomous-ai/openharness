@@ -143,7 +143,7 @@ void main() {
     expect(press('ctrl+space', phase: KeymapKeyPhase.up).handled, isTrue);
   });
 
-  test('repeat cannot create swarms or advance a sequence; directional commands can repeat', () {
+  test('repeat cannot create tabs or advance a sequence; directional commands can repeat', () {
     expect(press('cmd+t').command, 'swarm.new');
     expect(press('cmd+t', phase: KeymapKeyPhase.repeat).handled, isTrue);
     expect(press('cmd+t', phase: KeymapKeyPhase.repeat).command, isNull);
@@ -204,4 +204,26 @@ void main() {
       expect(keyStrokeFor(LogicalKeyboardKey.shiftLeft, shift: true), isNull);
     },
   );
+
+  test('macOS shifted symbols read as the key under them', () {
+    // A real ⇧⌘] on a Mac arrives with `}` as its logical key.
+    expect(
+      keyStrokeFor(LogicalKeyboardKey.braceRight, command: true, shift: true),
+      KeyStroke.parse('cmd+shift+]'),
+    );
+    expect(
+      keyStrokeFor(LogicalKeyboardKey.braceLeft, command: true, shift: true),
+      KeyStroke.parse('cmd+shift+['),
+    );
+    expect(
+      keyStrokeFor(LogicalKeyboardKey.question, command: true, shift: true),
+      KeyStroke.parse('cmd+shift+/'),
+    );
+    expect(
+      keyStrokeFor(LogicalKeyboardKey.exclamation, command: true, shift: true),
+      KeyStroke.parse('cmd+shift+1'),
+    );
+    // Without shift a brace is not a key the bindings can name.
+    expect(keyStrokeFor(LogicalKeyboardKey.braceRight, command: true), isNull);
+  });
 }

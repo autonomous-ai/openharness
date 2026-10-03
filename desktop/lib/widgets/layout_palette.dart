@@ -1,6 +1,6 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -9,6 +9,7 @@ import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../state/pane_preset.dart';
 import '../theme/app_theme.dart';
+import 'desktop_chrome.dart';
 
 /// ⇧⌘L — pick the shape of the grid.
 ///
@@ -229,11 +230,9 @@ class _LayoutPaletteState extends State<_LayoutPalette> {
         },
       },
       child: Dialog(
-        backgroundColor: grid.AppGlass.surfaceFill,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(13),
-          side: BorderSide(color: grid.AppGlass.hair),
-        ),
+        backgroundColor: DesktopChrome.surface,
+        insetPadding: const EdgeInsets.all(24),
+        shape: DesktopChrome.shape(),
         child: Focus(
           focusNode: _keys,
           autofocus: true,
@@ -302,22 +301,18 @@ class _LayoutPaletteState extends State<_LayoutPalette> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
-                        child: Text(
-                          choices.isEmpty ? 'Layout' : 'Layout · $count panes',
-                          style: grid.AppType.monoLabel(
-                            color: grid.AppPalette.textSecondary,
-                          ),
-                        ),
+                      DesktopDialogHeader(
+                        title: choices.isEmpty
+                            ? 'Layout'
+                            : 'Layout · $count panes',
+                        onClose: () => Navigator.of(context).pop(),
                       ),
                       if (choices.isEmpty)
                         Padding(
                           padding: const EdgeInsets.fromLTRB(18, 0, 18, 20),
                           child: Text(
-                            'One tile has no layout to choose. Open another and the '
-                            'shapes appear here.',
-                            style: grid.AppType.monoLabel(
+                            'Add another pane to choose a layout.',
+                            style: grid.AppType.body(
                               fontWeight: FontWeight.w400,
                               color: grid.AppPalette.textFaint,
                               height: 1.45,
@@ -363,7 +358,7 @@ class _LayoutPaletteState extends State<_LayoutPalette> {
                           child: Text(
                             'Arrows to move · Enter or 1–${choices.length} to apply.\n'
                             'Changing layout resets pane sizes.',
-                            style: grid.AppType.monoMeta(
+                            style: grid.AppType.caption(
                               color: grid.AppPalette.textSecondary,
                               height: 1.4,
                             ),
@@ -446,56 +441,65 @@ class _ShapeButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
-        decoration: BoxDecoration(
-          color: selected
+    return ExcludeFocus(
+      child: TextButton(
+        key: ValueKey('layout-choice-$index'),
+        onPressed: onTap,
+        style: TextButton.styleFrom(
+          padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          backgroundColor: selected
               ? grid.AppSurface.accentWash
-              : grid.AppSurface.hoverFill,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: selected ? AppColors.accent : grid.AppGlass.hair,
+              : grid.AppSurface.recess,
+          side: BorderSide(
+            width: 2,
+            color: cursor
+                ? DesktopChrome.accent
+                : selected
+                ? DesktopChrome.accent.withValues(alpha: .45)
+                : MediaQuery.highContrastOf(context)
+                ? DesktopChrome.muted
+                : DesktopChrome.rim,
           ),
         ),
-        // Paint focus over the fixed border so moving the highlight does not
-        // change the diagram's bounds or the height of the wrapped row.
-        foregroundDecoration: cursor
-            ? BoxDecoration(
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppColors.accent, width: 2),
-              )
-            : null,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: _Strip.diagram,
-              height: _Strip.diagram * 3 / 4,
-              child: CustomPaint(painter: _ShapePainter(preset, count)),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              preset.label,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: grid.AppType.monoLabel(
-                fontWeight: FontWeight.w400,
-                color: selected
-                    ? grid.AppPalette.textPrimary
-                    : grid.AppPalette.textSecondary,
+        child: Semantics(
+          selected: selected,
+          label: '${preset.label}${selected ? ', current layout' : ''}',
+          excludeSemantics: true,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: _Strip.diagram,
+                height: _Strip.diagram * 3 / 4,
+                child: CustomPaint(painter: _ShapePainter(preset, count)),
               ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              '$index',
-              style: grid.AppType.monoMeta(
-                color: grid.AppPalette.textSecondary,
+              const SizedBox(height: 8),
+              Text(
+                preset.label,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: DesktopChrome.control(
+                  color: selected
+                      ? DesktopChrome.foreground
+                      : DesktopChrome.muted,
+                ),
               ),
-            ),
-          ],
+              const SizedBox(height: 4),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (selected) ...[
+                    Icon(AppIcons.check, size: 14, color: DesktopChrome.accent),
+                    const SizedBox(width: 4),
+                  ],
+                  Text('$index', style: DesktopChrome.metadata()),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

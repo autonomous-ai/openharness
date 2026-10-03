@@ -362,10 +362,10 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Remote password for remote-mac'), findsOneWidget);
-    expect(find.text('enter  link machine'), findsOneWidget);
+    expect(find.text('Link machine'), findsOneWidget);
     expect(
       find.text(
-        'Your previous agent will reconnect automatically after linking.',
+        'Your previous harness will reconnect automatically after linking.',
       ),
       findsOneWidget,
     );
@@ -376,7 +376,7 @@ void main() {
     expect(find.text('Machine ID: remote-1'), findsOneWidget);
 
     // The close key guide remains clickable as well as keyboard accessible.
-    expect(find.text('esc  close'), findsOneWidget);
+    expect(find.text('Close'), findsOneWidget);
     notifier.dispose();
   });
 
@@ -396,7 +396,7 @@ void main() {
     );
 
     expect(notifier.isLinkPromptDismissed(machine.machineId), isFalse);
-    await tester.tap(find.text('esc  close'));
+    await tester.tap(find.text('Close'));
     await tester.pump();
     expect(notifier.isLinkPromptDismissed(machine.machineId), isTrue);
     notifier.dispose();
@@ -427,7 +427,7 @@ void main() {
         find.byKey(const Key('remote-password-connect-field')),
         'correct horse battery staple',
       );
-      await tester.tap(find.text('enter  link machine'));
+      await tester.tap(find.text('Link machine'));
       await tester.pumpAndSettle();
 
       expect(connectedPassword, 'correct horse battery staple');
@@ -459,7 +459,7 @@ void main() {
       find.byKey(const Key('remote-password-connect-field')),
       'wrong-password',
     );
-    await tester.tap(find.text('enter  link machine'));
+    await tester.tap(find.text('Link machine'));
     await tester.pumpAndSettle();
 
     expect(find.text('Incorrect password'), findsOneWidget);

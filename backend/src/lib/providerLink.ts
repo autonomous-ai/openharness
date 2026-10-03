@@ -372,8 +372,8 @@ export function forgetMachineMode(machineId: string): void {
  *
  * **The one branch.** A `provider` machine has no `down:{machineId}` consumer — there is no socket at
  * the other end — so its frames are handled in-process by calling the provider over HTTP. Every other
- * mode keeps the existing publish. Three call sites carry user traffic and route through here:
- * `hub.ts` (client frames), `nodeRpc.ts` (RPCs) and `machineMessage.ts` (the device/voice path);
+ * mode keeps the existing publish. Two call sites carry user traffic and route through here:
+ * `hub.ts` (client frames and the device/voice path) and `nodeRpc.ts` (RPCs);
  * node-only control frames deliberately do not.
  */
 export const HANDLED_IN_PROCESS = Symbol('provider-handled')

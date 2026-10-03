@@ -7,10 +7,11 @@ class ConfigStore {
   final LocalKeyValueStore _storage;
   static const _baseUrlKey = 'app_api_base_url';
   static const _environmentKey = 'app_autonomous_environment';
-  static const _skippedDesktopUpdateVersionKey =
+  // No longer read or written — the desktop's updater and its environment
+  // pre-flight, which a phone has neither of. Kept only so Reset can clean
+  // state written by older builds.
+  static const _legacySkippedDesktopUpdateVersionKey =
       'skipped_desktop_update_version';
-  // No longer read or written: live pre-flight runs on every launch. Kept only
-  // so Reset can clean state written by older desktop builds.
   static const _legacyEnvironmentSetupVersionKey = 'environment_setup_version';
   static const String defaultBaseUrl = 'https://harness-api.autonomous.ai';
 
@@ -23,32 +24,21 @@ class ConfigStore {
   );
   String? _cachedBaseUrl;
   String? _cachedEnvironment;
-  String? _cachedSkippedDesktopUpdateVersion;
-
-  String? get skippedDesktopUpdateVersion => _cachedSkippedDesktopUpdateVersion;
 
   Future<AppConfig> load() async {
-    // ⚠️ **One `readMany`, not three `read`s, and the difference is not cosmetic.**
+    // ⚠️ **One `readMany`, not two `read`s, and the difference is not cosmetic.**
     // Every operation on [HarnessFileStore] takes an exclusive file lock and
     // re-parses the whole of `state.json`, and they are queued process-wide — so
-    // three reads of three keys from one file cost three locks and three parses,
-    // strictly one after another, on the launch path. `readMany` answers all
-    // three from a single locked read. These keys are also a consistent set: a
+    // two reads of two keys from one file cost two locks and two parses,
+    // strictly one after another, on the launch path. `readMany` answers both
+    // from a single locked read. These keys are also a consistent set: a
     // base URL from before a write and an environment from after it would
     // describe a backend that was never configured.
-    final saved = await _storage.readMany([
-      _baseUrlKey,
-      _environmentKey,
-      _skippedDesktopUpdateVersionKey,
-    ]);
+    final saved = await _storage.readMany([_baseUrlKey, _environmentKey]);
     final baseUrl = saved[_baseUrlKey];
     final environment = saved[_environmentKey];
-    final skippedUpdate = saved[_skippedDesktopUpdateVersionKey];
     _cachedBaseUrl = baseUrl ?? defaultBaseUrl;
     _cachedEnvironment = environment == 'stag' ? 'stag' : 'prod';
-    _cachedSkippedDesktopUpdateVersion = skippedUpdate?.trim().isEmpty ?? true
-        ? null
-        : skippedUpdate!.trim();
     return config;
   }
 
@@ -62,28 +52,13 @@ class ConfigStore {
     await _storage.write(_environmentKey, _cachedEnvironment!);
   }
 
-  Future<void> saveSkippedDesktopUpdateVersion(String? version) async {
-    final normalized = version?.trim();
-    _cachedSkippedDesktopUpdateVersion =
-        normalized == null || normalized.isEmpty ? null : normalized;
-    if (_cachedSkippedDesktopUpdateVersion == null) {
-      await _storage.delete(_skippedDesktopUpdateVersionKey);
-    } else {
-      await _storage.write(
-        _skippedDesktopUpdateVersionKey,
-        _cachedSkippedDesktopUpdateVersion!,
-      );
-    }
-  }
-
   Future<void> reset() async {
     _cachedBaseUrl = null;
     _cachedEnvironment = null;
-    _cachedSkippedDesktopUpdateVersion = null;
     await Future.wait([
       _storage.delete(_baseUrlKey),
       _storage.delete(_environmentKey),
-      _storage.delete(_skippedDesktopUpdateVersionKey),
+      _storage.delete(_legacySkippedDesktopUpdateVersionKey),
       _storage.delete(_legacyEnvironmentSetupVersionKey),
     ]);
   }

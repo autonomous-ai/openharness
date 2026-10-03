@@ -1,0 +1,78 @@
+{
+  "at": "2026-10-01T17:39:27.386Z",
+  "capability": {
+    "supported": true,
+    "version": "1.18.34"
+  },
+  "runs": [
+    {
+      "mode": "text",
+      "requests": [
+        {
+          "route": "/v1/chat/completions",
+          "model": "memory-model",
+          "tools": [],
+          "selectedCredential": true
+        }
+      ],
+      "snapshotReads": 3,
+      "result": {
+        "text": "{\"proposals\":[]}"
+      },
+      "forbiddenFileExists": false,
+      "privateStorageRemoved": true
+    },
+    {
+      "mode": "bash",
+      "requests": [
+        {
+          "route": "/v1/chat/completions",
+          "model": "memory-model",
+          "tools": [],
+          "selectedCredential": true
+        },
+        {
+          "route": "/v1/chat/completions",
+          "model": "memory-model",
+          "tools": [],
+          "selectedCredential": true
+        }
+      ],
+      "snapshotReads": 2,
+      "error": "inference_tool_or_error",
+      "forbiddenFileExists": false,
+      "privateStorageRemoved": true
+    },
+    {
+      "mode": "question",
+      "requests": [
+        {
+          "route": "/v1/chat/completions",
+          "model": "memory-model",
+          "tools": [],
+          "selectedCredential": true
+        },
+        {
+          "route": "/v1/chat/completions",
+          "model": "memory-model",
+          "tools": [],
+          "selectedCredential": true
+        }
+      ],
+      "snapshotReads": 2,
+      "error": "inference_tool_or_error",
+      "forbiddenFileExists": false,
+      "privateStorageRemoved": true
+    }
+  ],
+  "limitations": [
+    "Synthetic localhost responses; no personal conversations or real model inference.",
+    "Native transport only. Host account/config observation and companion wiring remain unimplemented.",
+    "No claim about extraction quality, OAuth, automatic compaction or task benefit."
+  ],
+  "sources": [
+    "https://raw.githubusercontent.com/anomalyco/opencode/v1.18.34/packages/opencode/src/auth/index.ts",
+    "https://raw.githubusercontent.com/anomalyco/opencode/v1.18.34/packages/opencode/src/provider/provider.ts",
+    "https://raw.githubusercontent.com/anomalyco/opencode/v1.18.34/packages/opencode/src/config/managed.ts"
+  ]
+}

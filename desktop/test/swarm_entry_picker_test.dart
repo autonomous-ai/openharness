@@ -33,6 +33,10 @@ void main() {
         expect(tester.widget<TextField>(_input).controller!.text, '>');
         expect(
           find.textContaining('run command', findRichText: true),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey('swarm-search-preview')),
           findsOneWidget,
         );
         expect(find.widgetWithText(ListTile, 'Agent 0'), findsNothing);

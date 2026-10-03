@@ -6,10 +6,17 @@ import { plausibleBranchName, projectFolderName, projectFolderSlug } from './age
 import { GitProjectError, prepareGitProject, validGitPath } from './gitProject.js'
 
 /** `name` on a new project is what the person called it; without one the folder is named after the
- *  harness and the time. */
-export type ProjectFolder = { source: 'new'; name?: string } | { source: 'remote'; repositoryUrl: string; name: string }
+ *  harness and the time. `suggested` marks a name the app made up (from the first task — the phone has
+ *  no name field), which is numbered past a folder that exists rather than refused. */
+export type ProjectFolder = { source: 'new'; name?: string; suggested?: boolean } | { source: 'remote'; repositoryUrl: string; name: string }
   | { source: 'worktree'; gitSource: string; branchRef?: string; branchName?: string; existingBranch?: boolean; placeholder?: boolean }
   | { source: 'branch'; gitSource: string; branchRef?: string; branchName?: string }
+
+/** Where this daemon and the desktop app put the workspaces they make. A folder directly inside it is
+ *  one of those; anywhere else is a folder the person chose and answers for themselves. */
+export function projectsRoot(home = homedir()): string {
+  return join(home, 'harnesses')
+}
 
 export class ProjectFolderError extends Error {
   constructor(readonly code: string, message: string) { super(message) }
@@ -47,7 +54,8 @@ export function parseProjectFolder(payload: Record<string, unknown>): ProjectFol
   if (payload.projectSource === 'new' && payload.repositoryUrl === undefined) {
     // Slugged again here: the name becomes a path segment, so it is never taken on trust.
     const name = typeof payload.projectName === 'string' ? projectFolderSlug(payload.projectName) : null
-    return name ? { source: 'new', name } : { source: 'new' }
+    if (!name) return { source: 'new' }
+    return payload.projectNameMode === 'suggested' ? { source: 'new', name, suggested: true } : { source: 'new', name }
   }
   if (payload.projectSource !== 'remote' || typeof payload.repositoryUrl !== 'string') {
     throw new ProjectFolderError('INVALID_PROJECT_SOURCE', 'Choose a project.')
@@ -89,7 +97,7 @@ export async function prepareProjectFolder(
     now?: () => Date
   } = {},
 ): Promise<string> {
-  const root = options.root ?? join(homedir(), 'harnesses')
+  const root = options.root ?? projectsRoot()
   let staging: string | undefined
   try {
     if (project.source === 'worktree' || project.source === 'branch') {
@@ -104,12 +112,18 @@ export async function prepareProjectFolder(
     await mkdir(root, { recursive: true })
     if (project.source === 'new' && project.name) {
       // A name somebody chose is never quietly changed: an existing folder is theirs to pick as an
-      // existing project, as a clone's is.
-      const folder = join(root, project.name)
-      try { await mkdir(folder); return folder }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-        throw new ProjectFolderError('PROJECT_EXISTS', `“${project.name}” already exists. Select that folder from your projects.`)
+      // existing project, as a clone's is. A suggested one is only a guess, so a second "robot" task
+      // gets `robot-2` beside the first rather than an error (openharness#94).
+      for (let attempt = 1; ; attempt++) {
+        const name = attempt === 1 ? project.name : `${project.name.slice(0, 60)}-${attempt}`
+        const folder = join(root, name)
+        try { await mkdir(folder); return folder }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+          if (!project.suggested) {
+            throw new ProjectFolderError('PROJECT_EXISTS', `“${project.name}” already exists. Select that folder from your projects.`)
+          }
+        }
       }
     }
     if (project.source === 'new') {

@@ -1,5 +1,5 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/dsh_catalog.dart';
@@ -220,7 +220,7 @@ class _CoverCredit extends StatelessWidget {
             button: true,
             child: const Padding(
               padding: EdgeInsets.all(9),
-              child: Icon(LucideIcons.info300, size: 14, color: Colors.white),
+              child: Icon(AppIcons.info, size: 14, color: Colors.white),
             ),
           ),
         ),

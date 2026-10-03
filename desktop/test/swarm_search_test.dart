@@ -161,7 +161,7 @@ void main() {
   });
 
   test(
-    'Add here reuses the exact terminal and refuses a closed destination swarm',
+    'Add here reuses the exact terminal and refuses a closed destination tab',
     () async {
       final app = createApp();
       addTearDown(app.dispose);
@@ -201,7 +201,7 @@ void main() {
   );
 
   test(
-    'a machine result opens its agents in the empty swarm and reuses it',
+    'a machine result opens its agents in the empty tab and reuses it',
     () async {
       final app = createApp();
       addTearDown(app.dispose);
@@ -244,7 +244,7 @@ void main() {
   );
 
   test(
-    'opening a group from an occupied swarm keeps its work intact',
+    'opening a group from an occupied tab keeps its work intact',
     () async {
       final app = createApp();
       addTearDown(app.dispose);
@@ -272,7 +272,7 @@ void main() {
   );
 
   test(
-    'removed group members and oversized groups cannot create a partial swarm',
+    'removed group members and oversized groups cannot create a partial tab',
     () async {
       final app = createApp();
       addTearDown(app.dispose);

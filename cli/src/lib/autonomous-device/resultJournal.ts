@@ -1,5 +1,5 @@
 import { closeSync, fsyncSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from '../secureState.js'
 const MAX_BYTES = 32 * 1024 * 1024
@@ -12,6 +12,14 @@ export class DeviceResultJournal {
     secureStateDirectory(dirname(this.path))
     if (!hardenPrivateStateFileIfPresent(this.path, MAX_BYTES)) return undefined
     return JSON.parse(readPrivateStateFile(this.path, MAX_BYTES))
+  }
+  /** Set this journal aside under [owner] (the machine it was written for) so a fresh one can start,
+   *  replacing an earlier copy set aside for the same owner. Returns the file it was moved to. */
+  archive(owner: string): string {
+    const tag = owner.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) || 'unknown'
+    const target = join(dirname(this.path), `${basename(this.path).replace(/\.json$/, '')}.${tag}.json`)
+    renameSync(this.path, target)
+    return target
   }
   save(value: unknown): void {
     secureStateDirectory(dirname(this.path))

@@ -1,0 +1,57 @@
+name: Desktop logging checks
+
+on:
+  pull_request:
+    paths:
+      - 'desktop/lib/logging/**'
+      - 'desktop/test/app_log_test.dart'
+      - 'desktop/test/buffered_log_test.dart'
+      - 'desktop/test/crash_log_test.dart'
+      - 'desktop/test/dial_log_tail_test.dart'
+      - 'desktop/test/log_*_test.dart'
+      - 'desktop/test/export_logs_dialog_test.dart'
+      - 'desktop/test/cli_transcript_test.dart'
+      - 'desktop/tool/log_append_probe.dart'
+      - '.github/workflows/desktop-logging-checks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+      - id: toolchain
+        run: |
+          version="$(sed -n "s/^  FLUTTER_VERSION: '\([^']*\)'.*/\1/p" ../.github/workflows/release-desktop.yml)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ steps.toolchain.outputs.version }}
+          channel: stable
+          cache: true
+      - if: runner.os == 'macOS'
+        run: flutter config --enable-swift-package-manager
+      - run: flutter pub get
+      - name: Concurrent native process append
+        run: dart run tool/log_append_probe.dart
+      - name: Real-file and desktop logging regressions
+        run: >-
+          flutter test --no-pub --reporter expanded
+          test/buffered_log_test.dart test/app_log_test.dart
+          test/crash_log_test.dart test/log_stream_test.dart
+          test/cli_transcript_test.dart test/log_redact_test.dart
+          test/dial_log_tail_test.dart
+          test/ws_conn_test.dart test/swarm_async_test.dart
+          test/export_logs_dialog_test.dart

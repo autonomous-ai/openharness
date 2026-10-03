@@ -116,6 +116,11 @@ describe('opencode model catalog', () => {
       .toBe('opencode/ling-3.0-flash-free')
   })
 
+  it('keeps the project path in the next terminal column out of the model', () => {
+    expect(parseOpencodeFooter('┃  Build auto · Muse Spark 1.3 Free OpenCode Zen                         /private/tmp/harness-agent-switch-e2e'))
+      .toEqual({ target: 'Muse Spark 1.3 Free OpenCode Zen', effort: null })
+  })
+
   it('reads model and level apart, from a real footer', () => {
     expect(parseOpencodeFooter('┃  Build · Ox Alpha Free (Unlimited) OpenCode Zen · high'))
       .toEqual({ target: 'Ox Alpha Free (Unlimited) OpenCode Zen', effort: 'high' })

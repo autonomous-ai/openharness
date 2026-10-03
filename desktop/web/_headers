@@ -1,0 +1,7 @@
+/*
+  Cache-Control: no-cache
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+
+/auth/callback
+  Cache-Control: no-store

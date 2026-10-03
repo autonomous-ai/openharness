@@ -1,8 +1,10 @@
 import 'dart:convert';
 
 import 'local_key_value_store.dart';
+import 'launch_setup.dart';
+import 'permission_modes.dart';
 
-/// Remembers an agent choice, independently of a machine, profile or permission.
+/// Confirmed launch setup and use history, alongside legacy picker preferences.
 class AgentPreference {
   AgentPreference(this.storage);
   final LocalKeyValueStore? storage;
@@ -16,9 +18,14 @@ class AgentPreference {
 
   String? value;
   String? harness;
+  LaunchSetup? successfulLaunch;
+  // A non-Git launch leaves the last Git preference alone.
+  bool? successfulWorktree;
   bool advancedOpen = false;
   List<String> recentHarnesses = const [];
   final _enginesByHarness = <String, String>{};
+  final _permissionsByEngine = <String, String>{};
+  String? permissionModeFor(String engine) => _permissionsByEngine[engine];
   String? engineFor(String? harnessId) =>
       _enginesByHarness[harnessId ?? 'coding'];
 
@@ -26,11 +33,27 @@ class AgentPreference {
   /// Harness lists before anything is typed.
   List<String> recent = const [];
 
+  List<String>? _recentChoices;
+
+  /// Actual launch choices, interleaving coding agents and specialized
+  /// harnesses. A harness's backend is not a second launch by the user.
+  /// Older preferences recorded the two lists separately; preserve their last
+  /// known choice first when migrating that history.
+  List<String> get recentChoices =>
+      _recentChoices ??
+      <String>{
+        ?harness ?? value,
+        ...recentHarnesses,
+        ...recent,
+      }.take(recentCapacity).toList(growable: false);
+
   Future<void>? _loading;
+  bool _loaded = false;
   Future<void> _writes = Future.value();
   int _revision = 0;
 
-  Future<void> load() => _loading ??= _read();
+  Future<void> load() =>
+      _loading ??= _read().whenComplete(() => _loaded = true);
   Future<void> _read() async {
     final revision = _revision;
     try {
@@ -90,7 +113,23 @@ class AgentPreference {
           : null;
       recent = ids(data['agents'], false);
       recentHarnesses = ids(data['harnesses'], true);
+      if (data['choices'] case final List choices) {
+        _recentChoices = choices
+            .whereType<String>()
+            .where((id) => id.isNotEmpty)
+            .toSet()
+            .take(recentCapacity)
+            .toList(growable: false);
+      }
       advancedOpen = data['advancedOpen'] == true;
+      if (data['permissionsByEngine'] case final Map permissions) {
+        for (final engine in kEnginePermissionModes.keys) {
+          final mode = permissions[engine];
+          if (permissionModesOf(engine).any((item) => item.id == mode)) {
+            _permissionsByEngine[engine] = mode as String;
+          }
+        }
+      }
       if (data['enginesByHarness'] case final Map choices) {
         for (final entry in choices.entries) {
           if (entry.key is String &&
@@ -100,8 +139,36 @@ class AgentPreference {
           }
         }
       }
+      successfulLaunch = LaunchSetup.fromJson(data['successfulLaunch']);
+      if (data['successfulWorktree'] case final bool worktree) {
+        successfulWorktree = worktree;
+      }
     } catch (_) {
       /* A malformed preference never blocks launch. */
+    } finally {
+      // Older versions persisted dropdown edits as defaults. Only actual
+      // launch history is suitable for migrating a successful setup.
+      if (successfulLaunch == null && revision == _revision && revision == 0) {
+        final choice = _recentChoices
+            ?.where(
+              (id) =>
+                  id != 'terminal' &&
+                  !isInternalLaunchHarness(id) &&
+                  (id.contains('/')
+                      ? recentHarnesses.contains(id)
+                      : recent.contains(id)),
+            )
+            .firstOrNull;
+        final engine = choice != null && !choice.contains('/')
+            ? choice
+            : recent.where((id) => id != 'terminal').firstOrNull;
+        if (engine != null) {
+          successfulLaunch = LaunchSetup(
+            engine: engine,
+            harnessId: choice?.contains('/') == true ? choice : null,
+          );
+        }
+      }
     }
   }
 
@@ -116,15 +183,42 @@ class AgentPreference {
     return _save();
   }
 
-  /// [agent] was just used to create a harness: it moves to the front of
-  /// [recent].
-  Future<void> remember(String agent, {String? harnessId}) async {
+  /// Legacy picker defaults. Cmd-N uses [successfulLaunch] instead; selecting
+  /// an option is not a successful launch.
+  Future<void> selectLaunch(String engine, {String? harnessId}) async {
     await load();
     _revision++;
+    value = engine;
+    harness = harnessId;
+    _enginesByHarness[harnessId ?? 'coding'] = engine;
+    await _save();
+  }
+
+  /// [agent] was just used to create a harness: it moves to the front of
+  /// [recent].
+  Future<void> remember(
+    String agent, {
+    String? harnessId,
+    LaunchSetup? setup,
+    bool? worktree,
+  }) async {
+    if (!_loaded) await load();
     if (agent.contains('/')) {
       harnessId = agent;
       agent = value ?? '';
     }
+    if (isInternalLaunchHarness(harnessId)) return;
+    _revision++;
+    if (agent.isNotEmpty && agent != 'terminal') {
+      successfulLaunch =
+          setup ?? LaunchSetup(engine: agent, harnessId: harnessId);
+      if (worktree != null) successfulWorktree = worktree;
+    }
+    final choice = harnessId ?? agent;
+    _recentChoices = <String>{
+      if (choice.isNotEmpty) choice,
+      ...recentChoices,
+    }.take(recentCapacity).toList(growable: false);
     harness = harnessId;
     if (agent.isNotEmpty) {
       value = agent;
@@ -150,14 +244,27 @@ class AgentPreference {
     await _save();
   }
 
+  Future<void> selectPermissionMode(String engine, String mode) async {
+    if (!permissionModesOf(engine).any((item) => item.id == mode)) return;
+    await load();
+    _permissionsByEngine[engine] = mode;
+    _revision++;
+    await _save();
+  }
+
   Future<void> _save() {
     final snapshot = jsonEncode({
       'engine': value,
       'harness': harness,
       'agents': recent,
       'harnesses': recentHarnesses,
+      'choices': recentChoices,
       'enginesByHarness': _enginesByHarness,
       'advancedOpen': advancedOpen,
+      'permissionsByEngine': _permissionsByEngine,
+      if (successfulLaunch != null)
+        'successfulLaunch': successfulLaunch!.toJson(),
+      if (successfulWorktree != null) 'successfulWorktree': successfulWorktree,
     });
     return _writes = _writes.then((_) async {
       try {

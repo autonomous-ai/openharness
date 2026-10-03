@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 
 import '../shortcuts/app_keymap.dart';
 import '../state/app_state.dart';
-import '../terminal/terminal_text.dart';
-import 'box_chrome.dart';
+import '../shared/theme/app_theme.dart' as grid;
+import 'desktop_chrome.dart';
+import 'desktop_prompt_surface.dart';
+import 'box_chrome.dart' show BoxAnnouncer;
 import 'engine_identity.dart';
 import 'terminal_prompt.dart';
 
-/// Stopping ends the running process; closing a pane only removes its view.
+/// Explicit Stop ends the running process across its views.
 /// Requests remain with the model if this prompt is dismissed.
 Future<void> confirmDeleteAgent(
   BuildContext context,
@@ -135,110 +137,90 @@ class _StopAgentPromptState extends State<_StopAgentPrompt> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
-    return ListenableBuilder(
-      listenable: terminalFontStore,
-      builder: (context, _) => TerminalPromptKeys(
-        focusNode: _promptFocus,
-        cancel: _close,
-        pageDown: () => _page(1),
-        pageUp: () => _page(-1),
-        child: TerminalPrompt(
+    grid.AppTheme.watch(context);
+    final danger = Theme.of(context).colorScheme.error;
+    final closeLabel = _stopping ? 'Close' : 'Cancel';
+    return TerminalPromptKeys(
+      focusNode: _promptFocus,
+      cancel: _close,
+      pageDown: () => _page(1),
+      pageUp: () => _page(-1),
+      child: DesktopPromptSurface(
+        body: DesktopPromptScrollBody(
+          controller: _body,
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Flexible(
-                child: SingleChildScrollView(
-                  controller: _body,
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(
-                        widget.terminal ? 'Stop Terminal' : 'Stop Harness',
-                        style: boxMonoStyle(color: kBoxFaint),
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        widget.name,
-                        style: boxMonoStyle(weight: FontWeight.w600),
-                      ),
-                      if (widget.notifier
-                              .stateOf(widget.machineId)
-                              ?.machine
-                              .displayName
-                          case final machine?) ...[
-                        const SizedBox(height: 4),
-                        Text(machine, style: boxMonoStyle(color: kBoxFaint)),
-                      ],
-                      const SizedBox(height: 10),
-                      Text(
-                        widget.terminal
-                            ? 'End this shell and anything running in it? Files are kept.'
-                            : 'Stop this harness? Project files and saved conversation history are kept.',
-                        style: boxMonoStyle(color: Colors.white70),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Its panes close across tabs. Close Pane keeps it running.',
-                        style: boxMonoStyle(color: kBoxFaint),
-                      ),
-                      if (_stopping) ...[
-                        const SizedBox(height: 12),
-                        Text(
-                          'Stopping continues if you close this prompt.',
-                          style: boxMonoStyle(color: kBoxFaint),
-                        ),
-                      ],
-                    ],
+              Text(
+                widget.terminal ? 'Stop Terminal' : 'Stop Harness',
+                style: DesktopChrome.heading(),
+              ),
+              const SizedBox(height: DesktopChrome.groupGap),
+              Text(
+                widget.name,
+                style: DesktopChrome.text(size: 14, medium: true),
+              ),
+              if (widget.notifier.stateOf(widget.machineId)?.machine.displayName
+                  case final machine?) ...[
+                const SizedBox(height: 4),
+                Text(machine, style: DesktopChrome.metadata()),
+              ],
+              const SizedBox(height: DesktopChrome.groupGap),
+              Text(
+                widget.terminal
+                    ? 'End this shell and anything running in it? Files are kept.'
+                    : 'Stop this harness? Project files and saved conversation history are kept.',
+                style: DesktopChrome.text(size: 13),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Its panes close across tabs. Switching tabs keeps it running.',
+                style: DesktopChrome.text(size: 13, color: DesktopChrome.muted),
+              ),
+              if (_stopping) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'Stopping continues if you close this dialog.',
+                  style: DesktopChrome.text(
+                    size: 13,
+                    color: DesktopChrome.muted,
                   ),
                 ),
-              ),
-              if (!_stopping)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
-                  child: Wrap(
-                    spacing: 12,
-                    children: [
-                      terminalPromptButton(
-                        'Cancel',
-                        _close,
-                        focusNode: _cancel,
-                      ),
-                      terminalPromptButton(
-                        'Stop',
-                        _stop,
-                        danger: true,
-                        key: const Key('agent-stop-confirm'),
-                      ),
-                    ],
-                  ),
-                ),
-              BoxHintStrip(
-                message: _error ?? (_stopping ? 'Stopping…' : null),
-                isError: _error != null,
-                hints: [
-                  if (!_stopping)
-                    BoxHint(
-                      terminalPromptHint(context, 'picker.accept', 'enter'),
-                      'select',
-                    ),
-                  if (!_stopping)
-                    BoxHint(
-                      terminalPromptHint(context, 'picker.complete', 'tab'),
-                      'controls',
-                    ),
-                  BoxHint(
-                    terminalPromptHint(context, 'picker.cancel', 'esc'),
-                    'close',
-                    onTap: _close,
-                  ),
-                ],
-              ),
+              ],
             ],
           ),
         ),
+        footer: _error != null || _stopping
+            ? Semantics(
+                liveRegion: true,
+                child: DesktopPromptMessage(
+                  _error ?? 'Stopping…',
+                  color: _error == null ? DesktopChrome.muted : danger,
+                ),
+              )
+            : null,
+        actions: [
+          Tooltip(
+            message:
+                '$closeLabel · ${terminalPromptHint(context, 'picker.cancel', 'esc')}',
+            child: TextButton(
+              focusNode: _stopping ? null : _cancel,
+              onPressed: _close,
+              child: Text(closeLabel),
+            ),
+          ),
+          if (!_stopping)
+            Tooltip(
+              message:
+                  'Stop · ${terminalPromptHint(context, 'picker.accept', 'enter')}',
+              child: FilledButton(
+                key: const Key('agent-stop-confirm'),
+                onPressed: _stop,
+                style: grid.dangerButtonStyle(),
+                child: const Text('Stop'),
+              ),
+            ),
+        ],
       ),
     );
   }

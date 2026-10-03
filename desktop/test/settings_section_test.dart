@@ -1,8 +1,9 @@
-// Debug and Tracking are developer furniture, so a shipped build hides them. The flag behind that
+// Debug is developer furniture, so a shipped build hides it. The flag behind that
 // is a compile-time const and a test run has it ON — which is the whole difficulty, since the
 // shape worth guarding is the one no test build has. `settingsGroupsFor` takes the gate as an
 // argument for exactly this.
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import 'package:harness/logging/debug_surface.dart';
 import 'package:harness/settings/settings_section.dart';
@@ -16,7 +17,7 @@ void main() {
     expect(kDebugSurfaceEnabled, isTrue, reason: 'tests run in debug mode');
     expect(
       sectionsOf(settingsGroups),
-      containsAll([SettingsSection.debug, SettingsSection.tracking]),
+      contains(SettingsSection.debug),
     );
   });
 
@@ -34,8 +35,11 @@ void main() {
       SettingsSection.usage,
       SettingsSection.customize,
       SettingsSection.notifications,
-      SettingsSection.devices,
+      SettingsSection.experimental,
+      if (!kIsWeb) SettingsSection.devices,
       SettingsSection.account,
+      SettingsSection.accountDevices,
+      SettingsSection.profiles,
       SettingsSection.shortcuts,
       SettingsSection.about,
     ]);

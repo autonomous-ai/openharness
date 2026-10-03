@@ -2,15 +2,22 @@ import * as esbuild from 'esbuild'
 import { readdirSync, statSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
-import { readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
+import { readBuiltinBundle, readHarnessMonitorBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
+import { plateWorkerSource } from './scripts/lib/plateWorker.mjs'
+import { memoryWorkerSource } from './scripts/lib/memoryWorker.mjs'
 import { fileURLToPath } from 'node:url'
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
+const devicesBundle = JSON.stringify(readBuiltinBundle(fileURLToPath(new URL('../store/agents/devices', import.meta.url)), ['harness.json', 'AGENTS.md', 'LICENSE', 'template']))
+const harnessMonitorBundle = JSON.stringify(readHarnessMonitorBundle(fileURLToPath(new URL('../store/agents/harness-monitor', import.meta.url))))
 
 // Bake the version in so `node dist/cli.js version` works in the dev/per-file build too (parity with
 // build-bundle.mjs). The bundle build overrides this from ADAPTER_VERSION at release time.
 const version = JSON.parse(readFileSync('package.json', 'utf8')).version
 // The bundled registry (the store/ folders and store/registry at the repo root) — see src/dsh/registry.ts.
 const dshRegistry = JSON.stringify(readDshRegistry(join('..', 'store')))
+// The plate worker, bundled on its own (src/pair/plateService.ts): harnessd starts it from this string.
+const plateWorker = await plateWorkerSource()
+const memoryWorker = await memoryWorkerSource()
 
 function getAllTsFiles(dir, fileList = []) {
   const files = readdirSync(dir)
@@ -43,6 +50,10 @@ try {
       __ADAPTER_VERSION__: JSON.stringify(version),
       __DSH_REGISTRY__: JSON.stringify(dshRegistry),
       __MODEL_MANAGER_BUNDLE__: JSON.stringify(modelManagerBundle),
+      __DEVICES_BUNDLE__: JSON.stringify(devicesBundle),
+      __HARNESS_MONITOR_BUNDLE__: JSON.stringify(harnessMonitorBundle),
+      __PLATE_WORKER__: JSON.stringify(plateWorker),
+      __MEMORY_WORKER__: JSON.stringify(memoryWorker),
     },
     logLevel: 'info',
   })

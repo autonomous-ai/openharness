@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../terminal/terminal_text.dart';
-import 'box_chrome.dart';
+import '../shared/theme/app_theme.dart' as grid;
+import 'box_chrome.dart' show BoxAnnouncer, ReadlineKeys;
+import 'desktop_chrome.dart';
+import 'desktop_prompt_surface.dart';
 import 'terminal_prompt.dart';
 
 /// One rename editor for tabs, agents, and machines. A remote save may outlive
@@ -36,6 +38,7 @@ class _TerminalNamePromptState extends State<TerminalNamePrompt> {
     text: widget.name,
   )..selection = TextSelection(baseOffset: 0, extentOffset: widget.name.length);
   final _input = FocusNode(debugLabel: 'Rename input');
+  final _body = ScrollController();
   final _announcer = BoxAnnouncer();
   bool _saving = false;
   String? _error;
@@ -52,6 +55,7 @@ class _TerminalNamePromptState extends State<TerminalNamePrompt> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && ModalRoute.of(context)?.isCurrent != false) {
         _input.requestFocus();
+        if (_body.hasClients) _body.jumpTo(_body.position.maxScrollExtent);
       }
     });
   }
@@ -60,6 +64,7 @@ class _TerminalNamePromptState extends State<TerminalNamePrompt> {
   void dispose() {
     _text.dispose();
     _input.dispose();
+    _body.dispose();
     super.dispose();
   }
 
@@ -76,6 +81,13 @@ class _TerminalNamePromptState extends State<TerminalNamePrompt> {
     });
     _input.requestFocus();
     _announcer.row(context, error);
+    // Enlarged text can make the title and detail scroll. Keep the field and
+    // its validation at the end of that scroll area above the fixed actions.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _body.hasClients) {
+        _body.jumpTo(_body.position.maxScrollExtent);
+      }
+    });
   }
 
   void _accept() {
@@ -124,118 +136,136 @@ class _TerminalNamePromptState extends State<TerminalNamePrompt> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
-    return ListenableBuilder(
-      listenable: terminalFontStore,
-      builder: (context, _) => TerminalPromptKeys(
-        inputFocus: _input,
-        composing: () => _composing,
-        cancel: _close,
-        accept: _accept,
-        child: TerminalPrompt(
+    grid.AppTheme.watch(context);
+    final errorColor = Theme.of(context).colorScheme.error;
+    final border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(grid.AppDesktop.fieldRadius),
+      borderSide: BorderSide(color: DesktopChrome.rim),
+    );
+    return TerminalPromptKeys(
+      inputFocus: _input,
+      composing: () => _composing,
+      cancel: _close,
+      accept: _accept,
+      child: DesktopPromptSurface(
+        width: 460,
+        body: DesktopPromptScrollBody(
+          controller: _body,
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Flexible(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(widget.title, style: boxMonoStyle(color: kBoxFaint)),
-                      if (widget.detail case final detail?) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          detail,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: boxMonoStyle(color: kBoxFaint),
-                        ),
-                      ],
-                      const SizedBox(height: 10),
-                      ReadlineKeys(
-                        controller: _text,
-                        enabled: !_saving,
-                        onChanged: _changed,
-                        child: Semantics(
-                          label: widget.fieldLabel,
-                          child: TextField(
-                            key: widget.fieldKey,
-                            controller: _text,
-                            focusNode: _input,
-                            readOnly: _saving,
-                            maxLength: widget.maxLength,
-                            style: boxMonoStyle(),
-                            textAlignVertical: TextAlignVertical.center,
-                            textInputAction: TextInputAction.done,
-                            decoration: InputDecoration(
-                              hintText: widget.fieldLabel,
-                              hintStyle: boxMonoStyle(color: kBoxFaint),
-                              counterText: '',
-                              suffixText:
-                                  widget.maxLength != null &&
-                                      _text.text.characters.length >=
-                                          widget.maxLength! - 10
-                                  ? '${_text.text.characters.length}/${widget.maxLength}'
-                                  : null,
-                              suffixStyle: kBoxFaintStyle,
-                              isDense: true,
-                              filled: false,
-                              border: InputBorder.none,
-                              enabledBorder: InputBorder.none,
-                              focusedBorder: InputBorder.none,
-                              prefixIcon: Padding(
-                                padding: const EdgeInsets.only(right: 10),
-                                child: Center(
-                                  widthFactor: 1,
-                                  heightFactor: 1,
-                                  child: Text(
-                                    'name >',
-                                    style: boxMonoStyle(color: Colors.white70),
-                                  ),
-                                ),
-                              ),
-                              prefixIconConstraints: const BoxConstraints(
-                                minHeight: 38,
-                              ),
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                            onChanged: _changed,
-                            onEditingComplete: () {},
-                            onSubmitted: (_) => _save(),
-                          ),
+              DesktopDialogHeader(
+                title: widget.title,
+                padding: EdgeInsets.zero,
+              ),
+              if (widget.detail case final detail?) ...[
+                const SizedBox(height: 8),
+                Text(
+                  detail,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.text(
+                    size: 13,
+                    color: DesktopChrome.muted,
+                  ),
+                ),
+              ],
+              const SizedBox(height: DesktopChrome.groupGap),
+              Text(
+                widget.fieldLabel,
+                style: DesktopChrome.text(size: 13, medium: true),
+              ),
+              const SizedBox(height: 8),
+              ReadlineKeys(
+                controller: _text,
+                enabled: !_saving,
+                onChanged: _changed,
+                child: Semantics(
+                  label: widget.fieldLabel,
+                  child: TextField(
+                    key: widget.fieldKey,
+                    controller: _text,
+                    focusNode: _input,
+                    readOnly: _saving,
+                    maxLength: widget.maxLength,
+                    style: DesktopChrome.text(size: 14),
+                    cursorColor: DesktopChrome.accent,
+                    textAlignVertical: TextAlignVertical.center,
+                    textInputAction: TextInputAction.done,
+                    decoration: InputDecoration(
+                      hintText: widget.fieldLabel,
+                      hintStyle: DesktopChrome.text(color: DesktopChrome.muted),
+                      counterText: '',
+                      suffixText:
+                          widget.maxLength != null &&
+                              _text.text.characters.length >=
+                                  widget.maxLength! - 10
+                          ? '${_text.text.characters.length}/${widget.maxLength}'
+                          : null,
+                      suffixStyle: DesktopChrome.text(
+                        size: 12,
+                        color: DesktopChrome.muted,
+                      ),
+                      isDense: true,
+                      filled: true,
+                      fillColor: DesktopChrome.field,
+                      border: border,
+                      enabledBorder: border,
+                      focusedBorder: border.copyWith(
+                        borderSide: BorderSide(
+                          color: DesktopChrome.focusRing,
+                          width: grid.AppDesktop.focusWidth,
                         ),
                       ),
-                      if (_saving)
-                        Text(
-                          'Saving continues if you close this prompt.',
-                          style: boxMonoStyle(color: kBoxFaint),
-                        ),
-                    ],
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                    ),
+                    onChanged: _changed,
+                    onEditingComplete: () {},
+                    onSubmitted: (_) => _save(),
                   ),
                 ),
               ),
-              BoxHintStrip(
-                message: _error ?? (_saving ? 'Saving name…' : null),
-                isError: _error != null,
-                hints: [
-                  if (!_saving)
-                    BoxHint(
-                      terminalPromptHint(context, 'picker.accept', 'enter'),
-                      'save',
-                      onTap: _save,
-                    ),
-                  BoxHint(
-                    terminalPromptHint(context, 'picker.cancel', 'esc'),
-                    'close',
-                    onTap: _close,
+              if (_error != null || _saving) ...[
+                const SizedBox(height: 12),
+                Semantics(
+                  liveRegion: true,
+                  child: DesktopPromptMessage(
+                    _error ?? 'Saving name… You can close this dialog while it finishes.',
+                    color: _error == null ? DesktopChrome.muted : errorColor,
                   ),
-                ],
-              ),
+                ),
+              ],
             ],
           ),
         ),
+        actions: [
+          Tooltip(
+            message:
+                'Cancel · ${terminalPromptHint(context, 'picker.cancel', 'esc')}',
+            child: TextButton(
+              onPressed: _close,
+              style: TextButton.styleFrom(
+                foregroundColor: DesktopChrome.foreground,
+                textStyle: DesktopChrome.text(size: 13),
+              ),
+              child: const Text('Cancel'),
+            ),
+          ),
+          Tooltip(
+            message:
+                'Save · ${terminalPromptHint(context, 'picker.accept', 'enter')}',
+            child: FilledButton(
+              onPressed: _saving ? null : _save,
+              style: FilledButton.styleFrom(
+                textStyle: DesktopChrome.text(size: 13),
+              ),
+              child: Text(_saving ? 'Saving…' : 'Save'),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -28,7 +28,9 @@ cd ../my-first-harness
 The first command links the shared viewer from this checkout. Store installations normally install
 that dependency automatically; this also lets you try a new viewer before it is published.
 
-**Agent + viewer = harness.** This example has three working files:
+**A harness packages an agent’s instructions, tools, and optional viewer.** Install it,
+start it in your workspace, and group it with other harnesses in a swarm; see the
+[terminology guide](docs/terminology.md). This example has three working files:
 
 - [`harness.json`](store/examples/hello-world/harness.json) declares the agent and its viewer.
 - [`AGENTS.md`](store/examples/hello-world/AGENTS.md) teaches the agent to change the greeting.
@@ -79,8 +81,13 @@ project on the machine where you installed it. Ask:
 The agent should change `index.html` to say `Hello, Ada!`. Watch it update in the viewer beside
 the terminal. You have now run an agent and a viewer together as your own harness.
 
+The workspace opens **70% viewer on the left, 30% agent chat on the right**.
+Both slots remain visible during loading and errors. See the
+[DSH workspace contract](desktop/design/dsh-workspace.md) before building a new
+dashboard or changing how a harness opens.
+
 `--link` keeps the installed package connected to your checkout. Edit the instructions and start
-a fresh session in a new project to try them; instructions already copied into an existing
+a fresh harness in a new project to try them; instructions already copied into an existing
 project are preserved. You can remove this example with `harness dsh remove examples/hello-world`;
 your source folder and projects remain.
 
@@ -143,7 +150,7 @@ read what you submit and run the example yourself.
 | You want to… | Start here |
 |---|---|
 | Improve an existing harness | Its folder in [store/agents](store/agents/) and its own README |
-| Share a viewer other harnesses can reuse | [Store guide](store/README.md), [viewer packages](store/viewers/) |
+| Share a viewer harnesses can reuse | [Store guide](store/README.md), [viewer packages](store/viewers/) |
 | Add a coding engine | [Engine integration guide](cli/src/engines/README.md) |
 | Add an API provider | [Provider guide](provider/README.md) |
 | Improve terminal behavior, shortcuts, or accessibility | [Development guide](docs/development.md), [keyboard guide](docs/keyboard.md) |
@@ -162,7 +169,8 @@ Security reports go through [SECURITY.md](SECURITY.md).
    you need help. No separate issue is required for a small fix or documentation change.
 2. **Run the checks relevant to your change.** A harness contribution starts with its package
    check and a real example. Platform changes use the package checks below and in the
-   [development guide](docs/development.md). Say exactly what ran and what did not.
+   [development guide](docs/development.md). Follow the [validation and release guide](docs/validation-and-release.md)
+   to select checks, bound their runtime, and reuse results. Say exactly what ran and what did not.
 3. **Make it reproducible.** Use the PR template to describe the result, how to try it, and the
    validation. Remove credentials and private project content from logs and recordings.
 4. **Review together.** A maintainer checks the change and may ask you to refine it. CI is
@@ -183,21 +191,33 @@ Security reports go through [SECURITY.md](SECURITY.md).
 
 ## The CLI (`cli/`) — engines and multiplexers
 
-```bash
-cd cli && npm install && npm run typecheck && npm test
-```
+Use the pinned Node version in `.github/workflows/ci.yml` and `npm ci` when the lockfile
+or installed dependencies change. Run `npm run typecheck` and the affected test files
+while developing. Shared state, authentication, protocols, dependencies, and changes
+with an unclear impact also need the full CLI suite. A passing CI run on the tested
+source satisfies that full-suite check; do not run it again locally before release.
+Manual CI offers `cli`, `tui`, `backend`, `desktop`, and `full` scopes; `full` remains the default.
+CLI scope includes the supported OS/Node shell and serial matrix. Cross-component
+changes need all affected scopes or `full`.
+Desktop scope runs the complete VM suite in four shards on both macOS and Linux,
+with a verified coverage summary. Changed Dart analysis, browser tests and native
+integration checks remain separate requirements when relevant.
 
-That is the bar for every pull request that touches `cli/`. Two further suites exist and are
+Two further suites exist and are
 **opt-in**, because they need software the machine may not have — they skip themselves rather than
 fail, which is also why forgetting them is easy:
 
 ```bash
 npm run test:tmux-real     # RUN_REAL_TMUX_DISCOVERY=1 — drives a real tmux server
-npm run test:herdr-real    # RUN_REAL_HERDR=1 — drives isolated Herdr sessions/workspaces
 npm run test:cursor-e2e    # RUN_CURSOR_E2E=1 — needs a real cursor-agent CLI
 ```
 
-If your change touches how agents are discovered or driven, run both real multiplexer suites for the
+`test:tmux-real` owns its private tmux server and its cleanup. Run it directly; do not wrap it in
+a bare `tmux kill-server` trap. `TMUX_TMPDIR` alone does not isolate a test launched inside a tmux
+pane, because inherited `TMUX` takes precedence. New tmux fixtures must clear `TMUX` and
+`TMUX_PANE`, use a private socket, and explicitly target that socket with `-S` during cleanup.
+
+If your change touches how agents are discovered or driven, run the real multiplexer suite for the
 software available on your machine and say exactly which versions and engine rows ran. A missing
 binary, credential, or onboarding step is an unavailable row, not a passing one.
 
@@ -211,20 +231,18 @@ into the tool feed — and each one passed its unit tests first.
 
 ### Adding a multiplexer
 
-Harness drives agents inside tmux and Herdr 0.8.x protocol 19, watching both by default with nothing to
-configure. Another multiplexer is welcome, on one condition: it is **added alongside them, not swapped
-in.** Existing registries contain tmux pane identity, so replacing the multiplexer orphans running
+Harness drives agents inside tmux, with nothing to configure. Another multiplexer is welcome, on one
+condition: it is **added alongside tmux, not swapped in.** Existing registries contain tmux pane identity, so replacing the multiplexer orphans running
 agents on upgrade. Yours becomes another implementation behind the same interface instead of another
 rewrite.
 
 Four things decide how much work this is, and the first one is not in this repository at all:
 
 1. **Can a process running inside a pane tell which pane it is in — and with which of the values your
-   tool actually exports?** tmux exports `$TMUX_PANE`; Herdr exports `HERDR_PANE_ID`,
-   `HERDR_SOCKET_PATH`, `HERDR_ENV`, `HERDR_TAB_ID` and `HERDR_WORKSPACE_ID`. Read that list off a real
-   pane before you rely on any of it. Herdr 0.8.0 exports **no session name**, and matching endpoints by
-   name — a reasonable-looking assumption — silently rejected every hook it ever sent: no session bound,
-   resumed conversations opened blank, and turns typed in a pane produced no events at all. Identify the
+   tool actually exports?** tmux exports `$TMUX_PANE`. Read that list off a real pane before you rely
+   on any of it: a multiplexer that exports no session name, matched by name — a reasonable-looking
+   assumption — silently rejects every hook it ever sends: no session bound, resumed conversations open
+   blank, and turns typed in a pane produce no events at all. Identify the
    endpoint by something the tool really puts in the environment, accept more than one form of it, and
    treat a hint that identifies nothing as matching nothing. The shell hooks in `cli/hook/notify.mjs`
    and the in-process plugins and extensions generated in `cli/src/lib/hooks.ts` read typed hints and
@@ -238,8 +256,8 @@ Four things decide how much work this is, and the first one is not in this repos
    Miss the equivalent for yours and every recap spawns a phantom agent — silent, and thoroughly
    unpleasant to trace.
 4. **Detection has to be free when your tool is absent.** Backends are auto-detected before every five
-   second reconcile, so presence is decided by a `PATH` walk (`herdrBinaryAvailable` in
-   `cli/src/lib/herdrSessions.ts`) and nothing is spawned until that succeeds. An installed-but-broken
+   second reconcile, so presence is decided by a `PATH` walk (`binaryOnPath` in
+   `cli/src/lib/binaryOnPath.ts`) and nothing is spawned until that succeeds. An installed-but-broken
    version must degrade to "nothing to adopt", never to a startup failure: only an operator who named
    the backend explicitly gets an error, because only they asked for it.
 

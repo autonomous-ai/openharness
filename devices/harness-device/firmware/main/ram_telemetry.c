@@ -10,7 +10,6 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "lvgl.h"
 #include "ui/display.h"
 
 static const char *TAG = "ram";
@@ -19,7 +18,6 @@ static const char *TAG = "ram";
 #define APP_PSRAM_CAPS    (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
 
 static bool s_initialized;
-static volatile bool s_lvgl_ready;
 static volatile uint32_t s_json_fallback_count;
 static volatile uint64_t s_json_fallback_bytes;
 static volatile uint32_t s_psram_failure_count;
@@ -60,10 +58,6 @@ void ram_telemetry_init(void)
     s_initialized = true;
 }
 
-void ram_telemetry_set_lvgl_ready(void)
-{
-    s_lvgl_ready = true;
-}
 
 void *ram_psram_alloc(size_t bytes, const char *owner)
 {
@@ -109,14 +103,6 @@ static void log_task_stack(const char *name)
 
 void ram_telemetry_checkpoint(const char *tag)
 {
-    lv_mem_monitor_t lv = { 0 };
-    bool have_lvgl = s_lvgl_ready;
-    if (have_lvgl) {
-        display_lock();
-        lv_mem_monitor(&lv);
-        display_unlock();
-    }
-
     uint32_t json_fallbacks = __atomic_load_n(&s_json_fallback_count, __ATOMIC_RELAXED);
     uint64_t json_fallback_bytes = __atomic_load_n(&s_json_fallback_bytes, __ATOMIC_RELAXED);
     uint32_t psram_failures = __atomic_load_n(&s_psram_failure_count, __ATOMIC_RELAXED);
@@ -124,18 +110,13 @@ void ram_telemetry_checkpoint(const char *tag)
 
     ESP_LOGI(TAG,
              "RAM tag=%s int_free=%u int_min=%u int_largest=%u psram_free=%u psram_largest=%u "
-             "lv_total=%u lv_free=%u lv_largest=%u lv_frag=%u%% json_fb=%u/%lluB psram_fail=%u/%lluB "
-             "task=%s stack_free_min=%uB",
+             "json_fb=%u/%lluB psram_fail=%u/%lluB task=%s stack_free_min=%uB",
              tag ? tag : "unknown",
              (unsigned)heap_caps_get_free_size(APP_INTERNAL_CAPS),
              (unsigned)heap_caps_get_minimum_free_size(APP_INTERNAL_CAPS),
              (unsigned)heap_caps_get_largest_free_block(APP_INTERNAL_CAPS),
              (unsigned)heap_caps_get_free_size(APP_PSRAM_CAPS),
              (unsigned)heap_caps_get_largest_free_block(APP_PSRAM_CAPS),
-             (unsigned)lv.total_size,
-             (unsigned)lv.free_size,
-             (unsigned)lv.free_biggest_size,
-             have_lvgl ? (unsigned)lv.frag_pct : 0,
              (unsigned)json_fallbacks,
              (unsigned long long)json_fallback_bytes,
              (unsigned)psram_failures,
@@ -150,7 +131,6 @@ void ram_telemetry_periodic(const char *tag)
     if (++s_periodic_count % 10 != 0) return;
 
     static const char *const tasks[] = {
-        "lvgl",
         "proj_refresh",
         "ptt",
         "beep",

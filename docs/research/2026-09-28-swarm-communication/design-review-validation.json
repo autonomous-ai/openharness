@@ -1,0 +1,132 @@
+{
+  "status": "Offline design closeout; not production readiness or measured model behavior",
+  "checked_at": "2026-09-28 23:59:47 UTC",
+  "abstract_models": [
+    {
+      "script": "check_continuation_model.py",
+      "report": "continuation-model-results.json",
+      "script_sha256": "75c3673f3a3d20b899816552761c32d4c55babadfff47b60aee7e7b7785b51e6",
+      "report_sha256": "d769e06d02d90cd29d62b69cf9c904cd4288b9931a3bfb1ac4054803f60da428",
+      "traces": 8250,
+      "matches_saved_report": true
+    },
+    {
+      "script": "check_exchange_model.py",
+      "report": "exchange-model-results.json",
+      "script_sha256": "75e4dac8d02a7a3bfe278b252a1131844f41c4196f8dc8df8b618d92d3333e1b",
+      "report_sha256": "310e7d9a0aa57bb82ea4088cdd72df76397045ac8f7b8b9704189162eb36a7b5",
+      "traces": 6807,
+      "matches_saved_report": true
+    },
+    {
+      "script": "check_wait_set_model.py",
+      "report": "wait-set-model-results.json",
+      "script_sha256": "8fb15e4c813639d0607bba36212a7b747e590ca9ff64aaf5535474d7cb5a1704",
+      "report_sha256": "4bbaa18ffd95b38e2b338477df9b45285d89978e683a1bc15b82e168a5d220fa",
+      "traces": 35364,
+      "matches_saved_report": true
+    }
+  ],
+  "goal_scope_reproduction": {
+    "method": "Synthetic events through current CodexNormalizer and SwarmPromptScopes; no live provider calls.",
+    "observations": [
+      {
+        "event": "initial_goal",
+        "scopeIsOriginatingSwarm": true,
+        "scopeIsUnknown": false
+      },
+      {
+        "event": "automatic_continuation",
+        "scopeIsOriginatingSwarm": false,
+        "scopeIsUnknown": true
+      },
+      {
+        "event": "unproven_lookalike_input",
+        "scopeIsUnknown": true
+      }
+    ]
+  },
+  "unrun": [
+    "New-design native conformance gates",
+    "Autonomous model decision scoring",
+    "Task-backed provider pilot",
+    "Measured total savings and owner-delay comparison"
+  ],
+  "limit": "Confirms specified offline evidence and design artifacts. Does not prove semantic necessity, provider integration, runtime isolation, or cost savings.",
+  "task_fixture": {
+    "reference_checks": 52,
+    "all_passed": true,
+    "source_hashes_match": true,
+    "models_run": false
+  },
+  "decision_fixture": {
+    "canonical_cases": 62,
+    "reversible_presentations": 4464,
+    "source_hashes_match": true,
+    "models_run": false
+  },
+  "invocation_reproduction": {
+    "source_hashes_match": true,
+    "transport_calls": 0,
+    "observations": {
+      "initialContextWasA": true,
+      "frozenACommandRejectedAfterB": true,
+      "delayedOldInvocationReceivedBContext": true,
+      "delayedOldInvocationAdmittedInB": true,
+      "priorInputCommandAdmittedAfterNewInputInSameSwarm": true,
+      "transportStubCalls": 0
+    }
+  },
+  "reviewed_current_source_sha256": {
+    "cli/src/teams/promptScope.ts": "f363ee6a29aa92f2cdc398123a9e0e9880721d39cbf9a07c98f76df55dd722bb",
+    "cli/src/teams/channels.ts": "0e76298b4ef4c6f8e20db5dc0738df82cdaa072038145bafccbe64c7acbbe05f",
+    "cli/src/teams/service.ts": "c7f67f9eb48e3112f0e53e1eb6eda7f70edb52510a9e142a6ec80b30c215f75e",
+    "cli/src/teams/wire.ts": "47a9bedd44909edca7dd0c504beba37060d9e5464a9608dae462a9c06b36ec71",
+    "cli/src/teams/model.ts": "b08fb28d5382b63f9df95cf21103d4b671dc0c7f441f2cfd21c6bb618c908abd",
+    "cli/src/hookServer.ts": "91f13c097565aa84f731f01472b8cb1370e969bea1fdc364cd3087c8087845ce",
+    "cli/src/cli.ts": "00b432feb094cf9170209cc53b78455d55f20a3ecf40a7dd07b2590ee7bb7953",
+    "cli/src/engines/codex/normalizer.ts": "9d16fe1d306a22a8381d70b569804587a1d02ed2fef32c0cca0568e839e4413d",
+    "cli/src/teams/prompts.ts": "e54ba7cd6741c76da0bc4ebe65b35587e8757993e010e60a85c4eb87be2b0eff",
+    "cli/src/teams/command.ts": "a609ab0de8d7b2281490dd0abce6441e015a5e429f7d78783a449d84e574d92d"
+  },
+  "artifact_checks": {
+    "local_markdown_targets": 125,
+    "json_files": 11,
+    "python_files": 7
+  },
+  "research_artifact_sha256": {
+    "README.md": "3d078dc0a7b9c9d9db5716b9144ff34abbb2b5c928520d096b4215d60f71e4bb",
+    "agent-contract.md": "778394c4fd21842d229b80f1653ee63a3381adfaee238d31d4bad36addab3dcb",
+    "alternatives-and-evaluation.md": "ee341ca2c2167e72bb019a540bdf5990c594ce36011bbc09c826c871f1e7792b",
+    "baseline.md": "c50cf3568cd464166069464015da64eda1f99f830f5c685385a86fa1776d63c6",
+    "check_continuation_model.py": "75c3673f3a3d20b899816552761c32d4c55babadfff47b60aee7e7b7785b51e6",
+    "check_exchange_model.py": "75e4dac8d02a7a3bfe278b252a1131844f41c4196f8dc8df8b618d92d3333e1b",
+    "check_wait_set_model.py": "8fb15e4c813639d0607bba36212a7b747e590ca9ff64aaf5535474d7cb5a1704",
+    "conformance-plan.md": "be87d2267b4ef6357a1fcf4f68f7dd4b00614fc9b82946650e648ecf2fb82d16",
+    "continuation-model-results.json": "d769e06d02d90cd29d62b69cf9c904cd4288b9931a3bfb1ac4054803f60da428",
+    "decision-cases.json": "ca344067c5334ca8982f12db427d1a2ff00746a985d6693c3f464241c19f9643",
+    "decision-oracle.json": "6a43a0ec9230f1c79c1155f0bb82436a1157b29361da9d564157212e8ad95b3f",
+    "decision-review.md": "cb5a425cae749e0c2d2e30973cc5e8e8e2733a574c6e6ccba721c036e0ebb983",
+    "decision-trial-validation.json": "195c1a9c0a313fb6737b4e5ba4a578c37542f18e643b8fc683ca0cead894dc37",
+    "design-review.md": "e7349e1c6d8fadec58b92ad917b2b99b1f88052f888d2d69cea33344f25b37fa",
+    "exchange-model-results.json": "310e7d9a0aa57bb82ea4088cdd72df76397045ac8f7b8b9704189162eb36a7b5",
+    "implementation-brief.md": "6a523785a55619c05c746f05d38544ef9320d883e416438240357c254d90fe9e",
+    "invocation-scope-observations.json": "4ad1f91ae737fc7cbe15ae7d4729fd3658dfd59745eca63469d15c49c262ef4d",
+    "native-evidence.json": "afec721b7a0d34d52b7ea05ff3c9b046c1edea499cc39f6bdcb3e9ae7b91905c",
+    "native-session-comparison.md": "6a5905ad0ead6a6b181004d378e5b42e82cd1af9c37c8cbf355871248e7aaf92",
+    "observed-exchanges.md": "78332f74e9c8aed1235b8b5c3f134775cee32250b7a7e0e54779cc280bb1d68e",
+    "pilot-fixture-validation.json": "e12bcf0a24206aa35b25d7f4e71ae4eb15550f272a821305538e42864f5d7cf0",
+    "pilot-fixture.md": "9fc458562b09a8a77b38e8e38e4bc264ac6563c6f287b1c0e354aafafbd7392f",
+    "pilot_fixture.py": "60cdbe04c93457131c7fa8f02ea89be1939f90a043583ee0529a7f1bb7ec7b00",
+    "policy-proposal.md": "30a03c484c914d71bbd83d7f2098cec0673c2adeefe719028e07e66ea658ad18",
+    "prepare_decision_trials.py": "ddcbbc1e758760790ca5cddf24ce5f43117277075f8de1b8f2effae0ae666856",
+    "protocol-and-adapters.md": "564a7fe17942b0e127c164a5454cd48ff2f60ecfdf3b63b2c257fd556aac749d",
+    "reproduce_goal_scope.mts": "5fc39fa8511f066fa4f308f11e7cf15b447836e12d1092b9622fbd64a043721e",
+    "reproduce_invocation_scope.mts": "75d6fb245d3c1f4c3b4d5b1e59286c8a46d9fdc1c26a5ba45102e5a35863d463",
+    "usage-window-observations.json": "85938a9b82b8dad20bf85358045b77ffa57bf732c7377b0948a45256ac56c331",
+    "verify_decision_trials.py": "4718e034abb052a0b4073932cee1f99f8cab9993728f340b126cb0bdc0ee9fd8",
+    "verify_pilot_fixture.py": "38ad1238ac243be97c5d75e643f0c4c9711512d914995bad9705904a1f3cc86a",
+    "wait-set-model-results.json": "4bbaa18ffd95b38e2b338477df9b45285d89978e683a1bc15b82e168a5d220fa",
+    "worklog.md": "0d8d2af52bc3dcf674a9b907afd5362ea72b1842499edc0462aa48a793c550f3"
+  }
+}

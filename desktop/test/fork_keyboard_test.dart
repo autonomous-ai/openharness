@@ -149,7 +149,7 @@ void main() {
         const WsRequestTimeout('agent_fork'),
       );
       await tester.pumpAndSettle();
-      expect(find.text('enter  check status'), findsOneWidget);
+      expect(find.text('Check status'), findsOneWidget);
       expect(field(tester, _task).readOnly, isTrue);
       await key(tester, LogicalKeyboardKey.escape);
       await open(tester);
@@ -235,7 +235,7 @@ void main() {
         '''{"bindings":[{"keys":"f4","command":"picker.cancel","when":"picker"}]}''',
       );
       await tester.pump();
-      expect(find.text('F4  close'), findsOneWidget);
+      expect(find.byTooltip('Close · F4'), findsOneWidget);
       await key(tester, LogicalKeyboardKey.f4);
       await tester.pumpAndSettle();
       expect(_task, findsNothing);
@@ -281,13 +281,13 @@ void main() {
     await mount(tester, size: const Size(480, 360), scale: 1.7);
     await open(tester);
     expect(field(tester, _task).focusNode!.hasPrimaryFocus, isTrue);
-    expect(find.text('esc  close').hitTestable(), findsOneWidget);
+    expect(find.text('Cancel').hitTestable(), findsOneWidget);
     await key(tester, LogicalKeyboardKey.enter);
     connection.forkReplies.single.completeError(
       const WsRequestTimeout('agent_fork'),
     );
     await tester.pumpAndSettle();
-    expect(find.text('esc  close').hitTestable(), findsOneWidget);
+    expect(find.text('Close').hitTestable(), findsOneWidget);
     expect(find.text('Fork may already exist.').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
     await key(tester, LogicalKeyboardKey.escape);

@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
-import 'package:harness_mobile/phone/phone_status.dart';
 
 TerminalSession _session(TerminalSessionStatus status) => TerminalSession(
   machineId: 'm',
@@ -11,43 +10,9 @@ TerminalSession _session(TerminalSessionStatus status) => TerminalSession(
   sendBinary: (_) async => true,
 )..status = status;
 
+/// Who took a terminal, and who holds one this phone only watches — as the session reads them off
+/// the daemon's frames.
 void main() {
-  test('a session nobody else is driving offers nothing to reclaim', () {
-    expect(phoneReclaimAction(null), isNull);
-    for (final status in [
-      TerminalSessionStatus.opening,
-      TerminalSessionStatus.resyncing,
-      TerminalSessionStatus.controlling,
-    ]) {
-      expect(
-        phoneReclaimAction(_session(status)),
-        isNull,
-        reason: '$status has nothing to take back',
-      );
-    }
-  });
-
-  test('a taken-over session offers control back', () {
-    final action = phoneReclaimAction(
-      _session(TerminalSessionStatus.takenOver),
-    );
-
-    expect(action?.label, 'Take control');
-    expect(action?.tone, PhoneTone.attention);
-  });
-
-  test('a dropped session offers a reconnect', () {
-    for (final status in [
-      TerminalSessionStatus.error,
-      TerminalSessionStatus.closed,
-    ]) {
-      final action = phoneReclaimAction(_session(status));
-
-      expect(action?.label, 'Reconnect', reason: '$status');
-      expect(action?.tone, PhoneTone.bad, reason: '$status');
-    }
-  });
-
   group('who took control', () {
     TerminalSession taken({Map<String, dynamic>? takenBy}) {
       final session = _session(TerminalSessionStatus.controlling)
@@ -61,7 +26,7 @@ void main() {
       return session;
     }
 
-    test('the summary and the strip name the taker when the daemon said', () {
+    test('the taker is named when the daemon said', () {
       final session = taken(
         takenBy: {
           'kind': 'desktop',
@@ -70,39 +35,27 @@ void main() {
         },
       );
       expect(session.status, TerminalSessionStatus.takenOver);
-      final name = phoneTakerName(session, (_) => null);
-      expect(name, 'Mac mini');
-      expect(
-        phoneSessionSummary(session, takerName: name).label,
-        'Taken over by Mac mini',
-      );
-      expect(
-        phoneTakeoverNotice(session, name),
-        'Mac mini took control of this terminal',
-      );
+      expect(session.takenOverBy?.label((_) => null), 'Mac mini');
+      expect(session.errorMessage, 'Mac mini connected to this terminal.');
       // The fleet's current name for that machine wins over the declared one.
       expect(
-        phoneTakerName(
-          session,
+        session.takenOverBy?.label(
           (id) => id == 'ab12ab12ab12ab12' ? 'Studio' : null,
         ),
         'Studio',
       );
     });
 
-    test('an older daemon, or a nameless taker, reads as another app', () {
+    test('an older daemon, or a nameless taker, reads as another client', () {
       final session = taken();
-      expect(phoneTakerName(session, (_) => null), isNull);
-      expect(phoneSessionSummary(session).label, 'Taken over');
+      expect(session.status, TerminalSessionStatus.takenOver);
+      expect(session.takenOverBy, isNull);
       expect(
-        phoneTakeoverNotice(session, null),
-        'Another app took control of this terminal',
+        session.errorMessage,
+        'Another client connected to this terminal.',
       );
       expect(
-        phoneTakerName(
-          taken(takenBy: {'kind': 'not a kind', 'name': 'x'}),
-          (_) => null,
-        ),
+        taken(takenBy: {'kind': 'not a kind', 'name': 'x'}).takenOverBy,
         isNull,
       );
     });
@@ -136,7 +89,7 @@ void main() {
         return session;
       }
 
-      test('the banner names the machine, as the desktop does', () async {
+      test('the holder is named, as the desktop names it', () async {
         final session = await watching(
           heldBy: {
             'kind': 'desktop',
@@ -145,40 +98,21 @@ void main() {
           },
         );
         expect(session.watching, isTrue);
-        expect(phoneHolderName(session, (_) => null), 'MacBookPro2021.local');
+        expect(session.heldBy?.label((_) => null), 'MacBookPro2021.local');
         // The fleet's current name for that machine wins, as it does for a taker.
         expect(
-          phoneHolderName(
-            session,
+          session.heldBy?.label(
             (id) => id == 'ab12ab12ab12ab12' ? 'Studio' : null,
           ),
           'Studio',
         );
       });
 
-      test('an older daemon names nobody — "another app", then', () async {
+      test('an older daemon names nobody', () async {
         final session = await watching();
         expect(session.watching, isTrue);
-        expect(phoneHolderName(session, (_) => 'Mac'), isNull);
+        expect(session.heldBy, isNull);
       });
-
-      test('a session this phone drives has no holder to name', () {
-        final session = _session(TerminalSessionStatus.controlling)
-          ..heldBy = const TerminalClientDescriptor(kind: 'desktop', name: 'x');
-        expect(phoneHolderName(session, (_) => null), isNull);
-      });
-    });
-
-    test('nothing to say while this phone drives, or nobody does', () {
-      expect(phoneTakeoverNotice(null, null), isNull);
-      for (final status in [
-        TerminalSessionStatus.controlling,
-        TerminalSessionStatus.closed,
-        TerminalSessionStatus.error,
-      ]) {
-        expect(phoneTakeoverNotice(_session(status), 'Mac'), isNull);
-        expect(phoneTakerName(_session(status), (_) => 'Mac'), isNull);
-      }
     });
   });
 }

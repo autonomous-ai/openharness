@@ -1,0 +1,148 @@
+{
+  "schemaVersion": 1,
+  "suite": "synthetic-extraction-diagnostics-v1",
+  "suiteSha256": "135545eb05370bac04fbaf555c36255afd21fbcbd4190b0e21895e17d31273c3",
+  "promptVersion": "coding-memory-v1",
+  "sourceHashes": {
+    "learner.ts": "ee2d36b8f6dc9725b7fd46b0e914aef82d9a734982bcb21fea14ca0317d7b95b",
+    "types.ts": "380a95c563c7c5254f4a2ad8ccf3858d21e88f76ab90a348f1be5e18aa273ec6",
+    "admission.ts": "de6fe82c328763d0daad687373c345fa79dc7a48ae3ef8632de7729b419bb465",
+    "store.ts": "394696aecd5468d2bc49baa3af1ad1d1f7019532e773c133893a4e7eb51b8f9d",
+    "queue.ts": "ecb40a0d5a504c561f77e4838da23daf4ddcd7d0040ed5ca01bd277d5a3bf3f5",
+    "evaluation.ts": "758c434b83469fa3a9c3b20dc9b043e2661f7cd3e3b779749b882351c7fcbe2e",
+    "claudeInference.ts": "f7c87315c2e635aea7a2b7cbe2e72a9b1e1e2728726ce4dc5a562a52a4e351c6",
+    "inference.ts": "90ac3238d8a723102a365b809be2936429b31db0ad2fd7d2eaf7bc8ae5de12d5",
+    "inferenceProcess.ts": "aca1c23abeef5c2f928cfa7c3d0b045a64e1c429a840d2ca315200e1a263b79f"
+  },
+  "startedAt": "2026-10-01T00:11:05.027Z",
+  "status": "stopped",
+  "selected": {
+    "engine": "claude",
+    "model": "opus",
+    "effort": "high",
+    "nativeVersion": "2.1.286"
+  },
+  "limits": {
+    "maxCalls": 6,
+    "timeoutPerCallMs": 90000,
+    "retries": 0,
+    "corpus": "synthetic_only",
+    "tools": "restricted_native_adapter"
+  },
+  "limitations": [
+    "Development diagnostics, not held-out release evidence.",
+    "Mechanical checks do not establish faithful meaning or downstream task usefulness.",
+    "Semantic review remains pending until explicitly reviewed.",
+    "Native-reported cost is diagnostic metadata, not a subscription invoice.",
+    "No personal transcript was supplied to inference; live reads establish selected companion metadata only."
+  ],
+  "cases": [
+    {
+      "id": "conditional-debugging",
+      "durationMs": 1196,
+      "outcome": {
+        "state": "waiting_for_model",
+        "reason": "inference_unavailable"
+      },
+      "checks": [
+        {
+          "name": "completed_extraction",
+          "passed": false
+        },
+        {
+          "name": "record_count",
+          "passed": false
+        },
+        {
+          "name": "scope",
+          "passed": true
+        },
+        {
+          "name": "no_invented_rationale",
+          "passed": true
+        },
+        {
+          "name": "recall:debugging",
+          "passed": false
+        },
+        {
+          "name": "recall:incident",
+          "passed": true
+        },
+        {
+          "name": "recall:unclassified-task",
+          "passed": true
+        }
+      ],
+      "probes": [
+        {
+          "id": "debugging",
+          "query": "debugging failing test implementation",
+          "projectIds": [
+            "alpha"
+          ],
+          "conditions": {
+            "taskType": "debugging",
+            "productionIncident": false
+          },
+          "expected": "recall",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": false
+        },
+        {
+          "id": "incident",
+          "query": "debugging failing test implementation",
+          "projectIds": [
+            "alpha"
+          ],
+          "conditions": {
+            "taskType": "debugging",
+            "productionIncident": true
+          },
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true
+        },
+        {
+          "id": "unclassified-task",
+          "query": "debugging failing test implementation",
+          "projectIds": [
+            "alpha"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true
+        }
+      ],
+      "records": [],
+      "semanticReview": {
+        "status": "pending",
+        "criteria": [
+          "Preserves the test-before-implementation preference only for debugging.",
+          "Preserves the production-incident exception without inventing an incident workflow.",
+          "Does not invent a reason for the preference."
+        ]
+      },
+      "promptSha256": "62c4dca7e3858d8c48535b4d106bdf6ae33dcd7d8016933bb707e9861794d7e6",
+      "observations": [
+        {
+          "model": "claude-opus-5-5"
+        }
+      ]
+    }
+  ],
+  "nativeCalls": 1,
+  "finishedAt": "2026-10-01T00:11:06.227Z",
+  "completedCases": 0,
+  "postRunInterpretation": {
+    "qualityStatus": "inconclusive",
+    "nativeLoginProbe": { "loggedIn": false, "authMethod": "none", "apiProvider": "firstParty" },
+    "explanation": "The first native invocation returned inference_unavailable; the runner stopped without retry or fallback. A separate native auth-status query, using the same environment outside the sandbox, reported signed out. There is no completed model extraction to grade. The init model label is a CLI report, not evidence that the provider executed that model. Native usage and reported cost were absent; actual billing was not measured.",
+    "scoringCorrection": "This original runner still tested recall against the empty database after extraction failed. Its record, scope, rationale and recall booleans are not model-quality evidence. The current runner marks those checks inconclusive (null), skips recall probes, and marks semantic review not_reviewable on incomplete extraction. The original observations above are preserved.",
+    "subsequentChanges": "The unchanged six-case fixture remains frozen. Prompt v2 shares a context vocabulary with recall, and the CLI now accepts --conditions. No native v2 extraction has been run."
+  }
+}

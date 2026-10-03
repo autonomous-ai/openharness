@@ -101,7 +101,7 @@ export async function restartAgent(
   bypassPermission: boolean,
   deps: RestartAgentDeps,
 ): Promise<RestartOutcome> {
-  const changed = { ok: false, detail: 'the agent changed or stopped during restart' } as const
+  const changed = { ok: false, detail: 'the harness changed or stopped during restart' } as const
   const current = () => deps.isCurrent?.() !== false
   if (!current()) return changed
   const armed = await deps.holdOpen()

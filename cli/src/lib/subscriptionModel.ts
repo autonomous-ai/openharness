@@ -30,10 +30,13 @@
  * a regression, and it is recoverable by hand in the pane.
  */
 import type { AgentEngine } from '../engines/types.js'
+import { isOpencodeV2 } from '../engines/opencode/version.js'
 
 export interface SubscriptionModelLaunch {
   env: Record<string, string>
   args: string[]
+  /** The `provider/model` a resumed session must be switched to first — see `GridEngineLaunch`. */
+  sessionModel?: string
 }
 
 /**
@@ -43,7 +46,7 @@ export interface SubscriptionModelLaunch {
  * that is about the model and not about the endpoint — so the two cannot drift into disagreeing
  * about how a model is named to an engine. See `GRID_ENGINE_CONTRACTS` in `gridLaunch.ts`.
  */
-const CONTRACTS: Partial<Record<AgentEngine, (model: string) => SubscriptionModelLaunch>> = {
+const CONTRACTS: Partial<Record<AgentEngine, (model: string, opencodeMajor: number | null) => SubscriptionModelLaunch>> = {
   // Claude Code reads `ANTHROPIC_MODEL` and prefers it over the model stored on a resumed session,
   // which is precisely the stale value being displaced here. Same variable the grid contract sets.
   claude: (model) => ({ env: { ANTHROPIC_MODEL: model }, args: [] }),
@@ -63,7 +66,12 @@ const CONTRACTS: Partial<Record<AgentEngine, (model: string) => SubscriptionMode
   // is one the engine itself reported, so it round-trips; a bare model name has no provider this
   // module could supply without inventing one, and OpenCode would look for a model that does not
   // exist. Absent provider ⇒ no argument, per the rule at the top of this file.
-  opencode: (model) => (model.includes('/') ? { env: {}, args: ['-m', model] } : { env: {}, args: [] }),
+  // v2's TUI has no `-m` (it exits 1 on it); there the model is switched on the session before the
+  // relaunch, through OpenCode's own API, and argv carries nothing.
+  opencode: (model, opencodeMajor) => {
+    if (!model.includes('/')) return { env: {}, args: [] }
+    return { env: {}, args: isOpencodeV2(opencodeMajor) ? [] : ['-m', model], sessionModel: model }
+  },
 }
 
 /** Engines that can be returned to a specific model. Everything else relaunches as it always did. */
@@ -75,16 +83,18 @@ export function subscriptionModelEngines(): AgentEngine[] {
  * How to relaunch `engine` on its own login with `model` selected, or null when there is nothing
  * this module can say — an engine with no cited mechanism, or a model string it cannot use.
  *
- * Null is a normal answer and never an error: the relaunch proceeds without it.
+ * Null is a normal answer and never an error: the relaunch proceeds without it. `opencodeMajor` is
+ * the installed OpenCode's major version (`engines/opencode/version.ts`); absent reads as v1.
  */
 export function subscriptionModelLaunch(
   engine: AgentEngine,
   model: string | null | undefined,
+  opencodeMajor: number | null = null,
 ): SubscriptionModelLaunch | null {
   const chosen = model?.trim()
   if (!chosen) return null
   const build = CONTRACTS[engine]
   if (!build) return null
-  const launch = build(chosen)
-  return launch.args.length || Object.keys(launch.env).length ? launch : null
+  const launch = build(chosen, opencodeMajor)
+  return launch.args.length || Object.keys(launch.env).length || launch.sessionModel ? launch : null
 }

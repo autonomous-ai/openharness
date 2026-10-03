@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../core/harness_cli_runner.dart';
+import 'app_log.dart';
 
 /// What `harness logs export --json` answered.
 class LogExportResult {
@@ -19,6 +20,7 @@ class LogExportResult {
 /// window needs the same export. This app adds nothing to it but a button.
 Future<LogExportResult> exportLogs(HarnessCliRunner runner) async {
   try {
+    flushAppLog();
     final result = await runner.run(const ['logs', 'export', '--json']);
     final out = (result.stdout as String).trim();
     if (result.exitCode != 0 || out.isEmpty) {

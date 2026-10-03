@@ -7,24 +7,23 @@ import '../widgets/engine_identity.dart' show isTerminalEngine;
 /// approvals, arbitrary shell commands and viewer controls are intentionally absent.
 const commandBarCommands = {
   'navigation.needs_input':
-      'Find live questions and agents waiting for your input.',
-  'navigation.history': 'Return to previously opened harnesses and sessions.',
+      'Find live questions and harnesses waiting for your input.',
+  'navigation.history': 'Return to previously opened harnesses and tabs.',
   'app.settings':
       'Change preferences, appearance, account or connection settings.',
-  'machines.manage':
-      'Open Machine Monitor, the harness that links, names and retires your computers.',
+  'machines.manage': 'Open Machine Monitor, the harness that links, names and retires your computers.',
   'machines.list': 'See connected computers and their link state.',
   'machine.link': 'Open the setup dialog to connect another computer.',
-  'swarm.new': 'Choose an existing agent or create one in a new tab.',
-  'swarm.reopen': 'Reopen the most recently closed harness.',
+  'swarm.new': 'Choose an existing harness or create one in a new tab.',
+  'swarm.reopen': 'Reopen the most recently closed tab or pane.',
   'agent.add':
-      'Choose an existing agent or create one in a new pane in this tab.',
+      'Choose an existing harness or create one in a new pane in this tab.',
   'project.add': 'Choose a project folder to add to the workspace.',
   'pane.layout': 'Open the workspace layout chooser.',
   'pane.zoom': 'Toggle the focused pane between full size and the grid.',
   'pane.split_right': 'Choose a harness to open beside the current pane.',
   'pane.split_down': 'Choose a harness to open below the current pane.',
-  'machines.refresh': 'Refresh the list of machines and running agents.',
+  'machines.refresh': 'Refresh the list of machines and running harnesses.',
 };
 
 // Full phrases only: "open settings and delete my project" cannot match "open settings".
@@ -33,6 +32,7 @@ const _commandPhrases = {
     'needs input',
     'show pending questions',
     'which agents need my input',
+    'which harnesses need my input',
   ],
   'navigation.history': ['history', 'show history', 'open history'],
   'app.settings': [
@@ -48,8 +48,22 @@ const _commandPhrases = {
     'show connected computers',
   ],
   'machine.link': ['link machine', 'connect a computer'],
-  'swarm.new': ['new tab', 'open a new tab', 'open a fresh tab'],
-  'swarm.reopen': ['reopen last harness', 'reopen the last harness'],
+  'swarm.new': [
+    'new swarm',
+    'open a new swarm',
+    'open a fresh swarm',
+    'new tab',
+    'open a new tab',
+    'open a fresh tab',
+  ],
+  'swarm.reopen': [
+    'reopen last tab',
+    'reopen the last tab',
+    'reopen last swarm',
+    'reopen the last swarm',
+    'reopen last harness',
+    'reopen the last harness',
+  ],
   'agent.add': ['add existing harness', 'add an existing harness'],
   'project.add': ['add project folder', 'add a project folder'],
   'pane.layout': [
@@ -60,7 +74,11 @@ const _commandPhrases = {
   'pane.zoom': ['toggle pane zoom', 'zoom pane'],
   'pane.split_right': ['split right'],
   'pane.split_down': ['split down'],
-  'machines.refresh': ['refresh machines', 'refresh agents'],
+  'machines.refresh': [
+    'refresh machines',
+    'refresh harnesses',
+    'refresh agents',
+  ],
 };
 
 List<String> _openPhrases(String title) => [
@@ -127,20 +145,20 @@ List<CommandBarAction> buildCommandBarCatalog(
       id: 'semantic:search',
       kind: CommandKind.search,
       title: 'Find work by meaning',
-      detail: 'Find sessions about a topic, blocked work, results ready to review, repeated failures or overlapping work. Show matching recent activity.',
+      detail: 'Find harnesses about a topic, blocked work, results ready to review, repeated failures or overlapping work. Show matching recent activity.',
       automatic: true,
     ),
     const CommandBarAction(
       id: 'semantic:watch',
       kind: CommandKind.watch,
       title: 'Watch for a change',
-      detail: 'Watch the current sessions for a natural-language condition. Show matches in this window, checking changed activity at most once a minute. Stops when the window closes.',
+      detail: 'Watch the current harnesses for a natural-language condition. Show matches in this window, checking changed activity at most once a minute. Stops when the window closes.',
     ),
     CommandBarAction(
       id: 'app:store',
       kind: CommandKind.command,
       title: 'Explore the Harness Store',
-      detail: 'Browse specialized harnesses for coding, design, research, slides, 3D, and more.',
+      detail: 'Browse harnesses for coding, design, research, slides, 3D, and more.',
       automatic: true,
       phrases: [
         'harness store',
@@ -156,7 +174,7 @@ List<CommandBarAction> buildCommandBarCatalog(
       id: 'create:general',
       kind: CommandKind.create,
       title: 'Start a new harness',
-      detail: 'Give a new agent this task. Choose the engine, computer and folder in setup.',
+      detail: 'Give a new harness this task. Choose the agent, computer and folder in setup.',
       version: workspace,
       perform: (prompt) async {
         await create(null, null, prompt);
@@ -218,7 +236,7 @@ List<CommandBarAction> buildCommandBarCatalog(
         : app.sessionPreviews.read(d.previewKey!);
     final question = machine!.blockedAgents[agent.id];
     final context = [
-      if (d.current) 'This is the currently focused session.',
+      if (d.current) 'This is the currently focused harness.',
       'Status: ${agent.status}; ${machine.nodeOnline == false ? 'offline' : 'available'}',
       if (question != null) 'Needs input: ${short(question.prompt, 140)}',
       if (agent.verdict != null)
@@ -249,14 +267,14 @@ List<CommandBarAction> buildCommandBarCatalog(
           final live = swarmDestinations(app)
               .where((a) => a.id == d.id)
               .firstOrNull;
-          if (live == null) return 'That session is no longer available.';
+          if (live == null) return 'That harness is no longer available.';
           return await activateSwarmDestination(
                 app,
                 live,
                 destinationSwarmId: app.activeSwarmId,
               )
               ? null
-              : 'That session cannot be opened right now.';
+              : 'That harness cannot be opened right now.';
         },
       ),
     );
@@ -272,7 +290,7 @@ List<CommandBarAction> buildCommandBarCatalog(
           kind: CommandKind.send,
           title: short(d.title, 140),
           detail:
-              'Send your exact prompt to this agent · ${short(d.detail, 180)}',
+              'Send your exact prompt to this harness · ${short(d.detail, 180)}',
           context: short(context, 300),
           version: version,
           perform: (prompt) =>

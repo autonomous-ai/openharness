@@ -6,6 +6,8 @@
  * installs successfully but does not provide the expected executable is worse than no recipe.
  */
 
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { isTerminalEngine, type AgentEngine, type ProcessEngine } from '../engines/types.js'
 
 /** How to find the executable after the installer returns. */
@@ -121,6 +123,22 @@ export const ENGINE_INSTALL: Readonly<Record<ProcessEngine, EngineInstallRecipe>
 /** A terminal has nothing to install — the login shell is already there — hence `undefined`. */
 export function engineInstallRecipe(engine: AgentEngine): EngineInstallRecipe | undefined {
   return isTerminalEngine(engine) ? undefined : ENGINE_INSTALL[engine]
+}
+
+/** Stable across managed Node upgrades and writable by this OS user, unlike shared Homebrew. */
+export function npmEnginePrefix(): string {
+  return join(homedir(), '.local')
+}
+
+/** The same candidates are used by launch, availability checks, and process discovery. */
+export function engineInstallPaths(recipe: EngineInstallRecipe): string[] {
+  return [...new Set([
+    ...(recipe.executable.homeRelativePaths ?? []).map((path) => join(homedir(), path)),
+    ...(recipe.executable.absolutePaths ?? []),
+    ...(recipe.executable.npmGlobal
+      ? recipe.executable.names.map((name) => join(npmEnginePrefix(), 'bin', name))
+      : []),
+  ])]
 }
 
 export const INSTALLABLE_ENGINES: ReadonlySet<AgentEngine> = new Set(

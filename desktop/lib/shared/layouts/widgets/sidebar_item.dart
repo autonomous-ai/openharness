@@ -1,5 +1,5 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../theme/app_theme.dart';
 import '../../widgets/scroll_reveal_text.dart';
@@ -176,13 +176,19 @@ class _SidebarItemState extends State<SidebarItem> {
       ),
     );
 
+    final accessibleRow = Semantics(
+      button: true,
+      enabled: widget.enabled,
+      selected: widget.selected,
+      child: row,
+    );
     final tooltip = widget.tooltip;
     if (tooltip == null ||
         tooltip.trim().isEmpty ||
         tooltip.trim() == widget.label.trim()) {
-      return row;
+      return accessibleRow;
     }
-    return Tooltip(message: tooltip, child: row);
+    return Tooltip(message: tooltip, child: accessibleRow);
   }
 }
 
@@ -605,7 +611,7 @@ class _SidebarSectionLabelState extends State<SidebarSectionLabel> {
                 turns: widget.collapsed ? -0.25 : 0,
                 duration: AppMotion.swap,
                 curve: AppMotion.curve,
-                child: Icon(LucideIcons.chevronDown300, size: 14, color: ink),
+                child: Icon(AppIcons.chevronDown, size: 14, color: ink),
               ),
           ],
         ),

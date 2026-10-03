@@ -1,10 +1,13 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 
 import '../../core/harness_file_store.dart';
 import '../../core/local_key_value_store.dart';
 import 'color_palette.dart';
+import 'custom_background.dart';
 import 'harness_background.dart';
 import 'prompt_style.dart';
 
@@ -18,12 +21,31 @@ class AppearancePrefs {
     this.uiSize = uiSizeDefault,
     this.palette = HarnessPalette.graphite,
     this.background = HarnessBackground.plain,
+    this.custom = const CustomBackground(),
+    this.paneOpacity = paneOpacityDefault,
     this.prompt = const PromptPrefs(),
   });
 
   final PromptPrefs prompt;
   final HarnessPalette palette;
   final HarnessBackground background;
+
+  /// Kept while a built-in background is showing, so switching back is one
+  /// click.
+  final CustomBackground custom;
+
+  /// How solid the panes are while the background shows through them.
+  final double paneOpacity;
+  static const double paneOpacityDefault = 0.5;
+  static const double paneOpacityMin = 0;
+
+  /// Whether a running harness tab paints the background at all: Blank has
+  /// nothing to show through.
+  bool get showsBackground => background != HarnessBackground.plain;
+
+  /// The opacity panes paint their own fill at; 1 unless the background is
+  /// showing behind them.
+  double get effectivePaneOpacity => showsBackground ? paneOpacity : 1;
 
   /// Legacy fields, retained for settings compatibility with older builds.
   final String? uiFamily;
@@ -41,6 +63,8 @@ class AppearancePrefs {
     double? uiSize,
     HarnessPalette? palette,
     HarnessBackground? background,
+    CustomBackground? custom,
+    double? paneOpacity,
     PromptPrefs? prompt,
     bool clearUiFamily = false,
   }) => AppearancePrefs(
@@ -48,6 +72,8 @@ class AppearancePrefs {
     uiSize: uiSize ?? this.uiSize,
     palette: palette ?? this.palette,
     background: background ?? this.background,
+    custom: custom ?? this.custom,
+    paneOpacity: paneOpacity ?? this.paneOpacity,
     prompt: prompt ?? this.prompt,
   );
 
@@ -58,11 +84,20 @@ class AppearancePrefs {
       other.uiSize == uiSize &&
       other.palette == palette &&
       other.background == background &&
+      other.custom == custom &&
+      other.paneOpacity == paneOpacity &&
       other.prompt == prompt;
 
   @override
-  int get hashCode =>
-      Object.hash(uiFamily, uiSize, palette, background, prompt);
+  int get hashCode => Object.hash(
+    uiFamily,
+    uiSize,
+    palette,
+    background,
+    custom,
+    paneOpacity,
+    prompt,
+  );
 }
 
 /// The user's appearance choices, remembered across launches.
@@ -73,20 +108,40 @@ class AppearancePrefs {
 /// above every provider scope in this app, and these values have to resolve
 /// before there is a scope at all.
 class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
-  AppearancePrefsStore({LocalKeyValueStore? storage})
-    : _storage = storage ?? HarnessFileStore.shared,
-      super(const AppearancePrefs());
+  AppearancePrefsStore({
+    LocalKeyValueStore? storage,
+    this._backgroundsDirectory,
+  }) : _storage = storage ?? HarnessFileStore.shared,
+       super(const AppearancePrefs());
 
   static const _familyKey = 'app_ui_font_family';
   static const _sizeKey = 'app_ui_font_size';
   static const _paletteKey = 'app_color_palette';
   static const _backgroundKey = 'harness_start_background';
+  static const _customKey = 'harness_custom_background';
+  // Named for the retired on/off choice; it now holds only pane opacity.
+  static const _paneOpacityKey = 'harness_background_behind_harnesses';
   static const _promptKey = 'workspace_prompt_v1';
   Future<void>? _promptSave;
   Future<void>? _paletteSave;
   Future<void>? _backgroundSave;
+  Future<void>? _customSave;
+  Future<void>? _paneOpacitySave;
 
   final LocalKeyValueStore _storage;
+  final Directory? _backgroundsDirectory;
+
+  /// Harness's copies of custom backgrounds, beside `state.json`. Resolved on
+  /// first use: the browser build has no such folder and never asks for it.
+  Directory get backgroundsDirectory =>
+      _backgroundsDirectory ??
+      Directory(p.join(HarnessFileStore.defaultDirectoryPath(), 'backgrounds'));
+
+  /// The copy the custom background shows, or `null` when there is none.
+  File? get customBackgroundFile => switch (value.custom.image) {
+    final name? => File(p.join(backgroundsDirectory.path, name)),
+    null => null,
+  };
 
   /// Read the saved choices, if there are any.
   ///
@@ -100,13 +155,23 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
         _sizeKey,
         _paletteKey,
         _backgroundKey,
+        _customKey,
+        _paneOpacityKey,
         _promptKey,
       ]);
+      final custom = _customFrom(saved[_customKey]);
+      final background = HarnessBackground.fromId(saved[_backgroundKey]);
       value = AppearancePrefs(
         uiFamily: _familyFrom(saved[_familyKey]),
         uiSize: _sizeFrom(saved[_sizeKey]),
         palette: HarnessPalette.fromId(saved[_paletteKey]),
-        background: HarnessBackground.fromId(saved[_backgroundKey]),
+        // Custom with no image to show is Blank, not an empty selection.
+        background:
+            background == HarnessBackground.custom && custom.image == null
+            ? HarnessBackground.plain
+            : background,
+        custom: custom,
+        paneOpacity: _paneOpacityFrom(saved[_paneOpacityKey]),
         prompt: _promptFrom(saved[_promptKey]),
       );
     } catch (_) {
@@ -155,6 +220,110 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
       // Keep the selected background for this run if storage is unavailable.
     } finally {
       _backgroundSave = null;
+    }
+  }
+
+  /// Dim and fit changes; the image itself changes only through
+  /// [chooseCustomBackground] and [removeCustomBackground].
+  Future<void> setCustomBackground({double? dim, BackgroundFit? fit}) =>
+      _setCustom(value.custom.copyWith(dim: dim, fit: fit));
+
+  /// Copies the image at [path] into Harness and shows it. Returns a line to
+  /// show the person when the file is refused; the current background stays.
+  Future<String?> chooseCustomBackground(String path) async {
+    final directory = backgroundsDirectory;
+    final String name;
+    try {
+      name = await importCustomBackground(path, directory);
+    } on CustomBackgroundError catch (error) {
+      return error.message;
+    }
+    await Future.wait([
+      _setCustom(value.custom.copyWith(image: name)),
+      setBackground(HarnessBackground.custom),
+    ]);
+    // Only once the new name is saved, so a crash in between never leaves the
+    // preferences pointing at a deleted file.
+    await pruneCustomBackgrounds(directory, keep: name);
+    return null;
+  }
+
+  /// Forgets the custom image and deletes Harness's copy. Blank takes over if
+  /// it was showing.
+  Future<void> removeCustomBackground() async {
+    await Future.wait([
+      if (value.background == HarnessBackground.custom)
+        setBackground(HarnessBackground.plain),
+      _setCustom(value.custom.copyWith(clearImage: true)),
+    ]);
+    await pruneCustomBackgrounds(backgroundsDirectory);
+  }
+
+  Future<void> _setCustom(CustomBackground custom) {
+    if (value.custom == custom) return _customSave ?? Future.value();
+    value = value.copyWith(custom: custom);
+    return _customSave ??= _saveCustom();
+  }
+
+  Future<void> _saveCustom() async {
+    try {
+      while (true) {
+        final custom = value.custom;
+        await _storage.write(_customKey, jsonEncode(custom.toJson()));
+        if (value.custom == custom) break;
+      }
+    } catch (_) {
+      // Keep the custom background for this run if storage is unavailable.
+    } finally {
+      _customSave = null;
+    }
+  }
+
+  /// Pane opacity, clamped to [AppearancePrefs.paneOpacityMin]…1 rather than
+  /// rejected.
+  Future<void> setPaneOpacity(double opacity) {
+    final next = value.copyWith(paneOpacity: _clampOpacity(opacity));
+    if (next == value) return _paneOpacitySave ?? Future.value();
+    value = next;
+    return _paneOpacitySave ??= _savePaneOpacity();
+  }
+
+  Future<void> _savePaneOpacity() async {
+    try {
+      while (true) {
+        final opacity = value.paneOpacity;
+        await _storage.write(_paneOpacityKey, jsonEncode({'opacity': opacity}));
+        if (value.paneOpacity == opacity) break;
+      }
+    } catch (_) {
+      // Keep the choice for this run if storage is unavailable.
+    } finally {
+      _paneOpacitySave = null;
+    }
+  }
+
+  /// Older builds also saved an `on` flag here; it is ignored.
+  static double _paneOpacityFrom(String? raw) {
+    try {
+      final json = raw == null ? null : jsonDecode(raw);
+      final opacity = json is Map ? json['opacity'] : null;
+      return opacity is num
+          ? _clampOpacity(opacity.toDouble())
+          : AppearancePrefs.paneOpacityDefault;
+    } catch (_) {
+      return AppearancePrefs.paneOpacityDefault;
+    }
+  }
+
+  static double _clampOpacity(double opacity) => opacity.isFinite
+      ? opacity.clamp(AppearancePrefs.paneOpacityMin, 1.0)
+      : AppearancePrefs.paneOpacityDefault;
+
+  static CustomBackground _customFrom(String? raw) {
+    try {
+      return CustomBackground.fromJson(raw == null ? null : jsonDecode(raw));
+    } catch (_) {
+      return const CustomBackground();
     }
   }
 
@@ -223,12 +392,16 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
     value = const AppearancePrefs();
     await _paletteSave;
     await _backgroundSave;
+    await _customSave;
+    await _paneOpacitySave;
     await _promptSave;
     try {
       await _storage.delete(_familyKey);
       await _storage.delete(_sizeKey);
       await _storage.delete(_paletteKey);
       await _storage.delete(_backgroundKey);
+      await _storage.delete(_customKey);
+      await _storage.delete(_paneOpacityKey);
       await _storage.delete(_promptKey);
     } catch (_) {
       // See above.

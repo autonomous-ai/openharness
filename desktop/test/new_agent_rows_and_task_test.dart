@@ -109,7 +109,11 @@ class _App extends AppNotifier {
   }) async => {'profiles': <dynamic>[]};
 
   @override
-  Future<String?> installDsh(String machineId, String id) =>
+  Future<String?> installDsh(
+    String machineId,
+    String id, {
+    bool trustUnverified = false,
+  }) =>
       pendingInstall?.future ?? Future.value(null);
 
   @override

@@ -19,7 +19,9 @@ class Swarm {
        nameIsCustom =
            nameIsCustom ??
            (normalizeName(name) != defaultName &&
-               !(kind == 'store' && name == storeName));
+               !(kind == 'store' && name == storeName) &&
+               !(kind == 'companions' && name == companionsName) &&
+               !(kind == 'devices' && name == devicesName));
 
   /// What the tab holds: `harness` — panes of agents (the default); `store` —
   /// the Harness Store, no panes. A store tab is a tab like any other —
@@ -33,19 +35,27 @@ class Swarm {
   bool get isBlankNewTab =>
       isNewTabPage && kind == 'harness' && panes.isEmpty && presets.isEmpty;
   bool get isStore => kind == 'store';
+  bool get isCompanions => kind == 'companions';
+  bool get isDevices => kind == 'devices';
+  bool get isUtility => isStore || isCompanions || isDevices;
   bool get isOrchestrator =>
       kind == 'orchestrator' &&
       orchestratorId != null &&
       orchestratorMachineId != null;
   String? orchestratorId, orchestratorMachineId;
   static const storeName = 'Harness Store';
+  static const companionsName = 'Companions';
+  static const devicesName = 'Devices';
 
   static const defaultName = 'New Tab';
   // 'New Harness' was the default until 2026-09-15, 'New Agent' for a day
   // after, and 'Untitled Tab' until 2026-09-24; a layout saved then still
-  // carries one, and it must read as the same fresh tab.
+  // carries one, as do builds that called tabs swarms. They all display the
+  // current placeholder. Explicit custom
+  // names bypass this normalization in the constructor.
   static String normalizeName(String name) =>
       const {
+            'New Swarm',
             'New swarm',
             'New tab',
             'New Tab',
@@ -93,6 +103,24 @@ class Swarm {
 
   PaneArrangement? get manualLayout => paneSizes['${panes.length}:manual'];
 
+  List<TerminalPane> get panesInReadingOrder {
+    final ordered = panes.toList();
+    final layout = arranged?.tiles.length == panes.length
+        ? arranged
+        : manualLayout;
+    if (layout == null || layout.tiles.length != panes.length) return ordered;
+    // Splits insert beside their source in the list, which may differ from
+    // the visible order. Read each row left to right before reflowing.
+    final tiles = {
+      for (var i = 0; i < panes.length; i++) panes[i]: layout.tiles[i],
+    };
+    ordered.sort((a, b) {
+      final row = tiles[a]!.top.compareTo(tiles[b]!.top);
+      return row != 0 ? row : tiles[a]!.left.compareTo(tiles[b]!.left);
+    });
+    return ordered;
+  }
+
   void savePaneSizes(String key, PaneArrangement arrangement) {
     paneSizes[key] = arrangement;
     while (paneSizes.length > 64) {
@@ -101,9 +129,13 @@ class Swarm {
   }
 
   void remove(TerminalPane pane) {
-    final index = panes.indexOf(pane);
-    if (index < 0) return;
+    if (!panes.contains(pane)) return;
     final manual = manualLayout;
+    final ordered = panesInReadingOrder;
+    panes
+      ..clear()
+      ..addAll(ordered);
+    final index = panes.indexOf(pane);
     panes.removeAt(index);
     // Layouts are kept per pane count, so the harness split for a viewer and
     // its terminal would otherwise wait for the next two tiles of any kind.
@@ -112,20 +144,17 @@ class Swarm {
         identical(manual, PaneArrangement.viewerBesideTerminal)) {
       paneSizes.remove('2:manual');
     }
-    if (manual != null && panes.length > 1) {
-      final next = manual.remove(index);
-      if (next == null) {
-        paneSizes.remove('${panes.length}:manual');
-      } else {
-        savePaneSizes('${panes.length}:manual', next);
-      }
-    }
-    if (manual != null) {
-      pinnedSlots.updateAll((_, slot) => slot > index ? slot - 1 : slot);
-    }
+    // Every removal returns to the default for the remaining count, including
+    // when that count has an older preset or dragged proportions saved.
+    presets.remove(panes.length);
+    paneSizes.removeWhere((key, _) => key.startsWith('${panes.length}:'));
+    pinnedSlots.remove(pane.id);
+    // Keep pins attached to their panes without undoing the visible order.
+    pinnedSlots.updateAll((id, _) => panes.indexWhere((p) => p.id == id));
     arranged = null;
     arrangedKey = null;
-    pinnedSlots.remove(pane.id);
+    arrangedMinimum = null;
+    gridColumns = null;
     if (focusedPaneId == pane.id) {
       focusedPaneId = panes.isEmpty
           ? null
@@ -137,7 +166,7 @@ class Swarm {
 
   Map<String, Object?> toJson() {
     final agents = panes
-        .where((p) => p.agentId != null)
+        .where((p) => !isCompanions && p.agentId != null)
         .toList(growable: false);
     return {
       'id': id,
@@ -196,6 +225,10 @@ class ClosedAgent extends ClosedWork {
          for (final other in swarm.panes)
            if (other != pane) (other.machineId, other.agentId),
        ]),
+       remainingReadingOrder = List.unmodifiable([
+         for (final other in swarm.panesInReadingOrder)
+           if (other != pane) (other.machineId, other.agentId),
+       ]),
        zoomed = swarm.zoomedPaneId == pane.id;
 
   final String swarmId, swarmName, machineId, machineName, agentId, name;
@@ -205,6 +238,7 @@ class ClosedAgent extends ClosedWork {
   final int? pinnedSlot;
   final PaneArrangement? manualLayout;
   final List<(String, String?)> remainingAgents;
+  final List<(String, String?)> remainingReadingOrder;
 }
 
 /// Terminal buffers and controllers are released normally; a reopened view

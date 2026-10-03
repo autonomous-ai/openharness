@@ -14,9 +14,14 @@ bool device_mac_str(char *out, size_t cap)
     out[0] = '\0';
 
     uint8_t mac[6] = { 0 };
-    // ESP_MAC_WIFI_STA, not the AP or the base MAC: it is the address the device uses on the network the
-    // user actually sees, so it matches what any other tooling would report for this unit.
-    esp_err_t err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    // ESP_MAC_BASE — the chip's own factory address, and the one identifier this firmware has that is
+    // stable, unique and needs no pairing. It is what the daemon uses to tell one device from another
+    // before a byte of protocol is exchanged.
+    //
+    // It used to ask for ESP_MAC_WIFI_STA, which on the dial is the same value. On the Pro it is not a
+    // value at all: the ESP32-P4 has no radio of its own (its Wi-Fi lives in a coprocessor this firmware
+    // never wakes), so that read fails with ESP_ERR_NOT_FOUND and the hello went out carrying "mac":"".
+    esp_err_t err = esp_read_mac(mac, ESP_MAC_BASE);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_read_mac failed: %d", (int)err);
         return false;

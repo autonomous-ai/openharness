@@ -4,3 +4,8 @@
 abstract interface class AccessTokenSource {
   Future<String> accessToken({bool force = false, String? failedToken});
 }
+
+/// Distinguishes an expired session from a temporary failure to renew it.
+abstract interface class AccessTokenFailure implements Exception {
+  bool get signedOut;
+}

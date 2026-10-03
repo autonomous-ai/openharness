@@ -9,14 +9,17 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from '
 import { basename, join, dirname } from 'path'
 import { homedir } from 'os'
 import { fileURLToPath } from 'url'
+import { cursorConfigDir, cursorDataDir } from '../engines/cursor/home.js'
 import { env } from '../config/env.js'
 import { VERSION } from '../version.js'
 import { hermesConfigHomes } from '../engines/hermes/home.js'
 import { managedNodePath } from './nodeRuntime.js'
+import { opencodeMemoryPluginSource } from './opencodeMemoryPlugin.js'
+import { opencodeRecallPluginSource } from './opencodeRecallPlugin.js'
 
 const SETTINGS_PATH = join(homedir(), '.claude', 'settings.json')
 const GROK_HOOKS_PATH = join(env.GROK_HOME, 'hooks', 'harness.json')
-const CURSOR_HOOKS_PATH = join(process.env.CURSOR_HOME || join(homedir(), '.cursor'), 'hooks.json')
+const CURSOR_HOOKS_PATH = join(cursorConfigDir(), 'hooks.json')
 // agy reads hooks from its SHARED customization root (~/.gemini/config), not from its own state dir —
 // the CLI's changelog records the move, "ensuring hooks remain synchronized between the TUI and the
 // backend". Verified live: a hooks.json placed there fires for `agy` in a pane.
@@ -80,7 +83,7 @@ function command(
     '--claude-projects-dir', shellQuote(env.CLAUDE_PROJECTS_DIR),
     '--codex-home', shellQuote(codexHome),
     '--grok-home', shellQuote(env.GROK_HOME),
-    '--cursor-home', shellQuote(env.CURSOR_HOME),
+    '--cursor-home', shellQuote(cursorDataDir()),
     '--hermes-home', shellQuote(hermesHome),
     '--commandcode-home', shellQuote(env.COMMANDCODE_HOME),
     '--devin-home', shellQuote(env.DEVIN_HOME),
@@ -398,6 +401,9 @@ export function installCursorHooks(port: number): void {
 }
 
 const OPENCODE_PLUGIN_PATH = join(env.OPENCODE_PLUGIN_DIR, 'launcher-register.js')
+// OpenCode 2.0's TUI plugins: `<config>/plugins/<dir>/tui.js` (plural, a directory) — beside the 1.x
+// `plugin/` file, which 1.x keeps reading as it always did.
+const OPENCODE_TUI_PLUGIN_PATH = join(dirname(env.OPENCODE_PLUGIN_DIR), 'plugins', 'launcher-register', 'tui.js')
 const KILO_PLUGIN_PATH = join(env.KILO_PLUGIN_DIR, 'launcher-register.js')
 
 /**
@@ -419,13 +425,12 @@ function forkPluginSource(engine: 'opencode' | 'kilo', port: number): string {
 // local machine daemon (127.0.0.1:${port}) so it can be mirrored to web/device. No-op if machine isn't running.
 import { readFileSync } from "node:fs"
 const hookToken = () => { try { return readFileSync(${JSON.stringify(join(env.ADAPTER_DATA_DIR, 'hook-credential'))}, "utf8").trim() } catch { return "" } }
-export const MachineRegister = async ({ directory, worktree, project }) => {
+export const MachineRegister = async ({ directory, worktree, project, client }) => {
   const seen = new Set()
   const post = async (sessionID) => {
     const pane = process.env.TMUX_PANE
-    const herdrPane = process.env.HERDR_PANE_ID
     const token = hookToken()
-    if ((!pane && !herdrPane) || !token || !sessionID || seen.has(sessionID)) return
+    if (!pane || !token || !sessionID || seen.has(sessionID)) return
     seen.add(sessionID)
     try {
       await fetch("http://127.0.0.1:${port}/api/hook/session-start", {
@@ -440,13 +445,17 @@ export const MachineRegister = async ({ directory, worktree, project }) => {
           callerPid: process.pid,
           runtimeHints: [
             ...(pane ? [{ backend: "tmux", paneId: pane }] : []),
-            ...(herdrPane ? [{ backend: "herdr", paneId: herdrPane, sessionName: process.env.HERDR_SESSION, socketPath: process.env.HERDR_SOCKET_PATH }] : []),
           ],
         }),
       })
     } catch {}
   }
+${engine === 'opencode' ? opencodeMemoryPluginSource(port) : ''}
+${engine === 'opencode' ? opencodeRecallPluginSource(port) : ''}
   return {
+    ${engine === 'opencode' ? `"chat.message": async (input, output) => { await memoryMessage(input, output); await recallMessage(input, output) },
+    "chat.params": memoryParams, "experimental.chat.messages.transform": recallTransform,
+    "experimental.session.compacting": recallCompacting, "experimental.compaction.autocontinue": recallAutoContinue,` : ''}
     event: async ({ event }) => {
       if (!event) return
       if (event.type === "session.created" || event.type === "session.updated") {
@@ -457,6 +466,69 @@ export const MachineRegister = async ({ directory, worktree, project }) => {
       }
     },
   }
+}
+`
+}
+
+/**
+ * OpenCode 2.0's discovery plugin: the same session-start the 1.x plugin posts, from where 2.0 still
+ * knows the pane.
+ *
+ * Measured on 2.0.18 (upstream v2.0.18 source): a plugin must `export default { id, setup }` — the 1.x
+ * named export fails to load ("Plugin must export a default definition"); server plugins run in ONE
+ * background service shared by every TUI, whose environment has no `TMUX_PANE`, and whose events carry
+ * no client — so no server plugin can say which pane a session is in. A TUI plugin runs in the pane's
+ * own process: `process.env.TMUX_PANE` is the pane, and `ui.router.current()` is the session it shows.
+ * It posts that session — and the next one, when the pane switches (`/sessions`, a tab) — skipping a
+ * sub-agent's (it has a parent), each once. Polled: the router is a store, and a missed event costs a
+ * second, not a binding. Without a pane, a token or the router (another 2.x), it does nothing.
+ */
+function opencodeTuiPluginSource(port: number): string {
+  return `// session-register (OpenCode 2 TUI) — auto-installed by the machine adapter. Tells the local machine
+// daemon (127.0.0.1:${port}) which session this pane shows, as the 1.x plugin does. No-op if machine isn't running.
+import { readFileSync } from "node:fs"
+const hookToken = () => { try { return readFileSync(${JSON.stringify(join(env.ADAPTER_DATA_DIR, 'hook-credential'))}, "utf8").trim() } catch { return "" } }
+export default {
+  id: "harness-session-register",
+  setup(ctx) {
+    const pane = process.env.TMUX_PANE
+    const router = ctx && ctx.ui && ctx.ui.router
+    if (!pane || !router || typeof router.current !== "function") return
+    const posted = new Set()
+    let busy = false
+    const post = async (sessionID) => {
+      const token = hookToken()
+      if (!token || !sessionID || posted.has(sessionID) || busy) return
+      busy = true
+      try {
+        let info
+        try { info = await (ctx.data && ctx.data.session && ctx.data.session.get ? ctx.data.session.get(sessionID) : undefined) } catch {}
+        if (info && info.parentID) { posted.add(sessionID); return } // a sub-agent's — shown under its parent's Task card
+        const cwd = (info && info.location && info.location.directory) || (ctx.location && ctx.location.directory) || process.cwd()
+        const res = await fetch("http://127.0.0.1:${port}/api/hook/session-start", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-harness-hook-token": token },
+          body: JSON.stringify({
+            engine: "opencode",
+            pluginVersion: ${JSON.stringify(VERSION)},
+            sessionId: sessionID,
+            cwd,
+            tmuxPane: pane,
+            callerPid: process.pid,
+            runtimeHints: [{ backend: "tmux", paneId: pane }],
+          }),
+        })
+        if (res && res.ok) posted.add(sessionID)
+      } catch {} finally { busy = false }
+    }
+    const check = () => {
+      try { const at = router.current(); if (at && at.type === "session" && at.sessionID) post(at.sessionID) } catch {}
+    }
+    check()
+    const timer = setInterval(check, 1000)
+    if (timer && typeof timer.unref === "function") timer.unref()
+    return () => clearInterval(timer)
+  },
 }
 `
 }
@@ -726,10 +798,9 @@ export default function (pi: ExtensionAPI) {
 
   const register = async (ctx: any) => {
     const pane = process.env.TMUX_PANE;
-    const herdrPane = process.env.HERDR_PANE_ID;
     let token = "";
     try { token = readFileSync(${JSON.stringify(join(env.ADAPTER_DATA_DIR, 'hook-credential'))}, "utf8").trim(); } catch {}
-    if ((!pane && !herdrPane) || !token) return;
+    if (!pane || !token) return;
     // Pi knows the session file path immediately but only WRITES it once the first assistant message
     // lands. Sending a path that isn't on disk yet is rejected by the daemon (it validates the file),
     // so announce without one first and attach the real path on a later turn.
@@ -752,7 +823,6 @@ export default function (pi: ExtensionAPI) {
           callerPid: process.pid,
           runtimeHints: [
             ...(pane ? [{ backend: "tmux", paneId: pane }] : []),
-            ...(herdrPane ? [{ backend: "herdr", paneId: herdrPane, sessionName: process.env.HERDR_SESSION, socketPath: process.env.HERDR_SOCKET_PATH }] : []),
           ],
         }),
       });
@@ -840,8 +910,7 @@ const SESSIONS_DIR = ${JSON.stringify(sessionsDir)}
 
 export default function (amp: any) {
   const pane = process.env.TMUX_PANE
-  const herdrPane = process.env.HERDR_PANE_ID
-  if (!pane && !herdrPane) return
+  if (!pane) return
 
   // NOT \`process.cwd()\`: Bun runs a plugin with the PLUGIN's directory as its cwd, so that reports
   // \`<project>/.amp/plugins\` (measured). \`PWD\` is inherited from the shell that launched plain Amp.
@@ -895,7 +964,6 @@ export default function (amp: any) {
           callerPid: process.pid,
           runtimeHints: [
             ...(pane ? [{ backend: 'tmux', paneId: pane }] : []),
-            ...(herdrPane ? [{ backend: 'herdr', paneId: herdrPane, sessionName: process.env.HERDR_SESSION, socketPath: process.env.HERDR_SOCKET_PATH }] : []),
           ],
         }),
       })
@@ -1068,9 +1136,13 @@ export function installAmpPlugin(port: number): void {
   }
 }
 
-/** Idempotently drop the OpenCode discovery plugin into ~/.config/opencode/plugin/. */
+/**
+ * Idempotently drop the OpenCode discovery plugin into ~/.config/opencode/plugin/ (1.x, as it always
+ * was), and its 2.0 TUI form into ~/.config/opencode/plugins/launcher-register/ (1.x never looks there).
+ */
 export function installOpencodePlugin(port: number): void {
   installForkPlugin('opencode', OPENCODE_PLUGIN_PATH, 'OpenCode', port)
+  installPluginSource('opencode', OPENCODE_TUI_PLUGIN_PATH, 'OpenCode 2 TUI', opencodeTuiPluginSource(port))
 }
 
 /**
@@ -1086,7 +1158,11 @@ export function installKiloPlugin(port: number): void {
 }
 
 function installForkPlugin(engine: 'opencode' | 'kilo', path: string, product: string, port: number): void {
-  const source = forkPluginSource(engine, port)
+  installPluginSource(engine, path, product, forkPluginSource(engine, port))
+}
+
+/** Write [source] to [path] unless it is there already, atomically. */
+function installPluginSource(engine: 'opencode' | 'kilo', path: string, product: string, source: string): void {
   try {
     if (existsSync(path) && readFileSync(path, 'utf-8') === source) {
       console.log(`[hooks] ${product} discovery plugin already installed`)

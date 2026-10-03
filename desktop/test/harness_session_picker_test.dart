@@ -103,18 +103,18 @@ void main() {
     );
     await tester.enterText(resourceField, '');
     await selectResource(tester, 'a0');
-    await runResourceCommand(tester, 'Show paused sessions');
+    await runResourceCommand(tester, 'Show stopped harnesses');
     expect(
       resourceSearch(tester).rows.where((row) => !row.isCreate).single.agentId,
       'saved',
     );
     await selectResource(tester, 'saved');
-    await runResourceCommand(tester, 'Show all sessions');
+    await runResourceCommand(tester, 'Show all harnesses');
     expect(
       resourceSearch(tester).rows.where((row) => !row.isCreate),
       hasLength(2),
     );
-    await runResourceCommand(tester, 'Sort sessions: Name');
+    await runResourceCommand(tester, 'Sort harnesses: Name');
     expect(resourceSearch(tester).sessionSort, SessionSort.name);
     for (var i = 0; i < 3 && resourceField.evaluate().isNotEmpty; i++) {
       await key(tester, LogicalKeyboardKey.escape);
@@ -126,7 +126,7 @@ void main() {
 
   for (final withKeymap in [false, true]) {
     testWidgets(
-      'direct pause and resume preserve search; Enter still opens the session ($withKeymap)',
+      'Stop preserves search; Open reopens the session and focuses its pane ($withKeymap)',
       (tester) async {
         app.adoptSessionForTest(terminal('a0', []));
         final keymap = MemoryKeymap();
@@ -185,19 +185,17 @@ void main() {
         await tester.pumpAndSettle();
         expect(app.stateOf('m')!.agents.first.isStopped, isTrue);
         expect(resourceSearch(tester).selected?.agentId, 'a0');
-        expect(find.text('Resume & open'), findsNothing);
-        final panes = app.panes.map((pane) => pane.id).toList();
         expect(
-          tester.widget<TextField>(resourceField).focusNode!.hasFocus,
-          isTrue,
+          find.byKey(const ValueKey('resource-action:picker.accept')),
+          findsOneWidget,
         );
         expect(
           tester.widget<TextField>(resourceField).controller!.text,
           'Font styling',
         );
-        await key(tester, LogicalKeyboardKey.keyS, ctrl: true);
+        await key(tester, LogicalKeyboardKey.enter);
         expect(connection.types, ['agent_resume']);
-        expect(find.text('Working…'), findsOneWidget);
+        expect(resourceField, findsNothing);
         connection.restartReplies.single.complete(
           restartReceipt(
             connection.requests.single['creationId'] as String,
@@ -206,34 +204,7 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        expect(
-          app
-              .stateOf('m')!
-              .agents
-              .firstWhere((agent) => agent.id == 'a0')
-              .isStopped,
-          isFalse,
-        );
-        expect(app.panes.map((pane) => pane.id), panes);
-        expect(
-          tester.widget<TextField>(resourceField).focusNode!.hasFocus,
-          isTrue,
-        );
-        await key(tester, LogicalKeyboardKey.period, ctrl: true);
-        expect(
-          find.byKey(const ValueKey('resource-command-input')),
-          findsOneWidget,
-        );
-        await key(tester, LogicalKeyboardKey.escape);
-        expect(
-          tester.widget<TextField>(resourceField).focusNode!.hasFocus,
-          isTrue,
-        );
-        expect(
-          tester.widget<TextField>(resourceField).controller!.text,
-          'Font styling',
-        );
-        await key(tester, LogicalKeyboardKey.enter);
+        expect(app.focusedPane?.agentId, 'a0');
         expect(resourceField, findsNothing);
         expect(connection.types, ['agent_resume']);
         expect(tester.takeException(), isNull);
@@ -287,7 +258,7 @@ void main() {
     keymap.dispose();
   });
 
-  testWidgets('pause errors stay in the selected preview', (tester) async {
+  testWidgets('Stop errors stay in the selected preview', (tester) async {
     connection.inventory = Completer<Map<String, dynamic>>()
       ..complete({
         'agents': [
@@ -301,7 +272,7 @@ void main() {
         ],
       });
     await open(tester);
-    await press(tester, 'Pause');
+    await press(tester, 'Stop');
     connection.stopReplies.single.complete({
       'error': 'REFUSED',
       'detail': 'Machine busy. Try again.',
@@ -310,17 +281,20 @@ void main() {
     expect(find.textContaining('Machine busy. Try again.'), findsOneWidget);
     expect(app.stateOf('m')!.agents.first.isStopped, isFalse);
     await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
-    expect(find.text('Pause “Font styling review”'), findsOneWidget);
+    expect(
+      resourceSearch(tester).rows.map((row) => row.title),
+      contains('Stop “Font styling review”'),
+    );
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('closing and reopening cannot duplicate a pending pause', (
+  testWidgets('closing and reopening cannot duplicate a pending Stop', (
     tester,
   ) async {
     connection.inventory = Completer<Map<String, dynamic>>();
     await open(tester);
-    await press(tester, 'Pause');
+    await press(tester, 'Stop');
     await key(tester, LogicalKeyboardKey.escape);
     await key(tester, LogicalKeyboardKey.escape);
     await openWorkspaceTool(tester, 'harnesses');
@@ -336,18 +310,22 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('uncertain resume checks the existing receipt', (tester) async {
+  testWidgets('uncertain Open checks the existing receipt', (tester) async {
     await open(tester, id: 'saved');
-    await press(tester, 'Resume');
+    await key(tester, LogicalKeyboardKey.enter);
     connection.restartReplies.single.completeError(
       const WsRequestTimeout('agent_resume'),
     );
     await tester.pumpAndSettle();
     expect(
-      find.textContaining('Still waiting for the resume response'),
+      find.textContaining('Still waiting for the Open response'),
       findsOneWidget,
     );
-    await press(tester, 'Resume');
+    ScaffoldMessenger.of(tester.element(find.byType(Scaffold).first))
+        .clearSnackBars();
+    await openHarnessPicker(tester);
+    await selectResource(tester, 'saved');
+    await key(tester, LogicalKeyboardKey.enter);
     expect(connection.requests, hasLength(1));
     expect(
       connection.checks.single['creationId'],
@@ -362,7 +340,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(
-      find.textContaining('Still waiting for the resume response'),
+      find.textContaining('Still waiting for the Open response'),
       findsNothing,
     );
     await tester.pumpWidget(const SizedBox());
@@ -377,7 +355,7 @@ void main() {
       await selectResource(tester, id);
       await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
       expect(
-        find.textContaining(id == 'a0' ? 'Pause “' : 'Resume “'),
+        find.textContaining(id == 'a0' ? 'Stop “' : 'Open “'),
         findsNothing,
       );
       await key(tester, LogicalKeyboardKey.escape);

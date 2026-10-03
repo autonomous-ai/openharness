@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
@@ -8,6 +9,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_binary.dart';
+import 'package:harness/widgets/desktop_prompt_surface.dart';
 
 import 'keymap_host_test.dart' show key, MemoryKeymap;
 import 'support/stop_connection.dart';
@@ -36,13 +38,17 @@ void main() {
     WidgetTester tester, {
     Size size = const Size(1280, 800),
     double scale = 1,
+    Brightness brightness = Brightness.dark,
   }) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = size;
     addTearDown(tester.view.reset);
+    final oldBrightness = grid.AppTheme.brightness.value;
+    grid.AppTheme.brightness.value = brightness;
+    addTearDown(() => grid.AppTheme.brightness.value = oldBrightness);
     await tester.pumpWidget(
       MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        theme: grid.buildAppTheme(brightness: brightness),
         builder: (context, child) => MediaQuery(
           data: MediaQuery.of(context)
               .copyWith(textScaler: TextScaler.linear(scale)),
@@ -84,7 +90,7 @@ void main() {
       await open(tester);
       expect(find.text('Stop Harness'), findsOneWidget);
       expect(
-        find.textContaining('Close Pane keeps it running.'),
+        find.textContaining('Switching tabs keeps it running.'),
         findsOneWidget,
       );
       // The default action must leave the agent running.
@@ -150,7 +156,7 @@ void main() {
     ]}''');
     await mount(tester);
     await open(tester, accept: LogicalKeyboardKey.f8);
-    expect(find.text('F8  select'), findsOneWidget);
+    expect(find.byTooltip('Stop · F8'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.escape);
     expect(find.text('Stop Harness'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.f6);
@@ -161,7 +167,7 @@ void main() {
       {"keys":"f4","command":"picker.cancel","when":"picker"}
     ]}''');
     await tester.pump();
-    expect(find.text('F4  close'), findsOneWidget);
+    expect(find.byTooltip('Close · F4'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.escape);
     expect(find.text('Stop Harness'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.f4);
@@ -191,7 +197,7 @@ void main() {
       expect(find.text('Stop Terminal'), findsOneWidget);
       expect(find.textContaining('End this shell'), findsOneWidget);
       expect(find.text('Cancel').hitTestable(), findsOneWidget);
-      expect(find.text('esc  close').hitTestable(), findsOneWidget);
+      expect(find.text('Stop').hitTestable(), findsOneWidget);
       final body = tester.widget<SingleChildScrollView>(
         find.ancestor(
           of: find.textContaining('End this shell'),
@@ -199,6 +205,25 @@ void main() {
         ),
       );
       expect(body.controller!.offset, 0);
+      // The scroll cue must be present before scrolling, with the same safe
+      // actions stationary below it. A hidden auto-scrollbar cannot be dragged.
+      final actionsBefore = tester.getRect(find.text('Cancel'));
+      final scrollbar = find.ancestor(
+        of: find.textContaining('End this shell'),
+        matching: find.byType(Scrollbar),
+      );
+      final thumb = tester.getRect(scrollbar).topRight + const Offset(-3, 8);
+      final drag = await tester.startGesture(
+        thumb,
+        kind: PointerDeviceKind.mouse,
+      );
+      await drag.moveBy(const Offset(0, 48));
+      await drag.up();
+      await tester.pumpAndSettle();
+      expect(body.controller!.offset, greaterThan(0));
+      expect(tester.getRect(find.text('Cancel')), actionsBefore);
+      expect(connection.stops, isEmpty);
+      body.controller!.jumpTo(0);
       await key(tester, LogicalKeyboardKey.pageDown);
       expect(body.controller!.offset, greaterThan(0));
       expect(find.text('Cancel').hitTestable(), findsOneWidget);
@@ -206,7 +231,7 @@ void main() {
         var i = 0;
         i < 12 &&
             find
-                .textContaining('Close Pane keeps it running.')
+                .textContaining('Switching tabs keeps it running.')
                 .hitTestable()
                 .evaluate()
                 .isEmpty;
@@ -215,7 +240,7 @@ void main() {
         await key(tester, LogicalKeyboardKey.pageDown);
       }
       expect(
-        find.textContaining('Close Pane keeps it running.').hitTestable(),
+        find.textContaining('Switching tabs keeps it running.').hitTestable(),
         findsOneWidget,
       );
       for (var i = 0; i < 12 && body.controller!.offset > 0; i++) {
@@ -247,6 +272,116 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      'long stop errors remain readable and copyable above visible actions in ${brightness.name}',
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+      (tester) async {
+        app.adoptSessionForTest(terminal('a0', []));
+        await mount(
+          tester,
+          size: const Size(480, 360),
+          scale: 1.7,
+          brightness: brightness,
+        );
+        await open(tester);
+        await key(tester, LogicalKeyboardKey.tab);
+        await key(tester, LogicalKeyboardKey.enter);
+        final detail = List.generate(
+          20,
+          (index) =>
+              'Diagnostic ${index + 1}: reconnect to the machine and retry.',
+        ).join('\n');
+        connection.stopReplies.single.complete({
+          'error': 'OFFLINE',
+          'detail': detail,
+        });
+        await tester.pumpAndSettle();
+
+        final fullMessage = 'Stop failed: $detail';
+        final message = find.ancestor(
+          of: find.text(fullMessage),
+          matching: find.byType(DesktopPromptMessage),
+        );
+        final cancel = find.widgetWithText(TextButton, 'Cancel');
+        final stop = find.byKey(const Key('agent-stop-confirm'));
+        final cancelRect = tester.getRect(cancel);
+        final stopRect = tester.getRect(stop);
+        expect(message.hitTestable(), findsOneWidget);
+        expect(cancel.hitTestable(), findsOneWidget);
+        expect(stop.hitTestable(), findsOneWidget);
+        expect(cancelRect.bottom, lessThanOrEqualTo(340));
+        expect(stopRect.bottom, lessThanOrEqualTo(340));
+        expect(tester.takeException(), isNull);
+
+        // Error details must not add an invisible stop to the action cycle.
+        await key(tester, LogicalKeyboardKey.tab);
+        expect(
+          Focus.of(tester.element(find.text('Stop'))).hasPrimaryFocus,
+          isTrue,
+        );
+        await key(tester, LogicalKeyboardKey.tab);
+        expect(
+          Focus.of(tester.element(find.text('Cancel'))).hasPrimaryFocus,
+          isTrue,
+        );
+
+        final scrollable = tester.state<ScrollableState>(
+          find.descendant(of: message, matching: find.byType(Scrollable)).first,
+        );
+        expect(scrollable.position.maxScrollExtent, greaterThan(0));
+        final errorScrollbar = find
+            .descendant(of: message, matching: find.byType(Scrollbar))
+            .first;
+        final thumb =
+            tester.getRect(errorScrollbar).topRight + const Offset(-3, 8);
+        final drag = await tester.startGesture(
+          thumb,
+          kind: PointerDeviceKind.mouse,
+        );
+        await drag.moveBy(const Offset(0, 20));
+        await drag.up();
+        await tester.pumpAndSettle();
+        expect(scrollable.position.pixels, greaterThan(0));
+        scrollable.position.jumpTo(0);
+        await tester.sendEventToBinding(
+          PointerScrollEvent(
+            position: tester.getCenter(message),
+            scrollDelta: const Offset(0, 200),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(scrollable.position.pixels, greaterThan(0));
+
+        String? copied;
+        final messenger = tester.binding.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(SystemChannels.platform, (
+          call,
+        ) async {
+          if (call.method == 'Clipboard.setData') {
+            copied = (call.arguments as Map)['text'] as String;
+          }
+          return null;
+        });
+        addTearDown(
+          () =>
+              messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+        );
+        await tester.tap(message);
+        await key(tester, LogicalKeyboardKey.keyA, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyC, cmd: true);
+        expect(copied, fullMessage);
+        expect(tester.getRect(cancel), cancelRect);
+        expect(tester.getRect(stop), stopRect);
+        expect(connection.stops, hasLength(1));
+        await key(tester, LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(find.text('Stop Harness'), findsNothing);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
   testWidgets('an open confirmation cannot stop a newly replaced session', (
     tester,
   ) async {
@@ -267,7 +402,7 @@ void main() {
     await key(tester, LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     expect(connection.stops, isEmpty);
-    expect(find.textContaining('The agent changed.'), findsOneWidget);
+    expect(find.textContaining('The harness changed.'), findsOneWidget);
     await key(
       tester,
       LogicalKeyboardKey.enter,

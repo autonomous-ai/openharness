@@ -14,6 +14,7 @@
  */
 import { execFile } from 'node:child_process'
 import { accessSync, constants, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, sep } from 'node:path'
 import { env as appEnv } from '../config/env.js'
 import { binaryOnPath } from './binaryOnPath.js'
@@ -33,7 +34,15 @@ export type TmuxPathOutcome =
 
 export type AvailableTmuxPathOutcome = Exclude<TmuxPathOutcome, { state: 'absent' }>
 
-/** Refuse to start a daemon that cannot create terminals. */
+/**
+ * Refuse to start over a tmux that cannot be found.
+ *
+ * ⚠️ NOT used by the daemon any more. A daemon that will not start is a daemon that cannot be fixed
+ * — its own updater lives inside the boot it never finishes — and a machine that merely lost tmux
+ * from its PATH does not need that. `runForeground` records the reason and runs without a tmux
+ * backend instead, which every caller already handles (`TMUX_UNAVAILABLE`). Kept for callers that
+ * genuinely have nothing to do without terminals, and for its tests.
+ */
 export function requireTmuxAvailable(outcome: TmuxPathOutcome): AvailableTmuxPathOutcome {
   if (outcome.state === 'absent') {
     throw new Error(
@@ -63,6 +72,28 @@ export function managedTmuxPath(runtimeDir: string = appEnv.ADAPTER_RUNTIME_DIR)
     // No managed tmux here — the ordinary case on a Mac with Homebrew and on every Linux box.
   }
   return null
+}
+
+/** The same install locations Desktop checks, even before a new user's shell knows about them. */
+export function tmuxInstallDirectories(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  const userBin = env.HARNESS_BIN_DIR || join(env.HOME || homedir(), '.local', 'bin')
+  const brew = platform === 'darwin'
+    ? (env.HARNESS_HOMEBREW_PREFIXES ?? '/opt/homebrew /usr/local').split(/\s+/).filter(Boolean)
+      .map(prefix => join(prefix, 'bin'))
+    : []
+  return [userBin, ...brew].filter(isAbsolute)
+}
+
+/** A known location is only a fallback when its tmux actually runs on this computer. */
+function tmuxRuns(binary: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+  return new Promise(resolve => {
+    execFile(binary, ['-V'], { env, timeout: 2_000 }, (error, stdout) => {
+      resolve(!error && /^tmux \S+/.test(String(stdout).trim()))
+    })
+  })
 }
 
 /** Where the user's own interactive shell finds a command, which is not where the daemon looks. */
@@ -124,6 +155,7 @@ export async function ensureTmuxOnPath(
   env: NodeJS.ProcessEnv = process.env,
   shell: string | undefined = undefined,
   runtimeDir: string = appEnv.ADAPTER_RUNTIME_DIR,
+  installDirectories: readonly string[] = tmuxInstallDirectories(env),
 ): Promise<TmuxPathOutcome> {
   if (binaryOnPath('tmux', env)) return { state: 'present' }
   // The user's own shell is asked first and the managed build is the fallback, in that order on
@@ -144,10 +176,21 @@ export async function ensureTmuxOnPath(
     env.PATH = env.PATH ? `${dir}${delimiter}${env.PATH}` : dir
     return { state: 'adopted', path: managed, from: 'managed runtime' }
   }
+  // install.sh can find Homebrew and install tmux by temporarily evaluating `brew shellenv`.
+  // That PATH belongs only to the installer: a fresh macOS user's rc files do not inherit it.
+  // Desktop explicitly checks these locations too. Preserve the user's existing PATH/shell choice
+  // above, then verify the installed fallback without invoking Homebrew or changing shell profiles.
+  for (const dir of installDirectories) {
+    if (!isAbsolute(dir)) continue
+    const candidate = join(dir, 'tmux')
+    if (!binaryOnPath(candidate, env) || !await tmuxRuns(candidate, env)) continue
+    env.PATH = env.PATH ? `${dir}${delimiter}${env.PATH}` : dir
+    return { state: 'adopted', path: candidate, from: 'standard install location' }
+  }
   return {
     state: 'absent',
     reason: interactiveEngineShell(shell)
-      ? 'the user\'s login shell does not resolve tmux either, and there is no managed tmux'
-      : 'no usable login shell to ask, tmux is not on the daemon PATH, and there is no managed tmux',
+      ? 'tmux was not found on PATH, in the login shell, managed runtime, or standard install locations'
+      : 'no usable login shell, and tmux was not found on PATH, in the managed runtime, or standard install locations',
   }
 }

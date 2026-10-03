@@ -47,8 +47,11 @@ export class ViewerCapture {
     // while the owner's own pane showed the model (owner, 2026-09-18: "bên máy kia đang ra cái xe đạp,
     // bên này không thấy gì"). Without it Chrome renders on the GPU, or on SwiftShader where there is
     // none; `--enable-unsafe-swiftshader` keeps that fallback available on Chrome builds that gate it.
+    // This disposable profile never holds account credentials. OS credential stores can block
+    // its first navigation behind an invisible unlock prompt on a locked or SSH-only host.
     this.child = spawn(browser, ['--headless=new', '--enable-unsafe-swiftshader', '--no-first-run', '--no-default-browser-check',
       '--disable-sync', '--disable-extensions', '--disable-background-networking', '--mute-audio',
+      '--use-mock-keychain', '--password-store=basic',
       '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0',
       `--user-data-dir=${this.directory}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] })
     const endpoint = await new Promise<string>((resolve, reject) => {
@@ -103,7 +106,7 @@ export class ViewerCapture {
     this.loaded = null
   }
   private loaded: (() => void) | null = null
-  private call(method: string, params: Payload = {}): Promise<Payload> {
+  protected call(method: string, params: Payload = {}): Promise<Payload> {
     return new Promise((resolve, reject) => {
       if (this.closed || this.ws?.readyState !== WebSocket.OPEN) { reject(new Error('The viewer renderer disconnected.')); return }
       const id = ++this.id

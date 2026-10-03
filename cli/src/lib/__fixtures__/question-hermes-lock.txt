@@ -1,0 +1,24 @@
+exactement ces trois choix : Rouge, Vert, Bleu. Ne fais rien d autre.
+Initializing agent...
+────────────────────────────────────────
+
+
+╭─ ☤ Hermes ───────────────────────────────────────────────────────────────────╮
+Je vais utiliser l'outil clarify pour vous poser cette question.
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ┊ ❓ preparing clarify…
+╭─ Hermes needs your input ──────────────────────╮
+│ 1 questions                                    │
+│ ▸ Quelle couleur préférez-vous ?               │
+│   ❯ 1. Rouge (Recommended)                     │
+│     2. Vert                                    │
+│     3. Bleu                                    │
+│     4. Other (type your answer)                │
+╰────────────────────────────────────────────────╯
+
+  ❓ clarify  ( 51.4s · ↓ 69 tok)
+  ↑/↓ to select, Enter to lock, Tab next question  (3548s)
+ ☤ laguna-s-2.1:free │ 19.3K/262.1K │ [█░░░░░░░░░] . ─ Use clarify tool to a...
+────────────────────────────────────────────────────────────────────────────────
+? ❯ 
+────────────────────────────────────────────────────────────────────────────────

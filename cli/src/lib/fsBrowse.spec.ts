@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, chmodSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, chmodSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import { listDir } from './fsBrowse.js'
@@ -41,6 +41,14 @@ describe('listDir', () => {
 
   it('rejects a path outside $HOME by default', () => {
     expect(listDir(tmpdir())).toEqual({ error: 'FORBIDDEN' })
+  })
+
+  it('rejects a link that is named inside $HOME but points out of it', () => {
+    // The whole point of the fence: the name sits under home, the directory it opens does not.
+    const escape = join(root, 'escape')
+    symlinkSync(tmpdir(), escape)
+    expect(listDir(escape)).toEqual({ error: 'FORBIDDEN' })
+    expect(listDir(join(escape, '.'))).toEqual({ error: 'FORBIDDEN' })
   })
 
   it('reports NOT_FOUND for a missing directory', () => {

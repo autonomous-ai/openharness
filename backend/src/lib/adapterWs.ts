@@ -35,8 +35,10 @@ import { machineBillingAllowsDataPlane } from './billingState.js'
 import { normalizeComputerId } from './deviceAuth.js'
 import { authenticateAccessToken, SsoAuthError } from './ssoAuth.js'
 import { relayAccountPushes } from './adapterAccountPushes.js'
+import { DAEMONS } from '../config/env.js'
 import { parseAutonomousEnvironment } from './autonomousEnvironment.js'
 import { machineService } from '../services/MachineService.js'
+import { appendDeviceKey } from './deviceKeyLog.js'
 import { AppError } from '../errors/index.js'
 import {
   isEncryptedTerminalFrame,
@@ -169,7 +171,7 @@ export function handleAdapterUpgrade(req: IncomingMessage, socket: Duplex, head:
   const countryCode = countryCodeFromHeaders(req.headers)
   void (async () => {
     let user
-    try { user = await authenticateAccessToken(accessToken, autonomousEnv) } catch (err) {
+    try { user = await authenticateAccessToken(accessToken, autonomousEnv, { allowHarnessSession: 'computer' }) } catch (err) {
       if (err instanceof SsoAuthError && (err.code === 'AUTONOMOUS_ENV_MISMATCH' || err.code === 'AUTONOMOUS_ENV_NOT_ALLOWED')) {
         try { socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n') } catch { /* ignore */ }
         socket.destroy()
@@ -184,7 +186,7 @@ export function handleAdapterUpgrade(req: IncomingMessage, socket: Duplex, head:
     if (!machineBillingAllowsDataPlane(machine)) { denyPayment(); return }
     // Single-computer claim BEFORE upgrade/attach, so a rejected second computer never supersedes the first.
     if (!(await claimMachineOwner(machineId, computerId, PRESENCE_TTL_SEC))) { denyBusy(); return }
-    wss.handleUpgrade(req, socket, head, (ws) => void attachAdapter(ws, machineId, machine.userId, machine.name, label, computerId, clientVersion, countryCode))
+    wss.handleUpgrade(req, socket, head, (ws) => void attachAdapter(ws, machineId, machine.userId, machine.name, label, computerId, clientVersion, countryCode, user.harnessSessionId))
   })().catch((err) => {
     if (err instanceof AppError) {
       // 403 is the revoked-machine answer from `resolveOrCreateForComputer`, 429 its new-id rate limit
@@ -199,7 +201,7 @@ export function handleAdapterUpgrade(req: IncomingMessage, socket: Duplex, head:
   })
 }
 
-async function attachAdapter(ws: WebSocket, machineId: string, userId: string, currentName: string | null, label?: string, computerId?: string, clientVersion?: string, countryCode?: string): Promise<void> {
+async function attachAdapter(ws: WebSocket, machineId: string, userId: string, currentName: string | null, label?: string, computerId?: string, clientVersion?: string, countryCode?: string, harnessSessionId?: string): Promise<void> {
   // A different computer was already rejected at the upgrade (denyBusy), so this only closes our OWN
   // stale local socket on a same-computer reconnect landing on this worker.
   owners.get(machineId)?.close(4000, 'superseded')
@@ -209,7 +211,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   send({ t: 'connected', machineId })
   // What changed for the ACCOUNT on some worker (its tabs, its machine list): this computer's app
   // re-reads through its daemon rather than polling for it. See adapterAccountPushes.ts.
-  const accountPushesUnsub = await relayAccountPushes(userId, send)
+  const accountPushesUnsub = await relayAccountPushes(userId, send, { zoo: DAEMONS.on })
 
   // Last desktop-app state THIS socket asserted. Socket-scoped on purpose: a new adapter connection
   // starts with no claim and must re-assert, so a fresh value can never renew a stale one.
@@ -223,6 +225,13 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
     return ++turnWindowCount <= TURN_WRITES_PER_MINUTE
   }
   const p2pSignalRate = new P2pSignalRateGuard()
+  // A machine appends its own key once per sign-in, a removal when someone asks for one: a few a minute
+  // is generous, and it keeps a looping daemon from rebuilding the log on every frame.
+  const devlogRate = { windowStart: 0, count: 0, allow(): boolean {
+    const now = Date.now()
+    if (now - this.windowStart >= 60_000) { this.windowStart = now; this.count = 0 }
+    return ++this.count <= 10
+  } }
 
   // Buffer messages from RIGHT NOW, because the real handler cannot be installed until after the
   // `await attachNodeRole(...)` below — and `ws` drops any message emitted with no listener attached.
@@ -431,6 +440,26 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
         const kind = (app.payload as { kind?: unknown } | undefined)?.kind
         if (typeof kind !== 'string' || !APP_PRESENCE_KINDS.has(kind)) return
         touchUserPresence(kind as 'open' | 'ping')
+        return
+      }
+      // The machine appending to its account's device key log (lib/deviceKeyLog.ts): its own key, or a
+      // removal it signs. Over THIS socket so the entry is tied to the machine that sent it — a
+      // machine can only register a key under its own id. Answered to the machine alone, never published.
+      if (app.type === 'devlog_append') {
+        const p = (app.payload ?? {}) as { requestId?: unknown; entry?: unknown }
+        const requestId = typeof p.requestId === 'string' ? p.requestId.slice(0, 64) : ''
+        if (!devlogRate.allow()) {
+          send({ t: 'down', connId: '', frame: { type: 'devlog_append_result', payload: { requestId, error: 'RATE_LIMITED' } } })
+          return
+        }
+        void appendDeviceKey(userId, p.entry, { kind: 'machine', machineId, ...(harnessSessionId ? { harnessSessionId } : {}) })
+          .then((r) => send({ t: 'down', connId: '', frame: { type: 'devlog_append_result', payload: r.ok
+            ? { requestId, head: r.head }
+            : { requestId, error: r.code, ...('head' in r ? { head: r.head } : {}) } } }))
+          .catch((err) => {
+            logger.warn('devlog append failed', { machineId, error: String(err) })
+            send({ t: 'down', connId: '', frame: { type: 'devlog_append_result', payload: { requestId, error: 'UNAVAILABLE' } } })
+          })
         return
       }
       // Hub tap (mirrors managerWs): keep `machine_agents` in sync from the adapter's agent

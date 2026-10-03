@@ -9,6 +9,7 @@
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mbedtls/sha256.h"
@@ -25,6 +26,7 @@ static const char *TAG = "fw";
 // Read-back buffer for the hash. Small on purpose: this runs on the link's reader task, whose stack also
 // carries esp_ota_write().
 #define VERIFY_CHUNK 1024
+#define TRANSFER_IDLE_US INT64_C(15000000)
 
 static const esp_partition_t *s_target;
 static esp_ota_handle_t       s_handle;
@@ -33,6 +35,8 @@ static uint32_t               s_written;
 static uint32_t               s_expected;
 static char                   s_sha_hex[65];
 static char                   s_version[32];
+// Owned by the cable reader, just like the OTA handle and every slice.
+static int64_t                s_last_slice_us;
 
 static void reset_state(void)
 {
@@ -41,6 +45,7 @@ static void reset_state(void)
     s_handle = 0;
     s_written = 0;
     s_expected = 0;
+    s_last_slice_us = 0;
 }
 
 static void fail(const char *why)
@@ -61,7 +66,11 @@ void fw_mark_valid(void)
     if (!run || esp_ota_get_state_partition(run, &st) != ESP_OK) return;
     if (st != ESP_OTA_IMG_PENDING_VERIFY) return;   // not a fresh install — nothing to confirm
 
-    esp_ota_mark_app_valid_cancel_rollback();
+    esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "could not confirm image: %s", esp_err_to_name(err));
+        return;
+    }
     const esp_app_desc_t *me = esp_app_get_description();
     ESP_LOGW(TAG, "image confirmed (%s) — rollback cancelled", me ? me->version : "?");
 }
@@ -75,12 +84,26 @@ void fw_update_abort(const char *why)
     ui_show_projects();
 }
 
+void fw_update_tick(void)
+{
+    // USB pings prove the host is alive, not that an image is still arriving.
+    // Abandon a stalled transfer without rebooting or changing the boot slot.
+    if (s_active && esp_timer_get_time() - s_last_slice_us >= TRANSFER_IDLE_US)
+        fail("firmware transfer stalled");
+}
+
 bool fw_update_offer(const char *version, int size, const char *sha256_hex)
 {
     if (s_active) return false;                    // one at a time; the daemon will offer again
-    if (!version || !sha256_hex || strlen(sha256_hex) != 64 || size <= 0) {
+    if (!version || !version[0] || strnlen(version, sizeof s_version) >= sizeof s_version ||
+        !sha256_hex || strnlen(sha256_hex, sizeof s_sha_hex) != 64 || size <= 0) {
         ESP_LOGW(TAG, "ignoring a malformed offer");
         return false;
+    }
+    for (unsigned i = 0; i < 64; i++) {
+        char c = sha256_hex[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+            return false;
     }
     // Never mid-turn. The user is watching a turn run; a reboot in the middle of it loses the thread and
     // looks like a crash. The daemon offers again on the next hello, which is 15 seconds away.
@@ -91,7 +114,7 @@ bool fw_update_offer(const char *version, int size, const char *sha256_hex)
 
     const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
     if (!target) { ESP_LOGE(TAG, "no OTA slot"); return false; }
-    if ((int)target->size < size) {
+    if (target->size < (uint32_t)size) {
         ESP_LOGE(TAG, "image %d B does not fit the %u B slot", size, (unsigned)target->size);
         return false;
     }
@@ -102,9 +125,12 @@ bool fw_update_offer(const char *version, int size, const char *sha256_hex)
     // The screen goes up BEFORE the erase, which takes seconds: without it the dial looks frozen at
     // exactly the moment a user must not power it off.
     ui_ota_boot_show(version);
+    s_handle = 0;
     esp_err_t err = esp_ota_begin(target, size, &s_handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_begin: %s", esp_err_to_name(err));
+        if (s_handle) esp_ota_abort(s_handle);
+        reset_state();
         ui_show_projects();
         return false;
     }
@@ -114,7 +140,10 @@ bool fw_update_offer(const char *version, int size, const char *sha256_hex)
     s_written = 0;
     s_active = true;
     snprintf(s_sha_hex, sizeof(s_sha_hex), "%s", sha256_hex);
+    for (unsigned i = 0; i < 64; i++)
+        if (s_sha_hex[i] >= 'A' && s_sha_hex[i] <= 'F') s_sha_hex[i] += 'a' - 'A';
     snprintf(s_version, sizeof(s_version), "%s", version);
+    s_last_slice_us = esp_timer_get_time();
     cable_client_fw_accept();
     return true;
 }
@@ -151,7 +180,7 @@ void fw_update_slice(const uint8_t *data, size_t len)
 {
     if (!s_active || !data || len == 0) return;
 
-    if (s_written + len > s_expected) {
+    if (s_written > s_expected || len > s_expected - s_written) {
         fail("more bytes than the offer promised");
         return;
     }
@@ -160,6 +189,7 @@ void fw_update_slice(const uint8_t *data, size_t len)
         return;
     }
     s_written += (uint32_t)len;
+    s_last_slice_us = esp_timer_get_time();
     cable_client_fw_progress(s_written);
     ui_ota_boot_pct((int)((uint64_t)s_written * 100 / s_expected));
 
@@ -171,6 +201,17 @@ void fw_update_slice(const uint8_t *data, size_t len)
 
     // Over what was WRITTEN, not what was received — see written_hash_matches().
     if (!written_hash_matches()) { reset_state(); cable_client_fw_error("sha256 mismatch"); ui_show_projects(); return; }
+
+    // The manifest's label must name the image we actually verified. A wrong
+    // version string otherwise makes an apparently successful OTA loop forever.
+    esp_app_desc_t candidate;
+    if (esp_ota_get_partition_description(s_target, &candidate) != ESP_OK ||
+        strncmp(candidate.version, s_version, sizeof candidate.version) != 0) {
+        reset_state();
+        cable_client_fw_error("image version does not match offer");
+        ui_show_projects();
+        return;
+    }
 
     if (esp_ota_set_boot_partition(s_target) != ESP_OK) {
         reset_state();

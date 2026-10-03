@@ -24,12 +24,27 @@ fi
 if [[ "${2:-}" == "--history-performance" ]]; then
   optimization=(-O)
 fi
+if [[ "${2:-}" == "--tab-performance" ]]; then
+  check_source="$desktop_dir/tool/tab_activity_benchmark.swift"
+  optimization=(-O)
+fi
 if [[ "${2:-}" == "--window-zoom" ]]; then
   check_source="$desktop_dir/tool/window_zoom_checks.swift"
 fi
-cat "$desktop_dir/macos/Runner/HarnessKeymap.swift" \
-  "$desktop_dir/macos/Runner/SwarmTitlebar.swift" \
-  "$check_source" > "$check_dir/main.swift"
+if [[ "${2:-}" == "--status-preview" ]]; then
+  check_source="$desktop_dir/tool/status_theme_preview.swift"
+fi
+if [[ "${2:-}" == "--status-menu" ]]; then
+  check_source="$desktop_dir/tool/status_menu_checks.swift"
+fi
+if [[ "${2:-}" == "--status-menu-preview" ]]; then
+  check_source="$desktop_dir/tool/status_menu_preview.swift"
+fi
+cat "$desktop_dir/macos/Runner/HarnessKeymap.swift" > "$check_dir/main.swift"
+# The title bar shares menu ordering with the window. Include that production
+# helper without booting the Flutter window or its account/runtime services.
+sed -n '/^enum HarnessAppMenu {/,$p' "$desktop_dir/macos/Runner/MainFlutterWindow.swift" >> "$check_dir/main.swift"
+cat "$desktop_dir/macos/Runner/HarnessStatusMenu.swift" "$desktop_dir/macos/Runner/SwarmTitlebar.swift" "$check_source" >> "$check_dir/main.swift"
 xcrun swiftc -swift-version 5 "${optimization[@]}" -module-cache-path "$check_dir/module-cache" \
   -F "$framework_dir" -framework FlutterMacOS \
   -Xlinker -rpath -Xlinker "$framework_dir" \

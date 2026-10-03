@@ -1,13 +1,14 @@
 import 'dart:convert';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/widgets/app_dialog.dart';
 import '../terminal/terminal_text.dart';
 
 Future<void> showStoreDemo(
@@ -16,7 +17,7 @@ Future<void> showStoreDemo(
   required StoreExample example,
 }) async {
   if (example.video == null) return;
-  await showDialog<void>(
+  await showAppDialog<void>(
     context: context,
     builder: (_) => StoreDemoDialog(
       name: entry.name,
@@ -33,7 +34,7 @@ String storeDemoHtml(String video) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src https:; style-src 'unsafe-inline'; script-src 'nonce-harness-recording'">
 <style>html,body{margin:0;width:100%;height:100%;background:#111316;overflow:hidden}video{width:100%;height:100%;object-fit:contain}</style>
-</head><body><video id="recording" controls playsinline autoplay preload="none" aria-label="Recorded harness session"><source src="$source" type="video/mp4"></video>
+</head><body><video id="recording" controls playsinline autoplay preload="none" aria-label="Recorded harness run"><source src="$source" type="video/mp4"></video>
 <script nonce="harness-recording">document.querySelector('video').addEventListener('error',()=>DemoStatus.postMessage('error'));document.querySelector('source').addEventListener('error',()=>DemoStatus.postMessage('error'));</script>
 </body></html>''';
 }
@@ -191,7 +192,7 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
                 children: [
                   Expanded(
                     child: Text(
-                      '${widget.name} · Recorded session',
+                      '${widget.name} · Recorded run',
                       style: grid.AppType.heading(),
                     ),
                   ),
@@ -199,7 +200,7 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
                     key: const ValueKey('store-demo-close'),
                     tooltip: 'Close recording',
                     onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(LucideIcons.x300),
+                    icon: const Icon(AppIcons.close),
                   ),
                 ],
               ),
@@ -215,7 +216,7 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               const Icon(
-                                LucideIcons.film300,
+                                AppIcons.film,
                                 size: 36,
                                 color: Colors.white70,
                               ),
@@ -268,7 +269,7 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
                   TextButton.icon(
                     key: const ValueKey('store-demo-browser'),
                     onPressed: _openingBrowser ? null : _openBrowser,
-                    icon: const Icon(LucideIcons.externalLink300, size: 16),
+                    icon: const Icon(AppIcons.externalLink, size: 16),
                     label: const Text('Open in browser'),
                   ),
                 ],

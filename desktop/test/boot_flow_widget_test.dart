@@ -1,3 +1,5 @@
+import 'support/resource_picker.dart';
+import 'support/workspace_tools.dart';
 import 'swarm_interactions_test.dart' show chord;
 
 import 'package:flutter/services.dart';
@@ -20,7 +22,6 @@ import 'package:harness/update/desktop_updater.dart';
 import 'package:harness/update/manual_update_check.dart';
 import 'package:harness/widgets/update_notice.dart';
 import 'package:harness/widgets/bootstrapping_screen.dart';
-import 'package:harness/widgets/terminal_progress.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -196,7 +197,6 @@ void main() {
             'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         machineId: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
         machineName: 'local-manual',
-        setupToken: 'ephemeral-setup-token',
       ),
     );
 
@@ -545,8 +545,8 @@ void main() {
     // The card leads with what the app does for you, not with its own name —
     // the wordmark left when the screen stopped being a logo over a button.
     expect(find.text('Your agents, wherever they run'), findsOneWidget);
-    expect(find.text('Sign in'), findsOneWidget);
-    expect(find.byIcon(Icons.login), findsOneWidget);
+    expect(find.text('Continue with Google'), findsOneWidget);
+    expect(find.text('Continue with Apple'), findsOneWidget);
   });
 
   testWidgets('bootstrapping shows branded startup screen (pre-login)', (
@@ -565,10 +565,10 @@ void main() {
     // LoginScreen. Keep this on the real RootShell so notifier wiring remains
     // covered as well as the standalone screen's presentation tests.
     expect(find.byType(BootstrappingScreen), findsOneWidget);
-    expect(find.byType(TerminalProgressLine), findsOneWidget);
-    expect(find.text(r'$ harness start'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.text('Opening your workspace'), findsOneWidget);
     expect(find.text('Opening Harness…'), findsOneWidget);
-    expect(find.text('Sign in'), findsNothing);
+    expect(find.text('Continue with Google'), findsNothing);
   });
 
   testWidgets('live pre-flight has its own quiet screen', (tester) async {
@@ -582,8 +582,8 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text(r'$ harness doctor'), findsOneWidget);
-    expect(find.textContaining('read-only'), findsOneWidget);
+    expect(find.text('Checking this computer'), findsOneWidget);
+    expect(find.text("This check doesn't install anything."), findsOneWidget);
     expect(find.text('ENVIRONMENT SETUP'), findsNothing);
     expect(find.text('Pre-flight check'), findsNothing);
   });
@@ -612,7 +612,7 @@ void main() {
 
       expect(app.status, AppStatus.checkingEnvironment);
       expect(
-        find.text('all checks passed · opening your workspace'),
+        find.text('All checks passed. Opening your workspace…'),
         findsOneWidget,
       );
       expect(find.text('Continue to sign in'), findsNothing);
@@ -628,7 +628,7 @@ void main() {
       expect(app.status, AppStatus.authenticated);
       expect(app.isGuest, isTrue);
       // …and the desk is what is on screen, not the sign-in.
-      expect(find.text('Sign in'), findsNothing);
+      expect(find.text('Continue with Google'), findsNothing);
       app.dispose();
     },
   );
@@ -744,7 +744,7 @@ void main() {
       expect(app.status, AppStatus.authenticated);
       expect(app.isGuest, isTrue);
       // …on the desk, not in front of it.
-      expect(find.text('Sign in'), findsNothing);
+      expect(find.text('Continue with Google'), findsNothing);
       await tester.pumpWidget(const SizedBox());
       app.dispose();
     },
@@ -869,15 +869,15 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.byType(TerminalProgressLine), findsOneWidget);
-    expect(find.text('Sign in'), findsNothing);
+    expect(find.byType(BootstrappingScreen), findsOneWidget);
+    expect(find.text('Continue with Google'), findsNothing);
 
     app.status = AppStatus.unauthenticated;
     app.notifyListeners();
     await tester.pump();
 
-    expect(find.byType(TerminalProgressLine), findsNothing);
-    expect(find.text('Sign in'), findsOneWidget);
+    expect(find.byType(BootstrappingScreen), findsNothing);
+    expect(find.text('Continue with Google'), findsOneWidget);
   });
 
   testWidgets(
@@ -910,17 +910,18 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pumpAndSettle();
-      // With no machine to open an agent on, the start page's New goes to
-      // the Machines panel, with desktop and server instructions one click away.
-      expect(find.byKey(const ValueKey('machines-panel')), findsOneWidget);
-      await tester.tap(find.text('Add a second machine'));
+      // Creation without a machine opens the same picker as Cmd-M.
+      expect(resourceScope('@'), findsOneWidget);
+      expect(resourceSearch(tester).rows.last.title, 'Add machine');
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
-      expect(
-        find.text('1. Open Harness on your other computer.'),
-        findsOneWidget,
-      );
-      expect(find.text('Set up a server…'), findsOneWidget);
-      await tester.tap(find.byTooltip('Close Machines'));
+      expect(find.text('Add machine · App'), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       expect(app.panes, isEmpty);
       await tester.pumpWidget(const SizedBox());
@@ -1018,7 +1019,7 @@ void main() {
   });
 
   testWidgets(
-    'offline selected agent retains its Swarm view with an offline message',
+    'offline selected agent retains its Tab view with an offline message',
     (tester) async {
       final app = makeNotifier(AppStatus.authenticated);
       const machine = Machine(
@@ -1122,7 +1123,7 @@ void main() {
       // The panel and its password field receive focus after the first frame.
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const ValueKey('machines-panel')), findsOneWidget);
+      expect(resourceScope('@'), findsOneWidget);
       expect(
         find.byWidgetPredicate(
           (widget) =>
@@ -1131,7 +1132,8 @@ void main() {
         ),
         findsNothing,
       );
-      expect(find.textContaining('Offline'), findsOneWidget);
+      expect(resourceSearch(tester).selected?.machineId, machine.machineId);
+      expect(find.text('Offline'), findsWidgets);
       expect(find.text('Harness is offline'), findsNothing);
       expect(find.text('harness start'), findsNothing);
       await tester.pumpWidget(const SizedBox());
@@ -1180,22 +1182,18 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
 
-    await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
+    await openWorkspaceManagement(tester, 'machines');
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('link-mac'));
+    await selectResource(tester, 'machine:link-machine');
     await tester.tap(
-      find.byKey(const ValueKey('connect-machine-link-machine')),
+      find.byKey(const ValueKey('resource-action:picker.resource_connect')),
     );
     // Same popup-transition reasoning as above.
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('machines-panel')), findsOneWidget);
+    expect(resourceScope('@'), findsOneWidget);
     expect(
-      find.byWidgetPredicate(
-        (widget) =>
-            widget is TextField &&
-            widget.decoration?.hintText == 'Harness password',
-      ),
+      find.byKey(const ValueKey('remote-password-connect-field')),
       findsOneWidget,
     );
     await tester.pumpWidget(const SizedBox());
@@ -1264,15 +1262,15 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
 
-    await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
+    await openWorkspaceManagement(tester, 'machines');
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('link-mac'));
+    await selectResource(tester, 'machine:link-machine');
     await tester.tap(
-      find.byKey(const ValueKey('connect-machine-link-machine')),
+      find.byKey(const ValueKey('resource-action:picker.resource_connect')),
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('machines-panel')), findsOneWidget);
+    expect(resourceScope('@'), findsOneWidget);
     // No second pane was opened for the popup — just the one terminal pane that was
     // already there.
     expect(app.allPanes, hasLength(1));

@@ -170,7 +170,7 @@ describe('restart cancellation', () => {
         waitForProcess: async () => { stopAt('wait'); return null },
       })
       const result = await restartAgent({ engine: 'codex', sessionId: 's1' }, false, { ...d, isCurrent: () => current })
-      expect(result).toEqual({ ok: false, detail: 'the agent changed or stopped during restart' })
+      expect(result).toEqual({ ok: false, detail: 'the harness changed or stopped during restart' })
       expect(d.calls.filter((call) => call === 'respawn')).toHaveLength(['respawn', 'wait'].includes(phase) ? 1 : 0)
       if (phase === 'before') expect(d.calls).toEqual([])
       if (phase === 'hold') expect(d.calls).toEqual(['holdOpen'])

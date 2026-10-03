@@ -7,8 +7,8 @@
   "formerly": [
     "autonomous/solder"
   ],
-  "description": "Describe a board; get a real KiCad project \u2014 a wired schematic, DRC-checked copper, a prototype packet \u2014 with a live board view.",
-  "engine": "claude",
+  "description": "Describe a board; get a real KiCad project — a wired schematic, DRC-checked copper, a prototype packet — with a live board view.",
+  "engine": "codex",
   "workspace": {
     "template": "upstream/harness/kicad/template",
     "marker": "project.json",
@@ -29,9 +29,23 @@
       "KICADPY_PYTHON": "${dsh}/kicad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3",
       "CIRCUIT_KICAD_CLI": "${dsh}/kicad/KiCad.app/Contents/MacOS/kicad-cli",
       "KICAD_HARNESS_SHARE": "${dsh}/kicad/KiCad.app/Contents/SharedSupport",
-      "CIRCUIT_SKILLS_DIR": "${workspace}/.claude/skills",
+      "CIRCUIT_SKILLS_DIR": "${workspace}/.agents/skills",
       "DISABLE_AUTOUPDATER": "1"
-    }
+    },
+    "args": [
+      "-m",
+      "gpt-6-astra",
+      "-c",
+      "model_reasoning_effort=high",
+      "-c",
+      "approval_policy=never",
+      "-c",
+      "sandbox_mode=danger-full-access",
+      "-c",
+      "hooks.Stop=[{hooks=[{type=\"command\",command=\"\\\"$KICAD_HARNESS_PYTHON\\\" -m kicadpy.autofinish\",timeout=1200}]}]",
+      "-c",
+      "hooks.Interrupt=[{hooks=[{type=\"command\",command=\"\\\"$KICAD_HARNESS_PYTHON\\\" -m kicadpy.autofinish\",timeout=3}]}]"
+    ]
   },
   "toolchain": {
     "setup": "toolchain/setup.sh",

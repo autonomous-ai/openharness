@@ -1,0 +1,1299 @@
+{
+  "schemaVersion": 1,
+  "experiment": "dedicated-nli-memory-fields",
+  "status": "completed",
+  "startedAt": "2026-10-03T04:23:40.401911+00:00",
+  "inputHashes": {
+    "plan.json": "2febc77c974b1a5b82b5d655b719efba3829ac5e07e47027cce4f69de4b5a932",
+    "model-files.json": "06e111f1d942d4a2dcccec6d3e04aaab6e7ab1be3acece329b543349a484f925",
+    "requirements.txt": "78d57f0e9c700d9dbf69082193466479240fd583842b0afa54422ce30cda71ea",
+    "run.py": "09f769c330a687bb07f97db13dfee9cae2f29afee0071a8b80cf3f6e933f6ccb",
+    "score.py": "f944aa01d3cf8ddb134c18404bad42b7cec2c73933b55e68e2670adbdcf9d4a6"
+  },
+  "suiteSha256": "d9b1cd4c9a50327935dde45115afc23e7550a8a1a33c61c1ee0d9a0d3889e430",
+  "plan": {
+    "schemaVersion": 1,
+    "experiment": "dedicated-nli-memory-fields",
+    "createdAt": "2026-10-03T04:17:29.224316+00:00",
+    "suite": "../2026-10-02-memory-source-audit/cases.json",
+    "suiteSha256": "d9b1cd4c9a50327935dde45115afc23e7550a8a1a33c61c1ee0d9a0d3889e430",
+    "expectedCases": 16,
+    "model": "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
+    "revision": "6f5cf0a2b59cabb106aca4c287eed12e357e90eb",
+    "weightsSha256": "06d6fd89edd4f97816831626daafbdb0b029cf63bae8edc0bccab1d64e2e7707",
+    "packages": {
+      "torch": "2.9.1",
+      "transformers": "4.57.3",
+      "sentencepiece": "0.2.1",
+      "safetensors": "0.6.2",
+      "tokenizers": "0.22.2",
+      "numpy": "2.5.3"
+    },
+    "device": "cpu",
+    "dtype": "float32",
+    "threads": 2,
+    "seed": 42,
+    "maxPairTokens": 512,
+    "inferenceDeadlineSeconds": 120,
+    "retries": 0,
+    "fields": [
+      "claim",
+      "futureAction",
+      "rationale"
+    ],
+    "primaryArm": "scoped_source",
+    "arms": [
+      "scoped_source",
+      "raw_source"
+    ],
+    "premiseConstruction": {
+      "scoped_source": "Capture boundary: <episode.context>. Project: <comma-joined authorized project IDs>.\n<source.role>: <source.text>\n repeated in original episode/source order.",
+      "raw_source": "Source text joined with a newline in original episode/source order; metadata omitted only for this ablation."
+    },
+    "hypothesisConstruction": "Each nonempty claim, futureAction and rationale string verbatim, evaluated separately. No generated paraphrase or hand-written decomposition.",
+    "decision": "Accept a proposal only if entailment is the argmax label for every tested field. Neutral and contradiction both withhold acceptance; retain their separate probabilities.",
+    "acceptance": "All 16 cases must complete in the predeclared scoped_source primary arm, with all 10 supported proposals accepted and all 6 unsupported proposals withheld. The raw_source arm is a formatting ablation, not a replacement winning criterion.",
+    "limitations": [
+      "This tests necessary textual support only; it cannot replace scope, authorization, provenance, memory usefulness or all structured-field admission checks.",
+      "Known synthetic development cases with implementing-agent labels, not independent human review or held-out histories.",
+      "English reference model; no private sources, provider inference, live memory or production dependency changes.",
+      "Argmax scores are not calibrated probabilities of truth or an automatic publication guarantee."
+    ]
+  },
+  "model": {
+    "repository": "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
+    "revision": "6f5cf0a2b59cabb106aca4c287eed12e357e90eb",
+    "files": {
+      "README.md": {
+        "bytes": 23571,
+        "sha256": "4ffce2b113463476777ccc8efd1f0ea0571510a96a2c84f2d2aab152951b13ca"
+      },
+      "added_tokens.json": {
+        "bytes": 23,
+        "sha256": "dc046d04c9b0ada7ae6f1dc89c465801799acdf0c9a6aab8c15a1b2d5ca4e91f"
+      },
+      "config.json": {
+        "bytes": 1090,
+        "sha256": "a6c616d6dabeacf90fd0e776c741d3f0f30a05533ccf0bd3b5b62e94cfaa8d57"
+      },
+      "model.safetensors": {
+        "bytes": 368877646,
+        "sha256": "06d6fd89edd4f97816831626daafbdb0b029cf63bae8edc0bccab1d64e2e7707"
+      },
+      "special_tokens_map.json": {
+        "bytes": 286,
+        "sha256": "9463f61e1b109a8eb4688b829260d7c6b1e6dff04c98ff7269bb89e2b92369b9"
+      },
+      "spm.model": {
+        "bytes": 2464616,
+        "sha256": "c679fbf93643d19aab7ee10c0b99e460bdbc02fedf34b92b05af343b4af586fd"
+      },
+      "tokenizer.json": {
+        "bytes": 8656646,
+        "sha256": "05402ffae6dd382a8491b1d29bfc139bec5d332662e86a026f433ce54c25c202"
+      },
+      "tokenizer_config.json": {
+        "bytes": 1284,
+        "sha256": "557b3d33d3f41b81ad769244e506549e98a1857d41dd58160aacd4d98d710b5a"
+      }
+    }
+  },
+  "attemptedPairs": 69,
+  "completedPairs": 69,
+  "sanity": [
+    {
+      "premise": "All rooms are empty.",
+      "hypothesis": "There are no people in the rooms.",
+      "pairTokens": 16,
+      "probabilities": {
+        "entailment": 0.9800202956396473,
+        "neutral": 0.019489080064117526,
+        "contradiction": 0.0004906242962350344
+      },
+      "label": "entailment",
+      "elapsedMs": 61.901874985778704,
+      "expected": "entailment"
+    },
+    {
+      "premise": "All rooms are empty.",
+      "hypothesis": "There is a person in one of the rooms.",
+      "pairTokens": 18,
+      "probabilities": {
+        "entailment": 0.00015524310164075086,
+        "neutral": 0.003747393951329764,
+        "contradiction": 0.9960973629470296
+      },
+      "label": "contradiction",
+      "elapsedMs": 40.55570799391717,
+      "expected": "contradiction"
+    },
+    {
+      "premise": "There is a tree in the garden.",
+      "hypothesis": "The tree is an oak.",
+      "pairTokens": 17,
+      "probabilities": {
+        "entailment": 0.0003255779010387362,
+        "neutral": 0.9993601487579178,
+        "contradiction": 0.00031427334104359176
+      },
+      "label": "neutral",
+      "elapsedMs": 37.93337501701899,
+      "expected": "neutral"
+    }
+  ],
+  "cases": [
+    {
+      "arm": "scoped_source",
+      "id": "audit-01f634831f20",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Capture boundary: bounded. Project: network-client.\nuser: An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement.",
+          "hypothesis": "The retry delay for the network-client project has not been set to 2 seconds; the user stated that the retry delay still needs measurement.",
+          "pairTokens": 85,
+          "probabilities": {
+            "entailment": 0.9943957147292484,
+            "neutral": 0.002569570581407891,
+            "contradiction": 0.0030347146893438108
+          },
+          "label": "entailment",
+          "elapsedMs": 56.3872919883579
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Capture boundary: bounded. Project: network-client.\nuser: An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement.",
+          "hypothesis": "Do not hardcode the retry delay to 2 seconds in network-client; the value remains unresolved pending measurement.",
+          "pairTokens": 79,
+          "probabilities": {
+            "entailment": 0.9916809626935471,
+            "neutral": 0.005885797569097487,
+            "contradiction": 0.00243323973735552
+          },
+          "label": "entailment",
+          "elapsedMs": 54.66929098474793
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "scoped_source",
+      "id": "audit-07e16b26a94a",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Capture boundary: bounded. Project: sample-project.\nuser: In this project, use a condensed file tree by default. If I expand a folder manually, leave it expanded for the current session.",
+          "hypothesis": "Use a condensed file tree by default and preserve manually expanded folders for the session.",
+          "pairTokens": 59,
+          "probabilities": {
+            "entailment": 0.996012968084209,
+            "neutral": 0.003350090361010645,
+            "contradiction": 0.0006369415547804782
+          },
+          "label": "entailment",
+          "elapsedMs": 47.76970800594427
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Capture boundary: bounded. Project: sample-project.\nuser: In this project, use a condensed file tree by default. If I expand a folder manually, leave it expanded for the current session.",
+          "hypothesis": "Collapse all folders after every navigation to enforce the condensed default.",
+          "pairTokens": 55,
+          "probabilities": {
+            "entailment": 0.0006258847286016078,
+            "neutral": 0.04816881761019781,
+            "contradiction": 0.9512052976612005
+          },
+          "label": "contradiction",
+          "elapsedMs": 46.90575000131503
+        }
+      ],
+      "status": "completed",
+      "accepted": false
+    },
+    {
+      "arm": "scoped_source",
+      "id": "audit-1f43fab87514",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Capture boundary: bounded. Project: sample-project.\nuser: For this project, prefer SQLite for the local cache.",
+          "hypothesis": "This project should prefer SQLite for its local cache.",
+          "pairTokens": 37,
+          "probabilities": {
+            "entailment": 0.9956793331651739,
+            "neutral": 0.003824563290489691,
+            "contradiction": 0.000496103544336465
+          },
+          "label": "entailment",
+          "elapsedMs": 43.61837499891408
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Capture boundary: bounded. Project: sample-project.\nuser: For this project, prefer SQLite for the local cache.",
+          "hypothesis": "Prefer SQLite when choosing this project’s local cache.",
+          "pairTokens": 38,
+          "probabilities": {
+            "entailment": 0.9955842598851217,
+            "neutral": 0.003795782522755776,
+            "contradiction": 0.0006199575921225998
+          },
+          "label": "entailment",
+          "elapsedMs": 43.84266599663533
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "scoped_source",
+      "id": "audit-3cba24a110f0",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Capture boundary: bounded. Project: network-client.\nuser: An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement.",
+          "hypothesis": "For the network-client project, failures must be shown to users; the assistant's suggestion to hide failures was explicitly not approved.",
+          "pairTokens": 84,
+          "probabilities": {
+            "entailment": 0.9931802181747581,
+            "neutral": 0.0059391894633243495,
+            "contradiction": 0.000880592361917606
+          },
+          "label": "entailment",
+          "elapsedMs": 54.76287499186583
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Capture boundary: bounded. Project: network-client.\nuser: An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement.",
+          "hypothesis": "When implementing or modifying error handling in network-client, ensure that failures are displayed to users rather than hidden.",
+          "pairTokens": 79,
+          "probabilities": {
+            "entailment": 0.9944817396301318,
+            "neutral": 0.004918979457782911,
+            "contradiction": 0.0005992809120854162
+          },
+          "label": "entailment",
+          "elapsedMs": 54.69058401649818
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "scoped_source",
+      "id": "audit-4d25c6f7134d",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Capture boundary: bounded. Project: sample-project.\nuser: Please show a retry button after an upload fails in this project.",
+          "hypothesis": "Failed uploads already show a working retry button in this project.",
+          "pairTokens": 41,
+          "probabilities": {
+            "entailment": 0.0006242251243888602,
+            "neutral": 0.011792377138465615,
+            "contradiction": 0.9875833977371454
+          },
+          "label": "contradiction",
+          "elapsedMs": 38.23141602333635
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Capture boundary: bounded. Project: sample-project.\nuser: Please show a retry button after an upload fails in this project.",
+          "hypothesis": "Rely on the existing retry button after upload failures.",
+          "pairTokens": 39,
+          "probabilities": {
+            "entailment": 0.00020032607984983081,
+            "neutral": 0.0017819809457859314,
+            "contradiction": 0.9980176929743643
+          },
+          "label": "contradiction",
+          "elapsedMs": 38.032917014788836
+        }
+      ],
+      "status": "completed",
+      "accepted": false
+    },
+    {
+      "arm": "scoped_source",
+      "id": "audit-50d82bed0606",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Capture boundary: bounded. Project: editor.\nuser: In our editor, compact navigation is the default. Do not replace that default. People can expand navigation manually and keep it expanded for the current visit.",
+          "hypothesis": "In the editor project, compact navigation is the default state. This default must not be replaced, though users can manually expand navigation and keep it expanded for the current visit.",
+          "pairTokens": 78,
+          "probabilities": {
+            "entailment": 0.9949725172829317,
+            "neutral": 0.004175030411723792,
+            "contradiction": 0.0008524523053446707
+          },
+          "label": "entailment",
+          "elapsedMs": 56.041874981019646
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Capture boundary: bounded. Project: editor.\nuser: In our editor, compact navigation is the default. Do not replace that default. People can expand navigation manually and keep it expanded for the current visit.",
+          "hypothesis": "Preserve compact navigation as the default state in the editor. Do not implement changes that replace this default, while ensuring the manual expansion feature remains available for the current visit.",
+          "pairTokens": 77,
+          "probabilities": {
+            "entailment": 0.9979884820473032,
+            "neutral": 0.0017584381299731227,
+            "contradiction": 0.0002530798227237881
+          },
+          "label": "entailment",
+          "elapsedMs": 63.59983398579061
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "scoped_source",
+      "id": "audit-567845832990",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Capture boundary: bounded. Project: build-monitor.\nuser: Preserve the last successful build log when another build starts. Maybe the history chooser belongs in the footer, or beside Run? Let us settle its placement later.",
+          "hypothesis": "The build-monitor project must preserve the last successful build log when another build starts.",
+          "pairTokens": 65,
+          "probabilities": {
+            "entailment": 0.9806564922401474,
+            "neutral": 0.016475341733239664,
+            "contradiction": 0.0028681660266130205
+          },
+          "label": "entailment",
+          "elapsedMs": 57.72283300757408
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Capture boundary: bounded. Project: build-monitor.\nuser: Preserve the last successful build log when another build starts. Maybe the history chooser belongs in the footer, or beside Run? Let us settle its placement later.",
+          "hypothesis": "Implement or verify that the system retains the last successful build log during the start of a new build.",
+          "pairTokens": 68,
+          "probabilities": {
+            "entailment": 0.9854608039311293,
+            "neutral": 0.013350382247456997,
+            "contradiction": 0.0011888138214136274
+          },
+          "label": "entailment",
+          "elapsedMs": 54.169417009688914
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "scoped_source",
+      "id": "audit-776a00824696",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Capture boundary: bounded. Project: exporter.\nuser: For the export dialog's conflict prompt, remove Replace and Skip. Keep Cancel and Save copy. This change is only about that prompt; do not remove any other export actions.",
+          "hypothesis": "The export dialog's conflict prompt should include only Cancel and Save copy, with Replace and Skip removed. This decision is limited to the conflict prompt and does not apply to other export actions.",
+          "pairTokens": 88,
+          "probabilities": {
+            "entailment": 0.9964101868568147,
+            "neutral": 0.0022174080594089454,
+            "contradiction": 0.0013724050837762263
+          },
+          "label": "entailment",
+          "elapsedMs": 57.07195799914189
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Capture boundary: bounded. Project: exporter.\nuser: For the export dialog's conflict prompt, remove Replace and Skip. Keep Cancel and Save copy. This change is only about that prompt; do not remove any other export actions.",
+          "hypothesis": "When modifying the export dialog's conflict prompt, ensure it presents only Cancel and Save copy options. Do not remove Replace or Skip from other export actions or dialogs.",
+          "pairTokens": 84,
+          "probabilities": {
+            "entailment": 0.9950874762463207,
+            "neutral": 0.004210115301297382,
+            "contradiction": 0.0007024084523821254
+          },
+          "label": "entailment",
+          "elapsedMs": 56.29466599202715
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "scoped_source",
+      "id": "audit-8625fb25e3b1",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Capture boundary: bounded. Project: build-monitor.\nuser: For this build monitor, retain completed logs for 14 days. This is the policy we agreed to; keep it.",
+          "hypothesis": "The build monitor project retains completed logs for 14 days.",
+          "pairTokens": 50,
+          "probabilities": {
+            "entailment": 0.9851335619381454,
+            "neutral": 0.012693032225825253,
+            "contradiction": 0.0021734058360293727
+          },
+          "label": "entailment",
+          "elapsedMs": 46.78608401445672
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Capture boundary: bounded. Project: build-monitor.\nuser: For this build monitor, retain completed logs for 14 days. This is the policy we agreed to; keep it.",
+          "hypothesis": "Implement or maintain log retention logic to delete completed logs after 14 days.",
+          "pairTokens": 53,
+          "probabilities": {
+            "entailment": 0.0623700768176642,
+            "neutral": 0.9314433863008773,
+            "contradiction": 0.006186536881458414
+          },
+          "label": "neutral",
+          "elapsedMs": 47.456667001824826
+        }
+      ],
+      "status": "completed",
+      "accepted": false
+    },
+    {
+      "arm": "scoped_source",
+      "id": "audit-989f8e0009a9",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Capture boundary: bounded. Project: sample-project.\nuser: Please show a retry button after an upload fails in this project.",
+          "hypothesis": "The user requests a retry button after failed uploads.",
+          "pairTokens": 39,
+          "probabilities": {
+            "entailment": 0.9968995953574765,
+            "neutral": 0.0026596215322189708,
+            "contradiction": 0.00044078311030451843
+          },
+          "label": "entailment",
+          "elapsedMs": 37.21049998421222
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Capture boundary: bounded. Project: sample-project.\nuser: Please show a retry button after an upload fails in this project.",
+          "hypothesis": "Show a retry button after an upload fails.",
+          "pairTokens": 38,
+          "probabilities": {
+            "entailment": 0.9809554957989051,
+            "neutral": 0.015089146712372539,
+            "contradiction": 0.003955357488722426
+          },
+          "label": "entailment",
+          "elapsedMs": 43.431708007119596
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "scoped_source",
+      "id": "audit-9a0077092e24",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Capture boundary: bounded. Project: sample-project.\nuser: For this project, keep error details visible until I dismiss them.",
+          "hypothesis": "Error details should remain visible until the user dismisses them.",
+          "pairTokens": 40,
+          "probabilities": {
+            "entailment": 0.9898961893833675,
+            "neutral": 0.007392290560418874,
+            "contradiction": 0.002711520056213579
+          },
+          "label": "entailment",
+          "elapsedMs": 38.039834005758166
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Capture boundary: bounded. Project: sample-project.\nuser: For this project, keep error details visible until I dismiss them.",
+          "hypothesis": "Keep error details visible until the user dismisses them.",
+          "pairTokens": 39,
+          "probabilities": {
+            "entailment": 0.7872490697700794,
+            "neutral": 0.08968873632567488,
+            "contradiction": 0.12306219390424573
+          },
+          "label": "entailment",
+          "elapsedMs": 39.064375014277175
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "scoped_source",
+      "id": "audit-9cec6f971b07",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Capture boundary: bounded. Project: sample-project.\nuser: For this project, keep error details visible until I dismiss them.",
+          "hypothesis": "Error details should remain visible until the user dismisses them.",
+          "pairTokens": 40,
+          "probabilities": {
+            "entailment": 0.9898961893833675,
+            "neutral": 0.007392290560418874,
+            "contradiction": 0.002711520056213579
+          },
+          "label": "entailment",
+          "elapsedMs": 38.27987497788854
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Capture boundary: bounded. Project: sample-project.\nuser: For this project, keep error details visible until I dismiss them.",
+          "hypothesis": "Keep error details visible until the user dismisses them.",
+          "pairTokens": 39,
+          "probabilities": {
+            "entailment": 0.7872490697700794,
+            "neutral": 0.08968873632567488,
+            "contradiction": 0.12306219390424573
+          },
+          "label": "entailment",
+          "elapsedMs": 37.29470900725573
+        },
+        {
+          "path": "/rationale",
+          "premise": "Capture boundary: bounded. Project: sample-project.\nuser: For this project, keep error details visible until I dismiss them.",
+          "hypothesis": "The user relies on a screen reader and needs extra reading time.",
+          "pairTokens": 42,
+          "probabilities": {
+            "entailment": 0.0010182356503254956,
+            "neutral": 0.995837374231174,
+            "contradiction": 0.003144390118500506
+          },
+          "label": "neutral",
+          "elapsedMs": 37.73945799912326
+        }
+      ],
+      "status": "completed",
+      "accepted": false
+    },
+    {
+      "arm": "scoped_source",
+      "id": "audit-9efa67f8c22f",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Capture boundary: bounded. Project: sample-project.\nuser: In this project, use a condensed file tree by default. If I expand a folder manually, leave it expanded for the current session.",
+          "hypothesis": "Use a condensed file tree by default and preserve manually expanded folders for the session.",
+          "pairTokens": 59,
+          "probabilities": {
+            "entailment": 0.996012968084209,
+            "neutral": 0.003350090361010645,
+            "contradiction": 0.0006369415547804782
+          },
+          "label": "entailment",
+          "elapsedMs": 47.62583301635459
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Capture boundary: bounded. Project: sample-project.\nuser: In this project, use a condensed file tree by default. If I expand a folder manually, leave it expanded for the current session.",
+          "hypothesis": "Start with a condensed tree and keep manually expanded folders open for the current session.",
+          "pairTokens": 59,
+          "probabilities": {
+            "entailment": 0.9925976799621439,
+            "neutral": 0.006630791887806253,
+            "contradiction": 0.0007715281500498694
+          },
+          "label": "entailment",
+          "elapsedMs": 50.664624985074624
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "scoped_source",
+      "id": "audit-a65781ef836b",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Capture boundary: bounded. Project: editor.\nuser: In our editor, compact navigation is the default. Do not replace that default. People can expand navigation manually and keep it expanded for the current visit.",
+          "hypothesis": "In the editor project, compact navigation is the default and must not be replaced.",
+          "pairTokens": 60,
+          "probabilities": {
+            "entailment": 0.9939996249650142,
+            "neutral": 0.004366849423719026,
+            "contradiction": 0.0016335256112666662
+          },
+          "label": "entailment",
+          "elapsedMs": 51.85350001556799
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Capture boundary: bounded. Project: editor.\nuser: In our editor, compact navigation is the default. Do not replace that default. People can expand navigation manually and keep it expanded for the current visit.",
+          "hypothesis": "Preserve compact navigation as the default state in the editor; do not implement changes that replace this default.",
+          "pairTokens": 64,
+          "probabilities": {
+            "entailment": 0.9978931200760909,
+            "neutral": 0.001807680988228967,
+            "contradiction": 0.00029919893568020793
+          },
+          "label": "entailment",
+          "elapsedMs": 49.755999993067235
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "scoped_source",
+      "id": "audit-bb84d91e6745",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Capture boundary: bounded. Project: sample-project.\nuser: For this project, prefer SQLite for the local cache.",
+          "hypothesis": "The user prefers SQLite for all local caches across projects.",
+          "pairTokens": 38,
+          "probabilities": {
+            "entailment": 0.00254380868367002,
+            "neutral": 0.9957676363462504,
+            "contradiction": 0.001688554970079551
+          },
+          "label": "neutral",
+          "elapsedMs": 44.25895799067803
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Capture boundary: bounded. Project: sample-project.\nuser: For this project, prefer SQLite for the local cache.",
+          "hypothesis": "Always choose SQLite for the user’s local caches.",
+          "pairTokens": 38,
+          "probabilities": {
+            "entailment": 0.021108550117460063,
+            "neutral": 0.9678586364657855,
+            "contradiction": 0.011032813416754307
+          },
+          "label": "neutral",
+          "elapsedMs": 43.89395800535567
+        }
+      ],
+      "status": "completed",
+      "accepted": false
+    },
+    {
+      "arm": "scoped_source",
+      "id": "audit-dfb13cf95cfc",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Capture boundary: bounded. Project: review-tool.\nuser: Could you please keep keyboard focus in the search box after running a search in this review tool?",
+          "hypothesis": "The user prefers that keyboard focus remains in the search box after a search is executed in the review tool.",
+          "pairTokens": 56,
+          "probabilities": {
+            "entailment": 0.99675101178937,
+            "neutral": 0.0029606955529754074,
+            "contradiction": 0.0002882926576544939
+          },
+          "label": "entailment",
+          "elapsedMs": 45.621166995260864
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Capture boundary: bounded. Project: review-tool.\nuser: Could you please keep keyboard focus in the search box after running a search in this review tool?",
+          "hypothesis": "Ensure that the search box retains keyboard focus after search operations are performed in the review tool.",
+          "pairTokens": 53,
+          "probabilities": {
+            "entailment": 0.9958698466915178,
+            "neutral": 0.0038646506022823783,
+            "contradiction": 0.00026550270619976916
+          },
+          "label": "entailment",
+          "elapsedMs": 46.28779200720601
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "raw_source",
+      "id": "audit-01f634831f20",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement.",
+          "hypothesis": "The retry delay for the network-client project has not been set to 2 seconds; the user stated that the retry delay still needs measurement.",
+          "pairTokens": 72,
+          "probabilities": {
+            "entailment": 0.9417256004187542,
+            "neutral": 0.05246203020285324,
+            "contradiction": 0.005812369378392454
+          },
+          "label": "entailment",
+          "elapsedMs": 51.76858400227502
+        },
+        {
+          "path": "/futureAction",
+          "premise": "An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement.",
+          "hypothesis": "Do not hardcode the retry delay to 2 seconds in network-client; the value remains unresolved pending measurement.",
+          "pairTokens": 66,
+          "probabilities": {
+            "entailment": 0.9871880403403062,
+            "neutral": 0.010066838363767486,
+            "contradiction": 0.002745121295926388
+          },
+          "label": "entailment",
+          "elapsedMs": 53.856249985983595
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "raw_source",
+      "id": "audit-07e16b26a94a",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "In this project, use a condensed file tree by default. If I expand a folder manually, leave it expanded for the current session.",
+          "hypothesis": "Use a condensed file tree by default and preserve manually expanded folders for the session.",
+          "pairTokens": 46,
+          "probabilities": {
+            "entailment": 0.9940901339910746,
+            "neutral": 0.005380864871178537,
+            "contradiction": 0.0005290011377470453
+          },
+          "label": "entailment",
+          "elapsedMs": 43.062916985945776
+        },
+        {
+          "path": "/futureAction",
+          "premise": "In this project, use a condensed file tree by default. If I expand a folder manually, leave it expanded for the current session.",
+          "hypothesis": "Collapse all folders after every navigation to enforce the condensed default.",
+          "pairTokens": 42,
+          "probabilities": {
+            "entailment": 0.0003698672293321544,
+            "neutral": 0.04292571336546204,
+            "contradiction": 0.9567044194052058
+          },
+          "label": "contradiction",
+          "elapsedMs": 38.381374994060025
+        }
+      ],
+      "status": "completed",
+      "accepted": false
+    },
+    {
+      "arm": "raw_source",
+      "id": "audit-1f43fab87514",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "For this project, prefer SQLite for the local cache.",
+          "hypothesis": "This project should prefer SQLite for its local cache.",
+          "pairTokens": 24,
+          "probabilities": {
+            "entailment": 0.9955340621687052,
+            "neutral": 0.004086153785552935,
+            "contradiction": 0.000379784045741908
+          },
+          "label": "entailment",
+          "elapsedMs": 40.124749997630715
+        },
+        {
+          "path": "/futureAction",
+          "premise": "For this project, prefer SQLite for the local cache.",
+          "hypothesis": "Prefer SQLite when choosing this project’s local cache.",
+          "pairTokens": 25,
+          "probabilities": {
+            "entailment": 0.9936744465490913,
+            "neutral": 0.005768073712418746,
+            "contradiction": 0.0005574797384899513
+          },
+          "label": "entailment",
+          "elapsedMs": 39.07841700129211
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "raw_source",
+      "id": "audit-3cba24a110f0",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement.",
+          "hypothesis": "For the network-client project, failures must be shown to users; the assistant's suggestion to hide failures was explicitly not approved.",
+          "pairTokens": 71,
+          "probabilities": {
+            "entailment": 0.9620703903379253,
+            "neutral": 0.037026826877406126,
+            "contradiction": 0.0009027827846685128
+          },
+          "label": "entailment",
+          "elapsedMs": 53.95537501317449
+        },
+        {
+          "path": "/futureAction",
+          "premise": "An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement.",
+          "hypothesis": "When implementing or modifying error handling in network-client, ensure that failures are displayed to users rather than hidden.",
+          "pairTokens": 66,
+          "probabilities": {
+            "entailment": 0.9919698565845889,
+            "neutral": 0.007531457426387898,
+            "contradiction": 0.0004986859890231716
+          },
+          "label": "entailment",
+          "elapsedMs": 53.52570899412967
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "raw_source",
+      "id": "audit-4d25c6f7134d",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Please show a retry button after an upload fails in this project.",
+          "hypothesis": "Failed uploads already show a working retry button in this project.",
+          "pairTokens": 28,
+          "probabilities": {
+            "entailment": 0.0008231037835048548,
+            "neutral": 0.00883106961093671,
+            "contradiction": 0.9903458266055584
+          },
+          "label": "contradiction",
+          "elapsedMs": 39.317832997767255
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Please show a retry button after an upload fails in this project.",
+          "hypothesis": "Rely on the existing retry button after upload failures.",
+          "pairTokens": 26,
+          "probabilities": {
+            "entailment": 0.0001661952310292004,
+            "neutral": 0.0012686226435824407,
+            "contradiction": 0.9985651821253885
+          },
+          "label": "contradiction",
+          "elapsedMs": 39.779750019079074
+        }
+      ],
+      "status": "completed",
+      "accepted": false
+    },
+    {
+      "arm": "raw_source",
+      "id": "audit-50d82bed0606",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "In our editor, compact navigation is the default. Do not replace that default. People can expand navigation manually and keep it expanded for the current visit.",
+          "hypothesis": "In the editor project, compact navigation is the default state. This default must not be replaced, though users can manually expand navigation and keep it expanded for the current visit.",
+          "pairTokens": 67,
+          "probabilities": {
+            "entailment": 0.9542830758963541,
+            "neutral": 0.04450678166534731,
+            "contradiction": 0.0012101424382985919
+          },
+          "label": "entailment",
+          "elapsedMs": 54.3057500035502
+        },
+        {
+          "path": "/futureAction",
+          "premise": "In our editor, compact navigation is the default. Do not replace that default. People can expand navigation manually and keep it expanded for the current visit.",
+          "hypothesis": "Preserve compact navigation as the default state in the editor. Do not implement changes that replace this default, while ensuring the manual expansion feature remains available for the current visit.",
+          "pairTokens": 66,
+          "probabilities": {
+            "entailment": 0.9979320658198881,
+            "neutral": 0.0018557583413391506,
+            "contradiction": 0.0002121758387727222
+          },
+          "label": "entailment",
+          "elapsedMs": 55.536291998578236
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "raw_source",
+      "id": "audit-567845832990",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Preserve the last successful build log when another build starts. Maybe the history chooser belongs in the footer, or beside Run? Let us settle its placement later.",
+          "hypothesis": "The build-monitor project must preserve the last successful build log when another build starts.",
+          "pairTokens": 52,
+          "probabilities": {
+            "entailment": 0.05011978059357923,
+            "neutral": 0.9483185347320404,
+            "contradiction": 0.0015616846743803873
+          },
+          "label": "neutral",
+          "elapsedMs": 43.636291986331344
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Preserve the last successful build log when another build starts. Maybe the history chooser belongs in the footer, or beside Run? Let us settle its placement later.",
+          "hypothesis": "Implement or verify that the system retains the last successful build log during the start of a new build.",
+          "pairTokens": 55,
+          "probabilities": {
+            "entailment": 0.9282589847685486,
+            "neutral": 0.0695420604345173,
+            "contradiction": 0.0021989547969341393
+          },
+          "label": "entailment",
+          "elapsedMs": 46.33549999562092
+        }
+      ],
+      "status": "completed",
+      "accepted": false
+    },
+    {
+      "arm": "raw_source",
+      "id": "audit-776a00824696",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "For the export dialog's conflict prompt, remove Replace and Skip. Keep Cancel and Save copy. This change is only about that prompt; do not remove any other export actions.",
+          "hypothesis": "The export dialog's conflict prompt should include only Cancel and Save copy, with Replace and Skip removed. This decision is limited to the conflict prompt and does not apply to other export actions.",
+          "pairTokens": 77,
+          "probabilities": {
+            "entailment": 0.9964534403871781,
+            "neutral": 0.002435375973596361,
+            "contradiction": 0.0011111836392256262
+          },
+          "label": "entailment",
+          "elapsedMs": 55.33254100009799
+        },
+        {
+          "path": "/futureAction",
+          "premise": "For the export dialog's conflict prompt, remove Replace and Skip. Keep Cancel and Save copy. This change is only about that prompt; do not remove any other export actions.",
+          "hypothesis": "When modifying the export dialog's conflict prompt, ensure it presents only Cancel and Save copy options. Do not remove Replace or Skip from other export actions or dialogs.",
+          "pairTokens": 73,
+          "probabilities": {
+            "entailment": 0.9946416195291737,
+            "neutral": 0.004685108185705256,
+            "contradiction": 0.0006732722851209978
+          },
+          "label": "entailment",
+          "elapsedMs": 55.11729101999663
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "raw_source",
+      "id": "audit-8625fb25e3b1",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "For this build monitor, retain completed logs for 14 days. This is the policy we agreed to; keep it.",
+          "hypothesis": "The build monitor project retains completed logs for 14 days.",
+          "pairTokens": 37,
+          "probabilities": {
+            "entailment": 0.9348767029492103,
+            "neutral": 0.06221711820253616,
+            "contradiction": 0.0029061788482534915
+          },
+          "label": "entailment",
+          "elapsedMs": 44.496666989289224
+        },
+        {
+          "path": "/futureAction",
+          "premise": "For this build monitor, retain completed logs for 14 days. This is the policy we agreed to; keep it.",
+          "hypothesis": "Implement or maintain log retention logic to delete completed logs after 14 days.",
+          "pairTokens": 40,
+          "probabilities": {
+            "entailment": 0.039171126955862605,
+            "neutral": 0.9551708391122512,
+            "contradiction": 0.005658033931886321
+          },
+          "label": "neutral",
+          "elapsedMs": 38.61620899988338
+        }
+      ],
+      "status": "completed",
+      "accepted": false
+    },
+    {
+      "arm": "raw_source",
+      "id": "audit-989f8e0009a9",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Please show a retry button after an upload fails in this project.",
+          "hypothesis": "The user requests a retry button after failed uploads.",
+          "pairTokens": 26,
+          "probabilities": {
+            "entailment": 0.9916012528763212,
+            "neutral": 0.007838468814736736,
+            "contradiction": 0.0005602783089422051
+          },
+          "label": "entailment",
+          "elapsedMs": 38.1142089900095
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Please show a retry button after an upload fails in this project.",
+          "hypothesis": "Show a retry button after an upload fails.",
+          "pairTokens": 25,
+          "probabilities": {
+            "entailment": 0.9879070371122453,
+            "neutral": 0.010596472495076904,
+            "contradiction": 0.0014964903926778404
+          },
+          "label": "entailment",
+          "elapsedMs": 38.260000001173466
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "raw_source",
+      "id": "audit-9a0077092e24",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "For this project, keep error details visible until I dismiss them.",
+          "hypothesis": "Error details should remain visible until the user dismisses them.",
+          "pairTokens": 27,
+          "probabilities": {
+            "entailment": 0.9497508535313682,
+            "neutral": 0.03717273716134809,
+            "contradiction": 0.01307640930728371
+          },
+          "label": "entailment",
+          "elapsedMs": 38.46670800703578
+        },
+        {
+          "path": "/futureAction",
+          "premise": "For this project, keep error details visible until I dismiss them.",
+          "hypothesis": "Keep error details visible until the user dismisses them.",
+          "pairTokens": 26,
+          "probabilities": {
+            "entailment": 0.5590338021840999,
+            "neutral": 0.23894913759843253,
+            "contradiction": 0.20201706021746751
+          },
+          "label": "entailment",
+          "elapsedMs": 38.36379197309725
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "raw_source",
+      "id": "audit-9cec6f971b07",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "For this project, keep error details visible until I dismiss them.",
+          "hypothesis": "Error details should remain visible until the user dismisses them.",
+          "pairTokens": 27,
+          "probabilities": {
+            "entailment": 0.9497508535313682,
+            "neutral": 0.03717273716134809,
+            "contradiction": 0.01307640930728371
+          },
+          "label": "entailment",
+          "elapsedMs": 38.307500013615936
+        },
+        {
+          "path": "/futureAction",
+          "premise": "For this project, keep error details visible until I dismiss them.",
+          "hypothesis": "Keep error details visible until the user dismisses them.",
+          "pairTokens": 26,
+          "probabilities": {
+            "entailment": 0.5590338021840999,
+            "neutral": 0.23894913759843253,
+            "contradiction": 0.20201706021746751
+          },
+          "label": "entailment",
+          "elapsedMs": 38.579000014578924
+        },
+        {
+          "path": "/rationale",
+          "premise": "For this project, keep error details visible until I dismiss them.",
+          "hypothesis": "The user relies on a screen reader and needs extra reading time.",
+          "pairTokens": 29,
+          "probabilities": {
+            "entailment": 0.001539398397602074,
+            "neutral": 0.9895684942658869,
+            "contradiction": 0.008892107336510987
+          },
+          "label": "neutral",
+          "elapsedMs": 38.784499978646636
+        }
+      ],
+      "status": "completed",
+      "accepted": false
+    },
+    {
+      "arm": "raw_source",
+      "id": "audit-9efa67f8c22f",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "In this project, use a condensed file tree by default. If I expand a folder manually, leave it expanded for the current session.",
+          "hypothesis": "Use a condensed file tree by default and preserve manually expanded folders for the session.",
+          "pairTokens": 46,
+          "probabilities": {
+            "entailment": 0.9940901339910746,
+            "neutral": 0.005380864871178537,
+            "contradiction": 0.0005290011377470453
+          },
+          "label": "entailment",
+          "elapsedMs": 41.86166700674221
+        },
+        {
+          "path": "/futureAction",
+          "premise": "In this project, use a condensed file tree by default. If I expand a folder manually, leave it expanded for the current session.",
+          "hypothesis": "Start with a condensed tree and keep manually expanded folders open for the current session.",
+          "pairTokens": 46,
+          "probabilities": {
+            "entailment": 0.9906893257990557,
+            "neutral": 0.008680562132965865,
+            "contradiction": 0.0006301120679785505
+          },
+          "label": "entailment",
+          "elapsedMs": 42.90291600045748
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "raw_source",
+      "id": "audit-a65781ef836b",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "In our editor, compact navigation is the default. Do not replace that default. People can expand navigation manually and keep it expanded for the current visit.",
+          "hypothesis": "In the editor project, compact navigation is the default and must not be replaced.",
+          "pairTokens": 49,
+          "probabilities": {
+            "entailment": 0.8848380636801605,
+            "neutral": 0.11184840822538264,
+            "contradiction": 0.0033135280944567268
+          },
+          "label": "entailment",
+          "elapsedMs": 43.445416988106444
+        },
+        {
+          "path": "/futureAction",
+          "premise": "In our editor, compact navigation is the default. Do not replace that default. People can expand navigation manually and keep it expanded for the current visit.",
+          "hypothesis": "Preserve compact navigation as the default state in the editor; do not implement changes that replace this default.",
+          "pairTokens": 53,
+          "probabilities": {
+            "entailment": 0.9976132198695731,
+            "neutral": 0.0021281879680058544,
+            "contradiction": 0.0002585921624211808
+          },
+          "label": "entailment",
+          "elapsedMs": 44.56270899390802
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    },
+    {
+      "arm": "raw_source",
+      "id": "audit-bb84d91e6745",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "For this project, prefer SQLite for the local cache.",
+          "hypothesis": "The user prefers SQLite for all local caches across projects.",
+          "pairTokens": 25,
+          "probabilities": {
+            "entailment": 0.003974228316053914,
+            "neutral": 0.9929914194072267,
+            "contradiction": 0.003034352276719388
+          },
+          "label": "neutral",
+          "elapsedMs": 38.064583990490064
+        },
+        {
+          "path": "/futureAction",
+          "premise": "For this project, prefer SQLite for the local cache.",
+          "hypothesis": "Always choose SQLite for the user’s local caches.",
+          "pairTokens": 25,
+          "probabilities": {
+            "entailment": 0.043019650558555333,
+            "neutral": 0.9420871654872421,
+            "contradiction": 0.014893183954202447
+          },
+          "label": "neutral",
+          "elapsedMs": 37.22745898994617
+        }
+      ],
+      "status": "completed",
+      "accepted": false
+    },
+    {
+      "arm": "raw_source",
+      "id": "audit-dfb13cf95cfc",
+      "fields": [
+        {
+          "path": "/claim",
+          "premise": "Could you please keep keyboard focus in the search box after running a search in this review tool?",
+          "hypothesis": "The user prefers that keyboard focus remains in the search box after a search is executed in the review tool.",
+          "pairTokens": 43,
+          "probabilities": {
+            "entailment": 0.9946981375636308,
+            "neutral": 0.004971902567965344,
+            "contradiction": 0.00032995986840377505
+          },
+          "label": "entailment",
+          "elapsedMs": 41.677750006783754
+        },
+        {
+          "path": "/futureAction",
+          "premise": "Could you please keep keyboard focus in the search box after running a search in this review tool?",
+          "hypothesis": "Ensure that the search box retains keyboard focus after search operations are performed in the review tool.",
+          "pairTokens": 40,
+          "probabilities": {
+            "entailment": 0.995284842137004,
+            "neutral": 0.004472666004607426,
+            "contradiction": 0.00024249185838855938
+          },
+          "label": "entailment",
+          "elapsedMs": 37.54279200802557
+        }
+      ],
+      "status": "completed",
+      "accepted": true
+    }
+  ],
+  "networkGuard": {
+    "nonLoopbackConnectError": 1
+  },
+  "environment": {
+    "python": "3.12.10",
+    "os": "Darwin",
+    "machine": "arm64",
+    "packages": {
+      "certifi": "2026.7.22",
+      "charset-normalizer": "3.5.2",
+      "filelock": "4.0.9",
+      "fsspec": "2026.9.0",
+      "hf-xet": "1.6.0",
+      "huggingface_hub": "0.36.2",
+      "idna": "3.20",
+      "Jinja2": "3.1.6",
+      "MarkupSafe": "3.0.4",
+      "mpmath": "1.3.0",
+      "networkx": "3.7",
+      "numpy": "2.5.3",
+      "packaging": "26.3",
+      "PyYAML": "6.0.3",
+      "regex": "2026.9.29",
+      "requests": "2.34.2",
+      "safetensors": "0.6.2",
+      "sentencepiece": "0.2.1",
+      "setuptools": "84.0.0",
+      "sympy": "1.14.0",
+      "tokenizers": "0.22.2",
+      "torch": "2.9.1",
+      "tqdm": "4.70.1",
+      "transformers": "4.57.3",
+      "typing_extensions": "4.16.0",
+      "urllib3": "2.8.0"
+    }
+  },
+  "loadMs": 706.4862500119489,
+  "parameters": 184424451,
+  "finishedAt": "2026-10-03T04:23:59.165546+00:00"
+}

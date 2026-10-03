@@ -81,7 +81,7 @@ void main() {
     },
   );
 
-  for (final width in [1100.0, 620.0]) {
+  for (final width in [1100.0, 620.0, 390.0]) {
     testWidgets(
       'shared pane live output, reconnect, revocation and renewal at width $width',
       (tester) async {
@@ -141,6 +141,17 @@ void main() {
                       rows: 33,
                     ),
                   )!,
+                );
+              } else if (frame['type'] == 'observer_comments') {
+                ws.add(
+                  jsonEncode({
+                    'type': 'observer_comments',
+                    'payload': {
+                      'requestId': p['requestId'],
+                      'comments': [],
+                      'canComment': true,
+                    },
+                  }),
                 );
               } else if (frame['type'] == 'observer_viewer') {
                 ws.add(
@@ -205,25 +216,43 @@ void main() {
         await settleNetwork(() => find.text('Live').evaluate().isNotEmpty);
         expect(requests.first['payload'], containsPair('shareId', 'grant'));
         expect(find.text('View only'), findsOneWidget);
+        await tester.tap(find.widgetWithText(TextButton, 'Comments'));
+        await settleNetwork(
+          () => find.byKey(const Key('comment-input')).evaluate().isNotEmpty,
+        );
+        await tester.enterText(
+          find.byKey(const Key('comment-input')),
+          'Keep this draft',
+        );
+        await tester.tap(find.widgetWithText(TextButton, 'Watch'));
+        await tester.pump();
+        await tester.tap(find.widgetWithText(TextButton, 'Comments'));
+        await tester.pump();
+        expect(
+          tester
+              .widget<TextField>(find.byKey(const Key('comment-input')))
+              .controller!
+              .text,
+          'Keep this draft',
+        );
+        await tester.tap(find.widgetWithText(TextButton, 'Watch'));
+        await tester.pump();
         // Receiving the request on the server does not mean its reply has
         // reached the UI yet. Wait for the response we are about to inspect.
         await settleNetwork(
-          () =>
-              requests.any((r) => r['type'] == 'observer_viewer') &&
-              find
-                  .textContaining('The viewer will appear', skipOffstage: false)
-                  .evaluate()
-                  .isNotEmpty,
+          () => requests.any((r) => r['type'] == 'observer_viewer'),
         );
-        // Narrow: the terminal is in front and the viewer waits behind its tab —
-        // until the first frame lands, which brings it forward by itself (below).
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 30)),
+        );
+        await tester.pump();
+        // A harness with no viewer yet gets the whole pane for its terminal:
+        // no empty viewer column, no Terminal/Viewer switch.
         expect(
           find.textContaining('The viewer will appear', skipOffstage: false),
-          findsOneWidget,
+          findsNothing,
         );
-        if (width < 880) {
-          expect(find.textContaining('The viewer will appear'), findsNothing);
-        }
+        expect(find.text('Viewer'), findsNothing);
         expect(
           requests.map((r) => r['type']),
           isNot(contains('terminal_resize')),
@@ -360,6 +389,98 @@ void main() {
       );
       await tester.pumpWidget(const SizedBox());
       app.dispose();
+    },
+  );
+
+  testWidgets(
+    'a harness the owner is not running says so instead of showing Live',
+    (tester) async {
+      tester.view.physicalSize = const Size(1100, 760);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final sockets = <WebSocket>[];
+      late HttpServer server;
+      await tester.runAsync(() async {
+        server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        server.listen((request) async {
+          final ws = await WebSocketTransformer.upgrade(request);
+          sockets.add(ws);
+          ws.listen((raw) {
+            if (raw is! String || ws.readyState != WebSocket.open) return;
+            final frame = jsonDecode(raw) as Map<String, dynamic>;
+            final p = frame['payload'] as Map;
+            if (frame['type'] == 'machine_select') {
+              ws.add(
+                jsonEncode({
+                  'type': 'connected',
+                  'payload': {'machineId': 'shared', 'readOnly': true},
+                }),
+              );
+            } else if (frame['type'] == 'terminal_open') {
+              ws.add(
+                jsonEncode({
+                  'type': 'terminal_error',
+                  'payload': {
+                    'requestId': p['requestId'],
+                    'protocolVersion': 3,
+                    'code': 'TERMINAL_RUNTIME_UNAVAILABLE',
+                  },
+                }),
+              );
+            }
+          });
+        });
+      });
+      final app = AppNotifier(
+        config: AppConfig(
+          apiBaseUrl: 'http://127.0.0.1:9',
+          localCliBaseUrl: 'http://127.0.0.1:${server.port}',
+        ),
+        authSession: AuthSession(),
+        configStore: null,
+      );
+      final grant = SharedHarness(
+        id: 'grant',
+        agentId: 'agent',
+        name: 'Stopped harness',
+        engine: 'codex',
+        expiresAt: DateTime(2027),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SharedHarnessPanel(
+              notifier: app,
+              pane: TerminalPane(id: 1, machineId: 'shared', agentId: 'agent'),
+              grant: grant,
+              hasAccess: true,
+              visible: true,
+              onClose: () {},
+            ),
+          ),
+        ),
+      );
+      for (var i = 0; i < 100; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+        if (find.text('Not running').evaluate().isNotEmpty) break;
+      }
+      expect(find.text('Not running'), findsOneWidget);
+      expect(find.text('Live'), findsNothing);
+      expect(find.textContaining('isn’t running right now'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+      await tester.runAsync(() async {
+        for (final ws in sockets) {
+          unawaited(ws.close());
+        }
+        await server.close(force: true);
+      });
+      await tester.pump(const Duration(seconds: 6));
     },
   );
 }

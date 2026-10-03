@@ -19,8 +19,8 @@ TerminalTransportPluginFactory? harnessTransportPlugins;
 
 /// Everything a viewer build uses in place of the harness CLI, built once and handed to
 /// `AppNotifier`: the SSO session, signing in, the machines this device has linked and the E2EE
-/// sessions to them. A desktop build has none — and where it is null, nothing in the app behaves
-/// any differently than it did before viewers existed.
+/// sessions to them. This app always has one — the desktop's CLI-backed half of `AppNotifier` is
+/// not in this package.
 class ViewerServices {
   const ViewerServices._({
     required this.keys,

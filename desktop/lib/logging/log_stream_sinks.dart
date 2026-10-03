@@ -3,8 +3,8 @@
 ///
 /// A mirror rather than a second stream. Every call site keeps writing to the
 /// one `appLog`/`cliLog` it already writes to, so a line cannot reach the
-/// screen without reaching the file — which is what makes "read it in Settings
-/// ▸ Debug" and "send us the log" the same evidence.
+/// screen without also being queued for the file. Export flushes pending
+/// routine diagnostics before collecting "send us the log" evidence.
 library;
 
 import 'app_log.dart';
@@ -12,10 +12,17 @@ import 'cli_log.dart';
 import 'log_stream.dart';
 
 /// Writes one event to each of [sinks], in order.
-class FanoutAppLog implements AppLog {
+class FanoutAppLog implements FlushableAppLog {
   const FanoutAppLog(this.sinks);
 
   final List<AppLog> sinks;
+
+  @override
+  void flush() {
+    for (final sink in sinks) {
+      if (sink is FlushableAppLog) sink.flush();
+    }
+  }
 
   @override
   void record(

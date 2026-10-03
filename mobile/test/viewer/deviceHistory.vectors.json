@@ -1,0 +1,543 @@
+{
+  "acct": "acct-history-1",
+  "pubs": {
+    "a": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=",
+    "b": "gTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=",
+    "c": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E=",
+    "d": "ypOsFwUYcHHWe4PH/w7+gQjo7EUwV113JoeTM9vavnw="
+  },
+  "entries": [
+    {
+      "v": 1,
+      "acct": "acct-history-1",
+      "seq": 1,
+      "prev": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "at": 10,
+      "op": "add",
+      "pub": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=",
+      "kind": "machine",
+      "machineId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "label": "mac",
+      "signer": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=",
+      "sig": "TGq35MQKMb9h+RVuiWBdKkeGL0CpoDzz28ZWmTsgRCr9+Q5EUYP0cBOEvL2l1En0W7pghYv8nrUnQa6pvPrUAQ=="
+    },
+    {
+      "v": 1,
+      "acct": "acct-history-1",
+      "seq": 2,
+      "prev": "CovFBIdOBn7wiD9rCG4NzW31/eiYY2aQcLLFK7P08bc=",
+      "at": 20,
+      "op": "add",
+      "pub": "gTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=",
+      "kind": "viewer",
+      "machineId": "",
+      "label": "phone",
+      "signer": "gTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=",
+      "sig": "G3NPtWdtHRzO0qVbbd1jABC7EPAFCf0L7NXcaNC1tPfjkrSo4IqpFF1kMOMQkodYenWVTqr/lbxciclDAROfBA=="
+    },
+    {
+      "v": 1,
+      "acct": "acct-history-1",
+      "seq": 3,
+      "prev": "B5nsulFGuwg49bsCmFEg0lJUYigEX/VA/bCccUr94bM=",
+      "at": 30,
+      "op": "add",
+      "pub": "gTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=",
+      "kind": "viewer",
+      "machineId": "",
+      "label": "pixel",
+      "signer": "gTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=",
+      "sig": "CW+lpHmqR4qSoFxTIbY+fzKZr4G0dSZMfs0ULd6s3kdNpE4zVbkOpaKpL+bzA5bEghk6CiGki5NkV/0ZjYjnAQ=="
+    },
+    {
+      "v": 1,
+      "acct": "acct-history-1",
+      "seq": 4,
+      "prev": "rQt1wtdStS0QRgoTyNQxnPHCCo+OcAdJoTIEBoXes7c=",
+      "at": 40,
+      "op": "add",
+      "pub": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E=",
+      "kind": "viewer",
+      "machineId": "",
+      "label": "ipad",
+      "signer": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E=",
+      "sig": "LAdnsHZy255R8J9jeMq5AMC4QuJxz2Bq+QYnF/YQQarH3QOkTf3jzKk6XweiBouhXSLnposVThku9mI6cl8DBg=="
+    },
+    {
+      "v": 1,
+      "acct": "acct-history-1",
+      "seq": 5,
+      "prev": "bC4N5mAJgT276SBzBqiEOQSptTRcIQYM+mnpRygEYHM=",
+      "at": 50,
+      "op": "remove",
+      "pub": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E=",
+      "kind": "machine",
+      "machineId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "label": "LIE",
+      "signer": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=",
+      "sig": "xMGVbx5ArRy/NpTcLzBJGYD+oZT+GlJPaX3DbOJ8T9mKy+7wv8zhxzgYRQq4L0FHrX5LXlcEv1Fd6+1w6msuBQ=="
+    },
+    {
+      "v": 1,
+      "acct": "acct-history-1",
+      "seq": 6,
+      "prev": "yis5+Ci1yxF/tUx+lO0DIExsqBMxDm8bv516DD+0XdA=",
+      "at": 60,
+      "op": "remove",
+      "pub": "gTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=",
+      "kind": "viewer",
+      "machineId": "",
+      "label": "pixel",
+      "signer": "gTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=",
+      "sig": "sL2JKbDDzTcoZSQYcOlp5soXgp8II7n/Mrq5lI1zrmtZE3u0zsB/i3hayhBA1bdxC40Pl9B7vLJQtVxG7yrKCA=="
+    }
+  ],
+  "fork": [
+    {
+      "v": 1,
+      "acct": "acct-history-1",
+      "seq": 1,
+      "prev": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "at": 10,
+      "op": "add",
+      "pub": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=",
+      "kind": "machine",
+      "machineId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "label": "mac",
+      "signer": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=",
+      "sig": "TGq35MQKMb9h+RVuiWBdKkeGL0CpoDzz28ZWmTsgRCr9+Q5EUYP0cBOEvL2l1En0W7pghYv8nrUnQa6pvPrUAQ=="
+    },
+    {
+      "v": 1,
+      "acct": "acct-history-1",
+      "seq": 2,
+      "prev": "CovFBIdOBn7wiD9rCG4NzW31/eiYY2aQcLLFK7P08bc=",
+      "at": 20,
+      "op": "add",
+      "pub": "gTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=",
+      "kind": "viewer",
+      "machineId": "",
+      "label": "phone",
+      "signer": "gTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=",
+      "sig": "G3NPtWdtHRzO0qVbbd1jABC7EPAFCf0L7NXcaNC1tPfjkrSo4IqpFF1kMOMQkodYenWVTqr/lbxciclDAROfBA=="
+    },
+    {
+      "v": 1,
+      "acct": "acct-history-1",
+      "seq": 3,
+      "prev": "B5nsulFGuwg49bsCmFEg0lJUYigEX/VA/bCccUr94bM=",
+      "at": 31,
+      "op": "add",
+      "pub": "ypOsFwUYcHHWe4PH/w7+gQjo7EUwV113JoeTM9vavnw=",
+      "kind": "viewer",
+      "machineId": "",
+      "label": "evil",
+      "signer": "ypOsFwUYcHHWe4PH/w7+gQjo7EUwV113JoeTM9vavnw=",
+      "sig": "I5yBaoADRLpyN3I+0t0qhZR7wehgWo6oZqWsj9CY3tb5dotNiCkmf+7YnqW5ir0dwFa4XCz9k/yBxod63p0vBg=="
+    },
+    {
+      "v": 1,
+      "acct": "acct-history-1",
+      "seq": 4,
+      "prev": "sEpMlwosMHwGtmqVx5x1Dx3Nc8qf3rTnmjXVrUI+YRY=",
+      "at": 41,
+      "op": "add",
+      "pub": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E=",
+      "kind": "viewer",
+      "machineId": "",
+      "label": "ipad",
+      "signer": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E=",
+      "sig": "0pp4FidRF84ismPAL5P55sJ/1ZEXdToIxQ6i6glOLHO025TdJF51L4nhoRSAxW3Cuk2YS6yrSK+RsLYpwZ22Dg=="
+    }
+  ],
+  "history": [
+    {
+      "name": "the whole log, newest first",
+      "self": "a",
+      "joinedSeq": 1,
+      "pending": [
+        "b"
+      ],
+      "seqs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "loose": [],
+      "rows": [
+        {
+          "seq": 6,
+          "op": "signedOut",
+          "label": "pixel",
+          "kind": "viewer",
+          "thisDevice": false,
+          "afterJoin": true,
+          "pending": true,
+          "active": false,
+          "whileFrozen": false
+        },
+        {
+          "seq": 5,
+          "op": "removed",
+          "label": "ipad",
+          "kind": "viewer",
+          "by": "mac",
+          "thisDevice": false,
+          "afterJoin": true,
+          "pending": false,
+          "active": false,
+          "whileFrozen": false
+        },
+        {
+          "seq": 4,
+          "op": "added",
+          "label": "ipad",
+          "kind": "viewer",
+          "thisDevice": false,
+          "afterJoin": true,
+          "pending": false,
+          "active": false,
+          "whileFrozen": false
+        },
+        {
+          "seq": 3,
+          "op": "renamed",
+          "label": "pixel",
+          "kind": "viewer",
+          "previousLabel": "phone",
+          "thisDevice": false,
+          "afterJoin": true,
+          "pending": true,
+          "active": false,
+          "whileFrozen": false
+        },
+        {
+          "seq": 2,
+          "op": "added",
+          "label": "phone",
+          "kind": "viewer",
+          "thisDevice": false,
+          "afterJoin": true,
+          "pending": true,
+          "active": false,
+          "whileFrozen": false
+        },
+        {
+          "seq": 1,
+          "op": "added",
+          "label": "mac",
+          "kind": "machine",
+          "thisDevice": true,
+          "afterJoin": false,
+          "pending": false,
+          "active": true,
+          "whileFrozen": false
+        }
+      ]
+    },
+    {
+      "name": "only the recent tail is known (offline)",
+      "self": "a",
+      "joinedSeq": 1,
+      "pending": [],
+      "seqs": [
+        4,
+        5,
+        6
+      ],
+      "loose": [],
+      "rows": [
+        {
+          "seq": 6,
+          "op": "signedOut",
+          "label": "",
+          "kind": "viewer",
+          "thisDevice": false,
+          "afterJoin": true,
+          "pending": false,
+          "active": false,
+          "whileFrozen": false
+        },
+        {
+          "seq": 5,
+          "op": "removed",
+          "label": "ipad",
+          "kind": "viewer",
+          "by": "mac",
+          "thisDevice": false,
+          "afterJoin": true,
+          "pending": false,
+          "active": false,
+          "whileFrozen": false
+        },
+        {
+          "seq": 4,
+          "op": "added",
+          "label": "ipad",
+          "kind": "viewer",
+          "thisDevice": false,
+          "afterJoin": true,
+          "pending": false,
+          "active": false,
+          "whileFrozen": false
+        }
+      ]
+    },
+    {
+      "name": "a removal whose add is outside the known window",
+      "self": "a",
+      "joinedSeq": 1,
+      "pending": [],
+      "seqs": [
+        5,
+        6
+      ],
+      "loose": [],
+      "rows": [
+        {
+          "seq": 6,
+          "op": "signedOut",
+          "label": "",
+          "kind": "viewer",
+          "thisDevice": false,
+          "afterJoin": true,
+          "pending": false,
+          "active": false,
+          "whileFrozen": false
+        },
+        {
+          "seq": 5,
+          "op": "removed",
+          "label": "",
+          "kind": "viewer",
+          "by": "mac",
+          "thisDevice": false,
+          "afterJoin": true,
+          "pending": false,
+          "active": false,
+          "whileFrozen": false
+        }
+      ]
+    },
+    {
+      "name": "a removal applied while frozen",
+      "self": "a",
+      "joinedSeq": 1,
+      "pending": [],
+      "seqs": [
+        1,
+        2,
+        3,
+        4,
+        6
+      ],
+      "loose": [
+        5
+      ],
+      "rows": [
+        {
+          "seq": 6,
+          "op": "signedOut",
+          "label": "pixel",
+          "kind": "viewer",
+          "thisDevice": false,
+          "afterJoin": true,
+          "pending": false,
+          "active": false,
+          "whileFrozen": false
+        },
+        {
+          "seq": 5,
+          "op": "removed",
+          "label": "ipad",
+          "kind": "viewer",
+          "by": "mac",
+          "thisDevice": false,
+          "afterJoin": true,
+          "pending": false,
+          "active": false,
+          "whileFrozen": true
+        },
+        {
+          "seq": 4,
+          "op": "added",
+          "label": "ipad",
+          "kind": "viewer",
+          "thisDevice": false,
+          "afterJoin": true,
+          "pending": false,
+          "active": false,
+          "whileFrozen": false
+        },
+        {
+          "seq": 3,
+          "op": "renamed",
+          "label": "pixel",
+          "kind": "viewer",
+          "previousLabel": "phone",
+          "thisDevice": false,
+          "afterJoin": true,
+          "pending": false,
+          "active": false,
+          "whileFrozen": false
+        },
+        {
+          "seq": 2,
+          "op": "added",
+          "label": "phone",
+          "kind": "viewer",
+          "thisDevice": false,
+          "afterJoin": true,
+          "pending": false,
+          "active": false,
+          "whileFrozen": false
+        },
+        {
+          "seq": 1,
+          "op": "added",
+          "label": "mac",
+          "kind": "machine",
+          "thisDevice": true,
+          "afterJoin": false,
+          "pending": false,
+          "active": true,
+          "whileFrozen": false
+        }
+      ]
+    },
+    {
+      "name": "no joined point known",
+      "self": "b",
+      "pending": [],
+      "seqs": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "loose": [],
+      "rows": [
+        {
+          "seq": 6,
+          "op": "signedOut",
+          "label": "pixel",
+          "kind": "viewer",
+          "thisDevice": true,
+          "afterJoin": false,
+          "pending": false,
+          "active": false,
+          "whileFrozen": false
+        },
+        {
+          "seq": 5,
+          "op": "removed",
+          "label": "ipad",
+          "kind": "viewer",
+          "by": "mac",
+          "thisDevice": false,
+          "afterJoin": false,
+          "pending": false,
+          "active": false,
+          "whileFrozen": false
+        },
+        {
+          "seq": 4,
+          "op": "added",
+          "label": "ipad",
+          "kind": "viewer",
+          "thisDevice": false,
+          "afterJoin": false,
+          "pending": false,
+          "active": false,
+          "whileFrozen": false
+        },
+        {
+          "seq": 3,
+          "op": "renamed",
+          "label": "pixel",
+          "kind": "viewer",
+          "previousLabel": "phone",
+          "thisDevice": true,
+          "afterJoin": false,
+          "pending": false,
+          "active": false,
+          "whileFrozen": false
+        },
+        {
+          "seq": 2,
+          "op": "added",
+          "label": "phone",
+          "kind": "viewer",
+          "thisDevice": true,
+          "afterJoin": false,
+          "pending": false,
+          "active": false,
+          "whileFrozen": false
+        },
+        {
+          "seq": 1,
+          "op": "added",
+          "label": "mac",
+          "kind": "machine",
+          "thisDevice": false,
+          "afterJoin": false,
+          "pending": false,
+          "active": true,
+          "whileFrozen": false
+        }
+      ]
+    }
+  ],
+  "divergence": [
+    {
+      "name": "the first differing position, the one before it matching",
+      "log": "fork",
+      "from": 1,
+      "to": 4,
+      "expect": 3
+    },
+    {
+      "name": "a window that starts at the split cannot prove it",
+      "log": "fork",
+      "from": 3,
+      "to": 4,
+      "expect": null
+    },
+    {
+      "name": "the same log has no split",
+      "log": "main",
+      "from": 1,
+      "to": 4,
+      "expect": null
+    },
+    {
+      "name": "a window with a gap is not usable",
+      "log": "fork",
+      "from": 1,
+      "to": 4,
+      "tamper": "gap",
+      "expect": null
+    },
+    {
+      "name": "a window that does not end at the peer head is not usable",
+      "log": "fork",
+      "from": 1,
+      "to": 4,
+      "tamper": "head",
+      "expect": null
+    },
+    {
+      "name": "not a window at all",
+      "log": "fork",
+      "from": 1,
+      "to": 4,
+      "tamper": "junk",
+      "expect": null
+    }
+  ]
+}

@@ -1,7 +1,11 @@
+import 'support/workspace_tools.dart';
+import 'support/resource_picker.dart';
+
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -19,8 +23,6 @@ import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/shortcuts/keymap_host.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/machines_panel.dart';
-import 'package:harness/widgets/toolbar_icon.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
 import 'support/password_cli.dart';
@@ -223,7 +225,7 @@ void main() {
       await tester.pumpAndSettle();
     }
     if (workspace) {
-      await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
+      await openWorkspaceManagement(tester, 'machines');
       await tester.pumpAndSettle();
     } else {
       await tester.tap(find.text('open machines'));
@@ -308,8 +310,8 @@ void main() {
     expect(find.textContaining('Available'), findsNothing);
     expect(find.text('Offline'), findsNothing);
     expect(find.textContaining('—'), findsNothing);
-    expect(find.byIcon(LucideIcons.ellipsis), findsNothing);
-    expect(find.byIcon(LucideIcons.monitorOff), findsNWidgets(2));
+    expect(find.byIcon(AppIcons.ellipsis), findsNothing);
+    expect(find.byIcon(AppIcons.monitorOff), findsNWidgets(2));
     expect(find.text('Connect'), findsOneWidget);
     expect(find.byKey(const ValueKey('machine-stats-rig')), findsNothing);
     expect(find.text('0 harnesses'), findsOneWidget);
@@ -358,7 +360,7 @@ void main() {
   );
 
   testWidgets(
-    'toolbar panel is anchored, resizes, and closes outside without dimming work',
+    'workspace connection commands use the shared machine picker and inline forms',
     (tester) async {
       final previous = newHarnessOpensInBox;
       newHarnessOpensInBox = true;
@@ -387,88 +389,51 @@ void main() {
       });
       app.add('server', 'Build server', online: false);
       await mount(tester, size: const Size(1280, 800), workspace: true);
-      final panel = find.byKey(const ValueKey('machines-panel'));
+      final localInput = find.byKey(const ValueKey('remote-password-field'));
+      final remoteInput = find.byKey(
+        const ValueKey('remote-password-connect-field'),
+      );
+      expect(resourceScope('@'), findsOneWidget);
+      expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
       expect(find.byType(Dialog), findsNothing);
-      for (final barrier in tester.widgetList<ModalBarrier>(
-        find.byType(ModalBarrier),
-      )) {
-        expect(
-          barrier.color?.a ?? 0,
-          0,
-          reason: 'The workspace stays undimmed',
-        );
-      }
-      expect(tester.getRect(panel).top, greaterThan(40));
-      expect(tester.getRect(panel).right, closeTo(1270, 2));
-      expect(remoteInput, findsNothing);
-      expect(localInput, findsNothing);
-      expect(find.text('Set password'), findsOneWidget);
-      expect(find.text('View harnesses'), findsNothing);
-      expect(
-        tester.getTopLeft(find.text('M2')).dy,
-        lessThan(tester.getTopLeft(find.text('Mac mini')).dy),
+      expect(resourceSearch(tester).rows.map((row) => row.title), [
+        'Mac mini',
+        'M2',
+        'iMac · Office',
+        'Build server',
+        'Add machine',
+      ]);
+      expect(app.resourceReadIds, containsAll(['local', 'office']));
+      await selectResource(tester, 'machine:local');
+      await tap(
+        tester,
+        find.byKey(const ValueKey('resource-action:picker.resource_settings')),
       );
-      expect(
-        tester.getTopLeft(find.text('Mac mini')).dy,
-        lessThan(tester.getTopLeft(find.text('iMac · Office')).dy),
-      );
-      expect(
-        tester.getTopLeft(find.text('iMac · Office')).dy,
-        lessThan(tester.getTopLeft(find.text('Build server')).dy),
-      );
-      expect(
-        find.text('12 harnesses · CPU 18% · RAM 10/32 GB'),
-        findsOneWidget,
-      );
-      expect(find.text('8 harnesses · CPU 42% · RAM 24/64 GB'), findsOneWidget);
-      expect(find.text('Connected'), findsNothing);
-      expect(app.resourceReadIds, unorderedEquals(['local', 'office']));
-      final widths = ['Set password', 'Connect'].map(
-        (label) => tester
-            .getSize(
-              find.ancestor(
-                of: find.text(label),
-                matching: find.byType(TextButton),
-              ),
-            )
-            .width,
-      );
-      expect(widths.toSet(), hasLength(1));
-      for (final id in ['remote', 'office', 'server']) {
-        expect(
-          tester.getSize(find.byKey(ValueKey('machine-$id'))).height,
-          lessThan(85),
-        );
-      }
-      expect(
-        find.byKey(const ValueKey('connect-machine-remote')),
-        findsOneWidget,
-      );
-      expect(find.byKey(const ValueKey('machine-office')), findsOneWidget);
-      await capture(tester, 'machines-toolbar-panel');
-      await tap(tester, find.text('Set password'));
       expect(tester.widget<TextField>(localInput).focusNode!.hasFocus, isTrue);
-      await capture(tester, 'machines-toolbar-set-password');
+      expect(resourceScope('@'), findsOneWidget);
       await key(tester, LogicalKeyboardKey.escape);
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
-      await tester.pumpAndSettle();
-      expect(localInput, findsNothing);
-      await tap(tester, find.byKey(const ValueKey('connect-machine-remote')));
+      await key(tester, LogicalKeyboardKey.escape);
+      await selectResource(tester, 'machine:remote');
+      await tap(
+        tester,
+        find.byKey(const ValueKey('resource-action:picker.resource_connect')),
+      );
       expect(tester.widget<TextField>(remoteInput).focusNode!.hasFocus, isTrue);
-      await capture(tester, 'machines-toolbar-connect');
+      expect(resourceScope('@'), findsOneWidget);
+      await capture(tester, 'machines-picker-connect');
       tester.view.physicalSize = const Size(760, 620);
       await tester.pumpAndSettle();
-      expect(tester.getRect(panel).right, closeTo(750, 2));
-      expect(tester.getRect(panel).bottom, lessThanOrEqualTo(620));
+      expect(remoteInput, findsOneWidget);
       expect(tester.takeException(), isNull);
-      await tester.tapAt(const Offset(30, 200));
+      await key(tester, LogicalKeyboardKey.escape);
+      await key(tester, LogicalKeyboardKey.escape);
+      await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      expect(panel, findsNothing);
+      expect(resourceField, findsNothing);
       await mount(tester, workspace: true, brightness: Brightness.light);
-      expect(find.byType(ToolbarIcon), findsNothing);
-      expect(panel, findsOneWidget);
-      await tap(tester, find.byTooltip('Close Machines'));
+      expect(resourceScope('@'), findsOneWidget);
+      await key(tester, LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
       expect(
         find.byKey(const ValueKey('swarm-new-tab-button')).hitTestable(),
         findsOneWidget,
@@ -694,7 +659,7 @@ void main() {
       app.add('remote', 'Mac mini', online: false);
       await mount(tester);
       expect(find.textContaining('Offline'), findsNothing);
-      expect(find.byIcon(LucideIcons.monitorOff), findsOneWidget);
+      expect(find.byIcon(AppIcons.monitorOff), findsOneWidget);
       expect(
         find.byTooltip('Open Harness on Mac mini to bring it online.'),
         findsOneWidget,
@@ -797,7 +762,7 @@ void main() {
       await tester.pumpAndSettle();
       final stats = find.byKey(const ValueKey('machine-stats-remote'));
       expect(stats, findsNothing);
-      expect(find.byIcon(LucideIcons.monitorOff), findsOneWidget);
+      expect(find.byIcon(AppIcons.monitorOff), findsOneWidget);
       expect(find.text('Offline'), findsNothing);
       app.resourceValues['remote'] = const MachineResources(cpuPercent: 7);
       app.stateOf('remote')!.nodeOnline = true;
@@ -1199,7 +1164,7 @@ void main() {
   );
 
   testWidgets(
-    'Machines toolbar remains usable in a short narrow workspace at large text size',
+    'Machines picker remains usable in a short narrow workspace at large text size',
     (tester) async {
       final previous = newHarnessOpensInBox;
       newHarnessOpensInBox = true;
@@ -1210,8 +1175,10 @@ void main() {
         scale: 1.7,
         workspace: true,
       );
-      expect(find.byKey(const ValueKey('machines-panel')), findsOneWidget);
-      await tap(tester, find.byTooltip('Close Machines'));
+      expect(resourceScope('@'), findsOneWidget);
+      expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
+      await key(tester, LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
       expect(
         find.byKey(const ValueKey('swarm-new-tab-button')).hitTestable(),
         findsOneWidget,

@@ -1,0 +1,19 @@
+// Diagnostic namespace only; archived sources below are unmodified.
+#define ht_arc_cache_builds ht48_arc_cache_builds
+#define ht_arc_status ht48_arc_status
+#define ht_arc_title ht48_arc_title
+#define ht_can_display ht48_can_display
+#define ht_center ht48_center
+#define ht_damage ht48_damage
+#define ht_octopus_face ht48_octopus_face
+#define ht_octopus_motion_tick ht48_octopus_motion_tick
+#define ht_octopus_short_recap ht48_octopus_short_recap
+#define ht_raster ht48_raster
+#define ht_recap_lines ht48_recap_lines
+#define ht_rgb ht48_rgb
+#define ht_scene_clear ht48_scene_clear
+#define ht_take_line ht48_take_line
+#define ht_text ht48_text
+#define ht_text_rows ht48_text_rows
+#define ht_utf8_next ht48_utf8_next
+#define ht_wrap ht48_wrap

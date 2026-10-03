@@ -8,11 +8,11 @@ typedef AgentRef = ({String machineId, String agentId});
 
 /// The agent the phone had on screen, so a relaunch can put the person back on it.
 ///
-/// ⚠️ **In practice only ever overwritten, never cleared.** [forget] still exists and still works,
-/// but nothing calls it: it was the pager's way of saying "the terminal was left", back when leaving
-/// it meant landing on a list of agents that the next launch could start on instead. There is no
-/// such list any more — the terminal is the phone's home screen — so the only question this answers
-/// is *which* agent it opens on, and "none" is not one of the answers. A record naming an agent that
+/// ⚠️ **Only ever overwritten, never cleared.** Clearing it was the pager's way of saying "the
+/// terminal was left", back when leaving it meant landing on a list of agents that the next launch
+/// could start on instead. There is no such list any more — the terminal is the phone's home
+/// screen — so the only question this answers is *which* agent it opens on, and "none" is not one
+/// of the answers. A record naming an agent that
 /// has since been deleted simply matches nothing, and the home screen falls through to the first
 /// agent of the tab the phone was last in ([readTab]).
 class LastOpenedAgent {
@@ -100,23 +100,6 @@ class LastOpenedAgent {
       'agentId': agent.agentId,
     });
     _write((storage) => storage.write(_key, encoded));
-  }
-
-  /// Clears the record only while it still names [agent].
-  ///
-  /// A terminal replaced by another one can be disposed AFTER its successor has remembered itself,
-  /// and an unconditional clear would then erase the agent actually on screen.
-  ///
-  /// ⚠️ **Nothing calls this now, and that is the point rather than an oversight.** The pager used
-  /// to call it on the way out, back when leaving the terminal meant landing on a list of agents;
-  /// the terminal is the home screen now, so there is no "left the terminal" to report and clearing
-  /// the record would only cost the next launch its reopen. Kept because the reopen is a flag away
-  /// from being turned off again (`_showTabBar` in `phone_shell.dart` restores the list screens),
-  /// and this is the half of the pair that would have to come back with it.
-  void forget(AgentRef agent) {
-    if (_value != agent) return;
-    _value = null;
-    _write((storage) => storage.delete(_key));
   }
 
   void _write(Future<void> Function(LocalKeyValueStore storage) write) {

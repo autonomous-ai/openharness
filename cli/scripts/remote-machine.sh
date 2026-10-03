@@ -150,7 +150,7 @@ cmd_login() {
       "socat TCP-LISTEN:${LOGIN_PORT},bind=\$(hostname -i),fork,reuseaddr TCP:127.0.0.1:${LOGIN_PORT}"
 
     note "signing the box in — approve the URL below, then come back"
-    docker exec -i "$CONTAINER" harness login --json | node -e '
+    docker exec "$CONTAINER" harness login --json | node -e '
 const rl = require("readline").createInterface({ input: process.stdin })
 rl.on("line", (line) => {
   let e; try { e = JSON.parse(line) } catch { return }

@@ -5,36 +5,22 @@ import '../../terminal/terminal_font_store.dart';
 
 /// The app's type scale: which face, size and weight a piece of text gets.
 ///
-/// Harness is a terminal app, drawn for people who have lived in one, so the
-/// terminal's face leads. Two faces, split by one rule:
-///
-/// * **Mono** — the face chosen in Settings ▸ Terminal — for everything that
-///   names, labels or is typed: headings, titles, buttons, rows, navigation,
-///   fields, tabs, pane headers, shortcuts, counts, and the strings the user
-///   copies (a path, a branch, an id, a log line). Read like a CLI's `--help`:
-///   the command in mono, its description beside it.
-/// * **Sans** — the system UI face — only for prose: a description, an
-///   explanation, a dialog's sentence, a caption. A paragraph of mono at 13pt is
-///   what made an all-mono build read as a wall, so prose is where the second
-///   face earns its place.
-///
-/// Sizes are fixed. The terminal's own size setting (⌘+ / ⌘−) moves the
-/// terminal grid, its composer, its find field and the empty tab's welcome
-/// page, which stands where a terminal will — [terminalTextStyle] — and
-/// nothing here. An earlier build set every text in the app in the terminal
-/// face at the terminal size, which left a heading and its body copy one size
-/// apart only by weight.
+/// System typography belongs to app navigation, forms, headings, and prose.
+/// Monospace is explicit: terminal content, code, paths, and identifiers.
+/// Changing the terminal font must not change desktop controls. The terminal
+/// grid, its composer, and in-pane find keep their own selected font and size.
+/// These base sizes also respect the platform's accessibility text scaling.
 ///
 /// ```
-///   display    mono  28  semibold   one per screen: a page title, sign-in
-///   title      mono  20  semibold   a settings pane, a hero card, a figure
-///   heading    mono  15  semibold   a section, a dialog title, a card title
-///   label      mono  13  medium     buttons, rows, sidebar items, links
-///   mono       mono  13  regular    field text, typed commands, paths
-///   monoLabel  mono  12  medium     tabs, pane headers, command-box rows
-///   monoMeta   mono  11  regular    shortcuts, counts, eyebrows, timestamps
+///   display    sans  28  semibold   one per screen: a page title, sign-in
+///   title      sans  20  semibold   a settings pane, a hero card, a figure
+///   heading    sans  17  semibold   a section, a dialog title, a card title
+///   label      sans  13  medium     buttons, rows, sidebar items, links
+///   mono       mono  13  regular    commands, source text, paths
+///   monoLabel  mono  12  medium     terminal labels, compact code
+///   monoMeta   mono  11  regular    shortcut keys, identifiers, code metadata
 ///   body       sans  13  regular    prose: descriptions, explanations
-///   caption    sans  11  regular    tooltips, footnotes
+///   caption    sans  12  regular    tooltips, footnotes
 /// ```
 ///
 /// Every style takes the same optional arguments as `terminalTextStyle`, so a
@@ -42,9 +28,9 @@ import '../../terminal/terminal_font_store.dart';
 abstract final class AppType {
   static const double displaySize = 28;
   static const double titleSize = 20;
-  static const double headingSize = 15;
+  static const double headingSize = 17;
   static const double bodySize = 13;
-  static const double captionSize = 11;
+  static const double captionSize = 12;
   static const double monoSize = 13;
   static const double monoLabelSize = 12;
   static const double monoMetaSize = 11;
@@ -87,7 +73,7 @@ abstract final class AppType {
     double? height,
     double? letterSpacing,
     List<FontFeature>? fontFeatures,
-  }) => _mono(
+  }) => _sans(
     displaySize,
     fontWeight ?? FontWeight.w600,
     color,
@@ -104,7 +90,7 @@ abstract final class AppType {
     double? height,
     double? letterSpacing,
     List<FontFeature>? fontFeatures,
-  }) => _mono(
+  }) => _sans(
     titleSize,
     fontWeight ?? FontWeight.w600,
     color,
@@ -121,7 +107,7 @@ abstract final class AppType {
     double? height,
     double? letterSpacing,
     List<FontFeature>? fontFeatures,
-  }) => _mono(
+  }) => _sans(
     headingSize,
     fontWeight ?? FontWeight.w600,
     color,
@@ -155,7 +141,7 @@ abstract final class AppType {
     double? height,
     double? letterSpacing,
     List<FontFeature>? fontFeatures,
-  }) => _mono(
+  }) => _sans(
     bodySize,
     fontWeight ?? FontWeight.w500,
     color,

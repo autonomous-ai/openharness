@@ -1,11 +1,13 @@
 #include "cable_link.h"
 
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "driver/usb_serial_jtag.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "last_words.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -50,6 +52,11 @@ static const char *TAG = "cable";
 // anything arrives. It only bounds how long the task sleeps with nothing to do.
 #define READ_WAIT_MS 100
 
+// A stopped host can leave a legal-length header followed by only half its
+// payload. Magic inside the next welcome cannot escape that pending payload.
+// Expire only an idle gap, not the total duration of a slowly fragmented frame.
+#define FRAME_IDLE_US INT64_C(15000000)
+
 // How long a write waits for the host to make room. Finite, and that is the point: an unplugged cable or
 // an unopened port fills the TX FIFO and never drains it, and portMAX_DELAY there parks whatever task
 // called send() forever. This device is unplugged or in front of a machine with no daemon most of the
@@ -79,8 +86,9 @@ static const char *TAG = "cable";
 
 static cable_decoder_t s_decoder;
 static cable_frame_cb  s_cb;
+static cable_tick_cb   s_tick;
 static void           *s_ctx;
-static bool            s_running;
+static atomic_bool     s_running;
 
 // Serialises the shared encode buffer AND the write, so two tasks sending at once cannot interleave
 // halves of two frames onto the wire. A frame split down the middle by a second sender is not something
@@ -97,11 +105,11 @@ static uint8_t s_tx_frame[CABLE_MAX_FRAME];
 
 // ── log framing ─────────────────────────────────────────────────────────────────────────────────────
 
-static vprintf_like_t s_prev_vprintf;
-// Reentrancy guard. Every path below can log, and a log emitted from inside the log sink would recurse
-// until the stack ran out. One flag is enough because the sink holds the TX lock for its whole body, so
-// only one task is ever inside it.
-static volatile bool s_in_log_sink;
+// Hooks can still be executing on the other core when the session ends. Keep
+// the previous function valid for their whole lifetime; never clear it to NULL.
+static _Atomic(vprintf_like_t) s_prev_vprintf = vprintf;
+static atomic_bool s_log_framing;
+static atomic_uint s_dropped_logs;
 
 static bool send_locked(uint8_t type, const uint8_t *payload, size_t payload_len, TickType_t wait)
 {
@@ -112,17 +120,19 @@ static bool send_locked(uint8_t type, const uint8_t *payload, size_t payload_len
 
 static int log_vprintf(const char *fmt, va_list args)
 {
-    // From an ISR there is nothing safe to do here — the mutex below would abort — and ESP_EARLY_LOG /
-    // panic output does not come through this hook anyway. Hand it back to the plain console.
-    if (xPortInIsrContext() || s_in_log_sink) {
-        return s_prev_vprintf ? s_prev_vprintf(fmt, args) : 0;
-    }
+    // ESP_EARLY_LOG/panic output bypasses this hook. Ordinary logs from an ISR
+    // cannot take a mutex or safely fall back to the libc console.
+    if (xPortInIsrContext()) return 0;
+    if (!atomic_load(&s_log_framing)) return atomic_load(&s_prev_vprintf)(fmt, args);
 
     static char line[LOG_LINE_MAX];   // guarded by s_tx_lock, like s_tx_frame
-    if (!s_running || xSemaphoreTake(s_tx_lock, pdMS_TO_TICKS(LOG_WRITE_WAIT_MS)) != pdTRUE) {
-        return s_prev_vprintf ? s_prev_vprintf(fmt, args) : 0;
+    if (!s_running || xSemaphoreGetMutexHolder(s_tx_lock) == xTaskGetCurrentTaskHandle() ||
+        xSemaphoreTake(s_tx_lock, pdMS_TO_TICKS(LOG_WRITE_WAIT_MS)) != pdTRUE) {
+        // Recursion or congestion costs one diagnostic, never a raw console
+        // write mixed into a protocol frame or an unbounded wait by the caller.
+        atomic_fetch_add_explicit(&s_dropped_logs, 1, memory_order_relaxed);
+        return 0;
     }
-    s_in_log_sink = true;
     int n = vsnprintf(line, sizeof(line), fmt, args);
     if (n > 0) {
         size_t len = (size_t)n < sizeof(line) - 1 ? (size_t)n : sizeof(line) - 1;
@@ -130,9 +140,9 @@ static int log_vprintf(const char *fmt, va_list args)
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) len--;
         // Into the RTC ring first — that copy survives the reboot the next line may be the last before.
         if (len > 0) last_words_add(line, len);
-        if (len > 0) send_locked(CABLE_TYPE_LOG, (const uint8_t *)line, len, pdMS_TO_TICKS(LOG_WRITE_WAIT_MS));
+        if (len > 0 && !send_locked(CABLE_TYPE_LOG, (const uint8_t *)line, len, pdMS_TO_TICKS(LOG_WRITE_WAIT_MS)))
+            atomic_fetch_add_explicit(&s_dropped_logs, 1, memory_order_relaxed);
     }
-    s_in_log_sink = false;
     xSemaphoreGive(s_tx_lock);
     return n;
 }
@@ -141,14 +151,16 @@ void cable_link_set_log_framing(bool on)
 {
     if (!s_running) return;
     if (on) {
-        if (!s_prev_vprintf) s_prev_vprintf = esp_log_set_vprintf(log_vprintf);
+        if (!atomic_load(&s_log_framing)) {
+            atomic_store(&s_prev_vprintf, esp_log_set_vprintf(log_vprintf));
+            atomic_store(&s_log_framing, true);
+        }
         return;
     }
     // Restore the plain console FIRST, then say so — so the line explaining what happened is written the
     // way whoever is now watching the port with a serial monitor can read it.
-    if (s_prev_vprintf) {
-        esp_log_set_vprintf(s_prev_vprintf);
-        s_prev_vprintf = NULL;
+    if (atomic_exchange(&s_log_framing, false)) {
+        esp_log_set_vprintf(atomic_load(&s_prev_vprintf));
     }
 }
 
@@ -158,20 +170,30 @@ static void reader_task(void *arg)
 {
     (void)arg;
     uint8_t chunk[READ_CHUNK];
+    int64_t last_rx_us = 0;
     while (1) {
         int n = usb_serial_jtag_read_bytes(chunk, sizeof(chunk), pdMS_TO_TICKS(READ_WAIT_MS));
-        if (n <= 0) continue;
+        const int64_t now = esp_timer_get_time();
+        // This task owns the decoder. Reset before feeding a newly arrived
+        // read too: scheduling need not provide an intervening empty read.
+        if (s_decoder.len && now - last_rx_us >= FRAME_IDLE_US)
+            cable_decoder_reset(&s_decoder);
         // Never fails and never rejects: everything arriving here is untrusted, starts mid-stream after
         // every boot, and the only useful response to a byte that makes no sense is to step over it.
-        cable_decoder_feed(&s_decoder, chunk, (size_t)n, s_cb, s_ctx);
+        if (n > 0) {
+            cable_decoder_feed(&s_decoder, chunk, (size_t)n, s_cb, s_ctx);
+            last_rx_us = now;
+        }
+        if (s_tick) s_tick(s_ctx);
     }
 }
 
-bool cable_link_start(cable_frame_cb cb, void *ctx)
+bool cable_link_start(cable_frame_cb cb, cable_tick_cb tick, void *ctx)
 {
     if (s_running) return true;
 
     s_cb = cb;
+    s_tick = tick;
     s_ctx = ctx;
     cable_decoder_init(&s_decoder);
 
@@ -196,7 +218,11 @@ bool cable_link_start(cable_frame_cb cb, void *ctx)
         return false;
     }
 
+    // The new task may receive a welcome before xTaskCreate returns. Make the
+    // installed driver/send path visible before that callback can run.
+    s_running = true;
     if (xTaskCreate(reader_task, "cable_link", READER_STACK, NULL, 5, NULL) != pdPASS) {
+        s_running = false;
         ESP_LOGE(TAG, "reader task create failed — no link to the daemon");
         usb_serial_jtag_driver_uninstall();
         vSemaphoreDelete(s_tx_lock);
@@ -204,7 +230,6 @@ bool cable_link_start(cable_frame_cb cb, void *ctx)
         return false;
     }
 
-    s_running = true;
     ESP_LOGI(TAG, "usb link up on the native port (frame v%d, max frame %d B)",
              CABLE_FRAME_VERSION, CABLE_MAX_FRAME);
     return true;
@@ -245,6 +270,8 @@ void cable_link_counters(uint32_t *corrupt_frames, uint32_t *discarded_bytes)
     if (corrupt_frames) *corrupt_frames = s_decoder.corrupt_frames;
     if (discarded_bytes) *discarded_bytes = s_decoder.discarded_bytes;
 }
+
+uint32_t cable_link_dropped_logs(void) { return atomic_load(&s_dropped_logs); }
 
 void cable_link_reset_decoder(void)
 {

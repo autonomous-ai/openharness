@@ -90,6 +90,37 @@ describe('devin error log', () => {
     expect(tail.poll()).toHaveLength(1)
   })
 
+  it('looks back over only the tail of a long log, reading nothing before it', () => {
+    const { home, log } = devinHome()
+    // A failure far back in a long-lived session's log: beyond the look-back window, so never seen.
+    appendFileSync(log, REAL_ERROR.replace('2026-07-28T06:38:22', '2026-07-28T09:00:00') + '\n')
+    const filler = `${NOISE}\n`.repeat(Math.ceil((2 * 1024 * 1024) / NOISE.length))
+    appendFileSync(log, filler)
+    const tail = new DevinErrorTail(home, 'tested-crabapple')
+    expect(tail.scanSince('2026-07-28T08:00:00.000000Z')).toEqual([])
+    appendFileSync(log, REAL_ERROR.replace('2026-07-28T06:38:22', '2026-07-28T09:30:00') + '\n')
+    expect(tail.scanSince('2026-07-28T08:00:00.000000Z')).toEqual([
+      "Permission denied: We're currently facing high demand for this model. Please try again later.",
+    ])
+    // Older than the turn being healed: an earlier turn's failure.
+    expect(tail.scanSince('2026-07-28T10:00:00.000000Z')).toEqual([])
+    expect(tail.scanSince('not a time')).toEqual([])
+
+    // poll() reads what was appended, however long the log already is.
+    tail.seekToEnd()
+    appendFileSync(log, NOISE + '\n' + REAL_ERROR + '\n')
+    expect(tail.poll()).toHaveLength(1)
+  })
+
+  it('finds nothing to scan without a lock, or once the log is gone', () => {
+    const { home, log } = devinHome()
+    expect(new DevinErrorTail(home, 'no-such-session').scanSince('2026-07-28T00:00:00Z')).toEqual([])
+    const tail = new DevinErrorTail(home, 'tested-crabapple')
+    tail.seekToEnd()
+    rmSync(log)
+    expect(tail.scanSince('2026-07-28T00:00:00Z')).toEqual([])
+  })
+
   it('collapses Devin\'s doubled prefix and drops the trace id', () => {
     expect(cleanDevinErrorMessage('Permission denied: Permission denied: Too busy. (trace ID: abc123)'))
       .toBe('Permission denied: Too busy.')

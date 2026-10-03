@@ -1,0 +1,24 @@
+// Diagnostic namespace for the dense-cache reference algorithm.
+#define ht_arc_cache_builds ht79_arc_cache_builds
+#define ht_arc_fast_sampling ht79_arc_fast_sampling
+#define ht_arc_status ht79_arc_status
+#define ht_arc_tight_bounds ht79_arc_tight_bounds
+#define ht_arc_title ht79_arc_title
+#define ht_ascii_text ht79_ascii_text
+#define ht_can_display ht79_can_display
+#define ht_center ht79_center
+#define ht_damage ht79_damage
+#define ht_damage_fast_ascii ht79_damage_fast_ascii
+#define ht_glyph_cache_builds ht79_glyph_cache_builds
+#define ht_glyph_cache_bytes ht79_glyph_cache_bytes
+#define ht_glyph_cache_enable ht79_glyph_cache_enable
+#define ht_raster ht79_raster
+#define ht_raster_fast_ascii ht79_raster_fast_ascii
+#define ht_rgb ht79_rgb
+#define ht_run_bounds ht79_run_bounds
+#define ht_scene_clear ht79_scene_clear
+#define ht_take_line ht79_take_line
+#define ht_text ht79_text
+#define ht_text_rows ht79_text_rows
+#define ht_utf8_next ht79_utf8_next
+#define ht_wrap ht79_wrap

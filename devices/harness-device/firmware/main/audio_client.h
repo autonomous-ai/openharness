@@ -1,10 +1,10 @@
-// Records mic PCM into a PSRAM buffer during a PWR-button voice capture, then sends the whole
-// utterance over the existing commander WS (voice_start → PCM chunks → voice_end).
+// Touch-driven voice capture: 16kHz PCM streamed over the existing USB cable session.
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 
-// Reserve the PSRAM record buffer once at boot (call early, before WiFi, to avoid heap fragmentation).
+// Reserve audio buffers (and Habitat's capture/sender workers) once at boot.
 void audio_client_init(void);
 
 // Which slash command (if any) the backend should put in front of this utterance's transcript. The
@@ -23,6 +23,13 @@ typedef enum { VOICE_CMD_NONE = 0, VOICE_CMD_GOAL, VOICE_CMD_LOOP } voice_cmd_t;
  * belong to. `cmd` is the one modifier a person can express by how they hold the button.
  */
 void audio_client_start_cable(const char *agent_id, voice_cmd_t cmd);
+// Habitat's deliberate quote-and-speak flow. No selected text is held on the device.
+void audio_client_start_form(const char *id, unsigned revision);
+void audio_client_copy_form(char *out, size_t capacity, unsigned *revision);
+void audio_client_start_selection(const char *agent_id, const char *selection_id, unsigned revision);
+void audio_client_start_carry(const char *agent_id, const char *carry_id);
+void audio_client_copy_carry(char *out, size_t capacity);
+void audio_client_copy_selection(char *out, size_t capacity, unsigned *revision);
 
 void audio_client_stop(void);
 
@@ -34,11 +41,25 @@ bool audio_client_active(void);
 // True when `upload_id` belongs to the current or just-finished utterance. Used to accept a final
 // quota verdict after voice_end while ignoring delayed frames once a newer utterance has started.
 bool audio_client_upload_matches(const char *upload_id);
+void audio_client_copy_upload_id(char *out, size_t capacity);
 
 // True only while capturing mic PCM (false once the clip is uploading). Used by the UI to switch its
 // indicator to "Sending…" when capture ends.
 bool audio_client_recording(void);
 
-// True once this recording has crossed the speech-energy gate (the user actually spoke). The UI's 15s
-// silence watchdog discards a recording that never crosses it (accidental / forgotten Voice press).
+// Coarse energy estimate, not a reliable speech detector: quiet speech may never cross this gate.
+// Habitat recording stays under explicit user control; this estimate must not discard its audio.
 bool audio_client_heard_voice(void);
+// 0..4 measured mic envelope for local visual feedback; not speech recognition/VAD.
+unsigned audio_client_input_level(void);
+
+void audio_client_start_question(const char *id, const char *token, unsigned index);
+void audio_client_copy_question(char *out, size_t capacity, unsigned *index);
+
+void audio_client_request_review(void);
+bool audio_client_review_requested(void);
+void audio_client_start_draft(const char *id, unsigned revision, bool append);
+void audio_client_copy_draft(char *out, size_t capacity, unsigned *revision, bool *append);
+
+void audio_client_start_search(const char *agent_id, const char *selection_id, unsigned revision);
+void audio_client_copy_search(char *out, size_t capacity, unsigned *revision);

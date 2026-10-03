@@ -16,6 +16,8 @@ import {
 } from './engineBin.js'
 import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } from './engineLaunch.js'
 import { psEnv } from './childLocale.js'
+import { nativeProcessImages } from './nativeProcessImages.js'
+export { captureTmuxPane, tmuxCaptureArgs } from './tmuxCapture.js'
 
 function cleanPaneTitle(title: string): string | null {
   const cleaned = title
@@ -54,12 +56,35 @@ export interface ProcessRow extends ProcessIdentity {
   entrypointFileKey?: string
 }
 
-export function argvTokens(args: string): string[] {
-  return (args.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map((token) => {
-    const quoted = (token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))
-    return quoted ? token.slice(1, -1) : token
-  })
+const ARGV_TOKEN = /"[^"]*"|'[^']*'|\S+/g
+
+function unquoteArgvToken(token: string): string {
+  const quoted = (token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))
+  return quoted ? token.slice(1, -1) : token
 }
+
+export function argvTokens(args: string): string[] {
+  return (args.match(ARGV_TOKEN) ?? []).map(unquoteArgvToken)
+}
+
+/** Discovery only needs a command prefix. Do not tokenize a shell script or
+ * prompt suffix once per candidate engine. Keep the same token grammar as
+ * argvTokens, but stop scanning as soon as the consumer has enough evidence. */
+function argvPrefix(args: string): () => string | undefined {
+  const pattern = new RegExp(ARGV_TOKEN)
+  let done = false
+  return () => {
+    if (done) return undefined
+    const match = pattern.exec(args)
+    if (match) return unquoteArgvToken(match[0])
+    done = true // RegExp.exec resets lastIndex at EOF; never restart the prefix.
+    return undefined
+  }
+}
+
+const ORI_FLAGS_WITH_VALUE = new Set(['--model', '--log-level', '--completions'])
+const INTERPRETER_OPTIONS_WITH_VALUE = new Set(['-r', '--require', '--loader', '--import', '--conditions', '--inspect-port'])
+const INLINE_CODE_OPTIONS = new Set(['-c', '--command', '-e', '--eval', '--print'])
 
 /**
  * Return only the executable/script portion of argv, never prompt text or later CLI arguments.
@@ -69,51 +94,88 @@ export function argvTokens(args: string): string[] {
  * shell in `comm`, so for those interpreters the first non-option token is the real entrypoint. Absolute
  * prefixes are deliberately retained only for suffix/package-layout checks and are never hard-coded.
  */
-function processEntrypoint(args: string): string {
-  const tokens = argvTokens(args)
-  if (!tokens.length) return ''
-  let index = 0
-  let command = basename(tokens[index]).toLowerCase()
+function processEntrypoint(args: string, next = argvPrefix(args)): string {
+  let token = next() ?? ''
+  let command = basename(token).toLowerCase()
   if (command === 'env') {
-    index++
-    while (index < tokens.length && (tokens[index].startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index]))) index++
-    command = basename(tokens[index] ?? '').toLowerCase()
+    token = next() ?? ''
+    while (token.startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) token = next() ?? ''
+    command = basename(token).toLowerCase()
   }
   // `ori <engine>` (OpenRouter's launcher) computes an environment and then `execve`s the vendor binary
   // away, so a pane running it looks exactly like a bare `claude`/`codex` for all but the ~100ms before
   // the exec. Reading through the wrapper covers that window — and keeps the pane resolvable if a future
   // ori ever spawns a child instead. Its own flags are skipped; everything after them is the engine.
   if (command === 'ori') {
-    index++
-    const oriFlagsWithValue = new Set(['--model', '--log-level', '--completions'])
-    while (index < tokens.length && tokens[index].startsWith('-')) {
-      index += oriFlagsWithValue.has(tokens[index]) && index + 1 < tokens.length ? 2 : 1
+    token = next() ?? ''
+    while (token.startsWith('-')) {
+      if (ORI_FLAGS_WITH_VALUE.has(token)) next()
+      token = next() ?? ''
     }
-    command = basename(tokens[index] ?? '').toLowerCase()
+    command = basename(token).toLowerCase()
   }
-  if (!/^(?:node|nodejs|bun|deno|python(?:\d+(?:\.\d+)*)?|bash|zsh|sh)$/.test(command)) return tokens[index] ?? ''
+  if (!/^(?:node|nodejs|bun|deno|python(?:\d+(?:\.\d+)*)?|bash|zsh|sh)$/.test(command)) return token
 
-  index++
-  const optionsWithValue = new Set(['-r', '--require', '--loader', '--import', '--conditions', '--inspect-port'])
-  const inlineCodeOptions = new Set(['-c', '--command', '-e', '--eval', '--print'])
-  while (index < tokens.length) {
-    const token = tokens[index]
-    if (token === '--') { index++; break }
-    if (token === '-m' && index + 1 < tokens.length) return tokens[index + 1]
+  token = next() ?? ''
+  while (token) {
+    if (token === '--' || token === '-m') return next() ?? ''
     // Inline shell/Node/Python source is not an executable entrypoint. Its text can legitimately mention
     // an engine command; the real child process, if one is launched, will be discovered from its own row.
-    if (inlineCodeOptions.has(token)) return ''
+    if (INLINE_CODE_OPTIONS.has(token)) return ''
     if (!token.startsWith('-')) break
-    index += optionsWithValue.has(token) && index + 1 < tokens.length ? 2 : 1
+    if (INTERPRETER_OPTIONS_WITH_VALUE.has(token)) next()
+    token = next() ?? ''
   }
-  return tokens[index] ?? ''
+  return token
+}
+
+/** A launcher's capability check is not the interactive engine it is about to start.
+ * In particular, Codex startup runs `codex --help` before the real resume. Adopting
+ * that short-lived PID ends a restart too early and discovery then evicts its pane.
+ * Only a standalone probe argument counts: prompt text and option values do not. */
+function engineCapabilityProbe(args: string): boolean {
+  const next = argvPrefix(args)
+  if (!processEntrypoint(args, next)) return false
+  const option = next()
+  return (option === '--help' || option === '-h' || option === '--version' || option === '-V')
+    && next() === undefined
 }
 
 function hasCursorPackageEntrypoint(args: string): boolean {
   // Cursor's launcher uses `exec -a "$0" node .../index.js`, so argv[0] may stay `agent` instead of
   // `node`. Restrict this scan to the executable prefix: prompt text can appear later and is not proof.
-  return argvTokens(args).slice(0, 8).some((token) =>
-    /cursor-agent[\/\\]versions[\/\\][^/\\]+[\/\\]index\.js$/i.test(token))
+  const next = argvPrefix(args)
+  for (let seen = 0; seen < 8; seen++) {
+    const token = next()
+    if (token === undefined) break
+    if (/cursor-agent[\/\\]versions[\/\\][^/\\]+[\/\\]index\.js$/i.test(token)) return true
+  }
+  return false
+}
+
+/** Hermes' managed launchers exec Python -I -c with a path bootstrap, then either import main
+ * or run it through runpy. Require that executable prefix and actual code, never a script argument
+ * or a quoted mention. argv[0] is authoritative here: macOS can truncate an absolute `comm` path.
+ * Keep the standalone hook's copy in sync. */
+function hermesInlineLauncher(row: Pick<ProcessRow, 'args'>): boolean {
+  const args = row.args.trim()
+  if (!/^python(?:\d+(?:\.\d+)*)?$/.test(basename(argvPrefix(args)() ?? '').toLowerCase())) return false
+  const prefix = /^(?:"[^"]+"|'[^']+'|\S+)(?:\s+-(?:I|E|s|S|u|B|O{1,2}|q))*\s+-c\s+/.exec(args)
+  if (!prefix) return false
+  const source = args.slice(prefix[0].length).replace(/^["']/, '')
+  // Mask string literals before looking for Python statements. A print/prompt containing a whole
+  // launcher is still data. Keep literal values only to identify runpy's exact entry module.
+  const literals: string[] = []
+  const code = source.replace(/(['"])(?:\\[\s\S]|(?!\1)[^\\])*?\1/g, (literal) => {
+    literals.push(literal.slice(1, -1))
+    return `__literal${literals.length - 1}__`
+  })
+  if (!/^import\s+(?:(?:os|re|sys|runpy)\s*,\s*)*(?:sys|runpy)[;\s]+(?:os\.environ\.pop\(__literal\d+__,\s*None\)[;\s]+)*sys\.path\.insert\(\s*0,\s*__literal\d+__\s*\)/.test(code)) return false
+  if (/\bimport\s+hermes_bootstrap\b/.test(code)
+    && /\bfrom\s+hermes_cli\.main\s+import\s+main\b/.test(code)
+    && /\bsys\.exit\(\s*main\(\)\s*\)/.test(code)) return true
+  const run = /\brunpy\.run_module\(\s*__literal(\d+)__\s*,\s*run_name\s*=\s*__literal(\d+)__(?:\s*,\s*alter_sys\s*=\s*True)?\s*\)/.exec(code)
+  return !!run && literals[Number(run[1])] === 'hermes_cli.main' && literals[Number(run[2])] === '__main__'
 }
 
 function agentAliasCandidate(row: Pick<ProcessRow, 'executable' | 'args'>): boolean {
@@ -128,7 +190,7 @@ function agentAliasCandidate(row: Pick<ProcessRow, 'executable' | 'args'>): bool
  * `comm` can itself contain spaces: Command Code rewrites its argv to `⌘ <session title>` and macOS
  * prints that verbatim as the command name. Splitting comm off as a single `\S+` therefore shifted every
  * later field — `startMarker` came out as `"<rest of title> Thu Jul 30"` instead of a start time, so it
- * changed whenever Command Code renamed the session, `validateSessionRuntime` saw a different process,
+ * changed whenever Command Code renamed the session, runtime validation saw a different process,
  * and the reaper evicted a live pane ~10s after its first turn (observed four times on one session; the
  * pane went on serving turn-stop hooks after being declared "gone"). It also silently defeated the
  * PID-reuse guard that startMarker exists for.
@@ -249,26 +311,68 @@ function execText(command: string, args: string[], timeout: number): Promise<str
   })
 }
 
-/** macOS has no /proc; one lsof call resolves every collision candidate's executable image. */
-async function darwinProcessImages(pids: readonly number[]): Promise<Map<number, string>> {
-  if (!pids.length) return new Map()
-  const stdout = await execText('lsof', ['-a', '-p', pids.join(','), '-d', 'txt', '-Fn'], 3000)
+function parseDarwinProcessImages(stdout: string | null): Map<number, string> {
   const images = new Map<number, string>()
   if (stdout === null) return images
+  const seen = new Set<number>()
   let pid: number | null = null
   let textFile = false
-  for (const line of stdout.split('\n')) {
+  // A killed/buffer-limited helper may end halfway through a path.
+  for (const line of stdout.slice(0, stdout.lastIndexOf('\n') + 1).split('\n')) {
     if (/^p\d+$/.test(line)) {
       pid = Number(line.slice(1))
       textFile = false
     } else if (line === 'ftxt') {
       textFile = true
-    } else if (textFile && pid && line.startsWith('n') && !images.has(pid)) {
-      images.set(pid, line.slice(1))
+    } else if (textFile && pid && line.startsWith('n')) {
+      // The first text region is the executable. An error record must not let
+      // a later dylib masquerade as it; incomplete probes use the fallback.
+      if (!seen.has(pid) && line.startsWith('n/')) images.set(pid, line.slice(1))
+      seen.add(pid)
       textFile = false
     }
   }
   return images
+}
+
+/** macOS has no /proc. Prefer the bundled read-only kernel image probe; retain
+ * both lsof readers for missing paths, inside the same total 3s budget.
+ * Never cache by PID: exec can replace an image without changing its birth. */
+async function darwinProcessImages(rows: readonly ProcessRow[]): Promise<{
+  images: Map<number, string>; stale: Set<number>
+}> {
+  const images = new Map<number, string>()
+  const stale = new Set<number>()
+  if (!rows.length) return { images, stale }
+  const deadline = performance.now() + 3000
+  const pids = rows.map(row => row.pid)
+  const native = await nativeProcessImages(pids, 500)
+  const normalizeStart = (marker: string) => marker.trim().split(/\s+/)
+    .map((part, index) => index === 2 ? String(Number(part)) : part).join(' ')
+  for (const row of rows) {
+    const image = native.get(row.pid)
+    if (!image) continue
+    if (normalizeStart(image.startMarker) === normalizeStart(row.startMarker)) images.set(row.pid, image.path)
+    // The PID changed owners since ps. Do not combine the new executable with
+    // old ancestry/arguments, or let the fallback reintroduce that stale row.
+    else stale.add(row.pid)
+  }
+  const args = (selected: readonly number[]) => ['-a', '-p', selected.join(','), '-d', 'txt', '-Fn']
+  let missing = pids.filter(pid => !images.has(pid) && !stale.has(pid))
+  let remaining = Math.floor(deadline - performance.now())
+  if (missing.length && remaining > 0) {
+    for (const [pid, path] of parseDarwinProcessImages(
+      await execText('lsof', ['-b', ...args(missing)], Math.min(1000, remaining)),
+    )) images.set(pid, path)
+  }
+  missing = missing.filter(pid => !images.has(pid))
+  remaining = Math.floor(deadline - performance.now())
+  if (missing.length && remaining > 0) {
+    for (const [pid, path] of parseDarwinProcessImages(await execText('lsof', args(missing), remaining))) {
+      images.set(pid, path)
+    }
+  }
+  return { images, stale }
 }
 
 /**
@@ -285,6 +389,7 @@ export async function enrichProcessRows(
   if (!candidates.length) return rows
   const imagePaths = new Map<number, string>()
   const imageIdentities = new Map<number, ReturnType<typeof executableFileIdentity>>()
+  let stale = new Set<number>()
   if (platform() === 'linux') {
     await Promise.all(candidates.map(async (row) => {
       const procImage = `/proc/${row.pid}/exe`
@@ -297,13 +402,15 @@ export async function enrichProcessRows(
       }
     }))
   } else if (platform() === 'darwin') {
-    for (const [pid, path] of await darwinProcessImages(candidates.map((row) => row.pid))) {
+    const result = await darwinProcessImages(candidates)
+    stale = result.stale
+    for (const [pid, path] of result.images) {
       imagePaths.set(pid, path)
       imageIdentities.set(pid, executableFileIdentity(path.replace(/ \(deleted\)$/, '')))
     }
   }
 
-  return rows.map((row) => {
+  return rows.filter(row => !stale.has(row.pid)).map((row) => {
     if (!selectedPids.has(row.pid)) return row
     const imagePath = imagePaths.get(row.pid)
     const image = imageIdentities.get(row.pid) ?? null
@@ -467,6 +574,9 @@ function heuristicEngineProcessMatchScore(
   // Cursor's launcher can retain argv[0]=agent while the Node package path appears later in argv.
   if (engine === 'cursor' && hasCursorPackageEntrypoint(row.args)) return 3
 
+  // Hermes' own launcher, read out of the inline source it runs as. See `hermesInlineLauncher`.
+  if (engine === 'hermes' && hermesInlineLauncher(row)) return 2
+
   const signature = ENGINE_PROCESS_SIGNATURES[engine]
   if (signature.basenames.some((pattern) => pattern.test(executable) || pattern.test(entrybase))) return 3
   if (signature.entrypoints.some((pattern) => pattern.test(entrypoint))) return 2
@@ -506,6 +616,7 @@ export function engineProcessMatch(
   engine: RegisteredSession['engine'],
   ownership = agentCommandOwnershipSnapshot(),
 ): EngineProcessMatch {
+  if (engineCapabilityProbe(row.args)) return { score: 0, evidence: 'none' }
   const owners = engineFileOwners([row.imageFileKey, row.entrypointFileKey], ownership)
   if (owners.length === 1) {
     return owners[0] === engine
@@ -544,6 +655,7 @@ export function ambiguousAgentProcess(
   row: Pick<ProcessRow, 'executable' | 'args' | 'imageFileKey' | 'entrypointFileKey'>,
   ownership = agentCommandOwnershipSnapshot(),
 ): boolean {
+  if (engineCapabilityProbe(row.args)) return false
   if (!agentAliasCandidate(row) || hasCursorPackageEntrypoint(row.args)) return false
   const executable = basename(row.executable).toLowerCase()
   const entrybase = basename(processEntrypoint(row.args)).toLowerCase()
@@ -604,14 +716,18 @@ const RESUME_ARGS: Partial<Record<RegisteredSession['engine'], { flags: string[]
   claude: { flags: ['--resume', '-r'], id: /^[0-9a-f-]{16,}$/i, unless: ['--fork-session'] },
   codex: { flags: ['resume'], id: /^[0-9a-f-]{16,}$/i },
   cursor: { flags: ['--resume'], id: /^[0-9a-f-]{16,}$/i },
-  opencode: { flags: ['--session', '-s'], id: /^ses_[A-Za-z0-9]+$/ },
+  // `--fork` continues from the id but writes a NEW session, so the id in argv is the parent's.
+  opencode: { flags: ['--session', '-s'], id: /^ses_[A-Za-z0-9]+$/, unless: ['--fork'] },
   // Kilo inherits opencode's resume flags and its `ses_` id prefix — measured on this machine's kilo.db:
   // `ses_024a007fdffe11yG68JPxsHJly`. `--fork` is deliberately NOT here: it CONTINUES from an id but
   // writes a NEW session, so the id in argv is the parent's and would bind the agent to the wrong row.
-  kilo: { flags: ['--session', '-s'], id: /^ses_[A-Za-z0-9]+$/ },
+  kilo: { flags: ['--session', '-s'], id: /^ses_[A-Za-z0-9]+$/, unless: ['--fork'] },
   pi: { flags: ['--session', '--session-id'], id: /^[0-9a-f][0-9a-f-]{7,}$/i },
   // Hermes ids are timestamps: 20260728_115628_f2c86a.
-  hermes: { flags: ['--resume'], id: /^\d{8}_\d{6}_[0-9a-z]+$/i },
+  // Hermes ids are timestamps (20260728_115628_f2c86a), or uuids for an editor's (ACP) sessions.
+  hermes: { flags: ['--resume', '-r'], id: /^(?:\d{8}_\d{6}_[0-9a-z]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i },
+  // `devin -r <id>` / `--resume <id>`: ids are word slugs (`brisk-otter`).
+  devin: { flags: ['--resume', '-r'], id: /^[a-z0-9]+(?:-[a-z0-9]+)+$/ },
   commandcode: { flags: ['--resume', '-r', '--session'], id: /^[0-9a-f-]{16,}$/i },
   // `muse resume <uuid>` names the session; `muse resume --last` does not, so that form falls through
   // to the scan in sessionRepair instead.
@@ -708,7 +824,7 @@ type PaneProcessLookup =
   | { ok: true; identity: ProcessIdentity }
   | { ok: false; unknown: boolean; reason: string }
 
-async function lookupPaneEngineProcess(
+export async function lookupPaneEngineProcess(
   pane: string,
   engine: RegisteredSession['engine'],
 ): Promise<PaneProcessLookup> {
@@ -806,11 +922,6 @@ export async function resolvePaneEngineProcess(
 export const LSTART_MARKER_RE =
   /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4}$/
 
-/** Pane + engine process validation. A saved identity prevents PID reuse from reviving a stale entry. */
-export async function validateSessionRuntime(session: RegisteredSession): Promise<boolean> {
-  return (await checkSessionRuntime(session)).state === 'alive'
-}
-
 /**
  * The same check, but three-valued and with a reason — the reaper needs both.
  *
@@ -860,8 +971,8 @@ export async function checkSessionRuntime(session: RegisteredSession): Promise<R
   return { state: 'alive' }
 }
 
-// A short single-line message can be pasted without bracketed-paste settling. Anything longer or
-// multi-line uses bracketed paste and waits before Enter (see sendToTmux).
+// Short single-line messages need no settling delay, but still need bracketed-paste boundaries:
+// Codex treats Enter immediately after an unbracketed text burst as a pasted newline, not submit.
 const INJECT_FASTPATH_MAXLEN = 500
 // Base settle time before the submit Enter; grows with length (Claude needs time to ingest a big paste
 // and collapse it to `[Pasted text]` before a clean Enter counts as submit rather than paste content).
@@ -964,6 +1075,31 @@ export function tmuxPaneState(pane: string): Promise<TmuxPaneState | null> {
   })
 }
 
+/** What a pane is running and where, as tmux knows it (terminal clients' #{pane_current_*}). */
+export interface TmuxPaneInfo { command: string; path: string; pid: number | null; tty: string }
+
+/**
+ * The foreground command, live working directory, pid and tty of a pane — tmux's
+ * `#{pane_current_command}` and `#{pane_current_path}`, which a terminal client (hn) shows and a
+ * vim-tmux-navigator style check asks. Null when tmux does not know the pane.
+ */
+export function tmuxPaneInfo(pane: string, socket?: string): Promise<TmuxPaneInfo | null> {
+  return new Promise((resolve) => {
+    // A path can hold any character but a newline; the command, pid and tty cannot hold one either.
+    const format = '#{pane_current_command}\n#{pane_pid}\n#{pane_tty}\n#{pane_current_path}'
+    // `socket` names a server outright (tests pass their own); without it, the daemon's server.
+    const args = [...(socket ? ['-S', socket] : []), 'display-message', '-p', '-t', pane, format]
+    execFile('tmux', args, { timeout: 2_000 }, (err, stdout) => {
+      if (err) { resolve(null); return }
+      const [command = '', pid = '', tty = '', ...path] = stdout.replace(/\n$/, '').split('\n')
+      const n = Number(pid)
+      // tmux 3.5 answers a pane it does not know with empty fields rather than an error.
+      if (pid === '' || !Number.isSafeInteger(n)) { resolve(null); return }
+      resolve({ command, path: path.join('\n'), pid: n, tty })
+    })
+  })
+}
+
 /**
  * Hand a pane back to tmux's default disposal after `create()` asked tmux to keep it when dead.
  *
@@ -1007,18 +1143,18 @@ async function tmuxPasteText(pane: string, content: string, bracketed: boolean):
  * Type a message into a tmux pane and submit it — the web-chat/device → terminal injection point.
  *
  * All text is loaded into a uniquely named tmux buffer over stdin so prompt bytes never enter argv,
- * environment, logs, or child-process error strings. Short single-line input is pasted literally and
- * submitted immediately.
+ * environment, logs, or child-process error strings. Every message is bracketed-pasted as one unit
+ * (`paste-buffer -p`) so the terminal can distinguish the paste from the separate submit Enter.
+ * Short single-line input is submitted immediately after that explicit paste boundary.
  *
- * Long/multiline input is bracketed-pasted as one unit (`paste-buffer -p`), allowed to settle, then
- * submitted with a separate Enter. (Verified: reliably submits up to ~28 KB.)
+ * Long/multiline input is allowed to settle before Enter. (Verified: reliably submits up to ~28 KB.)
  */
 export function sendToTmux(pane: string, text: string): Promise<boolean> {
   const content = text.replace(/[\r\n]+$/, '') // strip trailing newlines so the submit Enter isn't doubled
   return (async () => {
-    const bracketed = content.length > INJECT_FASTPATH_MAXLEN || content.includes('\n')
-    if (!(await tmuxPasteText(pane, content, bracketed))) return false
-    if (bracketed) await sleep(Math.min(1500, INJECT_PASTE_DELAY_BASE_MS + Math.floor(content.length / 60)))
+    const needsSettle = content.length > INJECT_FASTPATH_MAXLEN || content.includes('\n')
+    if (!(await tmuxPasteText(pane, content, true))) return false
+    if (needsSettle) await sleep(Math.min(1500, INJECT_PASTE_DELAY_BASE_MS + Math.floor(content.length / 60)))
     return tmuxEnter(pane)
   })()
 }
@@ -1052,32 +1188,5 @@ export function pasteRawIntoTmux(pane: string, text: string): Promise<boolean> {
 export function sendKeyToTmux(pane: string, key: string): Promise<boolean> {
   return new Promise((resolve) => {
     execFile('tmux', ['send-keys', '-t', pane, key], { timeout: 2000 }, (err) => resolve(!err))
-  })
-}
-
-export function tmuxCaptureArgs(
-  pane: string,
-  historyLines = 100,
-  options: { visible?: boolean; ansi?: boolean } = {},
-): string[] {
-  const bounded = Math.max(20, Math.min(300, Math.floor(historyLines)))
-  const args = ['capture-pane', '-p']
-  if (options.ansi !== false) args.push('-e')
-  args.push('-J', '-t', pane)
-  if (!options.visible) args.push('-S', `-${bounded}`)
-  return args
-}
-
-/** Capture terminal text; SGR and bounded history are independently selectable by backend consumers. */
-export function captureTmuxPane(
-  pane: string,
-  historyLines = 100,
-  options: { visible?: boolean; ansi?: boolean } = {},
-): Promise<string | null> {
-  return new Promise((resolve) => {
-    execFile('tmux', tmuxCaptureArgs(pane, historyLines, options), { timeout: 2000 }, (err, stdout) => {
-      if (err) { resolve(null); return }
-      resolve(stdout)
-    })
   })
 }

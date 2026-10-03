@@ -83,8 +83,8 @@ class FileSnapshotStore implements SnapshotStore {
   }
 }
 
-/// The same contract with no disk under it — for tests, and for a build that
-/// deliberately keeps nothing.
+/// In memory — what every test passes, for the reason at the top of this file: a widget test that
+/// reached a real file store would hang rather than fail.
 class MemorySnapshotStore implements SnapshotStore {
   MemorySnapshotStore([this.contents]);
 

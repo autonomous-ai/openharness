@@ -1,4 +1,5 @@
 /** Stop retains the logical session before retiring its process and terminal. */
+import { stopSharedCodexSession } from './codexSessionLifecycle.js'
 import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { isTerminalEngine } from '../engines/types.js'
 import type { registry as liveRegistry, RegisteredSession } from './registry.js'
@@ -29,6 +30,17 @@ export class AgentStopError extends Error {
   readonly code = 'STOP_UNCONFIRMED'
 }
 
+export interface StopAgentOptions {
+  /** Synchronous cancellation/identity fence at the actual signal boundary. */
+  current?(): boolean
+  /** A Close must earn its permission again after saving, immediately before signalling. */
+  beforeStop?(session: RegisteredSession): Promise<void>
+  /** Retain native history before exit, then include anything the engine flushed while exiting. */
+  checkpoint?(session: RegisteredSession, phase: 'before' | 'after'): Promise<void>
+  /** Fresh proof that an unbound chat has never started and its composer is empty. */
+  confirmUnusedConversation?(session: RegisteredSession): Promise<boolean>
+}
+
 // Hooks rebuild registry objects. Compare stable values, never JavaScript object
 // identity or property ordering, while retaining the exact PID-reuse guard.
 const runtimeIdentity = (entry: RegisteredSession | undefined) => entry ? JSON.stringify([
@@ -40,7 +52,7 @@ const runtimeIdentity = (entry: RegisteredSession | undefined) => entry ? JSON.s
 export function createStopAgentService(deps: StopAgentServiceDeps) {
   const { registry, stoppedAgents, restartJobs, stopJobs, tmuxBackend, agentReconciler,
     forgetSession, markDeleted, clearDeleted } = deps
-  return (target: string) => {
+  return (target: string, options: StopAgentOptions = {}) => {
     const sessionId = registry.resolve(target)?.agentId ?? target
     const existing = stopJobs.get(sessionId)
     if (existing) return existing
@@ -57,39 +69,56 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
       const captured = await captureResumeIdentity({ ...live })
       // Discovery or a hook may have updated this row while reading the native store.
       // A replacement process must never be stopped using an older snapshot.
-      if (!sameTarget()) {
-        throw new AgentStopError('Harness changed while saving its conversation. Try pausing again.')
+      if (!sameTarget() || options.current?.() === false) {
+        throw new AgentStopError('Harness changed while saving its conversation. Try stopping again.')
       }
       const current = registry.resolve(sessionId)!
       const s = current.sessionId && current.sessionId !== captured.sessionId ? { ...current } : { ...current, sessionId: captured.sessionId,
         transcriptPath: captured.transcriptPath, boundAt: captured.boundAt, source: captured.source }
       // Saving precedes every mutation. A storage failure leaves the live agent alone.
       stoppedAgents.save(s)
+      await options.checkpoint?.(s, 'before')
+      await options.beforeStop?.(s)
+      if (!sameTarget() || options.current?.() === false) {
+        throw new AgentStopError('Harness changed while saving its conversation. Try stopping again.')
+      }
       const routes = s.runtimes.map(terminalRouteKey)
       for (const route of routes) agentReconciler.holdRoute(route)
       try {
         markDeleted(sessionId)
         if (s.sessionId) markDeleted(s.sessionId)
-        const paneStop = tmuxBackend
-          ? Promise.all(s.runtimes.filter((runtime): runtime is TmuxRuntimeRef => runtime.backend === 'tmux')
-            .map(runtime => tmuxBackend!.kill(runtime)))
-          : Promise.resolve([])
-        const processStop = isTerminalEngine(s.engine) ? Promise.resolve('gone' as const)
+        await stopSharedCodexSession(s, () => sameTarget() && options.current?.() !== false,
+          undefined, options.confirmUnusedConversation)
+        // Keep the terminal alive while the engine handles SIGTERM and flushes
+        // its native store. Killing tmux in parallel can deliver SIGHUP first.
+        const termination = await (isTerminalEngine(s.engine) ? Promise.resolve('gone' as const)
           : terminateDeletedAgent(s, {
             checkRuntime: checkPidRuntime,
-            kill: (pid, signal) => process.kill(pid, signal),
+            kill: (pid, signal) => {
+              if (!sameTarget() || options.current?.() === false) throw new AgentStopError('The close request was cancelled or changed.')
+              process.kill(pid, signal)
+            },
             sleep: ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.() }),
             log: message => console.log(message),
-          }, 0)
-        // Both checks must settle before releasing the route or permitting a retry.
-        const [panes, termination] = await Promise.allSettled([paneStop, processStop])
-        if (panes.status !== 'fulfilled' || termination.status !== 'fulfilled'
-          || termination.value === 'failed'
-          || panes.value.some(result => result.state !== 'succeeded')
-          || (isTerminalEngine(s.engine) && (!tmuxBackend || !panes.value.length))) {
-          throw new AgentStopError('Could not confirm that the harness stopped. Its saved conversation is safe. Try pausing again.')
+          }, 0)).catch(() => 'failed' as const)
+        if (termination === 'failed' || termination === 'not-ours') {
+          throw new AgentStopError('Could not confirm that the harness stopped. Its saved conversation is safe. Try stopping again.')
         }
-        // Never remove a replacement discovered while the process checks were awaiting.
+        // Never close a replacement's pane, even when our old process exited.
+        if (!sameTarget() || options.current?.() === false) {
+          throw new AgentStopError('The harness changed while pausing. Check its current state before trying again.')
+        }
+        await options.checkpoint?.(s, 'after')
+        if (!sameTarget() || options.current?.() === false) {
+          throw new AgentStopError('The harness changed while pausing. Check its current state before trying again.')
+        }
+        const panes = await Promise.allSettled(tmuxBackend
+          ? s.runtimes.filter((runtime): runtime is TmuxRuntimeRef => runtime.backend === 'tmux')
+            .map(runtime => tmuxBackend.kill(runtime)) : [])
+        if (panes.some(result => result.status !== 'fulfilled' || result.value.state !== 'succeeded')
+          || (isTerminalEngine(s.engine) && !panes.length)) {
+          throw new AgentStopError('Could not confirm that the harness stopped. Its saved conversation is safe. Try stopping again.')
+        }
         if (!sameTarget()) {
           throw new AgentStopError('The harness changed while pausing. Check its current state before trying again.')
         }

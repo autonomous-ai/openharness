@@ -2,7 +2,7 @@
  * The parts of starting a daemon that decide whether it WORKED — pulled out of cli.ts so they can be
  * tested without a backend, a bundle, or a real child.
  *
- * Two phases, and the split is the point. A spawned child first has to BIND the fixed control port;
+ * Two phases, and the split is the point. A spawned child first has to BIND its control endpoints;
  * only then does it try the backend. The old single wait watched the log for "[backend] connected"
  * and, when that never came inside ten seconds, gave up with "unreachable" — leaving a child that was
  * still booting (a slow login shell, tmux adoption) with no pid file and nothing guarding it, which is
@@ -23,7 +23,7 @@ export interface LaunchDeps {
   readLogSlice: (sinceOffset: number) => string
   now: () => number
   sleep: (ms: number) => Promise<void>
-  /** The fixed control port, for the EADDRINUSE message. */
+  /** The requested control port, for the EADDRINUSE message. */
   port: number
 }
 
@@ -59,10 +59,10 @@ export function connectFailure(tail: string, port: number): ConnectFailure | nul
   if (tail.includes('[backend] machine busy')) {
     return { detail: 'this machine is already connected from another computer', fatal: true, busy: true }
   }
-  // The daemon couldn't bind the (fixed) hook port → another adapter is almost certainly already
-  // running. Fatal: don't sit on "retrying"; tell the user how to find/stop the other one.
+  // A bind failed even with the private-socket fallback. Do not advise killing an unknown listener:
+  // on a shared computer the requested port may belong to another OS user's daemon.
   if (/EADDRINUSE|already in use/.test(tail)) {
-    return { detail: `hook port ${port} is already in use — is another machine daemon running? (harness stop, or lsof -ti :${port} | xargs kill)`, fatal: true }
+    return { detail: `hook port ${port} is already in use — check harness status or choose a different PORT`, fatal: true }
   }
   const m = tail.match(/Unexpected server response: (\d+)/)
   if (m) {

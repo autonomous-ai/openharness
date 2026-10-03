@@ -131,7 +131,7 @@ do {
     styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
   window.isReleasedWhenClosed = false
   defer { window.close() }
-  let titlebar = SwarmTitlebar(window: window, messenger: WindowZoomCheckMessenger())
+  let titlebar = SwarmTitlebar(window: window, messenger: WindowZoomCheckMessenger(), installStatusItem: false)
   try titlebar.checkWindowGestures(window)
   print("AppKit window zoom: \(windowZoomCheckCount) checks passed; no windows displayed.")
 } catch {

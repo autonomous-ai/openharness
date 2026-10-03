@@ -14,7 +14,9 @@ import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/shortcuts/keyboard_practice.dart';
 import 'package:harness/shortcuts/shortcuts_browser.dart';
 import 'package:harness/terminal/terminal_text.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/shortcuts_sheet.dart';
+import 'package:harness/widgets/terminal_text_action.dart';
 import 'package:harness/widgets/workspace_welcome.dart';
 import 'package:xterm/xterm.dart';
 
@@ -112,26 +114,43 @@ void main() {
   }
 
   void expectUniformText(WidgetTester tester) {
-    void check(InlineSpan span, TextStyle parent) {
+    void check(InlineSpan span, TextStyle parent, {bool capsule = false}) {
       final style = parent.merge(span.style);
       if (span is TextSpan) {
-        if (span.text?.trim().isNotEmpty == true &&
-            style.fontFamily != 'MaterialIcons') {
-          expect(style.fontSize, terminalFontStore.size, reason: span.text);
+        // Icon glyphs (Material's, and the app's Lucide set) are not type.
+        final icon =
+            style.fontFamily == 'MaterialIcons' ||
+            (style.fontFamily?.startsWith('packages/lucide_icons_flutter/') ??
+                false);
+        if (span.text?.trim().isNotEmpty == true && !icon) {
+          expect(
+            style.fontSize,
+            capsule ? 13 : terminalFontStore.size,
+            reason: span.text,
+          );
           expect(
             style.fontFamily,
-            terminalFontStore.value.fontFamily,
+            capsule
+                ? DesktopChrome.text().fontFamily
+                : terminalFontStore.value.fontFamily,
             reason: span.text,
           );
         }
         for (final child in span.children ?? <InlineSpan>[]) {
-          check(child, style);
+          check(child, style, capsule: capsule);
         }
       }
     }
 
-    for (final rich in tester.widgetList<RichText>(find.byType(RichText))) {
-      check(rich.text, const TextStyle());
+    for (final rich in find.byType(RichText).evaluate()) {
+      // Workspace prose follows the terminal font; named actions deliberately
+      // use the shared desktop capsule typography, independent of terminal size.
+      check(
+        (rich.widget as RichText).text,
+        const TextStyle(),
+        capsule:
+            rich.findAncestorWidgetOfExactType<TerminalTextAction>() != null,
+      );
     }
     for (final input in tester.widgetList<EditableText>(
       find.byType(EditableText),
@@ -139,6 +158,27 @@ void main() {
       expect(input.style.fontSize, terminalFontStore.size);
       expect(input.style.fontFamily, terminalFontStore.value.fontFamily);
     }
+    expect(tester.takeException(), isNull);
+  }
+
+  void expectShortcutTypography(WidgetTester tester) {
+    final browser = find.byType(ShortcutsBrowser);
+    for (final text in tester.widgetList<Text>(
+      find.descendant(of: browser, matching: find.byType(Text)),
+    )) {
+      if (text.style?.fontFamily != null) {
+        expect(
+          text.style!.fontFamily,
+          grid.AppType.sansFamily,
+          reason: text.data,
+        );
+      }
+    }
+    final input = tester.widget<TextField>(
+      find.byKey(const ValueKey('shortcuts-search')),
+    );
+    expect(input.style!.fontFamily, grid.AppType.sansFamily);
+    expect(input.style!.fontSize, 13);
     expect(tester.takeException(), isNull);
   }
 
@@ -257,7 +297,7 @@ void main() {
       );
       final search = find.byKey(const ValueKey('shortcuts-search'));
       await capture(tester, 'shortcuts-dark');
-      expectUniformText(tester);
+      expectShortcutTypography(tester);
       await tester.enterText(search, 'clone');
       await tester.pump();
       expect(find.text('Clone Harness'), findsOneWidget);
@@ -278,7 +318,7 @@ void main() {
       expect(find.byType(KeyboardPractice), findsOneWidget);
       await key(tester, LogicalKeyboardKey.keyY, cmd: true);
       await tester.pumpAndSettle();
-      expect(find.text('[x] New Tab'), findsOneWidget);
+      expect(find.byKey(const ValueKey('practice-completed')), findsOneWidget);
       await key(tester, LogicalKeyboardKey.escape);
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
@@ -288,7 +328,7 @@ void main() {
       font(22);
       tester.view.physicalSize = const Size(420, 740);
       await tester.pumpAndSettle();
-      expectUniformText(tester);
+      expectShortcutTypography(tester);
       await capture(tester, 'shortcuts-narrow-large');
       await tester.pumpWidget(const SizedBox());
     },
@@ -310,7 +350,7 @@ void main() {
     showShortcutsSheet(host);
     await tester.pumpAndSettle();
     expect(find.byType(ShortcutsBrowser), findsOneWidget);
-    expectUniformText(tester);
+    expectShortcutTypography(tester);
     // Dialog lives above the page's boundary; capture it directly when requested.
     final output = Platform.environment['HARNESS_REFINEMENT_CAPTURE_DIR'];
     if (output != null) {

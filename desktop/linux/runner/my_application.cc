@@ -77,10 +77,30 @@ static FlMethodResponse* write_clipboard_image_png(FlValue* args) {
   return FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_bool(TRUE)));
 }
 
+// The files the GTK clipboard holds, as paths in the order they were copied — what a file
+// manager's Copy puts there (Nautilus, Dolphin, Thunar and the rest all offer `text/uri-list`).
+// An empty list when the clipboard holds none. A URI that is not a local file — a remote mount
+// with no path here — is left out.
+static FlMethodResponse* read_clipboard_file_paths() {
+  GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+  g_autoptr(FlValue) paths = fl_value_new_list();
+  g_auto(GStrv) uris = gtk_clipboard_wait_for_uris(clipboard);
+  if (uris != nullptr) {
+    for (gchar** uri = uris; *uri != nullptr; uri++) {
+      g_autofree gchar* path = g_filename_from_uri(*uri, nullptr, nullptr);
+      if (path != nullptr) {
+        fl_value_append_take(paths, fl_value_new_string(path));
+      }
+    }
+  }
+  return FL_METHOD_RESPONSE(fl_method_success_response_new(paths));
+}
+
 // Dart calls into this channel to read/write a native image on the GTK clipboard. Flutter's own
 // `Clipboard` API only ever sees text/plain — see terminal_panel.dart's `_paste()` — so a real
 // image (a screenshot, "Copy Image" from a browser, ...) needs this native round trip instead.
-// Mirrors macOS's `harness/clipboard_image` channel (MainFlutterWindow.swift).
+// It also answers for the FILES a clipboard holds (`readFilePaths`), which that API cannot see
+// either. Mirrors macOS's `harness/clipboard_image` channel (MainFlutterWindow.swift).
 static void clipboard_image_method_call_cb(FlMethodChannel* channel,
                                             FlMethodCall* method_call,
                                             gpointer user_data) {
@@ -90,10 +110,30 @@ static void clipboard_image_method_call_cb(FlMethodChannel* channel,
     response = read_clipboard_image_png();
   } else if (g_strcmp0(method, "writeImagePng") == 0) {
     response = write_clipboard_image_png(fl_method_call_get_args(method_call));
+  } else if (g_strcmp0(method, "readFilePaths") == 0) {
+    response = read_clipboard_file_paths();
   } else {
     response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
   }
   fl_method_call_respond(method_call, response, nullptr);
+}
+
+// The app's command key is Meta — ⌘ on a Mac. A PC keyboard's logo key reaches
+// GTK as Super, which Flutter's Linux embedder maps to its own `superKey`
+// rather than to meta, so HardwareKeyboard.isMetaPressed never saw it and no
+// ⌘ shortcut could fire. Rewrite the key and its modifier bit before FlView's
+// own handler (the class default, which runs after this) reads the event.
+static gboolean super_as_meta_cb(GtkWidget* widget, GdkEventKey* event,
+                                 gpointer user_data) {
+  if (event->keyval == GDK_KEY_Super_L) {
+    event->keyval = GDK_KEY_Meta_L;
+  } else if (event->keyval == GDK_KEY_Super_R) {
+    event->keyval = GDK_KEY_Meta_R;
+  }
+  if (event->state & GDK_SUPER_MASK) {
+    event->state = static_cast<GdkModifierType>(event->state | GDK_META_MASK);
+  }
+  return FALSE;
 }
 
 // Held for the app's lifetime (same scope as the window itself), never unreffed — there is no
@@ -105,6 +145,31 @@ static void install_clipboard_image_channel(FlView* view) {
       FL_METHOD_CODEC(fl_standard_method_codec_new()));
   fl_method_channel_set_method_call_handler(
       channel, clipboard_image_method_call_cb, nullptr, nullptr);
+}
+
+// True under a tiling compositor (Hyprland — Omarchy's — sway, niri, river,
+// i3). Windows there carry no title bar: the compositor places them and a key
+// closes them, so a GTK header bar is a strip of chrome no other app has.
+static gboolean is_tiling_session() {
+  const gchar* sockets[] = {"HYPRLAND_INSTANCE_SIGNATURE", "SWAYSOCK",
+                            "NIRI_SOCKET", "I3SOCK"};
+  for (const gchar* name : sockets) {
+    const gchar* value = g_getenv(name);
+    if (value != nullptr && value[0] != '\0') return TRUE;
+  }
+  const gchar* desktop = g_getenv("XDG_CURRENT_DESKTOP");
+  if (desktop == nullptr) return FALSE;
+  g_auto(GStrv) names = g_strsplit(desktop, ":", -1);
+  for (gchar** name = names; *name != nullptr; name++) {
+    if (g_ascii_strcasecmp(*name, "Hyprland") == 0 ||
+        g_ascii_strcasecmp(*name, "sway") == 0 ||
+        g_ascii_strcasecmp(*name, "niri") == 0 ||
+        g_ascii_strcasecmp(*name, "river") == 0 ||
+        g_ascii_strcasecmp(*name, "i3") == 0) {
+      return TRUE;
+    }
+  }
+  return FALSE;
 }
 
 // Implements GApplication::activate.
@@ -122,8 +187,7 @@ static void my_application_activate(GApplication* application) {
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 
   // The packaged icon lives beside the executable in the relocatable Linux
-  // bundle. Resolve it once so both the native window icon and GNOME's custom
-  // header title use the exact same asset.
+  // bundle.
   g_autofree gchar* icon_path = nullptr;
   g_autofree gchar* exe_path = g_file_read_link("/proc/self/exe", nullptr);
   if (exe_path != nullptr) {
@@ -131,46 +195,34 @@ static void my_application_activate(GApplication* application) {
     icon_path = g_build_filename(exe_dir, "harness.png", nullptr);
   }
 
-  // Use a header bar when running in GNOME as this is the common style used
-  // by applications and is the setup most users will be using (e.g. Ubuntu
-  // desktop).
-  // If running on X and not using GNOME then just use a traditional title bar
-  // in case the window manager does more exotic layout, e.g. tiling.
-  // If running on Wayland assume the header bar will work (may need changing
-  // if future cases occur).
-  gboolean use_header_bar = TRUE;
+  // Who draws the window's title bar, told to Dart through the environment
+  // (HARNESS_LINUX_TITLE_BAR, read by linux_menu_bar.dart):
+  //  - "flutter": GNOME, the common case (e.g. Ubuntu desktop). The app draws
+  //    one row itself — its menus, search, notifications, Store and the
+  //    window buttons — where a GTK header bar would have taken a row of its
+  //    own above them. GTK keeps drawing the shadow and the resize edges
+  //    (client-side decorations) round a titlebar widget that is never shown.
+  //  - "none": a tiling compositor. Windows there carry no title bar; on
+  //    Wayland GTK would otherwise fall back to a client-side one of its own.
+  //  - "native": X without GNOME, where the window manager may lay windows out
+  //    in exotic ways, so it keeps its own traditional title bar.
+  const gchar* title_bar = "flutter";
+  if (is_tiling_session()) {
+    title_bar = "none";
+    gtk_window_set_decorated(window, FALSE);
+  } else {
 #ifdef GDK_WINDOWING_X11
-  GdkScreen* screen = gtk_window_get_screen(window);
-  if (GDK_IS_X11_SCREEN(screen)) {
-    const gchar* wm_name = gdk_x11_screen_get_window_manager_name(screen);
-    if (g_strcmp0(wm_name, "GNOME Shell") != 0) {
-      use_header_bar = FALSE;
+    GdkScreen* screen = gtk_window_get_screen(window);
+    if (GDK_IS_X11_SCREEN(screen)) {
+      const gchar* wm_name = gdk_x11_screen_get_window_manager_name(screen);
+      if (g_strcmp0(wm_name, "GNOME Shell") != 0) title_bar = "native";
     }
-  }
 #endif
-  if (use_header_bar) {
-    GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
-    gtk_widget_show(GTK_WIDGET(header_bar));
-    // GTK's stock header title has no application icon. Supply a compact,
-    // centered title widget so the native caption identifies Harness the same
-    // way it does in the dock and task switcher.
-    GtkWidget* title = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    if (icon_path != nullptr && g_file_test(icon_path, G_FILE_TEST_IS_REGULAR)) {
-      g_autoptr(GError) icon_error = nullptr;
-      g_autoptr(GdkPixbuf) title_pixbuf = gdk_pixbuf_new_from_file_at_scale(
-          icon_path, 20, 20, TRUE, &icon_error);
-      if (title_pixbuf != nullptr) {
-        GtkWidget* icon = gtk_image_new_from_pixbuf(title_pixbuf);
-        gtk_box_pack_start(GTK_BOX(title), icon, FALSE, FALSE, 0);
-      }
-    }
-    GtkWidget* label = gtk_label_new("Harness");
-    gtk_box_pack_start(GTK_BOX(title), label, FALSE, FALSE, 0);
-    gtk_widget_show_all(title);
-    gtk_header_bar_set_custom_title(header_bar, title);
-    gtk_header_bar_set_show_close_button(header_bar, TRUE);
-    gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
   }
+  if (g_strcmp0(title_bar, "flutter") == 0) {
+    gtk_window_set_titlebar(window, gtk_fixed_new());
+  }
+  g_setenv("HARNESS_LINUX_TITLE_BAR", title_bar, TRUE);
   // Keep the native window metadata correct even when a custom header is
   // drawn. Window managers use it for non-GNOME captions and accessibility.
   gtk_window_set_title(window, "Harness");
@@ -196,6 +248,10 @@ static void my_application_activate(GApplication* application) {
   fl_view_set_background_color(view, &background_color);
   gtk_widget_show(GTK_WIDGET(view));
   gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
+  g_signal_connect(view, "key-press-event", G_CALLBACK(super_as_meta_cb),
+                   nullptr);
+  g_signal_connect(view, "key-release-event", G_CALLBACK(super_as_meta_cb),
+                   nullptr);
 
   // Show the window when Flutter renders.
   // Requires the view to be realized so we can start rendering.

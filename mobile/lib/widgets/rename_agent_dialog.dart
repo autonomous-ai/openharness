@@ -162,7 +162,13 @@ class _RenameAgentDialogState extends State<_RenameAgentDialog> {
       widget.agentId,
       _controller.text,
     );
-    if (!mounted) return;
+    // ⚠️ `mounted` is not "still open". Cancel, the veil and Escape all stay
+    // live while Save spins, and a dialog closed that way is still mounted for
+    // the length of its fade — so an answer landing inside those 140ms found
+    // `mounted` true and popped again. The dialog was already going; the route
+    // that pop took was the terminal page under it. Only a route that is still
+    // in the navigator's history is this dialog's to close.
+    if (!mounted || !(ModalRoute.of(context)?.isActive ?? false)) return;
     if (result == null) {
       Navigator.of(context).pop();
       return;
@@ -390,9 +396,15 @@ class _RenameAgentDialogState extends State<_RenameAgentDialog> {
               disabledBackground: _busy
                   ? accent
                   : accent.withValues(alpha: 0.22),
+              // Disabled, white at 40% vanishes into the pale wash a light card
+              // makes of the accent (1.1:1); there the label takes the accent
+              // itself — 4.0:1, the wash alone saying it is off. Dark: 3.5:1.
               disabledForeground: _busy
                   ? Colors.white
-                  : Colors.white.withValues(alpha: 0.4),
+                  : grid.AppTheme.pick(
+                      accent,
+                      Colors.white.withValues(alpha: 0.4),
+                    ),
             ),
             onPressed: _canSave ? () => unawaited(_submit()) : null,
             child: _busy

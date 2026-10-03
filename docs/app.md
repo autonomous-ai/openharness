@@ -25,9 +25,12 @@ Closing a pane is a view operation; the agent keeps running. **Stop Harness** en
 and asks first. **Restart Harness** relaunches it in the same pane with the same id, resuming the
 conversation where the engine supports it.
 
-**Open Harness (⌘O)** is the search: harnesses, tabs, projects, machines, history and commands, fuzzy
+**Open Harness (⌘P)** is the search: harnesses, tabs, projects, machines, history and commands, fuzzy
 matched, with a session preview on the right built from cached recent turns. Type `>` for commands
 only (also ⇧⌘P).
+
+**Open Project (⌘O)** opens the same picker in Projects mode so you can choose a folder and its
+harnesses directly.
 
 The **Harness Store** keeps search at the top while you browse. Discover opens with three
 illustrated features, then icon collections for coding, new and updated harnesses in this
@@ -82,3 +85,12 @@ The app talks to the daemon on this computer over a loopback socket and never di
 Other machines are reached through that daemon: it links to them with a per-machine remote password,
 terminates the encryption locally, and hands the app plaintext. Machines ▸ Link Machine… runs the
 link flow; the CLI equivalent is under [The daemon and CLI](#the-daemon-and-cli).
+
+Settings ▸ Profiles keeps that one sign-in and chooses which computer's tabs
+this window draws. **All machines** is the shared desk. A computer's row hides
+tabs whose agents run anywhere else. Those tabs stay on the account, so another
+window, or **All machines** here, still has them. Closing the last visible tab
+opens an empty tab on this computer; it does not reveal a hidden one. A tab
+that mixes agents from two computers, or whose title still names another
+computer after its agents have all moved here, follows its agents. The Store
+and an empty tab remain in every profile.

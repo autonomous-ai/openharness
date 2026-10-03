@@ -1,106 +1,97 @@
-# Terminal workspace design system
+# Terminal workspace boundaries
 
-Harness should feel like a terminal workspace, from its tab bar to its welcome
-page, dialogs, and contextual controls. **Text first. Keyboard first. Fixed
-cells.** Use this document for new workspace surfaces and visual reviews.
+The [desktop design system](desktop-design-system.md) governs all app UI around
+the panes. It replaces this document's former fixed-cell and text-only rules
+for welcome pages, forms, dialogs, pickers, menus, and buttons. Historical
+screenshots show prior iterations and are not a presentation specification.
 
-The [terminal dialog rules](terminal-dialogs.md) specify row and column geometry,
-selection, input, and preview behavior. The [workspace status bar rules](workspace-status-bar.md)
-specify tabs, pane headers, focused context, and model selection. Those documents
-are the detailed implementation references for this system.
+Use the [product terminology](../../docs/terminology.md): a tab groups harnesses;
+a harness is one running agent session.
 
-## Text is the interface
+## Preserve the terminal
 
-Use meaningful names and familiar terminal punctuation. Prefer `[ New Harness ]`
-and `[ Customize Harness ]` to rounded buttons with pictograms. A checkbox is
-`[x]` or `[ ]`. Harness search has no prefix; `#` selects projects and `>` selects
-commands as editable text. Small, established actions may use `+`,
-`@`, `:`, and `*`, with a descriptive tooltip and accessible name.
+Terminal output, direct keyboard input, the in-pane composer, and in-pane find
+remain terminal-native. Keep the selected terminal font, palette, exact content,
+scrollback, selection, and input behavior. Real code, paths, and logs may use
+monospace elsewhere when it helps readability.
 
-There is no broadly understood ASCII pencil. Keep `[ Customize Harness ]` after
-customization as well as before it. The same action should retain its name and
-location; a saved background must not silently replace it with an unlabeled icon.
-Over artwork, a flat backing may protect text contrast. Do not add a pill,
-bordered button well, logo, emoji, or ornamental icon to workspace controls.
-User content and embedded viewers retain their own visual language.
+Do not recreate, resize, or send input to a terminal merely because app chrome
+opens or closes. Preserve terminal ownership, pending streams, viewer-owner
+relationships, and pane state. Closing a pane removes its view immediately.
 
-## Keyboard is the primary path
+## Keep the workspace structure
 
-Every workspace action needs an existing command or a clear keyboard interaction.
-Resolve shortcut hints from the live keymap. Cmd-N creates a harness, Cmd-O opens projects (`#`), Cmd-P searches harnesses, and Cmd-Shift-P opens
-commands (`>`) in the shared picker. Cmd-T opens a tab, Cmd-W closes a tab, and
-Cmd-Shift-W closes the focused pane view. Cmd-Q quits the app. Enter activates, Space toggles, and Escape backs out or dismisses.
+Tabs remain compact and content-sized, adding one at a time until the row fills.
+Preserve Command-number navigation and established working/question/done/failure
+marks. Idle does not need a mark. Motion represents actual work and respects
+Reduce Motion. Keep the top global actions compact and the Store button familiar.
+Leave an 8-point control gap before Store. On macOS, notifications live in the
+system menu bar; the window keeps Search and Store. Linux and browser bars
+retain their notification bell. Show a count badge only when something is unread.
+Tooltips explain icon actions and resolve shortcuts from the live keymap.
 
-Closing a pane removes its view immediately, without a minimize animation.
+The footer shows a global harness count, local host CPU/RAM/GPU and subscription
+allowance used on the left, all in neutral ink with whole percentages. Its
+right-hand context follows the focused pane: machine, project, branch and PR.
+Each terminal pane header ends with agent, model and close at every width.
+Hovering the right edge reveals split right; hovering the bottom edge reveals
+split down. These icons sit inside the pane, clear of resize gaps. The header
+has no split, add or zoom icons; zoom remains in menus and shortcuts.
+Agent and model use the same plain-text selector with no pill or chevron. Their
+hover/focus changes ink, not weight or size. The left side keeps the session name
+and activity; only a distinct domain-harness icon remains beside it, rather than
+repeating the named coding agent. Splitting opens New Harness directly with that pane's agent, machine,
+and project, then creates into the chosen split on submission. Clicking the
+agent opens the shared `&` Agents picker; clicking the model opens the shared Models picker for that harness;
+the footer does not repeat model or effort. Agent switching saves the original
+session before starting its replacement in the same project. Its pane and layout
+survive peer cleanup of the stopped source. Show the replacement terminal as soon
+as its creation is confirmed, including during startup. Setup and resume warnings
+preserve keyboard input on an available terminal, with guidance above the output
+so it cannot cover a prompt. Agents that accept an initial message receive bounded
+recent requests and saved answers, preserving the handoff across
+retries; the saved original session keeps the full transcript. Do not show worktree implementation
+paths in everyday labels. User-selected shell/Powerline status styles remain
+available, including PR state colors and the option to disable color.
 
-Keep mouse access useful without adding duplicate floating controls. Clickable
-text shows a hand cursor and bold text on hover, press, and keyboard focus.
-Preserve the underlying colors, including filled status segments. Reserve both
-text weights during layout so emphasis never shifts neighboring controls.
-Resting controls stay unboxed. Tooltips describe the
-action, not merely the text. Omit a tooltip that repeats the visible name;
-show the full name when truncated, or a different underlying name. A model
-selector says `Switch model · Subscription or local models`; include its full
-model name only when shortened or temporarily replaced by a switching label. Disabled controls must not advertise an available
-action or receive keyboard activation. Preserve accessibility names and focus
-restoration; terminal styling is not permission to replace real controls with
-inaccessible painted text.
+The captures below use synthetic pane names. Agent and model remain plain text;
+only the hovered edge reveals a split control.
 
-## Use a real character grid
+![Four panes with split right revealed in the dark theme](review/2026-10-02-pane-edge-right.png)
 
-Measure columns and rows through `terminalCellSizeOf(context)` for dialogs and
-welcome content. Text, margins, choices, and scrolling follow those dimensions.
-Dialog selection highlights exactly one text row. Keep fixed font metrics when space
-gets tight; truncate long values or reduce the number of visible columns.
+![Nine panes with split down revealed in the light theme](review/2026-10-02-pane-edge-down.png)
 
-Persistent tab, status, and pane bars use `workspaceBarTextStyle()` and
-`workspaceBarCellSizeOf(context)`: 13 pt SF Mono regular on macOS and the platform
-monospace stack on Linux, independent of terminal zoom. Every bar control uses
-same minimum click height: `workspaceBarControlHeight()` (28 pt). The active tab
-fills the entire bar height with the workspace background color, joining the
-content below; selection keeps regular text and adds no `*` marker. Hovering a
-tab uses bold text like other bar controls. No rounded corners, ripple, or
-separate model-label well. Dialogs and welcome
-actions use `terminalContentStyle()` and follow the terminal font preference.
+Machine opens its scope, Project opens related harnesses, Branch opens the
+existing branches/PR history, and the PR opens its URL. These are navigation,
+not checkout actions. Missing data stays honest. Dependent viewers use their
+owner's context. See [workspace-status-bar.md](workspace-status-bar.md) for
+behavior and data rules; the desktop design system controls presentation.
 
-## Keep surfaces quiet
+## Focused panes
 
-First launch uses the same New Tab page as every later visit: “Follow your
-curiosity.” with New Harness, Open Harness, and Harness Store shortcuts. Keep
-this page independent of onboarding progress; no checklist or automatic dialog.
+The selected pane stays at full contrast. Other visible panes receive the
+approved 30% neutral-gray veil; Graphite's inactive background is RGB 64,64,64.
+A single or zoomed pane stays clear. Existing click and keyboard focus actions
+own selection. Keep the current pane clear while a menu or the tab strip has
+keyboard focus. Waiting-question borders remain visible above the veil.
+The overlay does not consume the first click or alter terminal state.
 
-![Shared first-launch and New Tab welcome](images/workspace-welcome.png)
+Only the focused pane gets a location-colored rim: blue on this computer,
+muted teal-gray (`AppPalette.remotePaneFocus`) on a known remote machine,
+including a single or zoomed pane. Both use the same solid 1-point boundary.
+Remote location is a quiet cue with less emphasis than local focus blue;
+the footer identifies the machine in text. Unfocused panes keep their neutral
+rim. The existing amber waiting-question border takes precedence over the
+focus color. Location uses machine identity, independently of the connection's
+transport mode.
 
-Use terminal foreground, background, muted text, and selection colors. Workspace
-dialogs use the same thin frame as a focused pane. Avoid raised cards, shadows,
-rounded action pills, and redundant headings. Tabs use concise text labels, with
-selection conveyed by background rather than bold type.
+## Input and review
 
-Status layouts and terminal palettes are separate choices. **Plain** always uses
-the terminal foreground, including PR status. Other status presets use the
-terminal's ANSI colors; Color off makes any preset monochrome. Do not invent
-runtime facts, Git dirtiness, exit status, or progress to decorate a theme.
+Retain existing commands and their live remapping. Menus and visible controls
+make those commands discoverable without requiring a shortcut lesson. Text
+editors retain ordinary editing and composition. Disabled actions do not activate.
 
-## Make context useful
-
-Show the focused pane's model, machine, compact project name, branch, and PR in the
-shared app bar. A dependent viewer uses its owner's context. Keep internal
-worktree paths and machinery out of everyday labels.
-
-Machine opens the shared picker scoped to that machine. Project opens its harnesses across
-known checkouts and machines. Branch narrows that project to the exact named
-branch. Hide detached commit hashes from the bar. These are navigation actions;
-they do not check out a branch.
-The PR label opens that PR. Each field gets its own accessible link, tooltip, and
-the shared hover treatment, including in joined Agnoster segments.
-
-## Review in context
-
-Check keyboard-only operation, hover, focus, disabled state, narrow windows,
-long names, missing Git data, a dependent viewer, light and dark palettes, and
-terminal font changes. Opening or dismissing controls must not send input to an
-agent or recreate its terminal. Use synthetic data for screenshots.
-
-Start with `TerminalTextAction`, `WorkspaceBarControl`, `WorkspaceStatusLine`, and
-the Cmd-N/Cmd-O reference implementations. Native macOS controls must match the
-Flutter fallback in behavior and appearance.
+Review narrow windows, long names, terminal font changes, alternate terminal
+palettes, dependent viewers, missing Git data, and light/dark app appearance.
+Opening or dismissing desktop UI must return focus correctly and never type
+into an agent accidentally. Use synthetic terminal content for saved previews.

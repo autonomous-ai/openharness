@@ -8,6 +8,105 @@ import 'package:harness/core/config.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  // Deliberately plain tests: no widget binding's HTTP override to hide the
+  // account-lifecycle fixture's inherited calls into the real local daemon.
+  for (final url in [
+    AppConfig.dev.localCliBaseUrl,
+    'http://localhost:18473',
+    'http://[::1]:18473',
+    AppConfig.defaultApiUrl,
+  ]) {
+    test(
+      'test API refuses live reads and writes before opening HTTP: $url',
+      () async {
+        var clients = 0;
+        await HttpOverrides.runZoned(
+          () async {
+            final api = ApiClient(
+              config: AppConfig(
+                apiBaseUrl: AppConfig.defaultApiUrl,
+                localCliBaseUrl: url,
+              ),
+              session: AuthSession(),
+            );
+            final blocked = isA<DioException>().having(
+              (error) => error.error.toString(),
+              'reason',
+              contains('access to live services is disabled'),
+            );
+            await expectLater(api.desk(), throwsA(blocked));
+            await expectLater(
+              api.deskOps([
+                {'op': 'seed', 'tabs': []},
+              ]),
+              throwsA(blocked),
+            );
+            expect(clients, 0);
+          },
+          createHttpClient: (_) {
+            clients++;
+            throw StateError('A test attempted to open a real HTTP client');
+          },
+        );
+      },
+    );
+  }
+
+  test(
+    'account experiment writes include identity and the local proxy header',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final seen = <(String, String, String?, String)>[];
+      final snapshot = {
+        'accountId': 'account-a',
+        'revision': 1,
+        'features': {'focus_bar_creature': false, 'share_button': true},
+      };
+      final subscription = server.listen((request) async {
+        seen.add((
+          request.method,
+          request.uri.path,
+          request.headers.value('x-adapter-local'),
+          await utf8.decoder.bind(request).join(),
+        ));
+        request.response
+          ..headers.contentType = ContentType.json
+          ..write(jsonEncode({'success': true, 'data': snapshot}));
+        await request.response.close();
+      });
+      try {
+        final api = ApiClient(
+          config: AppConfig(
+            apiBaseUrl: 'http://unused.invalid',
+            localCliBaseUrl: 'http://127.0.0.1:${server.port}',
+          ),
+          session: AuthSession(),
+        );
+        expect(await api.experimentalSettings(), snapshot);
+        expect(
+          await api.setExperimentalSetting('account-a', 'share_button', true),
+          snapshot,
+        );
+        expect(seen, [
+          ('GET', '/api/experimental-settings', null, ''),
+          (
+            'PATCH',
+            '/api/experimental-settings',
+            '1',
+            jsonEncode({
+              'accountId': 'account-a',
+              'feature': 'share_button',
+              'enabled': true,
+            }),
+          ),
+        ]);
+      } finally {
+        await subscription.cancel();
+        await server.close(force: true);
+      }
+    },
+  );
+
   test('machine request hits the local CLI proxy, not the backend, with no credential', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final paths = <String>[];

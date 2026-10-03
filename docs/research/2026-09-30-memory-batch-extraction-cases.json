@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "suite": "synthetic-batch-extraction-diagnostics-v1",
+  "purpose": "Frozen development diagnostics for multi-episode extraction. These are synthetic conversations, not held-out user histories or proof of usefulness. Expectations and probes never enter inference. Preserve this file after a native run; create a new suite for revisions.",
+  "cases": [
+    {
+      "id": "personal-mixed-episodes",
+      "projectId": null,
+      "episodes": [
+        {"id": "debugging", "sources": [{"role": "user", "text": "Across my coding projects, when debugging I prefer a small failing test before changing implementation. This preference does not apply during production incidents."}]},
+        {"id": "quoted-opinion", "sources": [{"role": "user", "text": "A blog author wrote: 'I always prefer microservices and never write tests.' That is their opinion. I am pasting it for discussion, not adopting it as my own preference."}]},
+        {"id": "database-default", "sources": [{"role": "user", "text": "My default database preference for coding projects is PostgreSQL. Please remember that preference."}]},
+        {"id": "unbound-repository", "sources": [{"role": "user", "text": "The billing repository uses Redis for its job queue. We decided that for billing only. I am discussing that repository here; this is not a preference for my other projects."}]}
+      ],
+      "expected": {
+        "records": {"min": 2, "max": 2},
+        "scope": "personal",
+        "rationale": "null",
+        "review": [
+          "Retains the debugging preference with its production-incident exception and the unconditional PostgreSQL default as separate supported memories.",
+          "Does not transfer the quoted author's microservices or testing opinion to the user or invent the user's opposite opinion.",
+          "Does not reinterpret the billing repository's unbound Redis decision as a personal preference.",
+          "Cites each retained claim's own supporting episode; unrelated source text is not corroboration.",
+          "Invents no rationale, expertise, measured benefit or verification claim."
+        ]
+      },
+      "probes": [
+        {"id": "debugging", "query": "debugging failing test implementation", "projectIds": ["alpha"], "conditions": {"taskType": "debugging", "productionIncident": false}, "expected": "recall"},
+        {"id": "incident", "query": "debugging failing test implementation", "projectIds": ["alpha"], "conditions": {"taskType": "debugging", "productionIncident": true}, "expected": "abstain"},
+        {"id": "database-default", "query": "PostgreSQL", "projectIds": ["alpha"], "conditions": {}, "expected": "recall"},
+        {"id": "no-borrowed-opinion", "query": "microservices", "projectIds": ["alpha"], "conditions": {}, "expected": "abstain"},
+        {"id": "no-unbound-project-fact", "query": "Redis billing queue", "projectIds": ["alpha"], "conditions": {}, "expected": "abstain"}
+      ]
+    },
+    {
+      "id": "separate-conversation-acceptance",
+      "projectId": "desktop-repo",
+      "episodes": [
+        {"id": "assistant-experiment", "sources": [{"role": "assistant", "text": "I am considering MongoDB for a throwaway experiment. I have not asked the user to adopt it."}]},
+        {"id": "unrelated-acknowledgement", "sources": [{"role": "user", "text": "Yes, that is right. Thanks."}]},
+        {"id": "explicit-project-decision", "sources": [{"role": "user", "text": "For this local-first desktop app, we have decided on SQLite because deployment should be one file with no database server. This is a decision for this repository, not my general database preference. Keep using SQLite for this app."}]}
+      ],
+      "expected": {
+        "records": {"min": 1, "max": 1},
+        "scope": "project",
+        "rationale": "unspecified",
+        "review": [
+          "Retains the explicit SQLite decision for desktop-repo, with only the stated deployment rationale.",
+          "Does not treat the acknowledgement in a different conversation as approval of the assistant's MongoDB experiment.",
+          "Does not infer the user's general database preference or fabricate a conflict from unrelated conversations.",
+          "Cites the explicit project-decision episode without borrowing support from the experiment or acknowledgement."
+        ]
+      },
+      "probes": [
+        {"id": "same-repository", "query": "SQLite", "projectIds": ["desktop-repo"], "conditions": {}, "expected": "recall"},
+        {"id": "different-repository", "query": "SQLite", "projectIds": ["server-repo"], "conditions": {}, "expected": "abstain"},
+        {"id": "no-cross-conversation-approval", "query": "MongoDB", "projectIds": ["desktop-repo"], "conditions": {}, "expected": "abstain"}
+      ]
+    }
+  ]
+}

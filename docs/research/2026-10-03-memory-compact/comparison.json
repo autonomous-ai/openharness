@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "baseCommit": "28aa6d128eb0353a13729f3a47d9b1ca26293b13",
+  "candidatePatchSha256": "162f01f19706ee01dc272b027eb9b040010ac0d23705dce59e0183412718068a",
+  "candidateFileHashes": {
+    "cli/src/memory/extractionEvidence.ts": "53221238655f8a5657d3af23a7d6a73c5d05b41e169a5dcd9e2a76d3b93c8d38",
+    "cli/src/memory/learner.ts": "f6d1ebee0dd8807a22b9eaf3c6861e76e07a338c8189c5d074991d1ce3a8f7e1",
+    "cli/src/memory/extractionEvidence.spec.ts": "bd303e83eca1f19480aed2ce67a0c2369eaa97d5adbcf84e4249c9759f306e35",
+    "cli/src/memory/learner.spec.ts": "7c1fccd242c7e881ae6cdf48b48302b921acc9d880945e36056f9b1693300d35"
+  },
+  "reportSha256": "4aaf28c8ddf21d983d7953cc411bc6e6c1fbd5c4de88052af4239454d11a6294",
+  "planSha256": "e426d477522827e326f3bd90b2afa3fee760d9f61ecab54893a496b60dc50616",
+  "runner": "../2026-10-03-memory-reasoning/runner.snapshot.mjs",
+  "runnerSha256": "9c5b46cdf93e96467347112e33ba5ec466b615c2f0663414b9eb91653653e06e",
+  "baseline": "../2026-10-03-memory-reasoning/reasoning512.json",
+  "baselineSha256": "a5cec77cfe76b84b79d34eeb529aad5da7da8ed24e2821bbad8a64714d8eb1ed",
+  "suite": "../2026-10-02-memory-meaning-cases.json",
+  "suiteSha256": "657aae9de4f301b660cc2c57dce0f80ae801f49e71921a2365b862ba15d0023e",
+  "evidence": "Adaptive synthetic diagnostic; one run per arm; implementing-agent review, not held-out or independent.",
+  "baselineMetrics": {
+    "completedCases": 8,
+    "expectedCases": 8,
+    "medianMs": 57835.0,
+    "meanMs": 55069,
+    "maxMs": 66082,
+    "promptTokens": 24926,
+    "completionTokens": 5312,
+    "totalTokens": 30238,
+    "answerBytes": 6102
+  },
+  "candidateMetrics": {
+    "completedCases": 8,
+    "expectedCases": 8,
+    "medianMs": 56563.5,
+    "meanMs": 55346,
+    "maxMs": 67135,
+    "promptTokens": 25374,
+    "completionTokens": 5270,
+    "totalTokens": 30644,
+    "answerBytes": 5870
+  },
+  "decision": "rejected",
+  "reason": "The small completion-token reduction was outweighed by extra input tokens. Mean latency was slightly higher and the small median difference does not establish a reliable performance gain. No native or private-session improvement was demonstrated.",
+  "privateFollowup": "not_run: no useful efficiency gain established",
+  "productionPromptVersion": "coding-memory-v6",
+  "productionChanges": false,
+  "candidateValidation": {
+    "typecheck": "passed",
+    "testFiles": 6,
+    "testsPassed": 115,
+    "unitReceipt": "20261003T013057.332187Z-62026",
+    "modelReceipt": "20261003T013124.572507Z-63149",
+    "modelExecutionSeconds": 463.2
+  },
+  "modelFinishedAt": "2026-10-03T01:39:07.925Z",
+  "decidedAt": "2026-10-03T01:42:03.435327+00:00",
+  "planRecordedAt": "2026-10-03T01:30:42.660675+00:00",
+  "originalCandidatePatchSha256": "af725f1430b5d4dc30468d7a235ad1ac49eff3fd1c293faacc1911c1cfe5d21b",
+  "candidatePatchSerialization": "Empty context lines omit the single space; reconstructed candidate file hashes are unchanged."
+}

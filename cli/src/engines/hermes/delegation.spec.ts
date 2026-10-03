@@ -106,10 +106,12 @@ describe('hermes sub-agent sessions are not agents of their own', () => {
       'CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL);' +
       "INSERT INTO sessions VALUES ('20260805_111618_8e3027','subagent');" +
       "INSERT INTO sessions VALUES ('20260805_110520_3e0e44','tool');" +
-      "INSERT INTO sessions VALUES ('20260731_161017_999143','cli');"])
+      "INSERT INTO sessions VALUES ('20260731_161017_999143','cli');" +
+      "INSERT INTO sessions VALUES ('20260731_161017_999144','tui');"])
     expect(await isHermesSubagentSession(db, '20260805_111618_8e3027')).toBe(true)
     expect(await isHermesSubagentSession(db, '20260805_110520_3e0e44')).toBe(true)
     expect(await isHermesSubagentSession(db, '20260731_161017_999143')).toBe(false)
+    expect(await isHermesSubagentSession(db, '20260731_161017_999144')).toBe(false)
     expect(await isHermesSubagentSession(db, '20260101_000000_abcdef')).toBe(false) // unknown id → not a child
     // …but the caller can tell "no row YET" from "row says cli" — that distinction is what closes the
     // 110ms window in which a child's hook arrives before hermes has written its own sessions row.

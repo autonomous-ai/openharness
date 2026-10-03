@@ -8,6 +8,8 @@ import { isMachineId } from '../utils/slug.js'
 import { sendSuccess, sendCreated, sendError } from '../utils/response.js'
 import { logger } from '../utils/logger.js'
 import { bearerToken } from '../lib/ssoAuth.js'
+import { isHarnessAccessToken } from '../lib/harnessTokenFormat.js'
+import { AppError } from '../errors/index.js'
 import { requestedWebOrigin, resolveWebOrigin } from '../lib/sso.js'
 import { storedAutonomousEnvironment } from '../lib/autonomousEnvironment.js'
 import { env } from '../config/env.js'
@@ -60,6 +62,12 @@ const billingCompleteBody = z.object({
 function requestAccessToken(authorization: string | undefined): string {
   const token = bearerToken(authorization)
   if (!token) throw new Error('Authenticated request is missing its SSO access token')
+  // Billing is the Autonomous account's own business, and the caller's token is forwarded there
+  // (lib/autonomousBff.ts). A session Harness issued itself — a phone, or a computer signed in by
+  // scanning its QR — means nothing to that service: say what to do instead of a 502 from upstream.
+  if (isHarnessAccessToken(token)) {
+    throw new AppError('Billing needs your Autonomous sign-in. Sign in with Google or Apple on this device (harness login --force).', 403, 'NEEDS_AUTONOMOUS_SIGN_IN')
+  }
   return token
 }
 

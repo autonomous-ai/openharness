@@ -15,7 +15,7 @@ const SPAN = Math.log(CEIL / FLOOR)
 export const UNITS = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 }
 
 /** Thresholds a person would actually type, and the only values a dragged rule can land on. */
-export const PAUSE_STEPS = ['15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '2d', '3d', '7d']
+export const STOP_STEPS = ['15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '2d', '3d', '7d']
 export const HIDE_STEPS = ['1d', '2d', '3d', '5d', '7d', '10d', '14d', '21d', '30d']
 
 export function parseDuration(value) {

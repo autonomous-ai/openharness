@@ -34,6 +34,7 @@ export type ApiPreset = Omit<ApiConnection, 'id'> & { keyUrl: string; docsUrl: s
  * same store and execution path; presets are conveniences, never a provider allowlist. */
 export const API_PRESETS: ApiPreset[] = [
   { provider: 'openrouter', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', keyEnv: 'OPENROUTER_API_KEY', authHeader: 'Authorization', authPrefix: 'Bearer', keyUrl: 'https://openrouter.ai/settings/keys', docsUrl: 'https://openrouter.ai/docs/api/reference/authentication' },
+  { provider: 'requesty', name: 'Requesty', baseUrl: 'https://router.requesty.ai/v1', keyEnv: 'REQUESTY_API_KEY', authHeader: 'Authorization', authPrefix: 'Bearer', keyUrl: 'https://app.requesty.ai/api-keys', docsUrl: 'https://docs.requesty.ai/api-reference/introduction' },
   { provider: 'fal', name: 'fal.ai', baseUrl: 'https://queue.fal.run', keyEnv: 'FAL_KEY', authHeader: 'Authorization', authPrefix: 'Key', keyUrl: 'https://fal.ai/dashboard/keys', docsUrl: 'https://fal.ai/docs' },
   { provider: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', keyEnv: 'OPENAI_API_KEY', authHeader: 'Authorization', authPrefix: 'Bearer', keyUrl: 'https://platform.openai.com/api-keys', docsUrl: 'https://developers.openai.com/api/reference/overview' },
   { provider: 'anthropic', name: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1', keyEnv: 'ANTHROPIC_API_KEY', authHeader: 'x-api-key', authPrefix: '', keyUrl: 'https://platform.claude.com/settings/keys', docsUrl: 'https://platform.claude.com/docs/en/api/overview' },
@@ -43,6 +44,12 @@ export const API_PRESETS: ApiPreset[] = [
 export class ApiConnectionError extends Error {}
 const message = (value: string): never => { throw new ApiConnectionError(value) }
 const publicConnection = (value: StoredConnection): ApiConnection => metadata.parse(value)
+
+/** Whether coding agents can run on this API's models. Every engine authenticates to a custom
+ * endpoint as `Authorization: Bearer <key>` and takes no other header or prefix (`gridLaunch.ts`). */
+export function servesModels(connection: Pick<ApiConnection, 'authHeader' | 'authPrefix'>): boolean {
+  return connection.authHeader.toLowerCase() === 'authorization' && connection.authPrefix.toLowerCase() === 'bearer'
+}
 
 export class ApiConnections {
   private readonly dir: string
@@ -124,6 +131,14 @@ export class ApiConnections {
 
   private connection(connectionId: string): StoredConnection {
     return this.read().find(row => row.id === connectionId) ?? message('This API is not saved. Add it in Models → APIs.')
+  }
+
+  /** The settings and key a model launch needs (`apiModels.ts`). The key goes only into the one
+   * engine process the person moved onto this API, never into argv, a log line or a reply. */
+  modelAccess(connectionId: string): { connection: ApiConnection; apiKey: string } {
+    const connection = this.connection(connectionId)
+    if (!servesModels(connection)) return message(`${connection.name} does not take a Bearer key, so coding agents cannot run on it.`)
+    return { connection: publicConnection(connection), apiKey: connection.apiKey }
   }
 
   /** Never merge this into an agent's global environment: a vendor key can override its subscription.

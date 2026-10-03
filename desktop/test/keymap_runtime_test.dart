@@ -95,7 +95,7 @@ Future<void> tabToResult(WidgetTester tester, {String? id}) async {
 
 void main() {
   testWidgets(
-    'New Harness remapped navigation works in both fields and choices',
+    'New Harness uses Tab for controls and remapped navigation in choices',
     (tester) async {
       final previousEntry = newHarnessOpensInBox;
       newHarnessOpensInBox = true;
@@ -110,37 +110,55 @@ void main() {
       final app = createApp();
       addTearDown(map.dispose);
       addTearDown(app.dispose);
+      app.machineStates['m']!.localOnly = true;
+      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+      await app.agentPreference.remember('codex');
+      await app.projectHistory.select('m', '/work/openharness');
       await mount(tester, app, map);
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       final box = tester
           .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
-      for (final (forward, backward) in [
-        (LogicalKeyboardKey.keyJ, LogicalKeyboardKey.keyK),
-        (LogicalKeyboardKey.keyL, LogicalKeyboardKey.keyH),
-      ]) {
-        await key(tester, forward, ctrl: true);
-        expect(box.field, NewHarnessField.harness);
-        await key(tester, backward, ctrl: true);
-        expect(box.field, NewHarnessField.launch);
-        await key(tester, forward, ctrl: true);
-        await key(tester, LogicalKeyboardKey.enter);
-        final cursor = box.cursor;
-        final engine = box.engine;
-        await key(tester, forward, ctrl: true);
-        expect(box.cursor, (cursor + 1) % box.options.length);
-        await key(tester, backward, ctrl: true);
-        expect(box.cursor, cursor);
-        expect(box.engine, engine);
-        await key(tester, LogicalKeyboardKey.escape);
-        await key(tester, backward, ctrl: true);
-      }
-      await focusLaunchRow(tester, 'advanced');
-      final expanded = box.advancedOpen;
-      await key(tester, LogicalKeyboardKey.arrowRight);
-      expect(box.advancedOpen, !expanded);
-      await key(tester, LogicalKeyboardKey.arrowLeft);
-      expect(box.advancedOpen, expanded);
+      await openLaunchRow(tester, 'agent');
+      expect(box.field, NewHarnessField.harness);
+      final cursor = box.cursor;
+      final engine = box.engine;
+      await key(tester, LogicalKeyboardKey.keyJ, ctrl: true);
+      expect(box.cursor, (cursor + 1) % box.options.length);
+      await key(tester, LogicalKeyboardKey.keyK, ctrl: true);
+      expect(box.cursor, cursor);
+      expect(box.engine, engine);
+      // Remapped reverse Tab leaves choices without applying the highlight.
+      await key(tester, LogicalKeyboardKey.keyH, ctrl: true);
+      expect(harnessChoicesActive(tester), isFalse);
+      expect(box.engine, engine);
+      await openLaunchRow(tester, 'agent');
+      expect(harnessChoicesActive(tester), isTrue);
+      expect(box.engine, engine);
+      await key(tester, LogicalKeyboardKey.escape);
+      await focusLaunchRow(tester, 'model');
+      final model = box.modelLabel;
+      await key(tester, LogicalKeyboardKey.enter);
+      expect(box.field, NewHarnessField.model);
+      expect(harnessChoicesActive(tester), isTrue);
+      // Model is now a direct control. Remapped forward Tab dismisses its
+      // chooser and continues to Approvals without changing the model.
+      await key(tester, LogicalKeyboardKey.keyL, ctrl: true);
+      expect(harnessChoicesActive(tester), isFalse);
+      expect(box.modelLabel, model);
+      var approvalsFocused = false;
+      FocusManager.instance.primaryFocus?.context?.visitAncestorElements((e) {
+        approvalsFocused =
+            e.widget.key == const ValueKey('new-harness-field-approvals');
+        return !approvalsFocused;
+      });
+      expect(approvalsFocused, isTrue);
+      await focusLaunchRow(tester, 'model');
+      await key(tester, LogicalKeyboardKey.enter);
+      expect(harnessChoicesActive(tester), isTrue);
+      await key(tester, LogicalKeyboardKey.escape);
+      expect(harnessChoicesActive(tester), isFalse);
+      expect(box.modelLabel, model);
       expect(app.panes, isEmpty);
       await tester.pumpWidget(const SizedBox());
     },
@@ -156,6 +174,10 @@ void main() {
       final app = createApp();
       addTearDown(map.dispose);
       addTearDown(app.dispose);
+      app.machineStates['m']!.localOnly = true;
+      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+      await app.agentPreference.remember('codex');
+      await app.projectHistory.select('m', '/work/openharness');
       await mount(tester, app, map, native: true);
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       final form = find.byType(NewHarnessForm);
@@ -513,7 +535,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.keyG, ctrl: true);
       expect(secondInput.last.bytes, [
         7,
-      ], reason: 'Unbinding restores the original agent input route');
+      ], reason: 'Unbinding restores the original harness input route');
       expect(app.panes, [first, second]);
       await tester.pumpWidget(const SizedBox());
       app.dispose();

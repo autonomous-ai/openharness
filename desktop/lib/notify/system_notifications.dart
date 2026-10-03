@@ -298,6 +298,24 @@ class SystemNotifications {
 
   final DesktopNotificationStore store;
   final SystemNotifier notifier;
+  final _pending = <String, Future<void>>{};
+
+  // Posting may wait for an OS permission callback. Keep a read/withdraw
+  // behind that post, and a later notification behind the withdraw, so an old
+  // asynchronous post cannot bring back a message that was already read.
+  void _ordered(String id, Future<void> Function() operation) {
+    final previous = _pending[id];
+    late final Future<void> current;
+    current =
+        (previous == null
+                ? Future<void>.sync(operation)
+                : previous.then((_) => operation()))
+            .catchError((_) {})
+            .whenComplete(() {
+              if (identical(_pending[id], current)) _pending.remove(id);
+            });
+    _pending[id] = current;
+  }
 
   /// What the platform last answered. Settings reads it to explain a switch that
   /// is on but cannot do anything.
@@ -328,8 +346,9 @@ class SystemNotifications {
   void post(AgentAlert alert) {
     if (!store.value || !supported) return;
     if (permission.value == NotificationPermission.unavailable) return;
-    unawaited(
-      notifier
+    _ordered(
+      idFor(alert.machineId, alert.agentId),
+      () => notifier
           .show(
             id: idFor(alert.machineId, alert.agentId),
             title: alert.title,
@@ -346,10 +365,40 @@ class SystemNotifications {
     );
   }
 
+  /// What a device notice puts in the `machineId` slot of a click. The slots carry an agent's address
+  /// and the native side hands them back unchanged, so this marks "not an agent" without a new field
+  /// in the Swift code; [postNotice] puts the device's key in the `agentId` slot.
+  static const deviceNoticeMachine = '@device';
+
+  /// News about the ACCOUNT rather than an agent — a device joined it. The same switch and the same
+  /// rules as [post]; a click on it opens that device ([devicePub]) when given, else nothing.
+  void postNotice({required String id, required String title, required String body, String? devicePub}) {
+    if (!store.value || !supported) return;
+    if (permission.value == NotificationPermission.unavailable) return;
+    _ordered(
+      id,
+      () => notifier
+          .show(
+            id: id,
+            title: title,
+            body: body,
+            machineId: devicePub == null ? '' : deviceNoticeMachine,
+            agentId: devicePub ?? '',
+          )
+          .then((answer) {
+            if (answer != NotificationPermission.unknown) {
+              permission.value = answer;
+            }
+          })
+          .catchError((_) {}),
+    );
+  }
+
   /// The person got to this agent some other way. Its notification is old news.
   void withdraw(String machineId, String agentId) {
     if (!supported) return;
-    unawaited(notifier.withdraw(idFor(machineId, agentId)).catchError((_) {}));
+    final id = idFor(machineId, agentId);
+    _ordered(id, () => notifier.withdraw(id));
   }
 
   /// Where a click on a notification goes. Null stops listening.

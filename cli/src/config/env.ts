@@ -1,9 +1,9 @@
-import 'dotenv/config'
+import './loadEnv.js'
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { z } from 'zod'
-import { parseHerdrSessions, parseTerminalBackends } from './terminalConfig.js'
+import { parseTerminalBackends } from './terminalConfig.js'
 import { adoptComputerId } from '../lib/computerIdentity.js'
 
 // Packaged files (cli.js/notify.mjs) live in ~/.harness/cli; mutable state in ~/.harness/cli/data.
@@ -117,9 +117,9 @@ migrateLegacyAdapterState()
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-  // Localhost port the SessionStart/SessionEnd hook callbacks POST to (hook/notify.mjs). A quiet FIXED
-  // value (below the OS ephemeral range, outside the project's 80xx/8100-8999/9001-9999 ranges). No
-  // free-port fallback — if it's taken, the adapter reports it (another adapter is likely running).
+  // Preferred localhost control port, also the stable name of this user's private daemon socket.
+  // When another OS user holds it, Unix daemons record a separate TCP port in this user's data dir;
+  // engine hooks and CLI commands use that actual port while native clients use the private socket.
   PORT: z.string().default('18473').transform(Number),
   // The loopback port `harness login` listens on for the SSO redirect. 0 (the default) takes whatever
   // the OS gives, which is right on a real computer: the browser and the listener are the same
@@ -136,7 +136,9 @@ const envSchema = z.object({
   AUTONOMOUS_ENV: z.enum(['prod', 'stag']).default('prod'),
   // Web app base URL — used to print the agent's chat link on `adapter start`. Local: http://localhost:3000.
   WEB_URL: z.string().default('https://harness.autonomous.ai'),
-  // Set to '1' to let the New Agent folder browser (fs_list_dir) list directories outside $HOME.
+  // Set to '1' to lift the path fences shared by lib/pathContainment.ts: the New Agent folder browser
+  // (fs_list_dir), the project preview, git_project_info, and media previews all stop measuring what
+  // they were asked for against the folders they are allowed to read.
   // Off by default so a fat-fingered path or a compromised relay hop can't walk the whole filesystem.
   HARNESS_FS_BROWSE_UNRESTRICTED: z.string().optional(),
   // Where Claude Code writes its per-session JSONL transcripts.
@@ -156,8 +158,8 @@ const envSchema = z.object({
   // <COPILOT_HOME>/session-state/<sessionId>/events.jsonl, and hooks are read from
   // <COPILOT_HOME>/hooks/*.json — a directory, so Harness drops in its own file.
   COPILOT_HOME: z.string().default(join(homedir(), '.copilot')),
-  // Cursor state root. Interactive transcripts live below <CURSOR_HOME>/projects and local
-  // subagent linkage metadata lives below <CURSOR_HOME>/chats.
+  // Legacy Cursor fallback. cursor/home.ts resolves its distinct config (chats/hooks) and data
+  // (projects/transcripts) roots using CURSOR_CONFIG_DIR, XDG_CONFIG_HOME and CURSOR_DATA_DIR.
   CURSOR_HOME: z.string().default(join(homedir(), '.cursor')),
   // OpenCode state root — the SQLite store lives at <OPENCODE_DATA_DIR>/opencode.db (honors
   // XDG_DATA_HOME). Sessions are polled from that DB (no per-session transcript file).
@@ -259,11 +261,8 @@ const envSchema = z.object({
   // `harness start` and `harness login` install the `grid` CLI when the machine has none (see
   // lib/gridInstall.ts). Off for tests and for a machine whose grid is managed some other way.
   DISABLE_GRID_INSTALL: z.string().default('false').transform((v) => v === 'true'),
-  // Additive terminal capability. Order controls deterministic primary-route tie breaking.
-  //
-  // UNSET MEANS AUTO — every backend that is actually usable here, which is what makes `herdr` then an
-  // engine behave like `tmux new` then an engine, with nothing to configure. Set it to pin: `tmux` is
-  // how you turn Herdr off. Validation is unchanged for a value that IS given.
+  // Terminal backends to watch. UNSET MEANS AUTO — every backend usable here, which is tmux. A value
+  // pins the set; a retired name still in someone's environment is dropped with a warning.
   TERMINAL_BACKENDS: z.string().optional().transform((value, context) => {
     if (value === undefined || value === '') return undefined
     try { return parseTerminalBackends(value) } catch (error) {
@@ -271,16 +270,6 @@ const envSchema = z.object({
       return z.NEVER
     }
   }),
-  // Named Herdr sessions. UNSET means "adopt the sessions Herdr reports as running"; a value is a strict
-  // allowlist that discovery never widens, and hook-supplied socket paths never expand it either.
-  HERDR_SESSIONS: z.string().optional().transform((value, context) => {
-    if (value === undefined || value === '') return undefined
-    try { return parseHerdrSessions(value) } catch (error) {
-      context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'invalid Herdr sessions' })
-      return z.NEVER
-    }
-  }),
-  HERDR_BIN: z.string().default('herdr'),
   // Neutral discovery interval. The legacy tmux name remains a one-release fallback.
   TERMINAL_RECONCILE_INTERVAL_MS: z.string().optional().transform((value) => value === undefined ? undefined : Number(value)),
   // How often (ms) the reaper checks tmux panes and drops dead sessions.
@@ -396,6 +385,9 @@ const envSchema = z.object({
   ADAPTER_UPDATE_SLOT_SEC: z.string().default('45').transform(Number),
   // Set 'true' to disable self-update entirely.
   ADAPTER_UPDATE_DISABLE: z.string().default('false').transform((v) => v === 'true'),
+  /** How long a daemon whose start-up failed stays up serving nothing but its updater, before it
+   *  gives a clean process a turn. ~15 update slots; `0` keeps it up for ever. */
+  ADAPTER_SAFE_MODE_MS: z.string().default('900000').transform(Number),
   // Install dir holding the packaged cli.js + notify.mjs that the self-updater swaps in place.
   ADAPTER_CLI_DIR: z.string().default(adapterCliDir),
   // Where the managed Node runtime lives. Read (never written) by this process: the hook command
@@ -419,6 +411,9 @@ const envSchema = z.object({
   // Where the `harness` launcher lives. Same name (and default) `scripts/install-cli.sh` uses, so a
   // sandboxed install and this process agree on which launcher they are talking about.
   HARNESS_BIN_DIR: z.string().default(adapterBinDir),
+  // The lessons your daemons learned (pair/learn, daemons/LEARNING.md): a git-backed folder outside any
+  // repo, created on the first lesson, never before.
+  HARNESS_LESSONS_DIR: z.string().default(join(adapterRootDir, 'lessons')),
 
   // ── the dial on the USB cable ──────────────────────────────────────────────────────────────────
   // Set 'true' to leave the serial port alone entirely. The port is exclusive, so this is what a

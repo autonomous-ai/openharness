@@ -16,7 +16,7 @@ class ConfigStore {
   // No longer read or written: live pre-flight runs on every launch. Kept only
   // so Reset can clean state written by older desktop builds.
   static const _legacyEnvironmentSetupVersionKey = 'environment_setup_version';
-  static const String defaultBaseUrl = 'https://harness-api.autonomous.ai';
+  static const String defaultBaseUrl = AppConfig.defaultApiUrl;
 
   ConfigStore({LocalKeyValueStore? storage})
     : _storage = storage ?? HarnessFileStore.shared;

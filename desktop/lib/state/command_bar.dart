@@ -76,7 +76,7 @@ String _normalizePhrase(String text) => text
 String _reviewMessage(CommandBarAction action, Object? reason) {
   if (reason == 'ambiguous_target') {
     return action.kind == CommandKind.send
-        ? 'Which agent should receive this prompt?'
+        ? 'Which harness should receive this prompt?'
         : 'More than one possible match. Which one did you mean?';
   }
   if (reason == 'ambiguous_intent') return 'Choose what you would like to do.';
@@ -334,7 +334,7 @@ class CommandBarController extends ChangeNotifier {
     phase = CommandPhase.searching;
     error = null;
     rows = [];
-    message = 'Looking through recent session activity…';
+    message = 'Looking through recent harness activity…';
     _publish();
     try {
       final matches = await _match(query, actions, _cancel!);
@@ -384,7 +384,7 @@ class CommandBarController extends ChangeNotifier {
     }
     final scope = snapshot(sessionsOnly: true).take(24).toList();
     if (scope.isEmpty) {
-      error = 'Open a session before starting a watch.';
+      error = 'Open a harness before starting a watch.';
       phase = CommandPhase.choosing;
       _publish();
       return;
@@ -394,7 +394,7 @@ class CommandBarController extends ChangeNotifier {
     rows = [];
     phase = CommandPhase.done;
     message =
-        'Watching ${scope.length} current sessions while this window is open.';
+        'Watching ${scope.length} current harnesses while this window is open.';
     error = null;
     _watchTimer ??= Timer.periodic(watchInterval, (_) => checkWatches());
     _publish();

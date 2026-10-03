@@ -10,10 +10,11 @@
 /// would filter on a distinction this app does not have.
 library;
 
+
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/theme/app_theme.dart';
 import '../../usage/ledger/ledger_types.dart';
@@ -103,7 +104,7 @@ class _UsageProviderPaneState extends State<UsageProviderPane> {
           const SizedBox(height: 12),
           UsageBreakdownCard(
             title: 'By project',
-            subtitle: 'Grouped by the folder each session ran in.',
+            subtitle: 'Grouped by the folder each conversation ran in.',
             rows: breakdownByProject(provider, entries),
           ),
           const SizedBox(height: 12),
@@ -127,43 +128,43 @@ class _Figures extends StatelessWidget {
       UsageStatCard(
         label: 'Fresh input',
         value: formatTokens(totals.freshInput),
-        icon: LucideIcons.sparkles300,
+        icon: AppIcons.sparkles,
       ),
       UsageStatCard(
         label: 'Output',
         value: formatTokens(totals.output),
-        icon: LucideIcons.activity300,
+        icon: AppIcons.activity,
       ),
       UsageStatCard(
         label: 'Cache read',
         value: formatTokens(totals.cacheRead),
-        icon: LucideIcons.database300,
+        icon: AppIcons.database,
       ),
       UsageStatCard(
         label: 'Cache write',
         value: formatTokens(totals.cacheWrite),
-        icon: LucideIcons.waypoints300,
+        icon: AppIcons.waypoints,
       ),
       UsageStatCard(
         label: 'Cache reuse rate',
         value: _percent(report.cacheReuseRate),
-        icon: LucideIcons.gauge300,
+        icon: AppIcons.gauge,
       ),
       UsageStatCard(
         label: 'Cold turns',
         value: _percent(report.zeroCacheReadShare),
-        icon: LucideIcons.snowflake300,
+        icon: AppIcons.snowflake,
         footnote: 'read nothing from cache',
       ),
       UsageStatCard(
-        label: 'Sessions / turns',
+        label: 'Conversations / turns',
         value: '${report.sessions} / ${report.turns}',
-        icon: LucideIcons.folderKanban300,
+        icon: AppIcons.folderKanban,
       ),
       UsageStatCard(
         label: 'Est. cost',
         value: formatCost(report.costUsd),
-        icon: LucideIcons.coins300,
+        icon: AppIcons.coins,
       ),
     ];
 
@@ -231,14 +232,14 @@ class _Header extends StatelessWidget {
           iconSize: 15,
           visualDensity: VisualDensity.compact,
           tooltip: 'Rescan the local logs',
-          icon: Icon(LucideIcons.refreshCw300, color: AppPalette.textSecondary),
+          icon: Icon(AppIcons.refreshCw, color: AppPalette.textSecondary),
         ),
         IconButton(
           onPressed: onDisable,
           iconSize: 15,
           visualDensity: VisualDensity.compact,
           tooltip: 'Stop reading ${provider.label}',
-          icon: Icon(LucideIcons.power300, color: AppPalette.textSecondary),
+          icon: Icon(AppIcons.power, color: AppPalette.textSecondary),
         ),
       ],
     );
@@ -271,7 +272,7 @@ class _DisabledCard extends StatelessWidget {
             constraints: const BoxConstraints(maxWidth: 520),
             child: Text(
               'Reads the logs the ${provider.label} CLI already keeps on this '
-              'computer to show token, model and session figures. Nothing is '
+              'computer to show token, model and conversation figures. Nothing is '
               'read until you switch it on.',
               style: AppType.body(
                 height: 1.45,

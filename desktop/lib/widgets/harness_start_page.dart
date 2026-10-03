@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -147,7 +148,7 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
         shadowColor: Colors.black38,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(32),
-          side: BorderSide(color: Colors.white.withValues(alpha: .10)),
+          side: BorderSide(color: boxInk(.10)),
         ),
         clipBehavior: Clip.antiAlias,
         child: SwarmSearchKeys(
@@ -465,7 +466,7 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
                                         'harness-start-new-tab',
                                       ),
                                       onPressed: widget.onNewTab ?? _open,
-                                      icon: const Icon(Icons.add, size: 18),
+                                      icon: const Icon(AppIcons.plus, size: 18),
                                       label: const Text('New Tab'),
                                     ),
                                     OutlinedButton.icon(
@@ -474,7 +475,7 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
                                       ),
                                       onPressed: widget.onNewPane ?? _open,
                                       icon: const Icon(
-                                        Icons.add_box_outlined,
+                                        AppIcons.squarePlus,
                                         size: 18,
                                       ),
                                       label: const Text('New Pane'),

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
+import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
 
 /// A compact icon button with the same rounded hover and focus well as the
@@ -11,7 +11,7 @@ class AppIconButton extends StatefulWidget {
     required this.icon,
     required this.onPressed,
     this.tooltip,
-    this.size = 15,
+    this.size = AppIcons.inlineSize,
     this.color,
     this.hoverColor,
     this.hoverFill,
@@ -36,8 +36,8 @@ class AppIconButton extends StatefulWidget {
   /// it is about to be pressable again.
   final bool spinning;
 
-  /// Glyph size. 15 is the inline default — a ✕ that clears a field, a dismiss
-  /// on a row. A dialog's own close is 18, the size the app draws it at.
+  /// Glyph size, independent of the 32-point target. Inline actions use 16;
+  /// workspace close marks use AppIcons.closeSize inside their existing target.
   final double size;
 
   /// Resting ink. Defaults to [AppPalette.textSecondary].
@@ -86,13 +86,11 @@ class AppIconButton extends StatefulWidget {
   /// 4.5:1 on the hover fill, while still reading unmistakably red.
   static const Color _dangerDark = Color(0xFFFF8A80);
 
-  /// The button's box. Kept a touch larger than the glyph so the hover fill
-  /// reads as a pill around it rather than a tight halo.
-  static const double _box = 24;
+  /// A normal desktop target, independent of terminal cell size.
+  static const double _box = 32;
 
-  /// 7 — the app's radius for a small inline button (`ghost_button.dart`,
-  /// `chat_header.dart`), and never rounder than the 8 of a control it sits in.
-  static const double _radius = 7;
+  /// The same rounded control geometry as the rest of the desktop chrome.
+  static const double _radius = AppDesktop.fieldRadius;
 
   @override
   State<AppIconButton> createState() => _AppIconButtonState();
@@ -100,9 +98,6 @@ class AppIconButton extends StatefulWidget {
 
 class _AppIconButtonState extends State<AppIconButton>
     with SingleTickerProviderStateMixin {
-  bool _hovered = false;
-  bool _focused = false;
-
   /// One turn. Slow enough to read as deliberate rather than as a busy
   /// indicator thrashing, fast enough that a reload finishing inside a single
   /// revolution still looks like it moved.
@@ -149,8 +144,11 @@ class _AppIconButtonState extends State<AppIconButton>
     // Spinning does not grey the glyph out, but it does stop the press: the
     // work the last one asked for is still running.
     final enabled = widget.onPressed != null && !widget.spinning;
-    final pressable = widget.onPressed != null;
-    final resting = widget.color ?? AppPalette.textSecondary;
+    final highContrast = MediaQuery.highContrastOf(context);
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final resting =
+        widget.color ??
+        (highContrast ? AppPalette.textPrimary : AppPalette.textSecondary);
     // Only the glyph changes. The fill stays the same neutral lift every other
     // button gets, so a destructive button reads as *the same affordance* the
     // rest of the app uses — just saying, in its ink, what it would do.
@@ -162,64 +160,74 @@ class _AppIconButtonState extends State<AppIconButton>
         ? danger
         : (widget.hoverColor ?? AppPalette.textPrimary);
 
-    final emphasized = enabled && (_hovered || _focused);
-    final button = MouseRegion(
-      cursor: enabled ? SystemMouseCursors.click : MouseCursor.defer,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: FocusableActionDetector(
-        enabled: enabled,
-        onFocusChange: (value) => setState(() => _focused = value),
-        shortcuts: const {
-          SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
-          SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
-        },
-        actions: {
-          ActivateIntent: CallbackAction<ActivateIntent>(
-            onInvoke: (_) {
-              if (enabled) widget.onPressed?.call();
-              return null;
-            },
+    return Semantics(
+      value: widget.spinning ? 'Working' : null,
+      child: IconButton(
+        tooltip: widget.tooltip,
+        onPressed: enabled ? widget.onPressed : null,
+        iconSize: widget.size,
+        style: ButtonStyle(
+          animationDuration: reduceMotion ? Duration.zero : AppMotion.hover,
+          minimumSize: const WidgetStatePropertyAll(
+            Size.square(AppIconButton._box),
           ),
-        },
-        child: GestureDetector(
-          onTap: enabled ? widget.onPressed : null,
-          child: AnimatedContainer(
-            duration: AppMotion.hover,
-            curve: AppMotion.curve,
-            width: AppIconButton._box,
-            height: AppIconButton._box,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: emphasized
-                  ? (widget.hoverFill ?? AppSurface.hoverFill)
-                  : Colors.transparent,
+          padding: const WidgetStatePropertyAll(EdgeInsets.all(6)),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          visualDensity: VisualDensity.standard,
+          mouseCursor: WidgetStatePropertyAll(
+            enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+          ),
+          shape: WidgetStatePropertyAll(
+            RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(AppIconButton._radius),
             ),
-            child: RepaintBoundary(
-              child: RotationTransition(
-                turns: _spin ?? const AlwaysStoppedAnimation(0),
-                child: Icon(
-                  widget.icon,
-                  size: widget.size,
-                  color: pressable
-                      ? (emphasized ? active : resting)
-                      : AppPalette.textFaint,
-                ),
-              ),
+          ),
+          side: WidgetStateProperty.resolveWith(
+            (states) => BorderSide(
+              width: highContrast ? 2 : 1.5,
+              color: enabled && states.contains(WidgetState.focused)
+                  ? AppPalette.accentOnSurface
+                  : highContrast && enabled
+                  ? AppPalette.textSecondary
+                  : Colors.transparent,
             ),
+          ),
+          foregroundColor: WidgetStateProperty.resolveWith((states) {
+            if (widget.spinning && widget.onPressed != null) return resting;
+            if (states.contains(WidgetState.disabled)) {
+              return AppPalette.textFaint;
+            }
+            return states.contains(WidgetState.hovered) ||
+                    states.contains(WidgetState.pressed) ||
+                    states.contains(WidgetState.focused)
+                ? active
+                : resting;
+          }),
+          backgroundColor: const WidgetStatePropertyAll(Colors.transparent),
+          overlayColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.disabled)) {
+              return Colors.transparent;
+            }
+            if (states.contains(WidgetState.pressed)) {
+              return Color.alphaBlend(
+                AppPalette.textPrimary.withValues(alpha: .08),
+                widget.hoverFill ?? AppSurface.hoverFill,
+              );
+            }
+            if (states.contains(WidgetState.hovered) ||
+                states.contains(WidgetState.focused)) {
+              return widget.hoverFill ?? AppSurface.hoverFill;
+            }
+            return Colors.transparent;
+          }),
+        ),
+        icon: RepaintBoundary(
+          child: RotationTransition(
+            turns: _spin ?? const AlwaysStoppedAnimation(0),
+            child: Icon(widget.icon, size: widget.size),
           ),
         ),
       ),
-    );
-
-    final tooltip = widget.tooltip;
-    return Semantics(
-      button: true,
-      enabled: enabled,
-      child: tooltip == null
-          ? button
-          : Tooltip(message: tooltip, child: button),
     );
   }
 }

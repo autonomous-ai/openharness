@@ -92,7 +92,7 @@ void main() {
     cliLink: cliLink ?? PasswordCli(),
   );
 
-  testWidgets('shows the terminal password form when no password is set', (
+  testWidgets('shows the password form when no password is set', (
     tester,
   ) async {
     final appNotifier = notifier();
@@ -443,7 +443,7 @@ void main() {
       await enterPassword(tester);
       expect(cli.passwords, ['fixture password']);
       expect(tester.takeException(), isNull);
-      expect(find.text('esc  close').hitTestable(), findsOneWidget);
+      expect(find.text('Close').hitTestable(), findsOneWidget);
     },
   );
 
@@ -471,9 +471,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.escape);
       expect(field(tester, passwordKey).focusNode!.hasFocus, isTrue);
       expect(
-        find.textContaining(
-          RegExp('f8  confirm password', caseSensitive: false),
-        ),
+        find.byTooltip(RegExp('Confirm password · f8', caseSensitive: false)),
         findsOneWidget,
       );
       await key(tester, LogicalKeyboardKey.f8);
@@ -499,7 +497,7 @@ void main() {
       );
       await tester.pump();
       expect(
-        find.textContaining(RegExp('f4  close', caseSensitive: false)),
+        find.byTooltip(RegExp('Close · f4', caseSensitive: false)),
         findsOneWidget,
       );
       await key(tester, LogicalKeyboardKey.f4);

@@ -8,6 +8,7 @@
 #include <stddef.h>   // size_t (ui_project_id_at)
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"   // TaskHandle_t — ui_set_reload_waiter
+#include "ui_metrics.h"   // UI_DESK_GRID — which face this build is for, and so which of these exist
 #include "config_store.h"
 #include "../cable_machines.h"   // cable_machine_t — the wheel's row, already parsed and diffed
 #include "../cable_client.h"     // cable_swarm_t — one of the window's tabs, as the wire carries it
@@ -149,6 +150,13 @@ bool ui_scroll_reportable(void);
 // "Home" gesture (touch.c): a swipe-up that STARTED at the bottom edge → jump to the Overview tile from
 // any screen (closes the notif drawer / leaves the reader/wifi/picker, then centers ring 0).
 void ui_home_overview(void);
+
+// The desk grid: the tab's agents drawn in the arrangement the Mac has them in, one tile each, tap to
+// open. Present only on a face with room for a recognisable shape (UI_DESK_GRID in ui_metrics.h); on the
+// round dial these are no-ops and the carousel remains home.
+void ui_desk_open(void);
+void ui_desk_close(void);
+bool ui_desk_is_open(void);
 // Voice-state queries for the gesture layer: is_recording = actively capturing (a tap stops it);
 // is_active = recording OR the clip still uploading (blocks a new start).
 bool ui_voice_is_recording(void);
@@ -178,6 +186,12 @@ bool ui_notif_is_open(void);
 // button that lives inside that band can be pressed — a tap on the bell reaches LVGL and opens the
 // drawer; a pull that starts anywhere else in the band opens it too.
 bool ui_notif_pill_hit(uint16_t x, uint16_t y);
+/* First y the notification pull-down may start on: the bottom of the fixed tab line, which owns the top
+ * of the Pro's face. Declared only where UI_DESK_GRID — the round face has no line and no floor, and its
+ * touch path must compile to exactly what it did before. */
+#if UI_DESK_GRID
+int ui_notif_band_top_px(void);
+#endif
 // A swipe-up inside the open drawer → close it, but only if the list is already scrolled to the top
 // (otherwise the gesture is just scrolling the list).
 void ui_notif_swipe_up(void);
@@ -235,6 +249,14 @@ void ui_machines_refresh(void);
 // Replace the whole list from one `swarms` frame. `selected` names the one the window has on screen; it
 // is what every tile's swarm line draws. count 0 hides the line. Safe from the reader task.
 void ui_swarms_replace(const cable_swarm_t *rows, int count, const char *selected);
+/* The grid of the tab named by `swarm_id`, as the window laid it out.
+ *
+ * THE ID IS NOT DECORATION. These rectangles describe the APP's active tab, and this device can be
+ * looking at a different one — it lights a tab the moment you press it and only learns whether the
+ * window agreed a beat later. A shape drawn under the wrong tab puts agents in seats that belong to
+ * another tab's panes, which is what "3 agents, 2 tiles" was. `count` 0, or an id that is not the tab
+ * on screen, both mean the same thing: fall back to deriving a shape from what this tab holds. */
+void ui_tiles_replace(const cable_tile_t *tiles, int count, const char *swarm_id);
 
 // Whether the selected machine is the computer at the other end of this cable. Everything that acts on
 // "this desk" — the focus report, the scroll report — asks this first.
@@ -291,6 +313,74 @@ void ui_voice_route_abort(void);
 // One short line from the cabled Mac (a routing refusal, a send that did not land). Releases the routing
 // overlay first, then shows the message for ~2s over whatever is on screen.
 void ui_cable_toast(const char *msg);
+
+/*
+ * THE DEVICE'S SETTINGS, AS THE APP SEES THEM.
+ *
+ * A 466 circle holds four list rows between its chords, so the preferences live in the desktop app and
+ * the glass keeps only actions. The device still OWNS them: NVS is the record, the app proposes, and
+ * every answer is read back from here rather than echoed — the same rule `voicelang` has followed since
+ * it started crossing the cable (config_store.h).
+ *
+ * `round` is not a preference. It is the face, sent so the app can HIDE a row a square has no meaning
+ * for rather than grey out a control for a setting that does not exist there. This firmware only ever
+ * builds round, but the field stays: another device on this protocol may not be.
+ *
+ * Not here, deliberately: `swipe_reversed`. It is stored, and the LVGL build honours it, but habitat's
+ * tab carousel follows the finger by position and never reads it. A row in the app for a setting the
+ * glass ignores is worse than no row.
+ */
+typedef struct {
+    char id[16], uid[65], name[25], version[4];
+    uint32_t seed;
+    int8_t colour; // -1: approved species illustration; otherwise roster colour index
+    uint8_t mark;
+} ui_companion_t;
+typedef struct {
+    uint8_t brightness;   // 0..100, the number a person reads, not the 0..255 stored
+    uint8_t character;    // ht_character_id_t
+    uint16_t face;        // the glass, in pixels across — named so a support line can read it
+    bool muted, quiet, straight_title, focus_face, scroll_reversed, round;
+    bool follow_companion;
+    char companion[16];   // active desktop species, empty while using the saved skin; never persisted
+    ui_companion_t companion_details;
+    char voicelang[CFG_VLANG_MAX];
+} ui_settings_t;
+
+// Which fields of a ui_settings_t an apply is allowed to touch. Absent means unchanged — a frame that
+// names one row must not quietly restate the other ten.
+enum {
+    UI_SETTING_BRIGHTNESS = 1u << 0, UI_SETTING_MUTED          = 1u << 1,
+    UI_SETTING_CHARACTER  = 1u << 2,
+    UI_SETTING_QUIET      = 1u << 4, UI_SETTING_STRAIGHT_TITLE = 1u << 5,
+    UI_SETTING_FOCUS_FACE = 1u << 6, UI_SETTING_SCROLL         = 1u << 7,
+    UI_SETTING_VOICELANG  = 1u << 8,
+    UI_SETTING_FOLLOW_COMPANION = 1u << 9,
+};
+
+// The settings as they stand. Takes the display lock.
+void ui_settings_read(ui_settings_t *out);
+/*
+ * Apply the named fields. False means nothing was written and `error` holds one line to show verbatim;
+ * the caller answers with the settings read back either way, so a refusal still corrects the app.
+ */
+bool ui_settings_apply(const ui_settings_t *want, uint32_t fields, char *error, size_t cap);
+// NULL restores the saved skin. Unknown species are refused without changing it.
+bool ui_set_companion(const char *species);
+bool ui_set_companion_identity(const ui_companion_t *identity);
+bool ui_companion_celebrate(const ui_companion_t *identity, const char *kind, const char *token);
+// A local change the app has not heard about yet (a factory reset, a pattern just drawn). Wakes the
+// cable's reporter; safe from any task.
+void ui_settings_changed(void);
+void ui_selection_state(const struct cJSON *payload);
+void ui_draft_state(const struct cJSON *p);
+void ui_voice_draft(const struct cJSON *p);
+void ui_voice_question(const struct cJSON *p);
+void ui_voice_form(const struct cJSON *p);
+void ui_form_state(const struct cJSON *payload);
+void ui_carry_state(const struct cJSON *payload);
+void ui_visit_state(const struct cJSON *payload);
+void ui_voice_error(const char *msg);
 // Backend daily voice quota. Status caps the current recording to the remaining allowance; exceeded
 // stops capture, restores the previous screen and shows a short non-fatal toast.
 void ui_voice_quota_status(int remaining_seconds);
@@ -306,6 +396,7 @@ void ui_notify_task_done(const char *project_id, const char *name, const char *m
 // first time either is used. The tap's half already travels (cable_client_send_open); this is the
 // return leg. No-op when no row names this agent. Safe from the reader task.
 void ui_notif_seen(const char *project_id);
+void ui_notif_read(const char *project_id, const char *read_token);
 // Replace the WHOLE drawer with what the window still has unread, newest first.
 //
 // Sent once per attach, because that is the one moment this dial is known to have nothing: the rows
@@ -385,3 +476,10 @@ bool ui_lock_active(void);
 // One line on the log whenever what covers the face changes (screen, overlay, drawer, lock, sleep).
 // Called from the LVGL task every loop; cheap when nothing changed.
 void ui_log_state_if_changed(void);
+
+void ui_question_state(const struct cJSON *payload);
+void ui_answer_receipt(const struct cJSON *payload);
+
+void ui_voice_search(const struct cJSON *p);
+
+void ui_workspace_applied(const char *tab, uint32_t generation);

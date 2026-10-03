@@ -222,7 +222,7 @@ void main() {
       final unavailable = find.byKey(
         ValueKey(agentDestinationId('m', 'missing')),
       );
-      expect(tester.widget<InkWell>(unavailable).onTap, isNull);
+      expect(tester.widget<ListTile>(unavailable).onTap, isNull);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       expect(attentionField, findsOneWidget);

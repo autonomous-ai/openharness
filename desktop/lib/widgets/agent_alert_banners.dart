@@ -1,5 +1,7 @@
 library;
 
+
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../notify/agent_alerts.dart';
@@ -132,12 +134,18 @@ class _Banner extends StatelessWidget {
               // navigation.
               IconButton(
                 key: const Key('agent-alert-dismiss'),
-                icon: const Icon(Icons.close, size: 14),
+                icon: const Icon(AppIcons.close, size: 14),
                 color: AppColors.mutedStrong,
                 splashRadius: 14,
                 visualDensity: VisualDensity.compact,
                 tooltip: 'Dismiss',
-                onPressed: () => notifier.agentAlerts.dismiss(alert),
+                onPressed: () {
+                  notifier.readAgentNotification(
+                    alert.machineId,
+                    alert.agentId,
+                  );
+                  notifier.agentAlerts.dismiss(alert);
+                },
               ),
             ],
           ),

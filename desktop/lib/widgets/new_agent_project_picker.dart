@@ -1,8 +1,8 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/models.dart';
@@ -162,7 +162,7 @@ class _NewAgentProjectPickerState extends State<NewAgentProjectPicker> {
           value: entry.key,
           label: entry.value,
           detail: entry.key,
-          leading: () => const Icon(LucideIcons.folder, size: 18),
+          leading: () => const Icon(AppIcons.folder, size: 18),
         ),
     ];
   }
@@ -245,7 +245,7 @@ class _NewAgentProjectPickerState extends State<NewAgentProjectPicker> {
                   ? null
                   : projectFolderSlug(_name!),
               leading: Icon(
-                widget.terminal ? LucideIcons.house : LucideIcons.folderPlus,
+                widget.terminal ? AppIcons.house : AppIcons.folderPlus,
                 size: 22,
               ),
               selected: _source == _ProjectSource.newProject,
@@ -262,7 +262,7 @@ class _NewAgentProjectPickerState extends State<NewAgentProjectPicker> {
               detail: _source == _ProjectSource.local && _folder != null
                   ? p.basename(_folder!)
                   : null,
-              leading: const Icon(LucideIcons.folderOpen, size: 22),
+              leading: const Icon(AppIcons.folderOpen, size: 22),
               selected: _source == _ProjectSource.local,
               onPressed: widget.locked || _browsing ? null : _browse,
             ),
@@ -273,7 +273,7 @@ class _NewAgentProjectPickerState extends State<NewAgentProjectPicker> {
                 size: widget.tileSize,
                 label: 'Git',
                 detail: _repository?.name,
-                leading: const Icon(LucideIcons.gitBranch, size: 22),
+                leading: const Icon(AppIcons.gitBranch, size: 22),
                 selected: _source == _ProjectSource.git,
                 onPressed: widget.locked ? null : _git,
               ),
@@ -316,8 +316,8 @@ class _NewAgentProjectPickerState extends State<NewAgentProjectPicker> {
                       : null,
                   leading: widget.terminalStyle
                       ? Text(selectedRecent ? '>' : ' ')
-                      : const Icon(LucideIcons.history, size: 22),
-                  trailing: const Icon(Icons.keyboard_arrow_down, size: 18),
+                      : const Icon(AppIcons.history, size: 22),
+                  trailing: const Icon(AppIcons.chevronDown, size: 18),
                 ),
               ),
             ),

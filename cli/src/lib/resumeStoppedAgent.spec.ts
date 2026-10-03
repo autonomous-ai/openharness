@@ -34,10 +34,10 @@ describe('Enter resumes stopped work', () => {
   })
 
   it.each([
-    // No id recorded to reopen, and an engine with no resume argv at all: both still come back —
-    // same pane, same folder — as a new conversation, launched without a resume id.
+    // No id recorded to reopen: it still comes back — same pane, same folder — as a new
+    // conversation, launched without a resume id. (Every agent engine can resume one now.)
     { ...saved, sessionId: '' },
-    { ...saved, engine: 'devin' as const },
+    { ...saved, engine: 'devin' as const, sessionId: '' },
   ])('resumes without a conversation rather than refusing the harness', async entry => {
     const deps = fixture()
     deps.saved.mockReturnValue(entry)
@@ -198,11 +198,11 @@ describe('exact conversation readiness', () => {
   })
 
   it('says a resume with no conversation to reopen is a fresh one', async () => {
-    // devin hooks at launch like the rest, so it is confirmed the strict way — but it has no resume
-    // argv, so what came back is a new conversation and `resumed` says so rather than lying.
+    // devin hooks at launch like the rest, so it is confirmed the strict way — but with no id recorded
+    // there was nothing to reopen, so what came back is a new conversation and `resumed` says so.
     const deps = readiness('devin')
-    deps.set({ lastHookAt: 100, launch: { state: 'ready' } })
-    await expect(waitForResumedAgent({ ...saved, engine: 'devin' as const }, deps))
+    deps.set({ lastHookAt: 100, launch: { state: 'ready' }, sessionId: '' })
+    await expect(waitForResumedAgent({ ...saved, engine: 'devin' as const, sessionId: '' }, deps))
       .resolves.toMatchObject({ ok: true, resumed: false })
   })
 
@@ -291,4 +291,40 @@ describe('resume refusal and readiness edge cases', () => {
   it('uses the production clock and timeout defaults', async () => {
     expect(await waitForResumedAgent(saved, { current: () => false, session: () => undefined, process: async () => null, pane: async () => null, sleep: async () => {} })).toMatchObject({ error: 'AGENT_CHANGED' })
   })
+})
+
+it('reattaches when a startup hook rebuilds metadata for the same running process', async () => {
+  const deps = fixture()
+  const existing = { ...saved, registeredAt: 100, processIdentity: { pid: 42, startMarker: 'born', executable: 'codex' } }
+  const refreshed = { ...existing, title: 'Updated by hook', lastHookAt: 200 }
+  deps.live.mockReturnValue(existing)
+  deps.checkLive.mockImplementation(async () => { deps.live.mockReturnValue(refreshed); return { state: 'alive' } })
+  expect(await resumeStoppedAgent(deps)).toMatchObject({ ok: true, session: refreshed })
+  expect(deps.launch).not.toHaveBeenCalled()
+})
+
+it('honors a failure reported by a hook while the same live process was being checked', async () => {
+  const deps = fixture()
+  const row: RegisteredSession = { ...saved, resumeOnly: true }
+  deps.live.mockReturnValue(row)
+  deps.checkLive.mockImplementation(async () => {
+    deps.live.mockReturnValue({ ...row, launch: { state: 'failed', error: 'WRONG_CONVERSATION', detail: 'Different history', at: Date.now() } } as RegisteredSession)
+    return { state: 'alive' }
+  })
+  await expect(resumeStoppedAgent(deps)).resolves.toMatchObject({ ok: false, error: 'WRONG_CONVERSATION' })
+  expect(deps.launch).not.toHaveBeenCalled()
+})
+it.each(['pid', 'conversation', 'route', 'birth'])('refuses an in-place %s replacement while checking a live session', async change => {
+  const deps = fixture()
+  const existing = { ...saved, registeredAt: 100, tmuxPane: '%1', runtimes: [{ backend: 'tmux' as const, paneId: '%1' }], processIdentity: { pid: 42, startMarker: 'born', executable: 'codex' } }
+  deps.live.mockReturnValue(existing)
+  deps.checkLive.mockImplementation(async () => {
+    if (change === 'pid') existing.processIdentity.pid++
+    if (change === 'conversation') existing.sessionId = 'different'
+    if (change === 'route') existing.runtimes[0].paneId = '%2'
+    if (change === 'birth') existing.registeredAt++
+    return { state: 'alive' }
+  })
+  expect(await resumeStoppedAgent(deps)).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+  expect(deps.launch).not.toHaveBeenCalled()
 })

@@ -9,8 +9,7 @@ enum AppLogLevel { debug, info, warn, error }
 ///
 /// Ported from Grid, with one change: Riverpod out, a singleton in. The call
 /// sites here are `main`, `AppNotifier`, `WsConn` and the CLI runner, and most
-/// were never handed a `Ref` — the same reasoning that made `analytics` a
-/// singleton (see `analytics/analytics.dart`).
+/// were never handed a `Ref`.
 ///
 /// **Distinct from [CrashLog], and both are kept.** `CrashLog` answers "what
 /// threw", in one file, forever, with a full stack; this answers "what was the
@@ -132,7 +131,7 @@ class FileAppLog implements AppLog {
 }
 
 /// No-op [AppLog]. The default, so a `flutter test` run never writes into a real
-/// `~/.harness` — the same rule analytics follows, and for the same reason.
+/// `~/.harness`.
 class NoopAppLog implements AppLog {
   const NoopAppLog();
 

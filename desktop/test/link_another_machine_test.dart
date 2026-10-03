@@ -170,7 +170,9 @@ void main() {
       expect(tester.widget<TextField>(_input).focusNode!.hasFocus, isTrue);
       expect(find.text('build-box is linked.'), findsOneWidget);
       expect(
-        find.text('Already linked. Open its agents from New Tab or New Pane.'),
+        find.text(
+          'Already linked. Open its harnesses from New Tab or New Pane.',
+        ),
         findsOneWidget,
       );
       await key(tester, LogicalKeyboardKey.escape);

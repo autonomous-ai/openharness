@@ -1,5 +1,37 @@
 #include "audio_client.h"
+
+void audio_client_request_review(void) {}
+bool audio_client_review_requested(void) { return false; }
+void audio_client_copy_draft(char *out,size_t capacity,unsigned *revision,bool *append)
+{
+    if (capacity) out[0]=0;
+    if (revision) *revision=0;
+    if (append) *append=false;
+}
+
+void audio_client_copy_question(char *out, size_t capacity, unsigned *index)
+{
+    if (capacity) out[0] = 0;
+    if (index) *index = 0;
+}
+
+void audio_client_copy_carry(char *out, size_t capacity) { if (capacity) out[0] = 0; }
+
+void audio_client_copy_form(char *out, size_t capacity, unsigned *revision)
+{
+    if (capacity) out[0] = 0;
+    if (revision) *revision = 0;
+}
+void audio_client_copy_selection(char *out, size_t capacity, unsigned *revision)
+{
+    if (capacity) out[0] = 0;
+    if (revision) *revision = 0;
+}
+
+// The stock UI does not display the Habitat microphone envelope.
+unsigned audio_client_input_level(void) { return 0; }
 #include "audio_capture.h"
+#include "audio_probe.h"
 #include "cable_client.h"
 #include "config_store.h"
 #include "ram_telemetry.h"
@@ -114,7 +146,10 @@ static bool stream_capture_cable(uint8_t *tmp)
     char lang[CFG_VLANG_MAX];
     config_load_voicelang(lang, sizeof(lang));
     const char *cmd = s_cmd == VOICE_CMD_GOAL ? "goal" : (s_cmd == VOICE_CMD_LOOP ? "loop" : "");
-    cable_client_voice_begin(s_agent[0] ? s_agent : NULL, cmd, lang, AUDIO_SAMPLE_RATE);
+    if (!audio_stream_begin(s_agent[0] ? s_agent : NULL, cmd, lang, AUDIO_SAMPLE_RATE)) {
+        audio_stream_abort("could not start voice stream");
+        return false;
+    }
 
     // Drain up to this many chunks per iteration. Bounded so mic capture is never starved: the I2S DMA is
     // shallow, and a consumer that hogs the loop drops live speech — the same damage the drop policy above
@@ -131,16 +166,16 @@ static bool stream_capture_cable(uint8_t *tmp)
             size_t len = BUF_MAX - pos;
             if (len > remain) len = (size_t)remain;
             if (len > CABLE_VOICE_CHUNK) len = CABLE_VOICE_CHUNK;
-            if (!cable_client_voice_pcm(s_buf + pos, len)) {
+            if (!audio_stream_pcm(s_buf + pos, len)) {
                 ESP_LOGW(TAG, "voice(cable): chunk stalled at %lluKB — aborting the utterance",
                          (unsigned long long)(sent / 1024));
-                cable_client_voice_abort("cable stalled");
+                audio_stream_abort("cable stalled");
                 return false;
             }
             sent += len;
         }
     }
-    if (s_abort_req) { cable_client_voice_abort("aborted"); return false; }
+    if (s_abort_req) { audio_stream_abort("aborted"); return false; }
 
     // Tail: everything the mic produced after the last drain.
     while (sent < s_prod_off) {
@@ -149,14 +184,14 @@ static bool stream_capture_cable(uint8_t *tmp)
         size_t len = BUF_MAX - pos;
         if (len > remain) len = (size_t)remain;
         if (len > CABLE_VOICE_CHUNK) len = CABLE_VOICE_CHUNK;
-        if (!cable_client_voice_pcm(s_buf + pos, len)) {
+        if (!audio_stream_pcm(s_buf + pos, len)) {
             ESP_LOGW(TAG, "voice(cable): tail stalled at %lluKB", (unsigned long long)(sent / 1024));
-            cable_client_voice_abort("cable stalled");
+            audio_stream_abort("cable stalled");
             return false;
         }
         sent += len;
     }
-    return (cable_client_voice_end(), true);
+    return (audio_stream_end(), true);
 }
 
 static void voice_task(void *arg)
@@ -265,6 +300,11 @@ bool audio_client_active(void)
     return true;
 }
 
+void audio_client_copy_upload_id(char *out, size_t capacity)
+{
+    snprintf(out, capacity, "%s", s_upload_id);
+}
+
 bool audio_client_upload_matches(const char *upload_id)
 {
     // Keep matching the just-finished utterance until the next start replaces s_upload_id: the
@@ -279,3 +319,8 @@ bool audio_client_recording(void)
 {
     return s_recording;
 }
+
+void audio_client_start_search(const char *agent, const char *selection, unsigned revision)
+{ (void)agent; (void)selection; (void)revision; }
+void audio_client_copy_search(char *out, size_t capacity, unsigned *revision)
+{ if (capacity) *out = 0; if (revision) *revision = 0; }

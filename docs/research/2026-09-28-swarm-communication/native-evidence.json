@@ -1,0 +1,295 @@
+{
+  "checked_at": "2026-09-28",
+  "method": "Read-only CLI help/version, static installed-binary descriptors, and locally generated protocol schemas. No sessions started, no messages sent, no model calls.",
+  "codex": {
+    "version": "0.154.0",
+    "binary_sha256": "4f85982624b3898c8991cb80c0981b2aa71070e3537046c9a95950318a95afcc",
+    "help_commands": [
+      "agents",
+      "queue",
+      "app-server generate-json-schema"
+    ],
+    "static_tui_descriptors_found": [
+      "list_threads",
+      "list_archived_threads",
+      "read_thread",
+      "wait_threads",
+      "send_message_to_thread",
+      "create_thread",
+      "fork_thread",
+      "set_thread_archived"
+    ],
+    "descriptor_limit": "Presence and advertised semantics in the installed binary; not a runtime availability or end-to-end delivery test.",
+    "subagent_descriptor_scope": "Current root thread tree",
+    "schema_generation_command": "codex app-server generate-json-schema --experimental --out /private/tmp/harness-swarm-codex-0154-schema",
+    "schemas": {
+      "ClientRequest.json": {
+        "sha256": "4b1ea47e8a389402556b23451b5a690944e498dc31557b1bca3525631655f1f4"
+      },
+      "v2/ThreadListParams.json": {
+        "sha256": "5daf371b2852c409d4405c95f79cddb2d92a1ee89da808b2c5112ef16a57432c"
+      },
+      "v2/ThreadQueueAddParams.json": {
+        "sha256": "39bda9d790b315eea17fc04298afb0135a8b43e7d375b54eaa4a2e88ad0d4aff"
+      },
+      "v2/ThreadQueueStartParams.json": {
+        "sha256": "d92f1e985c183fa3f261bbfa004416f0f572a225a53e5de1744682e154cce936"
+      },
+      "v2/ThreadInjectItemsParams.json": {
+        "sha256": "8d7e754402a2bb71bd817882076d2f8ac4cd75d4573306db082a83b841aa3532"
+      },
+      "v2/TurnSteerParams.json": {
+        "sha256": "2e0cdcea6a90d6c8bc584fdc2ff838e824754b1eef0d2d16aa71bec4276fef44"
+      },
+      "v2/ThreadGoalSetResponse.json": {
+        "sha256": "b1c61b6068b3b73dd3d97b38f8a269593f8f7added4643bfdb2016315b71ad8e"
+      },
+      "v2/ThreadGoalGetResponse.json": {
+        "sha256": "f610000963194731c96ce2b45e46722ca700f1b6ccc1fc55a2fd95e526018fd9"
+      },
+      "v2/ThreadGoalUpdatedNotification.json": {
+        "sha256": "52010479c7efcc6dc749e2d9bf1e27c134453d92a1f0b367193d8125eec1fedc"
+      },
+      "DynamicToolCallParams.json": {
+        "sha256": "401bba20cfbd95762bef0467d840430c46be53369093ad9f26425ba757e34efc"
+      },
+      "v2/HookStartedNotification.json": {
+        "sha256": "913ca61da2ab299d5f3318f6ea4d842d22708fc9308a9b10cdfad5e757098f2f"
+      },
+      "v2/HookCompletedNotification.json": {
+        "sha256": "1f146d70303cea6e59752191179e36a273650d63a74d4f9338f9a399da6597d2"
+      }
+    },
+    "provenance_schema_observations": {
+      "DynamicToolCallParams": "Required threadId, turnId, callId; a native turn ID is not an accepted-human-input generation.",
+      "HookStartedNotification_and_HookCompletedNotification": "turnId is optional and nullable.",
+      "TurnSteerParams": "Required expectedTurnId; optional clientUserMessageId.",
+      "ThreadInjectItemsParams": "Required threadId and items; no expected-turn field in this generated schema.",
+      "limit": "Schema inspection only; no live tool, steering, injection, or attachment test."
+    }
+  },
+  "claude": {
+    "version": "2.1.283",
+    "binary_sha256": "d8cb1e5c79684cc12a8bfc813e3a2073406921b6245744b3009be3ab5651d21e",
+    "method": "Version/help provenance; feature behavior from official documentation, not binary reverse engineering."
+  },
+  "grok": {
+    "version": "1.0.34",
+    "build": "3736acbc8658",
+    "binary_sha256": "9cd26b579840f0f5c9148a8059ad651904c08b41b7f2ef0b4ec04b9ba898844e",
+    "method": "Read-only version/help; passive-hook behavior from official documentation; no model work started.",
+    "public_source_followup": {
+      "repository": "https://github.com/xai-org/grok-build",
+      "revision": "f0e3be1100ef5252488e3be8bb0e91cf68d8c305",
+      "upstream_source_rev": "036a5d8348cd744767cd0b08518ab17bf608fa7f",
+      "installed_build_differs": true,
+      "limit": "Pinned public source and guide inspection; no installed-runtime feature test and no configuration edits.",
+      "guides": {
+        "07-mcp-servers.md": {
+          "sha256": "bf2826a82d9985e68b39f7552bd9c3f6603b5a89bc2fde6b68a7c9ec159a98e5"
+        },
+        "10-hooks.md": {
+          "sha256": "59cfdf89f51bd9835c725e891f74aac1778bfcae358f6ae96c515166eec6e1e6"
+        },
+        "12-project-rules.md": {
+          "sha256": "160380abbee8bb7c0a94809b3f563f9fccde8d9592d1261aff0186b13a2e290b"
+        }
+      },
+      "source_files": {
+        "crates/codegen/xai-grok-shell/src/config/reloader.rs": {
+          "sha256": "f620cc10005b69a4a1adba86af308677eb004a08bf198c5c1a717986f80bedb3"
+        },
+        "crates/codegen/xai-grok-shell/src/session/acp_session_impl/hook_dispatch.rs": {
+          "sha256": "1cd54e1173805e5706dec07be54ec3809a6a8a0c4aee9ef9ca64399009146d16"
+        },
+        "crates/codegen/xai-grok-shell/src/session/acp_session_impl/hooks_plugins.rs": {
+          "sha256": "5b206b274d485a65562f0486cb4dc9c8517664e9df4640574c3c3c5161b9bb3e"
+        },
+        "crates/common/xai-message-delivery-core/src/lifecycle.rs": {
+          "sha256": "c60aa0343eda00a995582c5c5a900c0feb0b81985fd21031d1bf0b6484bd41ae"
+        },
+        "crates/common/xai-message-delivery-core/src/envelope.rs": {
+          "sha256": "f4255053ad2ac0b6143cebe696d154dbbf41e0fe0c6d7f9a2a3a8037e670639a"
+        },
+        "crates/common/xai-message-delivery-core/src/address.rs": {
+          "sha256": "9ebb9d717c9c24ffcbc3d1ff4e828c87dd2a0bd3f7ea4b0b41da1c74c79c334d"
+        },
+        "crates/codegen/xai-grok-tools/src/implementations/grok_build/send_subagent_message.rs": {
+          "sha256": "915c7104a9188c9837f8155609c74a5c64339f8eca19139d835bc70e64177276"
+        },
+        "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/agent_message_sender.rs": {
+          "sha256": "3cca80e5d2c30d9735edb4115557ea70357b23349341e0526443f3e7bbd5d547"
+        },
+        "crates/codegen/xai-grok-shell/src/session/acp_session_impl/active_agent_message_presentation.rs": {
+          "sha256": "48488e6318c4c8580441c9a01d169507c2d57d240604f5aa5d32d4a0ace414a1"
+        },
+        "crates/codegen/xai-grok-hooks/src/event.rs": {
+          "sha256": "f54a82c1fb546df8d93b4c7039f4a908bf9816f9609e6185c8a858128ad5a1eb",
+          "git_blob_sha": "a38e20310567887b32fcad940ebb2b02c457177f"
+        },
+        "crates/codegen/xai-grok-shell/src/session/acp_session/hooks.rs": {
+          "sha256": "7af95e78e3638a8b90d47b6d8cb145e1862d2f07e322b51ae67cbacd8877d411",
+          "git_blob_sha": "d9e4d975b239bd166693450761e7fbb363600bbb"
+        },
+        "crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_dispatch.rs": {
+          "sha256": "e7236455d097d6ffdd01860650c4cb61baa949fe76b4e69425b5f24d8f56755a",
+          "git_blob_sha": "904fc69af09413e49fb1a8e908883b89c28855b3"
+        },
+        "crates/codegen/xai-grok-shell/src/session/acp_session_impl/turn.rs": {
+          "sha256": "45c93ddc8178584ce90c6c7a28d0246f8e37e741f2c15dee5c6a696daa67f96a",
+          "git_blob_sha": "c298d48d98b6e7c4b9e42606a48d91ce71eb9567"
+        },
+        "crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_calls.rs": {
+          "sha256": "201c2e4ff7e544e566742f9c315b43370b5a9af4dc3cdc829522ca293b1562aa",
+          "git_blob_sha": "582c2dfd561d49921643961b8e3bbc5246684c9d"
+        },
+        "crates/codegen/xai-grok-shell/src/session/acp_session.rs": {
+          "sha256": "56216a190f064445191ac5f6fbf2569c64a7c12de9c99217adb01f39a9e6f59d",
+          "git_blob_sha": "045e9128f1572556287a3b1b78ee1b0bb476f719"
+        },
+        "crates/codegen/xai-grok-mcp/src/servers.rs": {
+          "sha256": "08664875b996c72171249077968888a4bbcba91e8af54cabed170c24c6905eb5",
+          "git_blob_sha": "f68c92840f68b50796c861dcd703deb23028d44a"
+        },
+        "crates/codegen/xai-grok-mcp/src/wire.rs": {
+          "sha256": "45f9b7c46ad685da069043727afb238e456c00f3d39eea2f1bda9b9a72d7d571",
+          "git_blob_sha": "7bb7554c54a4c103cd71669d36d32bcd1c4feed6"
+        },
+        "crates/codegen/xai-grok-mcp/src/mcp_http_client.rs": {
+          "sha256": "ddec01f427ec2f1a2814f33ad9388e749f5bda334fe9bf230b640c86898b3a82",
+          "git_blob_sha": "f69aaf15c17d2cd1261bf0ac63f42f2d057c9a43"
+        },
+        "crates/codegen/xai-grok-workspace/src/mcp.rs": {
+          "sha256": "2c8fa171b60e8ca59d7a1d20f6edca28550df583324f83630af749623ee7f1ad",
+          "git_blob_sha": "6b4627bceff7f72613896589286b262b10e3575a"
+        },
+        "crates/codegen/xai-grok-shell/src/session/acp_session_impl/mcp.rs": {
+          "sha256": "b20ae102b80e6ed96293ec5e3e2adcdbad463d226c232415af1360b6d7dc7865",
+          "git_blob_sha": "f4d6e17fcdcd0cb7694fc2d7818f516a17c9f76f"
+        },
+        "crates/codegen/xai-grok-tools/src/types/tool_call_origin.rs": {
+          "sha256": "23802501cc6b90367c8068a98fab1c4f3fba555871745a463bb7e84306c3de38",
+          "git_blob_sha": "ec6064c3b04b500e7e37e7bc17e7ffcd2fd880c5"
+        },
+        "crates/common/xai-computer-hub-mcp-adapter/src/bridge.rs": {
+          "sha256": "462b28cc7a05964e7509ec38e8f5673ba38a05070aa9ce349dc3b79c7d3bc189",
+          "git_blob_sha": "c5934d77741a2485517c6a4e906662fa9e2e4dbf"
+        },
+        "crates/codegen/xai-grok-shell/src/session/acp_session_impl/updates.rs": {
+          "sha256": "3f5d530ebdb2477750f1bcef483cc756c3f3d45f1a73447646a1b0f6d4e4e8d2",
+          "git_blob_sha": "6e47573d297a4f94d629dcd6541f381787352e73"
+        },
+        "crates/codegen/xai-chat-state/src/persistence.rs": {
+          "sha256": "fe2c8d75f284abe686772373a94e5f5ff81d6106c6695ed3d29205deec3fd482",
+          "git_blob_sha": "ef2eeb7c00d6150c3c2253346d09ca3649bc9eab"
+        },
+        "crates/codegen/xai-chat-state/src/actor/mutations.rs": {
+          "sha256": "e8b74d0a78a0bdcf1acc2fda921cf47b0a8de38e3d846528a351e6265575df1e",
+          "git_blob_sha": "130e13337730b3f38ebefbe1b215b9ea75b3012d"
+        },
+        "crates/codegen/xai-chat-state/src/types.rs": {
+          "sha256": "03058eee00e9a40e664278e40ce20d8affa08775640382b929e520d6ba67aaa7",
+          "git_blob_sha": "fa61a4babee78a50268e4b08c7769c937f2f7e9c"
+        },
+        "crates/codegen/xai-grok-shell/src/session/acp_session_impl/interjection.rs": {
+          "sha256": "40fa9ba9bc59baf8b9b47e2bbd390b339b92ede72fda82e3cb52a65c6d841474",
+          "git_blob_sha": "e9636b4b184c7b10e51d5a36a8d2b50a59e1041e"
+        },
+        "crates/codegen/xai-grok-shell/src/session/acp_session_tests/interjection_actor_tests.rs": {
+          "sha256": "f9fd5be6675c8b743ce9061279f95b8869c72d87106c2d01973f9a63e67be05a",
+          "git_blob_sha": "17ea50f47c754aeab3b0001e8a8f0df8210c7b08"
+        }
+      },
+      "commit_metadata_checked": {
+        "commit_sha": "f0e3be1100ef5252488e3be8bb0e91cf68d8c305",
+        "tree_sha": "7b13fb498bf5d9bcfced2053e56a48b5deb27b34",
+        "committed_at": "2026-09-23T16:52:41Z"
+      },
+      "messaging_limit": "Inspected owned-child/parent message capability and generic lifecycle primitives; does not establish arbitrary independent-session messaging or installed runtime behavior.",
+      "hook_provenance_observations": {
+        "HookEventEnvelope": "Optional prompt_id is serialized only when present; make_hook_envelope copies the supplied value without resolving a current prompt.",
+        "PreToolUse": "make_pre_tool_use_envelope passes None for prompt_id and preserves the model call ID as tool_use_id.",
+        "PostToolUse": "The inspected dispatch_post_tool_use_hook path passes None for prompt_id and preserves prepared.call_id as tool_use_id.",
+        "UserPromptSubmit": "The handle_prompt path supplies Some(prompt_id) to its gate; a gate event alone is not proof of accepted human input or later tool provenance.",
+        "PreparedToolCall": "The inspected struct holds model/ACP call IDs and an invocation ID but no prompt_id field. Other provider routes or correlations were not ruled out.",
+        "design_consequence": "Do not fill an absent task identity from mutable current session state. Verify immutable tool-to-input correlation or a task-bound capability delivery path.",
+        "limit": "Pinned source inspection only. Different installed build; no native hook or model session started."
+      },
+      "mcp_provenance_observations": {
+        "erased_tool": "McpErasedTool.run ignores ToolCallContext. try_call_tool creates CallToolRequestParams from tool name and raw arguments without attaching that context.",
+        "workspace_bridge": "The common bridge ignores ToolCallContext and forwards tool name/arguments. The workspace transport builds the outgoing request from those fields.",
+        "http_wrapper": "post_message delegates the supplied message and headers without adding an input/task identity.",
+        "session_headers": "expand_session_id_headers substitutes the session ID; this is not an accepted-input generation.",
+        "internal_origin": "ToolCallOrigin records internal invocation/session/turn attribution; forwarding it as task authority was not established on these inspected MCP paths.",
+        "design_consequence": "MCP transport alone does not close S4. Verify per-call capability provenance or a supported native/managed integration; never stamp delayed calls with a latest-task header.",
+        "limit": "Pinned source inspection only; installed build differs. Other extension paths are not ruled out, and no MCP server, native session, or model call was started."
+      },
+      "persisted_update_provenance_observations": {
+        "pending_call": "prepare_tool_call enqueues the initial ToolCall event before its pre-tool gate; send_update stamps current_prompt_id into outer promptId metadata.",
+        "persistence": "emit_notification_direct preserves notification metadata while sending it to persistence. Enqueue order alone does not prove a persisted line is available during the hook.",
+        "normalization": "Current GrokNormalizer parses outer metadata but does not propagate promptId into normalized tool_start events.",
+        "mid_turn_steering": "drain_pending_interjections submits conversation items and persists interjection-marked user chunks without replacing the outer current_prompt_id; an outer prompt ID alone does not distinguish accepted steering inputs.",
+        "chat_history": "The inspected chat-state push methods persist items through the actor; they do not independently add an immutable originating human-input identity to each model output.",
+        "fixture": {
+          "path": "cli/src/lib/__fixtures__/grok-session.jsonl",
+          "sha256": "893f1d9368b733c59823203f12afde6748acbd84029bcbdc962e92e099c35e43",
+          "user_message_chunks": 1,
+          "user_message_chunks_with_prompt_index": 1,
+          "tool_calls": 4,
+          "tool_calls_with_prompt_id": 4,
+          "tool_call_updates": 8,
+          "tool_call_updates_with_prompt_id": 8,
+          "conflicting_tool_to_prompt_mappings": 0
+        },
+        "normalizer_sha256": "336b77587acfa40ef0da944128318cc3770b66641cbeba37ade3f2094a7882a7",
+        "design_consequence": "Candidate for call-to-native-prompt correlation, subject to accepted-input/steering boundaries, persistence ordering, replay and session-generation conformance. Never map all calls from one native prompt ID to its latest steering input.",
+        "limit": "Pinned public source and checked-in fixture only. Installed build differs; no installed session, native hook, provider call, or steering experiment was run. No raw native IDs or conversation bodies exported."
+      }
+    },
+    "usage_help_checked": "grok usage <SESSION_ID> [TURN] advertises persisted session/turn usage; no session usage command was run."
+  },
+  "prompt_acceptance_followup": {
+    "checked_at": "2026-09-28",
+    "claude_documentation": {
+      "url": "https://code.claude.com/docs/en/hooks#userpromptsubmit-decision-control",
+      "observation": "UserPromptSubmit can block processing; observing a hook is not a post-gate acceptance receipt."
+    },
+    "codex_documentation": {
+      "url": "https://learn.chatgpt.com/docs/hooks#userpromptsubmit",
+      "observation": "UserPromptSubmit supports a blocking decision; context delivery and acceptance provenance need separate verification."
+    },
+    "grok_pinned_source": {
+      "revision": "f0e3be1100ef5252488e3be8bb0e91cf68d8c305",
+      "path": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/turn.rs",
+      "observation": "dispatch_prompt_submit_hook runs before the gate verdict is enforced and before the unblocked branch advances prompt state."
+    },
+    "integration_observation": "hookServer.ts calls onPromptSubmitted for UserPromptSubmit; cli.ts immediately calls SwarmPromptScopes.started. No post-gate receipt is established by those calls alone.",
+    "integration_source_sha256": {
+      "cli/src/hookServer.ts": "91f13c097565aa84f731f01472b8cb1370e969bea1fdc364cd3087c8087845ce",
+      "cli/src/cli.ts": "00b432feb094cf9170209cc53b78455d55f20a3ecf40a7dd07b2590ee7bb7953",
+      "cli/src/teams/promptScope.ts": "f363ee6a29aa92f2cdc398123a9e0e9880721d39cbf9a07c98f76df55dd722bb"
+    },
+    "limit": "Official documentation and source inspection only. No installed native prompt was submitted or rejected; no configuration changes or model calls."
+  },
+  "wait_transport_followup": {
+    "checked_at": "2026-09-28",
+    "current_command": {
+      "path": "cli/src/teams/command.ts",
+      "sha256": "a609ab0de8d7b2281490dd0abce6441e015a5e429f7d78783a449d84e574d92d",
+      "default_seconds": 30,
+      "maximum_seconds": 60,
+      "poll_interval_ceiling_ms": 1500,
+      "observation": "Internal status/inbox polling is process/network work, not a model call. Returning on timeout may lead a native caller to reissue waits; no extra model-turn count or cost is established from code alone."
+    },
+    "grok_pinned_source": {
+      "revision": "f0e3be1100ef5252488e3be8bb0e91cf68d8c305",
+      "path": "crates/codegen/xai-grok-mcp/src/servers.rs",
+      "tool_timeout": "Configurable per-tool timeout. load_timeouts uses DEFAULT_TOOL_TIMEOUT_SECS (6000) absent overrides, consistent with the pinned guide; a nearby API comment says 60, so no installed default is inferred.",
+      "cancellation": "call_tool_cancel_aware uses a cancellable request and CancelOnDrop notifies the server when a pending future is abandoned. Server-side cancellation behavior still depends on its implementation.",
+      "recovery": "Selected transport/service failures enter recover_and_retry with the same CallToolRequestParams. The timeout branch returns a timeout and does not replay that slow operation.",
+      "invocation_authority": "These transport features do not fix the separately recorded absence of input authority in inspected outgoing MCP call context."
+    },
+    "design_consequence": "Test an attached event-wait route separately from native yield/resume. Keep stable service IDs across transparent retries; a canceled/lost tool response channel does not automatically become an idle-turn grant.",
+    "limit": "Source and existing guide only. No native tool wait, interruption, goal-mode test, MCP server, configuration change, or paid provider call was run."
+  }
+}

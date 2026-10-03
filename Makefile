@@ -4,7 +4,22 @@
 #   make install-cli ARGS="--no-restart"
 #   make release-cli ARGS="--dry-run"
 
-.PHONY: cli-test install-cli upload-cli-install-sh release-cli release-backend release-desktop remote-machine upload-circle device-test
+.PHONY: validate merge-pr desktop-test cli-test install-cli upload-cli-install-sh release-cli release-backend release-desktop release-web remote-machine upload-circle device-test
+
+## validate: bounded independent checks with logs and a source/timing receipt.
+## See docs/validation-and-release.md. ARGS="path/to/plan.json".
+validate:
+	python3 scripts/validate-change.py $(ARGS)
+
+## merge-pr: wait for required CI and verify an already-reviewed PR; add --merge to squash it.
+## See docs/validation-and-release.md for reviewed source arguments and non-CI checks.
+merge-pr:
+	python3 scripts/merge-validated-pr.py $(ARGS)
+
+## desktop-test: bounded VM tests, host-sized workers and recorded startup recovery.
+## ARGS="test/affected_test.dart --workers 2"; omit paths for the full VM suite.
+desktop-test:
+	python3 scripts/test-desktop.py $(ARGS)
 
 ## cli-test: typecheck + run the CLI test suite.
 cli-test:
@@ -26,10 +41,18 @@ release-backend:
 ## release-desktop: tag this commit vX.Y.Z_desktop and push the tag — CI builds both macOS builds
 ## and both Linux architectures, publishes to GCS, and cuts the GitHub Release. The version is bumped
 ## from max(last git tag, live harness/desktop/metadata.json). ARGS="--dry-run" to preview,
+## ARGS="--prepare" to package a pushed PR head during final checks, without publishing,
 ## ARGS="--minor" for a forced-update minor bump, ARGS="X.Y.Z" for an explicit version. The by-hand
 ## escape hatches (upload-desktop, upload-desktop-linux, upload-node-runtime, upload-tmux-runtime) live in desktop/Makefile.
 release-desktop:
 	bash desktop/scripts/release-desktop.sh $(ARGS)
+
+## release-web: ship the browser app to harness.autonomous.ai — tag this commit vX.Y.Z_web; CI builds
+## the Flutter bundle into website/'s image and pushes it (ArgoCD deploys). Re-run with the same version
+## to resume waiting on a tag that already exists.
+## ARGS="--dry-run" to preview, ARGS="--minor" or ARGS="X.Y.Z" to bump differently.
+release-web:
+	bash desktop/scripts/release-web.sh $(ARGS)
 
 ## install-cli: bundle the CLI from THIS working tree and install it into ~/.harness/cli — the local dev
 ## loop, nothing published. Restarts the daemon on the new bytes. Self-update stays ON: the build is

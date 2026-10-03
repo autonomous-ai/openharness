@@ -1,9 +1,9 @@
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/codex_profiles.dart';
@@ -228,7 +228,7 @@ class _CodexProfileFieldState extends State<CodexProfileField> {
               SelectOption(
                 value: refreshValue,
                 label: 'Refresh profiles',
-                leading: () => const Icon(LucideIcons.refreshCw, size: 14),
+                leading: () => const Icon(AppIcons.refreshCw, size: 14),
               ),
             ],
             onChanged: (value) {
@@ -250,7 +250,7 @@ class _CodexProfileFieldState extends State<CodexProfileField> {
                 ),
                 const SizedBox(width: 8),
                 Icon(
-                  Icons.keyboard_arrow_down,
+                  AppIcons.chevronDown,
                   size: 16,
                   color: grid.AppPalette.textSecondary,
                 ),

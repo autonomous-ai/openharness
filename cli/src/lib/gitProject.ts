@@ -1,13 +1,22 @@
 import { execFile } from 'node:child_process'
 import { cp, lstat, mkdir, realpath, stat, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, normalize } from 'node:path'
 import { promisify } from 'node:util'
 import { placeholderBranch, plausibleBranchName, worktreeFolderName } from './agentNames.js'
+import { withinRoots } from './pathContainment.js'
 
 const exec = promisify(execFile)
 
 export class GitProjectError extends Error {
   constructor(readonly code: string, message: string) { super(message) }
+}
+
+const worktreeDiskFull = 'Not enough disk space to create the worktree. Free space on this machine, then retry.'
+function diskFull(error: unknown): boolean {
+  const failure = error as { code?: string; stderr?: string }
+  return failure?.code === 'ENOSPC' || failure?.code === 'EDQUOT' ||
+    /no space left on device|disk quota exceeded/i.test(failure?.stderr ?? '')
 }
 
 export function validGitPath(path: unknown): path is string {
@@ -17,7 +26,9 @@ export function validGitPath(path: unknown): path is string {
 async function git(path: string, args: string[], timeout = 4000): Promise<string> {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_OPTIONAL_LOCKS: '0' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete (env as NodeJS.ProcessEnv)[key]
-  return (await exec('git', ['--no-optional-locks', '-C', path, ...args], {
+  // core.fsmonitor names a program git runs on status/diff; a repository's own config must not choose
+  // one for the daemon (same guard as projectPreview.ts).
+  return (await exec('git', ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', path, ...args], {
     timeout, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024,
     env,
   })).stdout.replace(/\r?\n$/, '')
@@ -87,8 +98,22 @@ async function refreshBranches(path: string): Promise<Map<string, string[] | nul
 
 /** Cached choices are immediate. A picker can separately request a bounded
  *  remote refresh, including branches excluded by a single-branch clone. */
-export async function readGitProject(path: string, options: { refresh?: boolean } = {}) {
-  if (!validGitPath(path)) return { error: 'INVALID_PATH' }
+/**
+ * Reads a repository's shape for the New Harness form. `knownRoots` widens the browsable home with
+ * the workspaces agents are already running in; leaving it out still fences to the home folder, so a
+ * caller can never accidentally ask this to run git anywhere on the machine.
+ *
+ * `path` is resolved before anything runs: git would follow a symlink out of the allowed folders
+ * whatever the name said, so the containment is measured on the real path and git is pointed at it.
+ */
+export async function readGitProject(requested: string, options: { refresh?: boolean; knownRoots?: string[] } = {}) {
+  if (!validGitPath(requested)) return { error: 'INVALID_PATH' }
+  let path: string
+  // A folder that is gone reads as "not a Git project", which is what running git in it used to
+  // report (exit 128) — a deleted folder is not a malformed request.
+  try { path = await realpath(requested) } catch { return { isGit: false, branches: [] } }
+  // Same word and same roots as projectPreview's fence, so the two read alike.
+  if (!(await withinRoots(path, [homedir(), ...(options.knownRoots ?? [])]))) return { error: 'FORBIDDEN' }
   let root: string
   try { root = await git(path, ['rev-parse', '--show-toplevel']) }
   catch (error) {
@@ -263,7 +288,10 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
       try { await mkdir(folder); destination = folder }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
     }
-  } catch { destination = undefined }
+  } catch (error) {
+    if (diskFull(error)) throw new GitProjectError('WORKTREE_FAILED', worktreeDiskFull)
+    destination = undefined
+  }
   if (!destination) throw new GitProjectError('WORKTREE_FAILED', 'Could not create a worktree folder. Check folder permissions, then retry.')
   const remote = remoteBranch(options.ref)
   try {
@@ -285,8 +313,9 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
       : remote && remote.branch === branch
         ? ['worktree', 'add', '--track', '-b', branch, '--', destination, options.ref!]
         : ['worktree', 'add', '--no-track', '-b', branch, '--', destination, head], 120_000)
-  } catch {
+  } catch (error) {
     // Keep any partial checkout and branch available for recovery.
+    if (diskFull(error)) throw new GitProjectError('WORKTREE_FAILED', worktreeDiskFull)
     throw new GitProjectError('WORKTREE_FAILED', `Could not create the worktree at ${destination}. Check Git and folder permissions, then retry.`)
   }
   // Harness made this branch: its cleanup may remove it, and a made-up name gives way to the session's.

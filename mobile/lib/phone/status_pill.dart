@@ -62,18 +62,12 @@ class StatusPill extends StatelessWidget {
 }
 
 /// The status without its words: a dot in the tone's colour, or a small spinner while something is
-/// under way. For a place with no room for a label — the terminal header, beside the agent's name.
+/// under way. For a place with no room for a label — a machine's heading in the All harnesses list.
 ///
 /// The label is still there for a screen reader, and as a long-press tooltip, so a colour is never
 /// the only way to learn what it means.
 class StatusDot extends StatelessWidget {
-  const StatusDot({
-    super.key,
-    required this.summary,
-    this.ring,
-    this.size = defaultSize,
-    this.spinnerColor,
-  });
+  const StatusDot({super.key, required this.summary, this.size = defaultSize});
 
   /// The box every screen but the terminal's foot row draws it at.
   static const double defaultSize = 10;
@@ -85,26 +79,16 @@ class StatusDot extends StatelessWidget {
   /// a solid ring rather than as something turning.
   final double size;
 
-  /// A cut-out ring in this colour around the dot, for a dot laid OVER something — a badge on a
-  /// mark, the way presence sits on an avatar. It should be the colour behind the mark, so the dot
-  /// reads as notched into it rather than stuck on top.
-  final Color? ring;
-
-  /// The spinner's colour in place of the busy tone's, for a spinner drawn over a mark rather than
-  /// beside its words — see `BadgedEngineMark`. Null keeps the tone's.
-  final Color? spinnerColor;
-
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final color = phoneToneColor(summary.tone);
-    final ring = this.ring;
-    Widget dot = SizedBox.square(
+    final dot = SizedBox.square(
       dimension: size,
       child: summary.tone == PhoneTone.busy
           ? CircularProgressIndicator(
               strokeWidth: 1.6 * size / defaultSize,
-              color: spinnerColor ?? color,
+              color: color,
             )
           : Center(
               child: DecoratedBox(
@@ -113,12 +97,6 @@ class StatusDot extends StatelessWidget {
               ),
             ),
     );
-    if (ring != null) {
-      dot = DecoratedBox(
-        decoration: BoxDecoration(color: ring, shape: BoxShape.circle),
-        child: Padding(padding: const EdgeInsets.all(2), child: dot),
-      );
-    }
     return Tooltip(
       message: summary.label,
       child: Semantics(label: summary.label, child: dot),

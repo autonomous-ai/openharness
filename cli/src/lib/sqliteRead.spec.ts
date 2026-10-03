@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  builtinSqlite, closeSqliteHandles, inlineSqlParams, overrideBuiltinSqlite, sqliteReadAll,
+  builtinSqlite, closeSqliteHandles, idleWalStore, inlineSqlParams, overrideBuiltinSqlite, sqliteReadAll,
 } from './sqliteRead.js'
 
 const hasCli = (() => {
@@ -63,6 +63,7 @@ withCli('sqliteReadAll', () => {
     ['cli', () => overrideBuiltinSqlite(null)],
     ...(hasBuiltin ? [['builtin', () => overrideBuiltinSqlite(undefined)] as ['builtin', () => void]] : []),
   ]
+  const withBuiltin = hasBuiltin ? it : it.skip
 
   for (const [via, select] of paths) {
     describe(`via ${via}`, () => {
@@ -102,6 +103,56 @@ withCli('sqliteReadAll', () => {
         expect(Date.now() - started).toBeLessThan(5_000)
       })
 
+      // An engine's idle store must come back exactly as it was: no -wal or -shm made beside it (they
+      // would be the daemon's, in the engine's folder, and a held handle keeps the engine from tidying).
+      it('reads an idle WAL store without creating anything beside it, and a live one live', async () => {
+        run(db, 'PRAGMA journal_mode=WAL;')
+        expect(existsSync(`${db}-wal`)).toBe(false)
+        expect(idleWalStore(db)).toBe(true)
+        const idle = await sqliteReadAll(db, 'SELECT count(*) AS n FROM message;', [])
+        expect(idle).toEqual({ ok: true, via, rows: [{ n: 3 }] })
+        expect(existsSync(`${db}-wal`)).toBe(false)
+        expect(existsSync(`${db}-shm`)).toBe(false)
+        if (!hasBuiltin) return
+        // Its engine opens it and writes: the next read is live, and sees the new row.
+        // The engine's own connection, whichever way this test reads.
+        type Writer = { exec(sql: string): void; close(): void }
+        const sqlite = (process as unknown as { getBuiltinModule(id: string): { DatabaseSync: new (path: string) => Writer } })
+          .getBuiltinModule('node:sqlite')
+        const writer = new sqlite.DatabaseSync(db)
+        try {
+          writer.exec("INSERT INTO message VALUES ('m9','ses_c',9,'{}')")
+          expect(existsSync(`${db}-wal`)).toBe(true)
+          expect(idleWalStore(db)).toBe(false)
+          expect(await sqliteReadAll(db, 'SELECT count(*) AS n FROM message;', [])).toEqual({ ok: true, via, rows: [{ n: 4 }] })
+        } finally {
+          writer.close()
+        }
+      })
+
+      withBuiltin('sees a WAL write that finishes between reads, without leaving sidecars', async () => {
+        run(db, 'PRAGMA journal_mode=WAL;')
+        const query = "SELECT time_created AS time FROM message WHERE id = 'm1';"
+        expect(await sqliteReadAll(db, query)).toEqual({ ok: true, via, rows: [{ time: 1 }] })
+        expect(await sqliteReadAll(db, query)).toEqual({ ok: true, via, rows: [{ time: 1 }] })
+        // The engine starts, updates an existing row, checkpoints, and closes before the next poll.
+        // There is no WAL left to tell a cached immutable reader that its snapshot is stale.
+        type Writer = { exec(sql: string): void; close(): void }
+        const sqlite = (process as unknown as { getBuiltinModule(id: string): { DatabaseSync: new (path: string) => Writer } })
+          .getBuiltinModule('node:sqlite')
+        const writer = new sqlite.DatabaseSync(db)
+        try {
+          writer.exec("UPDATE message SET time_created = 9 WHERE id = 'm1'")
+        } finally {
+          writer.close()
+        }
+        expect(existsSync(`${db}-wal`)).toBe(false)
+        expect(existsSync(`${db}-shm`)).toBe(false)
+        expect(await sqliteReadAll(db, query)).toEqual({ ok: true, via, rows: [{ time: 9 }] })
+        expect(existsSync(`${db}-wal`)).toBe(false)
+        expect(existsSync(`${db}-shm`)).toBe(false)
+      })
+
       it('reports a missing store as transient, and creates nothing', async () => {
         const result = await sqliteReadAll(join(dir, 'absent.db'), 'SELECT 1;', [])
         expect(result.ok).toBe(false)
@@ -111,8 +162,6 @@ withCli('sqliteReadAll', () => {
       })
     })
   }
-
-  const withBuiltin = hasBuiltin ? it : it.skip
 
   // The handle is cached per path for the pollers' sake; a store rebuilt under the same name must
   // not keep answering from the file that was there before.
@@ -125,6 +174,13 @@ withCli('sqliteReadAll', () => {
     renameSync(fresh, db)
     const second = await sqliteReadAll(db, 'SELECT count(*) AS n FROM message;', [])
     expect(second).toEqual({ ok: true, via: 'builtin', rows: [{ n: 1 }] })
+  })
+
+  it('never reads a store in the older journal mode, or no store, as idle', () => {
+    expect(idleWalStore(db)).toBe(false)
+    expect(idleWalStore(join(dir, 'absent.db'))).toBe(false)
+    writeFileSync(join(dir, 'short.db'), 'tiny')
+    expect(idleWalStore(join(dir, 'short.db'))).toBe(false)
   })
 
   it('reports missing when neither reader exists', async () => {

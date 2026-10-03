@@ -4,6 +4,9 @@ import 'package:flutter/foundation.dart';
 
 import 'package:harness_mobile/core/phone_search_history.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/state/external_session.dart';
+import 'package:harness_mobile/state/search_when.dart';
+import 'package:harness_mobile/state/session_content_search.dart';
 
 import 'phone_destination.dart';
 import 'phone_search_catalog.dart';
@@ -15,8 +18,7 @@ import 'phone_search_rank.dart';
 /// The desktop's `kSwarmSearchHint`, word for word. It searches four kinds of
 /// thing, and a hint that named only one of them ("Search agents") was most of
 /// why nobody on the phone knew the other three existed.
-const kPhoneSearchHint =
-    'Search harnesses   > commands   # projects   @ machines   ? help';
+const kPhoneSearchHint = 'Search harnesses';
 
 /// One search session, shared by the field and its results.
 ///
@@ -24,10 +26,12 @@ const kPhoneSearchHint =
 /// `#` projects, `@` machines, `?` help, and the group scope that choosing a
 /// project or a machine drops you into.
 ///
-/// ⚠️ **Keystrokes never ask a machine anything.** They filter the catalog the
-/// app already holds — agents, machines, projects, and the session content
-/// [AppNotifier.sessionPreviews] has cached — so typing on two bars of signal
-/// stays instant and costs no data.
+/// Keystrokes filter the catalog the app already holds — agents, machines, projects and the
+/// session content [AppNotifier.sessionPreviews] has cached — so the list answers at once. A pause
+/// in typing (110ms) also asks every connected machine's session index what was said in each
+/// conversation (`session_search`, the desktop Cmd-P's search — see
+/// docs/research/2026-09-26-session-search.md); its hits join the ranking as they arrive. Only
+/// the hits leave a machine, sealed like every other request.
 ///
 /// What the desktop has and this does not: panes, tabs, placement, splits, the
 /// preview panel, and the "New Harness" row. All four are about WHERE a result
@@ -37,8 +41,14 @@ class PhoneSearchController extends ChangeNotifier {
     required this.notifier,
     this.history,
     this.commands,
+    this.modes = true,
   }) {
     _catalog = _cache.read(notifier);
+    _content = SessionContentSearch(
+      machines: () => notifier.searchableMachineIds,
+      ask: (machineId, words, when) =>
+          notifier.searchSessions(machineId, words, when: when),
+    )..addListener(_contentChanged);
     _filter();
     notifier.addListener(_rebuild);
     notifier.sessionPreviews.addListener(_previewChanged);
@@ -55,7 +65,76 @@ class PhoneSearchController extends ChangeNotifier {
   /// no agent is open.
   final List<PhoneCommand> Function()? commands;
 
+  /// Whether a leading `>` `#` `@` `?` switches the box into commands, projects, machines or help.
+  ///
+  /// Off in Find (`TerminalSearchOverlay`): a phone searches its agents, and a query is read as
+  /// typed. The modes were the desktop's command palette carried over.
+  final bool modes;
+
   final _cache = PhoneSearchCatalogCache();
+
+  /// What every machine's session index found for the query — see [contentHitFor].
+  late final SessionContentSearch _content;
+
+  /// The query the machines' session indexes last answered, or null before any answer.
+  String? get contentAnswered => _content.answered;
+
+  /// What a machine's session index found in this row's conversation for the current query.
+  SessionContentHit? contentHitFor(String rowId) =>
+      _contentQuery.isEmpty ? null : _content.hitsFor(_contentQuery)[rowId];
+
+  /// When the query says to look ("dial last week"), and its words without that.
+  ({String words, SearchWhen? when}) get _read => _contentQuery.isEmpty
+      ? (words: matchQuery, when: null)
+      : _content.read(_contentQuery);
+
+  /// The words matched against names and lit in the rows: the query less any time phrase.
+  String get wordsQuery => _read.words;
+
+  /// What the session indexes are asked: a plain harness search only, never a command or a mode.
+  String get _contentQuery => _listsAgents ? matchQuery : '';
+
+  void _contentChanged() {
+    if (_disposed) return;
+    _filter();
+    notifyListeners();
+  }
+
+  /// A Find row for a conversation Harness did not start, from the hit that found it: its title (or
+  /// what was first asked), and where it ran — the desktop's `externalSessionDestination`.
+  PhoneDestination _externalRow(
+    SessionContentHit hit,
+    ExternalSessionRef external,
+  ) {
+    final machine = notifier.stateOf(hit.machineId)?.machine.displayName ?? '';
+    return PhoneDestination(
+      id: hit.destinationId,
+      kind: PhoneDestinationKind.external,
+      title: external.title.isEmpty ? 'Untitled conversation' : external.title,
+      detail: '$machine:${external.folderName}',
+      machineId: hit.machineId,
+      machineLabel: machine,
+      engine: external.engine,
+      external: external,
+      lastAt: hit.lastAt ?? hit.at,
+      searchFields: [external.folderName, external.cwd, external.engineLabel],
+    );
+  }
+
+  /// With a time in the query, the rows worked on then: the conversation last moved in it, or a
+  /// machine vouches it saw a turn in it.
+  List<PhoneDestination> _within(List<PhoneDestination> rows) {
+    final when = _read.when;
+    if (when == null) return rows;
+    final hits = _content.hitsFor(_contentQuery);
+    bool then(DateTime? at) =>
+        at != null && !at.isBefore(when.from) && !at.isAfter(when.to);
+    return [
+      for (final row in rows)
+        if (hits.containsKey(row.id) || then(row.entry?.agent.updatedAt)) row,
+    ];
+  }
+
   List<PhoneDestination> _catalog = const [];
   Set<String> _commandIds = const {};
 
@@ -69,14 +148,18 @@ class PhoneSearchController extends ChangeNotifier {
   int total = 0;
   int matchCount = 0;
 
-  static final _quickAccessPrefix = RegExp(r'^[>@#?]');
+  static final _quickAccessPrefix = RegExp(r'^[>@#?:]');
   static final _commandPrefix = RegExp(r'^>\s*');
   static final _helpPrefix = RegExp(r'^\?\s*');
 
-  bool get isCommandMode => query.trimLeft().startsWith('>');
-  bool get isHelpMode => query.trimLeft().startsWith('?');
-  bool get isProjectMode => query.trimLeft().startsWith('#');
-  bool get isMachineMode => query.trimLeft().startsWith('@');
+  bool get isCommandMode => modes && query.trimLeft().startsWith('>');
+  bool get isHelpMode => modes && query.trimLeft().startsWith('?');
+  bool get isProjectMode => modes && query.trimLeft().startsWith('#');
+  bool get isMachineMode => modes && query.trimLeft().startsWith('@');
+
+  /// `:` — the models the agent on screen can run on, the desktop ⌘P's `:`. Drawn by Find itself
+  /// (it needs the machine's grid, asked for as the mode opens), so this list stays empty.
+  bool get isModelMode => modes && query.trimLeft().startsWith(':');
   bool get isGroupMode => isProjectMode || isMachineMode;
 
   String get commandQuery => query.trimLeft().replaceFirst(_commandPrefix, '');
@@ -94,7 +177,7 @@ class PhoneSearchController extends ChangeNotifier {
       ? commandQuery
       : isHelpMode
       ? helpQuery
-      : isGroupMode
+      : isGroupMode || isModelMode
       ? query.trimLeft().substring(1).trimLeft()
       : query;
 
@@ -106,6 +189,8 @@ class PhoneSearchController extends ChangeNotifier {
       ? 'Projects'
       : isMachineMode
       ? 'Machines'
+      : isModelMode
+      ? 'Models'
       : _groupScope != null
       ? 'Harnesses · ${_groupScope!.name}'
       : 'Search';
@@ -120,15 +205,20 @@ class PhoneSearchController extends ChangeNotifier {
       ? 'Search projects…'
       : isMachineMode
       ? 'Search machines…'
+      : isModelMode
+      ? 'Search models…'
       : kPhoneSearchHint;
 
   void setQuery(String value) {
     if (query == value) return;
     // Typing a mode character leaves whatever group was chosen: `@` means "pick
     // a machine", which is not a thing to do inside one.
-    if (_quickAccessPrefix.hasMatch(value.trimLeft())) _groupScope = null;
+    if (modes && _quickAccessPrefix.hasMatch(value.trimLeft())) {
+      _groupScope = null;
+    }
     query = value;
     _filter();
+    _content.search(_contentQuery);
     notifyListeners();
   }
 
@@ -150,6 +240,7 @@ class PhoneSearchController extends ChangeNotifier {
     _groupScope = null;
     query = '';
     _filter();
+    _content.search('');
     notifyListeners();
   }
 
@@ -176,7 +267,11 @@ class PhoneSearchController extends ChangeNotifier {
       return row;
     }
     final id = row.agentId == null ? null : row.id;
-    if (id != null) history?.remember(id);
+    if (id != null) {
+      history?.remember(id);
+      // Found from search: the phone's own Cmd-O, a first-egg habit.
+      notifier.daemonHabits.found();
+    }
     return row;
   }
 
@@ -188,12 +283,19 @@ class PhoneSearchController extends ChangeNotifier {
     PhoneDestinationKind.agent => row.entry?.isOpenable ?? false,
     // A locked machine opens its password form, which is the thing to do about
     // it; a switched-off one has nothing to take a password.
-    PhoneDestinationKind.machine =>
-      _catalog.any((entry) => entry.id == row.id && entry.isMachine),
-    PhoneDestinationKind.project =>
-      _catalog.any((entry) => entry.id == row.id && entry.isProject),
+    PhoneDestinationKind.machine => _catalog.any(
+      (entry) => entry.id == row.id && entry.isMachine,
+    ),
+    PhoneDestinationKind.project => _catalog.any(
+      (entry) => entry.id == row.id && entry.isProject,
+    ),
     PhoneDestinationKind.command => _commandIds.contains(row.id),
     PhoneDestinationKind.mode => true,
+    // Not while it is open in a terminal or an app elsewhere — two processes would write one
+    // conversation — nor while its machine cannot be asked.
+    PhoneDestinationKind.external =>
+      !(row.external?.open ?? true) &&
+          notifier.searchableMachineIds.contains(row.machineId),
   };
 
   void _rebuild() {
@@ -245,6 +347,13 @@ class PhoneSearchController extends ChangeNotifier {
   bool _disposed = false;
 
   void _filter() {
+    if (isModelMode) {
+      rows = const [];
+      total = 0;
+      matchCount = 0;
+      _commandIds = const {};
+      return;
+    }
     if (isHelpMode) {
       // The modes keep the order they are taught in; what follows `?` only
       // narrows them, the way a quick-open's own `?` does.
@@ -263,8 +372,7 @@ class PhoneSearchController extends ChangeNotifier {
     }
     final available = isCommandMode
         ? [
-            for (final command
-                in commands?.call() ?? const <PhoneCommand>[])
+            for (final command in commands?.call() ?? const <PhoneCommand>[])
               command.destination,
           ]
         : const <PhoneDestination>[];
@@ -279,9 +387,15 @@ class PhoneSearchController extends ChangeNotifier {
     final candidates = isCommandMode
         ? available
         : isProjectMode
-        ? [for (final row in _catalog) if (row.isProject) row]
+        ? [
+            for (final row in _catalog)
+              if (row.isProject) row,
+          ]
         : isMachineMode
-        ? [for (final row in _catalog) if (row.isMachine) row]
+        ? [
+            for (final row in _catalog)
+              if (row.isMachine) row,
+          ]
         : scoped != null
         ? [
             for (final row in _catalog)
@@ -299,20 +413,38 @@ class PhoneSearchController extends ChangeNotifier {
               if (row.isAgent) row,
           ];
     total = candidates.length;
+    _findExtras();
+    // Conversations Harness did not start, found by what was said in them: a row only while a
+    // search matches one, never in the list as it opens — the desktop Cmd-P's rule.
+    final found = _contentQuery.isEmpty || _groupScope != null || isCommandMode
+        ? candidates
+        : [
+            ...candidates,
+            for (final hit in _content.hitsFor(_contentQuery).values)
+              if (hit.external case final external?
+                  when !candidates.any((row) => row.id == hit.destinationId))
+                _externalRow(hit, external),
+          ];
     rows = isCommandMode
         ? _recentFirst(rankPhoneDestinations(candidates, commandQuery))
         : rankPhoneDestinations(
-            candidates,
-            matchQuery,
+            _within(found),
+            wordsQuery,
             recent: history?.recent ?? const <String>[],
             previews: notifier.sessionPreviews,
+            byActivity: _listsAgents,
+            contentHits: _contentQuery.isEmpty
+                ? null
+                : _content.hitsFor(_contentQuery),
           );
     matchCount = rows.length;
     // ⚠️ **Not with nothing typed.** That list is the desktop's Harness Monitor
     // order ([rankPhoneDestinations]), where paused work sits among the rest by
     // when it last moved — moving it to the bottom here is the phone's list
     // disagreeing with the laptop's again.
-    if (_listsMonitorOrder) return;
+    // A list of agents keeps its last-use order whole, the desktop ⌘P's rule — a row that cannot be
+    // opened stays where it is, dimmed, rather than sinking. See [rankPhoneDestinations].
+    if (_listsAgents) return;
     // Keep the match order, but put rows a tap can open first. An agent whose
     // terminal has gone must not bury the ones that answer.
     final open = <PhoneDestination>[];
@@ -324,13 +456,56 @@ class PhoneSearchController extends ChangeNotifier {
     matchCount = rows.length;
   }
 
+  /// With a plain query typed: the commands that match it, best first — Find's `commands` section
+  /// under the harnesses. Empty with nothing typed, in a mode, or inside a project or machine.
+  List<PhoneDestination> commandMatches = const [];
+
+  /// The project that best matches a plain query — Find's `+ New Harness in <project>`.
+  PhoneDestination? projectMatch;
+
+  void _findExtras() {
+    final plain =
+        _listsAgents && _groupScope == null && matchQuery.trim().isNotEmpty;
+    if (!plain) {
+      commandMatches = const [];
+      projectMatch = null;
+      return;
+    }
+    final available = [
+      for (final command in commands?.call() ?? const <PhoneCommand>[])
+        command.destination,
+    ];
+    _commandIds = {..._commandIds, for (final row in available) row.id};
+    // By name only: a command whose description merely mentions the letters ("ap" in Settings'
+    // "Appearance") is noise under the harnesses.
+    final needle = matchQuery.trim().toLowerCase();
+    commandMatches = rankPhoneDestinations(available, matchQuery)
+        .where(
+          (row) =>
+              row.title
+                  .toLowerCase()
+                  .split(RegExp(r'\s+'))
+                  .any((word) => word.startsWith(needle)) ||
+              row.title.toLowerCase().startsWith(needle),
+        )
+        .take(3)
+        .toList();
+    projectMatch = rankPhoneDestinations([
+      for (final row in _catalog)
+        if (row.isProject) row,
+    ], matchQuery).firstOrNull;
+  }
+
   /// Whether [rows] are agents with nothing typed — the list that follows the
   /// desktop's monitor.
-  bool get _listsMonitorOrder =>
+  /// Whether the rows are agents — the plain list, or one project's or machine's — rather than
+  /// commands, projects or machines.
+  bool get _listsAgents =>
       !isCommandMode &&
+      !isHelpMode &&
       !isProjectMode &&
       !isMachineMode &&
-      matchQuery.trim().isEmpty;
+      !isModelMode;
 
   /// With nothing typed, the commands run lately lead, newest first; the rest
   /// keep their order. Once something is typed, the match decides.
@@ -352,6 +527,9 @@ class PhoneSearchController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _content
+      ..removeListener(_contentChanged)
+      ..dispose();
     notifier.removeListener(_rebuild);
     notifier.sessionPreviews.removeListener(_previewChanged);
     super.dispose();

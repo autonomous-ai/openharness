@@ -129,6 +129,37 @@ void main() {
   );
 
   testWidgets(
+    'rename Tab traversal wraps between the field and visible actions',
+    (tester) async {
+      app.adoptSessionForTest(terminal('a0', []));
+      await mount(tester);
+      await command(tester, 'rename agent');
+      expect(field(tester, _agent).focusNode!.hasPrimaryFocus, isTrue);
+
+      Future<void> tabTo(String label, {bool backwards = false}) async {
+        await key(tester, LogicalKeyboardKey.tab, shift: backwards);
+        expect(
+          Focus.of(tester.element(find.text(label))).hasPrimaryFocus,
+          isTrue,
+          reason: 'Tab should land on the visible $label button',
+        );
+      }
+
+      await tabTo('Cancel');
+      await tabTo('Save');
+      await key(tester, LogicalKeyboardKey.tab);
+      expect(field(tester, _agent).focusNode!.hasPrimaryFocus, isTrue);
+      await tabTo('Save', backwards: true);
+      await tabTo('Cancel', backwards: true);
+      await key(tester, LogicalKeyboardKey.tab, shift: true);
+      expect(field(tester, _agent).focusNode!.hasPrimaryFocus, isTrue);
+      expect(connection.renames, isEmpty);
+      await key(tester, LogicalKeyboardKey.escape);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
     'live custom rename keys, disabled defaults and composition keep ownership',
     (tester) async {
       app.adoptSessionForTest(terminal('a0', []));
@@ -142,7 +173,7 @@ void main() {
       await mount(tester);
       await key(tester, LogicalKeyboardKey.f2);
       await tester.pumpAndSettle();
-      expect(find.text('F8  save'), findsOneWidget);
+      expect(find.byTooltip('Save · F8'), findsOneWidget);
       tester.testTextInput.enterText('Updated');
       final editor = field(tester, _agent).controller!;
       editor.value = editor.value.copyWith(
@@ -163,13 +194,13 @@ void main() {
       {"keys":"f4","command":"picker.cancel","when":"picker"}
     ]}''');
       await tester.pump();
-      expect(find.text('F10  save'), findsOneWidget);
+      expect(find.byTooltip('Save · F10'), findsOneWidget);
       await key(tester, LogicalKeyboardKey.f10);
       connection.replies.single.complete({});
       await tester.pumpAndSettle();
       await command(tester, 'rename tab');
       expect(field(tester, _tab).focusNode!.hasPrimaryFocus, isTrue);
-      expect(find.text('F10  save'), findsOneWidget);
+      expect(find.byTooltip('Save · F10'), findsOneWidget);
       tester.testTextInput.enterText('Named tab');
       await key(tester, LogicalKeyboardKey.f10);
       expect(app.activeSwarm.name, 'Named tab');
@@ -252,9 +283,10 @@ void main() {
       await command(tester, 'rename agent');
       tester.testTextInput.enterText('');
       await key(tester, LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
       expect(find.text('Name cannot be empty'), findsOneWidget);
       expect(_agent.hitTestable(), findsOneWidget);
-      expect(find.text('esc  close').hitTestable(), findsOneWidget);
+      expect(find.text('Cancel').hitTestable(), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
     },

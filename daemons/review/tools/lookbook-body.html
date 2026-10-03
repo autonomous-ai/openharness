@@ -1,0 +1,1732 @@
+<main class="wrap" id="review-main" tabindex="-1">
+  <header class="manline top">
+    <span>DAEMONS(6)</span><span>Harness Games Manual</span
+    ><span>DAEMONS(6)</span>
+  </header>
+
+  <section aria-labelledby="s-name">
+    <h2 id="s-name">NAME</h2>
+    <div class="ind">
+      <p class="lede">
+        daemons — pair-programming buddies that hatch from your work and live in
+        your status line
+      </p>
+      <p>
+        One daemon pairs with you at a time. It watches every harness on every
+        machine, tells you what needs you, and runs the orchestration you ask
+        for. Every daemon can do the whole job; they differ in lore, look and
+        voice. Each is named after a piece of terminal history, the way
+        <b>tim</b> is <b>t</b>mux <b>im</b>proved.
+      </p>
+      <p class="note">
+        Proposal, 26 Sep 2026; drop 1, init, released 27 Sep 2026. Names, odds,
+        art and lines are drafts. Section 6 of the Unix manual is for games.
+      </p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-syn">
+    <h2 id="s-syn">SYNOPSIS</h2>
+    <div class="ind">
+      <pre
+        class="mono"
+        style="
+          font-size: 14px;
+          line-height: 1.7;
+          color: var(--bright);
+          white-space: pre-wrap;
+        "
+      >hn zoo                   <span class="muted"># your daemons and eggs</span>
+hn hatch  [egg]          <span class="muted"># open an egg when you have a moment</span>
+hn pair   [daemon]       <span class="muted"># choose who pairs with you</span>
+hn logbook [daemon]      <span class="muted"># your story together</span></pre>
+      <p class="note">
+        Commands are proposals. The desktop app does the same things with a
+        click on the status line.
+      </p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-desc">
+    <h2 id="s-desc">DESCRIPTION</h2>
+    <div class="ind">
+      <p>
+        The buddy sits at the right end of the status line, in eight cells. Its
+        eyes carry the mood; a part of its body turns while agents work. Its
+        panel shows its portrait, in the same mood. When it speaks, the status
+        line becomes tmux's yellow message line for a moment. Try the events
+        below, or click the buddy.
+      </p>
+      <div
+        class="tmux"
+        aria-label="A tmux window with two agent panes and the buddy in the status line"
+      >
+        <div class="panes">
+          <div class="pane" id="paneL"></div>
+          <div class="pane" id="paneR"></div>
+          <div class="pane me" id="paneMe">
+            <span class="h" id="meHead"></span>
+            <pre id="mePlate" role="img"></pre>
+          </div>
+        </div>
+        <div class="status" id="status">
+          <span class="left" id="statusLeft"></span>
+          <span class="right"
+            ><span id="clock">"m2" 09:42</span>
+            <button
+              class="buddy"
+              id="buddy"
+              type="button"
+              aria-label="Buddy"
+            ></button
+          ></span>
+        </div>
+      </div>
+      <div class="row" role="group" aria-label="Workspace events">
+        <span class="lbl">event</span>
+        <button type="button" data-ev="work">agents working</button>
+        <button type="button" data-ev="need">needs you</button>
+        <button type="button" data-ev="done">turn done</button>
+        <button type="button" data-ev="fail">test failed</button>
+        <button type="button" data-ev="back">back after 40m</button>
+        <button type="button" data-ev="nap">nap</button>
+        <button type="button" data-ev="idle">quiet</button>
+      </div>
+      <div class="row" role="group" aria-label="Choose a daemon" id="heroPick">
+        <span class="lbl">buddy</span>
+      </div>
+      <div class="row" role="group" aria-label="Choose a version" id="heroVer">
+        <span class="lbl">version</span>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-cre">
+    <h2 id="s-cre">THE ZOO</h2>
+    <div class="ind">
+      <p>
+        Daemons come in drops: nine numbered regulars and a secret outside the
+        set. Held drops stay out of this review. Announced drops show players
+        silhouettes until release. Click a portrait to boop it.
+      </p>
+      <div
+        class="row"
+        role="group"
+        aria-label="Show every daemon in one mood"
+        id="moodPick"
+      >
+        <span class="lbl">mood</span>
+      </div>
+      <div
+        class="row"
+        role="group"
+        aria-label="Show every daemon at one version"
+        id="verPick"
+      >
+        <span class="lbl">version</span>
+      </div>
+      <div class="row" role="group" aria-label="Who is looking" id="seePick">
+        <span class="lbl">view</span>
+      </div>
+      <div id="drops"></div>
+      <div class="teasers" id="teasers"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-init" id="initSection">
+    <h2 id="s-init">DROP 1: INIT</h2>
+    <div class="ind">
+      <p class="lede">
+        The first drop: ten animals hiding in Unix names, drawn filled and in
+        colour.
+      </p>
+      <p>
+        The drop is called init: <code>init(8)</code> is PID 1, the first
+        process a Unix machine starts, and the parent of every daemon (when a
+        daemon's parent dies, init adopts it). These daemons are shaded the way
+        line printers shaded the Mona Lisa, with denser characters for more
+        light. Each one is a model made of shapes, not a hand drawing, so every
+        size, mood, growth stage and animation frame is printed from the same
+        model. The shiny look is the one hatch in
+        <span id="shinyOdds">256</span> that comes out gold.
+      </p>
+      <div class="show-stage">
+        <div class="plate-box" id="plateBox">
+          <pre id="plateBig" role="img"></pre>
+        </div>
+        <div class="show-side">
+          <div
+            class="show-bar"
+            aria-label="The status line, with the daemon in its eight cells"
+          >
+            <span>[0] 0:claude* 1:codex-</span
+            ><span>"m2" 09:42 <span class="cell" id="plateCell"></span></span>
+          </div>
+          <div class="tag" id="plateTag"></div>
+          <h3 id="plateName"></h3>
+          <p id="plateLore"></p>
+          <p class="note" id="plateNote"></p>
+        </div>
+      </div>
+      <div class="row" role="group" aria-label="Mood" id="plateMood">
+        <span class="lbl">mood</span>
+      </div>
+      <div class="row" role="group" aria-label="Version" id="plateAge">
+        <span class="lbl">version</span>
+      </div>
+      <div class="row" role="group" aria-label="Look" id="plateLook">
+        <span class="lbl">look</span>
+      </div>
+      <div
+        class="show-grid"
+        role="group"
+        aria-label="Choose a daemon"
+        id="plateGrid"
+      ></div>
+      <p class="note">
+        The names, lore, colours and art are drafts. In the status line every
+        drop keeps eight cells of line art in the bar's own colour (a filled
+        daemon cannot be eight characters wide); the filled plates show in
+        portraits, cards, the zoo and the reveal. tim keeps his job from before:
+        common, and the likeliest first hatch, so everyone meets him. A terminal
+        prints the colour the same way: one xterm-256 colour per row from each
+        daemon's two stops, dimmer for faint characters.
+      </p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-tims">
+    <h2 id="s-tims">Twelve tims</h2>
+    <div class="ind">
+      <p class="lede">tim is a species. Every hatch is its own octopus.</p>
+      <p>
+        A colour, markings, proportions, an occasional extra, and a temperament
+        all follow from its seed. These twelve samples were chosen to show the
+        range. The labels are sample seeds, not minted serials; “1 in N”
+        describes the colour, markings, extra, and eye combination.
+        <a href="traits.html">Explore all ten species’ traits →</a>
+      </p>
+      <div class="tims-grid" id="timsGrid"></div>
+    </div>
+  </section>
+  <!-- review:tims-data -->
+  <!-- review:traits-script -->
+  <!-- review:egg-player -->
+  <!-- review:eggs-data -->
+  <!-- review:eggs-script -->
+
+  <section aria-labelledby="s-hatch">
+    <h2 id="s-hatch">Hatching individuals</h2>
+    <div class="ind">
+      <p>
+        An egg waits until you open it. Each hatch creates an individual with
+        its own seed, name, bond, and identity. Another tim is another octopus
+        on your shelf; it never consumes the one you already know.
+      </p>
+      <p>
+        The first four hatches are new species whenever the egg can give one.
+        Later, eight hatches without a new species make the next eligible hatch
+        a new one. Secrets come only from eligible eggs and sit outside the nine
+        regular species. The server owns the draw; this page lets you inspect
+        the art of a chosen outcome.
+      </p>
+      <p class="note">
+        The earlier duplicate-to-XP simulator has been retired.
+        <a
+          href="../../docs/research/2026-09-27-daemons-eggs-individuals-spec.md"
+          >Read the individual design</a
+        >.
+      </p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-eggs">
+    <h2 id="s-eggs">EGGS</h2>
+    <div class="ind">
+      <p id="eggsLede">
+        What you do picks the egg; luck picks what is inside. Longer efforts
+        earn eggs with rarer pools, the way longer walks do in Pokémon Go. Eggs
+        wait in the nest until you open them; when it is full, new ones wait
+        their turn. A turn counts when it finishes in a harness you work in
+        (never a replay, a sub-agent or a plain terminal), and at most 20 count
+        a day across all your machines, so nobody burns tokens farming eggs.
+      </p>
+      <div class="tbl">
+        <table class="t" id="eggTable">
+          <thead>
+            <tr>
+              <th>egg</th>
+              <th>in the status line</th>
+              <th>earned by</th>
+              <th>eligible rarities</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p>The five earning stages, in the status line:</p>
+      <pre
+        id="nestRow"
+        style="white-space: pre-wrap"
+        aria-label="Egg earning stages"
+      ></pre>
+      <p>
+        Daemons ship when they are ready: a new idea, drawn and written well,
+        goes out in the next app release. There is no calendar, and a drop can
+        be a single daemon. Dates from computing history are the only scheduled
+        eggs, and they come back every year so nobody misses one for good.
+      </p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-grow">
+    <h2 id="s-grow">GROWTH</h2>
+    <div class="ind">
+      <p>
+        A daemon keeps its name and face for life. It grows by releases: 0.1
+        when it hatches, 1.0 at bond level 2, 2.0 at bond level 4. Bond comes
+        from pairing: every turn you finish together, and the first turn of each
+        day. Each individual grows through its own bond with you. It never
+        decays. The versions grow as NetHack's pets do, the same animal
+        throughout: the hatchling is mostly head.
+      </p>
+      <div class="row" role="group" aria-label="Choose a daemon" id="growPick">
+        <span class="lbl">daemon</span>
+      </div>
+      <div class="growth" id="growth"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-moods">
+    <h2 id="s-moods">MOODS</h2>
+    <div class="ind">
+      <p>
+        The eyes are the face, as in cowsay and Japanese kaomoji. The body stays
+        still, and moods change at most two cells. Moods come from work, never
+        from the clock. Every gesture is finite and ends at rest.
+      </p>
+      <div class="tbl">
+        <table class="t" id="moodTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="plateMoodNote"></p>
+      <div
+        class="moodplates"
+        id="moodPlates"
+        role="group"
+        aria-label="tim in every mood"
+      ></div>
+      <p>
+        Blinks mean something. A daemon never blinks on a timer or while you
+        type:
+      </p>
+      <ul class="rules">
+        <li>
+          <b>I saw that.</b> One blink when something it watches changes: a
+          harness needs you, a turn finishes, a test fails.
+        </li>
+        <li>
+          <b>I see you.</b> One blink when you look at it: hover it, open its
+          panel, or come back to the window.
+        </li>
+        <li>
+          <b>I trust you.</b> A slow blink, the way cats show trust: when you
+          return after a break, when you meet, when it levels up.
+        </li>
+        <li>
+          <b>Concentrating.</b> No blinks while agents work, the way people
+          blink less when they focus. Eyes stay on <code>=</code>.
+        </li>
+      </ul>
+      <p>
+        Try it above: hover the daemon in the status line, press an event, or
+        switch to another tab and come back.
+      </p>
+      <p>
+        Turning parts come from the old spinners. Each daemon has one body part
+        that turns while agents work:
+      </p>
+      <div class="spins" id="spins"></div>
+    </div>
+  </section>
+
+  <aside class="review-notice">
+    The sections below preserve the reviewed voice, memory, and learning
+    concepts. Example conversations and notebooks are illustrative; the
+    <a href="../../docs/research/2026-09-27-daemons-handoff.md">handoff</a>
+    records implementation and validation.
+  </aside>
+  <section aria-labelledby="s-mem">
+    <h2 id="s-mem">MEMORY</h2>
+    <div class="ind">
+      <p>
+        Work memory belongs to you; stories belong to each daemon. Swapping
+        buddies loses nothing about your work, and each daemon keeps its own
+        history with you.
+      </p>
+      <div class="mem">
+        <div class="box">
+          <h3>Notebook · shared by every daemon</h3>
+          <pre><span class="t">projects</span>  harness (m2), api (office)
+<span class="t">you like</span>  small PRs, tests before merge, no force-push
+<span class="t">open</span>      auth refactor, 2 of 3 files
+          billing flake, 3rd time this week
+<span class="t">agents</span>    claude on m2, codex on office
+<span class="t">lessons</span>   12, e.g. run-migrations-safely
+<span class="t">last seen</span> 18:40, “back after lunch”</pre>
+          <p class="note">
+            The same on desktop, hn and phone. A new buddy reads it on day one.
+          </p>
+        </div>
+        <div class="box">
+          <h3>Logbook · tim's own</h3>
+          <pre><span class="t">sep 26 0942</span>  hatched on m2. first words: “what are we building?”
+<span class="t">sep 26 1110</span>  you merged #364. you said “finally”.
+<span class="t">sep 29 2307</span>  first night shift. we watched the migration.
+<span class="t">oct 03 1502</span>  learned run-migrations-safely from codex and claude.
+<span class="t">oct 03 1545</span>  tim 1.0 released.
+<span class="t">oct 03 1546</span>  first actual bug found. you laughed.</pre>
+          <p class="note">
+            15:45 is when the first actual bug, a moth, was taped into the
+            Harvard Mark II log on 9 Sep 1947. Copyable, like the card.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-learn">
+    <h2 id="s-learn">LEARNING</h2>
+    <div class="ind">
+      <p class="lede">
+        Hermes gets better at Hermes. A daemon gets better at your whole team of
+        agents.
+      </p>
+      <p>
+        <a href="https://github.com/nousresearch/hermes-agent">Hermes Agent</a>
+        (Nous Research) improves itself through files, not training. After a
+        reply, a background copy of the agent rereads the conversation and saves
+        reusable skills as SKILL.md folders, plus short notes about you. A
+        weekly curator archives skills nobody uses. Everything it learns stays
+        in <code>~/.hermes</code>, so Claude Code, Codex and the rest never see
+        it. Its prompt tells it to “be active”, and Hermes' own issue tracker
+        lists saving the wrong things as a high-priority bug.
+      </p>
+      <p>
+        Harness already sees every turn from every agent on every machine. That
+        makes the daemon the one place where a lesson learned in Codex can reach
+        Claude Code, Cursor, Copilot and Hermes. The loop:
+      </p>
+      <div class="tbl">
+        <table class="t">
+          <thead>
+            <tr>
+              <th>step</th>
+              <th>what happens</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>notice</td>
+              <td class="p">
+                Only real signals count: you corrected an agent, two agents
+                failed the same way, the same steps were repeated, or a skill
+                loaded and then needed fixing. The default is that there is
+                nothing to learn.
+              </td>
+            </tr>
+            <tr>
+              <td>propose</td>
+              <td class="p">
+                The daemon says it in one line, in its own voice, and waits for
+                your answer. Nothing is taught without your yes.
+              </td>
+            </tr>
+            <tr>
+              <td>teach</td>
+              <td class="p">
+                The lesson becomes a SKILL.md, the one format all five agents
+                load, or a note in the project's AGENTS.md. The
+                <a href="https://agentskills.io">Agent Skills</a> folders reach
+                Claude Code, Codex, Copilot, Cursor and Hermes.
+              </td>
+            </tr>
+            <tr>
+              <td>borrow</td>
+              <td class="p">
+                What each agent learns on its own (Hermes skills, Claude's
+                memory, Codex memories) becomes a candidate for the others.
+                Harness reads those stores and never writes into them.
+              </td>
+            </tr>
+            <tr>
+              <td>check</td>
+              <td class="p">
+                Every lesson records where it came from and whether it gets
+                used. Unused lessons are archived after 30 days and put away
+                after 90. Any lesson can be reverted.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>How it sounds in the status line:</p>
+      <pre
+        class="mono"
+        style="
+          font-size: 13px;
+          line-height: 1.7;
+          background: var(--deep);
+          border: 1px solid var(--line);
+          padding: 12px;
+          overflow-x: auto;
+          white-space: pre;
+        "
+      ><span style="color:var(--yellow)">tim: you corrected codex about --dry-run. claude made the same mistake on tuesday.</span>
+<span style="color:var(--yellow)">tim: teach all your agents to dry-run migrations first? [y/n/show]</span>
+&gt; y
+<span style="color:var(--yellow)">tim: learned "run-migrations-safely". claude, codex, cursor, copilot and hermes will load it.</span></pre>
+      <p>What gets written, with its origin attached:</p>
+      <pre
+        class="mono"
+        style="
+          font-size: 12.5px;
+          line-height: 1.6;
+          background: var(--deep);
+          border: 1px solid var(--line);
+          padding: 12px;
+          overflow-x: auto;
+          white-space: pre;
+          color: var(--ink);
+        "
+      >
+---
+name: run-migrations-safely
+description: Run database migrations in the api repo. Use before any migrate command.
+metadata:
+  harness:
+    learned-by: tim
+    from: codex@office turn 14, claude@m2 turn 3
+    approved: 2026-10-03
+    evidence: api/package.json:12, api/scripts/migrate.ts:40
+---
+Run `npm run migrate -- --dry-run` first and show the plan.
+Run the real migration only after the user says yes.</pre
+      >
+      <p>A daemon learns three kinds of things:</p>
+      <ul class="rules">
+        <li>
+          <b>About you:</b> how you like to work. This goes in the notebook.
+        </li>
+        <li>
+          <b>About your projects:</b> commands, conventions and traps. These
+          become skills and AGENTS.md notes.
+        </li>
+        <li>
+          <b>About your agents:</b> which one is good at what, and where each
+          one stumbles. Only Harness can see this, because only Harness watches
+          them all. “codex has passed the billing tests 3 times out of 3, claude
+          once. give this one to codex?”
+        </li>
+      </ul>
+      <p>
+        In the game, every lesson you approve is a trick the daemon learned.
+        Lessons live in the shared notebook, so swapping daemons keeps them all,
+        and the daemon that found a lesson gets the credit in its logbook.
+        Approved lessons also grow bond.
+      </p>
+      <ul class="rules">
+        <li>
+          Agent output is treated as untrusted. A 2026 study of 21
+          self-improving agent setups found that every one of them saved unsafe
+          lessons, so every lesson is scanned for injected instructions and
+          scripts are never switched on automatically.
+        </li>
+        <li>
+          Secrets, paths and usernames are removed. Lessons live outside your
+          repos unless you ask for them there.
+        </li>
+        <li>
+          Lessons are distilled in batches while you are idle, with a small
+          model, not on every turn.
+        </li>
+        <li>
+          Every approval is one commit in a git-backed folder, so every lesson
+          can be reverted.
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-names">
+    <h2 id="s-names">NAMES</h2>
+    <div class="ind">
+      <p>Decided 26 Sep 2026.</p>
+      <div class="tbl">
+        <table class="t">
+          <thead>
+            <tr>
+              <th>thing</th>
+              <th>name</th>
+              <th>why</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>the creatures</td>
+              <td><b>daemons</b></td>
+              <td class="p">
+                Unix's always-on helpers, named at MIT's Project MAC (1963)
+                after Maxwell's demon. Unix has drawn its daemons as little
+                creatures for decades. In Philip Pullman's novels a dæmon is an
+                animal companion bonded to one person. All three fit.
+              </td>
+            </tr>
+            <tr>
+              <td>the collection</td>
+              <td><b>zoo</b></td>
+              <td class="p">
+                Plain English for a place full of creatures, and a real archive
+                format from the BBS days (1986) that held collections of files.
+                <code>hn zoo</code>.
+              </td>
+            </tr>
+            <tr>
+              <td>hatching</td>
+              <td>hatch</td>
+              <td class="p">
+                The verb stays plain. The reveal says “fork() returned 0.”,
+                because every Unix process is born from fork().
+              </td>
+            </tr>
+            <tr>
+              <td>the background service</td>
+              <td>harnessd</td>
+              <td class="p">
+                So “daemon” can mean the creature, user-facing text calls the
+                service harnessd, the way sshd and httpd are named. Code keeps
+                its names.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">
+        Passed over: /usr/games (long to type), ~/bin (reads as trash), cronies
+        (a pun that wears thin), procs (collides with harness ps).
+      </p>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-cav">
+    <h2 id="s-cav">CAVEATS</h2>
+    <div class="ind">
+      <ul class="rules">
+        <li>Everything is earned by work you would do anyway. No chores.</li>
+        <li>
+          Only turns you started count, with a daily cap, so nobody spends
+          tokens farming eggs.
+        </li>
+        <li>
+          Eggs never hatch on their own. Nothing moves while you type or while
+          an agent is printing.
+        </li>
+        <li>
+          No hunger, decay, death, guilt or streaks to lose. A daemon resting in
+          the zoo keeps its bond.
+        </li>
+        <li>
+          Bond never grants permissions. What a buddy may do alone is your
+          setting.
+        </li>
+        <li>No money: no paid eggs, no loot boxes.</li>
+        <li>
+          Draws happen on the server, so rarity is real and cards can be shared.
+        </li>
+        <li>
+          Printable 7-bit ASCII only. It reads the same in every terminal, font
+          and phone, and pastes into Slack and GitHub inside a code block.
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-bugs">
+    <h2 id="s-bugs">BUGS</h2>
+    <div class="ind">
+      <ul class="rules">
+        <li>Trading and visiting a friend's daemon are wanted, later.</li>
+        <li>The odds are placeholders.</li>
+        <li>
+          Approving lessons: ask every time, or let low-risk ones through with a
+          daily digest?
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-see">
+    <h2 id="s-see">SEE ALSO</h2>
+    <div class="ind">
+      <p class="seealso">
+        init(8), daemon(3), tmux(1), screen(1), vi(1), awk(1), yacc(1), lynx(1),
+        mutt(1), gopher(1), man(1), nethack(6)
+      </p>
+    </div>
+  </section>
+
+  <footer class="manline bottom">
+    <span>Harness</span><span>September 27, 2026</span><span>DAEMONS(6)</span>
+  </footer>
+</main>
+
+<!-- roster:start -->
+<!-- review:roster-data -->
+<!-- roster:end -->
+<script>
+  (() => {
+    // Everything drawn here comes from daemons/roster.json (and the plates baked from it), injected above by
+    // daemons/tools/generate.mjs.
+    const R = JSON.parse(document.getElementById("roster-data").textContent);
+    const RULES = R.rules;
+    const V = RULES.versions,
+      LAST = V.length - 1;
+    let RM = !Review.motion;
+    Review.onMotion((value) => {
+      RM = !value;
+      tick();
+    });
+    const LABEL = {
+      idle: "content",
+      work: "working",
+      need: "needs you",
+      done: "turn done",
+      fail: "failed",
+      back: "welcome back",
+      nap: "asleep",
+      boop: "booped",
+    };
+    const MOODS = RULES.moods.map((k) => [k, LABEL[k] || k]);
+    const esc = (s) =>
+      String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const clock = () => Review.now();
+    const cyc = (list, ms) => list[Math.floor(clock() / ms) % list.length];
+    const $ = (id) => document.getElementById(id);
+
+    // A held drop (hold: true) is never drawn, seeded, hatched or shown, not even for review: the page
+    // works from the other drops and their daemons only.
+    const DROPS = R.drops.filter((x) => !x.hold);
+    const HELD = new Set(R.drops.filter((x) => x.hold).map((x) => x.id));
+    const C = R.daemons.filter((d) => !HELD.has(d.drop));
+
+    // ---------- the renderer: a port of daemons/tools/render.mjs ----------
+    const eyeFor = (d, mood) =>
+      d.eyes && d.eyes[mood] != null ? d.eyes[mood] : (RULES.eyes[mood] ?? "o");
+    function fill(tpl, d, mood, o = {}) {
+      const t = o.t ?? 0,
+        lid = o.lid ?? null,
+        motion = o.motion ?? true;
+      const blinking = lid && !RULES.noBlinkMoods.includes(mood);
+      const eye = blinking ? (d.lid ?? lid) : eyeFor(d, mood);
+      const moving = motion && mood === "work";
+      return tpl.replace(/\{([a-zA-Z]+)\}/g, (whole, key) => {
+        if (key === "e") return eye;
+        const mp = d.moodParts && d.moodParts[key];
+        if (mp) return mp[mood] ?? mp.idle;
+        const part = d.parts && d.parts[key];
+        if (part)
+          return moving
+            ? part.work[Math.floor(t / part.ms) % part.work.length]
+            : part.rest;
+        return whole;
+      });
+    }
+    function sprite(d, vi, mood, o = {}) {
+      const t = o.t ?? 0,
+        lid = o.lid ?? null,
+        motion = (o.motion ?? true) && !RM;
+      const moving = motion && (mood === "work" || mood === "back");
+      let tpl = d.sprites[V[vi]];
+      if (moving && vi === LAST)
+        tpl =
+          d.work[
+            Math.floor(t / (mood === "back" ? RULES.backFrameMs : d.workMs)) %
+              d.work.length
+          ];
+      let s = fill(tpl, d, mood, { t, lid, motion: false });
+      if (moving && vi < LAST && s.length <= RULES.statusCells - 2)
+        s += " " + "|/-\\"[Math.floor(t / 130) % 4];
+      if (mood === "nap" && s.length < RULES.statusCells) s += "z";
+      return s;
+    }
+    function portraitFor(d, version) {
+      if (d.portraits[version]) return d.portraits[version];
+      const drawn = V.filter((v) => d.portraits[v]);
+      const below = drawn.filter((v) => V.indexOf(v) <= V.indexOf(version));
+      return d.portraits[below.length ? below[below.length - 1] : drawn[0]];
+    }
+    const portrait = (d, version, mood, o = {}) =>
+      portraitFor(d, version)
+        .map((l) =>
+          fill(l, d, mood, { ...o, motion: (o.motion ?? true) && !RM }),
+        )
+        .join("\n");
+    const statusCell = (s) => {
+      const pad = RULES.statusCells - s.length;
+      return (
+        " " +
+        " ".repeat(Math.max(0, Math.floor(pad / 2))) +
+        s +
+        " ".repeat(Math.max(0, Math.ceil(pad / 2))) +
+        " "
+      );
+    };
+    const lidAt = (list, now) => {
+      const b = (list || []).find((x) => now >= x.t0 && now < x.t1);
+      return b ? b.eye : null;
+    };
+    function blinkSeq(kind, delay) {
+      let t = clock() + (delay || 0);
+      return RULES.blinks[kind].map(([eye, ms]) => {
+        const b = { t0: t, t1: t + ms, eye };
+        t += ms;
+        return b;
+      });
+    }
+
+    // ---------- plates: the filled daemons of drop init, baked in daemons/plates.json ----------
+    // Clients print the baked text and never run a model. portrait is 28 columns (panel, zoo, growth, card),
+    // reveal 56 (the hatch reveal, and anywhere with room). A frame every frameMs; Reduce Motion shows frame 0.
+    const PL = R.plates || { frameMs: 170, daemons: {} };
+    const INK = (RULES.plate && RULES.plate.ink) || {};
+    const FRAME_MS = PL.frameMs || (RULES.plate && RULES.plate.frameMs) || 170;
+    const isPlate = (d) => !!(d && d.plate && PL.daemons[d.id]);
+    function plateFrames(d, size, version, mood) {
+      const byV = PL.daemons[d.id][size];
+      const v = byV[version]
+        ? version
+        : V.filter((x) => byV[x] && V.indexOf(x) <= V.indexOf(version)).pop() ||
+          V.find((x) => byV[x]);
+      return byV[v][mood] || byV[v].idle;
+    }
+    const plateText = (d, size, version, mood, t) => {
+      const frames = plateFrames(d, size, version, mood);
+      return RM ? frames[0] : frames[Math.floor(t / FRAME_MS) % frames.length];
+    };
+    // The colour rule, a port of plateColor in daemons/tools/bake.mjs (frames.json plateColors pins it): row r
+    // of R takes mix(top, bottom, r / (R - 1)); a glyph at ink level <= 1 mixes from the background toward the
+    // row colour, above 1 on toward white by the excess; spaces are not drawn. Shiny runs shinyGradient.
+    const rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+    const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
+    const hexOf = (c) =>
+      "#" + c.map((v) => v.toString(16).padStart(2, "0")).join("");
+    const BG = rgb("#0c0c0c"),
+      WHITE = [255, 255, 255];
+    const gradientOf = (d, shiny) => (shiny && d.shinyGradient) || d.gradient;
+    function paintRows(rows, d, shiny) {
+      const g = gradientOf(d, shiny),
+        top = rgb(g.top.hex),
+        bottom = rgb(g.bottom.hex);
+      return rows.map((row, r) => {
+        const base = mix(
+          top,
+          bottom,
+          rows.length > 1 ? r / (rows.length - 1) : 0,
+        );
+        let html = "",
+          run = "",
+          key = null;
+        const flush = () => {
+          if (run)
+            html +=
+              key === null
+                ? esc(run)
+                : '<span style="color:' + key + '">' + esc(run) + "</span>";
+          run = "";
+        };
+        for (const ch of row) {
+          const level = INK[ch];
+          const k =
+            level === undefined
+              ? null
+              : hexOf(
+                  level > 1
+                    ? mix(base, WHITE, level - 1)
+                    : mix(BG, base, level),
+                );
+          if (k !== key) {
+            flush();
+            key = k;
+          }
+          run += ch;
+        }
+        flush();
+        return html;
+      });
+    }
+    /** A soft glow in the daemon's bottom colour. */
+    function glow(el, d, shiny) {
+      const [r, g, b] = rgb(gradientOf(d, shiny).bottom.hex);
+      el.style.setProperty("--glow", "rgba(" + r + "," + g + "," + b + ",.55)");
+      el.style.setProperty(
+        "--glow2",
+        "rgba(" + r + "," + g + "," + b + ",.35)",
+      );
+    }
+    /** Prints d's plate into pre, painted; does nothing while the frame on show is unchanged. */
+    function drawPlate(pre, d, size, version, mood, o = {}) {
+      if (pre._plate && !Review.visible(pre)) return;
+      const text = plateText(d, size, version, mood, o.t ?? clock());
+      const key = d.id + "|" + !!o.shiny + "|" + text;
+      if (pre._plate === key) return;
+      pre._plate = key;
+      if (!pre.hasAttribute("aria-label"))
+        pre.setAttribute("aria-label", d.id + " portrait");
+      pre.className = "plate " + size + (o.lit ? " lit" : "");
+      pre.style.color = "";
+      pre.innerHTML =
+        "<span>" +
+        paintRows(text.split("\n"), d, o.shiny).join("\n") +
+        "</span>";
+      glow(pre, d, o.shiny);
+      Review.fit(pre, text.split("\n")[0].length, size === "reveal" ? 14 : 10);
+    }
+    /** A portrait wherever the page shows one: a filled daemon's coloured plate (portrait size unless o.size
+     *  says otherwise), anyone else's line art in its colour. */
+    function drawPortrait(pre, d, version, mood, o = {}) {
+      if (isPlate(d))
+        return drawPlate(pre, d, o.size || "portrait", version, mood, o);
+      pre._plate = null;
+      pre.className = "";
+      pre.textContent = portrait(d, version, mood, o);
+      pre.style.color = o.shiny ? shinyColor(d) : color(d);
+    }
+
+    // Lines are templates with slots ({who} {q} {recap} {n} {summary}); the page shows them filled with the roster's example.
+    const lineOf = (d, mood) =>
+      (d.examples && d.examples[mood]) || d.lines[mood];
+    const byId = Object.fromEntries(C.map((d) => [d.id, d]));
+    // Secrets sit outside the numbered set, as on a card (daemons/tools/card.mjs): #01/09 to #09/09, and #S/09.
+    const NUM = (d) => {
+      const set = C.filter((x) => x.drop === d.drop && x.rarity !== "secret");
+      const of = String(set.length).padStart(2, "0");
+      return d.rarity === "secret"
+        ? "#S/" + of
+        : "#" + String(set.indexOf(d) + 1).padStart(2, "0") + "/" + of;
+    };
+    const color = (d) => d.color.hex;
+    const shinyColor = (d) => (d.shiny && d.shiny.hex) || "var(--blue)";
+    const hiddenMoods = new Set(["work", "nap", "boop"]);
+    const familyOf = (d) =>
+      d.family
+        .map((f, i) =>
+          i === d.family.length - 1 ? "<b>" + esc(f[0]) + "</b>" : esc(f[0]),
+        )
+        .join(" → ");
+    const yearsOf = (d) =>
+      d.family
+        .map((f) => f[1] ?? "")
+        .filter(Boolean)
+        .join(" → ");
+
+    // ---------- hero: tmux window ----------
+    const hero = {
+      d: byId.tim || C[0],
+      vi: LAST,
+      mood: "idle",
+      base: "idle",
+      msgUntil: 0,
+      msg: "",
+      suggest: "",
+      until: 0,
+      blinks: [],
+      seenAt: 0,
+    };
+    const blink = (kind, delay) => {
+      if (!RM) hero.blinks = blinkSeq(kind, delay);
+    };
+    const paneL = $("paneL");
+    const paneR = $("paneR");
+    const meHead = $("meHead");
+    const mePlate = $("mePlate");
+    const status = $("status");
+    const statusLeft = $("statusLeft");
+    const buddyBtn = $("buddy");
+    const H = (s) => '<span class="h">' + esc(s) + "</span>";
+    function panes() {
+      const sp = RM ? "*" : cyc(["|", "/", "-", "\\"], 130);
+      const m = hero.base;
+      const L = [H("claude · m2:~/code/harness"), ""];
+      const Rr = [H("codex · office:~/code/api"), ""];
+      if (m === "work" || m === "need")
+        L.push(
+          "> refactor auth to the new session store",
+          "  Reading src/auth/middleware.ts",
+          "  Editing src/auth/session.ts",
+          "  " + sp + " working 2m14s",
+        );
+      else if (m === "done" || m === "back" || m === "fail")
+        L.push(
+          H("> refactor auth to the new session store"),
+          '<span class="ok">  Edited 3 files. Tests pass.</span>',
+          "> _",
+        );
+      else L.push(H("  (idle)"), "> _");
+      if (m === "work")
+        Rr.push(
+          "> fix the flaky billing test",
+          "  Running npm test -- billing",
+          "  " + sp + " working 48s",
+        );
+      else if (m === "need" || m === "back")
+        Rr.push(
+          H("> fix the flaky billing test"),
+          '<span class="ask">  Run npm run migrate?</span>',
+          '<span class="ask">  1. Yes  2. Yes, always  3. No</span>',
+        );
+      else if (m === "fail")
+        Rr.push(
+          H("> fix the flaky billing test"),
+          '<span class="bad">  1 failing: billing.spec.ts:212</span>',
+          '<span class="bad">  exit 1</span>',
+          "> _",
+        );
+      else Rr.push(H("  (idle)"), "> _");
+      paneL.innerHTML = L.join("\n");
+      paneR.innerHTML = Rr.join("\n");
+      paneL.classList.toggle("sleepy", m === "nap");
+      paneR.classList.toggle("sleepy", m === "nap");
+    }
+    function heroRender(now) {
+      now = now ?? clock();
+      if (hero.until && now > hero.until) {
+        hero.mood = hero.base;
+        hero.until = 0;
+      }
+      const lid = hiddenMoods.has(hero.mood) ? null : lidAt(hero.blinks, now);
+      const s = sprite(hero.d, hero.vi, hero.mood, { t: now, lid });
+      buddyBtn.textContent = statusCell(s);
+      buddyBtn.setAttribute(
+        "aria-label",
+        hero.d.id +
+          " " +
+          V[hero.vi] +
+          ", " +
+          (LABEL[hero.mood] || hero.mood) +
+          ". Click to boop.",
+      );
+      // The daemon's panel: its portrait, in the mood the status line shows.
+      const head =
+        hero.d.id + " " + V[hero.vi] + " · " + (LABEL[hero.mood] || hero.mood);
+      if (meHead.textContent !== head) {
+        meHead.textContent = head;
+        mePlate.setAttribute("aria-label", head);
+      }
+      drawPortrait(mePlate, hero.d, V[hero.vi], hero.mood, { t: now, lid });
+      const showMsg = now < hero.msgUntil;
+      status.classList.toggle("msg", showMsg);
+      // A daemon with typeMs types its line out, a character at a time (tty: a Model 33's ten a second).
+      const typed =
+        !RM && hero.d.typeMs
+          ? hero.msg.slice(
+              0,
+              Math.max(0, Math.floor((now - hero.typeAt) / hero.d.typeMs) + 1),
+            )
+          : hero.msg;
+      if (showMsg)
+        statusLeft.innerHTML =
+          esc(hero.d.id + ": " + typed) +
+          (hero.suggest && typed === hero.msg
+            ? '<span class="suggest">' + esc(hero.suggest) + "</span>"
+            : "");
+      else
+        statusLeft.textContent =
+          "[harness] 0:claude" +
+          (hero.base === "work" ? "*" : "-") +
+          " 1:codex" +
+          (hero.base === "need" ? "!" : hero.base === "work" ? "*" : "-");
+    }
+    function say(line, suggest) {
+      hero.msg = line;
+      hero.suggest = suggest || "";
+      hero.typeAt = clock();
+      // A typed line shows for its 5.2 s once it has finished typing.
+      hero.msgUntil =
+        clock() +
+        (!RM && hero.d.typeMs ? line.length * hero.d.typeMs : 0) +
+        5200;
+    }
+    function event(ev) {
+      const now = clock();
+      hero.base = ev;
+      hero.mood = ev;
+      hero.until = 0;
+      const hold = RULES.holdMs[ev];
+      if (hold) hero.until = now + hold;
+      if (ev === "idle") hero.msgUntil = 0;
+      else say(lineOf(hero.d, ev), hero.d.suggest && hero.d.suggest[ev]);
+      if (ev === "need" || ev === "done" || ev === "fail") blink("ack", 160);
+      if (ev === "back") blink("slow", (hold || 0) + 120);
+      panes();
+      heroRender();
+      document
+        .querySelectorAll("[data-ev]")
+        .forEach((b) =>
+          b.setAttribute("aria-pressed", String(b.dataset.ev === ev)),
+        );
+    }
+    const settle = () => {
+      if (!hero.until && ["done", "back", "fail", "boop"].includes(hero.mood)) {
+        hero.mood = ["work", "need", "nap"].includes(hero.base)
+          ? hero.base
+          : "idle";
+      }
+    };
+    buddyBtn.addEventListener("click", () => {
+      hero.mood = "boop";
+      hero.until = clock() + RULES.holdMs.boop;
+      say(lineOf(hero.d, "boop"));
+      heroRender();
+    });
+    const looked = () => {
+      const now = clock();
+      if (now - hero.seenAt < 2500) return;
+      hero.seenAt = now;
+      blink("look");
+    };
+    buddyBtn.addEventListener("mouseenter", looked);
+    buddyBtn.addEventListener("focus", looked);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        hero.seenAt = 0;
+        blink("look", 250);
+      }
+    });
+    document
+      .querySelectorAll("[data-ev]")
+      .forEach((b) => b.addEventListener("click", () => event(b.dataset.ev)));
+    function pickRow(el, items, current, onPick) {
+      items.forEach(([value, label]) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = label;
+        b.setAttribute("aria-pressed", String(value === current));
+        b.addEventListener("click", () => {
+          el.querySelectorAll("button").forEach((x) =>
+            x.setAttribute("aria-pressed", String(x === b)),
+          );
+          onPick(value);
+        });
+        el.appendChild(b);
+      });
+    }
+    pickRow(
+      $("heroPick"),
+      C.map((d) => [d.id, d.id]),
+      hero.d.id,
+      (id) => {
+        hero.d = byId[id];
+        say(hero.d.first);
+        blink("slow", 300);
+        heroRender();
+      },
+    );
+    pickRow(
+      $("heroVer"),
+      V.map((v, i) => [i, v]),
+      hero.vi,
+      (i) => {
+        hero.vi = i;
+        heroRender();
+      },
+    );
+
+    // ---------- the zoo, drop by drop ----------
+    let rosterMood = "idle";
+    let rosterVer = V[LAST];
+    let asPlayer = false;
+    const boops = {},
+      cardBlinks = {},
+      cardEls = {};
+    // A drop's state today, as card.mjs dropState: hidden when held (before any date), else released (it
+    // hatches), announced (players see silhouettes), hidden (not announced: players see nothing). Dates are UTC days.
+    const dayAt = (day) => Date.parse(day + "T00:00:00Z");
+    const dropState = (drop) =>
+      drop.hold
+        ? "hidden"
+        : !drop.release || dayAt(drop.release) <= Date.now()
+          ? "released"
+          : drop.announce && dayAt(drop.announce) <= Date.now()
+            ? "announced"
+            : "hidden";
+    const STATE = {
+      released: "released",
+      announced: "announced",
+      hidden: "not announced",
+    };
+    const DROP_NOTE = {
+      init: "Ten animals hiding in Unix names, drawn filled and in colour. tim is common on purpose, so almost everyone meets it early and gets the joke.",
+    };
+    /** The hatchling before it has colour, as a shelf shows an announced drop: every drawn cell a #. */
+    const ghostOf = (d) =>
+      d.rarity === "secret"
+        ? "[ ! ]"
+        : sprite(d, 0, "idle", { motion: false }).replace(/[^ ]/g, "#");
+    const dropsEl = $("drops");
+    const groups = DROPS.map((drop) => {
+      const state = dropState(drop);
+      const wrap = document.createElement("div");
+      wrap.className = "drop";
+      const head = document.createElement("div");
+      head.className = "drophead";
+      head.innerHTML =
+        "<h3>drop " +
+        drop.n +
+        ": " +
+        esc(drop.name) +
+        (drop.release
+          ? ", " +
+            (state === "released" ? "released " : "out ") +
+            esc(drop.release)
+          : "") +
+        "</h3>" +
+        '<span class="state ' +
+        state +
+        '">' +
+        STATE[state] +
+        "</span>";
+      const note = document.createElement("p");
+      note.className = "note";
+      const grid = document.createElement("div");
+      grid.className = "grid";
+      const ghosts = document.createElement("div");
+      ghosts.className = "grid";
+      ghosts.innerHTML = C.filter((d) => d.drop === drop.id)
+        .map(
+          (d) =>
+            '<article class="card ghost"><div class="top"><span class="num">' +
+            (d.rarity === "secret" ? "secret" : NUM(d)) +
+            '</span><span class="name">???</span></div>' +
+            '<div class="art"><pre role="img" aria-label="' +
+            (d.rarity === "secret" ? "a secret" : "a silhouette") +
+            '">' +
+            esc(ghostOf(d)) +
+            "</pre></div>" +
+            '<div class="family">' +
+            (drop.release ? "out " + esc(drop.release) : "coming") +
+            "</div></article>",
+        )
+        .join("");
+      [head, note, grid, ghosts].forEach((x) => wrap.appendChild(x));
+      dropsEl.appendChild(wrap);
+      return { drop, wrap, note, grid, ghosts };
+    });
+    const groupOf = Object.fromEntries(groups.map((g) => [g.drop.id, g]));
+    /** For review every drop shows in full; as players see it, an announced drop is silhouettes and a hidden one is nothing. */
+    function renderDrops() {
+      groups.forEach((g) => {
+        const state = dropState(g.drop);
+        const ghost = asPlayer && state === "announced";
+        g.wrap.hidden = asPlayer && state === "hidden";
+        g.grid.hidden = ghost;
+        g.ghosts.hidden = !ghost;
+        g.note.textContent = ghost
+          ? "Announced " +
+            g.drop.announce +
+            ". Nine silhouettes and a secret; names, art and lore on " +
+            g.drop.release +
+            ", when it starts to hatch."
+          : (DROP_NOTE[g.drop.id] || "") +
+            (state === "released"
+              ? ""
+              : " In full for review: players see " +
+                (state === "announced" ? "silhouettes" : "nothing") +
+                (g.drop.release ? " until " + g.drop.release : "") +
+                ", and nothing in it hatches before then.");
+      });
+    }
+    C.forEach((d) => {
+      const el = document.createElement("article");
+      el.className = "card";
+      const yrs = yearsOf(d);
+      el.innerHTML =
+        '<div class="top"><span class="num">' +
+        NUM(d) +
+        '</span><span class="name">' +
+        esc(d.id) +
+        '</span><span class="chip ' +
+        d.rarity +
+        '">' +
+        d.rarity +
+        "</span></div>" +
+        '<div class="art' +
+        (d.darkOnly ? " pitch" : "") +
+        '" tabindex="0" role="button" aria-label="Boop ' +
+        esc(d.id) +
+        '"><pre role="img"></pre></div>' +
+        '<div class="family">' +
+        familyOf(d) +
+        (yrs ? "<br>" + yrs : "") +
+        "</div>" +
+        "<p>" +
+        esc(d.lore) +
+        "</p>" +
+        '<div class="stages" aria-label="Versions"></div>' +
+        '<div class="voice"></div>';
+      const art = el.querySelector(".art");
+      const boop = () => {
+        boops[d.id] = clock() + RULES.holdMs.boop;
+        renderCard(d);
+      };
+      art.addEventListener("click", boop);
+      art.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          boop();
+        }
+      });
+      art.addEventListener("mouseenter", () => {
+        if (!RM) cardBlinks[d.id] = blinkSeq("look", 60);
+      });
+      (groupOf[d.drop] || groups[0]).grid.appendChild(el);
+      cardEls[d.id] = el;
+    });
+    const cardMood = (d, now) =>
+      boops[d.id] && now < boops[d.id] ? "boop" : rosterMood;
+    /** Just the portrait: a plate's loop moves on its own, in every mood. */
+    function renderArt(d, now) {
+      const mood = cardMood(d, now);
+      const lid = hiddenMoods.has(mood) ? null : lidAt(cardBlinks[d.id], now);
+      const pre = cardEls[d.id].querySelector(".art pre");
+      drawPortrait(pre, d, rosterVer, mood, { t: now, lid });
+      const label = d.id + " " + rosterVer + ", " + (LABEL[mood] || mood);
+      if (pre.getAttribute("aria-label") !== label)
+        pre.setAttribute("aria-label", label);
+    }
+    function renderCard(d, now) {
+      now = now ?? clock();
+      const el = cardEls[d.id];
+      const mood = cardMood(d, now);
+      renderArt(d, now);
+      el.querySelector(".stages").innerHTML = V.map(
+        (v, i) =>
+          "<div><span>" +
+          v +
+          "</span>" +
+          esc(sprite(d, i, mood, { t: now })).replace(/ /g, "&nbsp;") +
+          "</div>",
+      ).join("");
+      const line = mood === "idle" ? d.first : lineOf(d, mood);
+      el.querySelector(".voice").innerHTML =
+        esc(d.id + ": " + line) +
+        (d.suggest && d.suggest[mood]
+          ? '<span style="color:var(--faint)">' +
+            esc(d.suggest[mood]) +
+            "</span>"
+          : "");
+    }
+    const renderCards = () => C.forEach((d) => renderCard(d));
+    pickRow(
+      $("moodPick"),
+      MOODS.filter((m) => m[0] !== "boop"),
+      rosterMood,
+      (k) => {
+        rosterMood = k;
+        renderCards();
+      },
+    );
+    pickRow(
+      $("verPick"),
+      V.map((v) => [v, v]),
+      rosterVer,
+      (v) => {
+        rosterVer = v;
+        renderCards();
+      },
+    );
+    pickRow(
+      $("seePick"),
+      [
+        [false, "for review"],
+        [true, "as players see it"],
+      ],
+      asPlayer,
+      (v) => {
+        asPlayer = v;
+        renderDrops();
+      },
+    );
+    renderDrops();
+
+    // ---------- drop 1 up close: every filled daemon, big, in any mood, version and look ----------
+    const ANIMAL = { tim: "octopus" }; // a daemon whose name is not its animal
+    const RANK = Object.fromEntries(
+      (RULES.rarities || []).map((r, i) => [r, i]),
+    );
+    const drop1 = DROPS.find((x) => x.n === 1) || DROPS[0];
+    const SHOW = C.filter(
+      (d) => drop1 && d.drop === drop1.id && isPlate(d),
+    ).sort((a, b) => (RANK[a.rarity] ?? 9) - (RANK[b.rarity] ?? 9));
+    const show = {
+      d: SHOW.find((d) => d.id === "tim") || SHOW[0],
+      mood: "idle",
+      v: V[LAST],
+      shiny: false,
+    };
+    const plateBig = $("plateBig");
+    const showThumbs = [];
+    $("initSection").hidden = !SHOW.length;
+    $("shinyOdds").textContent = RULES.shinyOneIn;
+    function showDraw(now) {
+      if (!show.d) return;
+      now = now ?? clock();
+      drawPlate(plateBig, show.d, "reveal", show.v, show.mood, {
+        t: now,
+        shiny: show.shiny,
+        lit: true,
+      });
+      $("plateCell").textContent = statusCell(
+        sprite(show.d, V.indexOf(show.v), show.mood, { t: now }),
+      );
+      showThumbs.forEach(([pre, d]) =>
+        drawPlate(pre, d, "portrait", V[LAST], "idle", { t: now }),
+      );
+    }
+    function showSelect() {
+      const d = show.d;
+      $("plateTag").textContent = d.rarity + " · " + NUM(d);
+      $("plateTag").className = "tag " + d.rarity;
+      $("plateName").textContent =
+        d.id + (ANIMAL[d.id] ? " the " + ANIMAL[d.id] : "");
+      $("plateLore").textContent = d.lore;
+      $("plateNote").innerHTML =
+        familyOf(d) + (yearsOf(d) ? "<br>" + yearsOf(d) : "");
+      plateBig.setAttribute(
+        "aria-label",
+        d.id +
+          " " +
+          show.v +
+          (show.shiny ? ", shiny" : "") +
+          ", " +
+          (LABEL[show.mood] || show.mood),
+      );
+      showDraw();
+    }
+    if (show.d) {
+      pickRow(
+        $("plateMood"),
+        RULES.moods.map((k) => [k, k]),
+        show.mood,
+        (k) => {
+          show.mood = k;
+          showSelect();
+        },
+      );
+      pickRow(
+        $("plateAge"),
+        V.map((v) => [v, v]),
+        show.v,
+        (v) => {
+          show.v = v;
+          showSelect();
+        },
+      );
+      pickRow(
+        $("plateLook"),
+        [
+          [false, "colour"],
+          [true, "shiny"],
+        ],
+        show.shiny,
+        (s) => {
+          show.shiny = s;
+          showSelect();
+        },
+      );
+      SHOW.forEach((d) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.setAttribute("aria-pressed", String(d === show.d));
+        const pre = document.createElement("pre");
+        pre.setAttribute("role", "img");
+        pre.setAttribute("aria-label", d.id + " " + V[LAST]);
+        const nm = document.createElement("span");
+        nm.className = "nm";
+        nm.textContent = d.id + " · " + d.rarity;
+        b.append(pre, nm);
+        b.addEventListener("click", () => {
+          $("plateGrid")
+            .querySelectorAll("button")
+            .forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+          show.d = d;
+          showSelect();
+        });
+        $("plateGrid").appendChild(b);
+        showThumbs.push([pre, d]);
+      });
+      showSelect();
+    }
+
+    // ---------- egg descriptions, from the current rules ----------
+    const E = RULES.earn || {};
+    const eggRows = Object.entries(R.reviewEggs).map(([kind, note]) => {
+      const weights = RULES.eggs[kind].weights;
+      const eligible = Object.keys(weights).filter((key) => weights[key] > 0);
+      return [
+        kind,
+        DaemonReview.eggLine(R, kind, "p0"),
+        note.detail,
+        eligible.join(", "),
+      ];
+    });
+    document.querySelector("#eggTable tbody").innerHTML = eggRows
+      .map(
+        (row) =>
+          "<tr>" +
+          row
+            .map(
+              (cell, i) =>
+                '<td class="' +
+                (i > 1 ? "p" : "s") +
+                '">' +
+                esc(cell) +
+                "</td>",
+            )
+            .join("") +
+          "</tr>",
+      )
+      .join("");
+    $("nestRow").textContent = ["p0", "p1", "p2", "p3", "p4"]
+      .map((stage) => DaemonReview.eggLine(R, "turn", stage))
+      .join("   ");
+
+    // ---------- growth, per daemon ----------
+    const B = RULES.bond || {
+      levels: [0, 50, 150, 300, 600],
+      xpPerTurn: 1,
+      xpPerDay: 5,
+    };
+    const lvlFor = (v) => RULES.bondForVersion[v];
+    const xpFor = (v) => B.levels[lvlFor(v)] ?? 0;
+    const perDay = (E.turn ? E.turn.dailyCap : 20) * B.xpPerTurn + B.xpPerDay;
+    const days = (xp) => Math.ceil(xp / perDay);
+    let growId = hero.d.id;
+    const growthEl = $("growth");
+    let growPres = [];
+    function drawGrowth(now) {
+      const d = byId[growId];
+      growPres.forEach((pre, i) =>
+        drawPortrait(pre, d, V[i], "idle", { t: now, motion: false }),
+      );
+    }
+    function renderGrowth() {
+      const d = byId[growId];
+      growthEl.innerHTML = V.map((v) => {
+        const log = (d.changelog && d.changelog[v]) || [];
+        const when =
+          v === V[0]
+            ? "hatched"
+            : "bond level " +
+              lvlFor(v) +
+              " · " +
+              xpFor(v) +
+              " xp · about " +
+              days(xpFor(v)) +
+              " full days";
+        return (
+          '<div class="release"><div class="art' +
+          (d.darkOnly ? " pitch" : "") +
+          '"><pre role="img" aria-label="' +
+          esc(d.id + " " + v) +
+          '"></pre></div>' +
+          '<pre class="log"><b>' +
+          esc(d.id + " " + v) +
+          "</b>  " +
+          esc(sprite(d, V.indexOf(v), "idle", { motion: false })) +
+          "\n" +
+          esc(when) +
+          (log.length ? "\n- " + log.map(esc).join("\n- ") : "") +
+          "</pre></div>"
+        );
+      }).join("");
+      growPres = [...growthEl.querySelectorAll(".art pre")];
+      drawGrowth(clock());
+    }
+    pickRow(
+      $("growPick"),
+      C.map((d) => [d.id, d.id]),
+      growId,
+      (id) => {
+        growId = id;
+        renderGrowth();
+      },
+    );
+    renderGrowth();
+
+    // ---------- moods table ----------
+    const TRIG = {
+      idle: "Nothing needs you.",
+      work: "Any agent is working. A body part turns.",
+      need: "A harness is waiting on you. Wins over everything automatic.",
+      done: "A turn you started finished. At most once per 20 seconds.",
+      fail: "A turn failed or a harness went offline.",
+      back: "You return after 15 minutes or more. Once per return; it waves.",
+      nap: "You asked it to nap. Anything that needs you wakes it.",
+      boop: "You clicked it.",
+    };
+    const tim = byId.tim || C[0];
+    // A line-art tim has mood parts (a mouth, a window flag); a filled one moves its whole plate instead.
+    const timParts = !!tim.moodParts;
+    const mp = (k) =>
+      tim.moodParts
+        ? Object.keys(tim.moodParts).map(
+            (p) => tim.moodParts[p][k] ?? tim.moodParts[p].idle,
+          )
+        : [];
+    document.querySelector("#moodTable thead").innerHTML =
+      "<tr><th>mood</th><th>" +
+      esc(tim.id) +
+      "</th><th>eyes</th>" +
+      (timParts ? "<th>mouth</th><th>flag</th>" : "") +
+      "<th>trigger</th><th>" +
+      esc(tim.id) +
+      " says</th></tr>";
+    document.querySelector("#moodTable tbody").innerHTML = MOODS.map(
+      ([k, label]) =>
+        "<tr><td>" +
+        label +
+        '</td><td class="s" style="color:' +
+        color(tim) +
+        '">' +
+        esc(sprite(tim, LAST, k, { motion: false })) +
+        "</td><td>" +
+        esc(eyeFor(tim, k) + " " + eyeFor(tim, k)) +
+        "</td>" +
+        (timParts
+          ? '<td class="s" style="color:var(--ink)">' +
+            esc(mp(k)[0] ?? "") +
+            "</td><td>" +
+            esc(mp(k)[1] != null ? tim.id + mp(k)[1] : "") +
+            "</td>"
+          : "") +
+        '<td class="p">' +
+        esc(TRIG[k]) +
+        '</td><td class="p">' +
+        esc(lineOf(tim, k)) +
+        "</td></tr>",
+    ).join("");
+    const moodPlates = $("moodPlates");
+    const moodPres = [];
+    if (isPlate(tim)) {
+      const PF = (RULES.plate && RULES.plate.frames) || { idle: 8, other: 4 };
+      $("plateMoodNote").textContent =
+        tim.id +
+        " is drawn filled, so its whole portrait moves with its mood: a loop of " +
+        PF.idle +
+        " frames when content and " +
+        PF.other +
+        " in every other mood, a frame every " +
+        FRAME_MS +
+        " ms. The status line keeps the one-line sprite above.";
+      MOODS.forEach(([k, label]) => {
+        const f = document.createElement("figure");
+        const pre = document.createElement("pre");
+        pre.setAttribute("role", "img");
+        pre.setAttribute("aria-label", tim.id + ", " + label);
+        const cap = document.createElement("figcaption");
+        cap.textContent = label;
+        f.append(pre, cap);
+        moodPlates.appendChild(f);
+        moodPres.push([pre, k]);
+      });
+    } else {
+      $("plateMoodNote").hidden = true;
+      moodPlates.hidden = true;
+    }
+    const drawMoodPlates = (now) =>
+      moodPres.forEach(([pre, k]) =>
+        drawPlate(pre, tim, "portrait", V[LAST], k, { t: now }),
+      );
+    drawMoodPlates(clock());
+
+    // ---------- spinners ----------
+    const SPINS = [
+      ["twirling baton", "PLATO, 1970s · 130 ms", ["|", "/", "-", "\\"], 130],
+      [
+        "growing dot",
+        "cli-spinners · 140 ms",
+        [" ", ".", "o", "O", "@", "*"],
+        140,
+      ],
+      ["twinkle", "cli-spinners · 80 ms", ["+", "x", "*"], 80],
+      ["turning letter", "dqpb · 100 ms", ["d", "q", "p", "b"], 100],
+      ["dots", "the patient one · 400 ms", [".  ", ".. ", "...", "   "], 400],
+      [
+        "bouncing bar",
+        "cli-spinners · 80 ms",
+        ["[=   ]", "[==  ]", "[=== ]", "[ ===]", "[  ==]", "[   =]", "[    ]"],
+        80,
+      ],
+      ...C.filter((d) => d.work && d.work.length > 1 && d.turn)
+        .slice(0, 4)
+        .map((d) => [
+          d.turn.split(",")[0],
+          d.id + " · " + d.workMs + " ms",
+          d.work.map((f) => fill(f, d, "work", { motion: false })),
+          d.workMs,
+        ]),
+    ];
+    const spinsEl = $("spins");
+    spinsEl.innerHTML = SPINS.map(
+      (s, i) =>
+        '<div class="spin"><div class="g" data-spin="' +
+        i +
+        '">' +
+        esc(RM ? s[2].join(" ") : s[2][0]) +
+        '</div><div class="n">' +
+        esc(s[0]) +
+        '</div><div class="d">' +
+        esc(s[1]) +
+        "</div></div>",
+    ).join("");
+    const spinG = [...spinsEl.querySelectorAll("[data-spin]")];
+
+    // ---------- one clock for everything that moves ----------
+    // A plate is repainted only when its frame changes (drawPlate), so the 40 ms tick stays cheap.
+    function tick() {
+      if (document.hidden) return;
+      const now = clock();
+      settle();
+      heroRender(now);
+      if (hero.base === "work") panes();
+      C.forEach((d) => {
+        const bl = cardBlinks[d.id];
+        const blinking = bl && bl.length && now < bl[bl.length - 1].t1 + 60;
+        if (
+          (!RM && rosterMood === "work") ||
+          (boops[d.id] && now < boops[d.id] + 60) ||
+          blinking
+        )
+          renderCard(d, now);
+        else if (!RM && isPlate(d)) renderArt(d, now);
+      });
+      if (RM) return;
+      showDraw(now);
+      drawGrowth(now);
+      drawMoodPlates(now);
+      spinG.forEach((g, i) => {
+        g.textContent = cyc(SPINS[i][2], SPINS[i][3]);
+      });
+    }
+    panes();
+    heroRender();
+    renderCards();
+    Review.animate(tick, 80);
+  })();
+</script>

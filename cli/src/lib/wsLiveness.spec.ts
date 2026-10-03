@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import type { WebSocket } from 'ws'
-import { watchSocketLiveness, WS_HEARTBEAT_MS, WS_IDLE_DEADLINE_MS } from './wsLiveness.js'
+import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, WS_HEARTBEAT_MS, WS_IDLE_DEADLINE_MS } from './wsLiveness.js'
 
 class FakeSocket extends EventEmitter {
   pings = 0
@@ -86,6 +86,58 @@ describe('watchSocketLiveness', () => {
     ws.emit('close', 1000)
     await vi.advanceTimersByTimeAsync(WS_HEARTBEAT_MS * 5)
     expect(ws.pings).toBe(1)
+  })
+
+  // Node's clock runs on while a Mac sleeps: the first tick after a long sleep saw the whole sleep as
+  // silence and terminated every socket, the app's loopback one included (2026-09-28, `no traffic for
+  // 2287s`). Sleep is simulated by moving the clock without running any timer.
+  it('re-probes instead of terminating on the first tick after the computer slept', async () => {
+    vi.useFakeTimers()
+    const ws = socket()
+    ws.silent = true
+    let asleepMs = 0
+    const woke: number[] = []
+    watchSocketLiveness(ws, { now: () => performance.now() + asleepMs, onWake: (ms) => woke.push(ms) })
+    await vi.advanceTimersByTimeAsync(WS_HEARTBEAT_MS)
+    asleepMs += 2_280_000
+    await vi.advanceTimersByTimeAsync(WS_HEARTBEAT_MS)
+    expect(ws.terminated).toBe(0)
+    expect(ws.pings).toBe(2) // the wake tick asks at once
+    expect(woke).toEqual([2_280_000])
+    // A peer that stays silent is still given up on, after a deadline of AWAKE time.
+    await vi.advanceTimersByTimeAsync(WS_IDLE_DEADLINE_MS - WS_HEARTBEAT_MS)
+    expect(ws.terminated).toBe(0)
+    await vi.advanceTimersByTimeAsync(WS_HEARTBEAT_MS)
+    expect(ws.terminated).toBe(1)
+  })
+
+  it('keeps a live peer across a sleep without a single missed beat', async () => {
+    vi.useFakeTimers()
+    const ws = socket()
+    let asleepMs = 0
+    watchSocketLiveness(ws, { now: () => performance.now() + asleepMs })
+    await vi.advanceTimersByTimeAsync(WS_HEARTBEAT_MS)
+    asleepMs += 600_000
+    await vi.advanceTimersByTimeAsync(WS_HEARTBEAT_MS * 10)
+    expect(ws.terminated).toBe(0)
+  })
+
+  it('hangs up at once after a sleep the far end could not have waited through', async () => {
+    vi.useFakeTimers()
+    const ws = socket()
+    let asleepMs = 0
+    const verdicts: boolean[] = []
+    const opts = { now: () => performance.now() + asleepMs, peerGivesUpAfterMs: BACKEND_IDLE_DEADLINE_MS,
+      onWake: (_: number, hungUp: boolean) => { verdicts.push(hungUp) } }
+    watchSocketLiveness(ws, opts)
+    await vi.advanceTimersByTimeAsync(WS_HEARTBEAT_MS)
+    asleepMs += 30_000 // shorter than the backend waits: the link may well still be there
+    await vi.advanceTimersByTimeAsync(WS_HEARTBEAT_MS)
+    expect(ws.terminated).toBe(0)
+    asleepMs += BACKEND_IDLE_DEADLINE_MS
+    await vi.advanceTimersByTimeAsync(WS_HEARTBEAT_MS)
+    expect(ws.terminated).toBe(1)
+    expect(verdicts).toEqual([false, true])
   })
 
   it('terminates a socket it cannot even ping', async () => {

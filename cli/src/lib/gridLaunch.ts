@@ -45,6 +45,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEngine } from '../engines/types.js'
+import { isOpencodeV2 } from '../engines/opencode/version.js'
 import {
   CLAUDE_ALLOW_WEB_TOOLS_ARG,
   CLAUDE_DISALLOW_WEB_TOOLS_ARG,
@@ -124,6 +125,17 @@ export interface GridLaunchOverride {
    * Absent means the relay did not say, and each engine keeps its own assumption, as before.
    */
   contextWindow?: number
+}
+
+/**
+ * The `networkId` of a launch onto a saved API (`apiModels.ts`) rather than a grid: `api:<connection id>`.
+ * The same contracts below run it — an OpenAI-compatible API such as OpenRouter is reached exactly the
+ * way a grid's relay is — but nothing grid-specific (waking, the grid's picture) applies to it.
+ */
+export const API_NETWORK_PREFIX = 'api:'
+
+export function isApiLaunch(launch: Pick<GridLaunchOverride, 'networkId'> | null | undefined): boolean {
+  return !!launch?.networkId.startsWith(API_NETWORK_PREFIX)
 }
 
 /** The smallest window believed. Anything below it is not a model a coding agent can run on, and a
@@ -278,14 +290,29 @@ export function gridProviderId(networkName: string): string {
 }
 
 /**
+ * The provider id OpenCode's generated config declares for [override].
+ *
+ * A saved API is `api-<connection id>`, never its bare name: OpenCode ships built-in providers under
+ * names like `openrouter`, and a config block with the same id is merged into the built-in one rather
+ * than replacing it.
+ */
+function opencodeProviderId(override: GridLaunchOverride): string {
+  return isApiLaunch(override)
+    ? `api-${gridProviderId(override.networkId.slice(API_NETWORK_PREFIX.length))}`
+    : gridProviderId(override.networkName)
+}
+
+/**
  * The provider block OpenCode reads, as JSON.
  *
  * Four things here are load-bearing, each of which breaks the engine differently when got wrong:
  *
- *  1. **No top-level `model` key.** OpenCode's schema `$ref`s a CLOSED enum of known public models
- *     with no wildcard branch, so naming a private grid's model there makes OpenCode refuse the
- *     whole config at startup — a failure that arrives as a dead pane, long after the launch looked
- *     fine. The model is selected on argv instead, which is not schema-validated.
+ *  1. **No top-level `model` key on v1.** OpenCode 1.x's schema `$ref`s a CLOSED enum of known public
+ *     models with no wildcard branch, so naming a private grid's model there makes OpenCode refuse
+ *     the whole config at startup — a failure that arrives as a dead pane, long after the launch
+ *     looked fine. The model is selected on argv instead, which is not schema-validated. v2 is the
+ *     other way round: its TUI has no `-m`, and it accepts `model` naming the provider declared here
+ *     (measured on 2.0.18: a fresh `--standalone` pane opened on it), so on v2 the key is written.
  *  2. **`baseURL` is the relay root verbatim.** It already ends in `/relay/v1`; the SDK appends
  *     `/chat/completions` itself, so any "normalising" here 404s every request.
  *  3. **`apiKey` is `{env:…}`, not the key.** Nothing written to disk by this module may contain a
@@ -312,6 +339,7 @@ function opencodeGridConfig(
   provider: string,
   override: GridLaunchOverride,
   model: string,
+  v2: boolean,
 ): string {
   // EXACTLY ONE model, and that is deliberate: it is what the agent was created with.
   //
@@ -332,6 +360,9 @@ function opencodeGridConfig(
   }
   return `${JSON.stringify({
     $schema: 'https://opencode.ai/config.json',
+    // v2 only — see point 1 above. A resumed session keeps its own model whatever this says; the
+    // caller switches that one through the API (`sessionModel`).
+    ...(v2 ? { model: `${provider}/${model}` } : {}),
     provider: {
       [provider]: {
         npm: '@ai-sdk/openai-compatible',
@@ -425,6 +456,11 @@ export interface GridLaunchMachine {
    * such a machine the overlay is dropped and the agent launches without web tools.
    */
   hermesSystemManaged: boolean
+  /**
+   * The installed OpenCode's major version (`engines/opencode/version.ts`); absent or null reads as
+   * v1. v2's TUI rejects `-m`, and only a private server (`--standalone`) reads `OPENCODE_CONFIG`.
+   */
+  opencodeMajor?: number | null
 }
 
 /** How one engine is launched against a grid. */
@@ -435,6 +471,12 @@ export interface GridEngineLaunch {
   args: string[]
   /** What this launch gives the agent by way of web search. See [GridWebSearchStatus]. */
   webSearch: GridWebSearchStatus
+  /**
+   * The `provider/model` a RESUMED session has to be put on before the relaunch, for an engine whose
+   * resume restores the session's own stored model whatever argv says. OpenCode only; the caller
+   * applies it (`applyOpencodeSessionModel`).
+   */
+  sessionModel?: string
   /**
    * For an engine that reads its provider out of a config directory rather than an environment
    * variable: files the daemon writes into a directory IT owns, and the variable that points the
@@ -714,30 +756,42 @@ const GRID_ENGINE_CONTRACTS: Partial<Record<AgentEngine, GridEngineContract>> = 
   // So it takes the shape codex and pi take: DECLARE a provider. `OPENCODE_CONFIG` names a config
   // file, this daemon writes one into a directory it owns, and the grid arrives as a provider whose
   // models are the grid's own ids. The user's `~/.config/opencode/opencode.json` is never opened.
+  //
+  // ## v2 (2.0.18, measured)
+  //
+  // The TUI rejects `-m` and exits 1, so the model goes in the config file instead (see
+  // `opencodeGridConfig`, point 1). And by default the TUI attaches to ONE background service shared
+  // by every OpenCode on the machine, which never sees a pane's `OPENCODE_CONFIG`: a session put on a
+  // provider declared only here showed the service's default model in its footer. `--standalone`
+  // gives the pane its own server, which reads the file — the same session then showed the declared
+  // model. A resumed session keeps its stored model either way, so `sessionModel` is what the caller
+  // switches it to before the relaunch.
   opencode: {
-    build: (override) => {
-      const provider = gridProviderId(override.networkName)
+    build: (override, machine) => {
+      const provider = opencodeProviderId(override)
       // No model chosen means the grid routes — `Auto` is the router's own id, and the relay serves
       // it (verified: 200). It is a real id to OpenCode either way, which is what matters: the
       // provider block has to name something, and leaving the model out entirely puts OpenCode back
       // on its own catalogue and the 503 above.
       const model = override.model ?? GRID_ROUTER_MODEL
+      const v2 = isOpencodeV2(machine.opencodeMajor)
       return {
         // The key travels in the environment and is REFERENCED from the file, never written into it
         // — the rule every config-file engine here follows.
         env: { [GRID_KEY_VAR]: override.apiKey },
         // Deliberately NOT `OPENAI_BASE_URL`/`OPENAI_API_KEY`. Setting them would re-arm the built-in
         // `openai` provider beside ours, and its catalogue is what chose the model the grid refused.
-        args: ['-m', `${provider}/${model}`],
+        args: v2 ? ['--standalone'] : ['-m', `${provider}/${model}`],
         configDir: {
           envVar: 'OPENCODE_CONFIG',
           pointAt: OPENCODE_CONFIG_FILE,
           files: [{
             name: OPENCODE_CONFIG_FILE,
-            content: opencodeGridConfig(provider, override, model),
+            content: opencodeGridConfig(provider, override, model, v2),
           }],
         },
         webSearch: webSearchWhenWired(override),
+        sessionModel: `${provider}/${model}`,
       }
     },
   },

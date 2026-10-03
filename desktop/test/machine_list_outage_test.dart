@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/cli_login.dart';
+import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
@@ -44,7 +45,10 @@ class _Cli extends CliLogin {
   Future<CliAuthStatus> checkStatus() async =>
       const CliAuthStatus(loggedIn: true);
   @override
-  Future<void> login({void Function(String url)? onAuthorizeUrl}) async {}
+  Future<void> login({
+    void Function(String url)? onAuthorizeUrl,
+    SignInProvider? provider,
+  }) async {}
   @override
   Future<void> logout() async {}
 }
@@ -89,6 +93,16 @@ class _Connection extends WsConn {
         onEvent: (_) {},
         onStatus: (_) {},
       );
+
+  /// The socket to the daemon is open and selected (`WsConn.isReady`).
+  bool ready = false;
+
+  /// The next `agents_list` goes unanswered in time — what a timer armed before a sleep did on the
+  /// wake, or a daemon slow to answer just after it.
+  bool timeOutNextList = false;
+
+  @override
+  bool get isReady => ready;
   @override
   Future<void> waitUntilReady({required Duration timeout}) async {}
   @override
@@ -96,8 +110,22 @@ class _Connection extends WsConn {
     String type, {
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 20),
-  }) async => const {'agents': []};
+  }) async {
+    if (type == 'agents_list' && timeOutNextList) {
+      timeOutNextList = false;
+      throw const WsRequestTimeout('agents_list');
+    }
+    return const {'agents': []};
+  }
 }
+
+LocalCliEndpoint _endpoint() => LocalCliEndpoint(
+  computerId: _computerId,
+  wsUri: Uri.parse('ws://127.0.0.1:18473/ws'),
+  protocolVersion: localWsProtocolVersion,
+  terminalProtocolVersion: 1,
+  machineId: 'local-machine',
+);
 
 class _App extends AppNotifier {
   _App(_Api api, _Connection connection, this.discovery)
@@ -128,6 +156,7 @@ Future<void> _tick() => Future.delayed(Duration.zero);
 void main() {
   late _Api api;
   late _App app;
+  late _Connection connection;
   // Some tests deliberately end with the recovery timer armed; the binding checks for pending timers
   // when the BODY ends, so those dispose themselves and tell tearDown not to do it twice.
   var disposedEarly = false;
@@ -135,7 +164,8 @@ void main() {
   setUp(() {
     disposedEarly = false;
     api = _Api();
-    app = _App(api, _Connection(), _Discovery());
+    connection = _Connection();
+    app = _App(api, connection, _Discovery());
     app.status = AppStatus.authenticated;
     // The state a running session is in: this computer's machine, already known to be local.
     app.machines = [_localMachine];
@@ -369,5 +399,92 @@ void main() {
 
     expect(app.machinesAreStale, isFalse);
     expect(app.machineRecoveryPending, isFalse);
+  });
+
+  // 2026-09-29: after a lid was opened, an agents_list "timed out" (its timer had run on through the
+  // sleep) and marked this computer offline. The socket to the daemon never dropped, so the one
+  // path that brought the machine back — a reconnect — never ran, and the tiles sat on "Offline"
+  // over live terminals until the app was restarted.
+  group('this computer, while its daemon is on the socket', () {
+    setUp(() {
+      connection.ready = true;
+      app.machineStates['local-machine']!
+        ..localEndpoint = _endpoint()
+        ..connectionStatus = ConnectionStatus.connected
+        ..nodeOnline = true;
+    });
+
+    test('is not called offline by a request that timed out', () async {
+      final local = app.machineStates['local-machine']!;
+      connection.timeOutNextList = true;
+      app.onMachineConnectedForTest('local-machine');
+      await _tick();
+      await _tick();
+
+      expect(local.nodeOnline, isTrue, reason: 'the socket is the witness');
+      expect(local.usesLocalTransport, isTrue);
+      expect(local.agentsLoadError, 'Harness is not responding — retrying');
+
+      // "retrying" is a promise: the list is asked again, and the answer clears the strip.
+      await Future<void>.delayed(const Duration(seconds: 6));
+      await _tick();
+      expect(local.agentsLoadError, isNull);
+    });
+
+    test(
+      'comes back on the daemon’s next ready snapshot, endpoint and all',
+      () async {
+        // However it got here — a probe that missed, a status left stale — this is the stuck state.
+        final local = app.machineStates['local-machine']!
+          ..nodeOnline = false
+          ..localEndpoint = null
+          ..connectionStatus = ConnectionStatus.disconnected;
+
+        app.daemonSnapshotForTest(_endpoint());
+        await _tick();
+
+        expect(local.nodeOnline, isTrue);
+        expect(local.usesLocalTransport, isTrue);
+        expect(local.connectionStatus, ConnectionStatus.connected);
+        expect(local.transportMode, MachineTransportMode.localPlaintext);
+      },
+    );
+
+    test('comes back on any frame the daemon sends', () async {
+      final local = app.machineStates['local-machine']!..nodeOnline = false;
+      await app.handleEventForTest('local-machine', {
+        'type': 'turn_heartbeat',
+        'payload': <String, dynamic>{},
+      });
+      expect(local.nodeOnline, isTrue);
+    });
+
+    test('keeps its endpoint when a refresh applies a missed probe over a stale status', () async {
+      final local = app.machineStates['local-machine']!
+        ..connectionStatus = ConnectionStatus.disconnected;
+      app.discovery.probeMisses = true;
+      final refresh = app.refreshMachines();
+      await _tick();
+      api.lists.single.complete([_localMachine]);
+      await refresh;
+      await _tick();
+
+      expect(local.usesLocalTransport, isTrue);
+      expect(local.nodeOnline, isTrue);
+    });
+  });
+
+  test('a request that times out over a dead socket still takes this computer offline', () async {
+    final local = app.machineStates['local-machine']!
+      ..localEndpoint = _endpoint()
+      ..connectionStatus = ConnectionStatus.connected
+      ..nodeOnline = true;
+    connection.ready = false;
+    connection.timeOutNextList = true;
+    app.onMachineConnectedForTest('local-machine');
+    await _tick();
+    await _tick();
+
+    expect(local.nodeOnline, isFalse);
   });
 }

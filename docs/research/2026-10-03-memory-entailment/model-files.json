@@ -1,0 +1,38 @@
+{
+  "repository": "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
+  "revision": "6f5cf0a2b59cabb106aca4c287eed12e357e90eb",
+  "files": {
+    "README.md": {
+      "bytes": 23571,
+      "sha256": "4ffce2b113463476777ccc8efd1f0ea0571510a96a2c84f2d2aab152951b13ca"
+    },
+    "added_tokens.json": {
+      "bytes": 23,
+      "sha256": "dc046d04c9b0ada7ae6f1dc89c465801799acdf0c9a6aab8c15a1b2d5ca4e91f"
+    },
+    "config.json": {
+      "bytes": 1090,
+      "sha256": "a6c616d6dabeacf90fd0e776c741d3f0f30a05533ccf0bd3b5b62e94cfaa8d57"
+    },
+    "model.safetensors": {
+      "bytes": 368877646,
+      "sha256": "06d6fd89edd4f97816831626daafbdb0b029cf63bae8edc0bccab1d64e2e7707"
+    },
+    "special_tokens_map.json": {
+      "bytes": 286,
+      "sha256": "9463f61e1b109a8eb4688b829260d7c6b1e6dff04c98ff7269bb89e2b92369b9"
+    },
+    "spm.model": {
+      "bytes": 2464616,
+      "sha256": "c679fbf93643d19aab7ee10c0b99e460bdbc02fedf34b92b05af343b4af586fd"
+    },
+    "tokenizer.json": {
+      "bytes": 8656646,
+      "sha256": "05402ffae6dd382a8491b1d29bfc139bec5d332662e86a026f433ce54c25c202"
+    },
+    "tokenizer_config.json": {
+      "bytes": 1284,
+      "sha256": "557b3d33d3f41b81ad769244e506549e98a1857d41dd58160aacd4d98d710b5a"
+    }
+  }
+}

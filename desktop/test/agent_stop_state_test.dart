@@ -47,7 +47,7 @@ void main() {
                 .add(const Agent(id: 'a0', name: 'Recreated'));
           }
         }
-        expect(await confirm(), contains('The agent changed'));
+        expect(await confirm(), contains('The harness changed'));
         expect(connection.stops, isEmpty);
       },
     );
@@ -109,7 +109,7 @@ void main() {
         app.machineStates['m'] = state;
       }
       connection.stopReplies.single.complete({'deleted': true});
-      expect(await stop, contains('agent changed'));
+      expect(await stop, contains('harness changed'));
       if (!disposed) {
         expect(app.stateOf('m')!.agents.single.name, 'Replacement');
       }

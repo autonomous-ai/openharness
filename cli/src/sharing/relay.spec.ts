@@ -14,7 +14,7 @@ vi.mock('ws', async () => {
   }
   return { WebSocket: FakeWebSocket }
 })
-vi.mock('../lib/wsLiveness.js', () => ({ watchSocketLiveness: () => ({ stop: state.stop }) }))
+vi.mock('../lib/wsLiveness.js', () => ({ BACKEND_IDLE_DEADLINE_MS: 75_000, watchSocketLiveness: () => ({ stop: state.stop }) }))
 import { HarnessShareRelay, SharingEndedError } from './relay.js'
 import { SHARE_REQUEST_TYPES, SHARE_RESULT_TYPES } from './protocol.js'
 describe('recipient relay', () => {
@@ -70,6 +70,16 @@ describe('recipient relay', () => {
     const count = ws.send.mock.calls.length
     await session.send({ type: 'terminal_alive' })
     expect(ws.send).toHaveBeenCalledTimes(count)
+  })
+  it('never forwards the daemon-local device notices a share owner sends', async () => {
+    const { ws, owner } = await ready()
+    sink.sendFrame.mockClear()
+    for (const type of ['device_key_added', 'device_key_removed', 'device_conflict', 'device_keys_changed']) {
+      frame(ws, 'observer_frame', owner.cipher.seal({ type, payload: { pub: 'x' } }))
+    }
+    expect(sink.sendFrame).not.toHaveBeenCalled()
+    frame(ws, 'observer_frame', owner.cipher.seal({ type: 'observer_viewer', payload: { state: 'live' } }))
+    expect(sink.sendFrame).toHaveBeenCalledTimes(1)
   })
   it('refuses unpublished or wrong-machine grants before opening a socket', async () => {
     discover.mockResolvedValue([])

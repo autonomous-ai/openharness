@@ -30,8 +30,8 @@ test('humanIdle never shows two units', () => {
 test('a policy with a bad number fails at load, not mid-fleet', () => {
   assert.throws(() => normalizePolicy({ runningCeiling: -1 }), /runningCeiling/)
   assert.throws(() => normalizePolicy({ runningCeiling: 1.5 }), /runningCeiling/)
-  assert.throws(() => normalizePolicy({ pauseAfterIdle: 'ages' }), /Not a duration/)
-  assert.throws(() => normalizePolicy({ pauseAfterIdle: '2d', hideAfterIdle: '1d' }), /at least pauseAfterIdle/)
+  assert.throws(() => normalizePolicy({ stopAfterIdle: 'ages' }), /Not a duration/)
+  assert.throws(() => normalizePolicy({ stopAfterIdle: '2d', hideAfterIdle: '1d' }), /at least stopAfterIdle/)
 })
 
 test('a policy keeps keys it does not know about', () => {
@@ -49,25 +49,25 @@ test('protections are reported in the order a person would say them', () => {
   assert.equal(protectionFor(row(), policy), null)
 })
 
-test('the idle rules pause what has gone quiet and leave the fresh alone', () => {
+test('the idle rules stop what has gone quiet and leave the fresh alone', () => {
   const rows = [
     row({ id: 'fresh', idleMs: 5 * 60_000 }),
     row({ id: 'stale', idleMs: 2 * DAY }),
     row({ id: 'ancient', idleMs: 20 * DAY }),
-    row({ id: 'paused-stale', state: 'paused', idleMs: 20 * DAY, rssBytes: 0 }),
+    row({ id: 'stopped-stale', state: 'stopped', idleMs: 20 * DAY, rssBytes: 0 }),
   ]
   const { entries, totals } = decide(rows, { runningCeiling: 99 })
   const byId = Object.fromEntries(entries.map((entry) => [entry.id, entry]))
   assert.equal(byId.fresh.action, 'keep')
-  assert.equal(byId.stale.action, 'pause')
-  assert.equal(byId.stale.rule, 'pauseAfterIdle')
-  assert.equal(byId.ancient.action, 'pause')
-  assert.equal(byId['paused-stale'].action, 'keep', 'already paused: there is nothing left to do to it')
-  assert.equal(totals.pause, 2)
+  assert.equal(byId.stale.action, 'stop')
+  assert.equal(byId.stale.rule, 'stopAfterIdle')
+  assert.equal(byId.ancient.action, 'stop')
+  assert.equal(byId['stopped-stale'].action, 'keep', 'already stopped: there is nothing left to do to it')
+  assert.equal(totals.stop, 2)
 })
 
 test('the reason echoes the threshold as it was written, not as the clock reads it back', () => {
-  const { entries } = decide([row({ idleMs: 20 * DAY })], { pauseAfterIdle: '90m' })
+  const { entries } = decide([row({ idleMs: 20 * DAY })], { stopAfterIdle: '90m' })
   assert.match(entries[0].why, /past 90m/)
 })
 
@@ -82,33 +82,38 @@ test('the ceiling pauses the least recently active, and never a protected row', 
   const byId = Object.fromEntries(entries.map((entry) => [entry.id, entry]))
   assert.equal(byId.a.action, 'keep')
   assert.equal(byId.b.action, 'keep')
-  assert.equal(byId.c.action, 'pause')
+  assert.equal(byId.c.action, 'stop')
   assert.equal(byId.c.rule, 'runningCeiling')
   assert.equal(byId.pinned.action, 'keep')
   assert.equal(totals.runningAfter, 3) // the pinned one still counts as running
 })
 
-test('a ceiling of zero still cannot pause what is protected', () => {
+test('each machine has its own ceiling', () => {
+  const plan = decide([row({ id: 'local', machineId: 'm1' }), row({ id: 'remote', machineId: 'm2' })], { runningCeiling: 1 })
+  assert.equal(plan.totals.stop, 0)
+})
+
+test('a ceiling of zero still cannot stop what is protected', () => {
   const { entries } = decide([row({ id: 'p', pinned: true, idleMs: 3 * HOUR })], { runningCeiling: 0 })
   assert.equal(entries[0].action, 'keep')
 })
 
-test('a workspace that no longer exists is paused, whatever its idle time', () => {
+test('a workspace that no longer exists is stopped, whatever its idle time', () => {
   const { entries } = decide([row({ idleMs: 2 * HOUR, workspaceGone: true })], {})
-  assert.equal(entries[0].action, 'pause')
+  assert.equal(entries[0].action, 'stop')
   assert.equal(entries[0].rule, 'workspaceGone')
 })
 
 test('the loosened defaults leave yesterday afternoon alone', () => {
   const { entries } = decide([row({ id: 'yesterday', idleMs: 18 * HOUR }), row({ id: 'last-week', idleMs: 6 * DAY })], {})
   assert.equal(entries[0].action, 'keep')
-  assert.equal(entries[1].action, 'pause')
+  assert.equal(entries[1].action, 'stop')
 })
 
 test('simulate is the same plan, without the keeps', () => {
   const rows = [row({ id: 'a', idleMs: 2 * DAY }), row({ id: 'b', idleMs: 60_000 })]
   const result = simulate(rows, {})
-  assert.equal(result.pause, 1)
+  assert.equal(result.stop, 1)
   assert.equal(result.plan.length, 1)
   assert.equal(result.plan[0].id, 'a')
   assert.equal(result.frees, rows[0].rssBytes)
@@ -118,11 +123,18 @@ test('a shell is left alone by every rule, however old it is', () => {
   const { entries, totals } = decide([row({ state: 'terminal', idleMs: 40 * DAY, rssBytes: 0 })], { runningCeiling: 0 })
   assert.equal(entries[0].action, 'keep')
   assert.match(entries[0].why, /a shell, not an engine/)
-  assert.equal(totals.pause, 0)
+  assert.equal(totals.stop, 0)
 })
 
 test('the default ceiling is a backstop: a normal busy day never reaches it', () => {
   const rows = Array.from({ length: 60 }, (_, i) => row({ id: `h${i}`, name: `h${i}`, idleMs: (i + 2) * HOUR / 4 }))
   const { totals } = decide(rows, {})
-  assert.equal(totals.pause, 0, 'sixty harnesses used today, and the default pauses none of them')
+  assert.equal(totals.stop, 0, 'sixty harnesses used today, and the default pauses none of them')
+})
+test('legacy policy names preserve owner thresholds while exposing stop terminology', () => {
+  const policy = normalizePolicy({ pauseAfterIdle: '8h', pauseWhenWorkspaceGone: false })
+  assert.equal(policy.stopAfterIdle, '8h')
+  assert.equal(policy.stopWhenWorkspaceGone, false)
+  assert.equal('pauseAfterIdle' in policy, false)
+  assert.equal(normalizePolicy({ pauseAfterIdle: '8h', stopAfterIdle: '2d' }).stopAfterIdle, '2d')
 })

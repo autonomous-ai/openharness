@@ -1,4 +1,4 @@
-import 'package:xterm/xterm.dart';
+import 'package:xterm/core.dart';
 
 const _mediaExtensions =
     r'png|jpe?g|gif|webp|avif|heic|heif|bmp|tiff?|svg|ico|'
@@ -18,9 +18,17 @@ final _absoluteMedia = RegExp(
   caseSensitive: false,
 );
 final _relativeMedia = RegExp(
-  r'''[^\s<>`"'()\[\]]+\.(?:''' +
+  // Start once per token, rather than retrying every suffix of a long token
+  // with no media extension. The delimiter is outside the captured target.
+  r'''(?:^|[\s<>`"'()\[\]])([^\s<>`"'()\[\]]+\.(?:''' +
       _mediaExtensions +
-      r''')(?=$|[\s)\]}>.,;:!?])''',
+      r'''))(?=$|[\s)\]}>.,;:!?])''',
+  caseSensitive: false,
+);
+// Both bare-path patterns require this suffix and boundary. Reject ordinary
+// text before their permissive path bodies backtrack over every token prefix.
+final _bareMediaSuffix = RegExp(
+  r'\.(?:' + _mediaExtensions + r')(?=$|[\s)\]}>.,;:!?])',
   caseSensitive: false,
 );
 
@@ -54,17 +62,23 @@ String _trimWebPunctuation(String target) {
 
 /// Finds only the target under the pointer. No file IO or scan of scrollback.
 /// Markdown labels and quoted paths retain spaces; bare URLs retain queries.
-String? terminalLinkInText(String text, int offset) {
+String? terminalLinkInText(String text, int offset) =>
+    _terminalLinkInText(text, offset, null);
+
+String? _terminalLinkInText(String text, int offset, _LinkLookup? lookup) {
   if (offset < 0 || offset >= text.length) return null;
-  for (final match in _markdownLink.allMatches(text)) {
+  Iterable<RegExpMatch> matches(RegExp pattern) =>
+      lookup?.matches(pattern, text) ?? pattern.allMatches(text);
+  bool isTarget(String target) => lookup?.isTarget(target) ?? _isTarget(target);
+  for (final match in matches(_markdownLink)) {
     if (offset < match.start || offset >= match.end) continue;
     var target = match[1]!;
     if (target.startsWith('<') && target.endsWith('>')) {
       target = target.substring(1, target.length - 1);
     }
-    return _isTarget(target) ? target : null;
+    return isTarget(target) ? target : null;
   }
-  for (final match in _quotedTarget.allMatches(text)) {
+  for (final match in matches(_quotedTarget)) {
     if (offset < match.start || offset >= match.end) continue;
     final target = [
       match[1],
@@ -72,20 +86,21 @@ String? terminalLinkInText(String text, int offset) {
       match[3],
       match[4],
     ].whereType<String>().single;
-    if (_isTarget(target)) return target;
+    if (isTarget(target)) return target;
   }
-  for (final match in _webTarget.allMatches(text)) {
+  for (final match in matches(_webTarget)) {
     if (offset < match.start || offset >= match.end) continue;
-    final target = _trimWebPunctuation(match[0]!);
-    return offset < match.start + target.length && _isTarget(target)
+    final target = lookup?.trimWeb(match[0]!) ?? _trimWebPunctuation(match[0]!);
+    return offset < match.start + target.length && isTarget(target)
         ? target
         : null;
   }
+  if (!_bareMediaSuffix.hasMatch(text)) return null;
   for (final pattern in [_absoluteMedia, _relativeMedia]) {
-    for (final match in pattern.allMatches(text)) {
-      final target = match.groupCount == 0 ? match[0]! : match[1]!;
+    for (final match in matches(pattern)) {
+      final target = match[1]!;
       final start = match.end - target.length;
-      if (offset >= start && offset < match.end && _isTarget(target)) {
+      if (offset >= start && offset < match.end && isTarget(target)) {
         return target;
       }
     }
@@ -105,18 +120,118 @@ class _LogicalLine {
   /// UTF-16 offset of the target cell in [text], when the cell is on this line.
   final int? offset;
 
+  /// Retained only while walking one hover underline, never between events.
+  final List<List<int>>? cellOffsets;
+
   const _LogicalLine(
     this.firstRow,
     this.lastRow,
     this.text,
     this.styles,
-    this.offset,
+    this.offset, {
+    this.cellOffsets,
+  });
+
+  _LogicalLine at(CellOffset cell) => _LogicalLine(
+    firstRow,
+    lastRow,
+    text,
+    styles,
+    cell.y >= firstRow &&
+            cell.y <= lastRow &&
+            cell.x >= 0 &&
+            cell.x < cellOffsets![cell.y - firstRow].length
+        ? cellOffsets![cell.y - firstRow][cell.x]
+        : null,
+    cellOffsets: cellOffsets,
   );
 
   int get leadingBlanks => text.length - text.trimLeft().length;
 
   /// Offset of the last character that is not a blank, or -1 on a blank line.
   int get lastVisible => text.trimRight().length - 1;
+}
+
+/// Replay only the matches previously needed, advancing the source lazily.
+class _CachedPatternMatches {
+  _CachedPatternMatches(Iterable<RegExpMatch> source)
+    : _remaining = source.iterator;
+
+  Iterator<RegExpMatch>? _remaining;
+  final _seen = <RegExpMatch>[];
+
+  Iterable<RegExpMatch> get values sync* {
+    var index = 0;
+    while (true) {
+      if (index < _seen.length) {
+        yield _seen[index++];
+      } else if (_remaining?.moveNext() == true) {
+        _seen.add(_remaining!.current);
+      } else {
+        _remaining = null;
+        return;
+      }
+    }
+  }
+}
+
+/// One synchronous extent lookup may test hundreds of neighboring cells in
+/// the same text. Share its immutable line reconstruction and pattern matches.
+/// The object is discarded before returning: output, resize, buffer switches,
+/// and OSC 8 updates are always read afresh on the next pointer event.
+class _LinkLookup {
+  _LinkLookup(this.terminal);
+
+  final Terminal terminal;
+  final _lines = <int, _LogicalLine?>{};
+  final _matches = <(RegExp, String), _CachedPatternMatches>{};
+  final _targets = <String, bool>{};
+  final _trimmedWeb = <String, String>{};
+  final _urlCuts = <String, int?>{};
+  final _boxCuts = <int, bool>{};
+  final _tokens = <String, ({int length, bool single, bool continues})>{};
+
+  _LogicalLine? line(int row, CellOffset cell) {
+    if (_lines.containsKey(row)) return _lines[row]?.at(cell);
+    final line = _logicalLine(terminal, row, cell, retainOffsets: true);
+    _lines[row] = line;
+    if (line != null) {
+      for (var y = line.firstRow; y <= line.lastRow; y++) {
+        _lines[y] = line;
+      }
+    }
+    return line;
+  }
+
+  // Retain the original short-circuiting: a match under the pointer does not
+  // require parsing every later link or malformed fragment on the same line.
+  Iterable<RegExpMatch> matches(RegExp pattern, String text) =>
+      _matches.putIfAbsent((
+        pattern,
+        text,
+      ), () => _CachedPatternMatches(pattern.allMatches(text))).values;
+
+  bool isTarget(String target) =>
+      _targets.putIfAbsent(target, () => _isTarget(target));
+
+  String trimWeb(String target) =>
+      _trimmedWeb.putIfAbsent(target, () => _trimWebPunctuation(target));
+
+  int? urlCutAt(String text) =>
+      _urlCuts.putIfAbsent(text, () => _urlCutAt(text));
+
+  bool cutAtBoxWidth(_LogicalLine line) =>
+      _boxCuts.putIfAbsent(line.lastRow, () => _cutAtBoxWidth(terminal, line));
+
+  ({int length, bool single, bool continues}) tokens(_LogicalLine line) =>
+      _tokens.putIfAbsent(
+        line.text,
+        () => (
+          length: _tokenLength(line),
+          single: _singleToken(line),
+          continues: _continuesUrl(line),
+        ),
+      );
 }
 
 /// What makes a run of cells read as one thing: its colour and whether it is
@@ -133,7 +248,12 @@ bool _underlined(int styleKey) => styleKey & 1 != 0;
 /// mapping cell columns to UTF-16 offsets (wide CJK and emoji are not one code
 /// unit). The bound also keeps malformed/unbroken output cheap during mouse
 /// hover. [cell] is the pointer, whose offset is reported when it lands here.
-_LogicalLine? _logicalLine(Terminal terminal, int y, CellOffset cell) {
+_LogicalLine? _logicalLine(
+  Terminal terminal,
+  int y,
+  CellOffset cell, {
+  bool retainOffsets = false,
+}) {
   final lines = terminal.buffer.lines;
   var start = y;
   var end = y;
@@ -147,12 +267,16 @@ _LogicalLine? _logicalLine(Terminal terminal, int y, CellOffset cell) {
   }
   final text = StringBuffer();
   final styles = <int>[];
+  final cellOffsets = retainOffsets ? <List<int>>[] : null;
   int? offset;
   for (var row = start; row <= end; row++) {
     final line = lines[row];
+    final rowOffsets = retainOffsets ? <int>[] : null;
+    if (rowOffsets != null) cellOffsets!.add(rowOffsets);
     var previousOffset = text.length;
     for (var x = 0; x < line.length; x++) {
       final continuation = x > 0 && line.getWidth(x - 1) == 2;
+      rowOffsets?.add(continuation ? previousOffset : text.length);
       if (cell.y == row && cell.x == x) {
         offset = continuation ? previousOffset : text.length;
       }
@@ -167,7 +291,14 @@ _LogicalLine? _logicalLine(Terminal terminal, int y, CellOffset cell) {
       }
     }
   }
-  return _LogicalLine(start, end, text.toString(), styles, offset);
+  return _LogicalLine(
+    start,
+    end,
+    text.toString(),
+    styles,
+    offset,
+    cellOffsets: cellOffsets,
+  );
 }
 
 /// Columns up to the last cell that is neither empty nor a space — the width
@@ -297,9 +428,15 @@ int? _urlCutAt(String text) {
 /// row that opens in plain text is the next sentence, however wide the row
 /// above was. An address in the same paint as its sentence has only the box
 /// width to go on.
-bool _cutThroughout(Terminal terminal, List<_LogicalLine> joined) {
+bool _cutThroughout(
+  Terminal terminal,
+  List<_LogicalLine> joined,
+  _LinkLookup? lookup,
+) {
   final head = joined.first;
-  final urlStart = _urlCutAt(head.text);
+  final urlStart = lookup != null
+      ? lookup.urlCutAt(head.text)
+      : _urlCutAt(head.text);
   if (urlStart == null) return false;
   final urlStyle = head.styles[head.lastVisible];
   var before = urlStart - 1;
@@ -312,7 +449,8 @@ bool _cutThroughout(Terminal terminal, List<_LogicalLine> joined) {
   for (var i = 0; i + 1 < joined.length; i++) {
     final cut = painted
         ? _paintContinues(joined[i], joined[i + 1])
-        : _cutAtBoxWidth(terminal, joined[i]);
+        : (lookup?.cutAtBoxWidth(joined[i]) ??
+              _cutAtBoxWidth(terminal, joined[i]));
     if (!cut) return false;
   }
   return true;
@@ -328,7 +466,14 @@ bool _cutThroughout(Terminal terminal, List<_LogicalLine> joined) {
 /// `hard: true`) does. A terminal soft wrap is already joined by
 /// [_logicalLine]; this is the break it cannot see, and it is inferred: from
 /// the paint on the address when there is any, else from the row's width.
-String? terminalLinkAt(Terminal terminal, CellOffset cell) {
+String? terminalLinkAt(Terminal terminal, CellOffset cell) =>
+    _terminalLinkAt(terminal, cell, null);
+
+String? _terminalLinkAt(
+  Terminal terminal,
+  CellOffset cell,
+  _LinkLookup? lookup,
+) {
   final lines = terminal.buffer.lines;
   if (cell.y < 0 ||
       cell.y >= lines.length ||
@@ -336,41 +481,65 @@ String? terminalLinkAt(Terminal terminal, CellOffset cell) {
       cell.x >= lines[cell.y].length) {
     return null;
   }
-  final own = _logicalLine(terminal, cell.y, cell);
+  // An OSC 8 hyperlink names its target outright — Claude Code prints a
+  // markdown link `[!125](https://…)` as just `!125` and hides the address
+  // there — so it wins over anything read off the visible text.
+  final hyperlink = lines[cell.y].getHyperlink(cell.x);
+  if (hyperlink != null) {
+    final uri = Uri.tryParse(hyperlink);
+    if (uri != null &&
+        (uri.scheme == 'http' || uri.scheme == 'https') &&
+        uri.host.isNotEmpty) {
+      return hyperlink;
+    }
+  }
+  _LogicalLine? lineAt(int row) => lookup != null
+      ? lookup.line(row, cell)
+      : _logicalLine(terminal, row, cell);
+  int? urlCutAt(String text) =>
+      lookup != null ? lookup.urlCutAt(text) : _urlCutAt(text);
+  bool cutAtBoxWidth(_LogicalLine line) =>
+      lookup?.cutAtBoxWidth(line) ?? _cutAtBoxWidth(terminal, line);
+  bool singleToken(_LogicalLine line) =>
+      lookup?.tokens(line).single ?? _singleToken(line);
+  bool continuesUrl(_LogicalLine line) =>
+      lookup?.tokens(line).continues ?? _continuesUrl(line);
+  final own = lineAt(cell.y);
   if (own == null || own.offset == null) return null;
-  final single = terminalLinkInText(own.text, own.offset!);
+  final single = _terminalLinkInText(own.text, own.offset!, lookup);
 
   // Which way the rest of the address lies is read off the pointer: on the
   // row's opening token it may be a carried tail, so look above; on an
   // address the row breaks off in, look below. A row that is one token from
   // indent to end may be the middle of one, and is followed both ways.
   bool mayJoin(_LogicalLine a, _LogicalLine b) =>
-      _continuesUrl(b) &&
-      (_paintContinues(a, b) || _cutAtBoxWidth(terminal, a));
+      continuesUrl(b) && (_paintContinues(a, b) || cutAtBoxWidth(a));
 
   final joined = [own];
   final at = own.offset!;
-  final cutAt = _urlCutAt(own.text);
+  final cutAt = urlCutAt(own.text);
   final onOpeningToken =
-      at >= own.leadingBlanks && at < own.leadingBlanks + _tokenLength(own);
-  if (onOpeningToken && _continuesUrl(own)) {
+      at >= own.leadingBlanks &&
+      at <
+          own.leadingBlanks + (lookup?.tokens(own).length ?? _tokenLength(own));
+  if (onOpeningToken && continuesUrl(own)) {
     while (joined.first.firstRow > 0 && joined.length < _hardWrapRows) {
-      final previous = _logicalLine(terminal, joined.first.firstRow - 1, cell);
+      final previous = lineAt(joined.first.firstRow - 1);
       if (previous == null || !mayJoin(previous, joined.first)) break;
       // Above a carried row sits either the row the address starts on or
       // another row of nothing but address; anything else ends the search.
-      final head = _urlCutAt(previous.text) != null;
-      if (!head && !_singleToken(previous)) break;
+      final head = urlCutAt(previous.text) != null;
+      if (!head && !singleToken(previous)) break;
       joined.insert(0, previous);
       if (head) break;
     }
   }
-  if ((cutAt != null && at >= cutAt) || _singleToken(own)) {
+  if ((cutAt != null && at >= cutAt) || singleToken(own)) {
     while (joined.last.lastRow + 1 < lines.length) {
-      final next = _logicalLine(terminal, joined.last.lastRow + 1, cell);
+      final next = lineAt(joined.last.lastRow + 1);
       if (next == null ||
           !mayJoin(joined.last, next) ||
-          _urlCutAt(_splice(joined, null)?.$1 ?? '') == null) {
+          urlCutAt(_splice(joined, null)?.$1 ?? '') == null) {
         break;
       }
       // Past the bound the address is unknowable, and a fragment of it would
@@ -378,17 +547,87 @@ String? terminalLinkAt(Terminal terminal, CellOffset cell) {
       if (joined.length >= _hardWrapRows) return null;
       joined.add(next);
       // The row the address ends on has words after it; nothing follows.
-      if (!_singleToken(next)) break;
+      if (!singleToken(next)) break;
     }
   }
-  if (joined.length == 1 || !_cutThroughout(terminal, joined)) return single;
+  if (joined.length == 1 || !_cutThroughout(terminal, joined, lookup)) {
+    return single;
+  }
 
   final spliced = _splice(joined, own);
   if (spliced == null) return single;
   final (text, offset) = spliced;
   if (offset == null) return single;
-  final target = terminalLinkInText(text, offset);
+  final target = _terminalLinkInText(text, offset, lookup);
   if (target == null) return single;
   final scheme = Uri.tryParse(target)?.scheme;
   return scheme == 'http' || scheme == 'https' ? target : single;
+}
+
+/// One row's run of cells, [start] to [end] inclusive, that opens a link.
+typedef TerminalLinkSpan = ({int row, int start, int end});
+
+/// The cells that open [target], walked out from [cell] — what a hover
+/// underlines. An OSC 8 link is exactly the cells that carry it; a link read
+/// off the text is the run of cells [terminalLinkAt] resolves to [target],
+/// followed onto the rows above and below when it reaches their edge (a
+/// wrapped address continues at the next row's indent).
+List<TerminalLinkSpan> terminalLinkSpans(
+  Terminal terminal,
+  CellOffset cell,
+  String target,
+) {
+  final lines = terminal.buffer.lines;
+  if (cell.y < 0 || cell.y >= lines.length) return const [];
+  final osc8 = lines[cell.y].getHyperlink(cell.x) == target;
+  final lookup = osc8 ? null : _LinkLookup(terminal);
+  bool hit(int x, int y) => osc8
+      ? lines[y].getHyperlink(x) == target
+      : _terminalLinkAt(terminal, CellOffset(x, y), lookup) == target;
+  TerminalLinkSpan? walk(int y, int x) {
+    if (y < 0 || y >= lines.length || x < 0 || !hit(x, y)) return null;
+    final width = lines[y].length;
+    var start = x;
+    var end = x;
+    while (start > 0 && hit(start - 1, y)) {
+      start--;
+    }
+    while (end + 1 < width && hit(end + 1, y)) {
+      end++;
+    }
+    return (row: y, start: start, end: end);
+  }
+
+  int firstVisible(BufferLine line) {
+    for (var x = 0; x < line.length; x++) {
+      final codePoint = line.getCodePoint(x);
+      if (codePoint != 0 && codePoint != 0x20) return x;
+    }
+    return line.length;
+  }
+
+  final own = walk(cell.y, cell.x);
+  if (own == null) return const [];
+  final spans = [own];
+  var head = own;
+  while (spans.length < _hardWrapRows &&
+      head.start <= firstVisible(lines[head.row])) {
+    final above = head.row - 1;
+    if (above < 0) break;
+    final span = walk(above, _visibleWidth(lines[above]) - 1);
+    if (span == null) break;
+    spans.insert(0, span);
+    head = span;
+  }
+  var tail = own;
+  while (spans.length < _hardWrapRows * 2 &&
+      tail.end >= _visibleWidth(lines[tail.row]) - 1) {
+    final below = tail.row + 1;
+    if (below >= lines.length) break;
+    final span = walk(below, firstVisible(lines[below]));
+    if (span == null) break;
+    spans.add(span);
+    tail = span;
+  }
+  return spans;
 }

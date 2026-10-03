@@ -192,6 +192,28 @@ describe('Codex rollout normalizer', () => {
     expect(window.hasMore).toBe(true)
   })
 
+  it('never borrows a previous final answer for an unfinished goal turn', () => {
+    const previous = [
+      line('event_msg', { type: 'user_message', message: 'First task' }),
+      line('event_msg', { type: 'agent_message', phase: 'final_answer', message: 'First task done.' }),
+      line('response_item', { type: 'message', role: 'user', content: [{ type: 'input_text',
+        text: '<codex_internal_context source="goal"><objective>Next task</objective></codex_internal_context>' }] }),
+      line('event_msg', { type: 'agent_message', phase: 'commentary', message: 'Working on the next task.' }),
+    ]
+    expect(lastCodexTurnText(previous)).toBeNull()
+    expect(lastCodexTurnText([...previous,
+      line('event_msg', { type: 'agent_message', phase: 'final_answer', message: 'Next task done.' }),
+    ])).toEqual({ userMessage: '/goal Next task', assistantText: 'Next task done.' })
+  })
+
+  it('requires the final phase once the transcript supplies phases', () => {
+    expect(lastCodexTurnText([
+      line('event_msg', { type: 'user_message', message: 'Work' }),
+      line('event_msg', { type: 'agent_message', message: 'An unphased intermediate update.' }),
+      line('event_msg', { type: 'agent_message', phase: 'commentary', message: 'Still working.' }),
+    ])).toBeNull()
+  })
+
   it('maps Codex orchestration to a Task tree and deduplicates completion notifications', () => {
     const resolver: CodexSubagentResolver = () => ({
       events: [

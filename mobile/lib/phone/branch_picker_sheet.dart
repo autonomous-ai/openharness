@@ -159,10 +159,6 @@ class _BranchPickerState extends State<_BranchPicker> {
               child: PhoneSearchField(
                 controller: _controller,
                 focus: _focus,
-                // ⚠️ Not autofocused. The list is worth reading first — most
-                // repositories have a handful of branches and the answer is on
-                // screen already; the keyboard would bury it.
-                autofocus: false,
                 hintText: 'Search branches',
                 onChanged: (value) => setState(() => _query = value),
                 onClear: () => setState(() {

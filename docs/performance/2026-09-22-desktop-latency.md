@@ -32,7 +32,7 @@ Two complete runs per revision, pooled: 80 measured samples per operation. Milli
 | Action | Baseline median | Final median | Baseline p95 | Final p95 |
 |---|---:|---:|---:|---:|
 | Cmd+N — New Harness | 13.49 | 13.37 | 14.56 | 18.49 |
-| Cmd+O — Open Harness | 15.67 | 16.05 | 18.35 | 19.70 |
+| Cmd+O picker (now Open Project) | 15.67 | 16.05 | 18.35 | 19.70 |
 | Cmd+P — command picker | 14.68 | 14.85 | 15.24 | 15.22 |
 | Cmd+, — Settings | 12.20 | 12.33 | 13.09 | 13.05 |
 | Cmd+/ — shortcut browser | 153.28 | 18.99 | 154.52 | 22.52 |

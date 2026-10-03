@@ -199,12 +199,14 @@ List<ShortcutRow> effectiveShortcutRows(
             .toList();
         return matches.length == 1 &&
             matches.single.keys.length == 1 &&
-            matches.single.keys.single == KeyStroke.parse('cmd+${i + 1}');
+            matches.single.keys.single ==
+                KeyStroke.parse(platformWorkspaceBinding('cmd+${i + 1}'));
       }).every((value) => value);
   final shortcuts = appShortcuts();
   return [
     for (final command in harnessCommands)
       if (!command.hidden &&
+          harnessCommandActive(command.id) &&
           (command.context == KeymapContext.workspace ||
               (contextKind == KeymapContext.project &&
                   command.context == KeymapContext.picker) ||
@@ -235,10 +237,10 @@ List<ShortcutRow> effectiveShortcutRows(
             group: command.group,
           ),
     if (defaultDigits)
-      const ShortcutRow(
+      ShortcutRow(
         label: 'Select tabs 1–9',
         chords: [
-          ['⌘', '1 – 9'],
+          [workspaceKeyLabel, '1 – 9'],
         ],
         group: ShortcutGroup.navigate,
       ),

@@ -148,9 +148,28 @@ void main() {
 
       expect(
         deskTabName(tab, const Agent(id: 'c', name: 'harness-3')),
-        'Untitled Tab',
+        'New Swarm',
       );
-      expect(deskTabName(tab, null), 'Untitled Tab');
+      expect(deskTabName(tab, null), 'New Swarm');
+    });
+
+    test('legacy automatic names migrate while explicit names stay intact', () {
+      for (final legacy in [
+        'New tab',
+        'New Tab',
+        'Untitled Tab',
+        'New Harness',
+        'New Agent',
+      ]) {
+        expect(
+          deskTabName(deskTab('t1', legacy, [], custom: false), null),
+          'New Swarm',
+        );
+        expect(
+          deskTabName(deskTab('t1', legacy, [], custom: true), null),
+          legacy,
+        );
+      }
     });
   });
 }

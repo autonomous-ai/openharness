@@ -176,6 +176,67 @@ void main() {
     );
   }
 
+  for (final native in [false, true]) {
+    testWidgets(
+      'Cmd-W preserves term renamed to office beside another term (native=$native)',
+      (tester) async {
+        const channel = MethodChannel('harness/swarm_tabs');
+        final updates = <Map>[];
+        final messenger = tester.binding.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'update') updates.add(call.arguments as Map);
+          return true;
+        });
+        addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+        final app = createApp();
+        addTearDown(app.dispose);
+        final projects = SwarmProjectStore(storage: MemoryStore());
+        addTearDown(projects.dispose);
+        final input = <TerminalBinaryFrame>[];
+        final session = terminal('a0', input);
+        app.machineStates['m']!.nodeOnline = true;
+        final pane = app.adoptSessionForTest(session);
+        final office = app.activeSwarm;
+        app.renameSwarm(office.id, 'term');
+        app.newSwarm(name: 'term');
+        final term = app.activeSwarm;
+        app.adoptSessionForTest(terminal('a1', input));
+        app.selectSwarm(office.id);
+        await mount(tester, app, projects: projects, nativeTabs: native);
+
+        await chord(tester, LogicalKeyboardKey.keyR, shift: true);
+        await tester.enterText(
+          find.byKey(const Key('tab-rename-input')),
+          'office',
+        );
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pump();
+        expect(office.name, 'office');
+        expect(office.nameIsCustom, isTrue);
+
+        app.selectSwarm(term.id);
+        await tester.pump();
+        await chord(tester, LogicalKeyboardKey.keyW);
+        expect(app.swarms, [office]);
+        expect(app.activeSwarm, same(office));
+        expect(office.name, 'office');
+        expect(office.panes.single, same(pane));
+        expect(pane.session, same(session));
+        expect(input, isEmpty);
+        if (native) {
+          final tab = (updates.last['tabs'] as List).single as Map;
+          expect(tab['id'], office.id);
+          expect(tab['label'], 'office');
+          expect(tab['shortcutHint'], '⌘1');
+        } else {
+          expect(find.text('office'), findsOneWidget);
+        }
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
   testWidgets(
     'welcome opens the shared search and supports readline selection',
     (tester) async {
@@ -208,28 +269,30 @@ void main() {
     },
   );
 
-  testWidgets(
-    'close view and close swarm shortcuts keep shared sessions alive',
-    (tester) async {
-      final app = createApp();
-      app.machineStates['m']!.nodeOnline = true;
-      final session = terminal('a0', []);
-      app.adoptSessionForTest(session);
-      final original = app.activeSwarm;
-      app.newSwarm();
-      await app.addAgentToSwarm('m', 'a0');
-      await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyW, shift: true);
-      expect(app.swarms.length, 2);
-      expect(app.panes, isEmpty);
-      expect(original.panes.single.session, same(session));
-      await chord(tester, LogicalKeyboardKey.keyW);
-      expect(app.swarms.single, same(original));
-      expect(app.panes.single.session, same(session));
-      await tester.pumpWidget(const SizedBox());
-      app.dispose();
-    },
-  );
+  testWidgets('closing the final view or its tab keeps shared sessions alive', (
+    tester,
+  ) async {
+    final app = createApp();
+    app.machineStates['m']!.nodeOnline = true;
+    final session = terminal('a0', []);
+    app.adoptSessionForTest(session);
+    final original = app.activeSwarm;
+    app.newSwarm();
+    await app.addAgentToSwarm('m', 'a0');
+    await mount(tester, app);
+    await chord(tester, LogicalKeyboardKey.keyW, shift: true);
+    expect(app.swarms, [original]);
+    expect(app.panes.single.session, same(session));
+    app.newSwarm();
+    await app.addAgentToSwarm('m', 'a0');
+    await tester.pumpAndSettle();
+    expect(app.swarms.length, 2);
+    await chord(tester, LogicalKeyboardKey.keyW);
+    expect(app.swarms.single, same(original));
+    expect(app.panes.single.session, same(session));
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+  });
 
   testWidgets(
     'keyboard pane actions replace header controls and keep other views alive',
@@ -347,6 +410,12 @@ void main() {
 
       await activate('close', {'id': second});
       expect(app.activeSwarmId, first);
+      // The closed tab's neighbour is shown; the keyboard waits on the strip.
+      expect(app.tabStripFocused, isTrue);
+      expect(tester.testTextInput.hasAnyClients, isFalse);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyY);
+      expect(input, hasLength(1));
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       expect(tester.testTextInput.hasAnyClients, isTrue);
       tester.testTextInput.enterText('y');
       await tester.idle();
@@ -377,7 +446,7 @@ void main() {
     },
   );
 
-  testWidgets('native Swarm commands cannot mutate the view behind Settings', (
+  testWidgets('native Tab commands cannot mutate the view behind Settings', (
     tester,
   ) async {
     const channel = MethodChannel('harness/swarm_tabs');

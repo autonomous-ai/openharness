@@ -124,5 +124,11 @@
     "sourceSha256": "445ec79ee22691822124eafbb2774295c8475444b307c8ef95a9ce7bf5966307",
     "pngSha256": "6d59ad9cbf8afe6e4029c7a2c2508c20cd6498ce7092382fb6f9417c5dcb032e",
     "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/trailofbits-skills",
+    "sourceSha256": "2369e3ceabeeb694117202ebd25f889b158ac5923d84067982a60c548e59ebf9",
+    "pngSha256": "289f7c3b806bcb3e2d1efce9e65435d1e9d44be938058ab6fff208031fb0323b",
+    "renderer": "AppKit"
   }
 ]

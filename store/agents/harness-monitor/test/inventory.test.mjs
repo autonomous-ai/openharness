@@ -1,111 +1,102 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mergeRows, parseModel, projectOf, resolveRef, summarize, tilde } from '../lib/inventory.mjs'
-import { DAY, HOME, HOUR, frame, pane, row, table } from './fixtures.mjs'
+import { collect, mergeRows, parseModel, resolveRef, rowId, tilde } from '../lib/inventory.mjs'
+import { frame, HOME, HOUR } from './fixtures.mjs'
+const now = Date.now(), machine = { machineId: 'm1', name: 'Office' }
+const agent = extra => frame({ resumeMode: 'conversation', monitor: { activity: 'idle', activityKnown: true }, ...extra })
+const merge = (extra = {}, options = {}) => mergeRows([agent(extra)], { machine, now, ...options })[0]
 
-const now = Date.now()
-const base = { paneRows: new Map([['%1', pane()]]), table: table(), now, home: HOME }
-
-test('a runtime profile is read back as a model and an effort', () => {
-  assert.deepEqual(parseModel('runtime-v1:a1:claude:opus-5@high'), { model: 'opus-5', effort: 'high' })
-  assert.deepEqual(parseModel('gpt-6-astra'), { model: 'gpt-6-astra', effort: null })
-  assert.deepEqual(parseModel(null), { model: null, effort: null })
+test('machine and agent form the identity, including stopped work', () => {
+  const a = merge({ status: 'stopped' }), b = merge({}, { machine: { machineId: 'm2' } })
+  assert.equal(a.id, rowId('m1', 'a1')); assert.notEqual(a.id, b.id)
+  assert.equal(a.state, 'stopped'); assert.equal(a.activity, 'stopped'); assert.equal(a.canStop, false); assert.equal(a.canOpen, true)
+  assert.equal(a.engine, 'claude'); assert.equal(a.sessionId, 's1')
+})
+test('activity and last active use owning daemon facts, not process guesses', () => {
+  const row = merge({ updatedAt: now - 2 * HOUR, monitor: { activity: 'needsInput', activityKnown: true, cpu: 0 } })
+  assert.equal(row.needsInput, true); assert.equal(row.activity, 'needsInput'); assert.equal(row.idleMs, 2 * HOUR)
+  assert.equal(merge({ monitor: undefined }).activity, 'unknown')
+})
+test('unknown is not zero, offline retains metadata and disables actions', () => {
+  const unknown = merge(); assert.equal(unknown.cpu, null); assert.equal(unknown.rssBytes, null); assert.equal(unknown.tokens, null)
+  const zero = merge({ monitor: { activity: 'idle', activityKnown: true, cpu: 0, rssBytes: 0 }, tokenUsage: { totalTokens: 0 } })
+  assert.equal(zero.cpu, 0); assert.equal(zero.tokens, 0)
+  const offline = merge({}, { online: false }); assert.equal(offline.activity, 'offline'); assert.equal(offline.canOpen, false); assert.equal(offline.canStop, false)
+})
+test('monitor cannot stop itself, and starts/failures outrank activity', () => {
+  assert.equal(merge({ dsh: 'autonomous/harness-monitor' }).canStop, false)
+  assert.equal(merge({ launch: { state: 'starting' } }).activity, 'starting')
+  assert.equal(merge({ launch: { state: 'failed', error: 'RESUME_UNCONFIRMED' } }).activity, 'needsInput')
+})
+test('starting harnesses stay live before their terminal becomes available', () => {
+  const starting = merge({ terminal: { available: false }, launch: { state: 'starting' } })
+  assert.equal(starting.state, 'starting')
+  assert.equal(starting.live, true)
+  assert.equal(starting.canStop, false)
+  const exited = merge({ terminal: { available: false }, launch: { state: 'failed' } })
+  assert.equal(exited.state, 'gone')
+  assert.equal(exited.live, false)
+})
+test('cached remote rows survive disconnect; reconnection refreshes and unlinked machines disappear', async () => {
+  const remote = { at: 0, answers: new Map() }; let online = true, linked = true, reads = 0
+  const options = { remote, remoteIntervalMs: 0, reportMachines: async () => ({ machines: linked ? [{ machineId: 'm1', name: 'Office', online }] : [] }),
+    agentsFor: async () => { reads++; return [agent()] } }
+  assert.equal((await collect(options)).rows[0].canOpen, true)
+  online = false
+  assert.equal((await collect(options)).rows[0].activity, 'offline'); assert.equal(reads, 1)
+  online = true; await collect(options); assert.equal(reads, 2)
+  linked = false; assert.equal((await collect(options)).rows.length, 0)
+})
+test('remote read failures keep rows but never leave enabled controls', async () => {
+  const remote = { at: 0, answers: new Map([['m1', [agent()]]]) }
+  const result = await collect({ remote, remoteIntervalMs: 0, reportMachines: async () => ({ machines: [{ ...machine, online: true }] }), agentsFor: async () => { throw Error('Disconnected') } })
+  assert.equal(result.rows[0].activity, 'offline'); assert.equal(result.degraded, true)
+})
+test('reconnect and failed reads refresh before the regular remote interval', async () => {
+  const remote = { at: 0, answers: new Map() }; let now = 1000, online = true, fail = false, reads = 0
+  const options = { remote, remoteIntervalMs: 15_000, reportMachines: async () => ({ machines: [{ ...machine, online }] }),
+    agentsFor: async () => { reads++; if (fail) throw Error('Disconnected'); return [agent()] } }
+  const read = () => collect({ ...options, now: now++ })
+  await read(); await read(); assert.equal(reads, 1)
+  online = false; assert.equal((await read()).rows[0].activity, 'offline')
+  online = true; fail = true; assert.equal((await read()).rows[0].canOpen, false); assert.equal(reads, 2)
+  fail = false; assert.equal((await read()).rows[0].canOpen, true); assert.equal(reads, 3)
+})
+test('ambiguous IDs and pane numbers cannot choose another machine', () => {
+  const a = merge(), b = merge({}, { machine: { machineId: 'm2' } })
+  assert.match(resolveRef('a1', [a, b]).error, /matches 2/)
+  assert.match(resolveRef('%1', [a, b]).error, /matches 2/)
+  assert.equal(resolveRef(a.id, [a, b]).row, a)
+  assert.equal(resolveRef('1', [a, b]).row, a)
+})
+test('model and home parsing preserve provider IDs and directory boundaries', () => {
+  assert.deepEqual(parseModel('runtime-v1:a1:opencode:opencode/muse-spark-1.3-contributor-free@auto'), { model: 'opencode/muse-spark-1.3-contributor-free', effort: 'auto' })
+  assert.equal(tilde(HOME + 'other/x', HOME), HOME + 'other/x'); assert.equal(tilde(HOME + '/x', HOME), '~/x')
 })
 
-test('paths are shown against the home they belong to', () => {
-  assert.equal(tilde(`${HOME}/code/widgets`, HOME), '~/code/widgets')
-  assert.equal(tilde('/opt/thing', HOME), '/opt/thing')
-  assert.equal(tilde('', HOME), '')
+test('resource data and shared servers retain owning machine scope', async () => {
+  const result = await collect({ reportMachines: async () => ({ machines: [{ ...machine, online: true }] }),
+    inventoryFor: async () => ({ agents: [agent({ monitor: { activity: 'working', activityKnown: true, gpuPercent: 35, gpuMemoryBytes: 900, workspaceBytes: 1200, processCount: 2 } })],
+      shared: [{ kind: 'codex', agentIds: ['a1'], memoryBytes: 300, cpuPercent: 4 }] }) })
+  assert.equal(result.rows[0].gpuPercent, 35)
+  assert.equal(result.rows[0].workspaceBytes, 1200)
+  assert.equal(result.rows[0].live, true)
+  assert.equal(result.shared[0].machineId, 'm1')
+  assert.equal(result.shared[0].rssBytes, 300)
 })
-
-test('a project without a frame is named, not left blank', () => {
-  assert.equal(projectOf({ project: null }).project, 'unknown')
-  assert.equal(projectOf(frame()).project, 'widgets')
-})
-
-test('state comes from the pane and the process, not from the daemon status', () => {
-  const running = mergeRows([frame()], base)[0]
-  assert.equal(running.state, 'running')
-
-  const paused = mergeRows([frame()], { ...base, table: table({ comm: '-zsh' }) })[0]
-  assert.equal(paused.state, 'paused')
-  assert.equal(paused.rssBytes, 0)
-
-  const gone = mergeRows([frame()], { ...base, paneRows: new Map() })[0]
-  assert.equal(gone.state, 'gone')
-})
-
-test('idle comes from the last turn, never from the transcript mtime the daemon sends', () => {
-  const turns = new Map([['a1', now - 5 * DAY]])
-  const rows = mergeRows([frame({ updatedAt: now })], { ...base, turns, registry: new Map() })
-  assert.equal(rows[0].idleMs, 5 * DAY)
-  assert.equal(rows[0].idle, '5d')
-})
-
-test('with no turn to read, the daemon last hook is next, and registration last', () => {
-  const registry = new Map([['a1', { lastHookAt: now - 2 * HOUR, transcriptPath: '/nope' }]])
-  assert.equal(mergeRows([frame()], { ...base, registry })[0].idleMs, 2 * HOUR)
-  const created = now - 9 * DAY
-  const bare = mergeRows([frame({ createdAt: created })], { ...base, registry: new Map() })[0]
-  assert.equal(bare.idleMs, now - created)
-})
-
-test('a remote row is marked, and carries no local facts it cannot know', () => {
-  const rows = mergeRows([frame()], { ...base, local: false, machine: { name: 'studio', machineId: 'm2' } })
-  assert.equal(rows[0].local, false)
-  assert.equal(rows[0].machine, 'studio')
-  assert.equal(rows[0].rssBytes, 0)
-  assert.equal(rows[0].enginePid, null)
-  assert.equal(rows[0].state, 'running') // the daemon's word for it is all there is
-})
-
-test('working is a refusal signal, and CPU or a fresh turn is enough for it', () => {
-  const busy = mergeRows([frame()], { ...base, table: table({ cpu: 40 }), turns: new Map([['a1', now - 9 * DAY]]) })[0]
-  assert.equal(busy.working, true)
-  const quiet = mergeRows([frame()], { ...base, paneRows: new Map([['%1', pane({ lastOutput: now - 4 * HOUR })]]), turns: new Map([['a1', now - 9 * DAY]]) })[0]
-  assert.equal(quiet.working, false)
-})
-
-test('the summary counts what the gauges show', () => {
-  const rows = [row({ id: 'a' }), row({ id: 'b', state: 'paused', rssBytes: 0 }), row({ id: 'c', state: 'gone', rssBytes: 0 }), row({ id: 'd', needsInput: true })]
-  const summary = summarize(rows)
-  assert.equal(summary.total, 4)
-  assert.equal(summary.running, 2)
-  assert.equal(summary.paused, 1)
-  assert.equal(summary.gone, 1)
-  assert.equal(summary.needsInput, 1)
-  assert.equal(summary.held, 800 * 1024 * 1024)
-})
-
-test('a ref is a row number, a pane, an id prefix, a name, or a unique substring', () => {
-  const rows = [row({ id: 'abc123', name: 'widgets', title: 'Fix the reconciler' }), row({ id: 'def456', name: 'gadgets', pane: '%9', title: 'Ship the thing' })]
-  assert.equal(resolveRef('1', rows).row.id, 'abc123')
-  assert.equal(resolveRef('%9', rows).row.id, 'def456')
-  assert.equal(resolveRef('abc', rows).row.id, 'abc123')
-  assert.equal(resolveRef('gadgets', rows).row.id, 'def456')
-  assert.equal(resolveRef('reconciler', rows).row.id, 'abc123')
-  assert.match(resolveRef('3', rows).error, /no row 3/)
-  assert.match(resolveRef('%7', rows).error, /pane %7/)
-  assert.match(resolveRef('gets', rows).error, /matches 2 harnesses/)
-  assert.match(resolveRef('', rows).error, /Name a harness/)
-})
-
-test('a paused row describes itself from the ticket the daemon threw away', () => {
-  // Measured against a real pause: the daemon rewrites the row as a terminal and keeps only the cwd.
-  const released = frame({ engine: 'terminal', sessionId: '', title: null, name: 'e2e-project' })
-  const state = { pins: [], retired: {}, paused: { a1: { at: now - 2 * HOUR, sessionId: 'sess-0123456789ab', engine: 'claude', pane: '%1', title: 'Fix the reconciler' } } }
-  const paused = mergeRows([released], { ...base, table: table({ comm: '-zsh' }), state })[0]
-  assert.equal(paused.state, 'paused')
-  assert.equal(paused.engine, 'claude')
-  assert.equal(paused.title, 'Fix the reconciler')
-  assert.equal(paused.sessionId, 'sess-0123456789ab')
-  assert.equal(paused.pausedAt, now - 2 * HOUR)
-})
-
-test('a shell nobody paused is a shell, not a paused agent', () => {
-  const shell = frame({ engine: 'terminal', sessionId: '', title: null })
-  const row = mergeRows([shell], { ...base, table: table({ comm: '-zsh' }) })[0]
-  assert.equal(row.state, 'terminal')
-  assert.equal(summarize([row]).terminals, 1)
-  assert.equal(summarize([row]).paused, 0)
+test('token velocity uses fresh ledger updates, survives clock skew, and resets on conversation changes', async () => {
+  let tokenCount = 100, sourceTime = 9_000_000, sessionId = 's1', now = 100_000
+  const remote = { at: 0, answers: new Map() }
+  const options = { remote, remoteIntervalMs: 0, reportMachines: async () => ({ machines: [{ ...machine, online: true }] }),
+    agentsFor: async () => [agent({ sessionId, tokenUsage: { totalTokens: tokenCount, updatedAt: sourceTime } })] }
+  const read = async () => (await collect({ ...options, now })).rows[0].tokensPerMinute
+  assert.equal(await read(), null)
+  now += 4000; assert.equal(await read(), null)
+  now += 6000; sourceTime += 10000; tokenCount += 1000
+  assert.equal(await read(), 6000)
+  now += 4000; assert.equal(await read(), 6000)
+  sessionId = 'new'; assert.equal(await read(), null)
+  now += 10000; sourceTime += 10000; tokenCount = 1; assert.equal(await read(), null)
+  now += 120000; sourceTime += 120000; tokenCount += 1000; assert.equal(await read(), null)
+  now += 10000; sourceTime += 10000; tokenCount += 1000; assert.equal(await read(), 6000)
 })

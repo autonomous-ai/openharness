@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'local_daemon_transport.dart';
 import 'relay_codec.dart';
 import 'terminal_transport_plugin.dart';
 
@@ -27,7 +28,12 @@ class WsPool {
 
   final Map<String, WsConn> _conns = {};
 
+  /// How local connections reach the daemon — its socket or the loopback
+  /// port. Null keeps the port.
+  final LocalDaemonTransport? localTransport;
+
   WsPool({
+    this.localTransport,
     required this.wsBaseUrl,
     required this.autonomousEnv,
     this.relayCodecs,
@@ -91,6 +97,7 @@ class WsPool {
       },
       transportKind: transportKind,
       localWsUri: localWsUri,
+      localTransport: localTransport,
       localApiKey: localApiKey,
       localProtocolVersion: localProtocolVersion,
       fixedReconnectDelay: fixedReconnectDelay,

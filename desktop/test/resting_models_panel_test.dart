@@ -132,7 +132,7 @@ void main() {
       'Shared · team',
       'DeepSeek-V4-Flash',
       'scholes-60001',
-      'Select models in a session’s model picker.',
+      'Select models in a harness’s model picker.',
       'Manage models',
     ]);
   });
@@ -164,8 +164,7 @@ void main() {
       section('loft', state: 'awake', wakeOutcome: 'nobody_serving'),
     ]);
 
-    const subtitle =
-        'Asleep · starts when you send a message (about 10–30 s) · list from 2 h ago';
+    const subtitle = 'Asleep 2h ago';
     expect(find.text(subtitle), findsOneWidget);
     expect(
       find.byTooltip(

@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/cli_login.dart';
+import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/screens/login_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -39,11 +41,40 @@ Widget _host(
 /// process, which a unit test must never do — it would block on a binary the
 /// machine may not have.
 class _FailingCliLogin extends CliLogin {
+  final providers = <SignInProvider?>[];
+
   @override
   Future<void> login({
     required void Function(String url) onAuthorizeUrl,
+    SignInProvider? provider,
   }) async {
+    providers.add(provider);
     throw CliNotAvailableException('Could not run the harness CLI');
+  }
+}
+
+/// A login that stays in flight until it is cancelled, recording which account
+/// each attempt named.
+class _WaitingCliLogin extends CliLogin {
+  final providers = <SignInProvider?>[];
+  Completer<void>? _pending;
+
+  @override
+  Future<void> login({
+    required void Function(String url) onAuthorizeUrl,
+    SignInProvider? provider,
+  }) {
+    providers.add(provider);
+    return (_pending = Completer<void>()).future;
+  }
+
+  @override
+  void cancel() {
+    final pending = _pending;
+    _pending = null;
+    if (pending != null && !pending.isCompleted) {
+      pending.completeError(StateError('Sign-in was cancelled.'));
+    }
   }
 }
 
@@ -79,9 +110,17 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('Your agents, wherever they run'), findsOneWidget);
-    expect(find.text('Sign in'), findsOneWidget);
+    // Two ways in, named — not one Sign in that left the choice to the browser.
+    expect(find.text('Continue with Google'), findsOneWidget);
+    expect(find.text('Continue with Apple'), findsOneWidget);
+    expect(find.text('Sign in'), findsNothing);
+    // One size, both of them.
+    expect(
+      tester.getSize(find.byKey(const Key('login-continue-google'))),
+      tester.getSize(find.byKey(const Key('login-continue-apple'))),
+    );
     expect(find.byType(LoginFleetMap), findsOneWidget);
-    // The real mark, from the bundle — `Icons.memory` used to stand here and
+    // The real mark, from the bundle — `AppIcons.cpu` used to stand here and
     // appeared nowhere else in the app.
     final logo = tester.widget<Image>(
       find.byWidgetPredicate(
@@ -118,10 +157,60 @@ void main() {
     expect(find.text('Waiting for your browser'), findsOneWidget);
     expect(find.text('Cancel'), findsOneWidget);
     // The idle label is gone, so the two states cannot both be on screen.
-    expect(find.text('Sign in'), findsNothing);
+    expect(find.text('Continue with Google'), findsNothing);
 
     final button = tester.widget<FilledButton>(find.byType(FilledButton));
     expect(button.onPressed, isNull, reason: 'in-flight, so not pressable');
+  });
+
+  testWidgets(
+    'each button signs in with its own account, and says so while it waits',
+    (tester) async {
+      for (final provider in SignInProvider.values) {
+        final cli = _WaitingCliLogin();
+        final app = _notifier(AppStatus.unauthenticated, cliLogin: cli);
+        await tester.pumpWidget(_host(app));
+        await tester.pump(const Duration(milliseconds: 100));
+
+        await tester.tap(find.text('Continue with ${provider.label}'));
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(cli.providers, [provider]);
+
+        // The pressed button is the one working; the other stays where it was,
+        // and neither can start a second sign-in.
+        final pressed = find.byKey(Key('login-continue-${provider.name}'));
+        expect(
+          find.descendant(of: pressed, matching: find.text('Signing in…')),
+          findsOneWidget,
+        );
+        final other = SignInProvider.values.firstWhere((p) => p != provider);
+        expect(find.text('Continue with ${other.label}'), findsOneWidget);
+        for (final button in tester.widgetList<FilledButton>(
+          find.byType(FilledButton),
+        )) {
+          expect(button.onPressed, isNull);
+        }
+
+        app.cancelLogin();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text('Continue with ${provider.label}'), findsOneWidget);
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+      }
+    },
+  );
+
+  testWidgets('Try again goes back to the account that failed', (tester) async {
+    final cli = _FailingCliLogin();
+    final app = _notifier(AppStatus.unauthenticated, cliLogin: cli);
+    await app.login(SignInProvider.apple);
+    await tester.pumpWidget(_host(app));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.ensureVisible(find.text('Try again'));
+    await tester.tap(find.text('Try again'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(cli.providers, [SignInProvider.apple, SignInProvider.apple]);
   });
 
   testWidgets('a failure names itself and offers a way on', (tester) async {
@@ -146,7 +235,7 @@ void main() {
     final app = _notifier(AppStatus.unauthenticated);
     await tester.pumpWidget(_host(app));
     await tester.pumpAndSettle();
-    expect(find.text('Sign in'), findsOneWidget);
+    expect(find.text('Continue with Google'), findsOneWidget);
     expect(find.byType(LoginFleetMap), findsOneWidget);
     expect(tester.binding.hasScheduledFrame, isFalse);
     await tester.pump(const Duration(milliseconds: 3200));
@@ -164,7 +253,7 @@ void main() {
 
     // The example stays visible without depending on animation.
     expect(find.byType(LoginFleetMap), findsOneWidget);
-    expect(find.text('Sign in'), findsOneWidget);
+    expect(find.text('Continue with Google'), findsOneWidget);
   });
 
   testWidgets('holds at the 880x560 minimum window without overflowing', (
@@ -179,10 +268,12 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(tester.takeException(), isNull);
-    expect(find.text('Sign in'), findsOneWidget);
-    expect(find.text('Sign in').hitTestable(), findsOneWidget);
+    expect(find.text('Continue with Google'), findsOneWidget);
+    expect(find.text('Continue with Google').hitTestable(), findsOneWidget);
     expect(
-      tester.getRect(find.widgetWithText(FilledButton, 'Sign in')).bottom,
+      tester
+          .getRect(find.widgetWithText(FilledButton, 'Continue with Apple'))
+          .bottom,
       lessThan(tester.view.physicalSize.height),
     );
   });
@@ -308,6 +399,6 @@ void main() {
     // `panelBg`, not `windowBg` — in light the two ends of that pair are pure
     // white and the card would have nothing to sit on.
     expect(scaffold.backgroundColor, const Color(0xFF141414));
-    expect(find.text('Sign in'), findsOneWidget);
+    expect(find.text('Continue with Google'), findsOneWidget);
   });
 }

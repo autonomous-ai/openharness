@@ -1,13 +1,16 @@
+import 'dart:math' as math;
 import 'dart:async';
 
 import '../shared/widgets/labeled_field.dart';
 
+import 'package:harness/shared/theme/app_icons.dart';
+
+import '../shared/widgets/app_rating_star.dart';
+
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
-import '../analytics/analytics.dart';
 import '../core/dsh_catalog.dart';
 import '../core/harness_catalog.dart';
 import '../core/models.dart' show ConnectionStatus;
@@ -23,6 +26,7 @@ import '../widgets/dsh_install_panel.dart' show describeInstallFailure;
 import '../widgets/engine_identity.dart';
 import '../widgets/new_agent_dialog.dart';
 import '../widgets/open_harness_intent.dart';
+import 'experimental_harnesses.dart';
 import 'store_category.dart';
 import 'store_collections.dart';
 import 'store_controller.dart';
@@ -167,7 +171,6 @@ class _StoreTabState extends State<StoreTab> {
   void initState() {
     super.initState();
     _remember();
-    analytics.screenView('store', source: widget.source);
     // Deferred a frame: both calls notify listeners at once, and this screen
     // is built while the shell underneath — which listens to the same
     // notifier — is mid-build.
@@ -271,8 +274,9 @@ class _StoreTabState extends State<StoreTab> {
         installed: _installedOnMachine(local, identity.id),
       );
     }
-    for (final entry in currentHarnessCatalog(
-      local?.dsh.entries ?? const <DshEntry>[],
+    for (final entry in storeVisibleHarnesses(
+      currentHarnessCatalog(local?.dsh.entries ?? const <DshEntry>[]),
+      widget.notifier.experimentalFeatures,
     )) {
       rows.putIfAbsent(entry.id, () => entry);
     }
@@ -379,7 +383,6 @@ class _StoreTabState extends State<StoreTab> {
   void _show(_Shelf shelf) => _navigate(_StoreVisit(shelf, null, ''));
 
   void _openPage(String id) {
-    analytics.screenView('store_harness', source: 'store');
     _navigate(_StoreVisit(_shelf, id, _search.text));
   }
 
@@ -438,7 +441,11 @@ class _StoreTabState extends State<StoreTab> {
         child: ColoredBox(
           color: grid.AppPalette.windowBg,
           child: ListenableBuilder(
-            listenable: Listenable.merge([widget.notifier, _store]),
+            listenable: Listenable.merge([
+              widget.notifier,
+              widget.notifier.experimentalFeatures,
+              _store,
+            ]),
             builder: (context, _) {
               final catalog = _catalog;
               final selected = _selected == null
@@ -623,14 +630,14 @@ class _StoreNav extends StatelessWidget {
               children: [
                 SidebarItem(
                   key: const ValueKey('store-shelf-discover'),
-                  icon: LucideIcons.sparkles300,
+                  icon: AppIcons.sparkles,
                   label: 'Discover',
                   selected: !hasProduct && shelf is _Discover,
                   onTap: () => onSelect(const _Discover()),
                 ),
                 SidebarItem(
                   key: const ValueKey('store-shelf-all'),
-                  icon: LucideIcons.layoutGrid300,
+                  icon: AppIcons.layoutGrid,
                   label: 'All harnesses',
                   selected: !hasProduct && shelf is _All,
                   onTap: () => onSelect(const _All()),
@@ -638,9 +645,9 @@ class _StoreNav extends StatelessWidget {
                 if (sessionCount > 0 || shelf is _Sessions)
                   SidebarItem(
                     key: const ValueKey('store-shelf-sessions'),
-                    icon: LucideIcons.play300,
+                    icon: AppIcons.play,
                     label: 'Featured',
-                    tooltip: '$sessionCount recorded sessions',
+                    tooltip: '$sessionCount recorded runs',
                     selected: !hasProduct && shelf is _Sessions,
                     onTap: () => onSelect(const _Sessions()),
                   ),
@@ -648,9 +655,8 @@ class _StoreNav extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
                   child: Text(
-                    'DISCIPLINES',
-                    style: grid.AppType.monoMeta(
-                      letterSpacing: 1.4,
+                    'Disciplines',
+                    style: grid.AppType.caption(
                       fontWeight: grid.AppFont.medium,
                       color: grid.AppPalette.textFaint,
                     ),
@@ -671,7 +677,7 @@ class _StoreNav extends StatelessWidget {
                             alignment: Alignment.centerRight,
                             child: Text(
                               '${counts[name]}',
-                              style: grid.AppType.monoMeta(
+                              style: grid.AppType.caption(
                                 color: grid.AppPalette.textFaint,
                               ),
                             ),
@@ -687,7 +693,7 @@ class _StoreNav extends StatelessWidget {
               alignment: Alignment.centerLeft,
               child: AppIconButton(
                 key: const ValueKey('store-viewers-button'),
-                icon: LucideIcons.panelsTopLeft300,
+                icon: AppIcons.panelsTopLeft,
                 size: 17,
                 color: shelf is _Viewers
                     ? grid.AppPalette.textPrimary
@@ -704,18 +710,18 @@ class _StoreNav extends StatelessWidget {
 }
 
 IconData _categoryIcon(String category) => switch (category) {
-  'Design' => LucideIcons.box300,
-  'Engineering' => LucideIcons.cpu300,
-  'Media' => LucideIcons.film300,
-  'Music' => LucideIcons.music300,
-  'Productivity' => LucideIcons.fileText300,
-  'Science & Data' => LucideIcons.flaskConical300,
-  'Simulation' => LucideIcons.bot300,
-  'Research' => LucideIcons.search300,
-  'Local AI' => LucideIcons.brainCircuit300,
-  'Coding' => LucideIcons.terminal300,
-  'Games' => LucideIcons.gamepad2300,
-  _ => LucideIcons.shapes300,
+  'Design' => AppIcons.box,
+  'Engineering' => AppIcons.cpu,
+  'Media' => AppIcons.film,
+  'Music' => AppIcons.music,
+  'Productivity' => AppIcons.fileText,
+  'Science & Data' => AppIcons.flaskConical,
+  'Simulation' => AppIcons.bot,
+  'Research' => AppIcons.search,
+  'Local AI' => AppIcons.brainCircuit,
+  'Coding' => AppIcons.terminal,
+  'Games' => AppIcons.gamepad2,
+  _ => AppIcons.shapes,
 };
 
 // Search and the complete index stay compact; disciplines and collections
@@ -849,16 +855,29 @@ class _Stars extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         for (var i = 1; i <= 5; i++)
-          GestureDetector(
-            onTap: onPick == null ? null : () => onPick!(i),
-            child: Icon(
-              value >= i
-                  ? Icons.star_rounded
-                  : value >= i - 0.5
-                  ? Icons.star_half_rounded
-                  : Icons.star_outline_rounded,
-              size: size,
-              color: value >= i - 0.5 ? _amber : grid.AppPalette.textFaint,
+          MouseRegion(
+            cursor: onPick == null
+                ? SystemMouseCursors.basic
+                : SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: onPick == null ? null : () => onPick!(i),
+              child: Semantics(
+                label: '$i ${i == 1 ? 'star' : 'stars'}',
+                button: onPick != null,
+                child: SizedBox.square(
+                  dimension: onPick == null ? size : math.max(32, size),
+                  child: Center(
+                    child: AppRatingStar(
+                      fraction: (value - i + 1).clamp(0, 1),
+                      size: size,
+                      color: _amber,
+                      outlineColor: value >= i - 0.5
+                          ? _amber
+                          : grid.AppPalette.textFaint,
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
       ],
@@ -890,7 +909,8 @@ bool _canGetOnMachine(MachineState machine, DshEntry entry) {
       machine.dsh.runs[id]?.inProgress != true;
 }
 
-/// Open the workspace's New Harness dock with this product and machine chosen.
+/// Open a bundled app workspace, or the New Harness dock with this product and
+/// machine chosen.
 /// A successful start opens a new tab; reviewing or cancelling allocates none.
 ///
 /// Public because it is the ONE way a harness is opened from anywhere — the
@@ -903,6 +923,22 @@ Future<void> openStoreAgent(
   String machineId, {
   String? prompt,
 }) async {
+  final workspace = ExperimentalStoreHarness.forId(harnessId);
+  if (workspace != null) {
+    // Recheck at activation as the account/flag can change after rendering.
+    if (!workspace.enabled(notifier.experimentalFeatures)) return;
+    switch (workspace) {
+      case ExperimentalStoreHarness.devices:
+        notifier.openDevices();
+      case ExperimentalStoreHarness.companions:
+        notifier.openCompanions();
+        notifier.syncCompanionViewer(
+          enabled: true,
+          machineId: notifier.localMachineState?.machine.machineId,
+        );
+    }
+    return;
+  }
   harnessId = _operationId(notifier.machineStates[machineId], harnessId);
   final intent = OpenHarnessIntent(harnessId, machineId, task: prompt);
   if (Actions.maybeFind<OpenHarnessIntent>(context) != null) {
@@ -988,11 +1024,15 @@ class _ProductPageState extends State<_ProductPage> {
     // An engine is installed by the daemon on the way to the first harness
     // that needs it (`installIfMissing` on create), so Get is Open.
     if (widget.entry.isEngine) return _open(machineId);
-    if (!_busy.add(machineId)) return;
+    if (_busy.contains(machineId)) return;
+    final trusted = _unverified(local);
+    if (trusted && !await _confirmUnverified(local, update: false)) return;
+    if (!mounted || !_busy.add(machineId)) return;
     setState(() {});
     final failure = await widget.notifier.installDsh(
       machineId,
       _operationId(local, widget.entry.id),
+      trustUnverified: trusted,
     );
     _busy.remove(machineId);
     if (mounted) setState(() {});
@@ -1015,17 +1055,53 @@ class _ProductPageState extends State<_ProductPage> {
     if (local == null ||
         local.machine.machineId != machineId ||
         _machineHarness(local, widget.entry.id)?.hasUpdate != true ||
-        !_busy.add(machineId)) {
+        _busy.contains(machineId)) {
       return;
     }
+    final trusted = _unverified(local);
+    if (trusted && !await _confirmUnverified(local, update: true)) return;
+    if (!mounted || !_busy.add(machineId)) return;
     setState(() {});
     final failure = await widget.notifier.updateDsh(
       machineId,
       _operationId(local, widget.entry.id),
+      trustUnverified: trusted,
     );
     _busy.remove(machineId);
     if (mounted) setState(() {});
     if (failure != null) _say(_failureSentence(local, failure));
+  }
+
+  /// Harness has not reviewed this package ([DshEntry.unverified]), on the
+  /// machine's word or the page's.
+  bool _unverified(MachineState local) =>
+      widget.entry.unverified ||
+      _machineHarness(local, widget.entry.id)?.unverified == true;
+
+  /// Asks before a package Harness has not reviewed is installed or updated:
+  /// both run its setup script as the person, and Update fetches whatever its
+  /// repository holds now. True only when they confirm.
+  Future<bool> _confirmUnverified(
+    MachineState local, {
+    required bool update,
+  }) async {
+    final source =
+        _machineHarness(local, widget.entry.id)?.repo ??
+        widget.entry.repo ??
+        'its own repository';
+    final ok = await showAppDialog<bool>(
+      context: context,
+      builder: (context) => _ConfirmCard(
+        title: 'Harness has not reviewed ${widget.entry.name}',
+        detail:
+            'Its code comes from $source, not from Harness. '
+            '${update ? 'Updating fetches its latest code and runs its setup script again' : 'Installing runs its setup script'} '
+            'on ${local.machine.displayName} as you, with access to your files '
+            'and credentials. Continue only if you trust its author.',
+        action: update ? 'Update anyway' : 'Install anyway',
+      ),
+    );
+    return ok == true && mounted;
   }
 
   Future<void> _remove(String machineId, String machineName) async {
@@ -1062,7 +1138,8 @@ class _ProductPageState extends State<_ProductPage> {
   /// Open from the Store with this product and machine. An example's [prompt]
   /// becomes the editable task in the same dock before the person presses Start.
   Future<void> _open(String machineId, {String? prompt}) async {
-    if (widget.notifier.localMachineState?.machine.machineId != machineId) {
+    if (ExperimentalStoreHarness.forId(widget.entry.id) == null &&
+        widget.notifier.localMachineState?.machine.machineId != machineId) {
       return;
     }
     await openStoreAgent(
@@ -1100,6 +1177,7 @@ class _ProductPageState extends State<_ProductPage> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final entry = widget.entry;
+    final workspace = ExperimentalStoreHarness.forId(entry.id);
     final identity = engineIdentity(entry.id, displayName: entry.name);
     final author = entry.author ?? identity.creator;
     final category = entry.category ?? identity.category;
@@ -1108,7 +1186,9 @@ class _ProductPageState extends State<_ProductPage> {
     final local = widget.notifier.localMachineState;
     final localInstalled = _installedOnMachine(local, entry.id);
     final operationId = _operationId(local, entry.id);
-    final hasUpdate = _machineHarness(local, entry.id)?.hasUpdate == true;
+    final hasUpdate =
+        workspace == null &&
+        _machineHarness(local, entry.id)?.hasUpdate == true;
     final base = entry.engine.isNotEmpty
         ? entry.engine
         : (knownHarnessBase[entry.id] ?? '');
@@ -1120,12 +1200,17 @@ class _ProductPageState extends State<_ProductPage> {
     // New Harness installs a harness the machine lacks before it creates, so
     // an example can be tried from here whether or not Get was pressed.
     final canTry =
+        workspace == null &&
         !entry.isViewerPackage &&
         local != null &&
         !busy &&
         !installing &&
         (localInstalled || _canGetOnMachine(local, entry));
-    final showLaunch = !entry.isViewerPackage && !hasUpdate && localInstalled;
+    final showLaunch =
+        workspace == null &&
+        !entry.isViewerPackage &&
+        !hasUpdate &&
+        localInstalled;
     // A package that has not published its own examples yet still leads with
     // prompts — the editorial ones — so every page reads the same way.
     final examples = entry.examples.isNotEmpty
@@ -1141,8 +1226,9 @@ class _ProductPageState extends State<_ProductPage> {
     // A viewer package is never opened on its own: once it is here there is
     // nothing more to press, and Remove sits in the line beneath.
     final showAction =
-        local != null &&
-        (hasUpdate || !(entry.isViewerPackage && localInstalled));
+        workspace != null ||
+        (local != null &&
+            (hasUpdate || !(entry.isViewerPackage && localInstalled)));
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1206,7 +1292,9 @@ class _ProductPageState extends State<_ProductPage> {
                       [
                         ?author,
                         ?category,
-                        if (entry.isViewerPackage)
+                        if (workspace != null)
+                          'Included with Harness'
+                        else if (entry.isViewerPackage)
                           'Viewer package'
                         else if (entry.isEngine)
                           'Coding agent'
@@ -1266,11 +1354,13 @@ class _ProductPageState extends State<_ProductPage> {
                       Center(
                         child: FilledButton(
                           key: const ValueKey('store-primary-action'),
-                          onPressed:
-                              busy ||
-                                  installing ||
-                                  (!localInstalled &&
-                                      !_canGetOnMachine(local, entry))
+                          onPressed: workspace != null
+                              ? () => _open(local?.machine.machineId ?? '')
+                              : local == null ||
+                                    busy ||
+                                    installing ||
+                                    (!localInstalled &&
+                                        !_canGetOnMachine(local, entry))
                               ? null
                               : () => hasUpdate
                                     ? _update(local.machine.machineId)
@@ -1286,7 +1376,9 @@ class _ProductPageState extends State<_ProductPage> {
                             shape: const StadiumBorder(),
                           ),
                           child: Text(
-                            installing || busy
+                            workspace != null
+                                ? 'Open'
+                                : installing || busy
                                 ? 'Working…'
                                 : hasUpdate
                                 ? 'Update'
@@ -1321,27 +1413,28 @@ class _ProductPageState extends State<_ProductPage> {
                       ),
                     ],
                     const SizedBox(height: 14),
-                    Center(
-                      child: local == null
-                          ? Text(
-                              'Connecting to this computer…',
-                              style: grid.AppType.body(
-                                color: grid.AppPalette.textFaint,
+                    if (workspace == null)
+                      Center(
+                        child: local == null
+                            ? Text(
+                                'Connecting to this computer…',
+                                style: grid.AppType.body(
+                                  color: grid.AppPalette.textFaint,
+                                ),
+                              )
+                            : _InstallLine(
+                                key: ValueKey(
+                                  'store-machine:${local.machine.machineId}',
+                                ),
+                                state: local,
+                                entry: entry,
+                                busy: busy,
+                                onRemove: () => _remove(
+                                  local.machine.machineId,
+                                  local.machine.displayName,
+                                ),
                               ),
-                            )
-                          : _InstallLine(
-                              key: ValueKey(
-                                'store-machine:${local.machine.machineId}',
-                              ),
-                              state: local,
-                              entry: entry,
-                              busy: busy,
-                              onRemove: () => _remove(
-                                local.machine.machineId,
-                                local.machine.displayName,
-                              ),
-                            ),
-                    ),
+                      ),
                     const SizedBox(height: 24),
                   ],
                 ),
@@ -1636,7 +1729,7 @@ class _QuietLinkState extends State<_QuietLink> {
           widget.child ?? Text(widget.label!),
           if (url != null) ...[
             const SizedBox(width: 3),
-            Icon(LucideIcons.arrowUpRight300, size: 13, color: color),
+            Icon(AppIcons.arrowUpRight, size: 14, color: color),
           ],
         ],
       ),
@@ -1699,7 +1792,7 @@ class _RatingSummary extends StatelessWidget {
                         child: Text(
                           '$stars',
                           textAlign: TextAlign.right,
-                          style: grid.AppType.monoMeta(
+                          style: grid.AppType.caption(
                             color: grid.AppPalette.textFaint,
                           ),
                         ),

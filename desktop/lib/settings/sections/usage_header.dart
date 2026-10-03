@@ -55,6 +55,7 @@ class UsageRangeField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => AppSelectField<UsageRange>(
+    semanticLabel: 'Usage date range',
     value: value,
     width: usageControlWidth(context, 150),
     options: [

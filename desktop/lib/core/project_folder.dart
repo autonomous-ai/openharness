@@ -17,10 +17,16 @@ class ProjectFolderRequest {
       createsWorktree = false,
       repository = null,
       generatedLabel = null,
-      generatedAt = null;
+      generatedAt = null,
+      generatedTask = null;
+
+  /// A suggested new project: named after the first [task] when it has words
+  /// to name it by (openharness#94 — five `solder-2026-…` folders said nothing
+  /// about which board was which), otherwise after [label] and the time.
   ProjectFolderRequest.generated({
     required String label,
     required DateTime at,
+    String? task,
     String? name,
   }) : gitSource = null,
        branchRef = null,
@@ -31,7 +37,11 @@ class ProjectFolderRequest {
        repository = null,
        generatedLabel = label,
        generatedAt = at,
-       name = name ?? _suggestedFolderName(label, at);
+       generatedTask = taskProjectSlug(task ?? '') == null ? null : task,
+       name =
+           name ??
+           taskProjectSlug(task ?? '') ??
+           _suggestedFolderName(label, at);
   const ProjectFolderRequest.remote(GitHubRepository value)
     : gitSource = null,
       branchRef = null,
@@ -42,7 +52,8 @@ class ProjectFolderRequest {
       repository = value,
       name = null,
       generatedLabel = null,
-      generatedAt = null;
+      generatedAt = null,
+      generatedTask = null;
 
   /// A new worktree on [branchName]: created from [branchRef], or with
   /// [existingBranch] that local branch checked out as it is. Without a name
@@ -58,7 +69,8 @@ class ProjectFolderRequest {
        repository = null,
        name = null,
        generatedLabel = null,
-       generatedAt = null;
+       generatedAt = null,
+       generatedTask = null;
 
   /// The folder itself on [ref], or with [newBranch] on that new branch, made
   /// where the folder is now. [ref] then names the new branch, so a daemon that
@@ -76,7 +88,8 @@ class ProjectFolderRequest {
        repository = null,
        name = null,
        generatedLabel = null,
-       generatedAt = null;
+       generatedAt = null,
+       generatedTask = null;
 
   final String? gitSource, branchRef, branchName;
 
@@ -90,11 +103,33 @@ class ProjectFolderRequest {
   final String? name;
   final String? generatedLabel;
   final DateTime? generatedAt;
+
+  /// The first task a suggested name was made from, or null for one made from
+  /// the label and the time.
+  final String? generatedTask;
   bool get isGenerated => generatedAt != null;
+
+  /// What the agent is called before its engine titles the session: the
+  /// person's own name for the project, or the words of the task it was named
+  /// after. Null for a clock-named one, which the machine names itself.
+  String? get agentName => generatedTask != null
+      ? taskProjectTitle(generatedTask!)
+      : isGenerated
+      ? null
+      : name?.trim().isEmpty ?? true
+      ? null
+      : name!.trim();
 
   /// The preview and Start share a frozen timestamp. Only an untouched
   /// suggestion can advance to another name if its folder is taken.
   String nextGeneratedName(String taken) {
+    // Named after the task: the same words again, numbered.
+    if (taskProjectSlug(generatedTask ?? '') case final base?) {
+      final suffix = int.tryParse(taken.split('-').last);
+      return taken.startsWith('$base-') && suffix != null && suffix >= 2
+          ? '$base-${suffix + 1}'
+          : '$base-2';
+    }
     final precise = _suggestedFolderName(
       generatedLabel!,
       generatedAt!,
@@ -127,6 +162,7 @@ class ProjectFolderRequest {
       ProjectFolderRequest.generated(
         label: generatedLabel!,
         at: generatedAt!,
+        task: generatedTask,
         name: name,
       );
 
@@ -148,6 +184,11 @@ class ProjectFolderRequest {
     if (repository != null) 'repositoryUrl': repository!.url,
     // A daemon that predates the field ignores it and names the folder itself.
     if (repository == null && folderName != null) 'projectName': folderName!,
+    // A suggestion the machine may number past a folder that exists (`-2`)
+    // rather than refuse; a name the person typed stays refused. A daemon that
+    // predates it treats every name as typed.
+    if (repository == null && folderName != null && isGenerated)
+      'projectNameMode': 'suggested',
   };
 
   /// A new project is named after who it is for and when: [label] ("Codex", "Blender") and the
@@ -284,8 +325,12 @@ String projectFolderName(
 /// and nothing a path or a shell reads specially. Null when nothing usable is
 /// left, which callers treat as "not named". Mirrors `projectFolderSlug` in
 /// cli/src/lib/agentNames.ts.
+///
+/// Accented letters keep their base letter (`nói` → `noi`, `đèn` → `den`)
+/// rather than being dropped, which turned "Robot nói chuyện" into
+/// `Robot-ni-chuyn`.
 String? projectFolderSlug(String name) {
-  final slug = name
+  final slug = foldDiacritics(name)
       .trim()
       .replaceAll(RegExp(r'\s+'), '-')
       .replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '')
@@ -293,3 +338,78 @@ String? projectFolderSlug(String name) {
   if (slug.isEmpty) return null;
   return slug.length > 64 ? slug.substring(0, 64) : slug;
 }
+
+/// How many of a first task's words name the project and the agent.
+const _taskNameWords = 6;
+
+/// The first line of [task], cut to its first few words — what a project named
+/// after its task is called ("Robot nói chuyện với Gemini"). Null when the
+/// task has no letters or digits to name anything by.
+String? taskProjectTitle(String task) {
+  final line = task
+      .trim()
+      .split('\n')
+      .first
+      .split(RegExp(r'\s+'))
+      .where((word) => word.isNotEmpty)
+      .take(_taskNameWords)
+      .join(' ');
+  if (!RegExp(r'[\p{L}\p{N}]', unicode: true).hasMatch(line)) return null;
+  return line.length > 60 ? line.substring(0, 60).trimRight() : line;
+}
+
+/// The folder a project named after [task] gets: its [taskProjectTitle] in
+/// lowercase words joined by dashes, accents folded (`robot-noi-chuyen-voi-
+/// gemini`). Null when nothing usable is left.
+String? taskProjectSlug(String task) {
+  final title = taskProjectTitle(task);
+  if (title == null) return null;
+  final slug = foldDiacritics(title)
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
+  if (slug.isEmpty) return null;
+  return slug.length > 48
+      ? slug.substring(0, 48).replaceAll(RegExp(r'-+$'), '')
+      : slug;
+}
+
+/// [text] with Latin letters' accents removed: Vietnamese (`đ` included),
+/// French, German, Spanish, Portuguese and the like. Other scripts pass
+/// through untouched. Mirrors `foldDiacritics` in cli/src/lib/agentNames.ts.
+String foldDiacritics(String text) {
+  final out = StringBuffer();
+  for (final rune in text.runes) {
+    final char = String.fromCharCode(rune);
+    out.write(_folds[char] ?? char);
+  }
+  return out.toString();
+}
+
+final Map<String, String> _folds = () {
+  const groups = {
+    'a': 'àáảãạăằắẳẵặâầấẩẫậäåā',
+    'A': 'ÀÁẢÃẠĂẰẮẲẴẶÂẦẤẨẪẬÄÅĀ',
+    'e': 'èéẻẽẹêềếểễệëē',
+    'E': 'ÈÉẺẼẸÊỀẾỂỄỆËĒ',
+    'i': 'ìíỉĩịïī',
+    'I': 'ÌÍỈĨỊÏĪ',
+    'o': 'òóỏõọôồốổỗộơờớởỡợöøō',
+    'O': 'ÒÓỎÕỌÔỒỐỔỖỘƠỜỚỞỠỢÖØŌ',
+    'u': 'ùúủũụưừứửữựüū',
+    'U': 'ÙÚỦŨỤƯỪỨỬỮỰÜŪ',
+    'y': 'ỳýỷỹỵÿ',
+    'Y': 'ỲÝỶỸỴŸ',
+    'd': 'đ',
+    'D': 'Đ',
+    'c': 'ç',
+    'C': 'Ç',
+    'n': 'ñ',
+    'N': 'Ñ',
+    'ss': 'ß',
+  };
+  return {
+    for (final MapEntry(key: base, value: letters) in groups.entries)
+      for (final letter in letters.runes) String.fromCharCode(letter): base,
+  };
+}();

@@ -40,7 +40,7 @@ void main() {
 
   setUp(() {
     conn = _StaleConn();
-    app = pagerApp(conn, viewer: true);
+    app = pagerApp(conn);
   });
 
   tearDown(() => app.dispose());

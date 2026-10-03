@@ -11,6 +11,7 @@ import { homedir } from 'node:os'
 import { basename, delimiter, isAbsolute, join, normalize, sep } from 'node:path'
 import { env } from '../config/env.js'
 import { ENGINES, PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
+import { engineInstallPaths, engineInstallRecipe } from './engineInstall.js'
 
 // Keep this historical import surface for callers, but never duplicate the
 // catalog here. `engines/types.ts` is the one iterable source of truth.
@@ -182,21 +183,12 @@ function addAll(target: Set<string>, identities: readonly ExecutableFileIdentity
 }
 
 function vendorFallbackCommands(engine: AgentEngine): string[] {
-  const home = homedir()
+  const recipe = engineInstallRecipe(engine)
+  const paths = recipe ? engineInstallPaths(recipe) : []
   switch (engine) {
-    case 'claude': return [join(home, '.local', 'bin', 'claude')]
-    case 'codex': return [join(home, '.local', 'bin', 'codex')]
-    case 'cursor': return [join(home, '.local', 'bin', 'cursor-agent'), join(home, '.local', 'bin', 'agent')]
-    case 'opencode': return [join(home, '.opencode', 'bin', 'opencode')]
-    case 'hermes': return [join(home, '.local', 'bin', 'hermes')]
-    case 'devin': return [join(home, '.local', 'bin', 'devin')]
-    case 'muse': return [join(home, '.local', 'bin', 'muse')]
-    case 'amp': return [join(home, '.amp', 'bin', 'amp'), join(home, '.local', 'bin', 'amp')]
-    case 'kilo': return [join(home, '.kilo', 'bin', 'kilo'), join(home, '.local', 'bin', 'kilo')]
-    case 'grok': return [join(env.GROK_HOME, 'bin', 'grok'), join(home, '.local', 'bin', 'grok')]
-    case 'agy': return [join(home, '.local', 'bin', 'agy')]
-    case 'copilot': return [join(home, '.local', 'bin', 'copilot')]
-    default: return []
+    case 'cursor': return [...paths, join(homedir(), '.local', 'bin', 'agent')]
+    case 'grok': return [join(env.GROK_HOME, 'bin', 'grok'), ...paths]
+    default: return paths
   }
 }
 

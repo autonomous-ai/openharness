@@ -37,8 +37,7 @@ enum ModelStartPhase {
 ///
 /// Terminal output is deliberately NOT a signal: the first bytes a pane prints after Enter are the
 /// engine echoing the prompt and drawing its own spinner, which would end the chip the moment it
-/// appeared. Those events are what this app already trusts for the rail's working mark and for
-/// `app_first_message`.
+/// appeared. Those events are what this app already trusts for the rail's working mark.
 ///
 /// Its own notifier, like [GridPictures], so a pane header listening for its chip is not rebuilt on
 /// every terminal frame.

@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart';
@@ -17,6 +18,8 @@ void main() {
     of: find.byType(AppIconButton),
     matching: find.byType(RotationTransition),
   );
+  Color? ink(WidgetTester tester) =>
+      IconTheme.of(tester.element(find.byType(Icon))).color;
 
   Future<void> pumpButton(
     WidgetTester tester, {
@@ -34,7 +37,7 @@ void main() {
         home: Scaffold(
           body: Center(
             child: AppIconButton(
-              icon: Icons.refresh,
+              icon: AppIcons.refreshCw,
               spinning: spinning,
               onPressed: onPressed,
             ),
@@ -87,24 +90,24 @@ void main() {
     tester,
   ) async {
     await pumpButton(tester, spinning: true, onPressed: () {});
-    final spinningInk = tester.widget<Icon>(find.byType(Icon)).color;
+    final spinningInk = ink(tester);
     await tester.pumpWidget(const SizedBox.shrink());
 
     await pumpButton(tester, spinning: false, onPressed: () {});
-    expect(spinningInk, tester.widget<Icon>(find.byType(Icon)).color);
+    expect(spinningInk, ink(tester));
 
     // A button with nothing to do is the one that greys out.
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(
           body: Center(
-            child: AppIconButton(icon: Icons.refresh, onPressed: null),
+            child: AppIconButton(icon: AppIcons.refreshCw, onPressed: null),
           ),
         ),
       ),
     );
     await tester.pump();
-    expect(tester.widget<Icon>(find.byType(Icon)).color, AppPalette.textFaint);
+    expect(ink(tester), AppPalette.textFaint);
   });
 
   testWidgets('the glyph stops upright immediately when the work finishes', (

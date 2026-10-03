@@ -15,6 +15,7 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/settings/settings_nav.dart';
+import 'package:harness/settings/experimental_features.dart';
 import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/settings/settings_section.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -25,7 +26,9 @@ import 'package:harness/update/manual_update_check.dart';
 import 'package:harness/widgets/shortcuts_sheet.dart';
 import 'package:harness/widgets/update_notice.dart';
 
+import 'support/experimental_settings.dart';
 import 'support/real_fonts.dart';
+import 'swarm_state_test.dart' show MemoryStore;
 
 void main() {
   setUpAll(() async {
@@ -53,8 +56,8 @@ void main() {
         'packages/lucide_icons_flutter/assets/lucide.ttf',
       ),
       (
-        'packages/lucide_icons_flutter/Lucide300',
-        'packages/lucide_icons_flutter/assets/build_font/LucideVariable-w300.ttf',
+        'packages/lucide_icons_flutter/Lucide400',
+        'packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf',
       ),
     ]) {
       await (FontLoader(family)..addFont(rootBundle.load(path))).load();
@@ -96,6 +99,14 @@ void main() {
                     name: 'Morgan Rivera',
                     email: 'morgan@example.test',
                   );
+            final experiments = MemoryExperimentalFeaturesStore(
+              storage: MemoryStore(),
+            );
+            addTearDown(experiments.dispose);
+            if (section == SettingsSection.experimental &&
+                brightness == Brightness.dark) {
+              await experiments.set(ExperimentalFeature.focusBarCreature, true);
+            }
             final boundary = GlobalKey();
             Future<void> capture(String name) async {
               final output =
@@ -131,7 +142,10 @@ void main() {
                         .copyWith(textScaler: TextScaler.linear(scale)),
                     child: grid.BrightnessScope(child: child!),
                   ),
-                  home: SettingsScreen(notifier: app),
+                  home: SettingsScreen(
+                    notifier: app,
+                    experimentalFeatures: experiments,
+                  ),
                 ),
               ),
             );

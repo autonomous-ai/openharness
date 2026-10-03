@@ -59,8 +59,9 @@ lives in a transcript, and this one never needs to.
 - **Presence and link state are separate**: "online · link required" is a healthy computer that
   simply is not linked yet.
 - **Open** means a harness session still exists. It is not a claim that an agent is mid-turn.
-- The only per-harness time a roster reports honestly is when it was **created**; the registry's
-  `updatedAt` is stamped by its own reconcile pass, so nothing here draws "last worked on".
+- The pane draws when each harness was **created**. A roster's `updatedAt` is when the harness's
+  conversation last moved (the daemon's `lastActivityAt`), but daemons older than the fix sent their
+  reconcile time under that name, so nothing here draws "last worked on" from it.
 - A machine that was readable and then fails keeps its last roster, visibly stale, with the reason.
 
 ## Develop and verify

@@ -2,6 +2,8 @@
 // three steps with the line each is on, the tail of the log, how long each step
 // took, and — when it fails — the machine's own `miss` line as a sentence with
 // the command that fixes it.
+
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/dsh_catalog.dart';
@@ -71,8 +73,8 @@ _Mark _markOf(WidgetTester tester, String name) {
       .widgetList<Icon>(find.descendant(of: row, matching: find.byType(Icon)))
       .map((i) => i.icon)
       .toList();
-  if (icons.contains(Icons.check)) return _Mark.done;
-  if (icons.contains(Icons.priority_high)) return _Mark.failed;
+  if (icons.contains(AppIcons.check)) return _Mark.done;
+  if (icons.contains(AppIcons.circleAlert)) return _Mark.failed;
   return _Mark.pending;
 }
 

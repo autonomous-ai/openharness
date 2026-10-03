@@ -15,8 +15,42 @@ Uint8List scrypt(
   required int r,
   required int p,
   required int dkLen,
-}) {
-  if (n < 2 || (n & (n - 1)) != 0) throw ArgumentError('scrypt: N must be a power of 2');
+}) => _scryptSteps(password, salt, n: n, r: r, p: p, dkLen: dkLen).last!;
+
+/// Same computation, scheduled in bounded batches where isolates are absent.
+Future<Uint8List> scryptCooperative(
+  List<int> password,
+  List<int> salt, {
+  required int n,
+  required int r,
+  required int p,
+  required int dkLen,
+}) async {
+  for (final result in _scryptSteps(
+    password,
+    salt,
+    n: n,
+    r: r,
+    p: p,
+    dkLen: dkLen,
+  )) {
+    if (result != null) return result;
+    await Future<void>.delayed(Duration.zero);
+  }
+  throw StateError('scrypt: missing result');
+}
+
+Iterable<Uint8List?> _scryptSteps(
+  List<int> password,
+  List<int> salt, {
+  required int n,
+  required int r,
+  required int p,
+  required int dkLen,
+}) sync* {
+  if (n < 2 || (n & (n - 1)) != 0) {
+    throw ArgumentError('scrypt: N must be a power of 2');
+  }
   if (r < 1 || p < 1) throw ArgumentError('scrypt: r and p must be positive');
   final blockWords = 32 * r;
   final b = _bytesToWords(_pbkdf2Once(password, salt, 128 * r * p));
@@ -25,27 +59,29 @@ Uint8List scrypt(
   final y = Uint32List(blockWords);
   final mix = Uint32List(16);
   for (var i = 0; i < p; i++) {
-    _roMix(b, i * blockWords, r, n, v, x, y, mix);
+    yield* _roMix(b, i * blockWords, r, n, v, x, y, mix);
   }
-  return _pbkdf2Once(password, _wordsToBytes(b), dkLen);
+  yield _pbkdf2Once(password, _wordsToBytes(b), dkLen);
 }
 
 /// PBKDF2-HMAC-SHA256 with one iteration — all scrypt ever asks of it.
 Uint8List _pbkdf2Once(List<int> password, List<int> salt, int length) {
   final out = BytesBuilder(copy: false);
   for (var block = 1; out.length < length; block++) {
-    out.add(hmacSha256(password, [
-      ...salt,
-      (block >> 24) & 0xff,
-      (block >> 16) & 0xff,
-      (block >> 8) & 0xff,
-      block & 0xff,
-    ]));
+    out.add(
+      hmacSha256(password, [
+        ...salt,
+        (block >> 24) & 0xff,
+        (block >> 16) & 0xff,
+        (block >> 8) & 0xff,
+        block & 0xff,
+      ]),
+    );
   }
   return Uint8List.sublistView(out.takeBytes(), 0, length);
 }
 
-void _roMix(
+Iterable<Uint8List?> _roMix(
   Uint32List b,
   int offset,
   int r,
@@ -54,12 +90,13 @@ void _roMix(
   Uint32List x,
   Uint32List y,
   Uint32List mix,
-) {
+) sync* {
   final words = 32 * r;
   x.setRange(0, words, b, offset);
   for (var i = 0; i < n; i++) {
     v.setRange(i * words, (i + 1) * words, x);
     _blockMix(x, y, mix, r);
+    if ((i & 1023) == 1023) yield null;
   }
   final mask = n - 1;
   final last = (2 * r - 1) * 16;
@@ -69,6 +106,7 @@ void _roMix(
       x[k] ^= v[base + k];
     }
     _blockMix(x, y, mix, r);
+    if ((i & 1023) == 1023) yield null;
   }
   b.setRange(offset, offset + words, x);
 }

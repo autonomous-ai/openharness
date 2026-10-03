@@ -69,6 +69,10 @@ describe('desk ops — the merge rule', () => {
     r = applyDeskOp(r.tabs, { op: 'tab.layout', id: 'a', layout: { presets: { '2': 'columns' } } })
     expect(r.tabs[0].layout).toEqual({ presets: { '2': 'columns' } })          // replaced, not merged
     expect(applyDeskOp(r.tabs, { op: 'tab.layout', id: 'gone', layout }).changed).toBe(false)
+    // The terminal client's exact arrangement (tmux's layout string) is kept with the rest.
+    const tmux: DeskLayout = { presets: { '2': 'columns' }, tmux: 'acfd,120x31,0,0{60x31,0,0,0,59x31,61,0,1}' }
+    expect(applyDeskOp(r.tabs, { op: 'tab.layout', id: 'a', layout: tmux }).tabs[0].layout).toEqual(tmux)
+    expect(deskTabSchema.safeParse({ ...tab('a'), layout: { tmux: 'x'.repeat(4097) } }).success).toBe(false)
     expect(deskTabSchema.safeParse({ ...tab('a'), layout }).success).toBe(true)
     expect(deskTabSchema.safeParse({ ...tab('a'), layout: { sizes: { k: [[0, 0, 2, 1], [0, 0, 1, 1]] } } }).success).toBe(false)
   })

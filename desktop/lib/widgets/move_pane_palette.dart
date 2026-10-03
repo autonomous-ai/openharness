@@ -1,9 +1,11 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
+import 'desktop_chrome.dart';
 
 /// ⇧⌘M — send the focused pane to another tab.
 ///
@@ -41,19 +43,19 @@ class _Destination {
 
 List<_Destination> _destinationsFor(AppNotifier notifier, String sourceId) => [
   for (final swarm in notifier.swarms)
-    if (swarm.id != sourceId && !swarm.isStore)
+    if (swarm.id != sourceId && !swarm.isUtility && !swarm.isOrchestrator)
       _Destination(
         id: swarm.id,
         label: swarm.name,
         detail: switch (swarm.panes
             .where((pane) => pane.agentId != null)
             .length) {
-          0 => 'empty',
+          0 => 'No harnesses',
           1 => '1 harness',
           final count => '$count harnesses',
         },
       ),
-  const _Destination(label: 'New Tab', detail: 'a tab of its own'),
+  const _Destination(label: 'New Tab', detail: 'Create a tab'),
 ];
 
 class _MovePanePalette extends StatefulWidget {
@@ -77,6 +79,16 @@ class _MovePanePaletteState extends State<_MovePanePalette> {
   /// arrow keys unheard. Same reason the layout palette keeps one.
   final FocusNode _keys = FocusNode(debugLabel: 'move-pane-palette');
   int _cursor = 0;
+  final _rows = <int, GlobalKey>{};
+
+  void _select(int index) {
+    setState(() => _cursor = index);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final row = _rows[_cursor]?.currentContext;
+      if (row != null) Scrollable.ensureVisible(row);
+    });
+  }
 
   @override
   void initState() {
@@ -123,19 +135,17 @@ class _MovePanePaletteState extends State<_MovePanePalette> {
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.enter ||
-        key == LogicalKeyboardKey.numpadEnter) {
+        key == LogicalKeyboardKey.numpadEnter ||
+        key == LogicalKeyboardKey.space) {
       _take(destinations[_cursor.clamp(0, destinations.length - 1)]);
       return KeyEventResult.handled;
     }
-    if (key == LogicalKeyboardKey.arrowDown || key == LogicalKeyboardKey.tab) {
-      setState(() => _cursor = (_cursor + 1) % destinations.length);
+    if (key == LogicalKeyboardKey.arrowDown) {
+      _select((_cursor + 1) % destinations.length);
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.arrowUp) {
-      setState(
-        () =>
-            _cursor = (_cursor - 1 + destinations.length) % destinations.length,
-      );
+      _select((_cursor - 1 + destinations.length) % destinations.length);
       return KeyEventResult.handled;
     }
     // ⌘1–⌘9 select a tab, so the same digits pick one here.
@@ -170,44 +180,51 @@ class _MovePanePaletteState extends State<_MovePanePalette> {
       onKeyEvent: _onKey,
       child: Dialog(
         key: const ValueKey('move-pane-palette'),
-        backgroundColor: grid.AppGlass.surfaceFill,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(13),
-          side: BorderSide(color: grid.AppGlass.hair),
-        ),
-        child: SizedBox(
-          width: 360,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
-                child: Text(
-                  'Move pane to',
-                  style: grid.AppType.heading(
-                    color: grid.AppPalette.textPrimary,
+        insetPadding: const EdgeInsets.all(24),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: DesktopDialogSurface(
+          child: SizedBox(
+            width: grid.AppDesktop.formWidth,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DesktopDialogHeader(
+                  title: 'Move Pane',
+                  detail: 'Choose a destination tab.',
+                  onClose: () => Navigator.of(context).pop(),
+                ),
+                Divider(height: 1, color: DesktopChrome.rim),
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      children: [
+                        for (var i = 0; i < destinations.length; i++)
+                          KeyedSubtree(
+                            key: _rows.putIfAbsent(i, GlobalKey.new),
+                            child: _Row(
+                              destination: destinations[i],
+                              index: i,
+                              selected: i == cursor,
+                              onTap: () => _take(destinations[i]),
+                              onHover: () => setState(() => _cursor = i),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-              for (var i = 0; i < destinations.length; i++)
-                _Row(
-                  destination: destinations[i],
-                  index: i,
-                  selected: i == cursor,
-                  onTap: () => _take(destinations[i]),
-                  onHover: () => setState(() => _cursor = i),
-                ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
-                child: Text(
-                  '↑↓ choose · ⏎ move · esc cancel',
-                  style: grid.AppType.monoMeta(
-                    color: grid.AppPalette.textFaint,
+                Divider(height: 1, color: DesktopChrome.rim),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 16, 24, 20),
+                  child: Text(
+                    '↑↓ Select  ·  Return Move  ·  Esc Cancel',
+                    style: DesktopChrome.metadata(),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -232,47 +249,72 @@ class _Row extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ink = selected
-        ? grid.AppPalette.textPrimary
-        : grid.AppPalette.textSecondary;
-    return MouseRegion(
-      onEnter: (_) => onHover(),
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: Container(
-          key: ValueKey('move-pane-destination-$index'),
-          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-          decoration: BoxDecoration(
-            color: selected ? grid.AppSurface.selectedFill : null,
-            borderRadius: BorderRadius.circular(5),
-          ),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 18,
-                child: Text(
-                  index < 9 ? '${index + 1}' : '',
-                  style: grid.AppType.monoMeta(
-                    color: grid.AppPalette.textFaint,
-                  ),
+    final ink = selected ? DesktopChrome.onSelection : DesktopChrome.foreground;
+    final muted = selected
+        ? DesktopChrome.selectionDetail
+        : DesktopChrome.muted;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: '${destination.label}, ${destination.detail}',
+      onTap: onTap,
+      child: ExcludeSemantics(
+        child: MouseRegion(
+          onEnter: (_) => onHover(),
+          cursor: SystemMouseCursors.click,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            child: InkWell(
+              onTap: onTap,
+              canRequestFocus: false,
+              borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+              child: Container(
+                key: ValueKey('move-pane-destination-$index'),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: selected ? DesktopChrome.activeSelection : null,
+                  borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      destination.id == null
+                          ? AppIcons.plus
+                          : AppIcons.panelsTopLeft,
+                      color: ink,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            destination.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: grid.AppType.label(color: ink),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            destination.detail,
+                            style: DesktopChrome.metadata(color: muted),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      index < 9 ? '${index + 1}' : '',
+                      style: grid.AppType.monoMeta(color: muted),
+                    ),
+                  ],
                 ),
               ),
-              Expanded(
-                child: Text(
-                  destination.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: grid.AppType.label(color: ink),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                destination.detail,
-                style: grid.AppType.monoMeta(color: grid.AppPalette.textFaint),
-              ),
-            ],
+            ),
           ),
         ),
       ),

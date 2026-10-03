@@ -45,8 +45,7 @@ class PhoneSearchTrailing extends StatelessWidget {
 }
 
 /// The word a result ends in, or null for a row a tap simply opens — see
-/// [PhoneSearchTrailing]. Shared with the terminal sheet's rows
-/// (`sheet_search_row.dart`), which say the same thing in their own type.
+/// [PhoneSearchTrailing].
 String? phoneSearchBadge(PhoneDestination row, {required bool openable}) {
   final machine = row.machine;
   return switch (row.kind) {

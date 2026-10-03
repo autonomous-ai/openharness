@@ -26,7 +26,7 @@ Three complete runs per revision, pooled: **120 measured samples per action**, p
 | Action | Baseline median | Picker median | Baseline p95 | Picker p95 |
 |---|---:|---:|---:|---:|
 | Cmd+N — New Harness | 13.593 ms | 13.834 ms | 16.067 ms | 16.746 ms |
-| Cmd+O — Open Harness | 16.332 ms | 15.675 ms | 20.043 ms | 16.463 ms |
+| Cmd+O picker (now Open Project) | 16.332 ms | 15.675 ms | 20.043 ms | 16.463 ms |
 | Cmd+T — New tab | 11.711 ms | 12.190 ms | 16.673 ms | 18.348 ms |
 | Next workspace tab | 19.331 ms | 19.556 ms | 26.742 ms | 26.827 ms |
 

@@ -109,7 +109,7 @@ export async function initializeWorkspace(workspace, { runJson = gridJson, selec
             config.mode = candidate.mode; config.grid = candidate.grid; source = 'only reachable grid';
           }
         }
-        if (!config.grid) message = candidates.length ? `Ask the user which fleet to use — ${candidates.map(c => c.grid).join(', ')} — then fleet connect --mode local|remote --grid NAME. No private grid of theirs was found, so nothing is chosen for them.` : 'No grid is reachable from this machine. The user signs in to Harness first; then fleet connect --mode local|remote --grid NAME.';
+        if (!config.grid) message = candidates.length ? `Ask the user which fleet to use — ${candidates.map(c => c.grid).join(', ')} — then fleet connect --mode local|remote --grid NAME. No private grid of theirs was found, so nothing is chosen for them.` : 'No grid is reachable from this machine. Run `harness grid setup` (it signs this computer in with its Harness account and makes the account\'s grid), then fleet init again.';
       }
       if (config.grid) message = `Connected this workspace to ${config.mode} grid ${config.grid}.`;
     }

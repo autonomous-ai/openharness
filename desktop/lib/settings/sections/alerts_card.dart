@@ -43,9 +43,10 @@ class AlertsCard extends StatelessWidget {
           valueListenable: screen,
           builder: (context, on, _) => SettingRow(
             title: 'On-screen alerts',
+            controlSemanticLabel: 'On-screen alerts',
             detail:
                 'Show a banner when an agent finishes, or stops to ask you '
-                'something. Click it to go to that agent.',
+                'something. Click it to go to that harness.',
             control: Align(
               alignment: Alignment.centerLeft,
               child: Switch(
@@ -61,6 +62,7 @@ class AlertsCard extends StatelessWidget {
           valueListenable: sound,
           builder: (context, on, _) => SettingRow(
             title: 'Alert sounds',
+            controlSemanticLabel: 'Alert sounds',
             detail: 'Play a sound at the same two moments.',
             control: Align(
               alignment: Alignment.centerLeft,
@@ -80,6 +82,7 @@ class AlertsCard extends StatelessWidget {
             listenable: Listenable.merge([system.store, system.permission]),
             builder: (context, _) => SettingRow(
               title: 'Desktop notifications',
+              controlSemanticLabel: 'Desktop notifications',
               detail: _systemDetail(
                 clickOpensAgent: system.notifier.clickOpensAgent,
                 on: system.store.value,
@@ -110,7 +113,7 @@ String _systemDetail({
 }) {
   final base =
       'Let the system tell you at the same two moments while Harness is not '
-      'in front.${clickOpensAgent ? ' Click one to go to that agent.' : ''}';
+      'in front.${clickOpensAgent ? ' Click one to go to that harness.' : ''}';
   if (!on) return base;
   return switch (permission) {
     NotificationPermission.denied =>

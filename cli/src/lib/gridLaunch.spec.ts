@@ -516,6 +516,54 @@ describe('opencode declares the grid as a provider', () => {
     expect(launch().configDir!.envVar).toBe('OPENCODE_CONFIG')
     expect(launch().configDir!.pointAt).toBe('opencode.json')
   })
+
+  it('names the model a resumed session has to be put on, the same pair argv names', () => {
+    expect(launch('DeepSeek-V4-Flash-0731').sessionModel).toBe('autonomous-ai/DeepSeek-V4-Flash-0731')
+    expect(launch().sessionModel).toBe('autonomous-ai/Auto')
+  })
+})
+
+describe('opencode v2 on a grid', () => {
+  const base: GridLaunchOverride = {
+    networkId: 'grid-x',
+    networkName: 'autonomous.ai',
+    baseUrl: 'https://grid.autonomous.ai/grid-x/relay/v1',
+    apiKey: 'RELAY-KEY',
+  }
+  const V2: GridLaunchMachine = { hermesSystemManaged: false, opencodeMajor: 2 }
+  const launch = (model?: string, machine = V2) => {
+    const built = buildGridEngineLaunch('opencode', model ? { ...base, model } : base, machine)
+    if (!built.ok) throw new Error('opencode refused')
+    return built.launch
+  }
+  const config = (model?: string) => JSON.parse(launch(model).configDir!.files[0].content)
+
+  it('never passes -m: the v2 TUI has no such flag and exits 1 on it', () => {
+    // Measured on 2.0.18: `Unrecognized flag: -m in command opencode`, and the pane became a shell.
+    expect(launch('DeepSeek-V4-Flash-0731').args).not.toContain('-m')
+    expect(launch().args).not.toContain('-m')
+  })
+
+  it('runs its own server, the only one that reads the per-agent OPENCODE_CONFIG', () => {
+    // The shared background service ignores a pane's OPENCODE_CONFIG; a private one reads it.
+    expect(launch('DeepSeek-V4-Flash-0731').args).toEqual(['--standalone'])
+  })
+
+  it('selects the model for a NEW session in the config, which v2 accepts for a declared provider', () => {
+    expect(config('DeepSeek-V4-Flash-0731').model).toBe('autonomous-ai/DeepSeek-V4-Flash-0731')
+    expect(config().model).toBe('autonomous-ai/Auto')
+  })
+
+  it('still names the model a resumed session has to be switched to', () => {
+    expect(launch('DeepSeek-V4-Flash-0731').sessionModel).toBe('autonomous-ai/DeepSeek-V4-Flash-0731')
+  })
+
+  it('leaves a v1 or unknown install exactly as it was', () => {
+    for (const machine of [PLAIN_MACHINE, { hermesSystemManaged: false, opencodeMajor: 1 }, { hermesSystemManaged: false, opencodeMajor: null }]) {
+      expect(launch('Qwen', machine).args).toEqual(['-m', 'autonomous-ai/Qwen'])
+      expect(JSON.parse(launch('Qwen', machine).configDir!.files[0].content)).not.toHaveProperty('model')
+    }
+  })
 })
 
 describe('web tools (grid ADR 0041)', () => {

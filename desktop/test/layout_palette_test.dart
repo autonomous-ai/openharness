@@ -119,7 +119,7 @@ void main() {
         tester.getRect(
           find.ancestor(
             of: find.text(choice.label),
-            matching: find.byType(Container),
+            matching: find.byType(TextButton),
           ),
         ),
     ];

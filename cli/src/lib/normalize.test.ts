@@ -86,6 +86,48 @@ describe('lastTurnTextFromRawLines', () => {
     })
   })
 
+  it('takes the answer after the last tool call, not the narration before it', () => {
+    // A long working turn: the assistant narrates, works, narrates, works, then answers. The recap and the
+    // reader show the answer; before this they showed the FIRST narration line.
+    const lines = [
+      userPrompt('u1', 'why is the build red'),
+      asstText('a1', 'Let me look at the logs.'),
+      asstToolUse('a2', 't1', 'Bash'),
+      userToolResult('r1', 't1'),
+      asstText('a3', 'The lockfile is stale, checking the CI config next.'),
+      asstToolUse('a4', 't2', 'Read'),
+      userToolResult('r2', 't2'),
+      asstText('a5', 'The build is red because the lockfile is stale.'),
+      asstText('a6', 'Regenerating it fixes it.'),
+    ]
+    expect(lastTurnTextFromRawLines(lines)).toEqual({
+      userMessage: 'why is the build red',
+      assistantText: 'The build is red because the lockfile is stale.\n\nRegenerating it fixes it.',
+    })
+  })
+
+  it('treats text written in the same message as a tool call as narration too', () => {
+    const lines = [
+      userPrompt('u1', 'fix it'),
+      line({ type: 'assistant', uuid: 'a1', message: { role: 'assistant', content: [
+        { type: 'text', text: 'Reading the file first.' }, { type: 'tool_use', id: 't1', name: 'Read', input: {} }] } }),
+      userToolResult('r1', 't1'),
+      asstText('a2', 'Fixed: the import was misspelled.'),
+    ]
+    expect(lastTurnTextFromRawLines(lines)?.assistantText).toBe('Fixed: the import was misspelled.')
+  })
+
+  it('still summarizes a turn that never reached an answer, from what was said', () => {
+    // It ended on a tool call (or was interrupted): there is nothing after the last one, so the narration
+    // is all there is, and a recap of it beats a blank tile.
+    const lines = [
+      userPrompt('u1', 'run the migration'),
+      asstText('a1', 'Starting the migration now.'),
+      asstToolUse('a2', 't1', 'Bash'),
+    ]
+    expect(lastTurnTextFromRawLines(lines)?.assistantText).toBe('Starting the migration now.')
+  })
+
   it('keeps the last REAL ask when bash-mode (!command) lines follow it', () => {
     // Bash mode writes the command + its output back as a user line. It is the person running a shell,
     // not a prompt, so the recap must stay on the real task instead of drifting to shell mechanics.

@@ -9,6 +9,30 @@ void main() {
       });
     });
 
+    test(
+      'a new project named after its task asks for a numbered suggestion (#94)',
+      () {
+        expect(
+          ProjectFolderRequest.forTask('Robot nói chuyện với Gemini\nmore')
+              .payload,
+          {
+            'projectSource': 'new',
+            'projectName': 'robot-noi-chuyen-voi-gemini',
+            'projectNameMode': 'suggested',
+          },
+        );
+        expect(
+          taskProjectTitle('Đèn bàn cho phòng làm việc nhỏ gọn đẹp'),
+          'Đèn bàn cho phòng làm việc',
+        );
+        // Nothing to name it by: the machine names it, as a plain new project.
+        expect(ProjectFolderRequest.forTask('!!! ???').payload, {
+          'projectSource': 'new',
+        });
+        expect(taskProjectSlug('机器人'), isNull);
+      },
+    );
+
     test('a repository travels as its canonical clone URL', () {
       final repo = GitHubRepository.parse('owner/repo')!;
       expect(ProjectFolderRequest.remote(repo).payload, {

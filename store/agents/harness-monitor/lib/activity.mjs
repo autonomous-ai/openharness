@@ -1,7 +1,7 @@
 /**
  * When did this harness last actually do something?
  *
- * The obvious answers are all wrong, and each one is wrong in a way that would pause the fleet's living
+ * The obvious answers are all wrong, and each one is wrong in a way that would stop the fleet's living
  * agents or keep its dead ones running:
  *
  *   the registry's `updatedAt`  the daemon reconciles every five seconds, so every row reads "now"

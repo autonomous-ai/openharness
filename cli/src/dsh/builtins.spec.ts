@@ -1,14 +1,28 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import { ensureBundledModelManager, MODEL_MANAGER_ID } from './builtins.js'
-import { installedDsh, invalidateInstalledDsh, upsertInstalledRecord } from './installed.js'
+import { ensureBundledCoreHarnesses, ensureBundledDevices, ensureBundledHarnessMonitor, ensureBundledModelManager,
+  DEVICES_HARNESS_ID, HARNESS_MONITOR_ID, HARNESS_MONITOR_BUILTIN_SOURCE, MODEL_MANAGER_ID, type BundledFiles } from './builtins.js'
+import { dshListRows } from './wire.js'
+import { installedDsh, invalidateInstalledDsh, readInstalledIndex, upsertInstalledRecord } from './installed.js'
 import { lockDsh } from './lock.js'
 
 let root: string
 let original: string
+it('ships Devices as an unlisted DSH with the shared daemon commands and reusable workspace', () => {
+  const files = Object.fromEntries(['harness.json', 'AGENTS.md', 'template/devices.json'].map(path => [path,
+    { content: readFileSync(new URL(`../../../store/agents/devices/${path}`, import.meta.url), 'utf8'), executable: false }]))
+  expect(ensureBundledDevices(files)).toBe(true)
+  const installed = installedDsh(DEVICES_HARNESS_ID)!
+  expect(installed.manifest.workspace?.marker).toBe('devices.json')
+  expect(installed.manifest.agent?.env?.DSH_PERMISSION_MODE).toBe('ask')
+  expect(dshListRows([installed], [])).toEqual([])
+  expect(files['AGENTS.md']!.content).toContain('harness hardware list --json')
+  expect(ensureBundledDevices(files)).toBe(true)
+  expect(installedDsh(DEVICES_HARNESS_ID)?.dir).toBe(installed.dir)
+})
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'model-manager-bundle-'))
   original = env.DSH_DIR
@@ -85,4 +99,93 @@ it('keeps a developer linked package and refuses invalid bundled paths', () => {
   expect(ensureBundledModelManager(bundle('release update'))).toBe(true)
   expect(installedDsh(MODEL_MANAGER_ID)?.source).toBe('/my/checkout')
   expect(readFileSync(join(first.dir, 'AGENTS.md'), 'utf8')).toBe('Help with local models')
+})
+
+const coreFiles = (id: string, text = 'release resources'): BundledFiles => ({
+  'harness.json': { content: JSON.stringify({ spec: 1, id, name: 'Core tool', engine: 'opencode' }), executable: false },
+  'AGENTS.md': { content: text, executable: false },
+})
+
+it('migrates existing official monitor installations, retaining old files and workspace content', () => {
+  const oldDir = join(root, 'autonomous', 'harness-monitor')
+  const workspace = join(root, 'existing-workspace')
+  mkdirSync(oldDir, { recursive: true }); mkdirSync(workspace)
+  for (const [name, file] of Object.entries(coreFiles(HARNESS_MONITOR_ID, 'old instructions'))) writeFileSync(join(oldDir, name), file.content)
+  writeFileSync(join(workspace, 'NOTES.md'), 'user notes and history')
+  upsertInstalledRecord({ id: HARNESS_MONITOR_ID, dir: oldDir,
+    source: 'https://github.com/autonomous-ai/autonomous-harness.git', path: 'store/agents/harness-monitor',
+    ref: 'old-release', commit: 'a'.repeat(40), revision: 'b'.repeat(40), linked: false, installedAt: 123 })
+  expect(ensureBundledHarnessMonitor(coreFiles(HARNESS_MONITOR_ID))).toBe(true)
+  const updated = installedDsh(HARNESS_MONITOR_ID)!
+  expect(updated.source).toBe(HARNESS_MONITOR_BUILTIN_SOURCE)
+  expect(updated.installedAt).toBe(123)
+  expect(updated.dir).not.toBe(oldDir)
+  expect(readFileSync(join(updated.dir, 'AGENTS.md'), 'utf8')).toBe('release resources')
+  expect(readFileSync(join(oldDir, 'AGENTS.md'), 'utf8')).toBe('old instructions')
+  expect(readFileSync(join(workspace, 'NOTES.md'), 'utf8')).toBe('user notes and history')
+  expect(dshListRows([updated], [{ id: HARNESS_MONITOR_ID, name: 'Monitor', engine: 'opencode',
+    repo: 'https://github.com/autonomous-ai/openharness', path: 'store/agents/harness-monitor', ref: 'c'.repeat(40) }])[0].updateAvailable).toBe(false)
+})
+
+it.each([
+  { source: '/developer/monitor', path: undefined, linked: true },
+  { source: 'https://github.com/example/monitor', path: 'store/agents/harness-monitor', linked: false },
+  { source: 'https://github.com/autonomous-ai/openharness', path: 'custom/monitor', linked: false },
+])('preserves linked and custom monitor installations, including broken ones: %j', record => {
+  upsertInstalledRecord({ id: HARNESS_MONITOR_ID, dir: join(root, 'missing-custom-copy'),
+    ref: 'main', commit: null, installedAt: 123, ...record })
+  const before = readInstalledIndex()
+  expect(ensureBundledHarnessMonitor(coreFiles(HARNESS_MONITOR_ID))).toBe(true)
+  expect(readInstalledIndex()).toEqual(before)
+})
+
+it('refreshes every bundled core tool together and leaves ordinary Store apps alone', () => {
+  const blender = { id: 'autonomous/blender', dir: join(root, 'blender'), source: 'https://github.com/autonomous-ai/openharness',
+    path: 'store/agents/blender', ref: 'old-ref', commit: 'a'.repeat(40), linked: false, installedAt: 123 }
+  upsertInstalledRecord(blender)
+  vi.stubGlobal('__MODEL_MANAGER_BUNDLE__', JSON.stringify(coreFiles(MODEL_MANAGER_ID)))
+  vi.stubGlobal('__DEVICES_BUNDLE__', JSON.stringify(coreFiles(DEVICES_HARNESS_ID)))
+  vi.stubGlobal('__HARNESS_MONITOR_BUNDLE__', JSON.stringify(coreFiles(HARNESS_MONITOR_ID)))
+  expect(ensureBundledCoreHarnesses()).toBe(true)
+  const oldDevices = installedDsh(DEVICES_HARNESS_ID)!, oldMonitor = installedDsh(HARNESS_MONITOR_ID)!
+  vi.stubGlobal('__DEVICES_BUNDLE__', JSON.stringify(coreFiles(DEVICES_HARNESS_ID, 'next release')))
+  vi.stubGlobal('__HARNESS_MONITOR_BUNDLE__', JSON.stringify(coreFiles(HARNESS_MONITOR_ID, 'next release')))
+  expect(ensureBundledCoreHarnesses()).toBe(true)
+  expect(installedDsh(DEVICES_HARNESS_ID)!.dir).not.toBe(oldDevices.dir)
+  expect(installedDsh(HARNESS_MONITOR_ID)!.dir).not.toBe(oldMonitor.dir)
+  expect(existsSync(oldDevices.dir)).toBe(true)
+  expect(existsSync(oldMonitor.dir)).toBe(true)
+  expect(readInstalledIndex().find(row => row.id === blender.id)).toEqual(blender)
+  // A CLI rollback restores its corresponding core revision without touching the retained one.
+  vi.stubGlobal('__HARNESS_MONITOR_BUNDLE__', JSON.stringify(coreFiles(HARNESS_MONITOR_ID)))
+  expect(ensureBundledCoreHarnesses()).toBe(true)
+  expect(installedDsh(HARNESS_MONITOR_ID)!.dir).toBe(oldMonitor.dir)
+})
+
+it('an unavailable or invalid core bundle does not prevent the remaining tools from updating', () => {
+  const log = vi.fn()
+  expect(ensureBundledCoreHarnesses(log)).toBe(false)
+  vi.stubGlobal('__MODEL_MANAGER_BUNDLE__', 'invalid json')
+  vi.stubGlobal('__DEVICES_BUNDLE__', JSON.stringify(coreFiles(DEVICES_HARNESS_ID)))
+  vi.stubGlobal('__HARNESS_MONITOR_BUNDLE__', JSON.stringify(coreFiles(HARNESS_MONITOR_ID)))
+  expect(ensureBundledCoreHarnesses(log)).toBe(false)
+  expect(log).toHaveBeenCalledWith(expect.stringContaining('Model Manager'))
+  expect(installedDsh(DEVICES_HARNESS_ID)).toBeDefined()
+  expect(installedDsh(HARNESS_MONITOR_ID)).toBeDefined()
+})
+
+it('ships a complete monitor viewer with byte-identical binary icons and executable launchers', async () => {
+  // @ts-expect-error — production build helper is plain ESM without a declaration file
+  const { readHarnessMonitorBundle } = await import('../../scripts/lib/modelManagerBundle.mjs')
+  const source = new URL('../../../store/agents/harness-monitor/', import.meta.url)
+  const { fileURLToPath } = await import('node:url')
+  const files = readHarnessMonitorBundle(fileURLToPath(source)) as BundledFiles
+  vi.stubGlobal('__HARNESS_MONITOR_BUNDLE__', JSON.stringify(files))
+  expect(ensureBundledHarnessMonitor()).toBe(true)
+  const installed = installedDsh(HARNESS_MONITOR_ID)!
+  for (const name of ['harness.json', 'viewer.mjs', 'viewer/index.html', 'viewer/table.js', 'lib/bridge.mjs',
+    'toolchain/hps.mjs', 'viewer/icons/codex.png', 'viewer/icons/claude.png', 'skills/fleet-operations/SKILL.md']) {
+    expect(readFileSync(join(installed.dir, name))).toEqual(readFileSync(new URL(name, source)))
+  }
+  for (const name of ['viewer.sh', 'toolchain/hps', 'toolchain/init-workspace.sh']) expect(statSync(join(installed.dir, name)).mode & 0o111).not.toBe(0)
 })

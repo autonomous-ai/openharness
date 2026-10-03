@@ -17,7 +17,7 @@ import 'swarm_state_test.dart' show createApp, MemoryStore;
 
 void main() {
   test(
-    'History interleaves closed agents and swarms with captured identities',
+    'History interleaves closed agents and tabs with captured identities',
     () async {
       final app = createApp();
       addTearDown(app.dispose);
@@ -30,6 +30,7 @@ void main() {
         ),
       ];
       app.renameSwarm(app.activeSwarmId, 'Work');
+      app.adoptSessionForTest(terminal('a1', []));
       await app.addAgentToSwarm('m', 'a0');
       await app.closePane(app.focusedPaneId!);
       final agentId = app.closedHistory.single.historyId;
@@ -86,7 +87,7 @@ void main() {
   );
 
   test(
-    'a closed parent gets a swarm when its agent alone is reopened',
+    'a closed parent gets a tab when its agent alone is reopened',
     () async {
       final app = createApp();
       addTearDown(app.dispose);
@@ -113,7 +114,7 @@ void main() {
     },
   );
 
-  test('swarm recovery keeps newer choices and shared live sessions', () async {
+  test('tab recovery keeps newer choices and shared live sessions', () async {
     final store = MemoryStore();
     final app = createApp(store: store);
     addTearDown(app.dispose);
@@ -176,7 +177,7 @@ void main() {
   });
 
   test(
-    'swarm recovery fits among many tabs without duplicating agents',
+    'tab recovery fits among many tabs without duplicating agents',
     () async {
       final app = createApp();
       addTearDown(app.dispose);
@@ -205,7 +206,7 @@ void main() {
   );
 
   test(
-    'a full partial swarm keeps its recovery until every view fits',
+    'a full partial tab keeps its recovery until every view fits',
     () async {
       final app = createApp();
       addTearDown(app.dispose);
@@ -252,6 +253,7 @@ void main() {
   test('with many tabs open, agent and tab recovery both still fit', () async {
     final app = createApp();
     addTearDown(app.dispose);
+    await app.addAgentToSwarm('m', 'a1');
     await app.addAgentToSwarm('m', 'a0');
     final origin = app.activeSwarmId;
     await app.closePane(app.focusedPaneId!);
@@ -265,7 +267,7 @@ void main() {
     expect(app.canReopenClosed(agentId), isTrue);
     expect(app.reopenClosed(historyId: agentId), isTrue);
     expect(app.activeSwarmId, origin);
-    expect(app.panes.single.agentId, 'a0');
+    expect(app.panes.map((pane) => pane.agentId), ['a1', 'a0']);
     expect(app.swarms, hasLength(30));
   });
 
@@ -274,6 +276,7 @@ void main() {
     () async {
       final app = createApp();
       addTearDown(app.dispose);
+      await app.addAgentToSwarm('m', 'a1');
       await app.addAgentToSwarm('m', 'a0');
       await app.closePane(app.focusedPaneId!);
       final id = app.closedHistory.single.historyId;
@@ -344,6 +347,7 @@ void main() {
       final app = createApp();
       addTearDown(app.dispose);
       for (var i = 0; i < 30; i++) {
+        await app.addAgentToSwarm('m', 'a1');
         await app.addAgentToSwarm('m', 'a0');
         await app.closePane(app.focusedPaneId!);
         app.renameSwarm(app.activeSwarmId, 'Work $i');
@@ -371,14 +375,14 @@ void main() {
     expect(app.closedHistory, hasLength(1));
     expect(app.reopenClosed(), isTrue);
     await tester.pump();
-    expect(app.activeSwarm, same(origin));
+    expect(app.activeSwarmId, origin.id);
     expect(app.panes.single.agentId, 'a0');
     expect(app.closedHistory, isEmpty);
     await tester.pumpWidget(const SizedBox());
     app.dispose();
   });
 
-  testWidgets('keyboard swarm recovery returns input to its existing view', (
+  testWidgets('keyboard tab recovery returns input to its existing view', (
     tester,
   ) async {
     final app = createApp();

@@ -1,9 +1,7 @@
-import { execFile } from 'node:child_process'
 import { access, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { promisify } from 'node:util'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { AgentEngine } from '../engines/types.js'
 import {
   agentAliasOwner,
@@ -15,15 +13,16 @@ import {
 } from './engineBin.js'
 import { TmuxBackend } from './tmuxBackend.js'
 import { probeTmuxAgents } from './tmuxAgentDiscovery.js'
+import { probeTerminalAgents } from './terminalAgentDiscovery.js'
 import { HARNESS_SESSION_PREFIX } from './harnessSessionLabel.js'
+import { isolatedTmux, type IsolatedTmux } from '../testing/isolatedTmux.js'
 
 // Discovery only sees sessions named like agent_create's; a session outside the prefix is
 // invisible to it by design, so every session this suite expects to find must wear it.
 const SESSION_PREFIX = `${HARNESS_SESSION_PREFIX}real-${process.pid}`
 
-const exec = promisify(execFile)
 const realDescribe = process.env.RUN_REAL_TMUX_DISCOVERY === '1' ? describe : describe.skip
-const createdSessions = new Set<string>()
+let server: IsolatedTmux | undefined
 
 const ownership = agentCommandOwnershipSnapshot()
 const engines: Array<[AgentEngine, string, string | null]> = ENGINES.map((engine) => [
@@ -46,7 +45,8 @@ for (const [engine, candidates] of [
 }
 
 async function tmux(args: string[]): Promise<string> {
-  return (await exec('tmux', args, { timeout: 5_000 })).stdout.trim()
+  if (!server) throw new Error('The private tmux test server has not been initialized')
+  return server.run(...args)
 }
 
 async function eventually<T>(read: () => Promise<T | null>, timeoutMs = 20_000): Promise<T | null> {
@@ -60,17 +60,23 @@ async function eventually<T>(read: () => Promise<T | null>, timeoutMs = 20_000):
 }
 
 realDescribe.sequential('real installed CLI process discovery', () => {
+  beforeAll(async () => {
+    server = await isolatedTmux()
+    vi.stubEnv('TMUX_TMPDIR', server.root)
+    vi.stubEnv('TMUX', undefined)
+    vi.stubEnv('TMUX_PANE', undefined)
+    // Start with our config before TmuxBackend's first bare new-session call.
+    await server.run('new-session', '-d', '-s', `${SESSION_PREFIX}-keeper`, 'sleep 600')
+  })
+
   afterAll(async () => {
-    for (const session of createdSessions) {
-      await exec('tmux', ['kill-session', '-t', session], { timeout: 5_000 }).catch(() => {})
-    }
+    try { await server?.close() } finally { vi.unstubAllEnvs() }
   })
 
   it('creates, notifies, and kills a test-owned session through the shared backend contract', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'harness-real-tmux-lifecycle-'))
     const session = `${SESSION_PREFIX}-lifecycle`
     const backend = new TmuxBackend()
-    createdSessions.add(session)
     try {
       const created = await backend.create({ cwd: dir, label: session })
       expect(created.state).toBe('succeeded')
@@ -82,10 +88,8 @@ realDescribe.sequential('real installed CLI process discovery', () => {
       await expect(backend.kill(created.runtime))
         .resolves.toEqual({ state: 'succeeded', dispatch: 'executed' })
       await expect(tmux(['has-session', '-t', session])).rejects.toBeTruthy()
-      createdSessions.delete(session)
     } finally {
-      await exec('tmux', ['kill-session', '-t', session], { timeout: 5_000 }).catch(() => {})
-      createdSessions.delete(session)
+      await tmux(['kill-session', '-t', session]).catch(() => {})
       await rm(dir, { recursive: true, force: true })
     }
   })
@@ -96,7 +100,6 @@ realDescribe.sequential('real installed CLI process discovery', () => {
     matrixIt(`discovers ${engine} once and process-only deletion preserves its pane`, async () => {
       const dir = await mkdtemp(join(tmpdir(), `harness-real-${engine}-`))
       const session = `${SESSION_PREFIX}-${engine}`
-      createdSessions.add(session)
 
       try {
         await tmux(['new-session', '-d', '-s', session, '-c', dir])
@@ -112,6 +115,19 @@ realDescribe.sequential('real installed CLI process discovery', () => {
         })
         const capture = await tmux(['capture-pane', '-p', '-t', pane]).catch(() => '')
         expect(discovered, `${bin} was not discovered in ${pane}\n${capture}`).not.toBeNull()
+
+        // The daemon uses the backend-neutral scan. Exercise it against the same real process,
+        // not only the older tmux-specific reader, before checking that stop preserves the pane.
+        const current = await probeTerminalAgents([new TmuxBackend()], ['tmux'])
+        expect(current.processTableAvailable).toBe(true)
+        const matches = current.agents.filter(agent => agent.runtimes.some(runtime => runtime.paneId === pane))
+        expect(matches).toHaveLength(1)
+        // Node engines may change their process title between these snapshots.
+        // The PID and birth stamp prove this is still the same launched process.
+        expect(matches[0]).toMatchObject({ engine, processIdentity: {
+          pid: discovered!.processIdentity.pid,
+          startMarker: discovered!.processIdentity.startMarker,
+        } })
 
         const pid = discovered!.processIdentity.pid
         process.kill(pid, 'SIGTERM')
@@ -133,8 +149,7 @@ realDescribe.sequential('real installed CLI process discovery', () => {
         expect(absent, `${bin} remained discoverable after its exact saved PID was terminated`).toBe(true)
         await expect(tmux(['display-message', '-p', '-t', pane, '#{pane_id}'])).resolves.toBe(pane)
       } finally {
-        await exec('tmux', ['kill-session', '-t', session], { timeout: 5_000 }).catch(() => {})
-        createdSessions.delete(session)
+        await tmux(['kill-session', '-t', session]).catch(() => {})
         await rm(dir, { recursive: true, force: true })
       }
     }, 35_000)
@@ -143,7 +158,6 @@ realDescribe.sequential('real installed CLI process discovery', () => {
   it('types literally and submits short text through stdin-loaded buffers', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'harness-real-tmux-input-'))
     const session = `${SESSION_PREFIX}-input`
-    createdSessions.add(session)
     try {
       await tmux(['new-session', '-d', '-s', session, '-c', dir])
       const pane = await tmux(['list-panes', '-t', session, '-F', '#{pane_id}'])
@@ -165,8 +179,7 @@ realDescribe.sequential('real installed CLI process discovery', () => {
       })
       expect(await eventually(() => access(submitMarker).then(() => true).catch(() => null), 5_000)).toBe(true)
     } finally {
-      await exec('tmux', ['kill-session', '-t', session], { timeout: 5_000 }).catch(() => {})
-      createdSessions.delete(session)
+      await tmux(['kill-session', '-t', session]).catch(() => {})
       await rm(dir, { recursive: true, force: true })
     }
   }, 15_000)
@@ -174,7 +187,6 @@ realDescribe.sequential('real installed CLI process discovery', () => {
   it.each(installedAgentAliases)('classifies installed %s alias named agent from its executable identity', async (engine, path) => {
     const dir = await mkdtemp(join(tmpdir(), `harness-real-agent-alias-${engine}-`))
     const session = `${SESSION_PREFIX}-${engine}-agent-alias`
-    createdSessions.add(session)
     try {
       await tmux(['new-session', '-d', '-s', session, '-c', dir])
       const pane = await tmux(['list-panes', '-t', session, '-F', '#{pane_id}'])
@@ -189,8 +201,7 @@ realDescribe.sequential('real installed CLI process discovery', () => {
       const capture = await tmux(['capture-pane', '-p', '-t', pane]).catch(() => '')
       expect(discovered, `${path} was not classified as ${engine} in ${pane}\n${capture}`).not.toBeNull()
     } finally {
-      await exec('tmux', ['kill-session', '-t', session], { timeout: 5_000 }).catch(() => {})
-      createdSessions.delete(session)
+      await tmux(['kill-session', '-t', session]).catch(() => {})
       await rm(dir, { recursive: true, force: true })
     }
   }, 35_000)

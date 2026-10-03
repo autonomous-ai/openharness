@@ -1,6 +1,6 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/dsh_catalog.dart';
@@ -101,8 +101,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
           children: [
             Text(
               '${(i + 1).toString().padLeft(2, '0')} / ${widget.count.toString().padLeft(2, '0')}',
-              style: grid.AppType.monoMeta(
-                letterSpacing: 2,
+              style: grid.AppType.caption(
                 color: grid.AppPalette.accentOnSurface,
               ),
             ),
@@ -130,7 +129,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                   onPressed: widget.onTry == null
                       ? null
                       : () => widget.onTry!(example.prompt),
-                  icon: const Icon(LucideIcons.sparkles300, size: 17),
+                  icon: const Icon(AppIcons.sparkles, size: 16),
                   label: const Text('Try this prompt'),
                   style: FilledButton.styleFrom(
                     backgroundColor: grid.AppPalette.accent,
@@ -151,8 +150,8 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                       entry: widget.entry,
                       example: example,
                     ),
-                    icon: const Icon(LucideIcons.play300, size: 17),
-                    label: const Text('Watch real session'),
+                    icon: const Icon(AppIcons.play, size: 16),
+                    label: const Text('Watch recorded run'),
                     style: OutlinedButton.styleFrom(
                       minimumSize: const Size(0, 46),
                       padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -161,7 +160,7 @@ class _ExampleBlockState extends State<_ExampleBlock> {
                   ),
                 AppIconButton(
                   key: ValueKey('store-copy-prompt:$i'),
-                  icon: LucideIcons.copy300,
+                  icon: AppIcons.copy,
                   tooltip: 'Copy prompt',
                   onPressed: () async {
                     await Clipboard.setData(

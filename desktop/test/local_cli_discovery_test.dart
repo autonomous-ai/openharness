@@ -62,41 +62,40 @@ void main() {
     );
   });
 
-  test(
-    'waits while a new CLI is still performing initial terminal discovery',
-    () async {
-      const computerId = '0123456789abcdef0123456789abcdef';
-      final identityFile = File('${scratch.path}/computer-id')
-        ..writeAsStringSync(computerId);
-      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      server!.listen((request) async {
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(
-          jsonEncode({
-            'computerId': computerId,
-            'discoveryReady': false,
-            'localWs': {
-              'path': '/api/local-ws',
-              'protocolVersion': 1,
-              'terminalProtocolVersion': 3,
-              'e2ee': false,
-            },
-          }),
-        );
-        await request.response.close();
-      });
+  test('a CLI still on its initial terminal discovery is usable, and says it is scanning', () async {
+    const computerId = '0123456789abcdef0123456789abcdef';
+    final identityFile = File('${scratch.path}/computer-id')
+      ..writeAsStringSync(computerId);
+    server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    server!.listen((request) async {
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(
+        jsonEncode({
+          'computerId': computerId,
+          'discoveryReady': false,
+          'localWs': {
+            'path': '/api/local-ws',
+            'protocolVersion': 1,
+            'terminalProtocolVersion': 3,
+            'e2ee': false,
+          },
+        }),
+      );
+      await request.response.close();
+    });
 
-      final endpoint = await LocalCliDiscovery(
-        config: AppConfig(
-          apiBaseUrl: 'https://harness-api.autonomous.ai',
-          localCliBaseUrl: 'http://127.0.0.1:${server!.port}',
-        ),
-        identity: LocalMachineIdentity(computerIdFile: identityFile),
-      ).discover();
+    final endpoint = await LocalCliDiscovery(
+      config: AppConfig(
+        apiBaseUrl: 'https://harness-api.autonomous.ai',
+        localCliBaseUrl: 'http://127.0.0.1:${server!.port}',
+      ),
+      identity: LocalMachineIdentity(computerIdFile: identityFile),
+    ).discover();
 
-      expect(endpoint, isNull);
-    },
-  );
+    // Not a reason to hold the window: tiles wait as intent and attach as agents arrive.
+    expect(endpoint, isNotNull);
+    expect(endpoint!.scanning, isTrue);
+  });
 
   test('rejects non-loopback and mismatched status endpoints', () async {
     const computerId = 'abcdef0123456789abcdef0123456789';
@@ -199,6 +198,7 @@ void main() {
     int port,
     File identityFile, {
     Future<void> Function()? spawnCommand,
+    Future<void> Function()? stopCommand,
   }) => LocalCliDiscovery(
     config: AppConfig(
       apiBaseUrl: 'https://harness-api.autonomous.ai',
@@ -206,7 +206,64 @@ void main() {
     ),
     identity: LocalMachineIdentity(computerIdFile: identityFile),
     spawnCommand: spawnCommand,
+    stopCommand: stopCommand,
   );
+
+  test('supervision asks checkOwner once per daemon pid, and never for one that is not ready', () async {
+    const computerId = '0123456789abcdef0123456789abcdef';
+    final identityFile = File('${scratch.path}/computer-id')
+      ..writeAsStringSync(computerId);
+    // Not ready: a daemon answering for another computer.
+    var status = readyStatus('fedcba9876543210fedcba9876543210');
+    server = await serveStatus(await freePort(), () => status);
+    final checked = <int>[];
+    final discovery = discoveryFor(
+      server!.port,
+      identityFile,
+      spawnCommand: () async =>
+          fail('A running daemon must not be spawned over'),
+    );
+    final timer = discovery.startSupervising(
+      checkInterval: const Duration(milliseconds: 20),
+      checkOwner: (pid) async => checked.add(pid),
+    );
+    addTearDown(timer.cancel);
+    await Future.delayed(const Duration(milliseconds: 150));
+    expect(checked, isEmpty, reason: 'not ready: no owner check');
+    status = readyStatus(computerId);
+    await Future.delayed(const Duration(milliseconds: 200));
+    status = readyStatus(computerId, extra: {'pid': 5353});
+    await Future.delayed(const Duration(milliseconds: 200));
+    expect(checked, [4242, 5353]);
+  });
+
+  test('restart stops the daemon, waits for its port to go quiet, and spawns a new one', () async {
+    const computerId = '0123456789abcdef0123456789abcdef';
+    final identityFile = File('${scratch.path}/computer-id')
+      ..writeAsStringSync(computerId);
+    final port = await freePort();
+    server = await serveStatus(port, () => readyStatus(computerId));
+    final calls = <String>[];
+    final discovery = discoveryFor(
+      port,
+      identityFile,
+      stopCommand: () async {
+        calls.add('stop');
+        await server!.close(force: true);
+      },
+      spawnCommand: () async {
+        calls.add('start');
+        server = await serveStatus(
+          port,
+          () => readyStatus(computerId, extra: {'pid': 7777}),
+        );
+      },
+    );
+    final probe = await discovery.restart();
+    expect(calls, ['stop', 'start']);
+    expect(probe.ready, isTrue);
+    expect(probe.pid, 7777);
+  });
 
   test(
     'reads real working folders from older local status snapshots',
@@ -378,30 +435,32 @@ void main() {
     );
 
     test(
-      'a daemon still scanning for agents is NOT READY, and says so',
+      'a daemon still scanning for agents is READY, marked scanning',
       () async {
         server = await serveStatus(
           0,
           () => readyStatus(computerId, extra: {'discoveryReady': false}),
         );
         final probe = await discoveryFor(server!.port, identityFile).probe();
-        expect(probe.state, LocalCliProbeState.notReady);
-        expect(probe.reason, 'still scanning for agents');
+        expect(probe.state, LocalCliProbeState.ready);
+        expect(probe.endpoint!.scanning, isTrue);
         expect(probe.pid, 4242);
         expect(probe.version, '9.9.9');
-        expect(probe.endpoint, isNull);
       },
     );
 
-    test('a daemon still scanning for agents is NOT READY', () async {
-      server = await serveStatus(
-        0,
-        () => readyStatus(computerId, extra: {'discoveryReady': false}),
-      );
-      final probe = await discoveryFor(server!.port, identityFile).probe();
-      expect(probe.state, LocalCliProbeState.notReady);
-      expect(probe.reason, 'still scanning for agents');
-    });
+    test(
+      'a daemon that has finished scanning is not marked scanning',
+      () async {
+        server = await serveStatus(
+          0,
+          () => readyStatus(computerId, extra: {'discoveryReady': true}),
+        );
+        final probe = await discoveryFor(server!.port, identityFile).probe();
+        expect(probe.state, LocalCliProbeState.ready);
+        expect(probe.endpoint!.scanning, isFalse);
+      },
+    );
 
     test('a daemon for another computer is NOT READY, not down', () async {
       server = await serveStatus(
@@ -445,14 +504,35 @@ void main() {
     expect(spawned, isFalse);
   });
 
+  test('ensureRunning does not wait for a daemon that is still scanning for agents', () async {
+    const computerId = '0123456789abcdef0123456789abcdef';
+    final identityFile = File('${scratch.path}/computer-id')
+      ..writeAsStringSync(computerId);
+    server = await serveStatus(
+      0,
+      () => readyStatus(computerId, extra: {'discoveryReady': false}),
+    );
+    final watch = Stopwatch()..start();
+    final probe = await discoveryFor(
+      server!.port,
+      identityFile,
+    ).ensureRunning(readyTimeout: const Duration(seconds: 5));
+    expect(probe.state, LocalCliProbeState.ready);
+    expect(probe.endpoint!.scanning, isTrue);
+    expect(watch.elapsedMilliseconds, lessThan(1000));
+  });
+
   test('ensureRunning waits for a daemon that answers but is not ready, without spawning', () async {
     const computerId = '0123456789abcdef0123456789abcdef';
     final identityFile = File('${scratch.path}/computer-id')
       ..writeAsStringSync(computerId);
     var scanned = false;
+    // Answers, but not ready yet: for another computer until it flips.
     server = await serveStatus(
       0,
-      () => readyStatus(computerId, extra: {'discoveryReady': scanned}),
+      () => readyStatus(
+        scanned ? computerId : 'fedcba9876543210fedcba9876543210',
+      ),
     );
     var spawned = false;
     final discovery = discoveryFor(
@@ -476,7 +556,7 @@ void main() {
       ..writeAsStringSync(computerId);
     server = await serveStatus(
       0,
-      () => readyStatus(computerId, extra: {'discoveryReady': false}),
+      () => readyStatus('fedcba9876543210fedcba9876543210'),
     );
     var spawned = false;
     final probe = await discoveryFor(
@@ -487,7 +567,7 @@ void main() {
       },
     ).ensureRunning(readyTimeout: const Duration(milliseconds: 600));
     expect(probe.state, LocalCliProbeState.notReady);
-    expect(probe.reason, 'still scanning for agents');
+    expect(probe.reason, 'a daemon for a different computer');
     expect(spawned, isFalse);
   });
 
@@ -767,11 +847,9 @@ void main() {
     expect(spawnCount, lessThan(6));
   });
 
-  // The bug this closes: a daemon that signed ITSELF out (its machine was deleted from another
-  // machine) exits, and the supervisor respawned it forever — every replacement starting without a
-  // session and exiting again, silently, for the app's whole lifetime.
+  // Signed-out daemons now serve local agents in guest mode, so supervision must continue.
   test(
-    'startSupervising stops respawning once the CLI reports it is signed out',
+    'startSupervising keeps the guest daemon alive after sign-out',
     () async {
       const computerId = '0123456789abcdef0123456789abcdef';
       final identityFile = File('${scratch.path}/computer-id')
@@ -806,13 +884,18 @@ void main() {
 
       await Future.delayed(const Duration(milliseconds: 300));
 
+      expect(spawnCount, greaterThan(0));
       expect(
         spawnCount,
-        0,
-        reason: 'a signed-out daemon must never be respawned',
+        lessThan(6),
+        reason: 'guest restarts retain the backoff',
       );
-      expect(signedOutCalls, 1, reason: 'the caller is told exactly once');
-      expect(timer.isActive, isFalse, reason: 'supervision stops for good');
+      expect(
+        signedOutCalls,
+        spawnCount,
+        reason: 'auth is checked once per spawn attempt',
+      );
+      expect(timer.isActive, isTrue);
     },
   );
 
@@ -858,4 +941,102 @@ void main() {
       expect(timer.isActive, isTrue);
     },
   );
+
+  // `harness auth status` sat out a refresh lock a dying daemon had left (30s) and threw on the app's
+  // own timeout; the throw skipped the spawn and the local terminals stayed dark (2026-09-28 18:47).
+  for (final (name, check) in <(String, Future<bool> Function())>[
+    (
+      'fails',
+      () async => throw ProcessException(
+        'harness',
+        const [],
+        'did not finish within 30s',
+      ),
+    ),
+    ('never answers', () => Completer<bool>().future),
+  ]) {
+    test('startSupervising still respawns when the auth check $name', () async {
+      const computerId = '0123456789abcdef0123456789abcdef';
+      final identityFile = File('${scratch.path}/computer-id')
+        ..writeAsStringSync(computerId);
+      final probe = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final closedPort = probe.port;
+      await probe.close(force: true);
+
+      var spawnCount = 0;
+      var signedOutCalls = 0;
+      final discovery = LocalCliDiscovery(
+        config: AppConfig(
+          apiBaseUrl: 'https://harness-api.autonomous.ai',
+          localCliBaseUrl: 'http://127.0.0.1:$closedPort',
+        ),
+        identity: LocalMachineIdentity(computerIdFile: identityFile),
+        spawnCommand: () async {
+          spawnCount++;
+        },
+      );
+
+      final timer = discovery.startSupervising(
+        checkInterval: const Duration(milliseconds: 20),
+        graceStep: const Duration(milliseconds: 10),
+        graceWindow: const Duration(milliseconds: 50),
+        initialBackoff: const Duration(milliseconds: 20),
+        maxBackoff: const Duration(milliseconds: 20),
+        stillSignedIn: check,
+        onSignedOut: () => signedOutCalls++,
+      );
+      addTearDown(timer.cancel);
+
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      expect(spawnCount, greaterThan(0));
+      expect(
+        signedOutCalls,
+        0,
+        reason: 'an auth check with no answer is not a sign-out',
+      );
+    });
+  }
+
+  test('startSupervising spawns without waiting for a slow auth check, and still reports its sign-out', () async {
+    const computerId = '0123456789abcdef0123456789abcdef';
+    final identityFile = File('${scratch.path}/computer-id')
+      ..writeAsStringSync(computerId);
+    final probe = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final closedPort = probe.port;
+    await probe.close(force: true);
+
+    var spawnCount = 0;
+    var signedOutCalls = 0;
+    final answer = Completer<bool>();
+    final discovery = LocalCliDiscovery(
+      config: AppConfig(
+        apiBaseUrl: 'https://harness-api.autonomous.ai',
+        localCliBaseUrl: 'http://127.0.0.1:$closedPort',
+      ),
+      identity: LocalMachineIdentity(computerIdFile: identityFile),
+      spawnCommand: () async {
+        spawnCount++;
+      },
+    );
+
+    final timer = discovery.startSupervising(
+      checkInterval: const Duration(milliseconds: 20),
+      graceStep: const Duration(milliseconds: 10),
+      graceWindow: const Duration(milliseconds: 50),
+      initialBackoff: const Duration(seconds: 10),
+      maxBackoff: const Duration(seconds: 10),
+      stillSignedIn: () => answer.future,
+      onSignedOut: () => signedOutCalls++,
+    );
+    addTearDown(timer.cancel);
+
+    await Future.delayed(const Duration(milliseconds: 150));
+    expect(spawnCount, 1, reason: 'the spawn does not wait on the auth check');
+    expect(signedOutCalls, 0);
+
+    answer.complete(false);
+    await Future.delayed(Duration.zero);
+    expect(signedOutCalls, 1, reason: 'a late answer is still told');
+  });
 }

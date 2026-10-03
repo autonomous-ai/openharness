@@ -51,6 +51,22 @@ class ManifestTest(unittest.TestCase):
             self.assertTrue(rel.startswith(UPSTREAM_PKG + "/"), rel)
         self.assertEqual(m["workspace"]["marker"], "project.json")
 
+    def test_the_tile_runs_astra_with_the_upstream_hooks(self):
+        # The same engine and arguments as upstream harness/kicad/harness.json: a person who installs
+        # the tile from the store gets what the team runs, including the Stop hook that finishes a
+        # build and asks once for the firmware. Claude would run without any hook at all.
+        m = manifest()
+        self.assertEqual(m["engine"], "codex")
+        args = m["agent"]["args"]
+        self.assertEqual(args[:2], ["-m", "gpt-6-astra"])
+        self.assertIn("approval_policy=never", args)
+        self.assertIn("sandbox_mode=danger-full-access", args)
+        for event in ("Stop", "Interrupt"):
+            config = next(a for a in args if a.startswith("hooks." + event + "="))
+            self.assertIn("kicadpy.autofinish", config)
+            self.assertIn("$KICAD_HARNESS_PYTHON", config)
+        self.assertFalse(any("bypass-hook-trust" in a for a in args))
+
     def test_the_agent_runs_the_pipeline_on_the_wrappers_python(self):
         env = manifest()["agent"]["env"]
         self.assertEqual(env["KICAD_HARNESS_PYTHON"], "${dsh}/" + UPSTREAM_PKG + "/toolchain/python")

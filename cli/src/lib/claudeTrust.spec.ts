@@ -2,7 +2,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { preTrustClaudeProject, preTrustCodexProject } from './claudeTrust.js'
+import { claudeTrusts, codexTrusts, preTrustClaudeProject, preTrustCodexProject } from './claudeTrust.js'
 
 describe('preTrustClaudeProject', () => {
   it('records trust for a new folder the way Claude Code does, keeping everything else', () => {
@@ -144,5 +144,35 @@ describe('preTrustCodexProject', () => {
     expect(preTrustCodexProject('/Users/example/w', home)).toBe('trusted')
     expect(lstatSync(join(home, '.codex', 'config.toml')).isSymbolicLink()).toBe(true)
     expect(readFileSync(join(home, 'dotfiles', 'codex.toml'), 'utf8')).toContain('[projects."/Users/example/w"]')
+  })
+})
+
+describe('whether a source repo is already trusted (a worktree inherits only that)', () => {
+  it('reads Claude trust from the folder or a folder above it, as Claude Code does', () => {
+    const home = mkdtempSync(join(tmpdir(), 'trust-'))
+    expect(claudeTrusts('/work/repo', home)).toBe(false)
+    writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: {
+      '/work/repo': { hasTrustDialogAccepted: true },
+      '/work/other': { hasTrustDialogAccepted: false },
+      '/code/': { hasTrustDialogAccepted: true },
+    } }))
+    expect(claudeTrusts('/work/repo', home)).toBe(true)
+    expect(claudeTrusts('/work/repo/sub', home)).toBe(true)
+    expect(claudeTrusts('/code/anything', home)).toBe(true)
+    expect(claudeTrusts('/work/other', home)).toBe(false)
+    expect(claudeTrusts('/work/repo-evil', home)).toBe(false) // a prefix of the name is not a parent
+    writeFileSync(join(home, '.claude.json'), '{not json')
+    expect(claudeTrusts('/work/repo', home)).toBe(false)
+  })
+
+  it('reads Codex trust from exactly that folder\'s table', () => {
+    const home = mkdtempSync(join(tmpdir(), 'trust-'))
+    expect(codexTrusts('/work/repo', home)).toBe(false)
+    mkdirSync(join(home, '.codex'))
+    writeFileSync(join(home, '.codex', 'config.toml'),
+      '[projects."/work/repo"]\ntrust_level = "trusted"\n\n[projects."/work/other"]\ntrust_level = "untrusted"\n')
+    expect(codexTrusts('/work/repo', home)).toBe(true)
+    expect(codexTrusts('/work/other', home)).toBe(false)
+    expect(codexTrusts('/work', home)).toBe(false)
   })
 })

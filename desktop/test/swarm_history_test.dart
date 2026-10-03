@@ -109,7 +109,7 @@ void main() {
   });
 
   test(
-    'swarm History counts distinct machines, including offline and closed work',
+    'tab History counts distinct machines, including offline and closed work',
     () async {
       final app = createApp();
       addTearDown(app.dispose);
@@ -163,6 +163,7 @@ void main() {
           terminalAvailable: true,
         ),
       ];
+      final kept = app.adoptSessionForTest(terminal('a1', []));
       final pane = app.adoptSessionForTest(terminal('a0', []));
       final origin = app.activeSwarm;
       final projects = SwarmProjectStore();
@@ -202,7 +203,7 @@ void main() {
       await reply.future;
       await tester.pump();
       expect(app.activeSwarm, same(origin));
-      expect(app.panes.single.agentId, 'a0');
+      expect(app.panes.map((pane) => pane.agentId), [kept.agentId, 'a0']);
       expect(app.closedHistory, isEmpty);
       await app.closeSwarm(origin.id);
       await tester.pump();
@@ -247,7 +248,10 @@ void main() {
 
         // The mark a History row draws for the store, never the group grid.
         Future<void> expectFlutterRow() async {
-          await chord(tester, LogicalKeyboardKey.keyY);
+          await chord(tester, LogicalKeyboardKey.keyP, shift: true);
+          await tester.enterText(jumpField, '> Show full history');
+          await tester.pump();
+          await tester.sendKeyEvent(LogicalKeyboardKey.enter);
           await tester.pump();
           final row = find.ancestor(
             of: find.text(Swarm.storeName),
@@ -334,7 +338,7 @@ void main() {
   });
 
   test(
-    'a chosen closed Swarm restores independently and stale tokens stay inert',
+    'a chosen closed Tab restores independently and stale tokens stay inert',
     () async {
       final app = createApp();
       addTearDown(app.dispose);
@@ -377,13 +381,13 @@ void main() {
         const Agent(id: 'a0', name: 'Renamed agent', terminalAvailable: true),
         const Agent(id: 'a1', name: 'Agent 1', terminalAvailable: true),
       ];
-      app.renameSwarm(app.activeSwarmId, 'Renamed Swarm');
+      app.renameSwarm(app.activeSwarmId, 'Renamed Tab');
       final renamed = history.menuDestinations(app);
       expect(
         renamed.firstWhere((e) => e.agentId == 'a0').title,
         'Renamed agent',
       );
-      expect(renamed.firstWhere((e) => e.isSwarm).title, 'Renamed Swarm');
+      expect(renamed.firstWhere((e) => e.isSwarm).title, 'Renamed Tab');
       app.machineStates['m']!.nodeOnline = false;
       expect(history.menuDestinations(app).first.detail, contains('Offline'));
       await app.closePane(first.id);

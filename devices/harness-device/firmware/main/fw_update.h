@@ -48,3 +48,6 @@ bool fw_update_active(void);
 // Abandon an update in flight (the session dropped mid-transfer). The old image keeps running; the slot is
 // left dirty and is erased again by the next accepted offer.
 void fw_update_abort(const char *why);
+
+// Reader-owned idle check; USB keepalives must not keep a half-image open forever.
+void fw_update_tick(void);

@@ -42,6 +42,12 @@ export interface LaunchOverrides {
    * engine's own login has no such thing to say.
    */
   gridLaunchRecord?: GridLaunchRecord
+  /**
+   * The `provider/model` a resumed OpenCode session has to be put on before this launch — OpenCode
+   * restores a session's stored model whatever argv says. Present whenever the launch names one;
+   * the caller applies it (`applyOpencodeSessionModel`).
+   */
+  sessionModel?: string
 }
 
 export type LaunchOverridesResult =
@@ -166,9 +172,12 @@ export async function buildLaunchOverrides(
   // The named agent rides every relaunch, in the same argv slot `agent_create` put it in. Only an
   // engine with a contract could have had it recorded (create refuses the rest, AGENT_UNSUPPORTED),
   // so the guard is for a row edited by hand — it relaunches as a general session rather than
-  // handing the engine a flag it does not know.
-  if (source.agent && supportsNamedAgent(engine)) {
-    overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...namedAgentArgs(engine, source.agent)] }
+  // handing the engine a flag it does not know. The same guard covers an opencode agent created on
+  // v1 and relaunched on v2, whose TUI has no `--agent`: a resumed v2 session keeps the agent it
+  // stored (`session_v2.agent`), so nothing is lost by not naming it.
+  const opencodeMajor = deps.machine().opencodeMajor ?? null
+  if (source.agent && supportsNamedAgent(engine, opencodeMajor)) {
+    overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...namedAgentArgs(engine, source.agent, opencodeMajor)] }
   }
   return { ok: true, overrides: { ...overrides, clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }
 }
@@ -196,7 +205,7 @@ async function buildBaseLaunchOverrides(
   // back on the DEFAULT profile, reading hooks from a folder that was not the one it writes to.
   let ownLogin: LaunchOverrides | null = null
   if (!source.gridLaunch) {
-    const restored = subscriptionModelLaunch(engine, source.subscriptionModel)
+    const restored = subscriptionModelLaunch(engine, source.subscriptionModel, deps.machine().opencodeMajor ?? null)
     // Ahead of the model on the command line: `-c` configures, `-m` selects, and Codex resolves the
     // model against the provider it has been given.
     const provider = ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
@@ -205,6 +214,7 @@ async function buildBaseLaunchOverrides(
         env: { ...(restored?.env ?? {}) },
         extraArgs: [...provider, ...(restored?.args ?? [])],
         clearEnv: [],
+        ...(restored?.sessionModel ? { sessionModel: restored.sessionModel } : {}),
       }
     }
   }
@@ -232,6 +242,7 @@ async function buildBaseLaunchOverrides(
         extraArgs: [...built.launch.args],
         clearEnv: gridConflictingEnvToClear({ env }),
         gridLaunchRecord: { override: source.gridLaunch, webSearch: built.launch.webSearch },
+        ...(built.launch.sessionModel ? { sessionModel: built.launch.sessionModel } : {}),
       },
     }
   }

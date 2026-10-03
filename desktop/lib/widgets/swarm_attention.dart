@@ -1,6 +1,8 @@
 import 'swarm_search_field.dart';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
@@ -9,6 +11,17 @@ import '../state/app_state.dart';
 import '../state/swarm_attention.dart';
 import '../state/swarm_navigation.dart';
 import 'engine_identity.dart';
+
+// Ink on the dialog. Dark palettes keep the white ramp it was tuned in; light
+// ones take the semantic text tokens, because black at these alphas falls
+// under 4.5:1 there.
+Color get _ink => grid.AppTheme.pick(grid.AppPalette.textPrimary, Colors.white);
+Color get _inkSoft =>
+    grid.AppTheme.pick(grid.AppPalette.textSecondary, Colors.white70);
+Color get _inkMuted =>
+    grid.AppTheme.pick(grid.AppPalette.textSecondary, Colors.white60);
+Color get _inkFaint =>
+    grid.AppTheme.pick(grid.AppPalette.textSecondary, Colors.white54);
 
 Future<SwarmAttentionEntry?> showSwarmAttention(
   BuildContext context,
@@ -142,20 +155,20 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
                   const SizedBox(width: 8),
                   Text(
                     '${_catalog.length}',
-                    style: AppType.monoMeta(color: Colors.white54),
+                    style: AppType.monoMeta(color: _inkFaint),
                   ),
                   const Spacer(),
                   IconButton(
                     tooltip: 'Close notifications',
                     onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close, size: 18),
+                    icon: const Icon(AppIcons.close, size: 18),
                   ),
                 ],
               ),
               const SizedBox(height: 8),
               SwarmSearchField(
                 autofocus: true,
-                hintText: 'Find a question, agent, or project',
+                hintText: 'Find a question, harness, or project',
                 onChanged: (value) => setState(() {
                   _query = value;
                   _cursor = 0;
@@ -171,9 +184,9 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
                     ? Center(
                         child: Text(
                           _catalog.isEmpty
-                              ? 'No agents need your input'
+                              ? 'No harnesses need your input'
                               : 'No matching questions',
-                          style: AppType.body(color: Colors.white60),
+                          style: AppType.body(color: _inkMuted),
                         ),
                       )
                     : ListView.builder(
@@ -187,8 +200,13 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
                             key: ValueKey(row.id),
                             enabled: row.available,
                             selected: index == _cursor,
-                            selectedColor: Colors.white,
-                            selectedTileColor: Colors.white10,
+                            selectedColor: _ink,
+                            selectedTileColor: grid
+                                .AppTheme
+                                .palette
+                                .value
+                                .foreground
+                                .withValues(alpha: .10),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(8),
                             ),
@@ -216,7 +234,7 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
                                   overflow: TextOverflow.ellipsis,
                                   style: AppType.body(
                                     height: 1.35,
-                                    color: Colors.white70,
+                                    color: _inkSoft,
                                   ),
                                 ),
                                 const SizedBox(height: 4),
@@ -226,7 +244,7 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
                                   overflow: TextOverflow.ellipsis,
                                   style: AppType.monoMeta(
                                     height: 1.3,
-                                    color: Colors.white54,
+                                    color: _inkFaint,
                                   ),
                                 ),
                               ],
@@ -237,7 +255,7 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
                                   : destination.hasView
                                   ? 'Jump'
                                   : 'Open Harness',
-                              style: AppType.monoMeta(color: Colors.white54),
+                              style: AppType.monoMeta(color: _inkFaint),
                             ),
                             onTap: row.available
                                 ? () => Navigator.pop(context, row)
@@ -251,13 +269,13 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
                 alignment: Alignment.centerLeft,
                 child: Text(
                   selected != null && !selected.available
-                      ? 'This agent’s terminal is unavailable · Esc to close'
+                      ? 'This harness’s terminal is unavailable · Esc to close'
                       : selected != null && !selected.destination.hasView
                       ? '↵ Open Harness in $_targetName · Esc to close'
                       : '↑↓ or ⌃N ⌃P to choose · Return to jump · Esc to close',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: AppType.monoMeta(color: Colors.white54),
+                  style: AppType.monoMeta(color: _inkFaint),
                 ),
               ),
             ],

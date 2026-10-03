@@ -337,12 +337,14 @@ export function isWrapped(payload: unknown): payload is WrappedPayload {
 
 /** `up` events (adapter→web, group key) whose payload carries user content. */
 export const ENCRYPTED_UP_TYPES = new Set<string>([
+  'harness_devices_changed',
   'user_message', 'text_delta', 'thinking_delta', 'thinking_title', 'tool_start', 'tool_end',
   'turn_started', 'turn_ended', 'done', 'context_compact', 'turn_summary', 'turn_summary_pending',
   'agent_created', 'agent_synced', 'agent_renamed', 'agent_deleted',
 ])
 /** RPC replies (`<x>_result`) whose payload is encrypted ONLY when the requester has a session. */
 export const ENCRYPTED_RPC_RESULT_TYPES = new Set<string>([
+  'harness_devices_list_result', 'harness_device_settings_result',
   'session_get_result', 'sessions_list_result', 'agents_list_result', 'models_list_result',
   'agent_files_result', 'agent_read_file_result', 'agent_update_result', 'agent_delete_result',
   'e2ee_pairings_list_result', 'e2ee_pairing_unpair_result',
@@ -363,9 +365,14 @@ export const ENCRYPTED_RPC_RESULT_TYPES = new Set<string>([
   // targeted at the requester rather than broadcast — and so a daemon that predates the type is
   // told apart by silence, exactly like `usage_read`.
   'theme_set_result',
+  // Session search hits: what was said in this machine's conversations, around the searched words.
+  'session_search_result',
+  // The end of one conversation, for a preview: what was asked and answered, verbatim.
+  'session_tail_result',
 ])
 /** Client→adapter frames that carry or can trigger adapter-local user data. */
 export const ENCRYPTED_DOWN_TYPES = new Set<string>([
+  'harness_devices_list', 'harness_device_settings',
   'message',
   // An AskUserQuestion answer is user content, so the firmware wraps it (e2ee_manager.c). Leaving it out
   // of this set did NOT fail loudly: unwrapDown was simply never called, the payload stayed the raw
@@ -385,6 +392,11 @@ export const ENCRYPTED_DOWN_TYPES = new Set<string>([
   // The desktop's pane colours for this machine's tmux sessions (lib/hostTheme.ts). Same trap as
   // above if missing: the envelope would never be opened and the app would wait out its timeout.
   'theme_set',
+  // What somebody is searching their conversations for (lib/sessionSearch/). Same trap as above if
+  // missing: the envelope would never be opened and the app would wait out its timeout.
+  'session_search',
+  // Which conversation somebody is previewing. Same trap as above if missing.
+  'session_tail',
   'device_e2ee_pair', 'e2ee_pairings_list', 'e2ee_pairing_unpair',
   'e2ee_pairings_unpair_all', 'e2ee_browser_link_create',
   // Remote terminal control is always pairwise E2EE. The relay may route by outer type/connId but must

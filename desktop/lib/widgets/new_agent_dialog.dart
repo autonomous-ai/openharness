@@ -1,12 +1,11 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import '../analytics/analytics.dart';
 import '../state/pane_arrangement.dart';
 import '../core/desktop_window.dart';
 import '../core/engine_availability.dart';
@@ -14,6 +13,7 @@ import '../core/codex_profiles.dart';
 import '../core/dsh_catalog.dart';
 import '../core/harness_catalog.dart';
 import '../core/first_task.dart';
+import '../core/launch_setup.dart';
 import '../core/permission_modes.dart';
 import '../core/project_folder.dart';
 import '../core/repository_clone.dart';
@@ -95,7 +95,6 @@ Future<NewAgentDialogResult?> showNewAgentDialog(
             .machineId ??
         '';
   }
-  analytics.newAgentOpened(source: source);
   // This dialog uses a separate route. Carry the live picker bindings with
   // it; showGeneralDialog does not capture inherited themes for us.
   final activeKeymap = keymap ?? KeymapTheme.of(context, listen: false);
@@ -747,6 +746,30 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
       prompt: _firstPrompt,
       attempt: _creation,
     );
+    if (error == null && _creation?.agentId != null) {
+      unawaited(
+        widget.notifier.agentPreference.remember(
+          choice,
+          harnessId: harness,
+          setup: LaunchSetup(
+            engine: engine,
+            harnessId: harness,
+            permissionMode: permissionMode ?? kDefaultPermissionMode,
+            model: terminal ? null : widget.initialDraft?.model,
+            profile: engine == 'codex' && widget.initialDraft?.model == null
+                ? profile
+                : null,
+            profileMachineId: _machineId,
+          ),
+          worktree:
+              _sameGitProject && widget.initialDraft?.worktreePreference != null
+              ? widget.initialDraft!.worktreePreference
+              : project?.gitSource != null
+              ? project!.createsWorktree
+              : null,
+        ),
+      );
+    }
     if (!mounted) return;
     if (error != null) {
       setState(() {
@@ -766,15 +789,6 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
       });
       return;
     }
-    analytics.agentCreated(
-      engine: choice,
-      bypassPermission: bypassPermission,
-      permissionMode: permissionMode,
-    );
-    // What New Harness lists first next time, before anything is typed.
-    unawaited(
-      widget.notifier.agentPreference.remember(choice, harnessId: _harnessId),
-    );
     Navigator.of(context).pop(NewAgentDialogResult.created);
   }
 
@@ -899,7 +913,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
         elevation: 4,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(3),
-          side: BorderSide(color: Colors.white.withValues(alpha: .24)),
+          side: BorderSide(color: boxInk(.24)),
         ),
         title: Text(_title),
         titleTextStyle: boxMonoStyle(color: kBoxFaint),
@@ -1050,7 +1064,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                             : () =>
                                   Navigator.of(context)
                                       .pop(NewAgentDialogResult.findExisting),
-                        icon: const Icon(LucideIcons.search, size: 16),
+                        icon: const Icon(AppIcons.search, size: 16),
                         label: const Text('Find a harness'),
                       ),
                     FilledButton(
@@ -1064,14 +1078,12 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                           horizontal: 12,
                           vertical: 8,
                         ),
-                        backgroundColor: Colors.white.withValues(alpha: .08),
-                        foregroundColor: Colors.white,
+                        backgroundColor: boxInk(.08),
+                        foregroundColor: boxText(1),
                         textStyle: boxMonoStyle(),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(2),
-                          side: BorderSide(
-                            color: Colors.white.withValues(alpha: .24),
-                          ),
+                          side: BorderSide(color: boxInk(.24)),
                         ),
                         disabledForegroundColor: _submitting
                             ? grid.AppPalette.textPrimary
@@ -1083,11 +1095,11 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  const SizedBox(
+                                  SizedBox(
                                     width: 14,
                                     height: 14,
                                     child: CircularProgressIndicator(
-                                      color: Colors.white,
+                                      color: boxText(1),
                                       strokeWidth: 2,
                                     ),
                                   ),
@@ -1266,7 +1278,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                 id: NewHarnessController.codingId,
                 label: 'Coding',
                 detail: 'Work in any code project',
-                mark: (size) => Icon(LucideIcons.code, size: size),
+                mark: (size) => Icon(AppIcons.code, size: size),
               ),
               for (final harness in _harnessOptions)
                 AgentChoice(
@@ -1611,7 +1623,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                   padding: const EdgeInsets.only(right: 8),
                   child: AppIconButton(
                     key: const Key('new-agent-task-clear'),
-                    icon: LucideIcons.x300,
+                    icon: AppIcons.close,
                     tooltip: 'Clear the task',
                     onPressed: _choicesLocked ? null : _task.clear,
                   ),
@@ -1677,10 +1689,10 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
             detail: mode.detail,
             leading: () => Icon(
               mode.risky
-                  ? LucideIcons.shieldOff
+                  ? AppIcons.shieldOff
                   : mode.id == kDefaultPermissionMode
-                  ? LucideIcons.shieldCheck
-                  : LucideIcons.shield,
+                  ? AppIcons.shieldCheck
+                  : AppIcons.shield,
               size: 16,
               color: mode.risky
                   ? grid.AppPalette.dangerFill
@@ -1736,7 +1748,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
     value: _machineId,
     moreKey: const Key('new-agent-machine-more'),
     moreLabel: 'More machines',
-    moreLeading: const Icon(LucideIcons.monitor, size: 22),
+    moreLeading: const Icon(AppIcons.monitor, size: 22),
     optionKey: (id) => ValueKey('new-agent-machine-$id'),
     showDetails: true,
     compact: true,
@@ -1755,9 +1767,9 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
             leading: () => Icon(
               _machineOnline(machine)
                   ? (machine.isLocalMachine
-                        ? LucideIcons.laptop
-                        : LucideIcons.monitor)
-                  : LucideIcons.monitorOff,
+                        ? AppIcons.laptop
+                        : AppIcons.monitor)
+                  : AppIcons.monitorOff,
               size: 22,
               color: _machineOnline(machine)
                   ? grid.AppPalette.textPrimary

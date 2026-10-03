@@ -573,6 +573,19 @@ export function codexMessagesToEvents(
   return events
 }
 
+/** Select only records that can affect lastCodexTurnText. Empty user messages do not reset a
+ * turn. Discard tool receipts while scanning so a long latest turn does not retain them all. */
+export function selectCodexRecapLine(line: string): 'keep' | 'skip' | 'stop' {
+  const raw = parse(line)
+  const item = raw && payload(raw)
+  if (!raw || !item) return 'skip'
+  if (raw.type === 'response_item' && string(item.type) === 'message') return goalObjective(item) ? 'stop' : 'skip'
+  if (raw.type !== 'event_msg') return 'skip'
+  const itemType = string(item.type)
+  if (USER_TURN_TYPES.has(itemType) && messageText(item)) return 'stop'
+  return AGENT_TEXT_TYPES.has(itemType) ? 'keep' : 'skip'
+}
+
 export function lastCodexTurnText(rawLines: string[]): LastTurnText | null {
   let userMessage = ''
   let assistantText = ''
@@ -598,7 +611,7 @@ export function lastCodexTurnText(rawLines: string[]): LastTurnText | null {
     // A `/goal` turn has no `user_message` — its prompt lives in the injected goal context.
     if (raw.type === 'response_item' && string(item.type) === 'message') {
       const objective = goalObjective(item)
-      if (objective) { userMessage = `/goal ${objective}`; assistantText = '' }
+      if (objective) { userMessage = `/goal ${objective}`; assistantText = ''; finalText = ''; sawPhase = false }
       continue
     }
     if (raw.type !== 'event_msg') continue
@@ -611,7 +624,7 @@ export function lastCodexTurnText(rawLines: string[]): LastTurnText | null {
       if (message) take(item, message)
     }
   }
-  const text = sawPhase && finalText ? finalText : assistantText
+  const text = sawPhase ? finalText : assistantText
   return text ? { userMessage, assistantText: text } : null
 }
 

@@ -19,10 +19,8 @@ class AgentEntry {
   String get machineId => machine.machine.machineId;
   String get machineName => machine.machine.displayName;
 
-  /// The folder this agent works in, as [AgentContextLine] names it. Through [MachineState.projectOf]
-  /// rather than `agent.project` directly: a locally launched agent carries its project on the
-  /// machine's own side, and a row reading the field alone shows nothing for exactly those agents.
-  AgentProject? get project => machine.projectOf(agent);
+  /// The folder this agent works in, as [AgentContextLine] names it.
+  AgentProject? get project => agent.project;
 
   /// Whether this agent is blocked on an answer from the person holding the phone.
   bool get isWaiting => machine.blockedAgents.containsKey(agent.id);
@@ -43,8 +41,7 @@ class AgentEntry {
   /// of them to the bottom of every list and made them untappable — which,
   /// before the app asked for them at all, was invisible. It is visible now.
   bool get isOpenable =>
-      agent.terminalAvailable ||
-      (agent.isStopped && agent.canPauseAndResume);
+      agent.terminalAvailable || (agent.isStopped && agent.canPauseAndResume);
 
   /// When its conversation last moved: the machine's own [Agent.updatedAt], or
   /// a turn this app saw since ([MachineState.agentActivityAt]) — whichever is
@@ -132,6 +129,9 @@ List<AgentEntry> recentAgents(List<AgentEntry> entries) => _stableSorted(
 /// Then the desktop's tie-breaks: its own focus history (which a phone does not have, so it is
 /// skipped), the name as drawn in natural order, and finally the id so two rows never swap.
 int compareMonitorOrder(AgentEntry a, AgentEntry b) {
+  // When the conversation last MOVED — the true time (the owner: "use conversation last move, not
+  // last open"). Opening a harness on some app is not work on it, and sorting it up for that put a
+  // glance above the harness that actually just did something.
   final activity = (b.agent.updatedAt?.millisecondsSinceEpoch ?? 0).compareTo(
     a.agent.updatedAt?.millisecondsSinceEpoch ?? 0,
   );

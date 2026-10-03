@@ -133,11 +133,12 @@ gcloud storage --help >/dev/null 2>&1 || {
   exit 1
 }
 
-# gcs_cp <src> <dst> [cache-control] [content-type] — either side may be gs:// or a local path or `-`.
+# gcs_cp <src> <dst> [cache-control] [content-type] [generation-match].
 gcs_cp() {
-  local src="$1" dst="$2" cc="${3:-}" ct="${4:-}" args=(storage cp)
+  local src="$1" dst="$2" cc="${3:-}" ct="${4:-}" generation="${5:-}" args=(storage cp)
   if [ -n "$cc" ]; then args+=("--cache-control=$cc"); fi
   if [ -n "$ct" ]; then args+=("--content-type=$ct"); fi
+  if [ -n "$generation" ]; then args+=("--if-generation-match=$generation"); fi
   gcloud "${args[@]}" "$src" "$dst"
 }
 
@@ -222,6 +223,8 @@ mkdir -p "$APPDIR/usr/bin"
 cp -a "$BUNDLE_DIR/." "$APPDIR/usr/bin/"
 ln -s usr/bin/harness "$APPDIR/AppRun"
 cp "$BUNDLE_DIR/harness.png" "$APPDIR/harness.png"
+# StartupWMClass is the window's app id (APPLICATION_ID, linux/CMakeLists.txt): how a dock matches the
+# running window to this entry instead of drawing it with a generic icon.
 cat > "$APPDIR/harness.desktop" <<EOF
 [Desktop Entry]
 Type=Application
@@ -231,6 +234,7 @@ Exec=harness
 Icon=harness
 Categories=Development;
 Terminal=false
+StartupWMClass=com.autonomous.harness
 EOF
 
 APPIMAGE_ARCH="$([ "$RELEASE_ARCH" = "arm64" ] && echo aarch64 || echo x86_64)"
@@ -252,7 +256,7 @@ echo "   dest: gs://${GCS_BUCKET}/${GCS_PATH}"
 # Immutable per-version path — see the CDN_ASSET_BASE_URL note near the top of this script. Long
 # max-age here is what actually lets the CDN cache it instead of hitting GCS on every install/update.
 gcs_refuse_republish "gs://${GCS_BUCKET}/${GCS_PATH}"
-gcs_cp "$OUTPUT" "gs://${GCS_BUCKET}/${GCS_PATH}" "public, max-age=31536000, immutable"
+gcs_cp "$OUTPUT" "gs://${GCS_BUCKET}/${GCS_PATH}" "public, max-age=31536000, immutable" "" 0
 
 echo ">> merging manifest: gs://${GCS_BUCKET}/${METADATA_PATH}  (${OTA_KEY})"
 SRC="$(mktemp)"; DST="$(mktemp)"   # removed by cleanup() on EXIT

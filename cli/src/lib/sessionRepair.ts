@@ -77,10 +77,14 @@ async function transcripts(root: string, depth = 0): Promise<TranscriptFile[]> {
  * line one; scanning a few lines covers all three without knowing which is which.
  */
 const CWD_SCAN_LINES = 20
+const CWD_SCAN_CHARS = 256 * 1024
 
 async function readTranscriptMeta(path: string): Promise<TranscriptMeta | null> {
   try {
-    const head = (await readFile(path, 'utf-8')).slice(0, 256 * 1024)
+    // Preserve the existing UTF-16 character budget, including non-ASCII paths. Four
+    // UTF-8 bytes per code unit is sufficient even when the cutoff splits a surrogate
+    // pair; a byte budget equal to the character budget would silently shrink the scan.
+    const head = (await headBytes(path, CWD_SCAN_CHARS * 4)).toString('utf-8').slice(0, CWD_SCAN_CHARS)
     for (const line of head.split('\n', CWD_SCAN_LINES)) {
       if (!line.trim()) continue
       let obj: Record<string, unknown>
@@ -411,14 +415,19 @@ const CLAUDE_CONTINUATION_TAIL_BYTES = 4 * 1024
  *  lines of the top — the records before it are bookkeeping (mode, file history, title, agent name). */
 const CLAUDE_CONTINUATION_HEAD_BYTES = 256 * 1024
 
-async function headBytes(path: string, maxBytes: number): Promise<string> {
+async function headBytes(path: string, maxBytes: number): Promise<Buffer> {
   const handle = await open(path, 'r')
   try {
     const length = Math.min((await handle.stat()).size, maxBytes)
-    if (length <= 0) return ''
+    if (length <= 0) return Buffer.alloc(0)
     const buffer = Buffer.alloc(length)
-    await handle.read(buffer, 0, length, 0)
-    return buffer.toString('utf-8')
+    let read = 0
+    while (read < length) {
+      const { bytesRead } = await handle.read(buffer, read, length - read, read)
+      if (!bytesRead) break
+      read += bytesRead
+    }
+    return buffer.subarray(0, read)
   } finally {
     await handle.close()
   }
@@ -438,13 +447,13 @@ async function headBytes(path: string, maxBytes: number): Promise<string> {
  * these two lines and no turn.
  */
 async function hasConversationTurn(path: string): Promise<boolean> {
-  let head: string
+  let head: Buffer
   try {
     head = await headBytes(path, CLAUDE_CONTINUATION_HEAD_BYTES)
   } catch {
     return false
   }
-  for (const line of head.split('\n')) {
+  for (const line of head.toString('utf-8').split('\n')) {
     if (!line.trim() || (!line.includes('"user"') && !line.includes('"assistant"'))) continue
     try {
       const record = JSON.parse(line) as { type?: unknown }
@@ -454,6 +463,8 @@ async function hasConversationTurn(path: string): Promise<boolean> {
   // Nothing in the head, but more file than we read: a continuation can open on a `file-history-snapshot`
   // large enough to push the first turn past the bound, and the thing being ruled out is two short
   // lines. Anything this size is a conversation, so the bound must never be what refuses one.
+  // Count the bytes read, not decoded UTF-16 characters: Unicode bookkeeping must not make
+  // a read that hit the byte cap look smaller and strand the real turn beyond it.
   return head.length >= CLAUDE_CONTINUATION_HEAD_BYTES
 }
 

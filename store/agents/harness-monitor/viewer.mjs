@@ -1,18 +1,4 @@
-/**
- * The pane beside the terminal: the fleet, live, and the four reversible verbs.
- *
- * A loopback server and nothing else — it binds 127.0.0.1, refuses a request whose Host or Origin is not
- * its own, and serves three static files with a self-only CSP. What it adds over the other store viewers
- * is a narrow write surface, because a fleet manager you can only read is a fleet manager nobody uses:
- *
- *   POST /api/act      pause · resume · retire · pin · unpin — every one of them reversible
- *   POST /api/policy   the thresholds, validated before they are written
- *
- * Both require the token this process mints at boot and hands to its own page; a page from anywhere else
- * does not have it. What is deliberately NOT here: deleting an agent, killing a tmux session, touching a
- * transcript. Those are irreversible, they already exist in the app behind their own confirmation, and a
- * pane full of eighty rows is the last place they belong.
- */
+/** Loopback viewer. Inventory and explicit actions require no model inference. */
 
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
@@ -20,22 +6,17 @@ import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { pause, resume } from './lib/actions.mjs'
+import { stop, open, previewDelete, deleteHarness, worktreeAction, inspectWorkspace } from './lib/actions.mjs'
+import { cleanupReviews } from './lib/cleanup.mjs'
 import { closeBridges } from './lib/bridge.mjs'
 import { collect as collectFleet, summarize, tilde } from './lib/inventory.mjs'
-import { capture, looksBlocked } from './lib/panes.mjs'
 import { DEFAULT_POLICY, decide, normalizePolicy } from './lib/policy.mjs'
-import { clearPaused, markPaused, pin, readLog, readState, record, savePolicyValues, writeState, writeVerdict } from './lib/state.mjs'
+import { pin, readLog, readState, record, savePolicyValues, writeState, writeVerdict } from './lib/state.mjs'
 
 const PACKAGE = dirname(fileURLToPath(import.meta.url))
-const VERBS = new Set(['pause', 'resume', 'pin', 'unpin'])
+const VERBS = new Set(['stop', 'open', 'pin', 'unpin', 'delete-review', 'delete', 'worktree-review', 'worktree-delete', 'workspace-inspect'])
 
-/** Panes to read per refresh when looking for an open prompt. Bounded because each one is a tmux call
- *  and a fleet of eighty must cost the same as a fleet of eight: the candidates are the rows the policy
- *  is about to act on, which are the only rows where the answer changes anything. */
-const BLOCKED_SCAN_LIMIT = 24
-
-export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteIntervalMs = 60_000, now = () => Date.now(), collect = collectFleet, scan = capture, verbs = { pause, resume } }) {
+export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteIntervalMs = 15_000, now = () => Date.now(), collect = collectFleet, verbs = { stop, open, previewDelete, deleteHarness, worktreeAction, inspectWorkspace }, cleanup = cleanupReviews() }) {
   const token = randomBytes(24).toString('base64url')
   const clients = new Set()
   const cache = new Map()
@@ -68,17 +49,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
       return
     }
     const policy = normalizePolicy(state.policy, { home: homedir() })
-    const { rows, problems, degraded } = await collect({ state, now: now(), includeRemote: true, cache, remote, remoteIntervalMs: forceRemote ? 0 : remoteIntervalMs })
-
-    // Look for an open prompt only where it would change a decision, newest candidates first.
-    const candidates = rows
-      .filter((row) => row.local && row.state === 'running' && row.pane && row.idleMs >= policy.pauseAfterIdleMs / 2)
-      .slice(0, BLOCKED_SCAN_LIMIT)
-    await Promise.all(candidates.map(async (row) => {
-      const screen = await scan(row.pane, { lines: 30 })
-      row.needsInput = looksBlocked(screen)
-      row.screenTail = screen.split('\n').filter((line) => line.trim()).slice(-3).join('\n').slice(0, 600)
-    }))
+    const { rows, shared = [], machines = [], problems, degraded } = await collect({ state, now: now(), includeRemote: true, cache, remote, remoteIntervalMs: forceRemote ? 0 : remoteIntervalMs })
 
     const plan = decide(rows, policy, { home: homedir(), now: now() })
     const summary = summarize(rows)
@@ -86,6 +57,8 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
       spec: 1,
       status: degraded ? 'degraded' : 'ok',
       rows,
+      shared,
+      machines,
       summary,
       policy: { ...policy },
       defaults: DEFAULT_POLICY,
@@ -132,39 +105,73 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
 
   /** The write surface. One verb, up to 64 rows, and a receipt per row — the same library call the CLI
    *  makes, so a click and a typed command cannot behave differently. */
-  async function act({ verb, ids }) {
+  let writes = Promise.resolve()
+  function write(operation) {
+    const result = writes.then(operation)
+    writes = result.catch(() => {})
+    return result
+  }
+  const act = payload => write(() => actOnce(payload))
+  async function actOnce({ verb, ids, manual = false, expected, reviewId, path, discardChanges, choices }) {
     if (!VERBS.has(verb)) return { error: `Not a verb Harness Monitor has: ${verb}` }
-    const targets = (Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string').slice(0, 64)
+    const targets = [...new Set((Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string'))].slice(0, 64)
     if (!targets.length) return { error: 'Name at least one harness.' }
+    const explicit = manual === true && targets.length === 1
+    const deleting = ['delete', 'delete-review', 'worktree-review', 'worktree-delete', 'workspace-inspect'].includes(verb)
+    if (deleting && (!explicit || !Array.isArray(expected) || expected.length !== 1)) return { error: 'Review one harness at a time before deleting.' }
+    if (['delete', 'worktree-delete'].includes(verb) && (typeof reviewId !== 'string' || !reviewId)) return { error: 'Review this harness before deleting it.' }
+    const reviewed = new Map((Array.isArray(expected) ? expected : snapshot.rows).filter(row => row && typeof row.id === 'string').map(({ id, sessionId, lastActivity, createdAt }) => [id, { sessionId, lastActivity, createdAt }]))
+    // Bulk actions are restricted to what is still in the reviewed cleanup plan.
+    if (verb === 'stop' && !explicit) {
+      await polling
+      await poll({ immediate: true, forceRemote: true })
+    }
     const state = await readState(workspace)
     const policy = normalizePolicy(state.policy, { home: homedir() })
     const rows = snapshot.rows.filter((row) => targets.includes(row.id))
     if (!rows.length) return { error: 'Those harnesses are not in the current view. Refresh and try again.' }
 
     let next = state
-    const results = []
+    const results = targets.filter(id => !rows.some(row => row.id === id)).map(id => ({ id, name: id, action: verb, ok: false, refused: true, detail: 'This session is no longer in the current view.' }))
+    const eligible = new Set(snapshot.plan.filter(entry => entry.action === 'stop').map(entry => entry.id))
     for (const row of rows) {
-      if (verb === 'pin' || verb === 'unpin') {
-        next = pin(next, row.id, verb === 'pin')
-        results.push({ ok: true, action: verb, id: row.id, name: row.name, detail: verb === 'pin' ? 'never paused by the policy' : 'the policy may pause it again' })
+      const review = reviewed.get(row.id)
+      if ((verb === 'stop' || deleting) && (!review || review.sessionId !== row.sessionId || (deleting && review.createdAt !== row.createdAt) || (!explicit && review.lastActivity !== row.lastActivity))) {
+        results.push({ id: row.id, name: row.name, action: verb, ok: false, refused: true, detail: 'This session changed since you reviewed it. Refresh and review it again.' })
         continue
       }
-      const ticket = state.paused?.[row.id] ?? null
-      const result = verb === 'pause' ? await verbs.pause(row, { policy }) : await verbs.resume(row, { ticket })
-      if (result.ok && result.ticket) next = markPaused(next, row, result.ticket)
-      if (result.ok && verb === 'resume') next = clearPaused(next, row.id)
+      if (verb === 'stop' && !explicit && !eligible.has(row.id)) {
+        results.push({ id: row.id, name: row.name, action: verb, ok: false, refused: true, detail: 'This session is no longer eligible for cleanup. Review the new plan.' })
+        continue
+      }
+      if (verb === 'workspace-inspect') {
+        results.push(await verbs.inspectWorkspace(row))
+        continue
+      }
+      if (verb === 'pin' || verb === 'unpin') {
+        next = pin(next, row.id, verb === 'pin')
+        results.push({ ok: true, action: verb, id: row.id, name: row.name, detail: verb === 'pin' ? 'never stopped by the policy' : 'the policy may stop it again' })
+        continue
+      }
+      const result = verb === 'stop' ? await verbs.stop(row, { policy, force: explicit })
+        : verb === 'delete-review' ? await verbs.previewDelete(row)
+        : verb === 'delete' ? await verbs.deleteHarness(row, { reviewId, choices, path, discardChanges })
+        : verb === 'worktree-review' ? await verbs.worktreeAction(row)
+        : verb === 'worktree-delete' ? await verbs.worktreeAction(row, { reviewId, path, discardChanges }) : await verbs.open(row)
       results.push(result)
     }
-    await writeState(workspace, next)
+    if (verb === 'workspace-inspect') return { results }
+    if (verb === 'pin' || verb === 'unpin') await writeState(workspace, next)
     for (const result of results) await record(workspace, { ...result, by: 'pane' })
-    await poll({ immediate: true })
+    await polling
+    await poll({ immediate: true, forceRemote: true })
     return { results }
   }
 
   async function savePolicy(raw) {
     // Only the keys the pane can change, and only valid values: the file is a person's, and the pane is a
     // guest in it. Everything else in it — comments included — is left exactly as it was.
-    const allowed = ['pauseAfterIdle', 'hideAfterIdle', 'runningCeiling']
+    const allowed = ['stopAfterIdle', 'hideAfterIdle', 'runningCeiling']
     const values = Object.fromEntries(Object.entries(raw ?? {}).filter(([key]) => allowed.includes(key)))
     const state = await readState(workspace)
     let policy
@@ -189,8 +196,20 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
         for await (const chunk of req) { body += chunk; if (body.length > 64 * 1024) { json(res, 413, { error: 'Too large.' }); return } }
         let payload; try { payload = JSON.parse(body || '{}') } catch { json(res, 400, { error: 'Send JSON.' }); return }
         if (url.pathname === '/api/act') { json(res, 200, await act(payload)); return }
-        if (url.pathname === '/api/policy') { json(res, 200, await savePolicy(payload.policy ?? {})); return }
-        if (url.pathname === '/api/refresh') { await poll({ immediate: true, forceRemote: true }); json(res, 200, { ok: true }); return }
+        if (url.pathname === '/api/cleanup/preview') { json(res, 200, await cleanup.preview()); return }
+        if (url.pathname === '/api/cleanup/close') {
+          let result
+          try { result = await write(() => cleanup.close(payload.reviewId, payload.id)) }
+          catch (error) {
+            if (error.code !== 'INVALID_REVIEW') throw error
+            json(res, 409, { error: error.message }); return
+          }
+          await record(workspace, { ...result, by: 'pane' })
+          json(res, 200, result)
+          return
+        }
+        if (url.pathname === '/api/policy') { json(res, 200, await write(() => savePolicy(payload.policy ?? {}))); return }
+        if (url.pathname === '/api/refresh') { await polling; await poll({ immediate: true, forceRemote: true }); json(res, 200, { ok: true }); return }
         json(res, 404, { error: 'Not found' }); return
       }
 
@@ -210,11 +229,20 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, remoteInt
         return
       }
 
+      const icon = /^\/icons\/([a-z0-9-]+)\.png$/.exec(url.pathname)
+      if (icon) {
+        try {
+          const content = await readFile(join(PACKAGE, 'viewer', 'icons', icon[1] + '.png'))
+          res.writeHead(200, { ...headers, 'content-type': 'image/png' }); res.end(req.method === 'HEAD' ? undefined : content)
+        } catch { json(res, 404, { error: 'Icon not found' }) }
+        return
+      }
       const assets = {
         '/': ['index.html', 'text/html; charset=utf-8'],
         '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
         '/app.css': ['app.css', 'text/css; charset=utf-8'],
         '/scale.js': ['scale.js', 'text/javascript; charset=utf-8'],
+        '/table.js': ['table.js', 'text/javascript; charset=utf-8'],
       }
       if (!assets[url.pathname]) { json(res, 404, { error: 'Not found' }); return }
       const [file, contentType] = assets[url.pathname]

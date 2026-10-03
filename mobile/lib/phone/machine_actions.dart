@@ -10,6 +10,7 @@ import 'phone_navigation.dart';
 import 'phone_sheet.dart';
 import 'phone_status.dart';
 import 'unlink_machine.dart';
+import 'team_page.dart';
 
 /// A machine that wants its password opens the form for it. One that is linked opens a sheet of
 /// what can be done TO it — reload its agents, re-enter its password, unlink this phone.
@@ -36,6 +37,14 @@ void openMachineActions(
     context,
     title: machine.machine.displayName,
     actions: [
+      PhoneSheetAction(
+        icon: LucideIcons.users300,
+        label: 'Swarms',
+        chevron: true,
+        onTap: () => Navigator.of(context).push(
+          phoneRoute((_) => TeamPage(notifier: notifier, machineId: machineId)),
+        ),
+      ),
       PhoneSheetAction(
         icon: LucideIcons.refreshCw300,
         label: 'Reload harnesses',

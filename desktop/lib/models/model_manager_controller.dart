@@ -21,12 +21,35 @@ class ModelManagerController extends ChangeNotifier {
     this.app, {
     LocalKeyValueStore? storage,
     this.poll = true,
-  }) : _storage = storage ?? (kUnderTest ? null : HarnessFileStore.shared);
+    this.backgroundInventory = false,
+    String? targetMachineId,
+  }) : _targetMachineId =
+           targetMachineId ??
+           (app.viewer == null
+               ? null
+               : app.ownedActionMachine?.machine.machineId),
+       _followsBrowserChoice = targetMachineId == null && app.viewer != null,
+       _storage = storage ?? (kUnderTest ? null : HarnessFileStore.shared);
   final AppNotifier app;
   final LocalKeyValueStore? _storage;
   final bool poll;
+
+  /// Keep a remote machine's installed-model inventory warm for the footer.
+  /// Uses cached inventory reads, never forced scans, downloads or Grid setup.
+  final bool backgroundInventory;
+
+  /// A remote host uses the same inventory and lifecycle RPCs, without setting
+  /// up a Model Manager harness or reading another copy of the shared catalog.
+  String? _targetMachineId;
+  final bool _followsBrowserChoice;
+  String? get targetMachineId {
+    if (_targetMachineId != null || app.viewer == null) return _targetMachineId;
+    return _targetMachineId = app.ownedActionMachine?.machine.machineId;
+  }
+
   ApiConnectionsController? _apis;
-  ApiConnectionsController get apis => _apis ??= ApiConnectionsController(app);
+  ApiConnectionsController get apis =>
+      _apis ??= ApiConnectionsController(app, machineId: targetMachineId);
   static const introKey = 'models.introduction.dismissed';
   MachineState? _machine;
   Future<void>? _preparing, _opening, _refreshing;
@@ -36,20 +59,47 @@ class ModelManagerController extends ChangeNotifier {
   AgentCreationAttempt? _creation;
   ProjectFolderRequest? _folder;
   DateTime? _lastModelsRead, _lastLocalRead;
+  DateTime? _lastInventoryAttempt;
   bool _panelVisible = false;
   int _actionRevision = 0;
   String? _dismissedReadyId;
   GridModels? models;
   List<LocalModel> localModels = const [];
   double? memoryBytes;
+
+  /// Free space where downloads land, or null when the daemon did not say.
+  double? freeDiskBytes;
   String? hardware, error, _managerError;
   bool preparing = false, opening = false, scanning = false, loaded = false;
   bool inventoryAvailable = false, operationBusy = false;
+  bool supportsDownload = false;
+
+  /// Grid is not set up on this machine yet: no `grid`, or no sign-in. Grid is an add-on, set up the
+  /// first time a person asks for a grid feature ([setUpGrid]) — never by opening the app, a picker
+  /// or a list. Until then the pickers offer a Set up row in place of local and shared models.
+  bool gridSetupNeeded = false;
+
+  /// [setUpGrid] is under way.
+  bool settingUpGrid = false;
+
+  /// Why the last [setUpGrid] did not finish, in the daemon's words; null once it has.
+  String? gridSetupError;
+
+  /// Set up was pressed signed out of Harness. Grid is set up with the Harness account, so the press
+  /// started the sign-in and the set-up waits for it: it runs once the account's machine is back
+  /// ([_observe]) — one press, not a sign-in followed by a second trip to the picker.
+  bool _setUpAfterSignIn = false;
+
+  /// [setUpGrid] is waiting for the Harness sign-in it started.
+  bool get setUpWaitsForSignIn => _setUpAfterSignIn && app.signingIn;
   LocalModelOperation? pendingOperation;
   String? pendingId;
   bool pendingStart = true;
+  bool pendingDownload = false;
 
-  MachineState? get machine => app.localMachineState;
+  MachineState? get machine => targetMachineId == null
+      ? app.ownedActionMachine
+      : app.stateOf(targetMachineId!);
   Agent? get manager => machine?.agents
       .where((a) => a.dsh == AppNotifier.gridHarness)
       .firstOrNull;
@@ -96,13 +146,36 @@ class ModelManagerController extends ChangeNotifier {
     app.addListener(_observe);
     app.foreground.addListener(_foregroundChanged);
     app.gridPictures.addListener(_pictureChanged);
-    unawaited(_loadPreferences());
+    if (targetMachineId == null) unawaited(_loadPreferences());
     _observe();
     if (poll) {
       _timer = Timer.periodic(const Duration(seconds: 4), (_) {
         // A minimised or background app reads nothing, busy or not: the daemon owns the operation
         // either way, and the one refresh on return ([_foregroundChanged]) catches up.
         if (!app.inForeground) return;
+        if (backgroundInventory && !_panelVisible && !busy) {
+          if (machine?.connectionStatus != ConnectionStatus.connected ||
+              machine?.isOffline == true) {
+            return;
+          }
+          if (_lastInventoryAttempt != null &&
+              DateTime.now().difference(_lastInventoryAttempt!) <
+                  const Duration(minutes: 1)) {
+            return;
+          }
+        }
+        // Grid not set up and nobody looking: nothing to watch. While a picker is open it keeps
+        // reading, so grid set up some other way — a terminal's `harness grid login` — shows at
+        // once instead of leaving a Set up row that is no longer true.
+        if (gridSetupNeeded && !settingUpGrid && !busy && !_panelVisible) {
+          return;
+        }
+        if (targetMachineId != null &&
+            !backgroundInventory &&
+            !_panelVisible &&
+            !busy) {
+          return;
+        }
         if (busy ||
             _panelVisible ||
             _lastLocalRead == null ||
@@ -135,11 +208,16 @@ class ModelManagerController extends ChangeNotifier {
       _refreshing = null;
       _lastModelsRead = null;
       _lastLocalRead = null;
+      _lastInventoryAttempt = null;
       preparing = false;
       opening = false;
       scanning = false;
       loaded = false;
       inventoryAvailable = false;
+      supportsDownload = false;
+      gridSetupNeeded = false;
+      settingUpGrid = false;
+      gridSetupError = null;
       operationBusy = false;
       pendingOperation = null;
       pendingId = null;
@@ -147,21 +225,42 @@ class ModelManagerController extends ChangeNotifier {
       models = null;
       localModels = const [];
       memoryBytes = null;
+      freeDiskBytes = null;
       hardware = null;
       error = null;
       _managerError = null;
     }
-    if (current?.connectionStatus != ConnectionStatus.connected) {
+    if (current?.connectionStatus != ConnectionStatus.connected ||
+        current?.needsLink == true ||
+        (targetMachineId != null && current?.isOffline == true)) {
       inventoryAvailable = false;
     }
     if (current != null &&
         current.connectionStatus == ConnectionStatus.connected &&
-        current.agentLoadStatus == AgentLoadStatus.loaded &&
+        (targetMachineId != null ||
+            current.agentLoadStatus == AgentLoadStatus.loaded) &&
         !_autoPrepared) {
       _autoPrepared = true;
-      unawaited(prepare());
+      // The Model Manager is NOT prepared here: it is a grid feature, made ready when it is opened
+      // ([open]), never by the app starting on a machine that may not use grid at all.
       // In the background the first read waits for the app to come back ([_foregroundChanged]).
-      if (app.inForeground) unawaited(refresh());
+      if (app.inForeground &&
+          (targetMachineId == null || backgroundInventory || _panelVisible)) {
+        unawaited(refresh());
+      }
+    }
+    // Set up pressed while signed out: once the sign-in it started has landed and this machine is
+    // connected on the account, the set-up it was for runs — whether the sign-in moved the app onto
+    // the account's machine or left it where it was.
+    if (_setUpAfterSignIn &&
+        !app.isGuest &&
+        !app.signingIn &&
+        targetMachineId == null &&
+        current != null &&
+        current.connectionStatus == ConnectionStatus.connected &&
+        current.agentLoadStatus == AgentLoadStatus.loaded) {
+      _setUpAfterSignIn = false;
+      unawaited(setUpGrid());
     }
     _changed();
   }
@@ -169,6 +268,12 @@ class ModelManagerController extends ChangeNotifier {
   /// Back in front of the person: exactly one refresh, whatever the background skipped.
   void _foregroundChanged() {
     if (_disposed || !app.inForeground) return;
+    if (targetMachineId != null &&
+        !backgroundInventory &&
+        !_panelVisible &&
+        !busy) {
+      return;
+    }
     final owner = machine;
     if (owner == null || owner.connectionStatus != ConnectionStatus.connected) {
       return;
@@ -179,6 +284,7 @@ class ModelManagerController extends ChangeNotifier {
   /// Another surface's read, or the daemon's `grid_models_changed` push, changed the app's picture
   /// of this machine's grids: take it, with no read of our own.
   void _pictureChanged() {
+    if (targetMachineId != null) return;
     final owner = machine;
     if (_disposed || owner == null) return;
     final picture = app.gridPictures[owner.machine.machineId];
@@ -271,6 +377,13 @@ class ModelManagerController extends ChangeNotifier {
     error = null;
     _changed();
     try {
+      // Opening the Model Manager is a grid feature in use: grid is set up first, if it is not yet.
+      if (gridSetupNeeded && !await setUpGrid()) {
+        error =
+            gridSetupError ??
+            'Grid could not be set up on this computer. Try again.';
+        return;
+      }
       if (_creation?.agentId == null &&
           _creation?.awaitingConfirmation == false &&
           !preparing) {
@@ -330,25 +443,91 @@ class ModelManagerController extends ChangeNotifier {
   }
 
   void setPanelVisible(bool visible) {
+    if (visible &&
+        !_panelVisible &&
+        _followsBrowserChoice &&
+        !busy &&
+        !(_apis?.saving ?? false)) {
+      final next = app.ownedActionMachine?.machine.machineId;
+      if (next != null && next != targetMachineId) {
+        _targetMachineId = next;
+        _apis?.useMachine(next);
+        _observe();
+      }
+    }
     _panelVisible = visible;
   }
 
-  Future<void> refresh({bool force = false}) {
+  /// [local] false reads only the grid's models — what a harness can be moved onto — and not this
+  /// machine's own list, which a forced read rebuilds from every app's folders (16s once [run]).
+  Future<void> refresh({bool force = false, bool local = true}) {
     final owner = machine;
-    return _refreshing ??= _refresh(force: force).whenComplete(() {
-      if (identical(machine, owner)) _refreshing = null;
-    });
+    return _refreshing ??= _refresh(force: force, local: local).whenComplete(
+      () {
+        if (identical(machine, owner)) _refreshing = null;
+      },
+    );
   }
 
-  Future<void> _refresh({required bool force}) async {
+  /// Sets grid up on this machine — `grid` installed, signed in with this Harness account (its token:
+  /// no second browser), the account's grid made — then reads the lists it unlocks. The one door to
+  /// grid for a person who has not used it: the pickers' Set up row, or opening the Model Manager.
+  /// True when grid is set up afterwards.
+  Future<bool> setUpGrid() async {
+    if (settingUpGrid || app.signingIn) return !gridSetupNeeded;
+    // Grid is set up with the Harness account, so signed out, Set up starts with signing in — the
+    // app's own sign-in, in the browser — and finishes itself once that lands (see [_observe]).
+    // Failing the set-up instead ("Not signed in") left a person with nowhere to go but a terminal.
+    if (app.isGuest) {
+      _setUpAfterSignIn = true;
+      gridSetupError = null;
+      _changed();
+      await app.login();
+      // Cancelled or refused: nothing is left waiting to set Grid up behind a later sign-in.
+      if (app.isGuest) _setUpAfterSignIn = false;
+      _changed();
+      return false;
+    }
     final owner = machine;
-    if (owner == null || owner.connectionStatus != ConnectionStatus.connected) {
+    if (owner == null) return !gridSetupNeeded;
+    settingUpGrid = true;
+    gridSetupError = null;
+    _changed();
+    try {
+      // After any read already under way, so its stale answer cannot land over this one.
+      await _refreshing;
+      if (!_current(owner)) return false;
+      await (_refreshing = _refresh(force: true, setup: true).whenComplete(() {
+        if (identical(machine, owner)) _refreshing = null;
+      }));
+      return _current(owner) && !gridSetupNeeded;
+    } finally {
+      if (_current(owner)) {
+        settingUpGrid = false;
+        _changed();
+      }
+    }
+  }
+
+  Future<void> _refresh({
+    required bool force,
+    bool setup = false,
+    bool local = true,
+  }) async {
+    final owner = machine;
+    if (owner == null ||
+        owner.connectionStatus != ConnectionStatus.connected ||
+        owner.needsLink ||
+        (targetMachineId != null && owner.isOffline)) {
       inventoryAvailable = false;
-      error = 'Connect this computer to see its models.';
+      error = targetMachineId == null
+          ? 'Connect this computer to see its models.'
+          : 'Connect to ${owner?.machine.displayName ?? 'this machine'} to manage its models.';
       _changed();
       return;
     }
     scanning = true;
+    _lastInventoryAttempt = DateTime.now();
     _changed();
     final readShared =
         force ||
@@ -356,7 +535,7 @@ class ModelManagerController extends ChangeNotifier {
         DateTime.now().difference(_lastModelsRead!) >
             const Duration(seconds: 20);
     await Future.wait([
-      if (readShared)
+      if (readShared && targetMachineId == null)
         app.refreshGridModels(owner.machine.machineId).then((answer) {
           if (_current(owner)) {
             // The panel says so when ITS read could not reach the machine ("Shared models are
@@ -369,20 +548,30 @@ class ModelManagerController extends ChangeNotifier {
           }
         }),
       (() async {
+        if (!local) return;
         final revision = _actionRevision;
         try {
           final answer = await app.localModels(
             owner.machine.machineId,
             refresh: force,
+            setup: setup,
           );
           if (!_current(owner) || revision != _actionRevision) return;
           // `notice` is a sentence BESIDE the list. A reply carrying `error` never reaches here:
           // the RPC layer fails it whole and keeps nothing, which is how a daemon that sent its
           // warning in `error` once emptied this list. `error` is still read for a daemon too old
           // to send models at all.
-          error = (answer['notice'] ?? answer['error']) as String?;
+          //
+          // Not while Grid is not set up here: then the note is only that ("Sign in to find models
+          // for this computer."), which the pickers' Set up row already says — as a line on every
+          // preview it read as something wrong with whatever row was selected.
+          gridSetupNeeded = answer['gridSetupNeeded'] == true;
+          error = gridSetupNeeded
+              ? null
+              : (answer['notice'] ?? answer['error']) as String?;
           if (answer['models'] is! List) {
             inventoryAvailable = false;
+            error ??= 'Models are unavailable. Try again.';
             return;
           }
           localModels = (answer['models'] as List)
@@ -394,8 +583,18 @@ class ModelManagerController extends ChangeNotifier {
           memoryBytes = memory is num && memory.isFinite && memory > 0
               ? memory.toDouble()
               : null;
+          final disk = answer['freeDiskBytes'];
+          freeDiskBytes = disk is num && disk.isFinite && disk >= 0
+              ? disk.toDouble()
+              : null;
           hardware = answer['hardware'] as String?;
           operationBusy = answer['busy'] == true;
+          supportsDownload = answer['supportsDownload'] == true;
+          final setupError = answer['gridSetupError'];
+          gridSetupError =
+              setup && setupError is String && setupError.isNotEmpty
+              ? setupError
+              : null;
           inventoryAvailable = true;
           loaded = true;
           _lastLocalRead = DateTime.now();
@@ -439,30 +638,58 @@ class ModelManagerController extends ChangeNotifier {
     _changed();
   }
 
-  Future<void> toggle(LocalModel model) async {
+  Future<void> toggle(LocalModel model) =>
+      control(model, model.canStop ? 'stop' : 'start');
+
+  Future<void> control(LocalModel model, String action) async {
     final owner = machine;
-    if (owner == null || busy || !inventoryAvailable) return;
-    final startModel = !model.canStop;
-    if (startModel && !model.canStart) return;
+    if (owner == null ||
+        owner.connectionStatus != ConnectionStatus.connected ||
+        owner.needsLink ||
+        (targetMachineId != null && owner.isOffline) ||
+        owner.machine.isShared ||
+        busy ||
+        !inventoryAvailable) {
+      return;
+    }
+    final current = localModels
+        .where((entry) => entry.id == model.id)
+        .firstOrNull;
+    if (current == null) return;
+    final download = action == 'download';
+    final startModel = action == 'start';
+    if (download) {
+      if (!supportsDownload || current.downloaded || !current.canStart) return;
+    } else if (startModel) {
+      if (!current.canStart) return;
+    } else if (action != 'stop' || !current.canStop) {
+      return;
+    }
     pendingId = model.id;
     _actionRevision++;
     inventoryAvailable = false;
     pendingStart = startModel;
+    pendingDownload = download;
     error = null;
-    unawaited(dismissIntroduction());
+    if (targetMachineId == null) unawaited(dismissIntroduction());
     _changed();
     try {
-      final answer = await app.controlLocalModel(
-        owner.machine.machineId,
-        model.id,
-        start: startModel,
-      );
+      final answer = download
+          ? await app.downloadLocalModel(owner.machine.machineId, model.id)
+          : await app.controlLocalModel(
+              owner.machine.machineId,
+              model.id,
+              start: startModel,
+            );
       if (!_current(owner)) return;
       error = answer['error'] as String?;
       pendingOperation = LocalModelOperation.parse(answer['operation']);
       operationBusy = pendingOperation?.active == true;
     } catch (_) {
-      if (_current(owner)) error = 'Checking whether the model started. Your click will not be repeated.';
+      if (_current(owner)) {
+        error =
+            'Checking the model operation. Your click will not be repeated.';
+      }
     } finally {
       if (_current(owner)) {
         pendingId = null;

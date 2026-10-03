@@ -1,4 +1,5 @@
 import 'package:harness_mobile/state/app_state.dart';
+
 import 'phone_status.dart';
 
 /// Every machine the Machines tab draws, in the order a finger meets them.
@@ -16,7 +17,8 @@ import 'phone_status.dart';
 /// than by being missing.
 List<MachineState> visibleMachines(AppNotifier notifier) {
   final states = [
-    for (final machine in notifier.machines) ?notifier.stateOf(machine.machineId),
+    for (final machine in notifier.machines)
+      ?notifier.stateOf(machine.machineId),
   ];
   // Two runs, by whether the machine is usable as it stands — the split [MachinesTab] renders as
   // its two sections. A machine merely connecting belongs with the working ones: it needs nothing
@@ -35,24 +37,3 @@ List<MachineState> visibleMachines(AppNotifier notifier) {
   }
   return [...working, ...needsAttention];
 }
-
-/// The machines that work as they stand, in [visibleMachines] order.
-///
-/// Derived from that one list rather than re-partitioned here, so the sections the tab draws and
-/// the order the pager walks cannot drift apart.
-List<MachineState> workingMachines(List<MachineState> machines) => [
-  for (final machine in machines)
-    if (_works(machine)) machine,
-];
-
-/// The machines wanting something first — a password, or a Harness that is not running.
-List<MachineState> machinesNeedingAttention(List<MachineState> machines) => [
-  for (final machine in machines)
-    if (!_works(machine)) machine,
-];
-
-bool _works(MachineState machine) =>
-    switch (phoneMachineStatusOf(machine)) {
-      PhoneMachineStatus.connecting || PhoneMachineStatus.ready => true,
-      PhoneMachineStatus.needsPassword || PhoneMachineStatus.offline => false,
-    };

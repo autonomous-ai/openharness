@@ -1,11 +1,11 @@
 import { spawn, spawnSync, type ChildProcess } from 'child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
-import { createServer, type Server } from 'node:http'
+import { createServer, type RequestListener, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { listenLocalSocket, localSocketPath } from './lib/localSocket.js'
 
 const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const CLI_SOURCE = join(CLI_ROOT, 'src', 'cli.ts')
@@ -27,7 +27,8 @@ afterEach(async () => {
 
 /** A throwaway HOME for one CLI run; every path the CLI writes is under it. */
 function freshRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), 'harness-cli-command-'))
+  // Keep the private socket below macOS's sockaddr_un path limit.
+  const root = mkdtempSync('/tmp/hn-cli-command-')
   dirs.push(root)
   return root
 }
@@ -93,16 +94,21 @@ function seedRunningDaemon(root: string): { pid: number; exited: Promise<void> }
   return { pid: child.pid ?? -1, exited: new Promise((resolve) => child.once('exit', () => resolve())) }
 }
 
-/** The one thing `start` asks a live daemon: GET /api/status, for the machine it serves. Bound to a
- *  port of its own, which the test hands the CLI as PORT. */
-async function daemonStatusServer(machineId: string): Promise<number> {
-  const server = createServer((_req, res) => {
+/** The daemon's status through this user's private socket, plus its occupied TCP control port. */
+async function daemonStatusServer(root: string, machineId: string): Promise<number> {
+  const handler: RequestListener = (_req, res) => {
     res.setHeader('content-type', 'application/json')
     res.end(JSON.stringify({ machineId, version: '0.0.0-test', sessions: [] }))
-  })
+  }
+  const server = createServer(handler)
   servers.push(server)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  return (server.address() as AddressInfo).port
+  const port = (server.address() as AddressInfo).port
+  const dir = join(root, 'data')
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const privateServer = await listenLocalSocket(handler, localSocketPath(dir, port)!)
+  servers.push(privateServer.server)
+  return port
 }
 
 describe('CLI login/start command contract', () => {
@@ -118,7 +124,8 @@ describe('CLI login/start command contract', () => {
       cwd: CLI_ROOT,
       detached: true,
       env: envFor(root, {
-        PORT: String(20_000 + Math.floor(Math.random() * 20_000)),
+        // The kernel reserves a free port atomically; a random choice can hit another test.
+        PORT: '0',
         DISABLE_HOOK_INSTALL: 'true', CABLE_DISABLE: 'true', DISABLE_GRID_INSTALL: 'true',
         // Startup's sign-in contract does not need a runtime download or the developer's Grid.
         HARNESS_GRID_BIN: join(root, 'grid-unavailable'),
@@ -231,7 +238,7 @@ describe('start beside a daemon that serves another account', () => {
     const root = freshRoot()
     seedSession(root)                                  // machineId m_seeded
     const daemon = seedRunningDaemon(root)
-    const port = await daemonStatusServer('m_other')
+    const port = await daemonStatusServer(root, 'm_other')
 
     const result = await runAsync(root, ['start'], { PORT: String(port) })
 
@@ -239,8 +246,8 @@ describe('start beside a daemon that serves another account', () => {
     expect(result.stdout).not.toContain('already running')
     await daemon.exited
     expect(existsSync(join(root, 'data', 'adapter.pid'))).toBe(false)
-    // The restart goes on to boot a daemon inline (a repo run) — which fails to bind, because the port
-    // it was handed is this test's own status server. Past the point under test; the backend is never
+    // The restart goes on to boot a daemon inline (a repo run) — which refuses to displace this
+    // fixture's still-live private socket. Past the point under test; the backend is never
     // consulted (start no longer resolves the machine when the session already names one).
     expect(result.status).toBe(1)
     expect(result.stdout + result.stderr).not.toContain('resolve-computer')
@@ -248,11 +255,11 @@ describe('start beside a daemon that serves another account', () => {
 
   it('starts without the backend: a session that already names its machine never calls it', async () => {
     // Offline is the case this exists for. The backend here is port 1 — refused instantly — and the
-    // only thing that stops the boot is the port clash with this test's status server, AFTER the point
+    // only thing that stops the boot is this fixture's live private socket, AFTER the point
     // where `start` used to abort on the resolve. No "Failed to start adapter: fetch failed".
     const root = freshRoot()
     seedSession(root)
-    const port = await daemonStatusServer('m_other')
+    const port = await daemonStatusServer(root, 'm_other')
 
     const result = await runAsync(root, ['start'], { PORT: String(port) })
 
@@ -268,7 +275,7 @@ describe('start beside a daemon that serves another account', () => {
       version: 1, accessToken: 'tok', refreshToken: 'refresh', expiresAt: Date.now() + 3_600_000,
       autonomousEnv: 'prod', computerId: 'a'.repeat(32), updatedAt: Date.now(),
     }))
-    const port = await daemonStatusServer('m_other')
+    const port = await daemonStatusServer(root, 'm_other')
 
     const result = await runAsync(root, ['start'], { PORT: String(port) })
 
@@ -280,7 +287,7 @@ describe('start beside a daemon that serves another account', () => {
     const root = freshRoot()
     seedSession(root)
     const daemon = seedRunningDaemon(root)
-    const port = await daemonStatusServer('m_seeded')
+    const port = await daemonStatusServer(root, 'm_seeded')
 
     const result = await runAsync(root, ['start'], { PORT: String(port) })
 

@@ -14,6 +14,17 @@ afterEach(() => {
 })
 
 describe('TmuxBackend lifecycle', () => {
+  it.each(['tmux', 'ps'] as const)('does not declare a running pane gone when the %s probe fails', async failed => {
+    const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-probe-'))
+    dirs.push(dir)
+    writeFileSync(join(dir, 'tmux'), `#!/bin/sh\n${failed === 'tmux' ? 'exit 1' : 'echo 12345'}\n`, { mode: 0o700 })
+    writeFileSync(join(dir, 'ps'), '#!/bin/sh\nexit 1\n', { mode: 0o700 })
+    process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
+    expect(await new TmuxBackend().validate({ backend: 'tmux', paneId: '%42' }, {
+      engine: 'claude', processIdentity: { pid: 12345, executable: 'claude', startMarker: 'Sun Sep 27 20:00:00 2026' },
+    })).toMatchObject({ state: 'unknown' })
+  })
+
   it('creates a detached session and closes only its exact pane', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-lifecycle-'))
     dirs.push(dir)

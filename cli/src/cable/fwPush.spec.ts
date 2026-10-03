@@ -7,7 +7,7 @@
 //    window does not slow this side down — the dial's ring overflows and the bytes are gone with no error.
 import { describe, expect, it, vi } from 'vitest'
 
-import { FW_SLICE_BYTES, FW_WINDOW_BYTES, FirmwareTransfer, shouldOffer } from './fwPush.js'
+import { CIRCLE_OTA_KEY, FW_SLICE_BYTES, FW_WINDOW_BYTES, FirmwareTransfer, PRO_OTA_KEY, otaKeyForBoard, shouldOffer } from './fwPush.js'
 
 describe('shouldOffer', () => {
   it('offers a strictly newer release', () => {
@@ -131,5 +131,36 @@ describe('FirmwareTransfer', () => {
     // Finishing twice must not double-log: the port closing and the session ending both call it.
     t.finish('again')
     expect(log).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ONE IMAGE PER BOARD, AND NEVER A GUESS.
+//
+// Until Harness Pro existed there was one kind of device on the cable, so the offer took the manifest's
+// default entry. Two boards later that default is a brick: the Pro is an ESP32-P4 and the dial an
+// ESP32-S3, neither can run the other's image, and the cable that would let anyone put it right is the
+// firmware that just stopped booting. So the board decides the entry, and an unrecognised one is offered
+// nothing at all.
+describe('which firmware a board may be offered', () => {
+  it('sends each board to its own manifest entry', () => {
+    expect(otaKeyForBoard('cst9217+axp2101')).toBe(CIRCLE_OTA_KEY)
+    expect(otaKeyForBoard('cst816s')).toBe(CIRCLE_OTA_KEY)
+    expect(otaKeyForBoard('harness-pro')).toBe(PRO_OTA_KEY)
+    expect(CIRCLE_OTA_KEY).not.toBe(PRO_OTA_KEY)
+  })
+
+  it('offers nothing to a board it does not recognise', () => {
+    // A future board, or a device whose hello says something we have never seen. Refusing is the whole
+    // point: the alternative is picking one of the two images we do have, and both are wrong.
+    expect(otaKeyForBoard('harness-ultra')).toBeNull()
+    expect(otaKeyForBoard('')).not.toBeNull()   // empty is "did not say", handled below — not unknown
+  })
+
+  it('treats a device that does not say as the dial', () => {
+    // The one place a guess is right. `hw` has been in the hello since before the Pro was designed, so a
+    // build that omits it predates the Pro and can only be a dial. Refusing those would stop updates
+    // reaching exactly the devices most in need of one.
+    expect(otaKeyForBoard(undefined)).toBe(CIRCLE_OTA_KEY)
+    expect(otaKeyForBoard(null)).toBe(CIRCLE_OTA_KEY)
   })
 })

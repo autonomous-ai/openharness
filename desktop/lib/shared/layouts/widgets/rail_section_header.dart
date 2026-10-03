@@ -1,5 +1,5 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../theme/app_theme.dart';
 
@@ -70,7 +70,7 @@ class RailSectionHeader extends StatelessWidget {
               constraints: const BoxConstraints.tightFor(width: 26, height: 26),
               padding: EdgeInsets.zero,
               color: AppPalette.textSecondary,
-              icon: const Icon(LucideIcons.plus300),
+              icon: const Icon(AppIcons.plus),
               onPressed: onAdd,
             ),
         ],

@@ -1,0 +1,397 @@
+{
+  "scope": "Finite abstract two-sided brief-ask lifecycle, not production or autonomous-quality validation",
+  "assumptions": [
+    "One already-necessary, admitted dependency, two participants, one optional indispensable clarification",
+    "Explicit adoption is independently authorized; old tool invocations cannot acquire a new input generation",
+    "Current source and destination state is visible at serialized effect boundaries; remote revocation propagation is not modeled",
+    "Clarify-and-wait explicitly registers one parameter continuation; clarification alone does not",
+    "A source read means an outcome delivered to that harness during current work; human history inspection never acknowledges it",
+    "No native engine, side-effecting work, recipient rerouting, monetary cost, or semantic judgment is exercised"
+  ],
+  "families": {
+    "source_steering_before_initial": {
+      "traces": 180,
+      "violations": 0,
+      "initial_attempts": 84,
+      "source_wakes": 0,
+      "parameter_wakes": 0
+    },
+    "recipient_steering_before_initial": {
+      "traces": 180,
+      "violations": 0,
+      "initial_attempts": 84,
+      "source_wakes": 0,
+      "parameter_wakes": 0
+    },
+    "source_changes_swarm": {
+      "traces": 180,
+      "violations": 0,
+      "initial_attempts": 66,
+      "source_wakes": 0,
+      "parameter_wakes": 0
+    },
+    "old_tool_cannot_adopt": {
+      "traces": 24,
+      "violations": 0,
+      "initial_attempts": 4,
+      "source_wakes": 0,
+      "parameter_wakes": 0
+    },
+    "consumed_request_not_initial_again": {
+      "traces": 720,
+      "violations": 0,
+      "initial_attempts": 720,
+      "source_wakes": 0,
+      "parameter_wakes": 0
+    },
+    "source_changes_during_clarification": {
+      "traces": 720,
+      "violations": 0,
+      "initial_attempts": 720,
+      "source_wakes": 60,
+      "parameter_wakes": 0
+    },
+    "recipient_changes_before_parameter": {
+      "traces": 720,
+      "violations": 0,
+      "initial_attempts": 720,
+      "source_wakes": 0,
+      "parameter_wakes": 60
+    },
+    "outcome_stages_are_distinct": {
+      "traces": 720,
+      "violations": 0,
+      "initial_attempts": 720,
+      "source_wakes": 724,
+      "parameter_wakes": 360
+    },
+    "repeated_pending_wait": {
+      "traces": 2520,
+      "violations": 0,
+      "initial_attempts": 1260,
+      "source_wakes": 10,
+      "parameter_wakes": 0
+    },
+    "uncertain_initial_is_not_replayed": {
+      "traces": 120,
+      "violations": 0,
+      "initial_attempts": 120,
+      "source_wakes": 0,
+      "parameter_wakes": 0
+    },
+    "cancel_before_parameter": {
+      "traces": 720,
+      "violations": 0,
+      "initial_attempts": 720,
+      "source_wakes": 0,
+      "parameter_wakes": 60
+    },
+    "inspection_is_not_agent_delivery": {
+      "traces": 3,
+      "violations": 0,
+      "initial_attempts": 3,
+      "source_wakes": 3,
+      "parameter_wakes": 0
+    }
+  },
+  "positive_paths": {
+    "direct_answer": {
+      "events": [
+        "source_wait",
+        "reserve_initial",
+        "write_initial",
+        "answer",
+        "source_stage",
+        "source_write"
+      ],
+      "initial_attempts_source_wakes_parameter_wakes": [
+        1,
+        1,
+        0
+      ],
+      "final_phase": "answered",
+      "source_observed_outcome_version": 1
+    },
+    "ready_answer_returns_inline": {
+      "events": [
+        "reserve_initial",
+        "write_initial",
+        "answer",
+        "source_wait",
+        "source_stage",
+        "source_write"
+      ],
+      "initial_attempts_source_wakes_parameter_wakes": [
+        1,
+        0,
+        0
+      ],
+      "final_phase": "answered",
+      "source_observed_outcome_version": 1
+    },
+    "active_result_read_retires_queued_wake": {
+      "events": [
+        "source_wait",
+        "reserve_initial",
+        "write_initial",
+        "answer",
+        "source_stage",
+        "source_read",
+        "source_write"
+      ],
+      "initial_attempts_source_wakes_parameter_wakes": [
+        1,
+        0,
+        0
+      ],
+      "final_phase": "answered",
+      "source_observed_outcome_version": 1
+    },
+    "inspection_preserves_queued_wake": {
+      "events": [
+        "source_wait",
+        "reserve_initial",
+        "write_initial",
+        "answer",
+        "source_stage",
+        "inspect_history",
+        "source_write"
+      ],
+      "initial_attempts_source_wakes_parameter_wakes": [
+        1,
+        1,
+        0
+      ],
+      "final_phase": "answered",
+      "source_observed_outcome_version": 1
+    },
+    "one_clarification": {
+      "events": [
+        "source_wait",
+        "reserve_initial",
+        "write_initial",
+        "clarify_wait",
+        "source_stage",
+        "source_write",
+        "parameter",
+        "source_wait",
+        "recipient_stage",
+        "recipient_write",
+        "answer",
+        "source_stage",
+        "source_write"
+      ],
+      "initial_attempts_source_wakes_parameter_wakes": [
+        1,
+        2,
+        1
+      ],
+      "final_phase": "answered",
+      "source_observed_outcome_version": 2
+    },
+    "recipient_new_work_preserves_queued_question": {
+      "events": [
+        "recipient_human",
+        "recipient_idle",
+        "reserve_initial",
+        "write_initial"
+      ],
+      "initial_attempts_source_wakes_parameter_wakes": [
+        1,
+        0,
+        0
+      ],
+      "final_phase": "serving",
+      "source_observed_outcome_version": 0
+    },
+    "source_steering_adopts_existing_question": {
+      "events": [
+        "source_human",
+        "adopt",
+        "reserve_initial",
+        "write_initial"
+      ],
+      "initial_attempts_source_wakes_parameter_wakes": [
+        1,
+        0,
+        0
+      ],
+      "final_phase": "serving",
+      "source_observed_outcome_version": 0
+    },
+    "recipient_can_read_parameter_during_current_work": {
+      "events": [
+        "reserve_initial",
+        "write_initial",
+        "clarify_wait",
+        "source_read",
+        "parameter",
+        "recipient_human",
+        "recipient_idle",
+        "recipient_adopt",
+        "recipient_wait",
+        "answer",
+        "source_wait"
+      ],
+      "initial_attempts_source_wakes_parameter_wakes": [
+        1,
+        0,
+        0
+      ],
+      "final_phase": "answered",
+      "source_observed_outcome_version": 2
+    },
+    "clarification_without_wait_does_not_resume_recipient": {
+      "events": [
+        "reserve_initial",
+        "write_initial",
+        "clarify",
+        "source_read",
+        "parameter",
+        "recipient_stage",
+        "recipient_write"
+      ],
+      "initial_attempts_source_wakes_parameter_wakes": [
+        1,
+        0,
+        0
+      ],
+      "final_phase": "awaiting_answer",
+      "source_observed_outcome_version": 1
+    }
+  },
+  "counterexamples": {
+    "omit_source_revalidation": {
+      "family": "source_steering_before_initial",
+      "events": [
+        "adopt",
+        "reserve_initial",
+        "reserve_initial",
+        "source_human",
+        "write_initial",
+        "write_initial"
+      ],
+      "violations": [
+        "initial_contact_after_source_authority_changed"
+      ]
+    },
+    "omit_recipient_revalidation": {
+      "family": "recipient_changes_before_parameter",
+      "events": [
+        "reserve_initial",
+        "write_initial",
+        "clarify_wait",
+        "source_read",
+        "parameter",
+        "recipient_adopt",
+        "recipient_idle",
+        "recipient_stage",
+        "recipient_human",
+        "recipient_wait",
+        "recipient_write"
+      ],
+      "violations": [
+        "parameter_wake_after_recipient_input_changed"
+      ]
+    },
+    "ignore_outcome_stage": {
+      "family": "source_changes_during_clarification",
+      "events": [
+        "source_wait",
+        "reserve_initial",
+        "write_initial",
+        "clarify_wait",
+        "adopt",
+        "source_stage",
+        "source_write",
+        "parameter",
+        "source_wait",
+        "source_human"
+      ],
+      "violations": [
+        "obsolete_clarification_returned_after_parameter"
+      ]
+    },
+    "renew_pending_wait": {
+      "family": "outcome_stages_are_distinct",
+      "events": [
+        "source_wait",
+        "reserve_initial",
+        "write_initial",
+        "clarify_wait",
+        "source_stage",
+        "source_write",
+        "parameter",
+        "source_wait",
+        "answer",
+        "recipient_stage",
+        "recipient_write",
+        "source_stage",
+        "source_wait",
+        "source_write"
+      ],
+      "violations": [
+        "identical_pending_wait_reissued_grant"
+      ]
+    },
+    "replay_uncertain_initial": {
+      "family": "uncertain_initial_is_not_replayed",
+      "events": [
+        "reserve_initial",
+        "write_initial_uncertain",
+        "recipient_human",
+        "recipient_idle",
+        "retry_initial",
+        "reserve_initial",
+        "write_initial"
+      ],
+      "violations": [
+        "initial_contact_replayed"
+      ]
+    },
+    "overwrite_owner_scope": {
+      "family": "source_steering_before_initial",
+      "events": [
+        "adopt",
+        "reserve_initial",
+        "reserve_initial",
+        "write_initial",
+        "source_human",
+        "write_initial"
+      ],
+      "violations": [
+        "peer_contribution_overwrote_owner_scope"
+      ]
+    },
+    "inspection_consumes_resume": {
+      "family": "inspection_is_not_agent_delivery",
+      "events": [
+        "source_wait",
+        "reserve_initial",
+        "write_initial",
+        "answer",
+        "source_stage",
+        "inspect_history",
+        "inspect_history",
+        "source_write"
+      ],
+      "violations": [
+        "human_inspection_changed_agent_delivery_state"
+      ]
+    },
+    "drop_queued_on_recipient_input": {
+      "events": [
+        "recipient_human",
+        "recipient_idle",
+        "reserve_initial",
+        "write_initial"
+      ],
+      "violations": [
+        "eligible_initial_contact_dropped_after_recipient_work_changed"
+      ],
+      "kind": "liveness contrast with the corresponding positive path"
+    }
+  },
+  "total_traces": 6807,
+  "violations": 0
+}

@@ -2,13 +2,15 @@ import { execFile } from 'node:child_process'
 import { homedir, userInfo } from 'node:os'
 import { isAbsolute, basename, dirname, join } from 'node:path'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
+import { isOpencodeV2 } from '../engines/opencode/version.js'
 import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
 import { engineBin } from './engineBin.js'
-import type { EngineInstallRecipe } from './engineInstall.js'
+import { engineInstallPaths, npmEnginePrefix, type EngineInstallRecipe } from './engineInstall.js'
 import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath } from './gridExec.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { RAISE_OPEN_FILES_SH } from './openFiles.js'
 import { ENGINE_EXIT_PANE_OPTION } from './tmux.js'
+import { CODEX_STARTUP_RETRY_PROBE } from './codexStartupRetry.js'
 
 /**
  * Best-effort "skip permission prompts" flag per engine, confirmed against each vendor's own docs.
@@ -98,7 +100,10 @@ export const FIRST_PROMPT_ARGS: Readonly<Record<AgentEngine, readonly string[] |
   // No documented first-prompt argument for an interactive launch. Not guessed.
   cursor: null,
   pi: null,
-  hermes: null,
+  // `hermes chat --help`: "-q, --query QUERY  Query to run. On a real TTY the prompt seeds an
+  // interactive session (first turn)". Measured on a live pane: the prompt is answered and the TUI
+  // stays open for the next turn, which is also what lets a fork of a Hermes agent hand off.
+  hermes: ['chat', '-q'],
   commandcode: null,
   devin: null,
   muse: null,
@@ -177,15 +182,20 @@ export class NamedAgentUnsupportedError extends Error {
   }
 }
 
-export function supportsNamedAgent(engine: AgentEngine): boolean {
+/**
+ * `opencodeMajor` is the installed OpenCode's major version (`engines/opencode/version.ts`), absent
+ * meaning v1. v2 moved `--agent` to `opencode run`; its TUI exits 1 on the flag, so v2 has no entry.
+ */
+export function supportsNamedAgent(engine: AgentEngine, opencodeMajor: number | null = null): boolean {
+  if (engine === 'opencode' && isOpencodeV2(opencodeMajor)) return false
   return NAMED_AGENT_ARGS[engine] !== null
 }
 
 /** The argv that opens `engine` as its named agent `agent`. Throws [NamedAgentUnsupportedError] for
  *  an engine with no contract, so a caller cannot build an argv that silently drops the name. */
-export function namedAgentArgs(engine: AgentEngine, agent: string): string[] {
+export function namedAgentArgs(engine: AgentEngine, agent: string, opencodeMajor: number | null = null): string[] {
   const lead = NAMED_AGENT_ARGS[engine]
-  if (lead === null) throw new NamedAgentUnsupportedError(engine)
+  if (lead === null || !supportsNamedAgent(engine, opencodeMajor)) throw new NamedAgentUnsupportedError(engine)
   return [...lead, agent]
 }
 
@@ -264,6 +274,13 @@ export interface LaunchCommandOptions {
   harnessNode?: boolean
   /** Workspace entered after interactive-shell startup, not before it. */
   cwd?: string
+  /**
+   * A conversation taken over from the terminal that has it, once its turn ends (`agent_create`
+   * `takeOver: 'wait'`): the pane says it is waiting and starts the engine when that process is
+   * gone — the daemon stops it when the turn ends. Ctrl-C gives up and leaves it where it was.
+   * Ignored without an interactive shell, like `installFirst`: there is no script to wait in.
+   */
+  waitForPid?: { pid: number; name: string }
 }
 
 /**
@@ -286,8 +303,8 @@ export interface LaunchCommandOptions {
  *
  * A leading token that does NOT start with `-` is a SUBCOMMAND (`resume`, `threads continue`) and must
  * be the first argv after the binary, ahead of any other flag — `buildEngineCommandArgv` branches on
- * this. `devin` has no known resume flag at all (not even for `RESUME_ARGS` parsing) and is
- * deliberately omitted, so no resume is ever attempted for it.
+ * this. `devin --resume <id>` is documented since Devin CLI 2026.4.17 (docs.devin.ai/cli, "Essential
+ * commands"); it must run in the session's own folder, or Devin asks which folder to use.
  */
 export const LAUNCH_RESUME_FLAG: Readonly<Partial<Record<AgentEngine, string[]>>> = {
   claude: ['--resume'],
@@ -303,6 +320,7 @@ export const LAUNCH_RESUME_FLAG: Readonly<Partial<Record<AgentEngine, string[]>>
   grok: ['--resume'],
   agy: ['--conversation'],
   copilot: ['--resume'],
+  devin: ['--resume'],
 }
 
 /**
@@ -392,6 +410,17 @@ export function interactiveEngineShell(shell: string | undefined = undefined): I
   }
 }
 
+/** Automated zsh launches must set this BEFORE rc files run. Oh My Zsh otherwise waits for an
+ * update answer before the engine exists, while an agent switch is still showing the old pane.
+ * DISABLE_UPDATE_PROMPT would auto-update instead; DISABLE_AUTO_UPDATE skips that work entirely.
+ * Keep ordinary terminal launches unchanged, and keep loading rc files for PATH/version managers. */
+function engineShellArgv(shell: InteractiveEngineShell, args: readonly string[]): string[] {
+  const prefix = basename(shell.path).toLowerCase() === 'zsh'
+    ? ['/usr/bin/env', 'DISABLE_AUTO_UPDATE=true']
+    : []
+  return [...prefix, shell.path, ...shell.args, ...args]
+}
+
 /**
  * Full argv for a fresh tmux pane. `exec` replaces the shell with the engine,
  * preserving process discovery while loading the same startup files a user
@@ -409,6 +438,7 @@ export function buildEngineLaunchArgv(
   if (isTerminalEngine(engine)) return buildTerminalLaunchArgv(opts, shell)
   const command = buildEngineCommandArgv(engine, opts)
   const interactive = interactiveEngineShell(shell)
+    ?? (engine === 'codex' ? { path: '/bin/sh', args: ['-c'], label: 'shell' } : null)
   if (!interactive) return command
   const enginePrelude = engineFallbackPrelude(engine, interactive.path, tmuxBinary)
   // The clear comes FIRST, before the install as well as before the engine. An installer is a child
@@ -435,7 +465,19 @@ export function buildEngineLaunchArgv(
   // SERVER's soft limit, which is launchd's 256 whenever the desktop app started the daemon that
   // started the server, and an engine (Claude Code refuses outright) or an npm install under 256 is
   // the failure the person then reads in the pane. See openFiles.ts.
-  return [interactive.path, ...interactive.args, RAISE_OPEN_FILES_SH + prelude + cwdPrelude + body, 'harness-engine', ...(opts.cwd ? [opts.cwd] : []), ...command]
+  const wait = opts.waitForPid ? waitForPidScript(opts.waitForPid) : ''
+  return engineShellArgv(interactive, [RAISE_OPEN_FILES_SH + prelude + cwdPrelude + wait + body, 'harness-engine', ...(opts.cwd ? [opts.cwd] : []), ...command])
+}
+
+/** Waits in the pane for [wait]'s process to end before the engine starts: see `waitForPid`. */
+function waitForPidScript(wait: { pid: number; name: string }): string {
+  const pid = Math.trunc(wait.pid)
+  const name = wait.name.replace(/[^A-Za-z0-9 ._-]/g, '')
+  return `printf '%s\\n' 'Waiting for the ${name} in your terminal to finish its turn.' 'It moves here when the turn ends. Ctrl-C leaves it there.'\n`
+    + `trap 'printf "\\n%s\\n" "It stays in your terminal."; exit 130' INT\n`
+    + `while kill -0 ${pid} 2>/dev/null; do sleep 1; done\n`
+    + `trap - INT\n`
+    + `printf '\\033[H\\033[2J'\n`
 }
 
 /**
@@ -468,8 +510,10 @@ export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tm
     ? `  [ -n "\${TMUX_PANE:-}" ] && ${shellSingleQuote(tmuxBinary)} set-option -p -t "$TMUX_PANE" ${ENGINE_EXIT_PANE_OPTION} "$harness_status" >/dev/null 2>&1 || true\n`
     : ''
   return 'harness_engine() {\n'
-    + '  harness_status=0\n'
-    + '  "$@" || harness_status=$?\n'
+    + (engine === 'codex' ? codexOwnedLaunchPrelude() : '')
+    + (engine === 'codex' && tmuxBinary && isAbsolute(tmuxBinary)
+      ? codexStartupRetryScript(tmuxBinary)
+      : '  harness_status=0\n  "$@" || harness_status=$?\n')
     + '  if [ "$harness_status" -eq 127 ]; then exit 127; fi\n'
     + mark
     // Only a pane — something with a terminal on stdin — gets a shell to type into. Run without one
@@ -478,6 +522,47 @@ export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tm
     + `  printf '\\n%s\\n' ${shellSingleQuote(`harness: ${command} exited ($harness_status). This pane is a shell now — run ${command} again, or stop the pane.`).replace('($harness_status)', `('"$harness_status"')`)}\n`
     + `  exec ${shellSingleQuote(shellPath)}${loginArgs}\n`
     + '}\n'
+}
+
+/** Keep a transient pre-session account lookup failure inside the original launch.
+ * Only the final exit gets the pane's engine-exit marker. The short backoff also
+ * keeps discovery from archiving the row between attempts. Never reparse "$@": it
+ * includes the original prompt, model, permissions and resume/fork arguments. */
+function codexStartupRetryScript(tmuxBinary: string): string {
+  const probe = `${shellSingleQuote(process.execPath)} -e ${shellSingleQuote(CODEX_STARTUP_RETRY_PROBE)}`
+  return '  harness_codex_attempt=1\n'
+    + '  while :; do\n'
+    + '    harness_codex_before=\n'
+    + `    if [ -n "\${TMUX_PANE:-}" ]; then harness_codex_before=$(${probe} before ${shellSingleQuote(tmuxBinary)} "$TMUX_PANE") || harness_codex_before=; fi\n`
+    + '    harness_status=0\n'
+    + '    "$@" || harness_status=$?\n'
+    + '    [ "$harness_status" -eq 1 ] && [ "$harness_codex_attempt" -lt 3 ] && [ -n "$harness_codex_before" ] || break\n'
+    + `    ${probe} after ${shellSingleQuote(tmuxBinary)} "$TMUX_PANE" "$harness_codex_before" || break\n`
+    + '    harness_codex_delay=$((harness_codex_attempt * 2))\n'
+    + '    harness_codex_attempt=$((harness_codex_attempt + 1))\n'
+    + '    harness_codex_cancelled=0\n'
+    + "    trap 'harness_codex_cancelled=1' INT\n"
+    + `    printf '\\n%s\\n' "harness: Codex account lookup timed out. Retrying startup ($harness_codex_attempt/3) in \${harness_codex_delay}s; Ctrl-C cancels."\n`
+    + '    sleep "$harness_codex_delay" || harness_codex_cancelled=1\n'
+    + '    trap - INT\n'
+    + '    if [ "$harness_codex_cancelled" -eq 1 ]; then harness_status=130; break; fi\n'
+    + '  done\n'
+}
+
+/** Codex 0.157+ otherwise puts the writer outside tmux in a shared server. Keep
+ * Harness-owned launches process-owned so Close, hook attribution, provider env
+ * and RAM accounting describe the same lifetime. Probe the binary AFTER any
+ * install, in the exact pane shell; older versions simply omit the flag. The
+ * probe is bounded and never changes the user's Codex configuration. */
+function codexOwnedLaunchPrelude(): string {
+  const probe = `const {execFileSync}=require('node:child_process');try { const h=execFileSync(process.argv[1],['--help'],{timeout:5000,maxBuffer:1048576,encoding:'utf8',stdio:['ignore','pipe','pipe']});process.exit(/--no-daemon(?:[^A-Za-z0-9-]|$)/.test(h)?0:64); } catch { process.exit(2); }`
+  return `  harness_codex_mode=0\n`
+    + `  ${shellSingleQuote(process.execPath)} -e ${shellSingleQuote(probe)} "$1" || harness_codex_mode=$?\n`
+    + `  case "$harness_codex_mode" in\n`
+    + `    0) harness_codex_bin="$1"; shift; set -- "$harness_codex_bin" --no-daemon "$@" ;;\n`
+    + `    64) ;;\n`
+    + `    *) printf '%s\\n' 'harness: could not verify Codex startup options. Please try opening this session again.' >&2; exit 1 ;;\n`
+    + `  esac\n`
 }
 
 /**
@@ -626,13 +711,6 @@ export function shellSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`
 }
 
-function installedPathCandidates(recipe: EngineInstallRecipe): string[] {
-  return [
-    ...(recipe.executable.homeRelativePaths ?? []).map((path) => join(homedir(), path)),
-    ...(recipe.executable.absolutePaths ?? []),
-  ]
-}
-
 /**
  * Make npm recipes work on machines where Harness owns Node instead of installing it system-wide.
  *
@@ -642,31 +720,22 @@ function installedPathCandidates(recipe: EngineInstallRecipe): string[] {
  * otherwise prepend the managed runtime's bin directory for this pane only. This is portable across
  * macOS and Linux and avoids an interactive/root package-manager install in an agent launch.
  */
-function npmRuntimePrelude(recipe: EngineInstallRecipe, runtimeNode: string, required: boolean): string {
+function npmRuntimePrelude(recipe: EngineInstallRecipe, runtimeNode: string): string {
   if (!recipe.executable.npmGlobal) return ''
   const bins = [...new Set([dirname(runtimeNode), dirname(process.execPath)])]
     .map(shellSingleQuote)
     .join(' ')
   return [
-    'if ! command -v npm >/dev/null 2>&1; then',
+    'if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then',
     `  for harness_node_bin in ${bins}; do`,
     '    if [ -x "$harness_node_bin/node" ] && [ -x "$harness_node_bin/npm" ]; then',
     '      PATH="$harness_node_bin${PATH:+:$PATH}"',
     '      export PATH',
     '      hash -r 2>/dev/null || true',
-    ...(required ? [
-      `      printf '%s\\n' 'harness: npm is missing from PATH — enabling Harness managed Node.js/npm'`,
-    ] : []),
     '      break',
     '    fi',
     '  done',
     'fi',
-    ...(required ? [
-      'if ! command -v npm >/dev/null 2>&1; then',
-      `  printf '%s\\n' 'harness: npm is unavailable and the managed Node.js/npm runtime could not be used.'`,
-      '  exit 1',
-      'fi',
-    ] : []),
   ].join('\n')
 }
 
@@ -707,7 +776,12 @@ export function gridPanePrelude(binary: string): string {
 function installIfMissingThenExecScript(recipe: EngineInstallRecipe, runtimeNode: string): string {
   const install = recipe.command
   const names = recipe.executable.names.map(shellSingleQuote).join(' ')
-  const paths = installedPathCandidates(recipe).map(shellSingleQuote).join(' ')
+  const paths = engineInstallPaths(recipe).map(shellSingleQuote).join(' ')
+  // Scope both npm env spellings to the installer subprocess. Do not rewrite .npmrc or install
+  // into a different OS user's shared prefix, and do not tie the engine to a versioned Node folder.
+  const installCommand = recipe.executable.npmGlobal
+    ? `(export npm_config_prefix=${shellSingleQuote(npmEnginePrefix())} NPM_CONFIG_PREFIX=${shellSingleQuote(npmEnginePrefix())}; eval ${shellSingleQuote(install)})`
+    : `eval ${shellSingleQuote(install)}`
   const candidates = [names, paths].filter(Boolean).join(' ')
   const tryCandidates = candidates
     ? `for candidate in ${candidates}; do try_engine "$candidate" "$@" || true; done`
@@ -735,12 +809,21 @@ function installIfMissingThenExecScript(recipe: EngineInstallRecipe, runtimeNode
     '  shift',
     '  harness_engine "$resolved" "$@"',
     '}',
+    // A previously installed npm launcher also needs Node. Resolve the runtime before executing
+    // it, not just before installing it; fresh users often have no system node on PATH.
+    npmRuntimePrelude(recipe, runtimeNode),
     'try_engine "$1" "$@" || true',
     tryCandidates,
-    npmRuntimePrelude(recipe, runtimeNode, true),
     tryNpmGlobal,
+    ...(recipe.executable.npmGlobal ? [
+      'if ! command -v npm >/dev/null 2>&1; then',
+      `  printf '%s\\n' 'harness: npm is unavailable and the managed Node.js/npm runtime could not be used.'`,
+      '  exit 1',
+      'fi',
+    ] : []),
     `printf '%s\\n' 'harness: engine is missing — installing it in this terminal' 'harness: $ ${install.replace(/'/g, "'\\''")}' ''`,
-    `if eval ${JSON.stringify(install)}; then`,
+    ...(recipe.executable.npmGlobal ? [`printf '%s\\n' ${shellSingleQuote(`harness: installing for this user in ${npmEnginePrefix()}`)}`] : []),
+    `if ${installCommand}; then`,
     '  hash -r 2>/dev/null || true',
     '  try_engine "$1" "$@" || true',
     `  ${tryCandidates}`,
@@ -755,10 +838,10 @@ function installIfMissingThenExecScript(recipe: EngineInstallRecipe, runtimeNode
 
 function availabilityScript(recipe: EngineInstallRecipe | undefined): string {
   const names = recipe?.executable.names.map(shellSingleQuote).join(' ') ?? ''
-  const paths = recipe ? installedPathCandidates(recipe).map(shellSingleQuote).join(' ') : ''
+  const paths = recipe ? engineInstallPaths(recipe).map(shellSingleQuote).join(' ') : ''
   const candidates = [names, paths].filter(Boolean).join(' ')
   return [
-    ...(recipe ? [npmRuntimePrelude(recipe, managedNodePath(), false)] : []),
+    ...(recipe ? [npmRuntimePrelude(recipe, managedNodePath())] : []),
     `for candidate in "$@" ${candidates}; do`,
     '  case "$candidate" in',
     '    */*) resolved="$candidate" ;;',
@@ -790,12 +873,13 @@ export async function commandAvailableInInteractiveShell(
   const interactive = interactiveEngineShell(shell)
   if (!interactive) {
     return binaryOnPath(command)
-      || (recipe ? installedPathCandidates(recipe).some((candidate) => binaryOnPath(candidate)) : false)
+      || (recipe ? engineInstallPaths(recipe).some((candidate) => binaryOnPath(candidate)) : false)
   }
+  const [file, ...args] = engineShellArgv(interactive, [availabilityScript(recipe), 'harness-engine-probe', command])
   return await new Promise((resolve) => {
     execFile(
-      interactive.path,
-      [...interactive.args, availabilityScript(recipe), 'harness-engine-probe', command],
+      file,
+      args,
       { timeout: 5_000 },
       (error) => resolve(!error),
     )
@@ -857,10 +941,11 @@ export async function commandSupportsFlagInInteractiveShell(
     // ending the help. `[!…]` is POSIX and behaves the same in sh, bash and zsh (measured).
     `case "$help" in *"$2"[!A-Za-z0-9-]*|*"$2") exit 0 ;; *) exit ${FLAG_UNSUPPORTED_EXIT} ;; esac`,
   ].join('\n')
+  const [file, ...args] = engineShellArgv(interactive, [script, 'harness-engine-capability', command, flag])
   return await new Promise((resolve) => {
     execFile(
-      interactive.path,
-      [...interactive.args, script, 'harness-engine-capability', command, flag],
+      file,
+      args,
       { timeout: 5_000 },
       (error) => {
         const answer: CommandFlagSupport = !error

@@ -1,12 +1,11 @@
-# Your harnesses
+# Harness Monitor
 
-This folder is Harness Monitor's workspace. Almost nothing lives here, on purpose — there is one fleet per
-machine, so there is one policy per machine:
+The session table works without sending a prompt. The assistant stays beside the table. Use the viewer’s zoom icon when you want a full-width table.
 
-- **The rules:** `~/.config/harness/policy.jsonc` — commented, hand-edited, read on every refresh. Or drag
-  the two lines in the pane. Preview a change without moving anything: `hps pause --policy`.
-- **The resume tickets:** `~/.harness/monitor/paused.json` — which conversation each paused harness had.
-- **What happened, and why:** `~/.harness/monitor/log.jsonl`.
+New monitors default to Muse Spark 1.3 Contributor Free for both main and auxiliary requests. This is a
+limited-time free offer whose prompts and responses may train Meta models. Choose another model with
+`/models` before asking if those terms do not suit your work. A missing free model is an error, not
+permission to switch to a paid model.
 
-The only file Harness Monitor writes here is `.harness/verdict.json`, the pane header. Deleting this folder
-loses nothing.
+Cleanup is always explicit. Stopping retains history and launch settings; Open resumes through the
+owning daemon. No automatic cleanup runs while you are away.

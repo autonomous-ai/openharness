@@ -1,32 +1,61 @@
+import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
+import '../shared/theme/custom_background.dart';
 import '../shared/theme/harness_background.dart';
 import 'engine_identity.dart';
 
 /// Empty pages default to the selected tab's fill. An explicit background is
 /// used for picker thumbnails; the page follows the saved appearance choice.
 class SwarmWallpaper extends StatelessWidget {
-  const SwarmWallpaper({super.key, this.background, this.thumbnail = false});
+  const SwarmWallpaper({
+    super.key,
+    this.background,
+    this.thumbnail = false,
+    this.store,
+  });
   final HarnessBackground? background;
   final bool thumbnail;
+
+  /// Where the custom background's image, dim and fit come from.
+  final AppearancePrefsStore? store;
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    if (background case final choice?) return _paint(choice);
+    final prefs = store ?? appearancePrefsStore;
+    // Listened to even for an explicit choice: the custom background's dim and
+    // fit move while its card is on screen.
     return ValueListenableBuilder<AppearancePrefs>(
-      valueListenable: appearancePrefsStore,
-      builder: (context, prefs, _) => _paint(prefs.background),
+      valueListenable: prefs,
+      builder: (context, value, _) => _paint(
+        context,
+        background ?? value.background,
+        value.custom,
+        prefs.customBackgroundFile,
+      ),
     );
   }
 
-  Widget _paint(HarnessBackground choice) {
+  Widget _paint(
+    BuildContext context,
+    HarnessBackground choice,
+    CustomBackground custom,
+    File? customFile,
+  ) {
     if (choice == HarnessBackground.plain) {
       return ColoredBox(color: grid.AppPalette.swarmField);
+    }
+    if (choice == HarnessBackground.custom) {
+      return _CustomImage(
+        file: customFile,
+        custom: custom,
+        thumbnail: thumbnail,
+      );
     }
     if (choice.asset case final asset?) {
       return Stack(
@@ -88,6 +117,104 @@ class SwarmWallpaper extends StatelessWidget {
         ],
       ),
       size: Size.infinite,
+    );
+  }
+}
+
+/// The user's image, fitted and dimmed. A missing or broken copy paints Blank;
+/// its thumbnail says so, since that is where it can be fixed.
+class _CustomImage extends StatelessWidget {
+  const _CustomImage({
+    required this.file,
+    required this.custom,
+    required this.thumbnail,
+  });
+  final File? file;
+  final CustomBackground custom;
+  final bool thumbnail;
+
+  /// The page a thumbnail stands for. Center and tile show the image at its
+  /// real size, so a thumbnail draws a whole page and shrinks it, rather than
+  /// showing a real-size corner of the image.
+  static const _thumbnailPage = Size(1280, 720);
+
+  @override
+  Widget build(BuildContext context) {
+    final blank = ColoredBox(color: grid.AppPalette.swarmField);
+    final file = this.file;
+    if (file == null) return blank;
+    // Checked here rather than in an errorBuilder so the note is drawn at the
+    // card's size, not shrunk with the page and dimmed.
+    if (thumbnail && !file.existsSync()) {
+      return Container(
+        key: const ValueKey('custom-background-missing'),
+        color: grid.AppPalette.swarmField,
+        alignment: Alignment.center,
+        padding: const EdgeInsets.all(8),
+        child: Text(
+          'Image missing, choose again',
+          textAlign: TextAlign.center,
+          // On the workspace grey, so a light palette needs dark ink here.
+          style: grid.AppType.label(
+            color: grid.AppTheme.pick(
+              grid.AppPalette.textSecondary,
+              const Color(0xffdededb),
+            ),
+          ),
+        ),
+      );
+    }
+    // Real size as the OS shows it: one image pixel per device pixel.
+    final scale = MediaQuery.devicePixelRatioOf(context);
+    Widget missing(BuildContext _, Object _, StackTrace? _) => blank;
+    final image = switch (custom.fit) {
+      BackgroundFit.fill => Image.file(
+        file,
+        fit: BoxFit.cover,
+        excludeFromSemantics: true,
+        errorBuilder: missing,
+      ),
+      BackgroundFit.fit => Image.file(
+        file,
+        fit: BoxFit.contain,
+        excludeFromSemantics: true,
+        errorBuilder: missing,
+      ),
+      BackgroundFit.center => Image.file(
+        file,
+        scale: scale,
+        fit: BoxFit.none,
+        excludeFromSemantics: true,
+        errorBuilder: missing,
+      ),
+      BackgroundFit.tile => Image.file(
+        file,
+        scale: scale,
+        fit: BoxFit.none,
+        alignment: Alignment.topLeft,
+        repeat: ImageRepeat.repeat,
+        excludeFromSemantics: true,
+        errorBuilder: missing,
+      ),
+    };
+    final page = Stack(
+      fit: StackFit.expand,
+      children: [
+        blank,
+        image,
+        IgnorePointer(
+          child: ColoredBox(
+            color: const Color(0xff000000).withValues(alpha: custom.dim),
+          ),
+        ),
+      ],
+    );
+    if (!thumbnail) return page;
+    return ClipRect(
+      child: FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox.fromSize(size: _thumbnailPage, child: page),
+      ),
     );
   }
 }

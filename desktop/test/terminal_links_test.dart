@@ -109,6 +109,198 @@ void main() {
     );
   });
 
+  test(
+    'bare media suffix precheck keeps every supported extension and boundary',
+    () {
+      for (final extension in [
+        'png',
+        'jpg',
+        'jpeg',
+        'gif',
+        'webp',
+        'avif',
+        'heic',
+        'heif',
+        'bmp',
+        'tif',
+        'tiff',
+        'svg',
+        'ico',
+        'mp4',
+        'm4v',
+        'mov',
+        'webm',
+        'mkv',
+        'avi',
+        'mpg',
+        'mpeg',
+        'ogv',
+        '3gp',
+      ]) {
+        for (final suffix in [
+          '',
+          ' ',
+          ')',
+          ']',
+          '}',
+          '>',
+          '.',
+          ',',
+          ';',
+          ':',
+          '!',
+          '?',
+        ]) {
+          final path = '/tmp/preview.${extension.toUpperCase()}';
+          expect(terminalLinkInText('Saved $path$suffix', 9), path);
+        }
+      }
+      expect(terminalLinkInText('/tmp/not.pngz', 5), isNull);
+      expect(terminalLinkInText('a' * 2048, 1024), isNull);
+    },
+  );
+
+  test('underline includes both cells of wide glyphs across soft wraps', () {
+    const target = '/tmp/图😀.png';
+    final terminal = Terminal()..resize(10, 4);
+    terminal.write('`$target`');
+    for (final cell in [
+      const CellOffset(6, 0),
+      const CellOffset(7, 0),
+      const CellOffset(8, 0),
+      const CellOffset(9, 0),
+      const CellOffset(2, 1),
+    ]) {
+      expect(terminalLinkSpans(terminal, cell, target), [
+        (row: 0, start: 0, end: 9),
+        (row: 1, start: 0, end: 4),
+      ], reason: '$cell');
+    }
+  });
+
+  test('relative paths keep their token boundaries and adjacent matches', () {
+    const text = 'a.png)b.jpg]c.gif>d.mp4 prefix=one.png';
+    for (final path in ['a.png', 'b.jpg', 'c.gif', 'd.mp4', 'prefix=one.png']) {
+      expect(terminalLinkInText(text, text.indexOf(path)), path);
+    }
+    for (final delimiter in [')', ']', '>']) {
+      expect(terminalLinkInText(text, text.indexOf(delimiter)), isNull);
+    }
+    final adjacent = '${'a' * 2048} image.png';
+    expect(terminalLinkInText(adjacent, 1024), isNull);
+    expect(terminalLinkInText(adjacent, 2052), 'image.png');
+    expect(terminalLinkInText('command:one.png', 10), isNull);
+  });
+
+  test('equal URLs separated by text retain separate underline extents', () {
+    const target = 'https://e.co';
+    final terminal = Terminal()..resize(60, 4);
+    terminal.write('$target | $target');
+    expect(terminalLinkSpans(terminal, const CellOffset(2, 0), target), [
+      (row: 0, start: 0, end: 11),
+    ]);
+    expect(terminalLinkSpans(terminal, const CellOffset(17, 0), target), [
+      (row: 0, start: 15, end: 26),
+    ]);
+  });
+
+  test(
+    'extent memoization never survives output or alternate-buffer changes',
+    () {
+      const first = 'https://one.example';
+      const second = '/tmp/two.png';
+      const cell = CellOffset(3, 0);
+      final terminal = Terminal()..resize(60, 4);
+      terminal.write(first);
+      expect(terminalLinkSpans(terminal, cell, first), [
+        (row: 0, start: 0, end: first.length - 1),
+      ]);
+      terminal.write('\r\x1b[2K$second');
+      expect(terminalLinkSpans(terminal, cell, first), isEmpty);
+      expect(terminalLinkSpans(terminal, cell, second), [
+        (row: 0, start: 0, end: second.length - 1),
+      ]);
+      terminal.write('\x1b[?1049hplain');
+      expect(terminalLinkSpans(terminal, cell, second), isEmpty);
+      terminal.write('\x1b[?1049l');
+      expect(terminalLinkSpans(terminal, cell, second), [
+        (row: 0, start: 0, end: second.length - 1),
+      ]);
+    },
+  );
+
+  group('OSC 8 hyperlinks', () {
+    // Claude Code's table cell for `[!125](…/merge_requests/125)`, as tmux
+    // hands it over: the label is shown, the address rides in OSC 8.
+    const mr = 'https://git.example.com/group/project/-/merge_requests/125';
+
+    test('opens the hidden target from any cell of the label', () {
+      final terminal = Terminal()..resize(60, 4);
+      terminal.write(
+        '| MR | \x1b[94m\x1b]8;id=1a8pnbt;$mr\x1b\\!125\x1b[39m\x1b]8;;\x1b\\ | x',
+      );
+      for (var x = 7; x < 11; x++) {
+        expect(terminalLinkAt(terminal, CellOffset(x, 0)), mr);
+      }
+      expect(terminalLinkAt(terminal, const CellOffset(6, 0)), isNull);
+      expect(terminalLinkAt(terminal, const CellOffset(11, 0)), isNull);
+    });
+
+    test('BEL-terminated, with semicolons kept in the URI', () {
+      const url = 'https://example.com/a;b?c=1';
+      final terminal = Terminal()..resize(40, 4);
+      terminal.write('\x1b]8;;$url\x07here\x1b]8;;\x07 after');
+      expect(terminalLinkAt(terminal, const CellOffset(1, 0)), url);
+      expect(terminalLinkAt(terminal, const CellOffset(7, 0)), isNull);
+    });
+
+    test('survives an SGR reset and clears when the cell is rewritten', () {
+      const url = 'https://example.com/x';
+      final terminal = Terminal()..resize(40, 4);
+      terminal.write('\x1b]8;;$url\x1b\\ab\x1b[0mcd\x1b]8;;\x1b\\');
+      expect(terminalLinkAt(terminal, const CellOffset(3, 0)), url);
+      terminal.write('\r\x1b[2Kplain');
+      expect(terminalLinkAt(terminal, const CellOffset(1, 0)), isNull);
+    });
+
+    test('moves with inserted and deleted characters', () {
+      const url = 'https://example.com/y';
+      final terminal = Terminal()..resize(40, 4);
+      terminal.write('ab\x1b]8;;$url\x1b\\LINK\x1b]8;;\x1b\\');
+      terminal.write('\r\x1b[2@');
+      expect(terminalLinkAt(terminal, const CellOffset(4, 0)), url);
+      expect(terminalLinkAt(terminal, const CellOffset(2, 0)), isNull);
+      terminal.write('\r\x1b[3P');
+      expect(terminalLinkAt(terminal, const CellOffset(1, 0)), url);
+      expect(terminalLinkAt(terminal, const CellOffset(0, 0)), isNull);
+    });
+
+    test('spans exactly the linked cells for the hover underline', () {
+      final terminal = Terminal()..resize(60, 4);
+      terminal.write(
+        '| MR | \x1b[94m\x1b]8;id=1a8pnbt;$mr\x1b\\!125\x1b[39m\x1b]8;;\x1b\\ | x',
+      );
+      expect(terminalLinkSpans(terminal, const CellOffset(8, 0), mr), [
+        (row: 0, start: 7, end: 10),
+      ]);
+    });
+
+    test('a link never closed ends at a full reset', () {
+      const url = 'https://example.com/leak';
+      final terminal = Terminal()..resize(40, 4);
+      terminal.write('\x1b]8;;$url\x1b\\cut off');
+      terminal.write('\x1bc\r\nprompt');
+      expect(terminalLinkAt(terminal, const CellOffset(0, 0)), url);
+      expect(terminalLinkAt(terminal, const CellOffset(1, 1)), isNull);
+    });
+
+    test('ignores non-web schemes', () {
+      final terminal = Terminal()..resize(40, 4);
+      terminal.write('\x1b]8;;javascript:alert(1)\x1b\\x\x1b]8;;\x1b\\');
+      expect(terminalLinkAt(terminal, const CellOffset(0, 0)), isNull);
+    });
+  });
+
   group('hard-wrapped web URLs', () {
     // What Claude Code (Ink) writes for a long address in a narrow pane: rows
     // with their own newlines, cut at the box width, each indented by the box.
@@ -118,6 +310,48 @@ void main() {
       terminal.write(rows.join('\r\n'));
       return terminal;
     }
+
+    for (final (style, indent) in [('4', ''), ('94', '  ')]) {
+      test('joins a standalone painted URL without a label (SGR $style)', () {
+        const head = 'https://example.com/';
+        const tail = 'path/image.png';
+        final terminal = ink([
+          'A wider unrelated tool heading precedes the URL',
+          '$indent\x1b[${style}m$head\x1b[0m',
+          '$indent\x1b[${style}m$tail\x1b[0m',
+          'The next sentence is ordinary output.',
+        ], width: 60);
+        const target = '$head$tail';
+        for (final row in [1, 2]) {
+          final cell = CellOffset(indent.length + 3, row);
+          expect(terminalLinkAt(terminal, cell), target);
+          expect(terminalLinkSpans(terminal, cell, target), [
+            (
+              row: 1,
+              start: indent.length,
+              end: indent.length + head.length - 1,
+            ),
+            (
+              row: 2,
+              start: indent.length,
+              end: indent.length + tail.length - 1,
+            ),
+          ]);
+        }
+        expect(terminalLinkAt(terminal, const CellOffset(3, 3)), isNull);
+      });
+    }
+
+    test('spans every row of a cut URL for the hover underline', () {
+      final terminal = ink([
+        '  Command Code here: https://commandc',
+        '  ode.ai/0xkongamoto/settings/billing',
+      ]);
+      expect(terminalLinkSpans(terminal, const CellOffset(5, 1), url), [
+        (row: 0, start: 21, end: 36),
+        (row: 1, start: 2, end: 36),
+      ]);
+    });
 
     test('reads the whole URL from either row', () {
       final terminal = ink([

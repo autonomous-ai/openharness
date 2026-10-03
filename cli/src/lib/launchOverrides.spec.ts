@@ -206,7 +206,7 @@ describe('buildLaunchOverrides — a pane opened as a named agent comes back as 
     const own = await buildLaunchOverrides(deps().d, 'opencode', { agent: 'harness-compute' }, 'a')
     expect(own).toEqual({ ok: true, overrides: { env: {}, extraArgs: ['--agent', 'harness-compute'], clearEnv: [...DSH_SESSION_ENV] } })
     const home = await buildLaunchOverrides(deps().d, 'opencode', { agent: 'harness-compute', subscriptionModel: 'anthropic/claude' }, 'a')
-    expect(home).toMatchObject({ ok: true, overrides: { extraArgs: ['-m', 'anthropic/claude', '--agent', 'harness-compute'] } })
+    expect(home).toMatchObject({ ok: true, overrides: { extraArgs: ['-m', 'anthropic/claude', '--agent', 'harness-compute'], sessionModel: 'anthropic/claude' } })
     const grid = await buildLaunchOverrides(deps().d, 'opencode', { gridLaunch: GRID, agent: 'harness-compute' }, 'a')
     expect(grid.ok).toBe(true)
     if (!grid.ok) return
@@ -217,6 +217,31 @@ describe('buildLaunchOverrides — a pane opened as a named agent comes back as 
   it('adds nothing for a general session, or for an engine with no contract on a hand-edited row', async () => {
     expect(await buildLaunchOverrides(deps().d, 'opencode', { agent: null }, 'a')).toMatchObject({ ok: true, overrides: { extraArgs: [] } })
     expect(await buildLaunchOverrides(deps().d, 'claude', { agent: 'harness-compute' }, 'a')).toMatchObject({ ok: true, overrides: { extraArgs: [] } })
+  })
+})
+
+describe('buildLaunchOverrides — opencode v2', () => {
+  const v2 = () => deps({ machine: () => ({ hermesSystemManaged: false, opencodeMajor: 2 }) }).d
+
+  it('hands the v2 TUI neither -m nor --agent, on its own login or on a grid', async () => {
+    // Both are `opencode run` flags in v2; the TUI exits 1 on them and the pane becomes a shell.
+    for (const source of [
+      { agent: 'harness-compute', subscriptionModel: 'anthropic/claude' },
+      { gridLaunch: GRID, agent: 'harness-compute' },
+    ]) {
+      const built = await buildLaunchOverrides(v2(), 'opencode', source, 'a')
+      expect(built.ok).toBe(true)
+      if (!built.ok) return
+      expect(built.overrides.extraArgs).not.toContain('-m')
+      expect(built.overrides.extraArgs).not.toContain('--agent')
+    }
+  })
+
+  it('carries the model the resumed session has to be switched to', async () => {
+    const home = await buildLaunchOverrides(v2(), 'opencode', { subscriptionModel: 'anthropic/claude' }, 'a')
+    expect(home).toMatchObject({ ok: true, overrides: { extraArgs: [], sessionModel: 'anthropic/claude' } })
+    const grid = await buildLaunchOverrides(v2(), 'opencode', { gridLaunch: GRID }, 'a')
+    expect(grid).toMatchObject({ ok: true, overrides: { extraArgs: ['--standalone'], sessionModel: 'team-grid/gpt-5' } })
   })
 })
 

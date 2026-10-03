@@ -78,15 +78,15 @@ void main() {
           },
         }),
         Agent.fromJson({
-          'id': 'herdr-only',
-          'sessionId': 'session-herdr',
-          'name': 'herdr-session',
+          'id': 'foreign-only',
+          'sessionId': 'session-foreign',
+          'name': 'foreign-session',
           'engine': 'claude',
           'status': 'active',
           'terminal': {
             'runtimes': [
               {
-                'backend': 'herdr',
+                'backend': 'future-backend',
                 'endpointId': 'endpoint-a',
                 'sessionName': 'default',
                 'terminalId': 'terminal-a',
@@ -99,7 +99,7 @@ void main() {
     state.sessionAgentIds.addAll({
       'session-parent': 'parent',
       'session-child': 'child',
-      'session-herdr': 'herdr-only',
+      'session-foreign': 'foreign-only',
     });
     notifier.machines = [machine];
     notifier.machineStates[machine.machineId] = state;

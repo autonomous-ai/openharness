@@ -1,5 +1,5 @@
-/// Shared instant dialogs. An opaque-enough tint separates terminal text from
-/// the dialog without filtering live terminal pixels on every frame.
+/// Shared desktop dialogs keep the surrounding workspace recognizable without
+/// filtering live terminal pixels on every frame.
 library;
 
 import 'dart:ui' show ImageFilter;
@@ -7,12 +7,16 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../theme/app_theme.dart';
+
 /// Dialogs do not blur the live workspace by default.
 const double kDialogVeilBlur = 0;
 
-/// Shared dark backdrop for dialogs and centered pickers. Terminal output
-/// stays in the background while the active surface has the user's attention.
-const Color kDialogVeilTint = Color(0xE6000000);
+/// Every modal uses the same 95% veil, including Cmd-N and Cmd-P.
+const Color kDialogVeilTint = AppDesktop.darkVeil;
+
+Color dialogVeilTintOf(BuildContext context) =>
+    AppDesktop.veil(Theme.of(context).brightness);
 
 /// The app's dialog barrier: a flat tint and the active surface.
 ///
@@ -31,9 +35,10 @@ Future<T?> showAppDialog<T>({
   required WidgetBuilder builder,
   bool barrierDismissible = true,
   String barrierLabel = 'Dismiss',
-  Color veilTint = kDialogVeilTint,
+  Color? veilTint,
   double veilBlur = kDialogVeilBlur,
   Duration transitionDuration = Duration.zero,
+  ValueChanged<bool>? onCurrentChanged,
 }) => showGeneralDialog<T>(
   context: context,
   // The route's own barrier draws nothing: the veil below is the barrier.
@@ -46,11 +51,14 @@ Future<T?> showAppDialog<T>({
   transitionDuration: MediaQuery.disableAnimationsOf(context)
       ? Duration.zero
       : transitionDuration,
-  pageBuilder: (context, _, _) => _AppDialogVeil(
-    tint: veilTint,
-    blur: veilBlur,
-    dismissible: barrierDismissible,
-    child: Builder(builder: builder),
+  pageBuilder: (context, _, _) => _DialogVisibility(
+    onCurrentChanged: onCurrentChanged,
+    child: _AppDialogVeil(
+      tint: veilTint,
+      blur: veilBlur,
+      dismissible: barrierDismissible,
+      child: Builder(builder: builder),
+    ),
   ),
   transitionBuilder: (context, anim, _, child) =>
       transitionDuration == Duration.zero ||
@@ -58,6 +66,43 @@ Future<T?> showAppDialog<T>({
       ? child
       : FadeTransition(opacity: anim, child: child),
 );
+
+/// Lets an explicit preview route preserve passive native chrome. A nested
+/// route hides that preview again; this never grants input to the workspace.
+class _DialogVisibility extends StatefulWidget {
+  const _DialogVisibility({required this.child, this.onCurrentChanged});
+  final Widget child;
+  final ValueChanged<bool>? onCurrentChanged;
+
+  @override
+  State<_DialogVisibility> createState() => _DialogVisibilityState();
+}
+
+class _DialogVisibilityState extends State<_DialogVisibility> {
+  bool? _current;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final current = ModalRoute.isCurrentOf(context) ?? false;
+    if (current == _current) return;
+    _current = current;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && current == _current) {
+        widget.onCurrentChanged?.call(current);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    widget.onCurrentChanged?.call(false);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
 
 /// The veil, and the dialog standing on it.
 class _AppDialogVeil extends StatelessWidget {
@@ -68,7 +113,7 @@ class _AppDialogVeil extends StatelessWidget {
     required this.child,
   });
 
-  final Color tint;
+  final Color? tint;
   final double blur;
   final bool dismissible;
   final Widget child;
@@ -86,10 +131,10 @@ class _AppDialogVeil extends StatelessWidget {
             behavior: HitTestBehavior.opaque,
             onTap: dismissible ? () => Navigator.of(context).maybePop() : null,
             child: blur == 0
-                ? ColoredBox(color: tint)
+                ? ColoredBox(color: tint ?? dialogVeilTintOf(context))
                 : BackdropFilter(
                     filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-                    child: ColoredBox(color: tint),
+                    child: ColoredBox(color: tint ?? dialogVeilTintOf(context)),
                   ),
           ),
         ),

@@ -8,7 +8,7 @@ const row = (over: Partial<RegisteredSession> = {}): RegisteredSession => ({
   defaultName: 'harness Desktop', transcriptPath: '/tmp/rollout.jsonl', projectDir: 'demo',
   cwd: '/tmp/demo', runtimes: [{ backend: 'tmux', paneId: '%7' }], primaryRuntimeKey: 'tmux\u0000%7',
   tmuxPane: '%7', source: null, title: null, model: null, cliVersion: null, codexHome: null,
-  dsh: null, agent: null, processIdentity: null, registeredAt: 1, updatedAt: 1, lastHookAt: 1,
+  dsh: null, agent: null, processIdentity: null, registeredAt: 1, touchedAt: 1, lastHookAt: 1,
   lastTranscriptAt: 1, ...over,
 } as RegisteredSession)
 

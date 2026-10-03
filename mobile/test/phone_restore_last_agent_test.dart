@@ -7,6 +7,7 @@ import 'package:harness_mobile/phone/agent_home.dart';
 import 'package:harness_mobile/phone/agent_swipe.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/phone/welcome/pick_up_page.dart';
 
 import 'agent_pager_fixture.dart';
 import 'desk_fixture.dart';
@@ -130,17 +131,30 @@ void main() {
     expect(openedAgent(tester), 'c');
   });
 
-  testWidgets('records the agent it opens, so the next launch finds it', (
-    tester,
-  ) async {
-    final storage = MemoryKeyValueStore();
-    final notifier = await app(tester, storage: storage);
-    machineLists(notifier, [
-      for (final id in pagerAgentIds) agent(id, terminal: true),
-    ]);
-    await pumpHome(tester, notifier);
-    expect(storage.values['phone_last_agent_v1'], isNotNull);
-  });
+  testWidgets(
+    'a new phone opens on its sessions; the one picked is recorded for the next launch',
+    (tester) async {
+      final storage = MemoryKeyValueStore();
+      final notifier = await app(tester, storage: storage);
+      machineLists(notifier, [
+        for (final id in pagerAgentIds) agent(id, terminal: true),
+      ]);
+      await pumpHome(tester, notifier);
+      // Nothing remembered: "Pick up where you left off", not a session guessed for it.
+      expect(find.byType(PickUpPage), findsOneWidget);
+      expect(storage.values['phone_last_agent_v1'], isNull);
+
+      // A row tapped there opens through the shell, as Find's do.
+      picked!.value = (machineId: 'm', agentId: 'b');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 700));
+      expect(openedAgent(tester), 'b');
+      expect(storage.values['phone_last_agent_v1'], contains('"agentId":"b"'));
+      // The welcome's list reaches the machines, and the storage persists: let the timers run out.
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 30));
+    },
+  );
 
   testWidgets('the next launch opens the agent picked last, not the first', (
     tester,

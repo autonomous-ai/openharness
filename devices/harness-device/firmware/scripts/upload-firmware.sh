@@ -24,6 +24,7 @@ VER_FILE="$HERE/version.txt"
 # A DEDICATED prod build dir + DEVICE_FORCE_PROD so a published binary is always production (ignores any
 # local provisioned_config.h) WITHOUT moving the header, and without clobbering the interactive `build/`
 # dir — both stay warm (with ccache, near-instant rebuilds). Override BUILD_DIR via env if needed.
+BUILD_DIR_FROM_ENV="${BUILD_DIR:-}"
 BUILD_DIR="${BUILD_DIR:-$HERE/build-prod}"
 BIN="$BUILD_DIR/interns_commander.bin"
 
@@ -32,6 +33,27 @@ GCS_BUCKET="${GCS_BUCKET:-s3-autonomous-upgrade-3}"
 GCS_PUBLIC_BASE_URL="${GCS_PUBLIC_BASE_URL:-https://storage.googleapis.com/${GCS_BUCKET}}"
 METADATA_PATH="${METADATA_PATH:-harness/esp32/ota/metadata.json}"
 OTA_KEY="${OTA_KEY:-commander}"   # must match DEVICE_OTA_KEY in main/config_store.h
+
+# WHICH SILICON THIS RELEASE IS FOR, NAMED OUT LOUD.
+#
+# One project builds for two boards now, and this script builds into its own fresh directory — so
+# nothing in it says which. ESP-IDF then GUESSES, and what it guesses from is a stale `sdkconfig`
+# left in the firmware directory by whoever built last. On this desk that happened to say esp32s3
+# and the release looked fine; on a clean checkout, where no such file exists, IDF falls back to
+# plain `esp32` and the build dies at CMake (verified, 2026-09-28).
+#
+# Loud rather than silent, so this was never going to ship the wrong image — but it was going to
+# stop working the first time it ran anywhere but here, which for a release script is the same
+# problem one step later. The pair moves together: OTA_KEY names the manifest entry, and this names
+# the chip whose image goes in it.
+IDF_TARGET_BOARD="${IDF_TARGET_BOARD:-esp32s3}"
+
+# THE VERSION STAYS A PLAIN NUMBER, and that is load-bearing.
+#
+# fwPush.ts only offers a version matching ^v?\d+\.\d+\.\d+$, and fw_update.c compares the offered
+# string to the image's own esp_app_desc.version. A suffix — `0.0.94-habitat` was one, left in a build
+# directory's CMake cache and shipped to a device on 2026-09-29 — is therefore neither offered nor
+# installed, and the device holding it can never be updated over the cable again.
 
 next_firmware_version() {
   local current="$1" major minor patch
@@ -162,12 +184,12 @@ if [ "$DO_BUILD" -eq 1 ]; then
   rm -f "$RELEASE_SDKCONFIG"
   echo ">> building… (prod: -DDEVICE_FORCE_PROD=1, build dir $BUILD_DIR, fresh config from sdkconfig.defaults)"
   BUILD_LOG="$(mktemp)"
-  if ! idf.py -C "$HERE" -B "$BUILD_DIR" -DSDKCONFIG="$RELEASE_SDKCONFIG" -DDEVICE_FORCE_PROD=1 build 2>&1 | tee "$BUILD_LOG"; then
+  if ! idf.py -C "$HERE" -B "$BUILD_DIR" -DIDF_TARGET="$IDF_TARGET_BOARD" -DSDKCONFIG="$RELEASE_SDKCONFIG" -DDEVICE_FORCE_PROD=1 build 2>&1 | tee "$BUILD_LOG"; then
     if grep -q "idf.py fullclean" "$BUILD_LOG"; then
       echo ">> build env changed; running idf.py fullclean and retrying once"
       idf.py -C "$HERE" -B "$BUILD_DIR" fullclean
       rm -f "$RELEASE_SDKCONFIG"
-      idf.py -C "$HERE" -B "$BUILD_DIR" -DSDKCONFIG="$RELEASE_SDKCONFIG" -DDEVICE_FORCE_PROD=1 build
+      idf.py -C "$HERE" -B "$BUILD_DIR" -DIDF_TARGET="$IDF_TARGET_BOARD" -DSDKCONFIG="$RELEASE_SDKCONFIG" -DDEVICE_FORCE_PROD=1 build
     else
       exit 1
     fi

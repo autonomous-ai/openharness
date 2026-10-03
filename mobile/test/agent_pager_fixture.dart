@@ -56,15 +56,14 @@ class PagerConn extends WsConn {
 
 const pagerAgentIds = ['a', 'b', 'c', 'd'];
 
-/// One machine `m` running [pagerAgentIds], reached through [conn] — as a phone reaches it when
-/// [viewer], with no CLI and nothing written to disk.
+/// One machine `m` running [pagerAgentIds], reached through [conn] — as a phone reaches it, with no
+/// CLI and nothing written to disk.
 /// [storage] gives the app the preferences a real one keeps across launches —
 /// the agent to reopen among them. Left out, nothing is remembered anywhere,
 /// which is what a test that is not about a relaunch wants.
 AppNotifier pagerApp(
   PagerConn conn, {
   bool online = true,
-  bool viewer = false,
   LocalKeyValueStore? storage,
 }) {
   final session = AuthSession();
@@ -76,13 +75,11 @@ AppNotifier pagerApp(
     paneLayoutStore: storage == null
         ? null
         : PaneLayoutStore(storage: storage),
-    viewer: viewer
-        ? ViewerServices(
-            config: AppConfig.dev,
-            session: session,
-            keys: ViewerKeyStore(storage: MemoryKeyValueStore()),
-          )
-        : null,
+    viewer: ViewerServices(
+      config: AppConfig.dev,
+      session: session,
+      keys: ViewerKeyStore(storage: MemoryKeyValueStore()),
+    ),
   );
   const machine = Machine(
     machineId: 'm',

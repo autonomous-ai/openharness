@@ -16,6 +16,15 @@ class _Links implements PeerLinkClient {
     String password, {
     void Function(String stage)? onProgress,
     String? displayName,
+    String? label,
+  }) async => const CliLinkConnectResult(error: 'not used');
+
+  @override
+  Future<CliLinkConnectResult> connectWithCode(
+    String machineId,
+    String code, {
+    required String label,
+    String? displayName,
   }) async => const CliLinkConnectResult(error: 'not used');
 
   @override

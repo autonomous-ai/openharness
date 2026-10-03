@@ -327,3 +327,26 @@ describe('protocol errors', () => {
     expect(result.agents).toBeTruthy()
   })
 })
+
+describe('only servers are clients', () => {
+  it('refuses a request a browser made, whatever its credential', async () => {
+    for (const headers of [{ origin: 'http://rebind.example' }, { origin: 'null' }, { 'sec-fetch-site': 'same-origin' }] as Record<string, string>[]) {
+      const res = await fetch(base, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${KEY}`, ...headers },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'agent.list', params: {} }),
+      })
+      expect(res.status, JSON.stringify(headers)).toBe(403)
+    }
+    expect((await rpc('agent.list', {})).status).toBe(200)
+  })
+
+  it('refuses a body past the request size limit instead of buffering it', async () => {
+    const res = await fetch(base, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${KEY}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'agent.list', params: { pad: 'x'.repeat(2 * 1024 * 1024) } }),
+    }).catch(() => null)
+    expect(res?.status).toBe(413)
+  })
+})

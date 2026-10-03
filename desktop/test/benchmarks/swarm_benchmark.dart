@@ -366,7 +366,7 @@ void main() {
     final swarmCount = scenario.swarms;
     final chrome = scenario.native ? 'native bridge' : 'Flutter tabs';
     testWidgets(
-      'tab-switch CPU benchmark with $swarmCount retained swarms ($chrome)',
+      'tab-switch CPU benchmark with $swarmCount retained tabs ($chrome)',
       (tester) async {
         final app = createApp();
         app.machineStates['m']!.nodeOnline = true;

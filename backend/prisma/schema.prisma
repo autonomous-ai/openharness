@@ -629,3 +629,139 @@ model Desk {
 
   @@map("desks")
 }
+
+/// Routing only; channel messages and member capabilities stay on the host daemon.
+/// A deterministic _id makes concurrent claims atomic using MongoDB's built-in
+/// unique primary index. This never changes the format of the shared desk.
+model TabChannel {
+  id            String   @id @map("_id") @db.ObjectId
+  userId        String
+  tabId         String
+  hostMachineId String
+  createdAt     DateTime @default(now())
+
+  @@map("tab_channels")
+}
+
+/// Explicit account opt-in for automatic swarm collaboration; absence means off.
+model TabChannelSettings {
+  id        String  @id @map("_id") @db.ObjectId
+  userId    String
+  enabled   Boolean @default(false)
+  revision  Int     @default(0)
+
+  @@map("tab_channel_settings")
+}
+
+/// Explicit account opt-ins; missing choices stay off. Each write changes one feature.
+model ExperimentalSettings {
+  id               String  @id @map("_id") @db.ObjectId
+  userId           String
+  focusBarCreature Boolean @default(false)
+  shareButton      Boolean @default(false)
+  devicesTab       Boolean @default(false)
+  revision         Int     @default(0)
+
+  @@index([userId])
+  @@map("experimental_settings")
+}
+
+/// The account's ZOO: the daemons it hatched, the eggs waiting, which one is paired, and the
+/// first-egg habits done so far — one document per user, the same on every client, like the desk
+/// but separate from it (daemons/README.md, "The zoo"). Written through `POST /api/zoo/ops`
+/// (routes/zoo.ts): idempotent ops applied in order under `revision`, the draw made here and only
+/// here (lib/zoo.ts). `state` is validated shape by shape on every read; what does not parse is
+/// dropped rather than served.
+model Zoo {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @unique
+  revision  Int      @default(0)
+  state     Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("zoos")
+}
+
+/// Serial numbers for hatched daemons: one counter per roster id, across every account. Each server
+/// hatch of a daemon the account did not own takes the next one with an atomic increment
+/// (routes/zoo.ts), and the daemon keeps it as `serial` in its zoo: the card's `#0042`. A duplicate
+/// merges into the daemon you have and takes none; a guest's daemons, hatched on a client, have none.
+/// Numbers are never given twice; a hatch whose write never landed leaves a gap.
+model DaemonMint {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  daemonId  String   @unique
+  count     Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@map("daemon_mints")
+}
+
+/// A sign-in Harness issued ITSELF rather than through the Autonomous account service — today only
+/// to a phone that scanned a signed-in computer's Add Phone QR (lib/harnessSession.ts). The account
+/// service has no way for one signed-in device to sign in another, so the computer asks for a
+/// one-time handoff code, the QR carries it, and the phone trades it for this session.
+///
+/// Only a HASH of the refresh token is stored: a dump of this collection must not be a key store.
+/// The access token lives in Redis beside it, an hour at a time. Revoking is setting `revokedAt`;
+/// every request reads it, so it takes effect at once.
+model HarnessSession {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId      String
+  refreshHash String    @unique
+  /// What the device calls itself ("Dee's iPhone"), for a list of signed-in devices.
+  label       String
+  /// `computer` — a computer signed in by a phone scanning its QR (lib/harnessSession.ts): it may
+  /// connect AS a machine. Absent (every older row) or `viewer` — an app, which may not.
+  kind        String?
+  createdAt   DateTime  @default(now())
+  lastUsedAt  DateTime  @default(now())
+  /// Slides forward on every refresh: a phone in use stays signed in, one left in a drawer does not.
+  expiresAt   DateTime
+  revokedAt   DateTime?
+
+  @@index([userId])
+  @@map("harness_sessions")
+}
+
+/// One entry of an account's device key log (lib/deviceKeyLog.ts): the identity keys its machines and
+/// viewer apps hold, append-only and hash-chained. Every device trusts the keys the log leaves active,
+/// so signing in is enough for an account's devices to reach each other end to end.
+///
+/// `entry` is the JSON the device sent, kept verbatim; its signature and hash cover a binary encoding
+/// of its fields, so nothing here depends on how Mongo orders keys. The unique `(userId, seq)` is what
+/// makes appending atomic: two devices appending at one head cannot both win.
+model DeviceKeyLogEntry {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String
+  seq       Int
+  hash      String
+  entry     String
+  /// The Harness session (a phone signed in by a QR) that added this key, so removing the key signs
+  /// that session out too. Null for anything else.
+  sessionId String?
+  createdAt DateTime @default(now())
+
+  @@unique([userId, seq])
+  @@map("device_key_log")
+}
+
+/// Public/private link metadata only. The owner daemon keeps the final policy and encrypted discussion.
+model HarnessLink {
+  id             String    @id @map("_id")
+  ownerId        String
+  machineId      String
+  agentId        String
+  autonomousEnv  String
+  name           String
+  engine         String?
+  ownerPublicKey String
+  visibility     String
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([machineId, agentId])
+  @@index([ownerId, machineId])
+  @@map("harness_links")
+}

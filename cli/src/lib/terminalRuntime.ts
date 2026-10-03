@@ -7,29 +7,23 @@ function assertKeyPart(value: string, field: string): string {
   return value
 }
 
-/** Stable route key. It changes when a Herdr terminal moves to a different public pane route. */
+/** Stable route key. */
 export function terminalRouteKey(runtime: TerminalRuntimeRef): string {
-  return runtime.backend === 'tmux'
-    ? `tmux${SEP}${assertKeyPart(runtime.paneId, 'tmux pane id')}`
-    : `herdr${SEP}${assertKeyPart(runtime.endpointId, 'Herdr endpoint id')}${SEP}${assertKeyPart(runtime.paneId, 'Herdr pane id')}`
+  return `tmux${SEP}${assertKeyPart(runtime.paneId, 'tmux pane id')}`
 }
 
-export function terminalInstanceId(runtime: TerminalRuntimeRef): string {
-  return runtime.backend === 'tmux' ? 'tmux:default' : `herdr:${assertKeyPart(runtime.endpointId, 'Herdr endpoint id')}`
+export function terminalInstanceId(_runtime: TerminalRuntimeRef): string {
+  return 'tmux:default'
 }
 
-/** Human-readable locator label for status and logs. It never contains a Herdr socket path. */
+/** Human-readable locator label for status and logs. */
 export function terminalRuntimeLabel(runtime: TerminalRuntimeRef): string {
-  return runtime.backend === 'tmux'
-    ? `tmux:${runtime.paneId}`
-    : `herdr:${runtime.sessionName}:${runtime.paneId}`
+  return `tmux:${runtime.paneId}`
 }
 
-/** Stable placement key. A Herdr pane move keeps this key because terminal_id is the placement identity. */
+/** Stable placement key. For tmux the pane id is both the route and the placement identity. */
 export function terminalPlacementKey(runtime: TerminalRuntimeRef): string {
-  return runtime.backend === 'tmux'
-    ? terminalRouteKey(runtime)
-    : `herdr${SEP}${assertKeyPart(runtime.endpointId, 'Herdr endpoint id')}${SEP}${assertKeyPart(runtime.terminalId, 'Herdr terminal id')}`
+  return terminalRouteKey(runtime)
 }
 
 export function processIdentityKey(engine: string, identity: ProcessIdentity): string {
@@ -44,7 +38,7 @@ export function sameTerminalPlacement(a: TerminalRuntimeRef, b: TerminalRuntimeR
   return terminalPlacementKey(a) === terminalPlacementKey(b)
 }
 
-/** Replace a moved Herdr route without duplicating its stable placement. */
+/** Merge observed runtimes into the current set without duplicating a placement. */
 export function mergeTerminalRuntimes(
   current: readonly TerminalRuntimeRef[],
   observed: readonly TerminalRuntimeRef[],

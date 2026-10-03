@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:io';
 
 import '../core/harness_file_store.dart';
+import 'log_append.dart';
 
 /// Best-effort append-only diagnostic log split into one file per calendar day
 /// (`<base>-YYYYMMDD.log`) inside a directory.
@@ -11,25 +13,32 @@ import '../core/harness_file_store.dart';
 /// so a log line means the same thing in both products. Keep the two in step.
 ///
 /// Why per-day: a single ever-growing file eventually becomes too big to open or
-/// send us, and a size-based `.old` rotation keeps only the last slice. Dating
-/// the file caps each day's size on its own and lets anything past
-/// [retentionDays] be pruned automatically, so the directory stays bounded
-/// without ever discarding the current session.
+/// send us, and a size-based `.old` rotation keeps only the last slice. Dated
+/// files let anything past [retentionDays] be pruned automatically. This caps
+/// retained age, not a busy day's byte count.
 ///
-/// Writes are synchronous and flushed so a line survives even if the app is
-/// force-quit mid-write, and every IO error is swallowed — diagnostic logging
-/// must never break the flow it only observes.
+/// Immediate writes are synchronous and flushed. Routine diagnostics may opt
+/// into bounded batches; an immediate write also commits the pending context.
+/// Every IO error is swallowed — diagnostics must never break the flow they
+/// only observe.
 class DailyLogFile {
   DailyLogFile(
     this.directory,
     this.base, {
     this.retentionDays = 14,
+    this.bufferInterval = const Duration(seconds: 1),
+    this.maxBufferedCharacters = 64 * 1024,
+    this.maxBufferedEntries = 256,
+    this.appendFile = appendDurableLog,
     DateTime Function() clock = DateTime.now,
     // The field is private, so an initialising formal would name the
     // PARAMETER `_clock` — which no caller outside this library could pass.
     // The clock is injected by tests.
-    // ignore: prefer_initializing_formals
-  }) : _clock = clock;
+  }) : assert(bufferInterval > Duration.zero),
+       assert(maxBufferedCharacters > 0),
+       assert(maxBufferedEntries > 0),
+       // ignore: prefer_initializing_formals
+       _clock = clock;
 
   /// The app's own log directory, `~/.harness/logs`.
   ///
@@ -49,6 +58,22 @@ class DailyLogFile {
   /// the first time a new day is written. A value `<= 0` disables pruning.
   final int retentionDays;
 
+  /// A one-shot deadline from the first pending entry, never an idle poll.
+  final Duration bufferInterval;
+
+  /// Bound both text and entry overhead during bursts. Oversized entries are
+  /// written directly; they cannot remain in the pending buffer.
+  final int maxBufferedCharacters;
+  final int maxBufferedEntries;
+
+  /// Durable append implementation, injectable for measurements using real IO.
+  final void Function(File file, String contents) appendFile;
+
+  final List<String> _pending = [];
+  int _pendingCharacters = 0;
+  DateTime? _pendingAt;
+  Timer? _bufferTimer;
+
   final DateTime Function() _clock;
 
   /// `YYYYMMDD` of the file we last wrote, so pruning only runs when the day
@@ -65,9 +90,59 @@ class DailyLogFile {
   /// Append [block] followed by a newline to today's file. Creates the directory
   /// on demand and prunes stale days on the first write after midnight; any
   /// failure is swallowed.
-  void append(String block) {
+  void append(String block, {bool buffered = false}) {
     try {
       final now = _clock();
+      if (_pendingAt case final at? when _ymd(at) != _ymd(now)) {
+        // A timer firing after midnight must not move yesterday's records into
+        // today's file. The same rule handles a wall-clock correction.
+        flush();
+      }
+      if (!buffered || block.length + 1 >= maxBufferedCharacters) {
+        if (_pending.isEmpty) {
+          _appendNow(block, now);
+        } else {
+          // The diagnostic and the lines leading to it share one durable write.
+          _pending.add(block);
+          flush();
+        }
+        return;
+      }
+      if (_pendingCharacters + block.length + 1 > maxBufferedCharacters) {
+        flush();
+      }
+      _pendingAt ??= now;
+      _pending.add(block);
+      _pendingCharacters += block.length + 1;
+      if (_pending.length >= maxBufferedEntries ||
+          _pendingCharacters >= maxBufferedCharacters) {
+        flush();
+      } else {
+        _bufferTimer ??= Timer(bufferInterval, flush);
+      }
+    } catch (e) {
+      _debugLog('DailyLogFile.append failed: $e');
+    }
+  }
+
+  /// Commit any pending batch and cancel its timer. Empty flushes do no IO.
+  /// Called on errors, export, backgrounding, normal quit and updater handoff.
+  void flush() {
+    _bufferTimer?.cancel();
+    _bufferTimer = null;
+    if (_pending.isEmpty) return;
+    final block = _pending.join('\n');
+    final at = _pendingAt!;
+    // Release the batch even on disk failure, matching append's best-effort
+    // behavior without retaining an unbounded retry queue.
+    _pending.clear();
+    _pendingCharacters = 0;
+    _pendingAt = null;
+    _appendNow(block, at);
+  }
+
+  void _appendNow(String block, DateTime now) {
+    try {
       final day = _ymd(now);
       final file = _fileFor(now);
       file.parent.createSync(recursive: true);
@@ -75,7 +150,7 @@ class DailyLogFile {
         _activeDay = day;
         _pruneOlderThan(now);
       }
-      file.writeAsStringSync('$block\n', mode: FileMode.append, flush: true);
+      appendFile(file, '$block\n');
     } catch (e) {
       // Best-effort: never surface an IO failure into the caller's flow.
       _debugLog('DailyLogFile.append failed: $e');

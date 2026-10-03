@@ -1,4 +1,6 @@
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/widgets.dart';
+
+import '../shared/theme/app_icons.dart';
 
 /// Four agents sharing one workspace. Native menus use the corresponding
 /// `square.grid.2x2` symbol in SwarmTitlebar.swift.
@@ -10,5 +12,5 @@ class SwarmIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) =>
-      Icon(CupertinoIcons.square_grid_2x2, size: size, color: color);
+      Icon(AppIcons.layoutGrid, size: size, color: color);
 }

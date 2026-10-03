@@ -175,6 +175,33 @@ describe('result persistence, opt-in and authorization', () => {
     expect(setup('claude', { resultJournal: journal }).service.receipt('owner', 'A')).toBeNull()
   })
 
+  // The same computer signs in as another machine (another account, another backend): the old
+  // journal's dedupe cannot apply to the new id, and refusing to start kept the whole daemon in safe
+  // mode (2026-09-28). It is kept aside, and a journal that is really broken still refuses.
+  it('sets aside a journal written for another machine instead of refusing to start', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'device-results-')); dirs.push(dir)
+    const path = join(dir, 'device-results.json')
+    const journal = new DeviceResultJournal(path)
+    journal.save({ version: 1, machineId: 'other-machine', entries: [], results: [] })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const f = setup('claude', { resultJournal: journal })
+    log.mockRestore()
+    expect(() => statSync(path)).toThrow()
+    expect(JSON.parse(readFileSync(join(dir, 'device-results.other-machine.json'), 'utf8'))).toMatchObject({ machineId: 'other-machine' })
+    await f.send('A', claude.inputs[0])
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ machineId: 'machine' })
+
+    // Keeping the copy is best-effort: a journal that cannot be moved still does not stop the start.
+    const stuck = { load: () => ({ version: 1, machineId: 'third-machine', entries: [], results: [] }), save: () => {},
+      archive: () => { throw new Error('EACCES') } }
+    const quiet = vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(() => setup('claude', { resultJournal: stuck })).not.toThrow()
+    quiet.mockRestore()
+
+    journal.save({ version: 2, machineId: 'machine', entries: [], results: [] })
+    expect(() => setup('claude', { resultJournal: journal })).toThrow('Invalid Device result journal')
+  })
+
   it('does not dispatch if durable reservation fails', async () => {
     const f = setup('claude', { resultJournal: { load: () => undefined, save: () => { throw new Error('disk full') } } })
     const response = await f.service.request('owner', { type: 'turn.send', requestId: randomUUID(), machineId: 'machine', agentId: 'agent', idempotencyKey: 'A', text: 'A' })

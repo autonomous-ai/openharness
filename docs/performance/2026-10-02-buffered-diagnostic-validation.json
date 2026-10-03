@@ -1,0 +1,51 @@
+{
+  "baseCommit": "922c9dc9c",
+  "focusedMacosArm64": {
+    "passed": 118,
+    "skipped": 1,
+    "skipReason": "Linux /dev/full failure-path check; scheduled in Linux CI"
+  },
+  "processAppendProbe": {
+    "writers": 4,
+    "records": 2000,
+    "allRecordsIntact": true
+  },
+  "fullDesktopAttempt": {
+    "passedBeforeInterruption": 5282,
+    "skipped": 15,
+    "reproducedAssertionFailures": [
+      "test/agent_pause_state_test.dart: a confirmed pause remains in inventory when its refresh fails",
+      "test/daemon_workspace_test.dart: the pair brain an unavailable companion engine explains setup and retries in the same DSH",
+      "test/desktop_search_polish_test.dart: native scopes put machines first and keep typed words and focus",
+      "test/machines_manager_test.dart: Search unifies categories and preserves management commands (native=false)",
+      "test/machines_manager_test.dart: Search unifies categories and preserves management commands (native=true)",
+      "test/new_harness_install_e2e_test.dart: a dropped socket says the install may still be finishing",
+      "test/new_harness_install_e2e_test.dart: a failed install explains itself; New Harness retries and creates",
+      "test/new_harness_install_e2e_test.dart: pick with keys, install with narration, then create",
+      "test/new_harness_install_e2e_test.dart: the pane fits a 520px window at 1.0x text",
+      "test/new_harness_install_e2e_test.dart: the pane fits a 520px window at 2.0x text",
+      "test/new_harness_install_e2e_test.dart: the pane fits a 960px window at 2.0x text",
+      "test/new_harness_install_pane_test.dart: installing on the way to start a failed install stays on screen, with how to retry",
+      "test/new_harness_install_pane_test.dart: installing on the way to start outside dismissal cannot abandon a running installation",
+      "test/new_harness_install_pane_test.dart: installing on the way to start the right pane narrates the machine, step by step",
+      "test/new_harness_install_pane_test.dart: the harness list with no history, Claude Code leads and every harness is listed",
+      "test/new_harness_install_pane_test.dart: what the form opens on Code and Claude Code when nothing was used before",
+      "test/pane_model_status_test.dart: an agent whose frame says neither keeps the header it had",
+      "test/share_toolbar_test.dart: Share defaults hidden and its saved Settings toggle updates the toolbar (native=false)",
+      "test/share_toolbar_test.dart: Share defaults hidden and its saved Settings toggle updates the toolbar (native=true)",
+      "test/terminal_panel_presentation_test.dart: narrow headers preserve identity and close control at large text",
+      "test/terminal_panel_presentation_test.dart: retained header uses current callbacks, names, projects and status",
+      "test/terminal_tail_lifecycle_test.dart: all delayed local panes start at bottom",
+      "test/terminal_tail_lifecycle_test.dart: all delayed remote panes start at bottom"
+    ],
+    "loaderFailure": "agent_alert_banner_widget_test.dart failed to load once, then passed in the focused rerun",
+    "stalledTests": [
+      "daemon_off_test.dart: Settings switches the creature on and off without leaving Settings",
+      "share_toolbar_test.dart: button and shortcut share only the focused agent and return terminal focus"
+    ],
+    "candidateStall": "Both reached the default ten-minute test timeout; following tests in those files then stalled.",
+    "baselineStall": "The same two files stopped making progress on unchanged source; this baseline attempt was stopped after 4m11s.",
+    "completion": "Both runs were interrupted. Neither is a passing full suite, and no full-suite coverage result was produced."
+  },
+  "coverageScope": "Focused suite only; not 100% end-to-end coverage."
+}

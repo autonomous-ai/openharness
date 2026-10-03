@@ -13,10 +13,9 @@ describe('what a paused harness can promise, per engine', () => {
     }
   })
 
-  it('names the shell and the one engine with no resume argv', () => {
+  it('names the shell, and every agent engine resumes its conversation', () => {
     expect(resumeMode('terminal')).toBe('shell')
-    // devin is deliberately absent from LAUNCH_RESUME_FLAG — no confirmed flag exists.
-    expect(resumeMode('devin')).toBe('fresh')
+    expect(resumeMode('devin')).toBe('conversation')
     expect(resumeMode('claude')).toBe('conversation')
     expect(resumeMode('opencode')).toBe('conversation')
   })
@@ -25,8 +24,8 @@ describe('what a paused harness can promise, per engine', () => {
     expect(resumesConversation('claude', 'abc')).toBe(true)
     expect(resumesConversation('claude', '')).toBe(false)
     expect(resumesConversation('claude', null)).toBe(false)
-    // A recorded id cannot help an engine that has no way to reopen it.
-    expect(resumesConversation('devin', 'abc')).toBe(false)
+    // A recorded id cannot help a shell, which has no conversation to reopen.
+    expect(resumesConversation('devin', 'brisk-otter')).toBe(true)
     expect(resumesConversation('terminal', 'abc')).toBe(false)
   })
 

@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "8bf50793fabd3ddad916baf8970a587dbc9abeb61106845843268b9f096d52af",
+  "suiteSha256": "135545eb05370bac04fbaf555c36255afd21fbcbd4190b0e21895e17d31273c3",
+  "evidence": "development_diagnostic_only",
+  "reviewer": null,
+  "coverage": {
+    "completedCases": 0,
+    "expectedCases": 6
+  },
+  "memories": {
+    "passed": 0,
+    "reviewed": 0,
+    "total": 0,
+    "rate": null
+  },
+  "recall": {
+    "passed": 0,
+    "reviewed": 0,
+    "total": 0,
+    "rate": null
+  },
+  "abstention": {
+    "passed": 0,
+    "reviewed": 0,
+    "total": 0,
+    "rate": null
+  },
+  "cases": [
+    {
+      "id": "conditional-debugging",
+      "status": "not_reviewable",
+      "probes": []
+    },
+    {
+      "id": "project-database-decision",
+      "status": "not_reviewable",
+      "probes": []
+    },
+    {
+      "id": "routine-tool-choice",
+      "status": "not_reviewable",
+      "probes": []
+    },
+    {
+      "id": "quoted-third-party",
+      "status": "not_reviewable",
+      "probes": []
+    },
+    {
+      "id": "unstated-rationale",
+      "status": "not_reviewable",
+      "probes": []
+    },
+    {
+      "id": "unbound-project-fact",
+      "status": "not_reviewable",
+      "probes": []
+    }
+  ],
+  "taskBenefit": "not_measured",
+  "nativeDelivery": "not_measured",
+  "limitations": [
+    "Ratings are attributed judgements, not authenticated independent review.",
+    "These diagnostics do not satisfy the held-out-history or paired coding-task release gates.",
+    "Older reports without captured recall context can be reviewed for memory content but receive no recall-quality rate.",
+    "Empty, unfinished or partially reviewed denominators never receive a passing rate."
+  ],
+  "producer": {
+    "protocol": "coding-memory-quality-review-v1",
+    "node": "v22.23.2",
+    "runnerSha256": "90252c4c052d97bdbccbd794c769a25a4e123c579afebcf6d452d58ec5b7afb9",
+    "scorerSha256": "da4c153d69c6cdf26bd8135993e576bc3f60c4042fc2c11829880b2be295bea3"
+  }
+}

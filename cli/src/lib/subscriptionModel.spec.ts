@@ -20,11 +20,20 @@ describe('subscriptionModelLaunch', () => {
 
   it('passes an OpenCode model only when it carries its provider', () => {
     expect(subscriptionModelLaunch('opencode', 'anthropic/claude-sonnet-4')).toEqual({
-      env: {}, args: ['-m', 'anthropic/claude-sonnet-4'],
+      env: {}, args: ['-m', 'anthropic/claude-sonnet-4'], sessionModel: 'anthropic/claude-sonnet-4',
     })
     // A bare name has no provider this module could supply, and OpenCode would look for a model
     // that does not exist. Saying nothing leaves the engine to decide, which is the safe direction.
     expect(subscriptionModelLaunch('opencode', 'claude-sonnet-4')).toBeNull()
+  })
+
+  it('never passes -m to OpenCode v2, whose TUI has no such flag', () => {
+    // The model is switched on the session instead (`applyOpencodeSessionModel`), so the launch
+    // carries only the model to switch to.
+    expect(subscriptionModelLaunch('opencode', 'anthropic/claude-sonnet-4', 2)).toEqual({
+      env: {}, args: [], sessionModel: 'anthropic/claude-sonnet-4',
+    })
+    expect(subscriptionModelLaunch('opencode', 'claude-sonnet-4', 2)).toBeNull()
   })
 
   it('says nothing for an engine with no cited mechanism', () => {

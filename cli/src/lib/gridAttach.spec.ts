@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { reconcileGridAttach, createGridAttachRunner, type GridAttachDeps, type GridAttachResult } from './gridAttach.js'
+import { reconcileGridAttach, createGridAccess, setUpWithin, type GridAttachDeps, type GridAttachResult } from './gridAttach.js'
 import type { GridHandoffResult } from './gridHandoff.js'
 import type { EnsureResult } from './gridEnsure.js'
 
@@ -20,7 +20,7 @@ function deps(over: Partial<GridAttachDeps> = {}): GridAttachDeps & {
   onName: ReturnType<typeof vi.fn>
 } {
   const base = {
-    managedGridReady: Promise.resolve(),
+    installCli: async () => {},
     gridAvailable: () => true,
     mintName: async () => NAME,
     accessToken: async () => 'tok',
@@ -34,7 +34,7 @@ function deps(over: Partial<GridAttachDeps> = {}): GridAttachDeps & {
   return { ...base, ...over } as never
 }
 
-describe('reconcileGridAttach — the daemon-start convergence', () => {
+describe('reconcileGridAttach — bringing grid into line for a grid feature', () => {
   it('does nothing but publish the name when already signed in as the right account with the grid present', async () => {
     const d = deps()
     const r = await reconcileGridAttach(d)
@@ -138,12 +138,12 @@ describe('reconcileGridAttach — the daemon-start convergence', () => {
     expect(d.onName).not.toHaveBeenCalled()
   })
 
-  it('waits for the managed grid runtime before checking the binary', async () => {
+  it('installs grid before checking the binary', async () => {
     const order: string[] = []
     let releaseRuntime = (): void => {}
     const runtime = new Promise<void>((res) => { releaseRuntime = () => { order.push('runtime'); res() } })
     const d = deps({
-      managedGridReady: runtime,
+      installCli: () => runtime,
       gridAvailable: () => { order.push('available'); return false },
     })
 
@@ -156,150 +156,143 @@ describe('reconcileGridAttach — the daemon-start convergence', () => {
     expect(order).toEqual(['runtime', 'available'])
   })
 
-  it('does not let a rejected runtime promise throw — a failed download is best-effort', async () => {
-    const d = deps({ managedGridReady: Promise.reject(new Error('download failed')), gridAvailable: () => false })
+  it('does not let a failed install throw — the binary check says what is missing', async () => {
+    const d = deps({ installCli: async () => { throw new Error('download failed') }, gridAvailable: () => false })
     await expect(reconcileGridAttach(d)).resolves.toMatchObject({ status: 'no-cli' })
+  })
+
+  it("signs in without making a grid when the feature needs no grid of the account's own", async () => {
+    const d = deps({ signedInEmail: () => null, gridNames: async () => [] })
+    const r = await reconcileGridAttach(d, { ownGrid: false })
+    expect(r).toMatchObject({ status: 'signed-in', name: NAME })
+    expect(r).not.toHaveProperty('ownGrid')
+    expect(d.handoff).toHaveBeenCalledWith('tok')
+    expect(d.ensure).not.toHaveBeenCalled()
+  })
+
+  it('reports what making the own grid came to', async () => {
+    const d = deps({ signedInEmail: () => null, gridNames: async () => [], ensure: vi.fn(async () => CREATED) })
+    expect(await reconcileGridAttach(d, { ownGrid: true })).toMatchObject({ status: 'signed-in', ownGrid: 'created' })
+    expect(await reconcileGridAttach(deps(), { ownGrid: true })).toMatchObject({ status: 'converged', ownGrid: 'existed' })
+  })
+
+  it('signed in earlier this run: a feature with no own grid to make needs nothing more', async () => {
+    // No own grid yet, so the gate cannot prove the account — the earlier sign-in this run does.
+    const d = deps({ gridNames: async () => [] })
+    expect(await reconcileGridAttach(d, { ownGrid: false, signedInThisRun: true })).toMatchObject({ status: 'converged' })
+    expect(d.handoff).not.toHaveBeenCalled()
+    expect(d.ensure).not.toHaveBeenCalled()
+  })
+
+  it('signed in earlier this run and now the own grid is wanted: made, without a second hand-off', async () => {
+    // Every hand-off rotates the account's grid token; one per sign-in is the whole budget.
+    const d = deps({ gridNames: async () => [], ensure: vi.fn(async () => CREATED) })
+    expect(await reconcileGridAttach(d, { ownGrid: true, signedInThisRun: true })).toMatchObject({ status: 'signed-in', ownGrid: 'created' })
+    expect(d.handoff).not.toHaveBeenCalled()
+    expect(d.ensure).toHaveBeenCalledWith(NAME)
   })
 })
 
 /**
- * The coordination half: WHEN a reconcile runs. The daemon calls `run()` at start and again on every
- * backend reconnect, so every property here is about the interaction of those calls.
+ * The coordination half: when a reconcile runs — on demand, one at a time, never twice for what is
+ * already done, and never as a remembered failure.
  */
-describe('createGridAttachRunner — when a reconcile runs', () => {
-  const result = (status: GridAttachResult['status']): GridAttachResult => ({ status, name: NAME, detail: '' })
+describe('createGridAccess — grid set up when a feature asks', () => {
+  const result = (status: GridAttachResult['status'], ownGrid?: GridAttachResult['ownGrid']): GridAttachResult =>
+    ({ status, name: NAME, detail: '', ...(ownGrid ? { ownGrid } : {}) })
 
-  /** A clock the test moves by hand, so nothing here waits on real time. */
-  function clock(start = 1_000_000) {
-    let t = start
-    return { now: () => t, advance: (ms: number) => { t += ms } }
+  function access(answers: GridAttachResult[], signedIn = () => true) {
+    const attempt = vi.fn(async (_request: { ownGrid: boolean; signedInThisRun: boolean }) => answers.shift() ?? result('converged', 'existed'))
+    return { attempt, grid: createGridAccess({ attempt, signedIn, log: () => {} }) }
   }
 
-  function runner(over: Partial<Parameters<typeof createGridAttachRunner>[0]> = {}, c = clock()) {
-    const attempt = vi.fn(async () => result('converged'))
-    const logs: string[] = []
-    const r = createGridAttachRunner({
-      attempt,
-      maxAttempts: 3,
-      minIntervalMs: 1_000,
-      ceilingMs: 5_000,
-      now: c.now,
-      log: (line) => logs.push(line),
-      ...over,
-    })
-    return { r, attempt: (over.attempt ?? attempt) as ReturnType<typeof vi.fn>, logs, clock: c }
-  }
-
-  it('runs once and stops once attached — a later reconnect costs nothing', async () => {
-    const { r, attempt, clock: c } = runner()
-
-    r.run()
-    await r.probe()
-    expect(attempt).toHaveBeenCalledOnce()
-
-    c.advance(10_000) // well past the interval, so only "already attached" can stop a second run
-    r.run()
-    expect(attempt).toHaveBeenCalledOnce()
+  it('remembers a sign-in: asking again for the same costs nothing', async () => {
+    const { attempt, grid } = access([result('signed-in')])
+    await grid.ensure()
+    await grid.ensure()
+    expect(attempt.mock.calls).toEqual([[{ ownGrid: false, signedInThisRun: false }]])
   })
 
-  it('does not overlap: a reconnect during an in-flight attempt is a no-op', async () => {
-    let release = (): void => {}
-    const gate = new Promise<void>((res) => { release = res })
-    const attempt = vi.fn(async () => { await gate; return result('converged') })
-    const { r, clock: c } = runner({ attempt })
-
-    r.run()
-    c.advance(10_000)
-    r.run()
-    r.run()
-    expect(attempt).toHaveBeenCalledOnce()
-
-    release()
-    await r.probe()
-    expect(attempt).toHaveBeenCalledOnce()
+  it('asks again for the own grid, telling the reconcile this run is already signed in', async () => {
+    const { attempt, grid } = access([result('signed-in'), result('signed-in', 'created')])
+    await grid.ensure({ ownGrid: false })
+    await grid.ensure({ ownGrid: true })
+    await grid.ensure({ ownGrid: true })
+    expect(attempt.mock.calls).toEqual([
+      [{ ownGrid: false, signedInThisRun: false }],
+      [{ ownGrid: true, signedInThisRun: true }],
+    ])
   })
 
-  it('retries after an attempt that did not attach, once the interval has passed', async () => {
-    const attempt = vi.fn(async () => result('no-name'))
-    const { r, clock: c } = runner({ attempt })
+  it('one at a time: a Set up and a Get pressed together make one sign-in', async () => {
+    let finish: (r: GridAttachResult) => void = () => {}
+    const attempt = vi.fn(() => new Promise<GridAttachResult>((resolve) => { finish = resolve }))
+    const grid = createGridAccess({ attempt, signedIn: () => true, log: () => {} })
+    const first = grid.ensure({ ownGrid: true })
+    const second = grid.ensure({ ownGrid: false })
+    await Promise.resolve()
+    finish(result('signed-in', 'created'))
+    expect((await first).status).toBe('signed-in')
+    expect((await second).status).toBe('signed-in')
+    expect(attempt).toHaveBeenCalledTimes(1)
+  })
 
-    r.run()
-    await r.probe()
-    expect(attempt).toHaveBeenCalledOnce()
-
-    c.advance(1_000)
-    r.run()
-    await r.probe()
+  it('does not remember a failure: the next ask is a person acting again, so it tries again', async () => {
+    const { attempt, grid } = access([result('handoff-failed'), result('signed-in')])
+    expect((await grid.ensure()).status).toBe('handoff-failed')
+    expect((await grid.ensure()).status).toBe('signed-in')
     expect(attempt).toHaveBeenCalledTimes(2)
   })
 
-  it('collapses a burst of reconnects into ONE deferred attempt instead of burning the budget', async () => {
+  it('an own grid that could not be made is asked for again next time', async () => {
+    const { attempt, grid } = access([result('signed-in', 'failed'), result('signed-in', 'created')])
+    expect((await grid.ensure({ ownGrid: true })).ownGrid).toBe('failed')
+    expect((await grid.ensure({ ownGrid: true })).ownGrid).toBe('created')
+    expect(attempt.mock.calls[1]).toEqual([{ ownGrid: true, signedInThisRun: true }])
+  })
+
+  it('forgets everything once grid holds no sign-in — a `grid logout` run by hand', async () => {
+    let signedIn = true
+    const { attempt, grid } = access([result('signed-in', 'created'), result('signed-in', 'existed')], () => signedIn)
+    await grid.ensure({ ownGrid: true })
+    signedIn = false
+    await grid.ensure({ ownGrid: true })
+    expect(attempt.mock.calls).toEqual([
+      [{ ownGrid: true, signedInThisRun: false }],
+      [{ ownGrid: true, signedInThisRun: false }],
+    ])
+  })
+
+  it('an attempt that throws resolves as a failed hand-off — it never rejects on the caller', async () => {
+    const grid = createGridAccess({ attempt: async () => { throw new Error('boom') }, signedIn: () => true, log: () => {} })
+    await expect(grid.ensure()).resolves.toMatchObject({ status: 'handoff-failed', detail: 'boom' })
+  })
+})
+
+describe('setUpWithin: a set-up a create waits for, but not for long', () => {
+  it('answers done once a quick set-up lands', async () => {
+    await expect(setUpWithin(async () => ({ status: 'converged' }), 1_000)).resolves.toBe('done')
+  })
+
+  it('stops waiting at the bound and leaves the set-up running', async () => {
     vi.useFakeTimers()
     try {
-      const attempt = vi.fn(async () => result('no-name'))
-      // A real clock is not advanced by fake timers, so the runner reads the same injected one.
-      const c = clock()
-      const { r } = runner({ attempt }, c)
-
-      r.run()
-      await r.probe()
-      expect(attempt).toHaveBeenCalledTimes(1)
-
-      // Waking a laptop: several reconnects inside the interval. None may start an attempt, and
-      // together they must cost exactly one — the whole point of deferring rather than dropping.
-      for (let i = 0; i < 5; i++) r.run()
-      expect(attempt).toHaveBeenCalledTimes(1)
-      expect(r.attempts()).toBe(1)
-
-      c.advance(1_000)
-      await vi.advanceTimersByTimeAsync(1_000)
-      expect(attempt).toHaveBeenCalledTimes(2)
-      // Four attempts' worth of churn cost one, so the cap of 3 is not spent.
-      expect(r.attempts()).toBe(2)
+      let finish!: () => void
+      const running = new Promise<void>((resolve) => { finish = resolve })
+      let landed = false
+      const waited = setUpWithin(() => running.then(() => { landed = true }), 8_000)
+      await vi.advanceTimersByTimeAsync(8_000)
+      await expect(waited).resolves.toBe('pending')
+      finish()
+      await running
+      await Promise.resolve()
+      expect(landed).toBe(true)
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('gives up out loud at the cap, and says it only once', async () => {
-    const attempt = vi.fn(async () => result('no-name'))
-    const { r, logs, clock: c } = runner({ attempt })
-
-    for (let i = 0; i < 3; i++) {
-      c.advance(1_000)
-      r.run()
-      await r.probe()
-    }
-    expect(attempt).toHaveBeenCalledTimes(3)
-
-    c.advance(1_000)
-    r.run()
-    c.advance(1_000)
-    r.run()
-    expect(attempt).toHaveBeenCalledTimes(3)
-    expect(logs.filter((l) => l.includes('giving up'))).toHaveLength(1)
-  })
-
-  it('a rejected attempt is logged and retried, never thrown', async () => {
-    const attempt = vi.fn(async () => { throw new Error('boom') })
-    const { r, logs, clock: c } = runner({ attempt })
-
-    expect(() => r.run()).not.toThrow()
-    await r.probe()
-    expect(logs.some((l) => l.includes('boom'))).toBe(true)
-
-    c.advance(1_000)
-    r.run()
-    expect(attempt).toHaveBeenCalledTimes(2)
-  })
-
-  it('probe stops offering the attempt once its ceiling passes, so an RPC never waits on a stuck one', async () => {
-    const attempt = vi.fn(async () => new Promise<GridAttachResult>(() => {})) // never settles
-    const { r, clock: c } = runner({ attempt })
-
-    r.run()
-    expect(r.probe()).not.toBeNull()
-    c.advance(5_000)
-    expect(r.probe()).toBeNull()
+  it('never throws: a failed set-up is for the next use of grid to say', async () => {
+    await expect(setUpWithin(async () => { throw new Error('offline') }, 1_000)).resolves.toBe('done')
   })
 })

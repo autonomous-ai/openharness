@@ -14,6 +14,8 @@ import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import { inflateSync } from 'node:zlib'
 import { WebSocket } from 'ws'
+import { b64e, newEphemeral } from '../src/lib/e2ee/core.js'
+import { recipientHandshake, type ObserverCipher } from '../src/sharing/crypto.js'
 import { decodeTerminalLocal, encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from '../src/lib/terminalBinary.js'
 
 if (!process.env.HARNESS_SHARE_E2E_SERVICES) throw new Error('Set HARNESS_SHARE_E2E_SERVICES to disposable service URLs.')
@@ -62,17 +64,28 @@ class Peer {
   readonly binary: TerminalBinaryClear[] = []
   text = ''; stream = ''; closedCode: number | undefined; private inputSequence = 0
   private heartbeat: NodeJS.Timeout
-  constructor(readonly ws: WebSocket) {
+  private cipher: ObserverCipher | null = null
+  constructor(readonly ws: WebSocket, private readonly observation?: { machineId: string; id: string; ownerPublicKey: string }) {
+    const ephemeral = newEphemeral()
     sockets.push(ws)
     ws.on('message', (raw, binary) => {
-      if (binary) {
-        const frame = decodeTerminalLocal(new Uint8Array(raw as Buffer))
+      let clear: any = binary ? null : JSON.parse(raw.toString())
+      if (observation && clear?.type === 'observer_connected') {
+        ws.send(JSON.stringify({ type: 'observer_hello', payload: { ephemeral: b64e(ephemeral.pub) } })); return
+      }
+      if (observation && clear?.type === 'observer_welcome') {
+        this.cipher = recipientHandshake(ephemeral, observation.machineId, observation.id, observation.ownerPublicKey, clear.payload); return
+      }
+      if (observation && clear?.type === 'observer_closed') { ws.close(clear.payload.retry ? 1012 : 4403); return }
+      if (observation && clear?.type === 'observer_frame') { clear = this.cipher!.open(clear.payload); assert.ok(clear) }
+      if (binary || clear?.type === 'observer_binary') {
+        const frame = decodeTerminalLocal(binary ? new Uint8Array(raw as Buffer) : Buffer.from(clear.payload.bytes, 'base64'))
         if (!frame) return
         this.binary.push(frame)
         this.text += (frame.compressed ? inflateSync(frame.bytes) : Buffer.from(frame.bytes)).toString()
         this.send('terminal_ack', { streamId: frame.streamId, lastSeq: frame.seq })
       } else {
-        const frame = JSON.parse(raw.toString()); this.frames.push(frame)
+        const frame = clear; this.frames.push(frame)
         if (frame.type === 'terminal_ready') { this.stream = frame.payload.streamId; this.inputSequence = 0 }
       }
     })
@@ -87,12 +100,21 @@ class Peer {
     await until('local peer admission', () => peer.frames.some(f => f.type === 'connected') || peer.closedCode !== undefined)
     return peer
   }
+  static async observe(link: { machineId: string; id: string; ownerPublicKey: string }, token?: string) {
+    const peer = new Peer(new WebSocket(`${backendUrl.replace('http:', 'ws:')}/api/observer-ws?link=${link.id}`, token ? [token] : undefined), link)
+    await until('browser observer admission', () => peer.cipher !== null || peer.closedCode !== undefined)
+    return peer
+  }
   send(type: string, payload: Record<string, unknown> = {}) {
-    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type, payload }))
+    if (this.ws.readyState !== WebSocket.OPEN) return
+    const frame = this.observation ? { type: 'observer_frame', payload: this.cipher!.seal({ type, payload }) } : { type, payload }
+    this.ws.send(JSON.stringify(frame))
   }
   async rpc(type: string, payload: Record<string, unknown> = {}) {
     const requestId = randomUUID(); this.send(type, { ...payload, requestId })
-    await until(type, () => this.frames.some(f => f.payload?.requestId === requestId))
+    await until(type, () => this.frames.some(f => f.payload?.requestId === requestId)).catch(async error => {
+      await writeFile(join(root, 'rpc-failure.json'), JSON.stringify({ type, requestId, closedCode: this.closedCode, frames: this.frames }, null, 2)); throw error
+    })
     return this.frames.find(f => f.payload?.requestId === requestId)!.payload
   }
   async open(agentId: string, cols = 120, rows = 40) {
@@ -116,7 +138,8 @@ const sso = createServer((req, res) => {
 let success = false
 try {
   await new Promise<void>(resolve => sso.listen(0, '127.0.0.1', resolve))
-  const [backendPort, proxyPort] = await Promise.all([freePort(), freePort()])
+  const backendPort = process.env.HARNESS_SHARE_BACKEND_PORT ? Number(process.env.HARNESS_SHARE_BACKEND_PORT) : await freePort()
+  const proxyPort = await freePort()
   backendUrl = `http://127.0.0.1:${backendPort}`
   const backendEnv = { ...process.env, NODE_ENV: 'test', PORT: String(backendPort), PORT_APP_PROXY: String(proxyPort),
     DATABASE_URL: mongo.href, REDIS_URL: redis.href, HARNESS_BILLING_ENABLED: 'false', MESH_ENABLED: 'false',
@@ -127,7 +150,7 @@ try {
   run('backend', join(repo, 'backend'), ['--import', 'tsx', 'src/server.ts'], backendEnv)
   await until('backend', async () => fetch(`${backendUrl}/api/health`).then(r => r.ok).catch(() => false))
   const engine = join(root, 'codex')
-  await writeFile(engine, `#!${process.execPath}\nif (process.argv.includes('--version')) { console.log('codex-cli 1.0.0'); process.exit(0) }\nprocess.title = 'codex'; process.stdin.setRawMode?.(true); console.log('SHARING_READY'); process.stdin.on('data', x => process.stdout.write('ECHO:' + x + '\\r\\n')); setInterval(() => {}, 1000);\n`, { mode: 0o700 })
+  await writeFile(engine, `#!${process.execPath}\nif (process.argv.includes('--version')) { console.log('codex-cli 1.0.0'); process.exit(0) }\nif (process.argv.includes('--help')) { console.log('--approve-for-me --dangerously-bypass-approvals-and-sandbox --ask-for-approval'); process.exit(0) }\nconst { appendFileSync } = require('node:fs'); process.title = 'codex'; process.stdin.setRawMode?.(true); console.log('SHARING_READY'); process.stdin.on('data', x => { appendFileSync(${JSON.stringify(join(root, 'fixture-input.bin'))}, x); process.stdout.write('ECHO:' + x + '\\r\\n'); }); setInterval(() => {}, 1000);\n`, { mode: 0o700 })
   const fixture = join(root, 'harness-source')
   await mkdir(join(fixture, 'template'), { recursive: true })
   await writeFile(join(fixture, 'harness.json'), JSON.stringify({ spec: 1, id: 'fixture/sharing', name: 'Sharing demo', engine: 'codex',
@@ -135,7 +158,8 @@ try {
     viewer: { command: './viewer.mjs', url: 'http://127.0.0.1:${port}/' }, verdict: '.harness/verdict.json' }))
   await writeFile(join(fixture, 'AGENTS.md'), 'Share harness test fixture.\n')
   await writeFile(join(fixture, 'template/result.txt'), 'Sharing demo')
-  await writeFile(join(fixture, 'viewer.mjs'), `#!${process.execPath}\nimport { createServer } from 'node:http';\ncreateServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<html><body style="background:#152238;color:white;font:40px sans-serif"><h1>Live harness</h1><p id="clock"></p><script>setInterval(() => document.getElementById("clock").textContent=Date.now(), 200)</script></body></html>'); }).listen(Number(process.env.HARNESS_VIEWER_PORT), '127.0.0.1');\n`, { mode: 0o700 })
+  const viewerPage = `<html><body style="margin:0;background:#152238;color:white;font:40px sans-serif"><h1 style="position:absolute;left:20px;top:20px;margin:0;font-size:36px">Live harness</h1><button style="position:absolute;left:20px;top:100px;width:200px;height:56px;font-size:24px" onclick="fetch('/event?click=1')">Click me</button><input aria-label="Viewer text" style="position:absolute;left:20px;top:180px;width:400px;height:56px;font-size:24px" oninput="fetch('/event?text='+encodeURIComponent(this.value))"><p id="clock" style="position:absolute;left:20px;top:250px"></p><script>setInterval(() => document.getElementById('clock').textContent=Date.now(), 200)</script></body></html>`
+  await writeFile(join(fixture, 'viewer.mjs'), `#!${process.execPath}\nimport { createServer } from 'node:http';\nimport { appendFileSync } from 'node:fs';\ncreateServer((req, res) => { if (req.url.startsWith('/event?')) { appendFileSync(${JSON.stringify(join(root, 'viewer-events.log'))}, req.url + '\\n'); res.end('ok'); return; } res.setHeader('Content-Type', 'text/html'); res.end(${JSON.stringify(viewerPage)}); }).listen(Number(process.env.HARNESS_VIEWER_PORT), '127.0.0.1');\n`, { mode: 0o700 })
   const machines: Array<{ machineId: string; port: number; env: NodeJS.ProcessEnv; child: ChildProcess; socket: string; workspace: string }> = []
   for (const account of accounts.slice(0, 3)) {
     const folder = join(root, account.name), data = join(folder, 'data'), auth = join(folder, 'auth'), workspace = join(folder, 'project')
@@ -148,7 +172,12 @@ try {
     await writeFile(join(auth, 'session.json'), JSON.stringify({ version: 1, accessToken: account.token, refreshToken: 'fixture-refresh',
       expiresAt: Date.now() + 3_600_000, autonomousEnv: 'prod', computerId, machineId, updatedAt: Date.now() }), { mode: 0o600 })
     await exec('tmux', ['-S', socket, '-f', '/dev/null', 'new-session', '-d', '-s', 'fixture-keeper'])
-    const env = { ...process.env, NODE_ENV: 'test', TMUX: `${socket},0,0`, PORT: String(port), HARNESS_AUTH_DIR: auth,
+    const env = { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR, LANG: 'en_US.UTF-8',
+      NODE_ENV: 'test', HARNESS_SHARE_TEST_HOME: folder, LOG_FRAMES: 'true',
+      NODE_OPTIONS: `--require=${join(repo, 'cli/scripts/share-harness-e2e-preload.cjs')}`,
+      HARNESS_GRID_BIN: join(folder, 'no-grid'), DISABLE_GRID_INSTALL: 'true',
+      GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
+      TMUX: `${socket},0,0`, PORT: String(port), HARNESS_AUTH_DIR: auth,
       ADAPTER_COMPUTER_ID: computerId, ADAPTER_COMPUTER_ID_FILE: join(folder, 'computer-id'), ADAPTER_DATA_DIR: data,
       ADAPTER_RUNTIME_DIR: join(folder, 'runtime'), DSH_DIR: join(folder, 'dsh'), CODEX_PATH: engine,
       BACKEND_WS_URL: `ws://127.0.0.1:${backendPort}`, WEB_URL: backendUrl, HARNESS_STORE_CATALOG_URL: 'http://127.0.0.1:9/catalog',
@@ -169,6 +198,23 @@ try {
   await until('fixture model ready', () => owner.text.includes('SHARING_READY'))
   owner.input('owner-before-sharing')
   await until('owner terminal input', () => owner.text.includes('ECHO:owner-before-sharing'))
+  const workspaceCheck = process.env.HARNESS_WORKSPACE_BROWSER_CHECK
+  if (workspaceCheck) {
+    const password = `Fixture-only-${randomUUID()}`
+    const response = await fetch(`http://127.0.0.1:${host.port}/api/remote-password/set`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' },
+      body: JSON.stringify({ password }),
+    })
+    assert.equal(response.status, 200, await response.text())
+    const path = join(root, 'browser-workspace.json')
+    await writeFile(path, JSON.stringify({ origin: process.env.HARNESS_SHARE_BROWSER_ORIGIN,
+      backendUrl, token: accounts[0].token, machineId: host.machineId, agentId, password, root }), { mode: 0o600 })
+    const result = await exec(process.execPath, [workspaceCheck, path], { env: process.env, timeout: 240_000 })
+    console.log(result.stdout)
+    // The browser took control and resized this terminal. Reclaim it explicitly before the
+    // observer assertions below; viewers must inherit the controller's dimensions.
+    await owner.open(agentId, 110, 33)
+  }
   console.log('Owner input verified; inviting Ken and Diego')
   const invitation = await owner.rpc('harness_share_invite', { agentId, emails: [accounts[1].email.toUpperCase(), accounts[2].email], days: 30 })
   assert.equal(invitation.shares.length, 2, JSON.stringify(invitation))
@@ -184,6 +230,47 @@ try {
   }
   assert.deepEqual((await api(accounts[3], '/api/harness-shares')).body.data.machines, [])
   assert.equal((await api(accounts[1], `/api/harness-shares/${kenShare}`, 'DELETE')).status, 404)
+  console.log('Checking browser links and encrypted comments')
+  const privateLink = (await owner.rpc('harness_share_link', { agentId, visibility: 'private' })).link
+  assert.ok(privateLink.url && !privateLink.pending && !privateLink.error, JSON.stringify(privateLink))
+  const discoverUrl = `${backendUrl}/api/shared-agents/${privateLink.id}`
+  assert.equal((await fetch(discoverUrl)).status, 401)
+  assert.equal((await api(accounts[3], `/api/shared-agents/${privateLink.id}`)).status, 403)
+  const linkData = (await api(accounts[1], `/api/shared-agents/${privateLink.id}`)).body.data
+  assert.equal(new URLSearchParams(new URL(privateLink.url).hash.slice(1)).get('key'), linkData.ownerPublicKey)
+  const refused = await Peer.observe(linkData)
+  assert.equal(refused.closedCode, 4403)
+  const invited = await Peer.observe(linkData, accounts[1].token)
+  await invited.open(agentId)
+  const publicLink = (await owner.rpc('harness_share_link', { agentId, visibility: 'public' })).link
+  assert.equal(publicLink.url, privateLink.url)
+  assert.equal((await fetch(discoverUrl)).status, 200)
+  const guest = await Peer.observe(linkData), commenter = await Peer.observe(linkData, accounts[3].token)
+  await guest.open(agentId)
+  assert.ok(guest.text.includes('owner-before-sharing'))
+  assert.equal((await guest.rpc('observer_comment_post', { id: randomUUID(), text: 'anonymous spoof', authorId: 'owner', owner: true })).error, 'COMMENT_REJECTED')
+  assert.equal((await guest.rpc('terminal_input', { agentId, data: 'ILLEGAL_PUBLIC_INPUT' })).code, 'VIEW_ONLY')
+  const commentId = randomUUID()
+  for (let retry = 0; retry < 2; retry++) assert.ok(!(await invited.rpc('observer_comment_post', { id: commentId, text: 'Fixture collaboration' })).error)
+  const thread = await guest.rpc('observer_comments')
+  assert.equal(thread.comments.length, 1); assert.equal(thread.canComment, false); assert.equal(thread.comments[0].canDelete, false)
+  assert.equal((await commenter.rpc('observer_comment_remove', { id: commentId })).error, 'COMMENT_REJECTED')
+  async function browserCheck(mode: string) {
+    const check = process.env.HARNESS_SHARE_BROWSER_CHECK
+    if (!check) return
+    const path = join(root, `browser-${mode}.json`)
+    await writeFile(path, JSON.stringify({ mode, origin: process.env.HARNESS_SHARE_BROWSER_ORIGIN,
+      backendUrl, url: privateLink.url, token: mode === 'denied' ? accounts[3].token : accounts[1].token, root }))
+    await exec(process.execPath, [check, path], { env: process.env, timeout: 120_000 })
+    console.log(`PASS browser ${mode}`)
+  }
+  await browserCheck('public')
+  await owner.rpc('harness_share_link', { agentId, visibility: 'private' })
+  await until('private transition closes uninvited public viewers', () => guest.closedCode === 4403 && commenter.closedCode === 4403)
+  assert.equal((await invited.rpc('observer_comments')).comments[0].text, 'Fixture collaboration')
+  await browserCheck('private')
+  await browserCheck('denied')
+  await invited.close()
   console.log('Account discovery verified; connecting observers')
   let ken = await Peer.connect(kenMachine.port, host.machineId, kenShare)
   const diego = await Peer.connect(diegoMachine.port, host.machineId, diegoShare)
@@ -225,13 +312,19 @@ try {
   await until('owner restarted', async () => fetch(`http://127.0.0.1:${host.port}/api/status`, { headers: { 'x-adapter-local': '1' } }).then(r => r.json()).then((r: any) => r.connected === true).catch(() => false))
   owner = await Peer.connect(host.port, host.machineId)
   assert.equal((await owner.rpc('harness_share_list', { agentId })).shares.length, 1)
+  assert.equal((await owner.rpc('harness_share_comments', { agentId })).comments[0].text, 'Fixture collaboration')
   const rejoined = await Peer.connect(diegoMachine.port, host.machineId, diegoShare); await rejoined.open(agentId)
   await owner.open(agentId); owner.input('after-daemon-restart')
   await until('durable permission reconnect', () => rejoined.text.includes('ECHO:after-daemon-restart'))
   await owner.rpc('harness_share_remove', { agentId, id: diegoShare })
   await until('last observer removed', () => rejoined.closedCode === 4403)
+  await owner.rpc('harness_share_link', { agentId, visibility: 'public' })
+  const finalGuest = await Peer.observe(linkData); await finalGuest.open(agentId)
+  await owner.rpc('harness_share_link', { agentId, visibility: 'off' })
+  await until('stop sharing closes link viewers', () => finalGuest.closedCode === 4403)
+  assert.equal((await fetch(discoverUrl)).status, 401)
   success = true
-  console.log('PASS: invite → account discovery → two read-only observers → encrypted live terminal/viewer → denied controls → reconnect → immediate revocation → offline discovery → durable daemon restart.')
+  console.log('PASS: public/private browser links → encrypted comments and moderation → daemon restart persistence → stop sharing → invite → account discovery → two read-only observers → encrypted live terminal/viewer → denied controls → reconnect → immediate revocation → offline discovery → durable daemon restart.')
 } catch (error) {
   console.error(error)
   throw error

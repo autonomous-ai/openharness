@@ -67,13 +67,6 @@ class TerminalPane {
 
   bool get isPinned => pinnedSlot != null;
 
-  /// Whether this tile shows the composer textbox under its terminal.
-  ///
-  /// Only ever consulted for a remote machine — that is the one where typing straight into the
-  /// pane pays a network round trip per keystroke. Off by default, and remembered, so the choice
-  /// survives a restart the way the rest of the layout does.
-  bool composerVisible = false;
-
   /// Whether this tile was opened AHEAD of anyone looking at it — the phone's
   /// pager attaching the agents beside the one on screen, so a swipe lands on
   /// output rather than on "Attaching…". See `AppNotifier.warmAgentPane`.
@@ -94,19 +87,16 @@ class PaneLayoutEntry {
   const PaneLayoutEntry({
     required this.machineId,
     required this.agentId,
-    this.composerVisible = false,
     this.pinnedSlot,
   });
 
   final String machineId;
   final String agentId;
-  final bool composerVisible;
   final int? pinnedSlot;
 
   Map<String, dynamic> toJson() => {
     'machineId': machineId,
     'agentId': agentId,
-    'composerVisible': composerVisible,
     // Absent for the tiles nobody pinned, which is nearly all of them.
     'pinnedSlot': ?pinnedSlot,
   };
@@ -117,14 +107,9 @@ class PaneLayoutEntry {
     final agentId = raw['agentId'];
     if (machineId is! String || machineId.isEmpty) return null;
     if (agentId is! String || agentId.isEmpty) return null;
-    final composer = raw['composerVisible'];
     return PaneLayoutEntry(
       machineId: machineId,
       agentId: agentId,
-      // Absent means a layout written before the composer existed. Those default to OFF, matching a
-      // tile the user has never had an opinion about — never to ON, which would read as a setting
-      // they chose.
-      composerVisible: composer is bool ? composer : false,
       // A negative or absurd slot is read as "not pinned" rather than clamped:
       // a pin is a place someone chose, and inventing a different one for them
       // is worse than forgetting it.

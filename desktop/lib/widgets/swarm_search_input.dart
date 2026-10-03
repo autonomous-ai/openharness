@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
@@ -6,6 +7,7 @@ import '../state/swarm_search.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import 'box_chrome.dart';
+import 'desktop_chrome.dart';
 
 /// The shared input for the start page, Open Agent and split searches.
 /// Flutter owns the caret and result navigation; native chrome only opens it.
@@ -78,6 +80,39 @@ class SwarmSearchInput extends StatelessWidget {
   }
 
   Widget _buildInput(BuildContext context) {
+    if (DesktopChrome.of(context)) {
+      return TextField(
+        key: inputKey,
+        groupId: groupId ?? EditableText,
+        controller: controller,
+        focusNode: focusNode,
+        autofocus: autofocus,
+        onChanged: onChanged,
+        onTap: onOpen,
+        onTapAlwaysCalled: true,
+        onTapOutside: (_) => onTapOutside?.call(),
+        autocorrect: false,
+        enableSuggestions: false,
+        style: DesktopChrome.text(size: 17),
+        cursorColor: DesktopChrome.foreground,
+        cursorWidth: 2,
+        textAlignVertical: TextAlignVertical.center,
+        decoration: InputDecoration(
+          constraints: BoxConstraints.tightFor(
+            height: MediaQuery.textScalerOf(context).scale(17) * 1.45 + 24,
+          ),
+          hintText: hintText ?? search?.hint ?? kSwarmSearchHint,
+          hintStyle: DesktopChrome.text(size: 17, color: DesktopChrome.muted),
+          hintMaxLines: 1,
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
+          filled: false,
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(vertical: 12),
+        ),
+      );
+    }
     final open = search != null;
     final terminalStyle = terminal || prompt != null;
     final theme = terminalThemeFor(
@@ -105,9 +140,7 @@ class SwarmSearchInput extends StatelessWidget {
               : 12,
         ),
       ),
-      borderSide: outlined
-          ? BorderSide(color: Colors.white.withValues(alpha: .10))
-          : BorderSide.none,
+      borderSide: outlined ? BorderSide(color: boxInk(.10)) : BorderSide.none,
     );
     final field = TextField(
       key: inputKey,
@@ -119,7 +152,7 @@ class SwarmSearchInput extends StatelessWidget {
       onTapAlwaysCalled: true,
       onTapOutside: onTapOutside == null ? null : (_) => onTapOutside!(),
       onChanged: onChanged,
-      style: terminalStyle ? style : grid.AppType.mono(color: Colors.white),
+      style: terminalStyle ? style : grid.AppType.mono(color: boxText(1)),
       cursorColor: bios ? theme.cursor : grid.AppPalette.swarmAccent,
       cursorWidth: cursorWidth ?? (bios ? cell.width : 2),
       cursorRadius: Radius.zero,
@@ -130,9 +163,7 @@ class SwarmSearchInput extends StatelessWidget {
       decoration: bios
           ? InputDecoration(
               hintText: hint,
-              hintStyle: style.copyWith(
-                color: theme.foreground.withValues(alpha: .54),
-              ),
+              hintStyle: style.copyWith(color: theme.muted),
               hintMaxLines: 1,
               isDense: true,
               isCollapsed: true,
@@ -147,7 +178,7 @@ class SwarmSearchInput extends StatelessWidget {
               hintText: hint,
               hintStyle: terminalStyle
                   ? style.copyWith(color: kBoxFaint)
-                  : grid.AppType.mono(color: Colors.white60),
+                  : grid.AppType.mono(color: boxText(.60)),
               hintMaxLines: 1,
               prefixIcon: prompt != null
                   ? Padding(
@@ -168,9 +199,9 @@ class SwarmSearchInput extends StatelessWidget {
                   : terminal
                   ? null
                   : Icon(
-                      Icons.search,
+                      AppIcons.search,
                       size: fontSize + 4,
-                      color: Colors.white60,
+                      color: boxText(.60),
                     ),
               prefixIconConstraints: BoxConstraints(
                 minWidth: prompt != null
@@ -191,7 +222,7 @@ class SwarmSearchInput extends StatelessWidget {
                             TextButton(
                               onPressed: onClose,
                               style: TextButton.styleFrom(
-                                foregroundColor: Colors.white60,
+                                foregroundColor: boxText(.60),
                                 minimumSize: const Size(36, 28),
                               ),
                               child: Text(

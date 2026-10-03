@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "ead03aecf7e056fbc622e752a787038187e7e72c8fe1c8e7a58a6ad7911cb087",
+  "suiteSha256": "bac5cde1bd7be21727cdc475b165d1f0e0a53894d7acff9fb34d4c0a7603f70c",
+  "sourceHashes": {
+    "store.ts": "6afdb822447b372954f9c9b71d39e885cf3d084870a8938aa590a111f7ebe51d",
+    "types.ts": "172334317158f4ec4b4881d91ab62499191401d917c082052ab08002366d508c",
+    "recallSources.ts": "a6f5d214f5ee7a61e984950cc0c5875040a6e40be6d2fdfe48db37438927c21b",
+    "runtime.ts": "50b8d6fed6a9164084d5f798c82b1d23078144f2b320fff828e5db0993608240"
+  },
+  "executionAt": "2026-10-02T21:44:46.920421+00:00",
+  "execution": "Reviewed pure functions; disposable Node processes with networking and writes denied, private file contents excluded, metadata readable for module resolution.",
+  "codeExtraction": "Only a single Markdown JSON fence was removed for the two noncompliant responses. No JSON or code body repaired.",
+  "cases": [
+    {
+      "id": "coding-4515496f4882",
+      "taskId": "search-focus",
+      "arm": "production_source_format",
+      "strictFormat": false,
+      "codeSha256": "fcd4e54ee2af28251f784f928305b2964c2998b8319c5bc807a97c856e153bfd",
+      "checks": [
+        {
+          "index": 0,
+          "passed": true
+        },
+        {
+          "index": 1,
+          "passed": true
+        },
+        {
+          "index": 2,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "coding-64f0ddbffda8",
+      "taskId": "export-options",
+      "arm": "production_source_format",
+      "strictFormat": false,
+      "codeSha256": "220306a1022ca6624657018478007bcf856d9d577ee9b1d4fe9f417697459d77",
+      "checks": [
+        {
+          "index": 0,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  [\n    'Cancel',\n    'Save copy',\n-   'Help'\n  ]\n"
+        },
+        {
+          "index": 1,
+          "passed": true
+        },
+        {
+          "index": 2,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  [\n-   'Inspect',\n    'Cancel'\n  ]\n"
+        }
+      ],
+      "passed": false
+    },
+    {
+      "id": "coding-9120a8bb8d89",
+      "taskId": "retry-config",
+      "arm": "production_source_format",
+      "strictFormat": true,
+      "codeSha256": "81635a1d25fc65b454ef84ad9e2fe331f413423d7550b05bd9352a29696a1596",
+      "checks": [
+        {
+          "index": 0,
+          "passed": true
+        },
+        {
+          "index": 1,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "coding-b07fa86fee67",
+      "taskId": "file-tree-override",
+      "arm": "production_source_format",
+      "strictFormat": true,
+      "codeSha256": "730051f660b576614bbb347dc4397c46d3ea6772a07219419619b5253320d8d7",
+      "checks": [
+        {
+          "index": 0,
+          "passed": true
+        },
+        {
+          "index": 1,
+          "passed": true
+        },
+        {
+          "index": 2,
+          "passed": true
+        },
+        {
+          "index": 3,
+          "passed": true
+        },
+        {
+          "index": 4,
+          "passed": true
+        },
+        {
+          "index": 5,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "coding-e1557fb170e4",
+      "taskId": "navigation-default",
+      "arm": "production_source_format",
+      "strictFormat": true,
+      "codeSha256": "cc8a43e04b4e0328ceefc789668207d3b6cef99ad50ab4f64d4b34bf21182965",
+      "checks": [
+        {
+          "index": 0,
+          "passed": true
+        },
+        {
+          "index": 1,
+          "passed": true
+        },
+        {
+          "index": 2,
+          "passed": true
+        },
+        {
+          "index": 3,
+          "passed": true
+        },
+        {
+          "index": 4,
+          "passed": true
+        },
+        {
+          "index": 5,
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "summary": {
+    "assessableTasks": 5,
+    "passedTasks": 4
+  },
+  "limitations": [
+    "Five adaptive synthetic coding microtasks, not held-out user histories or a native-framework benefit estimate.",
+    "Three of five responses were strict JSON; two used Markdown fences and are explicitly separated from code correctness.",
+    "The control-list error remains; source evidence does not guarantee correct interpretation."
+  ]
+}

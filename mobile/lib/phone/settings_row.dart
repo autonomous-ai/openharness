@@ -58,39 +58,15 @@ class SettingsCaption extends StatelessWidget {
       // that group than to the one it follows. Equal gaps either side would leave every caption
       // floating between two cards with nothing to say which it labels.
       padding: const EdgeInsets.fromLTRB(4, 22, 4, 8),
+      // Lowercase and 13pt, the way Find heads its sections (`needs you`, `recent`).
+      //
+      // ⚠️ Halfway between faint and secondary, not faint: faint reads 3.4:1 on the page, under
+      // the 4.5:1 small text needs, and a heading is text somebody has to read to find a row.
       child: Text(
-        text.toUpperCase(),
+        text.toLowerCase(),
         style: TextStyle(
-          color: AppPalette.textFaint,
-          fontSize: 11.5,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.5,
-        ),
-      ),
-    );
-  }
-}
-
-/// A quiet sentence under a run, explaining something the rows cannot say themselves.
-class SettingsNote extends StatelessWidget {
-  const SettingsNote(this.text, {super.key});
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return Padding(
-      // 10 rather than 8, and the extra 2 is doing work: the caption above a group sits at 8, so a
-      // note at the same gap reads as another caption for whatever follows rather than as a remark
-      // on the group it belongs to.
-      padding: const EdgeInsets.fromLTRB(4, 10, 4, 0),
-      child: Text(
-        text,
-        style: TextStyle(
-          color: AppPalette.textFaint,
-          fontSize: 12.5,
-          height: 1.45,
+          color: Color.lerp(AppPalette.textFaint, AppPalette.textSecondary, .5),
+          fontSize: 13,
         ),
       ),
     );
@@ -111,10 +87,10 @@ class SettingsGroup extends StatelessWidget {
       // row happens to need. Belt and braces with the `stretch` below: the alignment makes the rows
       // fill the card, this makes the card fill the list.
       width: double.infinity,
+      // Filled, not outlined: one raised step off the page, like the phone's fields.
       decoration: BoxDecoration(
         color: AppGlass.rowFill,
         borderRadius: BorderRadius.circular(AppCard.radius),
-        border: Border.all(color: AppGlass.hair),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(AppCard.radius),
@@ -154,6 +130,7 @@ class SettingsRow extends StatelessWidget {
     this.onTap,
     this.destructive = false,
     this.nested = false,
+    this.detailLines = 2,
   });
 
   final String title;
@@ -170,6 +147,10 @@ class SettingsRow extends StatelessWidget {
 
   final VoidCallback? onTap;
   final bool destructive;
+
+  /// How many lines [detail] may take before it is cut short with an ellipsis; null lets it wrap in full
+  /// (a warning is read to the end).
+  final int? detailLines;
 
   /// Draws this row as a CHILD of the one above it — the Codex profiles under Codex, the folders
   /// under Recent.
@@ -222,8 +203,13 @@ class SettingsRow extends StatelessWidget {
                   const SizedBox(height: 3),
                   Text(
                     detail!,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
+                    maxLines: detailLines,
+                    // ⚠️ Not `ellipsis` when the detail may take every line: an ellipsis with no
+                    // `maxLines` still cuts the text to ONE line (measured on iOS and in a widget
+                    // test), which is exactly the clipping `detailLines: null` is meant to prevent.
+                    overflow: detailLines == null
+                        ? TextOverflow.clip
+                        : TextOverflow.ellipsis,
                     style: TextStyle(
                       color: AppPalette.textSecondary,
                       fontSize: 12.5,

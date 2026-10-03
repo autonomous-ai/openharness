@@ -1,0 +1,30 @@
+{
+  "status": "passed: offline rendering integrity only",
+  "canonical_cases": 62,
+  "seeds": [
+    17,
+    91
+  ],
+  "provider_permutations": 6,
+  "roster_permutations": 6,
+  "rendered_inputs_checked": 4464,
+  "checks": [
+    "Every presented fact, task, requester and provider relation restores to the source",
+    "All provider/roster combinations are independent and covered per seed",
+    "Canonical names and evaluator fields are absent from input payloads",
+    "Manual actions and recipients remain aligned with transformed scenarios",
+    "Paired answer-use, request-scope, timing, cross-repository and negative-outcome cases retain identical nonmaterial presentation",
+    "Changing all oracle labels leaves every model-visible input byte unchanged",
+    "Unreviewed input fields are rejected before output creation",
+    "Existing output is not overwritten"
+  ],
+  "source_sha256": {
+    "decision-cases.json": "ca344067c5334ca8982f12db427d1a2ff00746a985d6693c3f464241c19f9643",
+    "decision-oracle.json": "6a43a0ec9230f1c79c1155f0bb82436a1157b29361da9d564157212e8ad95b3f",
+    "prepare_decision_trials.py": "ddcbbc1e758760790ca5cddf24ce5f43117277075f8de1b8f2effae0ae666856",
+    "verify_decision_trials.py": "4718e034abb052a0b4073932cee1f99f8cab9993728f340b126cb0bdc0ee9fd8"
+  },
+  "model_execution": "not run",
+  "decision_quality": "unscored",
+  "native_provider_coverage": "not tested by display-label permutations"
+}

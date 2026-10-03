@@ -1,0 +1,47 @@
+{
+  "date": "2026-09-30",
+  "kind": "synthetic-local-memory-performance",
+  "command": "cd cli && node --import tsx scripts/memory-benchmark.ts",
+  "environment": { "node": "v22.23.1", "platform": "darwin", "arch": "arm64" },
+  "dataset": { "records": 10000, "projects": 10, "coldRequests": 10, "warmRequests": 300 },
+  "baseline": {
+    "warmP50Ms": 74.3644, "warmP95Ms": 196.5587, "warmMaxMs": 198.2733,
+    "coldP95Ms": 125.9617, "timeouts": 0, "parentEventLoopP95Ms": 1.2892
+  },
+  "afterFtsJoinOrderFix": {
+    "warmP50Ms": 3.2765, "warmP95Ms": 12.729, "warmMaxMs": 15.8431,
+    "coldP95Ms": 43.672, "timeouts": 0, "parentEventLoopP95Ms": 1.6394,
+    "largestPacketBytes": 2491
+  },
+  "afterPreLimitApplicabilityFiltering": {
+    "warmP50Ms": 1.5963, "warmP95Ms": 15.8511, "warmMaxMs": 20.4279,
+    "coldP95Ms": 42.2521, "timeouts": 0, "parentEventLoopP95Ms": 1.3128,
+    "largestPacketBytes": 2491
+  },
+  "afterPreLimitSourcePrivacyFiltering": {
+    "warmP50Ms": 1.3755, "warmP95Ms": 20.3543, "warmMaxMs": 23.5947,
+    "coldP95Ms": 36.883, "timeouts": 0, "parentEventLoopP95Ms": 1.2902,
+    "largestPacketBytes": 2491
+  },
+  "afterScopePrecedenceFiltering": {
+    "warmP50Ms": 2.0287, "warmP95Ms": 19.5328, "warmMaxMs": 22.3854,
+    "coldP95Ms": 39.4458, "timeouts": 0, "parentEventLoopP95Ms": 1.2769,
+    "largestPacketBytes": 2591
+  },
+  "preparedRecallWithReceipts": {
+    "command": "cd cli && node --import tsx scripts/memory-benchmark.ts --receipts",
+    "retainedReceipts": 5000,
+    "warmP50Ms": 21.6253, "warmP95Ms": 39.4962, "warmMaxMs": 58.2062,
+    "coldP95Ms": 50.8899, "timeouts": 0, "parentEventLoopP95Ms": 1.4387,
+    "largestPacketBytes": 2642,
+    "includes": ["Scoped lexical recall", "Prior-revision withdrawal checks", "Durable receipt preparation and bounded retention"],
+    "excludes": ["Native hook process startup and HTTP transport", "Runtime ownership checks", "Model inference"]
+  },
+  "queryPlanFinding": "The original plan used the scope index first and repeated MATCH for each project row. Driving the join from FTS once preserves access filtering before LIMIT and avoids those repeated scans.",
+  "limitations": [
+    "These are synthetic lexical requests, not a retrieval-quality benchmark.",
+    "Cold means a new worker; the OS disk cache was not emptied.",
+    "One local machine. Native hook delivery and model inference are not measured.",
+    "The runs are engineering measurements, not a controlled hardware comparison or a confidence interval."
+  ]
+}

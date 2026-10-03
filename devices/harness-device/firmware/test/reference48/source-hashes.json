@@ -1,0 +1,17 @@
+{
+  "terminal.c.inc": {
+    "sha256": "a80ae27c0a5fa6199886e732157fd1c2710434f06eb2f6d1c02c1b516c2f21c0",
+    "bytes": 17512,
+    "snapshot": "/private/tmp/harness-atlas49/before/terminal.c"
+  },
+  "octopus.c.inc": {
+    "sha256": "cb5f6416d662ba20cdab1f5e952e9f6fe8bd284bd4cde060ab7d744f7e68c6bb",
+    "bytes": 11060,
+    "snapshot": "/private/tmp/harness-clip50/before/main/ui/habitat/octopus.c"
+  },
+  "octopus_art.inc": {
+    "sha256": "0c384833a16ef999344d82e99c8c543aa1f6784b9f07c722ad3f7155fa7b272f",
+    "bytes": 113878,
+    "snapshot": "/private/tmp/harness-clip50/before/main/ui/habitat/octopus_art.inc"
+  }
+}

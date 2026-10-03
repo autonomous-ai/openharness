@@ -1,6 +1,7 @@
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
+import { createHash, randomBytes } from 'node:crypto'
 
 export interface AuthSession {
   version: 1
@@ -10,8 +11,34 @@ export interface AuthSession {
   autonomousEnv: 'prod' | 'stag'
   computerId: string
   machineId?: string
+  /** How this computer signed in: `qr` — a phone scanned its QR (a Harness-issued session, which
+   *  the Autonomous services behind billing and grid do not take); absent or `sso` — the browser. */
+  method?: 'sso' | 'qr'
+  /** The auth-service client these tokens were issued to, as the backend's exchange reported it.
+   *  A refresh has to name the same one. Absent is the backend's configured client. */
+  clientId?: SsoClientId
   updatedAt: number
+  /** Opaque local knowledge owner, learned from authenticated /auth/me, bound to this sign-in. */
+  memoryOwner?: { key: string; binding: string }
+  /** Which sign-in by hand this session is: minted here when the person signs in, never anything the
+   *  backend sends — the device key log keeps its marks per sign-in (deviceLogSyncer `signIn`). */
+  signInEpoch?: string
 }
+
+/**
+ * auth-service's clients a computer signs in as (backend `SSO_CLIENT_IDS`): a person at a terminal,
+ * or the desktop app running this CLI on their behalf.
+ */
+const SSO_CLIENT_IDS = { cli: 'harness-cli', desktop: 'harness-desktop' } as const
+export type SsoClientId = (typeof SSO_CLIENT_IDS)[keyof typeof SSO_CLIENT_IDS]
+
+/** The client for the surface that asked to sign in (`--entry-point`). */
+export const ssoClientIdFor = (entryPoint: string): SsoClientId =>
+  entryPoint === 'desktop' ? SSO_CLIENT_IDS.desktop : SSO_CLIENT_IDS.cli
+
+/** A client id read back from the backend or the session file: one of ours, or nothing. */
+export const knownSsoClientId = (raw: unknown): SsoClientId | undefined =>
+  Object.values(SSO_CLIENT_IDS).find((id) => id === raw)
 
 export class AuthSessionError extends Error {
   constructor(message: string, readonly code: 'MISSING' | 'INVALID_REFRESH' | 'UNAVAILABLE') {
@@ -41,9 +68,49 @@ function parse(raw: string): AuthSession | null {
       autonomousEnv: value.autonomousEnv,
       computerId: value.computerId,
       ...(typeof value.machineId === 'string' && value.machineId ? { machineId: value.machineId } : {}),
+      ...(value.method === 'qr' || value.method === 'sso' ? { method: value.method } : {}),
+      ...(knownSsoClientId(value.clientId) ? { clientId: knownSsoClientId(value.clientId) } : {}),
       updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : 0,
+      ...(value.memoryOwner && /^[a-f0-9]{64}$/.test(value.memoryOwner.key)
+        && value.memoryOwner.binding === memoryOwnerBinding(value.accessToken, value.autonomousEnv)
+        ? { memoryOwner: value.memoryOwner } : {}),
+      ...(typeof value.signInEpoch === 'string' && value.signInEpoch ? { signInEpoch: value.signInEpoch } : {}),
     }
   } catch { return null }
+}
+
+/** A new `signInEpoch`, for a session a sign-in by hand just made: random, then `@` and when it was
+ *  made (ms) — the device key log lets a sign-in start its file over only shortly after it was made. */
+export const newSignInEpoch = (now = Date.now()): string => `${randomBytes(16).toString('hex')}@${now}`
+
+/** How a `signInEpoch` given to a session from before epochs existed starts: nobody saw that sign-in
+ *  being made here, so the device key log may take its file over for it but never starts one over. */
+export const ADOPTED_SIGN_IN = 'adopted:'
+
+/** Give a session from before epochs existed one (`ADOPTED_SIGN_IN`), under the refresh lock so a
+ *  rotated refresh token is never written back over. The session's epoch; null when signed out. */
+export async function ensureSignInEpoch(): Promise<string | null> {
+  if (!readAuthSession()) return null
+  return withLock(async () => {
+    const latest = readAuthSession()
+    if (!latest) return null
+    if (latest.signInEpoch) return latest.signInEpoch
+    const signInEpoch = ADOPTED_SIGN_IN + newSignInEpoch()
+    writeAuthSession({ ...latest, signInEpoch })
+    return signInEpoch
+  })
+}
+
+/** A `signInEpoch` as the device key log reads it (deviceLogSyncer `signIn`): whether it was adopted,
+ *  and when it was made — null when it does not say (one from before the time was recorded). */
+export function signInOf(epoch: string | undefined | null): { epoch: string; adopted: boolean; at: number | null } | null {
+  if (!epoch) return null
+  const at = /@(\d{1,15})$/.exec(epoch)
+  return { epoch, adopted: epoch.startsWith(ADOPTED_SIGN_IN), at: at ? Number(at[1]) : null }
+}
+
+function memoryOwnerBinding(token: string, environment: AuthSession['autonomousEnv']): string {
+  return createHash('sha256').update(JSON.stringify(['memory-owner-binding-v1', environment, token])).digest('hex')
 }
 
 export function readAuthSession(): AuthSession | null {
@@ -74,6 +141,20 @@ export function clearAuthSession(): void {
   try { rmSync(AUTH_SESSION_FILE, { force: true }) } catch { /* ignore */ }
 }
 
+// Whether THIS process holds the refresh lock right now. `process.exit` skips the `finally` below, and
+// a daemon that exits mid-refresh (safe mode's own deadline, a revoke) used to leave the lock behind:
+// the next `harness auth status` — the one the desktop app runs before respawning that daemon — then
+// sat out the whole LOCK_STALE_MS before it could answer, and the app gave up on it at exactly 30s.
+let holdingLock = false
+let releaseOnExitArmed = false
+
+/** Drop the refresh lock if this process holds it. Run on `exit`; exported for the spec. */
+export function releaseHeldAuthLock(): void {
+  if (!holdingLock) return
+  holdingLock = false
+  try { rmSync(LOCK_FILE, { force: true }) } catch { /* ignore */ }
+}
+
 async function withLock<T>(action: () => Promise<T>): Promise<T> {
   ensureDir()
   let deadline = Date.now() + LOCK_STALE_MS
@@ -102,9 +183,15 @@ async function withLock<T>(action: () => Promise<T>): Promise<T> {
       await new Promise<void>((resolve) => setTimeout(resolve, 40))
       continue
     }
+    holdingLock = true
+    if (!releaseOnExitArmed) {
+      releaseOnExitArmed = true
+      process.once('exit', releaseHeldAuthLock)
+    }
     try {
       return await action()
     } finally {
+      holdingLock = false
       closeSync(fd)
       try { rmSync(LOCK_FILE, { force: true }) } catch { /* ignore */ }
     }
@@ -148,7 +235,11 @@ async function refreshRequest(baseUrl: string, current: AuthSession, timeoutMs =
     response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/auth/refresh`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ refreshToken: current.refreshToken, autonomousEnv: current.autonomousEnv }),
+      body: JSON.stringify({
+        refreshToken: current.refreshToken,
+        autonomousEnv: current.autonomousEnv,
+        ...(current.clientId ? { clientId: current.clientId } : {}),
+      }),
       signal: AbortSignal.timeout(timeoutMs),
     })
   } catch {
@@ -204,6 +295,8 @@ export class AuthSessionManager {
           ...(refreshed.refreshToken ? { refreshToken: refreshed.refreshToken } : {}),
           ...(refreshed.expiresIn ? { expiresAt: Date.now() + refreshed.expiresIn * 1000 } : {}),
           updatedAt: Date.now(),
+          ...(latest.memoryOwner ? { memoryOwner: { key: latest.memoryOwner.key,
+            binding: memoryOwnerBinding(refreshed.token, latest.autonomousEnv) } } : {}),
         }
         writeAuthSession(next)
         return next.accessToken
@@ -220,5 +313,18 @@ export class AuthSessionManager {
     const current = readAuthSession()
     if (!current || current.machineId === machineId) return
     writeAuthSession({ ...current, machineId, updatedAt: Date.now() })
+  }
+
+  /** A host-observed authenticated response, never an identity supplied by an agent or viewer. */
+  async bindMemoryOwner(ownerId: string, expectedToken: string, environment: AuthSession['autonomousEnv']): Promise<string | null> {
+    if (!ownerId || ownerId.length > 200 || /[\x00-\x1f\x7f]/.test(ownerId)) return null
+    return withLock(async () => {
+      const latest = readAuthSession()
+      if (!latest || latest.accessToken !== expectedToken || latest.autonomousEnv !== environment) return null
+      const key = createHash('sha256').update(JSON.stringify(['harness-memory-profile-v1', environment, ownerId])).digest('hex')
+      if (latest.memoryOwner?.key !== key) writeAuthSession({ ...latest,
+        memoryOwner: { key, binding: memoryOwnerBinding(latest.accessToken, latest.autonomousEnv) } })
+      return key
+    })
   }
 }

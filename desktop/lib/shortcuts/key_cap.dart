@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -57,7 +58,9 @@ class KeyCap extends StatelessWidget {
             ? Semantics(
                 label: label == '⇥' ? 'Tab' : 'Return',
                 child: Icon(
-                  label == '⇥' ? Icons.keyboard_tab : Icons.keyboard_return,
+                  label == '⇥'
+                      ? AppIcons.arrowRightToLine
+                      : AppIcons.cornerDownLeft,
                   size: iconSize,
                   color: grid.AppPalette.textPrimary,
                 ),

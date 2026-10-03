@@ -11,7 +11,7 @@
  */
 import { WebSocket } from 'ws'
 import * as C from './core.js'
-import { encryptDownFrame } from './applicationFrames.js'
+import { encryptDownFrameFor } from './applicationFrames.js'
 import { deriveTerminalBinaryKey, openTerminalBinary, sealTerminalBinary, type TerminalBinaryClear } from '../terminalBinary.js'
 import { pwCpaceGenerator, pwContext, stretchPassword } from './passwordPake.js'
 import { ReplayWindow } from './replayWindow.js'
@@ -38,6 +38,7 @@ export class RelaySessionCrypto {
   private epoch = ''
   private p2pVersion = 0
   private viewerVersion = 0
+  private strict = false
   private groupRecv = new Map<string, number>() // epoch -> highest counter seen
 
   constructor(private readonly deps: RelayCryptoDeps) {}
@@ -45,6 +46,8 @@ export class RelaySessionCrypto {
   get ready(): boolean { return this.c2s !== null && this.s2c !== null }
   get terminalP2pVersion(): number { return this.p2pVersion }
   get viewerForwardingVersion(): number { return this.viewerVersion }
+  /** The daemon opens every sealed type and refuses STRICT_DOWN_TYPES unsealed (its welcome said so). */
+  get strictDown(): boolean { return this.strict }
 
   helloFrame(): Frame {
     return {
@@ -72,7 +75,7 @@ export class RelaySessionCrypto {
     } catch { return false }
     const opened = C.aeadOpen(keys.s2c, 0, C.utf8('e2e-welcome'), C.b64d(encB64))
     if (!opened) return false
-    let initial: { groupKey?: string; epoch?: string; features?: { terminalP2p?: unknown; viewerForwarding?: unknown } }
+    let initial: { groupKey?: string; epoch?: string; features?: { terminalP2p?: unknown; viewerForwarding?: unknown; strictDown?: unknown } }
     try { initial = JSON.parse(new TextDecoder().decode(opened)) as typeof initial } catch { return false }
     if (!initial.groupKey || !initial.epoch) return false
     this.c2s = keys.c2s
@@ -85,6 +88,7 @@ export class RelaySessionCrypto {
       ? Number(initial.features?.terminalP2p)
       : 0
     this.viewerVersion = initial.features?.viewerForwarding === 1 ? 1 : 0
+    this.strict = initial.features?.strictDown === 1
     return true
   }
 
@@ -109,7 +113,7 @@ export class RelaySessionCrypto {
     const type = frame.type as string | undefined
     // Sharing, viewer forwarding and fleet RPCs are negotiated extensions; the shared crypto core stays
     // byte-identical — see applicationFrames.ts for the one list.
-    if (!type || !this.c2s || !encryptDownFrame(type)) return frame
+    if (!type || !this.c2s || !encryptDownFrameFor(type, this)) return frame
     const payload = C.wrapPayload(this.c2s, 'p', this.c2sCounter++, type, undefined, frame.payload)
     return { ...frame, payload }
   }
@@ -160,7 +164,8 @@ export class RelaySessionCrypto {
 }
 
 export type PwConnectResult =
-  | { ok: true; peerPub: Uint8Array; fingerprint: string }
+  /** `mutual`: the target said it pinned this joiner back (a machine joiner can then be dialed from it). */
+  | { ok: true; peerPub: Uint8Array; fingerprint: string; mutual: boolean }
   | { ok: false; error: string; retryAt?: number }
 
 export type PwConnectProgress = 'connecting' | 'deriving_key' | 'exchanging' | 'verifying'
@@ -182,6 +187,9 @@ export async function connectWithPassword(opts: {
   autonomousEnv: string
   onProgress?: (stage: PwConnectProgress) => void
   timeoutMs?: number
+  /** Who this joiner is, sealed into round 4 next to its identity. A machine that names its own
+   *  machineId gets pinned back by a target that understands it, so the link works both ways. */
+  self?: { machineId?: string; kind: 'machine' | 'viewer'; label?: string }
 }): Promise<PwConnectResult> {
   const url = `${opts.backendWsBase}/api/web-ws?autonomousEnv=${encodeURIComponent(opts.autonomousEnv)}`
   const ws = new WebSocket(url, [opts.accessToken])
@@ -269,15 +277,17 @@ export async function connectWithPassword(opts: {
           const targetPub = C.b64d(targetId.id)
           if (!C.pairBindVerify(targetPub, th, C.b64d(targetId.sig))) { finish({ ok: false, error: 'WRONG_PASSWORD' }); return }
           peerPub = targetPub
-          const sealed = C.aeadSeal(C.pairKey(isk, ci), 4, C.utf8('e2e-id'), C.utf8(JSON.stringify({ id: C.b64e(opts.selfIdentity.pub), sig: C.b64e(C.pairBindSig(opts.selfIdentity.priv, th)) })))
+          const joiner = { id: C.b64e(opts.selfIdentity.pub), sig: C.b64e(C.pairBindSig(opts.selfIdentity.priv, th)), ...(opts.self ?? {}) }
+          const sealed = C.aeadSeal(C.pairKey(isk, ci), 4, C.utf8('e2e-id'), C.utf8(JSON.stringify(joiner)))
           ws.send(JSON.stringify({ type: 'e2e_pw_pake', payload: { sid: sidB64, round: 4, enc: C.b64e(sealed) } }))
           return
         }
         if (round === 5) {
           if (payload.ok === true && peerPub) {
-            finish({ ok: true, peerPub, fingerprint: typeof payload.fingerprint === 'string' ? payload.fingerprint : C.fingerprint(peerPub) })
+            finish({ ok: true, peerPub, fingerprint: typeof payload.fingerprint === 'string' ? payload.fingerprint : C.fingerprint(peerPub), mutual: payload.mutual === 1 })
           } else {
-            finish({ ok: false, error: typeof payload.error === 'string' ? payload.error : 'PAIR_FAILED' })
+            const retryAt = typeof payload.retryAt === 'number' ? payload.retryAt : undefined
+            finish({ ok: false, error: typeof payload.error === 'string' ? payload.error : 'PAIR_FAILED', ...(retryAt !== undefined ? { retryAt } : {}) })
           }
         }
       } catch {

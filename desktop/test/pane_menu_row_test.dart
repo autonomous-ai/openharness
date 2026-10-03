@@ -1,12 +1,13 @@
-// `PaneMenuRow` and `paneMenuItem` on their own terms.
-//
-// These assertions used to live in `grid_model_picker_test`, because the model picker was the only
-// thing drawing these rows. It is not any more — it has its own panel — but the find bar and the
-// New Harness box still use them, and the two bugs pinned here were real: a hover the eye could
-// not tell from a selection, and trailing columns that landed at a different offset on every row.
+// The live action's active state and the retained legacy row's column geometry.
+// PaneMenuRow is no longer used by production menus.
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/theme/app_theme.dart';
+import 'package:harness/widgets/model_picker_chrome.dart';
 import 'package:harness/widgets/pane_menu.dart';
 
 void main() {
@@ -29,28 +30,71 @@ void main() {
 
   Widget item(Widget row) => paneMenuItem(onTap: () {}, child: row);
 
-  testWidgets('hover has its own colour, and focus paints none', (tester) async {
-    // Two rows looked equally chosen: one was SELECTED and the other was merely under the pointer
-    // or holding focus, and all three states painted the same fill.
-    await show(tester, [
-      item(const PaneMenuRow(selected: true, title: 'chosen', status: 'here')),
-      item(const PaneMenuRow(selected: false, title: 'other', status: 'there')),
-    ]);
+  testWidgets(
+    'active fill and saved checkmark stay distinct without moving the row',
+    (tester) async {
+      await show(tester, [
+        ModelPickerRow(
+          selected: true,
+          title: 'chosen',
+          subtitle: 'here',
+          onTap: () {},
+        ),
+        ModelPickerRow(
+          selected: false,
+          title: 'other',
+          subtitle: 'there',
+          onTap: () {},
+        ),
+      ]);
 
-    for (final well in tester.widgetList<InkWell>(find.byType(InkWell))) {
-      // Stated, not inherited: the Material default sat close enough to the selected fill to be
-      // indistinguishable.
-      expect(well.hoverColor, AppColors.rowHover);
-      // An ink ripple is a THIRD fill on the same rectangle, and it lingers past the tap.
-      expect(well.splashColor, Colors.transparent);
-      expect(well.highlightColor, Colors.transparent);
-      // Focus is a keyboard position, not a decision — and a menu focuses its first row as it
-      // opens, so painting it lit a row before the pointer had moved.
-      expect(well.focusColor, Colors.transparent);
-    }
-    expect(AppColors.rowHover, isNot(AppColors.selected));
-    expect(AppColors.rowHover.a, lessThan(AppColors.selected.a));
-  });
+      final chosen = find.widgetWithText(TextButton, 'chosen');
+      final other = find.widgetWithText(TextButton, 'other');
+      Material material(Finder row) => tester.widget<Material>(
+        find.descendant(of: row, matching: find.byType(Material)),
+      );
+      expect(material(chosen).color, grid.AppSurface.accentWash);
+      expect(material(other).color, Colors.transparent);
+      expect(
+        find.descendant(of: chosen, matching: find.byIcon(AppIcons.check)),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: other, matching: find.byIcon(AppIcons.check)),
+        findsNothing,
+      );
+      final before = tester.getRect(other);
+      final shape = material(other).shape;
+      final pointer = await tester.createGesture(
+        kind: ui.PointerDeviceKind.mouse,
+      );
+      await pointer.addPointer(location: const Offset(800, 600));
+      addTearDown(pointer.removePointer);
+      await pointer.moveTo(tester.getCenter(other));
+      await tester.pumpAndSettle();
+      expect(material(other).color, grid.AppDesktop.selection);
+      expect(
+        tester.widget<Text>(find.text('other')).style!.color,
+        grid.AppDesktop.onSelection,
+      );
+      expect(
+        tester.widget<Text>(find.text('there')).style!.color,
+        grid.AppDesktop.onSelection,
+      );
+      expect(material(chosen).color, grid.AppSurface.accentWash);
+      expect(material(other).shape, shape);
+      expect(tester.getRect(other), before);
+
+      await pointer.moveTo(const Offset(800, 600));
+      Focus.of(tester.element(find.text('other'))).requestFocus();
+      await tester.pumpAndSettle();
+      expect(material(other).color, grid.AppDesktop.selection);
+      expect(material(other).shape, shape);
+      expect(tester.getRect(other), before);
+      expect(find.byIcon(AppIcons.check), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('only the chosen row is filled', (tester) async {
     await show(tester, [
@@ -74,40 +118,41 @@ void main() {
     expect(fillOf('other')?.color, isNull);
   });
 
-  testWidgets('trailing metadata shares one right edge, whatever the row holds', (
-    tester,
-  ) async {
-    // Every trailing field was a `Flexible`, whose flex is ONE — so a row's spare width was split
-    // evenly between the title and each field beside it. A row with two fields put them a third
-    // and two thirds across; a row with one put it halfway. Three columns, three offsets.
-    await show(tester, [
-      item(const PaneMenuRow(selected: false, title: 'one', status: 'a')),
-      item(
-        const PaneMenuRow(
-          selected: false,
-          title: 'two',
-          status: 'firmware-engineer-daniel',
+  testWidgets(
+    'trailing metadata shares one right edge, whatever the row holds',
+    (tester) async {
+      // Every trailing field was a `Flexible`, whose flex is ONE — so a row's spare width was split
+      // evenly between the title and each field beside it. A row with two fields put them a third
+      // and two thirds across; a row with one put it halfway. Three columns, three offsets.
+      await show(tester, [
+        item(const PaneMenuRow(selected: false, title: 'one', status: 'a')),
+        item(
+          const PaneMenuRow(
+            selected: false,
+            title: 'two',
+            status: 'firmware-engineer-daniel',
+          ),
         ),
-      ),
-      item(
-        const PaneMenuRow(
-          selected: false,
-          title: 'three',
-          detail: '7f0c59',
-          status: '11% remaining',
+        item(
+          const PaneMenuRow(
+            selected: false,
+            title: 'three',
+            detail: '7f0c59',
+            status: '11% remaining',
+          ),
         ),
-      ),
-    ]);
+      ]);
 
-    final edges = [
-      tester.getRect(find.text('a')).right,
-      tester.getRect(find.text('firmware-engineer-daniel')).right,
-      tester.getRect(find.text('11% remaining')).right,
-    ];
-    for (final edge in edges) {
-      expect((edge - edges.first).abs(), lessThan(0.5));
-    }
-  });
+      final edges = [
+        tester.getRect(find.text('a')).right,
+        tester.getRect(find.text('firmware-engineer-daniel')).right,
+        tester.getRect(find.text('11% remaining')).right,
+      ];
+      for (final edge in edges) {
+        expect((edge - edges.first).abs(), lessThan(0.5));
+      }
+    },
+  );
 
   testWidgets('a long trailing field ellipsizes instead of eating the title', (
     tester,

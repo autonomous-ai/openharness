@@ -16,17 +16,21 @@ import {
   webCallbackUri,
   isLoopbackRedirectUri,
   normalizeEntryPoint,
+  normalizeSignInProvider,
+  normalizeSsoClientId,
   resolveWebOrigin,
   requestedWebOrigin,
   type SsoTx,
 } from '../lib/sso.js'
 import { parseAutonomousEnvironment, type AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
+import { isHarnessRefreshToken } from '../lib/harnessTokenFormat.js'
+import { redeemHandoff, refreshHarnessSession, revokeHarnessSession, startHandoff } from '../lib/harnessSession.js'
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   // 1) Start login (web-driven). The web fetches this (XHR, so the API URL never hits the address
   //    bar), stashes the returned opaque `tx` id in sessionStorage, and navigates the browser to
   //    `authorizeUrl` (the SSO provider). redirect_uri is the WEB callback page, not the API.
-  app.post<{ Body: { next?: string; origin?: string; autonomousEnv?: AutonomousEnvironment } }>('/api/auth/authorize', async (req, reply) => {
+  app.post<{ Body: { next?: string; origin?: string; autonomousEnv?: AutonomousEnvironment; provider?: string; clientId?: string } }>('/api/auth/authorize', async (req, reply) => {
     const { verifier, challenge } = pkcePair()
     const state = randomState()
     const next = typeof req.body?.next === 'string' && req.body.next ? req.body.next : '/'
@@ -36,9 +40,13 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     try { autonomousEnv = parseAutonomousEnvironment(req.body?.autonomousEnv) } catch {
       return sendError(reply, 'invalid Autonomous environment', 'INVALID_AUTONOMOUS_ENV', 400)
     }
+    // Which button the person pressed (Google, Apple); absent is the sign-in page's own chooser.
+    const provider = normalizeSignInProvider(req.body?.provider)
+    // Which surface is signing in (lib/sso.ts `SSO_CLIENT_IDS`), kept for the exchange.
+    const clientId = normalizeSsoClientId(req.body?.clientId)
     try {
-      const tx = await createTx({ verifier, state, next, redirectUri, webOrigin, autonomousEnv })
-      return sendSuccess(reply, { authorizeUrl: authorizeUrl(challenge, state, redirectUri, autonomousEnv), tx })
+      const tx = await createTx({ verifier, state, next, redirectUri, webOrigin, autonomousEnv, ...(clientId ? { clientId } : {}) })
+      return sendSuccess(reply, { authorizeUrl: authorizeUrl(challenge, state, redirectUri, autonomousEnv, { provider, clientId }), tx })
     } catch {
       return sendError(reply, 'login transaction service unavailable', 'AUTH_SERVICE_UNAVAILABLE', 503)
     }
@@ -62,7 +70,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         return sendError(reply, 'invalid_state', 'INVALID_STATE', 400)
       }
       try {
-        const tokens = await exchangeCode(code, tx.verifier, tx.redirectUri, tx.autonomousEnv)
+        const tokens = await exchangeCode(code, tx.verifier, tx.redirectUri, tx.autonomousEnv, tx.clientId)
         const token = tokens.access_token
         if (!token) throw new Error('sso response had no access_token')
         const user = await authenticateAccessToken(token, tx.autonomousEnv)
@@ -77,6 +85,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           token,
           next: tx.next,
           autonomousEnv: tx.autonomousEnv,
+          // The client these tokens were issued to, for the caller to keep and name on every
+          // refresh. Absent is the configured client — and what a backend from before the
+          // clients were split answers, so a caller never assumes the client it asked for.
+          ...(tx.clientId ? { clientId: tx.clientId } : {}),
           ...(tokens.refresh_token ? { refreshToken: tokens.refresh_token } : {}),
           ...(typeof tokens.expires_in === 'number' ? { expiresIn: tokens.expires_in } : {}),
         })
@@ -100,11 +112,23 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     },
   )
 
-  app.post<{ Body: { refreshToken?: string; autonomousEnv?: AutonomousEnvironment } }>(
+  app.post<{ Body: { refreshToken?: string; autonomousEnv?: AutonomousEnvironment; clientId?: string } }>(
     '/api/auth/refresh',
     async (req, reply) => {
       const refreshToken = typeof req.body?.refreshToken === 'string' ? req.body.refreshToken.trim() : ''
       if (!refreshToken) return sendError(reply, 'refresh token is required', 'INVALID_REFRESH_REQUEST', 400)
+
+      // A session Harness issued itself (a phone signed in by a QR) renews here, not at the SSO.
+      if (isHarnessRefreshToken(refreshToken)) {
+        try {
+          const tokens = await refreshHarnessSession(refreshToken)
+          if (!tokens) return sendError(reply, 'Refresh token is invalid or expired', 'REFRESH_TOKEN_INVALID', 401)
+          return sendSuccess(reply, tokens)
+        } catch (e) {
+          logger.error('harness session refresh failed', e)
+          return sendError(reply, 'Authentication service unavailable', 'AUTH_SERVICE_UNAVAILABLE', 503)
+        }
+      }
 
       let autonomousEnv: AutonomousEnvironment
       try { autonomousEnv = parseAutonomousEnvironment(req.body?.autonomousEnv) } catch {
@@ -112,7 +136,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       }
 
       try {
-        const tokens = await refreshAccessToken(refreshToken, autonomousEnv)
+        // The client the session was issued to: a refresh under any other is refused upstream.
+        const tokens = await refreshAccessToken(refreshToken, autonomousEnv, normalizeSsoClientId(req.body?.clientId))
         const token = tokens.access_token
         if (!token) throw new SsoTokenError('SSO refresh returned no access token', 'TOKEN_SERVICE_UNAVAILABLE')
         const user = await authenticateAccessToken(token, autonomousEnv)
@@ -158,7 +183,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   // 1b) Native/desktop-driven login (loopback OAuth). Accepts an explicit loopback redirect_uri so a
   //     desktop client can run a local HTTP listener to capture the SSO callback; unlike the web
   //     authorize, it never derives redirect_uri from a web origin. /exchange reuses tx.redirectUri.
-  app.post<{ Body: { redirectUri?: string; autonomousEnv?: AutonomousEnvironment; entryPoint?: string } }>(
+  app.post<{ Body: { redirectUri?: string; autonomousEnv?: AutonomousEnvironment; entryPoint?: string; provider?: string; clientId?: string } }>(
     '/api/auth/authorize-native',
     async (req, reply) => {
       const redirectUri = typeof req.body?.redirectUri === 'string' ? req.body.redirectUri.trim() : ''
@@ -173,11 +198,13 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         const { verifier, challenge } = pkcePair()
         const state = randomState()
         const webOrigin = new URL(redirectUri).origin
-        const tx = await createTx({ verifier, state, next: '/', redirectUri, webOrigin, autonomousEnv })
+        const clientId = normalizeSsoClientId(req.body?.clientId)
+        const tx = await createTx({ verifier, state, next: '/', redirectUri, webOrigin, autonomousEnv, ...(clientId ? { clientId } : {}) })
         // Which surface started this sign-in (`cli`, `desktop`) — analytics only, and dropped
         // unless it is a plain key, because this route needs no token.
         const entryPoint = normalizeEntryPoint(req.body?.entryPoint)
-        return sendSuccess(reply, { authorizeUrl: authorizeUrl(challenge, state, redirectUri, autonomousEnv, entryPoint), tx })
+        const provider = normalizeSignInProvider(req.body?.provider)
+        return sendSuccess(reply, { authorizeUrl: authorizeUrl(challenge, state, redirectUri, autonomousEnv, { entryPoint, provider, clientId }), tx })
       } catch {
         return sendError(reply, 'login transaction service unavailable', 'AUTH_SERVICE_UNAVAILABLE', 503)
       }
@@ -195,6 +222,52 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     return sendSuccess(reply, {
       logoutUrl: logoutUrl(resolveWebOrigin(requestedWebOrigin(req.query, req.headers)), autonomousEnv),
     })
+  })
+
+  // 4) Scan to sign in (lib/harnessSession.ts). A signed-in computer asks for a one-time code for
+  //    its Add Phone QR; the phone that scans it redeems the code for a session of its own. An
+  //    Autonomous sign-in can hand one off, and so can a computer a phone signed in by QR
+  //    (routes/qrSignIn.ts) — a phone's own session cannot mint more of itself.
+  app.post('/api/auth/handoff', async (req, reply) => {
+    if (req.user!.harnessSessionId && req.user!.harnessSessionKind !== 'computer') {
+      return sendError(reply, 'Add a phone from a computer signed in to Harness', 'HANDOFF_NOT_ALLOWED', 403)
+    }
+    try {
+      return sendSuccess(reply, await startHandoff(req.user!.sub))
+    } catch (e) {
+      logger.error('handoff start failed', e)
+      return sendError(reply, 'Authentication service unavailable', 'AUTH_SERVICE_UNAVAILABLE', 503)
+    }
+  })
+
+  // Unauthenticated BY DESIGN, like /refresh: the code is the credential. It is 32 random bytes,
+  // good for one redeem within 90 seconds, so there is nothing to guess and nothing to replay.
+  app.post<{ Body: { code?: string; label?: string } }>('/api/auth/handoff/redeem', async (req, reply) => {
+    const code = typeof req.body?.code === 'string' ? req.body.code.trim() : ''
+    const label = (typeof req.body?.label === 'string' ? req.body.label.trim() : '').slice(0, 80) || 'phone'
+    try {
+      const tokens = await redeemHandoff(code, label)
+      // Expired, spent, or never ours — one answer, so a caller learns nothing from which.
+      if (!tokens) return sendError(reply, 'That code has expired. Scan the new one.', 'HANDOFF_INVALID', 401)
+      logger.info('handoff redeemed', { label })
+      return sendSuccess(reply, tokens)
+    } catch (e) {
+      logger.error('handoff redeem failed', e)
+      return sendError(reply, 'Authentication service unavailable', 'AUTH_SERVICE_UNAVAILABLE', 503)
+    }
+  })
+
+  // Sign a Harness-issued session out. Knowing the refresh token is the authority, as for /refresh;
+  // an Autonomous refresh token is not ours to revoke and is ignored.
+  app.post<{ Body: { refreshToken?: string } }>('/api/auth/revoke', async (req, reply) => {
+    const refreshToken = typeof req.body?.refreshToken === 'string' ? req.body.refreshToken.trim() : ''
+    try {
+      await revokeHarnessSession(refreshToken)
+      return sendSuccess(reply, { revoked: true })
+    } catch (e) {
+      logger.error('harness session revoke failed', e)
+      return sendError(reply, 'Authentication service unavailable', 'AUTH_SERVICE_UNAVAILABLE', 503)
+    }
   })
 
   // Current session's mirrored user, SSO-access-token gated by the auth middleware.

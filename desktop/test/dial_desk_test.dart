@@ -143,7 +143,45 @@ void main() {
   });
 
   test(
-    'a dial-selected agent adds a view without replacing swarm membership',
+    'dial focus reveals another tab without adding its agents here',
+    () async {
+      final app = await _withTiles(['a1', 'a2']);
+      try {
+        final desktop = app.activeSwarm;
+        _machine(app, 'm2', ['a4']);
+        app.newSwarm();
+        final device = app.activeSwarm;
+        await app.addAgentToSwarm('m1', 'a3');
+        await app.addAgentToSwarm('m2', 'a4');
+        final devicePanes = device.panes.toList();
+
+        for (final (machineId, agentId) in [
+          ('m1', 'a3'),
+          ('m2', 'a4'),
+          ('m1', 'a3'),
+        ]) {
+          app.selectSwarm(desktop.id);
+          await app.handleEventForTest('m1', {
+            'type': 'dial_focus',
+            'payload': {'machineId': machineId, 'agentId': agentId},
+          });
+
+          expect(app.activeSwarmId, device.id);
+          expect(app.focusedPane?.machineId, machineId);
+          expect(app.focusedPane?.agentId, agentId);
+          expect(app.paneFocusByUser, isFalse);
+          expect(desktop.panes.map((p) => p.agentId), ['a1', 'a2']);
+          expect(device.panes, devicePanes);
+          expect(app.swarms, hasLength(2));
+        }
+      } finally {
+        app.dispose();
+      }
+    },
+  );
+
+  test(
+    'a dial-selected agent adds a view without replacing tab membership',
     () async {
       // The carousel cannot reach this agent any more, but the pull-down switcher still names it and the
       // window is still told. What happens then is ordinary selection — the focused tile becomes it —
@@ -278,7 +316,7 @@ void main() {
   });
 
   test(
-    'a dial_swarm frame switches the swarm, and an unknown id is ignored',
+    'a dial_swarm frame switches the tab, and an unknown id is ignored',
     () async {
       // The dial's swarm line. It sends the id it was given; the switch is the ordinary one, so the desk
       // it re-describes is the other swarm's panes — which is what the dial's carousel then walks.
@@ -310,7 +348,7 @@ void main() {
         'payload': {'swarmId': second},
       });
       expect(app.activeSwarmId, second);
-      expect(_desk(app), isEmpty, reason: 'the new swarm has no panes yet');
+      expect(_desk(app), isEmpty, reason: 'the new tab has no panes yet');
       app.dispose();
     },
   );
@@ -448,6 +486,32 @@ void main() {
         reason: 'the band stays; only a hand on this app presses its button',
       );
     });
+
+    test(
+      'dial focus finds a taken pane in another tab without reopening',
+      () async {
+        final first = app.activeSwarm;
+        app.newSwarm();
+        final second = app.activeSwarm;
+        app.adoptSessionForTest(taken('a3'));
+        app.selectSwarm(first.id);
+
+        await dialFocus(app, 'a3');
+
+        expect(app.activeSwarmId, second.id);
+        expect(app.focusedPane?.agentId, 'a3');
+        expect(app.paneFocusByUser, isFalse);
+        expect(first.panes.map((p) => p.agentId), ['a1', 'a2']);
+        expect(second.panes.map((p) => p.agentId), ['a3']);
+        expect(
+          app.focusedPane?.session?.status,
+          TerminalSessionStatus.takenOver,
+        );
+        for (final id in ['a1', 'a2', 'a3']) {
+          expect(opens(id), isEmpty);
+        }
+      },
+    );
 
     test('a question shown on the dial only brings the pane forward', () async {
       await app.handleEventForTest('m1', {

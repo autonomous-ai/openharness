@@ -1,0 +1,66 @@
+<section aria-labelledby="s-states">
+  <h2 id="s-states">From the first crack to an open shell</h2>
+  <p class="lede">Five stages while you earn it. Four when you open it.</p>
+  <p>
+    A turn egg takes 40 counted turns. The green strip under each portrait shows
+    its eight-cell status-line sprite. The light stays plain until the shell
+    bursts and reveals the rarity.
+  </p>
+  <div class="states" id="states"></div>
+</section>
+<!-- eggs:start -->
+<section aria-labelledby="s-eggs3">
+  <h2 id="s-eggs3">Eight kinds. One small beginning.</h2>
+  <p>
+    Choose an egg, its progress, and a possible rarity. Hatch it, pause it, or
+    drag the frame control to inspect the opening. These are local previews;
+    nothing is added to a real collection.
+  </p>
+  <div class="eggs-grid" id="eggGrid" role="group" aria-label="Egg kind"></div>
+  <div class="egg-player">
+    <div class="egg-status">
+      <span class="one" id="eggLine" aria-label="Status-line sprite"></span
+      ><span class="note" id="eggStageLabel"></span>
+    </div>
+    <div class="egg-stage" id="eggStage">
+      <pre id="eggArt" role="img" aria-label="Egg preview"></pre>
+    </div>
+    <div
+      class="egg-caption"
+      id="eggWords"
+      role="status"
+      aria-live="polite"
+    ></div>
+    <div class="egg-controls">
+      <div
+        class="row"
+        role="group"
+        aria-label="Progress toward this egg"
+        id="eggProgress"
+      >
+        <span class="lbl">earned</span>
+      </div>
+      <div class="row" role="group" aria-label="Rarity inside" id="eggRarity">
+        <span class="lbl">inside</span>
+      </div>
+      <div class="row">
+        <button type="button" id="eggHatch">Hatch egg</button
+        ><button type="button" id="eggPause" disabled>Pause opening</button
+        ><button type="button" id="eggReset">Reset egg</button>
+      </div>
+      <label class="egg-scrub" for="eggScrub"
+        ><span>Opening frame</span
+        ><input
+          id="eggScrub"
+          type="range"
+          min="0"
+          max="1"
+          value="0"
+          disabled
+        /><output id="eggFrameCount" for="eggScrub">—</output></label
+      >
+      <p class="note" id="eggNote"></p>
+    </div>
+  </div>
+</section>
+<!-- eggs:end -->

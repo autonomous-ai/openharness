@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { TmuxBackend } from './tmuxBackend.js'
-import { ensureTmuxOnPath, managedTmuxPath, requireTmuxAvailable, resolveViaLoginShell } from './tmuxOnPath.js'
+import { ensureTmuxOnPath, managedTmuxPath, requireTmuxAvailable, resolveViaLoginShell, tmuxInstallDirectories } from './tmuxOnPath.js'
 
 const dirs: string[] = []
 const originalPath = process.env.PATH
@@ -167,7 +167,7 @@ PATH="${binDir}" exec /bin/sh -c "$@"
     const emptyBin = scratch('tmux-onpath-empty-')
     const env: NodeJS.ProcessEnv = { PATH: '/nonexistent-for-this-test' }
 
-    const outcome = await ensureTmuxOnPath(env, fakeShell(emptyBin), noManagedTmux())
+    const outcome = await ensureTmuxOnPath(env, fakeShell(emptyBin), noManagedTmux(), [])
 
     expect(outcome.state).toBe('absent')
     expect(env.PATH).toBe('/nonexistent-for-this-test')
@@ -210,5 +210,49 @@ exit 0
     expect(after).toEqual({
       state: 'succeeded', dispatch: 'executed', runtime: { backend: 'tmux', paneId: '%7' },
     })
+  })
+
+  it('creates the first pane with an installed tmux absent from a fresh user’s shell', async () => {
+    const binDir = scratch('tmux-onpath-installed-')
+    writeFileSync(join(binDir, 'tmux'), `#!/bin/sh
+case "$1" in
+  -V) printf 'tmux 3.7c\\n' ;;
+  new-session) printf '%%0\\n' ;;
+esac
+`, { mode: 0o700 })
+    const runtimeDir = noManagedTmux()
+    process.env.PATH = '/nonexistent-for-this-test'
+    const backend = new TmuxBackend()
+    expect(await backend.create({ label: 'harness-first' })).toMatchObject({
+      state: 'failed', reason: 'tmux is unavailable',
+    })
+
+    // The installer found Homebrew in a known prefix. Neither the daemon nor
+    // this new OS user's login shell inherited the installer's temporary PATH.
+    const outcome = await ensureTmuxOnPath(process.env, '/nonexistent/shell', runtimeDir, [binDir])
+    expect(outcome).toMatchObject({ state: 'adopted', path: join(binDir, 'tmux') })
+    expect(await backend.create({ label: 'harness-first' })).toMatchObject({
+      state: 'succeeded', runtime: { backend: 'tmux', paneId: '%0' },
+    })
+  })
+
+  it('checks the user bin and both macOS Homebrew prefixes, but not Homebrew on Linux', () => {
+    expect(tmuxInstallDirectories({ HOME: '/Users/new-user' }, 'darwin')).toEqual([
+      '/Users/new-user/.local/bin', '/opt/homebrew/bin', '/usr/local/bin',
+    ])
+    expect(tmuxInstallDirectories({ HOME: '/home/new-user' }, 'linux')).toEqual(['/home/new-user/.local/bin'])
+    expect(tmuxInstallDirectories({ HARNESS_BIN_DIR: '/custom/bin', HARNESS_HOMEBREW_PREFIXES: '/custom/brew' }, 'darwin'))
+      .toEqual(['/custom/bin', '/custom/brew/bin'])
+  })
+
+  it('skips a broken install candidate and adopts the next runnable tmux', async () => {
+    const broken = scratch('tmux-onpath-broken-')
+    writeFileSync(join(broken, 'tmux'), '#!/bin/sh\nexit 1\n', { mode: 0o700 })
+    const working = scratch('tmux-onpath-working-')
+    writeFileSync(join(working, 'tmux'), '#!/bin/sh\nprintf "tmux 3.7c\\n"\n', { mode: 0o700 })
+    const env: NodeJS.ProcessEnv = { PATH: '/nonexistent' }
+    expect(await ensureTmuxOnPath(env, '/nonexistent/shell', noManagedTmux(), [broken, working]))
+      .toMatchObject({ state: 'adopted', path: join(working, 'tmux') })
+    expect(env.PATH?.split(delimiter)[0]).toBe(working)
   })
 })

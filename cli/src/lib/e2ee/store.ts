@@ -4,17 +4,32 @@
  * mode 0600 (pairs are rare — no debounce needed). The identity key is the root of trust; losing it
  * forces every browser to re-pair.
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { env } from '../../config/env.js'
-import { newIdentity, newPairId, b64e, b64d, fingerprint, encodeSetupToken, verifySetupToken, type Identity, type PairRole } from './core.js'
+import { newIdentity, newPairId, b64e, b64d, fingerprint, type Identity, type PairRole } from './core.js'
 import { stretchPassword } from './passwordPake.js'
 
 const DIR = join(env.ADAPTER_DATA_DIR, 'e2e')
 const IDENTITY_FILE = join(DIR, 'identity.json')
 const PAIRED_FILE = join(DIR, 'paired.json')
+
+/** This computer's identity public key (base64) as already on disk, or null. Unlike `E2eeStore.init()`
+ *  it never creates a key and writes nothing, so a read-only command can show the fingerprint without
+ *  minting an identity as a side effect. */
+export function peekIdentityPub(): string | null {
+  try {
+    const raw = JSON.parse(readFileSync(IDENTITY_FILE, 'utf-8')) as { pub?: unknown }
+    return typeof raw.pub === 'string' && raw.pub ? raw.pub : null
+  } catch { return null }
+}
+
+/** Whether an identity was retired here (`identity.json.removed-*`, left by signing this device out of
+ *  the account), so "no identity" can be told apart from "never had one". */
+export function identitySpent(): boolean {
+  try { return readdirSync(DIR).some((f) => f.startsWith('identity.json.removed-')) } catch { return false }
+}
 const REMOTE_PASSWORD_FILE = join(DIR, 'remotePassword.json')
-const SETUP_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 // Remote-password lockout tuning (anti online-guessing for a reusable, human-memorable secret — see
 // notePwFailure()/pwLockedUntil()). Distinct regime from the live pairing code's RATE_MAX=3/5min in
@@ -39,10 +54,23 @@ export interface PairedClient {
   label: string       // UA-derived, for display
   pairedAt: number
   role: PairRole      // old records without this field are treated as web
+  /** Set for a peer that joined over the remote password (or was learned from a trust-group sync): the
+   *  joining machine's id when `kind` is 'machine', absent for a viewer app. Absent on older records. */
+  machineId?: string
+  kind?: PeerKind
 }
-function writeSecure(file: string, data: unknown): void {
+
+/** What a password-linked peer is: another harness machine (which also serves, so it can be dialed back)
+ *  or a viewer app (mobile / viewer desktop — dial-out only). */
+export type PeerKind = 'machine' | 'viewer'
+/** How long `init()` waits for another process's just-created identity file to be written (10 × 20 ms). */
+const IDENTITY_READ_RETRIES = 10
+const IDENTITY_READ_RETRY_MS = 20
+const sleepSync = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }
+
+function writeSecure(file: string, data: unknown, flag: 'w' | 'wx' = 'w'): void {
   mkdirSync(DIR, { recursive: true, mode: 0o700 })
-  writeFileSync(file, JSON.stringify(data, null, 2), { mode: 0o600 })
+  writeFileSync(file, JSON.stringify(data, null, 2), { mode: 0o600, flag })
 }
 
 export class E2eeStore {
@@ -54,13 +82,26 @@ export class E2eeStore {
    *  Idempotent. */
   init(): Identity {
     if (this.identity) return this.identity
-    try {
+    const readIdentity = (): Identity => {
       const raw = JSON.parse(readFileSync(IDENTITY_FILE, 'utf-8')) as { priv: string; pub: string }
-      this.identity = { priv: b64d(raw.priv), pub: b64d(raw.pub) }
-    } catch {
+      return { priv: b64d(raw.priv), pub: b64d(raw.pub) }
+    }
+    // `harness login` and a booting daemon can both get here: exclusive create so exactly one key is
+    // ever minted, and the loser adopts the winner's instead of overwriting it. The create makes the
+    // file before its bytes land, so a loser that reads it empty waits a moment and reads again; only
+    // a file still unreadable after that is taken as broken and replaced, as before.
+    for (let attempt = 0; !this.identity; attempt++) {
+      try { this.identity = readIdentity(); break } catch { /* missing, half-written or broken */ }
       const id = newIdentity()
-      writeSecure(IDENTITY_FILE, { priv: b64e(id.priv), pub: b64e(id.pub) })
-      this.identity = id
+      try {
+        writeSecure(IDENTITY_FILE, { priv: b64e(id.priv), pub: b64e(id.pub) }, 'wx')
+        this.identity = id
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+        if (attempt < IDENTITY_READ_RETRIES) { sleepSync(IDENTITY_READ_RETRY_MS); continue }
+        writeSecure(IDENTITY_FILE, { priv: b64e(id.priv), pub: b64e(id.pub) })
+        this.identity = id
+      }
     }
     try {
       const arr = JSON.parse(readFileSync(PAIRED_FILE, 'utf-8')) as Array<PairedClient & { role?: PairRole }>
@@ -105,8 +146,16 @@ export class E2eeStore {
     return this.paired.get(identityPubB64)?.label ?? null
   }
 
-  addPaired(identityPubB64: string, label: string, at: number, role: PairRole = 'web'): void {
-    this.paired.set(identityPubB64, { identityPub: identityPubB64, label, pairedAt: at, role })
+  pairedPeer(identityPubB64: string): PairedClient | null {
+    return this.paired.get(identityPubB64) ?? null
+  }
+
+  addPaired(identityPubB64: string, label: string, at: number, role: PairRole = 'web', peer?: { machineId?: string; kind?: PeerKind }): void {
+    this.paired.set(identityPubB64, {
+      identityPub: identityPubB64, label, pairedAt: at, role,
+      ...(peer?.machineId ? { machineId: peer.machineId } : {}),
+      ...(peer?.kind ? { kind: peer.kind } : {}),
+    })
     writeSecure(PAIRED_FILE, [...this.paired.values()])
   }
 
@@ -128,30 +177,10 @@ export class E2eeStore {
     return this.paired.size
   }
 
-  createSetupToken(machineId?: string, ttlMs = SETUP_TTL_MS): { token: string; expiresAt: number; fingerprint: string } {
-    const id = this.getIdentity()
-    const nonce = b64e(newPairId()).replace(/=+$/g, '')
-    const expiresAt = Date.now() + ttlMs
-    const payload = { v: 1 as const, typ: 'adapter-e2ee-setup' as const, pub: b64e(id.pub), nonce, exp: expiresAt, ...(machineId ? { machineId } : {}) }
-    return { token: encodeSetupToken(payload, id.priv), expiresAt, fingerprint: this.fingerprint() }
-  }
-
-  /** Validate a reusable setup link. The signed token is the capability: successful claims never
-   * consume server-side state, so the same unexpired link can pair multiple browser identities —
-   * including a link whose nonce was consumed by an older one-time build before an upgrade. */
-  validateSetupToken(token: string, expectedMachineId?: string): { ok: true; fingerprint: string } | { ok: false; error: 'BAD_TOKEN' | 'WRONG_ADAPTER' } {
-    const id = this.getIdentity()
-    const verified = verifySetupToken(token, Date.now(), expectedMachineId)
-    if (!verified) return { ok: false, error: 'BAD_TOKEN' }
-    if (b64e(id.pub) !== verified.payload.pub) return { ok: false, error: 'WRONG_ADAPTER' }
-    return { ok: true, fingerprint: this.fingerprint() }
-  }
-
   // ── persistent remote password (machine-to-machine `harness link connect`) ───────────────────────
-  // A fourth, separate trust primitive from the three above: not a browser pairing (paired.json), not
-  // a one-time signed token (createSetupToken), and not the live 6-char CPace code — see
-  // passwordPake.ts for why this needs its own domain-separated CPace generator, and manager.ts's
-  // onPwPairIntent/onPwPake for the state machine that consumes remotePasswordVerifier()/
+  // A separate trust primitive from the ones above: not a pairing (paired.json) and not the live 6-char
+  // CPace code — see passwordPake.ts for why this needs its own domain-separated CPace generator, and
+  // manager.ts's onPwPairIntent/onPwPake for the state machine that consumes remotePasswordVerifier()/
   // notePwFailure()/notePwSuccess() below.
 
   /** Stretch + persist a new remote password (0600, same convention as identity.json/paired.json).
@@ -200,6 +229,9 @@ export class E2eeStore {
     const record = this.remotePassword
     if (!record) return { lockedUntil: null }
     const now = Date.now()
+    // The backoff escalates across lockouts only while they keep coming: a quiet day since the last one
+    // ended starts it over, so no one is held at the 24h ceiling for good.
+    if (record.lockedUntil && now - record.lockedUntil > PW_LOCKOUT_MAX_MS) record.lockoutCount = 0
     record.recentFailures = [...record.recentFailures.filter((t) => now - t < PW_FAIL_WINDOW_MS), now]
     if (record.recentFailures.length >= PW_FAIL_THRESHOLD) {
       const count = (record.lockoutCount ?? 0) + 1
@@ -211,11 +243,15 @@ export class E2eeStore {
     return { lockedUntil: record.lockedUntil ?? null }
   }
 
-  /** Successful attempts don't affect the failure count — mirrors manager.ts's `attempts` convention
-   *  for the live pairing code (only failed handshakes count toward its rate limit). Kept as an
-   *  explicit no-op call site (rather than omitted) so the success path in manager.ts reads the same
-   *  shape as the failure path, and so a future policy change has one place to land. */
-  notePwSuccess(): void { /* deliberately no-op — see doc comment */ }
+  /** A successful pairing proves the password is known to its owner's machines: the failures and the
+   *  lockout escalation that came before it no longer describe anyone's guessing, so both start over. */
+  notePwSuccess(): void {
+    const record = this.remotePassword
+    if (!record || (record.recentFailures.length === 0 && !record.lockoutCount)) return
+    record.recentFailures = []
+    record.lockoutCount = 0
+    writeSecure(REMOTE_PASSWORD_FILE, record)
+  }
 
   /** Current lockout, or null if unset/expired. An expired `lockedUntil` is treated as not-locked
    *  without rewriting the file — the next real failure (if any) will naturally recompute it. */

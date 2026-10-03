@@ -1,0 +1,2 @@
+# Static hosts such as Cloudflare Pages and Netlify serve existing files first.
+/* /index.html 200

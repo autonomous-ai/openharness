@@ -69,7 +69,7 @@ void main() {
         'Machine not found',
       );
       expect(await app.renameAgent('m', 'a0', '  '), 'Name cannot be empty');
-      expect(await app.renameAgent('m', 'gone', 'Name'), 'Agent not found');
+      expect(await app.renameAgent('m', 'gone', 'Name'), 'Harness not found');
       final shared = MachineState(
         const Machine(
           machineId: 'shared',
@@ -108,7 +108,7 @@ void main() {
           disposed = true;
       }
       connection.replies.single.complete({});
-      expect(await request, contains('agent changed'));
+      expect(await request, contains('harness changed'));
       if (!disposed) expect(name(), 'Replacement');
       expect(app.pendingAgentRename('m', 'a0'), isNull);
     });
@@ -122,7 +122,7 @@ void main() {
     });
     app.stateOf('m')!.agents.add(const Agent(id: 'a0', name: 'Recreated'));
     connection.replies.single.complete({});
-    expect(await request, contains('agent changed'));
+    expect(await request, contains('harness changed'));
     expect(name(), 'Recreated');
   });
 
@@ -138,7 +138,7 @@ void main() {
       expect(name(), 'Agent 0');
       request = app.renameAgent('m', 'a0', 'Retry');
       connection.replies.last.completeError(StateError('fixture detail'));
-      expect(await request, 'Could not rename the agent. Try again.');
+      expect(await request, 'Could not rename the harness. Try again.');
       request = app.renameAgent('m', 'a0', 'Retry');
       connection.replies.last.completeError(
         const WsRequestTimeout('agent_update'),

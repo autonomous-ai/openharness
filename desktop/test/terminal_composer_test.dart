@@ -156,7 +156,7 @@ void main() {
       await tester.pump();
 
       final field = tester.widget<TextField>(find.byType(TextField));
-      expect(field.decoration?.hintText, 'Message agent…  ·  ↵ send');
+      expect(field.decoration?.hintText, 'Message harness…  ·  ↵ send');
       expect(
         find.byKey(const ValueKey('terminal-composer-prompt')),
         findsOneWidget,
@@ -214,7 +214,7 @@ void main() {
     void expectTypography(String family, double size) {
       final field = tester.widget<TextField>(find.byType(TextField));
       final renderedHintStyle = tester
-          .widget<Text>(find.text('Message agent…  ·  ↵ send'))
+          .widget<Text>(find.text('Message harness…  ·  ↵ send'))
           .style!;
       final promptStyle = tester
           .widget<AnimatedDefaultTextStyle>(

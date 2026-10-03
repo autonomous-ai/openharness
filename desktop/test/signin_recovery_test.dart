@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/cli_login.dart';
+import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/screens/login_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -21,7 +22,10 @@ class _Cli extends CliLogin {
   var cancellations = 0;
   var statusChecks = 0;
   @override
-  Future<void> login({required void Function(String) onAuthorizeUrl}) {
+  Future<void> login({
+    required void Function(String) onAuthorizeUrl,
+    SignInProvider? provider,
+  }) {
     final attempt = _Attempt(onAuthorizeUrl);
     attempts.add(attempt);
     return attempt.done.future;
@@ -105,7 +109,7 @@ void main() {
         expect(cli.cancellations, 1);
         expect(app.pendingAuthorizeUrl, isNull);
         expect(app.lastError, isNull);
-        expect(find.text('Sign in'), findsOneWidget);
+        expect(find.text('Continue with Google'), findsOneWidget);
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         expect(cli.cancellations, 1);
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -197,7 +201,7 @@ void main() {
       expect(app.signingIn, isFalse);
       expect(app.status, AppStatus.unauthenticated);
       expect(app.lastError, isNull);
-      expect(find.text('Sign in'), findsOneWidget);
+      expect(find.text('Continue with Google'), findsOneWidget);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump(const Duration(milliseconds: 100));
       expect(cli.attempts, hasLength(2));

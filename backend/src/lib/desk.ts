@@ -29,6 +29,9 @@ const tile = z.tuple([z.number().min(0).max(1), z.number().min(0).max(1), z.numb
 export const deskLayoutSchema = z.object({
   presets: z.record(z.string().regex(/^[2-9]$/), z.string().min(1).max(32)).optional(),
   sizes: z.record(z.string().min(1).max(80), z.array(tile).min(2).max(DESK_MAX_PANES)).optional(),
+  // The terminal client's (hn) exact arrangement, as tmux writes a layout (`acfd,120x31,0,0{…}`):
+  // other terminals lay the tab out so; the desktop and phone keep to presets and sizes.
+  tmux: z.string().min(1).max(4096).optional(),
 }).strict()
 export type DeskLayout = z.infer<typeof deskLayoutSchema>
 export const deskTabSchema = z.object({
@@ -83,6 +86,7 @@ const DESK_MAX_SIZES = 16
 function sizesCapped(layout: DeskLayout): DeskLayout {
   const out: DeskLayout = {}
   if (layout.presets && Object.keys(layout.presets).length) out.presets = layout.presets
+  if (layout.tmux) out.tmux = layout.tmux
   if (layout.sizes) {
     const entries = Object.entries(layout.sizes).slice(-DESK_MAX_SIZES)
     if (entries.length) out.sizes = Object.fromEntries(entries)

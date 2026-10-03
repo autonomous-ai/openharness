@@ -1,7 +1,7 @@
-import { readdirSync, statSync } from 'fs'
+import { readdirSync, realpathSync, statSync } from 'fs'
 import { homedir } from 'os'
-import { isAbsolute, resolve, sep } from 'path'
-import { env } from '../config/env.js'
+import { isAbsolute, resolve } from 'path'
+import { withinRootsSync } from './pathContainment.js'
 
 export interface DirEntry { name: string; isDir: true }
 export interface ListDirResult { path: string; entries: DirEntry[]; truncated: boolean }
@@ -13,18 +13,27 @@ const MAX_ENTRIES = 2_000
 
 /** Restrict browsing to under the user's home directory by default — the machine a user runs
  *  `harness` on is "theirs", but a fat-fingered path (or a compromised relay hop) walking arbitrary
- *  system directories is still worth guarding against. Same opt-out convention as CLAUDE_PATH etc. */
-function isAllowed(path: string): boolean {
-  if (env.HARNESS_FS_BROWSE_UNRESTRICTED === '1') return true
-  const home = resolve(homedir())
-  return path === home || path.startsWith(home + sep)
+ *  system directories is still worth guarding against. Same opt-out convention as CLAUDE_PATH etc.
+ *
+ *  Measured on the REAL path: a link inside the home folder is named inside it while pointing
+ *  anywhere, so the caller resolves before asking (lib/pathContainment.ts). */
+function isAllowed(real: string): boolean {
+  return withinRootsSync(real, [homedir()])
 }
 
 /** One-level directory listing (folders only) rooted at `path`, or `homedir()` when omitted. */
 export function listDir(path: string): ListDirResult | ListDirError {
   const target = path || homedir()
   if (!isAbsolute(target)) return { error: 'INVALID_PATH' }
-  const resolved = resolve(target)
+  // Two spellings of one folder: the browser keeps showing the path the person picked, while the
+  // fence — and every read below it — uses the folder that path actually opens.
+  const requested = resolve(target)
+  let resolved: string
+  try {
+    resolved = realpathSync(requested)
+  } catch (e) {
+    return { error: (e as NodeJS.ErrnoException).code === 'EACCES' ? 'PERMISSION_DENIED' : 'NOT_FOUND' }
+  }
   if (!isAllowed(resolved)) return { error: 'FORBIDDEN' }
 
   let st
@@ -49,5 +58,5 @@ export function listDir(path: string): ListDirResult | ListDirError {
   }
   dirs.sort((a, b) => a.name.localeCompare(b.name))
   const truncated = dirs.length > MAX_ENTRIES
-  return { path: resolved, entries: truncated ? dirs.slice(0, MAX_ENTRIES) : dirs, truncated }
+  return { path: requested, entries: truncated ? dirs.slice(0, MAX_ENTRIES) : dirs, truncated }
 }

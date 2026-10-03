@@ -138,7 +138,7 @@ class _Titles extends StatelessWidget {
         style: TextStyle(
           color: AppPalette.textPrimary,
           fontSize: large ? 32 : 17,
-          fontWeight: large ? FontWeight.w700 : FontWeight.w600,
+          fontWeight: large ? FontWeight.w600 : FontWeight.w600,
           letterSpacing: large ? -0.6 : -0.2,
         ),
       ),

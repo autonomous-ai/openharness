@@ -46,6 +46,7 @@ void main() {
     int tmuxInstallExitCode = 0,
     int linuxInstallExitCode = 0,
     String linuxInstallStderr = 'apt install failed',
+    String cliVersion = '1.2.3',
   }) {
     return (executable, arguments, {environment}) async {
       final command = '$executable ${arguments.join(' ')}';
@@ -132,7 +133,7 @@ void main() {
         return result(0, stdout: 'v20.18.0');
       }
       if (executable == managedNode.path && arguments.contains('version')) {
-        return result(0, stdout: 'harness 1.2.3');
+        return result(0, stdout: cliVersion);
       }
       // System tools, writable HOME and chmod.
       return result(0);
@@ -163,6 +164,37 @@ void main() {
       expect(calls.where((line) => line.contains('install.sh')), isEmpty);
     },
   );
+
+  for (final (version, ready) in [
+    ('0.0.1-dev.7c3d6315c.startup-retry.dirty', true),
+    ('0.2.48', true),
+    ('0.2.47', false),
+    ('0.0.1', false),
+  ]) {
+    test(
+      'debug desktop checks CLI $version without replacing a local build',
+      () async {
+        await createManagedHarness();
+        final calls = <String>[];
+        final provisioner = EnvironmentProvisioner(
+          harnessHome: scratch,
+          isMacOS: true,
+          isLinux: false,
+          run: runner(
+            tmuxPresent: () => true,
+            cliVersion: version,
+            calls: calls,
+          ),
+        );
+        final readiness = await provisioner.ensureReady(
+          onProgress: (_) {},
+          install: false,
+        );
+        expect(readiness.isReady, ready, reason: readiness.output.join('\n'));
+        expect(calls.where((line) => line.contains('install.sh')), isEmpty);
+      },
+    );
+  }
 
   // The macOS ladder: tmux, else one in-app installer step that uses the
   // Homebrew already here or downloads the managed build. Nothing here ever

@@ -558,11 +558,35 @@ describe('RemoteRelayPool shares one upstream between every local client selecte
       onClosed: ((code: number, reason: string) => void) | null
       lingerTimer: ReturnType<typeof setTimeout> | null
       viewers: { reset: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }
+      ws: { send: ReturnType<typeof vi.fn> }
+      p2p: { isReady: boolean; send: ReturnType<typeof vi.fn> } | null
     }
     ;(pool as unknown as { entries: Map<string, unknown> }).entries.set('m1', entry)
     return { pool, entry }
   }
   const sink = () => ({ sendFrame: vi.fn(() => true), sendBinary: vi.fn(() => true) })
+
+  it.each(['relay', 'p2p'])('preserves distinct view ownership on terminal opens over %s', async (transport) => {
+    const { pool, entry } = poolWithEntry()
+    if (transport === 'p2p') entry.p2p = { isReady: true, send: vi.fn(() => true) }
+    const a = await pool.acquire('m1', 'env', { type: 'machine_select', payload: {} }, sink(), vi.fn())
+    const b = await pool.acquire('m1', 'env', { type: 'machine_select', payload: {} }, sink(), vi.fn())
+    const open = { type: 'terminal_open', payload: { requestId: 'one', agentId: 'agent-1', takeover: false, viewId: 'caller-value' } }
+    await a.send(open)
+    await b.send(open)
+    await a.send({ ...open, payload: { ...open.payload, requestId: 'reopen' } })
+    const send = entry.p2p?.send ?? entry.ws.send
+    const frames = send.mock.calls.map(([raw]) => JSON.parse(raw as string))
+    expect(frames[0].payload).toMatchObject({ requestId: 'one', agentId: 'agent-1', takeover: false })
+    expect(frames[0].payload.viewId).toMatch(/^[a-f0-9-]{36}$/)
+    expect(frames[1].payload.viewId).not.toBe(frames[0].payload.viewId)
+    expect(frames[2].payload.viewId).toBe(frames[0].payload.viewId)
+    expect(open.payload.viewId).toBe('caller-value')
+    await a.send({ type: 'terminal_alive', payload: { streamId: 'stream-a' } })
+    expect(JSON.parse(entry.ws.send.mock.calls.at(-1)![0])).toEqual({ type: 'terminal_alive', payload: { streamId: 'stream-a' } })
+    a.detach(); b.detach()
+    clearTimeout(entry.lingerTimer!)
+  })
 
   it('a second client joins the first, both get every frame, and detaching one leaves the other on', async () => {
     const { pool, entry } = poolWithEntry()
@@ -602,6 +626,20 @@ describe('RemoteRelayPool shares one upstream between every local client selecte
     expect(entry.viewers.reset).toHaveBeenCalled()
     clearTimeout(entry.lingerTimer!)
   })
+
+  it.each(['device_key_added', 'device_key_removed', 'device_conflict', 'device_keys_changed'])(
+    'a %s frame from the remote machine never reaches the local app: those notices are this daemon\'s own', async (type) => {
+      const { pool, entry } = poolWithEntry()
+      const app = sink()
+      await pool.acquire('m1', 'env', { type: 'machine_select', payload: {} }, app, vi.fn())
+      app.sendFrame.mockClear()
+      // Delivered as far as the sender knows (the client is not dropped for it), but not forwarded.
+      expect(entry.sink!.sendFrame({ type, payload: { pub: 'evil' } })).toBe(true)
+      expect(app.sendFrame).not.toHaveBeenCalled()
+      expect(entry.attached.size).toBe(1)
+      entry.sink!.sendFrame({ type: 'agent_created', payload: {} })
+      expect(app.sendFrame).toHaveBeenCalledWith({ type: 'agent_created', payload: {} })
+    })
 
   it('a client whose socket refuses a frame is dropped; the rest keep receiving', async () => {
     const { pool, entry } = poolWithEntry()

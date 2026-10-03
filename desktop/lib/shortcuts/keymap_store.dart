@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import 'keymap.dart';
+import 'keymap_edit.dart';
 
 /// Owns one dotfile. Invalid edits retain the last working keymap, and file
 /// activity never performs work on the keyboard event path.
@@ -76,29 +77,16 @@ class KeymapStore extends ChangeNotifier {
     if (_disposed || generation != _generation) return;
     var changed = false;
     try {
-      String source;
-      try {
-        final bytes = await file
-            .openRead(0, maximumBytes + 1)
-            .fold(
-              BytesBuilder(copy: false),
-              (builder, chunk) => builder..add(chunk),
-            );
-        if (bytes.length > maximumBytes) {
-          throw const FormatException('Keyboard config exceeds 128 KiB');
-        }
-        source = utf8.decode(bytes.takeBytes());
-      } on FileSystemException catch (error) {
-        if (!const {2, 3}.contains(error.osError?.errorCode)) rethrow;
-        source = ''; // A missing file inherits defaults.
-      }
-      final next = ResolvedKeymap(
-        _defaults,
-        KeymapConfig.parse(source, commands: _commands),
-      );
+      final source = await _readSource();
+      final config = KeymapConfig.parse(source, commands: _commands);
+      final next = ResolvedKeymap(_defaults, config);
       validate?.call(next);
       if (_disposed || generation != _generation) return;
       final signature = _describe(next);
+      if (hasOverrides != config.bindings.isNotEmpty) {
+        hasOverrides = config.bindings.isNotEmpty;
+        changed = true;
+      }
       if (_signature != signature) {
         current = next;
         _signature = signature;
@@ -115,6 +103,81 @@ class KeymapStore extends ChangeNotifier {
         (changed || priorError != error)) {
       notifyListeners();
     }
+  }
+
+  Future<String> _readSource() async {
+    try {
+      final bytes = await file
+          .openRead(0, maximumBytes + 1)
+          .fold(
+            BytesBuilder(copy: false),
+            (builder, chunk) => builder..add(chunk),
+          );
+      if (bytes.length > maximumBytes) {
+        throw const FormatException('Keyboard config exceeds 128 KiB');
+      }
+      return utf8.decode(bytes.takeBytes());
+    } on FileSystemException catch (error) {
+      if (!const {2, 3}.contains(error.osError?.errorCode)) rethrow;
+      return ''; // A missing file inherits defaults.
+    }
+  }
+
+  /// Whether the file changes any key — a remap or an unbind. The resolved map
+  /// cannot say: an unbound default simply is not in it.
+  bool hasOverrides = false;
+
+  Future<void> _editing = Future.value();
+
+  /// Puts every key back to its default by emptying the file's bindings.
+  ///
+  /// Unlike [editBindings] this does not need the file to parse: resetting is
+  /// how a person gets out of a config they broke. Anything other than the
+  /// file this app writes is copied to `.bak` first.
+  Future<void> resetAll() {
+    final edit = _editing.then((_) async {
+      final source = await _readSource();
+      final blank = keymapFileSource(const [], _commands);
+      if (source.trim().isNotEmpty && source != blank) {
+        await File('${file.path}.bak').writeAsString(source, flush: true);
+        await file.writeAsString(blank, flush: true);
+      }
+      await reload();
+    });
+    _editing = edit.catchError((Object _) {});
+    return edit;
+  }
+
+  /// Rewrites the dotfile with [change] applied to its bindings, then reloads.
+  ///
+  /// The file is read again rather than trusting [current], so an edit made
+  /// in an editor a moment ago is kept. Nothing is written when that file does
+  /// not parse or the result would not resolve — the error is thrown for the
+  /// caller to show. Comments a person wrote into the file are not carried
+  /// into the rewrite, so a hand-edited file is copied to `.bak` first.
+  Future<void> editBindings(
+    List<KeyBinding> Function(
+      List<KeyBinding> custom,
+      List<KeyBinding> defaults,
+    )
+    change,
+  ) {
+    final edit = _editing.then((_) async {
+      final source = await _readSource();
+      final config = KeymapConfig.parse(source, commands: _commands);
+      final next = change(config.bindings, _defaults);
+      final resolved = ResolvedKeymap(_defaults, KeymapConfig(next));
+      validate?.call(resolved);
+      await file.parent.create(recursive: true);
+      if (source.trim().isNotEmpty &&
+          source != keymapFileSource(config.bindings, _commands)) {
+        await File('${file.path}.bak').writeAsString(source, flush: true);
+      }
+      await file.writeAsString(keymapFileSource(next, _commands), flush: true);
+      await reload();
+    });
+    _editing = edit.catchError((Object _) {});
+    return edit;
   }
 
   String _describe(ResolvedKeymap map) => [
@@ -270,25 +333,7 @@ class KeymapStore extends ChangeNotifier {
     try {
       await handle.lock(FileLock.exclusive);
       if (await handle.length() == 0) {
-        await handle.writeString(
-          '''// Harness keyboard overrides. Defaults are inherited.
-// Save this file to apply changes. Invalid edits keep the last working keys.
-// A null command unbinds a key or a sequence prefix.
-// "when" can be "workspace" (default), "terminal", "picker", or "project".
-// Workspace bindings are inherited by the other contexts.
-{
-  "version": 1,
-  "bindings": [
-    // Example: move New Tab from Command-T to Command-O.
-    // { "keys": "cmd+t", "command": null },
-    // { "keys": "cmd+o", "command": "swarm.new" },
-  ],
-}
-
-// Available command names:
-${(_commands.toList()..sort()).map((id) => '//   $id').join('\n')}
-''',
-        );
+        await handle.writeString(keymapFileSource(const [], _commands));
         await handle.flush();
       }
     } finally {

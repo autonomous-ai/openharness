@@ -36,7 +36,7 @@ void main() {
     ({'resumed': true}, null),
     (
       {'resumed': false},
-      'Started a new conversation. The previous session could not be resumed.',
+      'Started a new conversation. The previous conversation could not be resumed.',
     ),
     (
       {'error': 'AGENT_BUSY', 'detail': 'The engine could not restart.'},

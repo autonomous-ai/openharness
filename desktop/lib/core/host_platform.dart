@@ -1,13 +1,15 @@
 import 'dart:io';
 
+import 'runtime_platform.dart';
+
 /// True where the app is a guest inside a sandboxed container rather than a
 /// desktop process of its own: iOS and Android.
-bool get isMobileHost => Platform.isIOS || Platform.isAndroid;
+bool get isMobileHost => RuntimePlatform.isIOS || RuntimePlatform.isAndroid;
 
 /// The app's own container, on the platforms that give a process no `HOME`.
 ///
 /// An app on iOS or Android does not live in a user's home directory; it lives
-/// in a private container, and `Platform.environment` there carries no `HOME`
+/// in a private container, and `RuntimePlatform.environment` there carries no `HOME`
 /// to point at it. The container root is the parent of the temporary directory
 /// the platform DOES name — `NSTemporaryDirectory()` is `<container>/tmp`, and
 /// Android's cache directory is `<data dir>/cache` — which makes it reachable
@@ -28,7 +30,7 @@ String? get containerHome {
   // An iOS app's container ROOT is not writable; `Library/Application Support`
   // is, and is where Apple expects state that is not user documents. Android's
   // data directory root is writable, so it takes the container as it is.
-  return Platform.isIOS
+  return RuntimePlatform.isIOS
       ? '$container/Library/Application Support'
       : container;
 }

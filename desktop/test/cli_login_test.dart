@@ -4,14 +4,26 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/cli_login.dart';
+import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/core/harness_cli_runner.dart';
 
 class _Runner extends HarnessCliRunner {
+  _Runner({this.method = const []});
+
+  /// The flag naming how to sign in (`--google`, `--apple`), when the test's sign-in names one.
+  final List<String> method;
   final starts = <Completer<Process>>[];
   @override
   Future<Process> start(List<String> arguments) {
-    // The entry point rides along so login tracking can tell an app sign-in from a terminal one.
-    expect(arguments, ['login', '--force', '--json', '--entry-point=desktop']);
+    // The entry point rides along: login tracking tells an app sign-in from a terminal one by
+    // it, and the CLI signs in as the desktop app's own auth-service client because of it.
+    expect(arguments, [
+      'login',
+      '--force',
+      '--json',
+      ...method,
+      '--entry-point=desktop',
+    ]);
     final start = Completer<Process>();
     starts.add(start);
     return start.future;
@@ -116,6 +128,28 @@ void main() {
       expect(process.ended.isCompleted, isTrue);
     },
   );
+
+  for (final provider in SignInProvider.values) {
+    test(
+      '${provider.label} is one flag to the CLI, and its page still arrives',
+      () async {
+        final runner = _Runner(method: ['--${provider.name}']);
+        final cli = CliLogin(runner: runner);
+        final urls = <String>[];
+        final login = cli.login(onAuthorizeUrl: urls.add, provider: provider);
+        final process = _Process();
+        process.emit({
+          'type': 'authorize_url',
+          'url': 'https://auth.example/page',
+        });
+        process.emit({'type': 'result', 'status': 'success'});
+        runner.starts.single.complete(process);
+        process.finish();
+        await login;
+        expect(urls, ['https://auth.example/page']);
+      },
+    );
+  }
 
   test(
     'cancel while the CLI starts ignores its late URL and stops that process',

@@ -42,7 +42,7 @@ vi.mock('./oneshot.js', () => ({
   shutdownOneShotPool: vi.fn(),
 }))
 
-import { deriveTurnBody, summarizeTurnText, syncSummaryPoolSessions, deriveTurnSummary } from './summarize.js'
+import { deriveTurnBody, summarizeTurnText, syncSummaryPoolSessions, deriveTurnSummary, RECAP_MAX_CHARS } from './summarize.js'
 
 beforeEach(() => {
   mocks.runClaude.mockReset()
@@ -332,13 +332,91 @@ describe('the body under the headline', () => {
 })
 
 describe('deriveTurnSummary (the local recap)', () => {
-  it('headlines the opening of the answer', () => {
+  it('keeps complete opening sentences across paragraph boundaries', () => {
     const text = 'Blue selected.\n\nAnything else?'
-    expect(deriveTurnSummary(text)?.split('\n')[0]).toBe('Blue selected.')
+    expect(deriveTurnSummary(text)?.split('\n')[0]).toBe('Blue selected. Anything else?')
   })
 
   it('skips a label at the top', () => {
     const text = 'Kết quả:\nĐã sửa xong file cấu hình.'
     expect(deriveTurnSummary(text)?.split('\n')[0]).toBe('Đã sửa xong file cấu hình.')
+  })
+
+  it.each([
+    ['Yes. The fix is installed.', 'Yes. The fix is installed.'],
+    ['No.\n\nThe list only decides who is allowed in.', 'No. The list only decides who is allowed in.'],
+    ['## Result\n\n**No.** It does not send your data to a model.', 'No. It does not send your data to a model.'],
+    ['OK! The checks pass. Here are all the details.', 'OK! The checks pass. Here are all the details.'],
+    ['No\nThe device has no network connection.', 'No The device has no network connection.'],
+    ['Yes. Correct. The fix is installed. More details follow.', 'Yes. Correct. The fix is installed. More details follow.'],
+    ['No.', 'No.'],
+  ])('preserves the opening and its explanation: %s', (text, expected) => {
+    expect(deriveTurnSummary(text)?.split('\n')[0]).toBe(expected)
+  })
+
+  it('includes the explanation instead of stranding a bare acknowledgment', () => {
+    const text = 'Yes. The fix is installed and the device has reconnected successfully to the desktop application.'
+    const result = deriveTurnSummary(text)!
+    expect(result.split('\n\n')[0]).toBe(text)
+    expect(result.split('\n\n')[0].length).toBeLessThanOrEqual(RECAP_MAX_CHARS)
+    expect(result.split('\n\n')[1]).toBe(text)
+  })
+
+  it.each([
+    ["It isn't external. The label is a branch name.", "It isn't external. The label is a branch name."],
+    ['Tests pass. All the details are in the terminal.', 'Tests pass. All the details are in the terminal.'],
+    ['Not approved. The write would overwrite your changes.', 'Not approved. The write would overwrite your changes.'],
+    ['No files changed. This was only a review.', 'No files changed. This was only a review.'],
+  ])('keeps useful short sentences without a word-count threshold: %s', (text, expected) => {
+    expect(deriveTurnSummary(text)?.split('\n')[0]).toBe(expected)
+  })
+
+  it('keeps a sentence exactly at the current budget without a continuation marker', () => {
+    const text = 'A'.repeat(RECAP_MAX_CHARS - 1) + '.'
+    expect(text.length).toBe(RECAP_MAX_CHARS)
+    expect(deriveTurnSummary(`${text} Another sentence.`)?.split('\n')[0]).toBe(text)
+  })
+
+  it('uses the additional room for three complete sentences', () => {
+    const text = 'Fixed the parser. All tests pass. Voice input now sends to the selected agent.'
+    expect(text.length).toBeGreaterThan(60)
+    expect(deriveTurnSummary(`${text} More details follow.`)?.split('\n')[0]).toBe(`${text} More details follow.`)
+  })
+
+  it('keeps the body excerpt unchanged when the headline is shorter', () => {
+    const text = `Tests pass. ${'The details stay in the body. '.repeat(15)}`
+    const [recap, body] = deriveTurnSummary(text)!.split('\n\n')
+    expect(recap).toBe('Tests pass. The details stay in the body. The details stay in the body. The details stay in the body. The details stay in the body. The details stay in the body.')
+    expect(body).toBe(deriveTurnBody(text))
+    expect(body.length).toBeLessThanOrEqual(250)
+    expect(body.endsWith('…')).toBe(true)
+    expect(mocks.runClaude).not.toHaveBeenCalled()
+    expect(mocks.runCodex).not.toHaveBeenCalled()
+    expect(mocks.complete).not.toHaveBeenCalled()
+  })
+
+  it('stops after two complete sentences when the next sentence would overflow', () => {
+    const text = `Fixed the parser. All tests pass. The remaining details include ${'additional verification notes '.repeat(6)}in the terminal.`
+    expect(deriveTurnSummary(text)?.split('\n')[0]).toBe('Fixed the parser. All tests pass.')
+  })
+
+  it('extends a short sentence to at least 20 characters even when the next sentence cannot fit', () => {
+    const text = `Tests pass. The full explanation includes ${'individual test results and measurements '.repeat(6)}in the terminal.`
+    const recap = deriveTurnSummary(text)!.split('\n')[0]
+    expect(recap.length).toBeGreaterThanOrEqual(20)
+    expect(recap.startsWith('Tests pass. The full explanation')).toBe(true)
+    expect(recap.endsWith(' +')).toBe(true)
+  })
+
+  it('keeps following text when a complete opening is shorter than 20 characters', () => {
+    const text = 'It is fixed. The remaining details are'
+    expect(deriveTurnSummary(text)?.split('\n')[0]).toBe(text)
+  })
+
+  it('uses a marked word-boundary excerpt when no complete sentence fits', () => {
+    const text = 'The fix is installed and the device has reconnected successfully to the desktop application and verified the selected agent before sending the complete transcript from the microphone to its terminal pane'
+    const recap = deriveTurnSummary(text)!.split('\n')[0]
+    expect(recap).toBe('The fix is installed and the device has reconnected successfully to the desktop application and verified the selected agent before sending the complete transcript from the +')
+    expect(recap.length).toBeLessThanOrEqual(RECAP_MAX_CHARS)
   })
 })

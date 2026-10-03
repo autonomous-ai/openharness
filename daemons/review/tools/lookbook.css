@@ -1,0 +1,834 @@
+/* One visual world on purpose: a terminal at night. Colours are xterm-256 values, named the way tmux spells them. */
+:root {
+  color-scheme: dark;
+  --bg: #1c1c1c; /* colour234 */
+  --panel: #262626; /* colour235 */
+  --deep: #0c0c0c;
+  --line: #3a3a3a; /* colour237 */
+  --faint: #626262; /* colour241 */
+  --dim: #949494; /* colour246 */
+  --ink: #d0d0d0; /* colour252 */
+  --bright: #eeeeee; /* colour255 */
+  --green: #5faf5f; /* colour71, tmux's status line */
+  --yellow: #d7af5f; /* colour179, tmux's message line */
+  --cyan: #5fafaf; /* colour73 */
+  --magenta: #af87af; /* colour139 */
+  --red: #d75f5f; /* colour167 */
+  --blue: #87afd7; /* colour110 */
+  --orange: #d7875f; /* colour173 */
+  --olive: #87af5f; /* colour107 */
+  --lav: #8787af; /* colour103 */
+  --tan: #d7af87; /* colour180 */
+  --duck: #ffd75f; /* colour221 */
+  --mono: "IBM Plex Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
+  --vt: "VT323", "IBM Plex Mono", Menlo, monospace;
+}
+* {
+  box-sizing: border-box;
+}
+[hidden] {
+  display: none !important;
+}
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 16px/1.6 var(--sans);
+  padding-inline: 20px;
+  padding-block: 20px 72px;
+}
+.wrap {
+  max-width: 1080px;
+  margin: 0 auto;
+}
+pre,
+code,
+kbd,
+.mono,
+button,
+table {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
+}
+pre {
+  margin: 0;
+}
+code {
+  font-size: 0.92em;
+  color: var(--bright);
+}
+a {
+  color: var(--blue);
+}
+p {
+  max-width: 68ch;
+  margin: 0;
+}
+.muted {
+  color: var(--dim);
+}
+
+.manline {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font: 13px/1.5 var(--mono);
+  color: var(--dim);
+  padding-block: 6px;
+}
+.manline.top {
+  border-bottom: 1px solid var(--line);
+}
+.manline.bottom {
+  border-top: 1px solid var(--line);
+  margin-top: 64px;
+}
+
+section {
+  display: grid;
+  gap: 14px;
+}
+h2 {
+  font: 400 32px/1 var(--vt);
+  letter-spacing: 0.08em;
+  color: var(--bright);
+  margin: 52px 0 2px;
+}
+.ind {
+  padding-left: 56px;
+  display: grid;
+  gap: 14px;
+}
+@media (max-width: 700px) {
+  .ind {
+    padding-left: 0;
+  }
+}
+.lede {
+  font-size: 18px;
+  color: var(--bright);
+  max-width: 60ch;
+  text-wrap: balance;
+}
+.note {
+  font: 13px/1.5 var(--mono);
+  color: var(--dim);
+}
+
+/* buttons */
+button {
+  appearance: none;
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+button:hover {
+  border-color: var(--dim);
+  color: var(--bright);
+}
+button[aria-pressed="true"] {
+  background: var(--panel);
+  border-color: var(--green);
+  color: var(--bright);
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+button:focus-visible,
+.art:focus-visible,
+.buddy:focus-visible {
+  outline: 2px solid var(--yellow);
+  outline-offset: 2px;
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.row .lbl {
+  font: 12px var(--mono);
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-right: 4px;
+}
+
+/* tmux window */
+.tmux {
+  background: var(--deep);
+  border: 1px solid var(--line);
+  font: 12.5px/1.5 var(--mono);
+  min-width: 0;
+} /* the status line ellipsizes; it never widens the page */
+.panes {
+  display: grid;
+  min-height: 214px;
+}
+.pane {
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  overflow: hidden;
+  color: var(--ink);
+}
+.pane + .pane {
+  border-left: 1px solid var(--green);
+}
+.pane .h {
+  color: var(--dim);
+}
+.pane .ok {
+  color: var(--green);
+}
+.pane .bad {
+  color: var(--red);
+}
+.pane .ask {
+  color: var(--yellow);
+}
+.pane.sleepy {
+  opacity: 0.45;
+}
+.status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  background: var(--green);
+  color: #000;
+  padding-left: 8px;
+  white-space: pre;
+  line-height: 1.6;
+}
+.status.msg {
+  background: var(--yellow);
+}
+.status .left {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.status .right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.buddy {
+  display: inline-block;
+  width: 10ch;
+  text-align: center;
+  white-space: pre;
+  font-weight: 600;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: #000;
+  font-size: inherit;
+  line-height: inherit;
+}
+.buddy:hover {
+  color: #000;
+  background: rgba(0, 0, 0, 0.08);
+}
+.suggest {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+/* roster */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 14px;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+.card .top {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.card .num {
+  font: 12px var(--mono);
+  color: var(--faint);
+}
+.card .name {
+  font: 600 20px/1 var(--mono);
+  color: var(--bright);
+}
+.chip {
+  font: 11px/1.6 var(--mono);
+  border: 1px solid currentColor;
+  padding: 0 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.common {
+  color: var(--ink);
+}
+.rare {
+  color: var(--cyan);
+}
+.legendary {
+  color: var(--yellow);
+}
+.secret {
+  color: var(--magenta);
+}
+.art {
+  background: var(--deep);
+  padding: 14px 10px;
+  display: grid;
+  place-items: center;
+  overflow-x: auto;
+  cursor: pointer;
+  min-height: 172px;
+}
+.art pre {
+  font: 15px/1.15 var(--mono);
+  white-space: pre;
+}
+.art.pitch {
+  background: #000;
+}
+.family {
+  font: 13px/1.5 var(--mono);
+  color: var(--dim);
+}
+.family b {
+  color: var(--ink);
+  font-weight: 500;
+}
+.card p {
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+.stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font: 13px var(--mono);
+}
+.stages span {
+  color: var(--faint);
+  margin-right: 6px;
+}
+.voice {
+  font: 13px/1.5 var(--mono);
+  color: var(--dim);
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+.drophead {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+.drophead h3 {
+  margin: 0;
+  font: 400 26px/1 var(--vt);
+  letter-spacing: 0.06em;
+  color: var(--bright);
+}
+.state {
+  font: 11px/1.6 var(--mono);
+  border: 1px solid currentColor;
+  padding: 0 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.state.released {
+  color: var(--green);
+}
+.state.announced {
+  color: var(--yellow);
+}
+.state.hidden {
+  color: var(--faint);
+}
+.drop {
+  display: grid;
+  gap: 10px;
+}
+.card.ghost .art {
+  cursor: default;
+  min-height: 120px;
+}
+.card.ghost .art pre {
+  color: var(--faint);
+  font-size: 26px;
+}
+.card.ghost .name {
+  color: var(--faint);
+}
+.teasers {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr));
+  gap: 10px;
+}
+.teaser {
+  border: 1px dashed var(--line);
+  padding: 10px;
+  font: 12.5px/1.5 var(--mono);
+  color: var(--dim);
+  display: grid;
+  gap: 4px;
+}
+.teaser b {
+  color: var(--faint);
+  font-size: 18px;
+  font-weight: 500;
+}
+
+/* hatch */
+.hatch {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 14px;
+}
+@media (max-width: 800px) {
+  .hatch {
+    grid-template-columns: 1fr;
+  }
+}
+.stage {
+  align-self: start;
+  position: sticky;
+  top: 16px;
+  background: var(--deep);
+  border: 1px solid var(--line);
+  min-height: 360px;
+  padding: 20px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  overflow: hidden;
+}
+.stage.pitch {
+  background: #000;
+}
+#egg {
+  font: 17px/1.15 var(--mono);
+  color: var(--yellow);
+}
+#big {
+  font: 500 52px/1 var(--mono);
+  white-space: pre;
+}
+#banner {
+  font: 14px/1.15 var(--mono);
+  color: var(--bright);
+  white-space: pre;
+  min-height: 4.6em;
+}
+#stamp {
+  font: 12px var(--mono);
+  letter-spacing: 0.1em;
+}
+#words {
+  font: 13px/1.5 var(--mono);
+  color: var(--dim);
+  text-align: center;
+  max-width: 42ch;
+}
+#pitchline {
+  font: 13px var(--mono);
+  color: var(--dim);
+  text-align: center;
+}
+.side {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+.box {
+  border: 1px solid var(--line);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+.box h3 {
+  margin: 0;
+  font: 500 12px var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--dim);
+}
+table.odds {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+table.odds td {
+  padding: 2px 4px;
+  border-bottom: 1px solid var(--panel);
+}
+table.odds td:last-child {
+  text-align: right;
+}
+.owned {
+  color: var(--faint);
+  text-decoration: line-through;
+}
+.shelf {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font: 13px var(--mono);
+}
+.shelf span {
+  white-space: pre;
+}
+#cardwrap {
+  display: grid;
+  gap: 8px;
+}
+#card {
+  font: 12.5px/1.35 var(--mono);
+  color: var(--ink);
+  background: var(--deep);
+  border: 1px solid var(--line);
+  padding: 12px;
+  overflow-x: auto;
+}
+
+/* tables */
+.tbl {
+  overflow-x: auto;
+}
+table.t {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+table.t th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11.5px;
+  padding: 6px 10px 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+table.t td {
+  padding: 7px 10px 7px 0;
+  border-bottom: 1px solid var(--panel);
+  vertical-align: top;
+}
+table.t td.s {
+  white-space: pre;
+  color: var(--yellow);
+}
+table.t td.p {
+  font-family: var(--sans);
+  font-size: 14px;
+}
+
+/* growth */
+.growth {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+  gap: 14px;
+}
+.release {
+  border: 1px solid var(--line);
+  display: grid;
+  align-content: start;
+}
+.release .art {
+  cursor: default;
+  border-bottom: 1px solid var(--line);
+  min-height: 150px;
+}
+.release pre.log {
+  font: 12.5px/1.5 var(--mono);
+  padding: 10px 12px;
+  color: var(--dim);
+  white-space: pre-wrap;
+}
+.release pre.log b {
+  color: var(--bright);
+  font-weight: 500;
+}
+
+/* spinners */
+.spins {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+  gap: 10px;
+}
+.spin {
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+}
+.spin .g {
+  font: 500 22px/1.2 var(--mono);
+  color: var(--bright);
+  white-space: pre;
+  min-height: 1.2em;
+}
+.spin .n {
+  font: 12.5px var(--mono);
+  color: var(--ink);
+}
+.spin .d {
+  font: 12px var(--mono);
+  color: var(--dim);
+}
+
+/* memory */
+.mem {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+@media (max-width: 760px) {
+  .mem {
+    grid-template-columns: 1fr;
+  }
+}
+.mem .box pre {
+  font: 12.5px/1.6 var(--mono);
+  white-space: pre-wrap;
+  color: var(--ink);
+}
+.mem .box pre .t {
+  color: var(--faint);
+}
+
+ul.rules {
+  margin: 0;
+  padding-left: 1.1em;
+  display: grid;
+  gap: 6px;
+  max-width: 72ch;
+}
+ul.rules li::marker {
+  color: var(--faint);
+}
+.seealso {
+  font: 13.5px/1.8 var(--mono);
+  color: var(--ink);
+  max-width: 72ch;
+}
+
+/* plates: drop init's filled daemons, printed from daemons/plates.json in each daemon's gradient.
+     portrait is 28 columns by at most 12 rows, reveal 56 by at most 24; a plate stands on its last row. */
+pre.plate {
+  font: 400 12px/1.2 var(--mono);
+  white-space: pre;
+  color: var(--bright);
+  display: grid;
+  align-content: end;
+  justify-content: center;
+  filter: drop-shadow(0 0 4px var(--glow2));
+}
+pre.plate.portrait {
+  min-height: calc(12 * 1.2em);
+}
+pre.plate.reveal {
+  font-size: 9px;
+  font-size: clamp(4px, 100cqi / 34.5, 14px);
+  min-height: calc(24 * 1.2em);
+}
+pre.plate.lit {
+  filter: drop-shadow(0 0 2px var(--glow)) drop-shadow(0 0 9px var(--glow2));
+}
+pre.plate.ghost {
+  color: var(--faint);
+  filter: none;
+}
+.stage pre.plate.reveal {
+  min-height: 0;
+} /* the hatchling stands right on its name */
+.stage,
+.plate-box {
+  container-type: inline-size;
+}
+
+/* the hero's third pane: the daemon's panel */
+.panes {
+  grid-template-columns: 1fr 1fr auto;
+}
+.pane.me {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  white-space: normal;
+}
+.pane.me .h {
+  align-self: stretch;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pane.me pre {
+  font: 12px/1.2 var(--mono);
+  white-space: pre;
+}
+@media (max-width: 860px) {
+  .panes {
+    grid-template-columns: 1fr 1fr;
+  }
+  .pane.me {
+    grid-column: 1 / -1;
+    border-left: 0;
+    border-top: 1px solid var(--green);
+  }
+}
+
+/* drop 1 up close */
+.show-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(min(100%, 220px), 1fr);
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 760px) {
+  .show-stage {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.plate-box {
+  background: var(--deep);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 18px 16px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  min-height: 300px;
+}
+.show-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  background: var(--green);
+  color: #080808;
+  font: 14px/1.9 var(--mono);
+  padding: 0 6px;
+  border-radius: 3px;
+  margin-bottom: 14px;
+  white-space: pre;
+  overflow: hidden;
+}
+.show-bar > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.show-bar > span:last-child {
+  flex-shrink: 0;
+}
+.show-bar .cell {
+  background: #080808;
+  color: var(--green);
+  padding: 0 1px;
+}
+.show-side h3 {
+  margin: 0;
+  font: 600 20px var(--mono);
+  color: var(--bright);
+  letter-spacing: 0.02em;
+}
+.show-side .tag {
+  font: 12px var(--mono);
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.show-side .tag.legendary {
+  color: var(--yellow);
+}
+.show-side .tag.rare {
+  color: var(--cyan);
+}
+.show-side .tag.secret {
+  color: var(--magenta);
+}
+.show-side p {
+  margin: 10px 0 0;
+}
+.show-grid,
+.moodplates {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 176px), 1fr));
+  gap: 10px;
+}
+.show-grid button,
+.moodplates figure {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  padding: 10px 6px 8px;
+  background: var(--deep);
+  text-align: center;
+  margin: 0;
+}
+.moodplates figure {
+  border: 1px solid var(--line);
+  border-radius: 2px;
+}
+.show-grid pre.plate,
+.moodplates pre.plate {
+  font-size: 9px;
+}
+.show-grid .nm,
+.moodplates figcaption {
+  font: 12px var(--mono);
+  color: var(--dim);
+}
+.show-grid button[aria-pressed="true"] .nm {
+  color: var(--bright);
+}
+@media (max-width: 520px) {
+  .show-grid,
+  .moodplates {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 146px), 1fr));
+  }
+  .show-grid pre.plate,
+  .moodplates pre.plate {
+    font-size: 7.5px;
+  }
+}
+
+@media (max-width: 520px) {
+  .panes {
+    grid-template-columns: 1fr;
+  }
+  .pane + .pane {
+    border-left: 0;
+    border-top: 1px solid var(--green);
+  }
+  #big {
+    font-size: 40px;
+  }
+}

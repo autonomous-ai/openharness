@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { automaticAgentName, engineLabel, isAutomaticName, projectFolderName } from './agentNames.js'
+import { automaticAgentName, engineLabel, foldDiacritics, isAutomaticName, projectFolderName, projectFolderSlug } from './agentNames.js'
 import { ENGINES } from '../engines/types.js'
+
+describe('project folder slugs', () => {
+  it('keeps an accented letter as its base letter rather than dropping it', () => {
+    expect(projectFolderSlug('Robot nói chuyện với Gemini')).toBe('Robot-noi-chuyen-voi-Gemini')
+    expect(projectFolderSlug('Đèn bàn')).toBe('Den-ban')
+    expect(foldDiacritics('Straße, smørrebrød, façade')).toBe('Strasse, smorrebrod, facade')
+    expect(projectFolderSlug('机器人')).toBeNull()
+  })
+})
 
 describe('agent names: who and when', () => {
   it('names every engine the way the app does, and passes an unknown one through', () => {

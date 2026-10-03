@@ -11,10 +11,11 @@ class AppConfig {
     this.localCliBaseUrl = 'http://127.0.0.1:18473',
   });
 
-  static const AppConfig dev = AppConfig(
-    apiBaseUrl: 'https://harness-api.autonomous.ai',
-    autonomousEnv: 'prod',
+  static const defaultApiUrl = String.fromEnvironment(
+    'HARNESS_API_URL',
+    defaultValue: 'https://harness-api.autonomous.ai',
   );
+  static const AppConfig dev = AppConfig(apiBaseUrl: defaultApiUrl);
 
   /// HTTPS->wss, HTTP->ws for the hub endpoint.
   String get wsBaseUrl {

@@ -6,8 +6,9 @@ export 'app_type.dart';
 import 'color_palette.dart';
 
 /// The app's live brightness — the single source of truth the color tokens below
-/// resolve against. Harness Desktop is dark-only: `_GridTokenScope` (in
-/// `main.dart`) pins this to [Brightness.dark] once, at the top of the tree.
+/// resolve against. The palette decides it: `_GridTokenScope` (in
+/// `app_shell.dart`) sets this from [palette]'s own brightness, so a light
+/// palette ([HarnessPalette.paper], [HarnessPalette.mist]) is a light app.
 ///
 /// Every `AppPalette`/`AppSurface`/`AppGlass`/`AppCard` member is a getter that
 /// switches on this, so a call site like `color: AppPalette.windowBg` follows the
@@ -20,6 +21,17 @@ abstract final class AppTheme {
   static final palette = ValueNotifier(HarnessPalette.graphite);
 
   static bool get isDark => brightness.value == Brightness.dark;
+
+  /// A theme preview can request the opposite brightness without changing the
+  /// saved palette. Keep its surface and foreground on the same light/dark ramp.
+  static HarnessPalette paletteFor(Brightness value) =>
+      palette.value.brightness == value
+      ? palette.value
+      : value == Brightness.dark
+      ? HarnessPalette.graphite
+      : HarnessPalette.paper;
+
+  static HarnessPalette get surfacePalette => paletteFor(brightness.value);
 
   /// Pick between a light and a dark value for the current brightness.
   static T pick<T>(T light, T dark) => isDark ? dark : light;
@@ -154,15 +166,18 @@ class _PaletteScope extends InheritedNotifier<ValueNotifier<HarnessPalette>> {
 /// hex literals, and resolves per [AppTheme.brightness].
 abstract final class AppPalette {
   // Approved Swarms canvas and native tab-strip palette.
-  static Color get swarmField => AppTheme.palette.value.workspace;
+  static Color get swarmField => AppTheme.surfacePalette.workspace;
   // Empty tabs join the selected native tab as one continuous surface.
-  static Color get swarmWelcome => AppTheme.palette.value.workspace;
-  static Color get swarmTabBar => AppTheme.palette.value.tabBar;
-  static Color get swarmAccent => AppTheme.palette.value.accent;
+  static Color get swarmWelcome => AppTheme.surfacePalette.workspace;
+  static Color get swarmTabBar => AppTheme.surfacePalette.tabBar;
+  static Color get swarmAccent => AppTheme.surfacePalette.accent;
   // Shared with the native search field for a continuous input/results surface.
-  static Color get swarmSearchSurface => AppTheme.palette.value.search;
-  static const agentEntrySurface = Color(0xff101113);
-  static const agentEntryField = Color(0xff1d1f22);
+  static Color get swarmSearchSurface => AppTheme.surfacePalette.search;
+  // Getters, not consts: a light palette brings its own panel and card.
+  static Color get agentEntrySurface =>
+      AppTheme.pick(AppTheme.surfacePalette.panel, const Color(0xff101113));
+  static Color get agentEntryField =>
+      AppTheme.pick(AppTheme.surfacePalette.card, const Color(0xff1d1f22));
   // The command field deliberately stays light, like a browser's new-tab omnibox.
   static const commandField = Color(0xFFF7F8FA);
   static const commandInk = Color(0xFF202124);
@@ -177,20 +192,20 @@ abstract final class AppPalette {
   // (#141414) is now *darker* than the page it sits on. Depth in dark is
   // therefore carried by the rim and the shadow, not by the fill — §2's stack
   // still holds, it just has less room to say it in.
-  static Color get windowBg =>
-      AppTheme.pick(const Color(0xFFFFFFFF), AppTheme.palette.value.background);
+  //
+  // These four come from the palette in both themes: a light palette carries
+  // its own light surfaces (color_palette.dart), and it is the palette that
+  // decides the brightness in the first place.
+  static Color get windowBg => AppTheme.surfacePalette.background;
 
   // sidebar column — a barely-there cool grey (Codex keeps the rail almost white,
   // set apart by a hairline, not a tone) / charcoal panel in dark.
-  static Color get panelBg =>
-      AppTheme.pick(const Color(0xFFF9F9F8), AppTheme.palette.value.panel);
+  static Color get panelBg => AppTheme.surfacePalette.panel;
 
   // input fills, quiet cards
-  static Color get cardBg =>
-      AppTheme.pick(const Color(0xFFF3F3F2), AppTheme.palette.value.card);
+  static Color get cardBg => AppTheme.surfacePalette.card;
 
-  static Color get cardBgHover =>
-      AppTheme.pick(const Color(0xFFECECEA), AppTheme.palette.value.hover);
+  static Color get cardBgHover => AppTheme.surfacePalette.hover;
 
   // A hairline separator. Light: a faint cool black; dark: a faint white — a
   // black divider would vanish on charcoal.
@@ -248,8 +263,13 @@ abstract final class AppPalette {
   /// row, still plainly the same indigo. [accent] can't simply take this value:
   /// it is the fill under white text in ~100 places, and lightening it there
   /// would drop that text to ~3.1:1 — fixing the icon by breaking the buttons.
-  static Color get accentOnSurface =>
-      AppTheme.pick(const Color(0xFF2F5BEA), AppTheme.palette.value.accent);
+  static Color get accentOnSurface => AppDesktop.focus;
+
+  /// A quiet location cue around a focused remote pane. Desaturated separately
+  /// from teal ink so a full perimeter stays subordinate to terminal content.
+  /// Clears 3:1 against every built-in pane ground and workspace gutter.
+  static Color get remotePaneFocus =>
+      AppTheme.pick(const Color(0xFF567C77), const Color(0xFF6C9691));
 
   // avatar fill (white text on it); a touch brighter in dark for contrast.
   static Color get accentMuted =>
@@ -312,25 +332,40 @@ abstract final class AppPalette {
   static Color get accentHover =>
       AppTheme.pick(const Color(0xFF2850D8), const Color(0xFF4166F2));
 
-  // "Owner" badge — a teal that stays legible on either surface.
+  // These three are drawn as TEXT as often as dots (status labels, ledger
+  // rows), so their light values clear 4.5:1 on the deepest light-palette
+  // ground they meet — Paper's search #E2E2DF / Mist's #DCE4EE — not only on
+  // white: teal 4.90, online 5.02, warn 4.93 there (6.4–6.5 on white).
+
+  // Teal ink for badges and labels — legible on either surface.
   static Color get teal =>
-      AppTheme.pick(const Color(0xFF0F766E), const Color(0xFF2DD4BF));
+      AppTheme.pick(const Color(0xFF0D6B63), const Color(0xFF2DD4BF));
 
   // green "connected" dot
   static Color get online =>
-      AppTheme.pick(const Color(0xFF15803D), const Color(0xFF3FB950));
+      AppTheme.pick(const Color(0xFF146C34), const Color(0xFF3FB950));
 
   // expiring soon
   static Color get warn =>
-      AppTheme.pick(const Color(0xFFB45309), const Color(0xFFFFB020));
+      AppTheme.pick(const Color(0xFF9A4708), const Color(0xFFFFB020));
 
-  // grey dot
+  /// A quiet allowance limit in workspace chrome, distinct from an app error.
+  static Color get usageLow =>
+      AppTheme.pick(const Color(0xFF87632A), const Color(0xFFC4A46C));
+
+  /// Remaining subscription capacity is nearly exhausted (5% or less).
+  static Color get usageCritical =>
+      AppTheme.pick(const Color(0xFFB3261E), const Color(0xFFFF7068));
+
+  // grey dot — a state mark, so ≥3:1 in light (3.14 on Paper's search ground).
   static Color get offline =>
-      AppTheme.pick(const Color(0xFFA3A29C), const Color(0xFF6E6E6E));
+      AppTheme.pick(const Color(0xFF7F7E78), const Color(0xFF6E6E6E));
 
   // Grid brand lightning gold — the live/active ⚡ mark, matching the tray bolt.
+  // Light is a deeper gold than the tray's: #C98A00 was 2.27–2.95:1 on the
+  // light grounds, this is 3.93 at worst.
   static Color get brandBolt =>
-      AppTheme.pick(const Color(0xFFC98A00), const Color(0xFFE0A93B));
+      AppTheme.pick(const Color(0xFF946500), const Color(0xFFE0A93B));
 
   static Color get textPrimary =>
       AppTheme.pick(const Color(0xFF1A1A18), const Color(0xFFF5F5F5));
@@ -338,8 +373,13 @@ abstract final class AppPalette {
   static Color get textSecondary =>
       AppTheme.pick(const Color(0xFF62615B), const Color(0xFFA8A8A2));
 
+  /// Meta text and hints. Light is #7A7973, not the #8E8D86 it was: that one
+  /// was tuned for a white page and fell to 2.57:1 on Paper's search ground
+  /// (#E2E2DF) and 2.60 on Mist's (#DCE4EE). This holds 3.36 / 3.40 there and
+  /// 3.49 / 3.51 on the two workspaces, and stays 1.42:1 apart from
+  /// [textSecondary] so the three steps still read as three.
   static Color get textFaint =>
-      AppTheme.pick(const Color(0xFF8E8D86), const Color(0xFF6E6E68));
+      AppTheme.pick(const Color(0xFF7A7973), const Color(0xFF6E6E68));
 
   /// The page a document is drawn on, and the ink on it.
   ///
@@ -409,9 +449,9 @@ abstract final class AppPalette {
 /// [buildAppTheme] needs the values *before* the global brightness is the one
 /// being built for — see the note at its `scrollbarTheme`. The getters below read
 /// these same four, so there is one set of numbers rather than two that can drift.
-const Color _scrollThumbLight = Color(0xFF8C8C8C);
+const Color _scrollThumbLight = Color(0xFF787878);
 const Color _scrollThumbDark = Color(0xFF686868);
-const Color _scrollThumbHoverLight = Color(0xFF6E6E6E);
+const Color _scrollThumbHoverLight = Color(0xFF5E5E5E);
 const Color _scrollThumbHoverDark = Color(0xFF8A8A8A);
 
 /// Surface tokens for the app's chrome — the sidebar's rows, the composer card,
@@ -479,6 +519,9 @@ abstract final class AppSurface {
   /// barely dents a white one, so reaching 3:1 needs 0.40 in dark and 0.50 in
   /// light. These are those two values resolved — 3.55:1 dark, 3.36:1 light —
   /// stated as colours so a list on the panel measures the same as one on the page.
+  /// Light was since deepened (#8C8C8C → #787878) for the light palettes'
+  /// tinted grounds: the old thumb fell to 2.69:1 on Paper's workspace; this
+  /// one holds 3.53 there and 3.55 on Mist's.
   static Color get scrollThumb =>
       AppTheme.pick(_scrollThumbLight, _scrollThumbDark);
 
@@ -707,7 +750,7 @@ abstract final class AppGlass {
 /// use [styleFor] and the consts; everywhere else use [style] and the getters.
 abstract final class AppMenu {
   static const Color fillLight = Color(0xFFFFFFFF);
-  static const Color fillDark = Color(0xFF2A2A2A);
+  static const Color fillDark = Color(0xFF262626);
   static Color get fill => AppTheme.pick(fillLight, fillDark);
 
   /// The panel's rim — the same hairline [AppGlass.hair] resolves to, stated as
@@ -716,10 +759,8 @@ abstract final class AppMenu {
   static const Color rimDark = Color(0x1FFFFFFF);
   static Color get rim => AppTheme.pick(rimLight, rimDark);
 
-  /// A menu panel's rounding. On the §3 ladder this is the *panel* step (10),
-  /// one below a content card (12) and above the rows inside it (8) — a child is
-  /// never rounder than its parent.
-  static const double panelRadius = 10;
+  /// Menu frame and inset rows follow the same concentric geometry.
+  static const double panelRadius = AppDesktop.menuRadius;
 
   /// Deeper than Material's menu default (8): this panel opens over chrome that
   /// already carries a lift of its own, and at 8 it reads as lying *on* that
@@ -879,36 +920,47 @@ abstract final class AppCard {
 /// The app's theme for a given [brightness]. Both the light and dark themes are
 /// built from this one function so the two never drift; the color tokens above
 /// resolve against [AppTheme.brightness] at paint time.
-ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
+ThemeData buildAppTheme({
+  Brightness brightness = Brightness.light,
+  bool highContrast = false,
+}) {
   final isDark = brightness == Brightness.dark;
-  final scheme = isDark
+  final baseScheme = isDark
       ? ColorScheme.dark(
           primary: AppPalette.accent,
           onPrimary: Colors.white,
           secondary: AppPalette.accent,
-          surface: AppTheme.palette.value.background,
+          surface: AppTheme.paletteFor(brightness).background,
           onSurface: const Color(0xFFF5F5F5),
           onSurfaceVariant: const Color(0xFFA8A8A2),
-          surfaceContainerHighest: AppTheme.palette.value.card,
+          surfaceContainerHighest: AppTheme.paletteFor(brightness).card,
           outline: const Color(0x14FFFFFF),
           outlineVariant: const Color(0x14FFFFFF),
-          error: const Color(0xFFF2544B),
+          error: const Color(0xFFFF7068),
         )
-      : const ColorScheme.light(
+      : ColorScheme.light(
           primary: AppPalette.accent,
           onPrimary: Colors.white,
           secondary: AppPalette.accent,
-          // Pure white — matches AppPalette.windowBg so the chat pane (which
-          // paints scheme.surface) reads as clean white, letting the composer's
-          // rim and shadow stand out instead of blending into an off-white wash.
-          surface: Color(0xFFFFFFFF),
-          onSurface: Color(0xFF1A1A18),
-          onSurfaceVariant: Color(0xFF62615B),
-          surfaceContainerHighest: Color(0xFFF3F3F2),
-          outline: Color(0x0F000000),
-          outlineVariant: Color(0x0F000000),
-          error: Color(0xFFB3261E),
+          // The light palette's own ground — matches AppPalette.windowBg, as
+          // the dark scheme's does.
+          surface: AppTheme.paletteFor(brightness).background,
+          onSurface: AppTheme.paletteFor(brightness).foreground,
+          onSurfaceVariant: const Color(0xFF62615B),
+          // The field fill. Not the card, which is pure white on both light
+          // palettes: a white field in a white dialog has no edge at all. The
+          // panel tone is the step the old light theme's #F3F3F2 was.
+          surfaceContainerHighest: AppTheme.paletteFor(brightness).panel,
+          outline: const Color(0x0F000000),
+          outlineVariant: const Color(0x0F000000),
+          error: const Color(0xFFB3261E),
         );
+  final scheme = highContrast
+      ? baseScheme.copyWith(
+          outline: baseScheme.onSurface.withValues(alpha: .6),
+          outlineVariant: baseScheme.onSurface.withValues(alpha: .4),
+        )
+      : baseScheme;
 
   // The chrome fills used by menus, dialogs and toasts. A getter-backed token
   // can't be a compile-time const, so these are resolved here per-brightness —
@@ -921,17 +973,19 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
   // both were `#1E1E1E`, which is [AppCard.base] — a content card's colour, one
   // step *below* the block it was supposed to be.
   final panelFill = isDark ? AppMenu.fillDark : AppMenu.fillLight;
-  final dialogFill = isDark
-      ? AppTheme.palette.value.card
-      : const Color(0xFFFFFFFF);
+  final dialogFill = panelFill;
   final textTheme = _appTextTheme(scheme.onSurface, scheme.onSurfaceVariant);
 
   return ThemeData(
-    filledButtonTheme: FilledButtonThemeData(style: _filledButtonStyle()),
-    outlinedButtonTheme: OutlinedButtonThemeData(
-      style: _outlinedButtonStyle(scheme),
+    filledButtonTheme: FilledButtonThemeData(
+      style: _filledButtonStyle(scheme, highContrast: highContrast),
     ),
-    textButtonTheme: TextButtonThemeData(style: _textButtonStyle()),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: _outlinedButtonStyle(scheme, highContrast: highContrast),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: _textButtonStyle(scheme, highContrast: highContrast),
+    ),
     useMaterial3: true,
     brightness: brightness,
     colorScheme: scheme,
@@ -1051,6 +1105,16 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
     iconTheme: IconThemeData(color: scheme.onSurfaceVariant, size: 18),
     iconButtonTheme: IconButtonThemeData(
       style: ButtonStyle(
+        side: WidgetStateProperty.resolveWith(
+          (states) => BorderSide(
+            width: highContrast ? 2 : 1.5,
+            color:
+                !states.contains(WidgetState.disabled) &&
+                    states.contains(WidgetState.focused)
+                ? (isDark ? AppDesktop.focusDark : scheme.primary)
+                : Colors.transparent,
+          ),
+        ),
         shape: WidgetStatePropertyAll(
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
         ),
@@ -1072,7 +1136,9 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       trackColor: WidgetStateProperty.resolveWith(
         (s) => s.contains(WidgetState.selected)
             ? AppPalette.accent
-            : (isDark ? const Color(0xFF3A3A3A) : const Color(0xFFA3A29C)),
+            // Light's off track is a UI mark (3:1): #A3A29C was 2.56 on a
+            // white dialog; #858480 is 3.74 there, 3.37 on the panel.
+            : (isDark ? const Color(0xFF3A3A3A) : const Color(0xFF858480)),
       ),
       trackOutlineColor: WidgetStateProperty.all(Colors.transparent),
     ),
@@ -1089,8 +1155,10 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       // (The typed text is set on the field via
       // [kFieldTextStyle]; `InputDecorationTheme` has no `style` of its own, so
       // a field's own text can't be themed globally here.)
+      // 75% in light: at 70% the hint sat at 2.999:1 on Mist's panel-toned
+      // fill; this is 3.29 (Mist) / 3.29 (Paper). Dark keeps 70% (3.99:1).
       hintStyle: _fieldTextStyle(
-        scheme.onSurfaceVariant.withValues(alpha: 0.7),
+        scheme.onSurfaceVariant.withValues(alpha: isDark ? 0.7 : 0.75),
       ),
       // Material builds a field for a phone: its default padding, plus the 48px
       // touch target it gives a prefixIcon, rendered this 48 tall next to a 32px
@@ -1120,9 +1188,15 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       ),
       border: _fieldBorder(scheme.outline),
       enabledBorder: _fieldBorder(scheme.outline),
-      focusedBorder: _fieldBorder(AppPalette.accent, width: 1.5),
+      focusedBorder: _fieldBorder(
+        isDark ? AppDesktop.focusDark : scheme.primary,
+        width: highContrast ? 2 : 1.5,
+      ),
       errorBorder: _fieldBorder(scheme.error),
-      focusedErrorBorder: _fieldBorder(scheme.error, width: 1.5),
+      focusedErrorBorder: _fieldBorder(
+        scheme.error,
+        width: highContrast ? 2 : 1.5,
+      ),
     ),
     // Fill, rim and elevation come from [AppMenu] so a Material popup cannot
     // disagree with a MenuAnchor about what a menu looks like.
@@ -1143,6 +1217,39 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
     // point: a MenuAnchor that forgets to pass a style used to fall back to a
     // rimless panel, which is the bug the hand-written style existed to fix.
     menuTheme: MenuThemeData(style: AppMenu.styleFor(isDark: isDark)),
+    menuButtonTheme: MenuButtonThemeData(
+      style: ButtonStyle(
+        textStyle: WidgetStatePropertyAll(AppType.body(height: 1.25)),
+        minimumSize: const WidgetStatePropertyAll(Size(0, AppControl.height)),
+        shape: WidgetStatePropertyAll(
+          RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppDesktop.rowRadius),
+          ),
+        ),
+        foregroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? scheme.onSurface.withValues(alpha: .38)
+              : states.contains(WidgetState.hovered) ||
+                    states.contains(WidgetState.focused)
+              ? AppDesktop.onSelection
+              : scheme.onSurface,
+        ),
+        backgroundColor: WidgetStateProperty.resolveWith(
+          (states) =>
+              !states.contains(WidgetState.disabled) &&
+                  (states.contains(WidgetState.hovered) ||
+                      states.contains(WidgetState.focused))
+              ? AppDesktop.selection
+              : Colors.transparent,
+        ),
+        overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+        mouseCursor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? SystemMouseCursors.basic
+              : SystemMouseCursors.click,
+        ),
+      ),
+    ),
     // An ExpansionTile defaults `backgroundColor` (expanded) and
     // `collapsedBackgroundColor` to *different* values and cross-fades between
     // them, so opening one flashes a tint over whatever surface it sits on. Our
@@ -1157,17 +1264,14 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       collapsedShape: Border(),
     ),
     dialogTheme: DialogThemeData(
-      // The raised block's own fill, not a menu's and not a card's. §9.3: a
-      // dialog that takes `windowBg` merges with the page, and one that takes
-      // [AppCard.base] sits a step under the block it is supposed to *be* —
-      // both invisible in light, both plain in dark.
+      // Standard Dialog and custom DesktopDialogSurface use one frame recipe.
       backgroundColor: dialogFill,
       surfaceTintColor: Colors.transparent,
-      // The card radius, not a number of its own. This was 18 — the iOS
-      // action-sheet curve, and the app's cards had already come down to 12 for
-      // macOS without the dialogs following.
+      elevation: AppDesktop.dialogElevation,
+      shadowColor: AppDesktop.shadow,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppCard.radius),
+        borderRadius: BorderRadius.circular(AppDesktop.dialogRadius),
+        side: BorderSide(color: isDark ? AppMenu.rimDark : AppMenu.rimLight),
       ),
       titleTextStyle: AppType.heading(color: scheme.onSurface),
       contentTextStyle: AppType.body(color: scheme.onSurface),
@@ -1183,7 +1287,7 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
     // Resolved from `isDark` rather than read off the getter — see the note at
     // `scrollbarTheme`.
     progressIndicatorTheme: ProgressIndicatorThemeData(
-      color: isDark ? const Color(0xFF6E8BFF) : const Color(0xFF2F5BEA),
+      color: isDark ? AppDesktop.focusDark : const Color(0xFF2F5BEA),
       linearTrackColor: scheme.outline,
     ),
     snackBarTheme: SnackBarThemeData(
@@ -1202,11 +1306,8 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
 
 /// The one set of numbers every button in the app is built from.
 ///
-/// macOS controls are compact, squarish and quiet: a 13pt semibold label in a
-/// ~32px capsule with a small radius — not the tall, wide, fully-round buttons
-/// Material defaults to. Before this existed each call site invented its own,
-/// which is how the app ended up with seven button heights, three shape systems
-/// and six label sizes. Change a number here, not at a call site.
+/// Shared desktop controls: 13-point system labels, 32-point capsule buttons,
+/// and softly rounded fields. Change geometry here, not in individual dialogs.
 abstract final class AppControl {
   /// Standard control height. macOS's regular push button sits at 32; the app's
   /// own most-used value was 34, and 32 reads correctly next to a 13pt label.
@@ -1225,14 +1326,11 @@ abstract final class AppControl {
   /// one.
   static const double heightField = 36;
 
-  /// Corner radius. Apple's push buttons are gently rounded, not stadium — a
-  /// pill reads as a "chip" on macOS, not as a button.
-  static const double radius = 8;
+  /// Text-field radius. Action buttons use the shared capsule shape.
+  static const double radius = AppDesktop.fieldRadius;
 
-  /// A menu/popover's rounding. Tighter than a button's: macOS menus are nearly
-  /// square-cornered, and rounding one like an iOS action sheet is one of the
-  /// louder tells that a desktop app was drawn to phone conventions.
-  static const double menuRadius = 6;
+  /// Menu/popover radius, shared with custom desktop choosers.
+  static const double menuRadius = AppDesktop.menuRadius;
 
   /// The air between a menu panel and the control it hangs off.
   ///
@@ -1265,10 +1363,16 @@ abstract final class AppControl {
   /// A compact glyph for an inline chip.
   static const double iconSizeChip = 13;
 
-  /// Horizontal breathing room. Apple pads a push button generously sideways and
-  /// barely at all vertically — the height is what sets the touch target.
-  static const EdgeInsets padding = EdgeInsets.symmetric(horizontal: 14);
-  static const EdgeInsets paddingSmall = EdgeInsets.symmetric(horizontal: 10);
+  /// The minimum height keeps normal-size controls compact. Vertical padding
+  /// lets enlarged system text grow the capsule without touching its rim.
+  static const EdgeInsets padding = EdgeInsets.symmetric(
+    horizontal: 14,
+    vertical: 6,
+  );
+  static const EdgeInsets paddingSmall = EdgeInsets.symmetric(
+    horizontal: 10,
+    vertical: 6,
+  );
 
   /// A button that leads with a glyph, at the compact scale.
   ///
@@ -1305,11 +1409,53 @@ abstract final class AppControl {
 
   /// [padding], grown for the current UI size — a wider label needs the
   /// sidebearing to grow with it, or the text crowds the capsule's ends.
-  static EdgeInsets get paddingScaled =>
-      EdgeInsets.symmetric(horizontal: 14 * AppFont.uiScale);
+  static EdgeInsets get paddingScaled => padding * AppFont.uiScale;
 
-  static EdgeInsets get paddingSmallScaled =>
-      EdgeInsets.symmetric(horizontal: 10 * AppFont.uiScale);
+  static EdgeInsets get paddingSmallScaled => paddingSmall * AppFont.uiScale;
+}
+
+/// The desktop's geometry and interaction tokens. Dialogs, menu anchors, search,
+/// creation and ordinary themed controls all resolve through this one recipe.
+/// Terminal geometry and the user's terminal palette remain independent.
+abstract final class AppDesktop {
+  static const double dialogRadius = 20;
+  static const double dialogElevation = 16;
+  static const Color shadow = Color(0x3D000000);
+  static const double menuRadius = 16;
+  static const double rowRadius = 10;
+  static const double fieldRadius = 10;
+  static const double paneRadius = 10;
+  static const double tabRadius = 10;
+  static const double tabShoulder = 8;
+  static const double tabTopInset = 6;
+  static const double tabCloseInset = 8;
+  static const double tabMinWidth = 128;
+  static const double tabMaxWidth = 256;
+  static const double tabBarTrailingInset = 12;
+  static const double paneCloseInset = 4;
+  static const double panelPadding = 24;
+  static const double groupGap = 16;
+  static const double controlGap = 8;
+  static const double menuInset = 6;
+  static const double iconSize = 16;
+  static const double identitySize = 28;
+  static const double formWidth = 460;
+  static const double focusWidth = 1.5;
+
+  static Color get surface => AppMenu.fill;
+  static Color get rim => AppMenu.rim;
+  static Color get field =>
+      AppTheme.pick(const Color(0xFFF2F2F4), const Color(0xFF303030));
+  static const Color focusDark = Color(0xFF8BA9FF);
+  static Color get focus => AppTheme.pick(AppPalette.accent, focusDark);
+  static Color get selection => AppPalette.accent;
+  static const Color onSelection = Colors.white;
+  static const Color selectionDetail = Color(0xEBFFFFFF);
+
+  static const darkVeil = Color(0xF2000000);
+  static const lightVeil = Color(0xF2FFFFFF);
+  static Color veil(Brightness brightness) =>
+      brightness == Brightness.dark ? darkVeil : lightVeil;
 }
 
 /// Desktop feedback is visible on the next frame. Keep these shared names so
@@ -1400,16 +1546,16 @@ OutlineInputBorder _fieldBorder(Color color, {double width = 1}) =>
 /// **not** inherit `fontFamily` from the text theme, so a button must receive
 /// the UI font explicitly.
 TextStyle get _buttonTextStyle =>
-    AppType.label(fontWeight: AppControl.fontWeight);
+    AppType.body(fontWeight: AppControl.fontWeight, height: 1.25);
 
-/// A text field's own text: [AppType.mono] — what the user types is set the
-/// way a terminal sets it, at the scale of the button beside it.
+/// Ordinary form fields use the system UI face. Code, paths, credentials,
+/// and terminal editors opt into their explicit monospace styles.
 /// `InputDecorationTheme` has no `style` slot (it themes the *decoration*, not
 /// the editable text), so a field must be handed this explicitly:
 /// `TextField(style: kFieldTextStyle, ...)`.
 TextStyle get kFieldTextStyle => _fieldTextStyle(AppPalette.textPrimary);
 
-TextStyle _fieldTextStyle(Color color) => AppType.mono(color: color);
+TextStyle _fieldTextStyle(Color color) => AppType.body(color: color);
 
 /// A field's leading glyph — the magnifier on a search box, and its kind.
 ///
@@ -1420,9 +1566,7 @@ TextStyle _fieldTextStyle(Color color) => AppType.mono(color: color);
 /// the `Icon` itself still has to be handed this size at the call site.
 const double kFieldIconSize = 18;
 
-RoundedRectangleBorder get _buttonShape => RoundedRectangleBorder(
-  borderRadius: BorderRadius.circular(AppControl.radius),
-);
+StadiumBorder get _buttonShape => const StadiumBorder();
 
 /// The primary action: a solid accent capsule.
 /// A filled button that destroys something.
@@ -1441,7 +1585,14 @@ ButtonStyle dangerButtonStyle() => FilledButton.styleFrom(
   foregroundColor: Colors.white,
 );
 
-ButtonStyle _filledButtonStyle() => FilledButton.styleFrom(
+ButtonStyle _filledButtonStyle(
+  ColorScheme scheme, {
+  bool highContrast = false,
+}) => FilledButton.styleFrom(
+  backgroundColor: scheme.primary,
+  foregroundColor: scheme.onPrimary,
+  disabledBackgroundColor: scheme.onSurface.withValues(alpha: .08),
+  disabledForegroundColor: scheme.onSurface.withValues(alpha: .38),
   animationDuration: Duration.zero,
   minimumSize: Size(0, AppControl.heightScaled),
   padding: AppControl.paddingScaled,
@@ -1451,6 +1602,7 @@ ButtonStyle _filledButtonStyle() => FilledButton.styleFrom(
   // that leaves a 32px button floating in a 48px box and wrecks every row it
   // sits in.
   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  enabledMouseCursor: SystemMouseCursors.click,
   visualDensity: VisualDensity.standard,
   // Its own wash, not [AppSurface.hoverFill]: this button already carries the
   // accent as a FILL, so the hover has to read against that rather than against
@@ -1458,30 +1610,41 @@ ButtonStyle _filledButtonStyle() => FilledButton.styleFrom(
   // second colour. See [_textButtonStyle] for why any of these are needed at
   // all — `NoSplash` took the ripple away and left nothing behind it.
   overlayColor: const Color(0x1FFFFFFF),
-);
+).copyWith(side: _controlRim(scheme, filled: true, highContrast: highContrast));
 
 /// The secondary action: a hairline rim, no fill — Apple's "bordered" button.
-ButtonStyle _outlinedButtonStyle(ColorScheme scheme) =>
-    OutlinedButton.styleFrom(
-      animationDuration: Duration.zero,
-      minimumSize: Size(0, AppControl.heightScaled),
-      padding: AppControl.paddingScaled,
-      shape: _buttonShape,
-      textStyle: _buttonTextStyle,
-      side: BorderSide(color: scheme.outline),
-      foregroundColor: scheme.onSurface,
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      visualDensity: VisualDensity.standard,
-    );
+ButtonStyle _outlinedButtonStyle(
+  ColorScheme scheme, {
+  bool highContrast = false,
+}) => OutlinedButton.styleFrom(
+  animationDuration: Duration.zero,
+  minimumSize: Size(0, AppControl.heightScaled),
+  padding: AppControl.paddingScaled,
+  shape: _buttonShape,
+  textStyle: _buttonTextStyle,
+  side: BorderSide(color: scheme.onSurface.withValues(alpha: .14)),
+  backgroundColor: scheme.onSurface.withValues(alpha: .04),
+  foregroundColor: scheme.onSurface,
+  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  enabledMouseCursor: SystemMouseCursors.click,
+  visualDensity: VisualDensity.standard,
+).copyWith(side: _controlRim(scheme, highContrast: highContrast));
 
-/// The tertiary action: text only, for the quiet way out of a dialog.
-ButtonStyle _textButtonStyle() => TextButton.styleFrom(
+/// A quiet capsule for secondary dialog and workspace actions.
+ButtonStyle _textButtonStyle(
+  ColorScheme scheme, {
+  bool highContrast = false,
+}) => TextButton.styleFrom(
+  foregroundColor: scheme.onSurface,
+  backgroundColor: scheme.onSurface.withValues(alpha: .055),
+  side: BorderSide(color: scheme.onSurface.withValues(alpha: .10)),
   animationDuration: Duration.zero,
   minimumSize: Size(0, AppControl.heightScaled),
   padding: AppControl.paddingSmallScaled,
   shape: _buttonShape,
   textStyle: _buttonTextStyle,
   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  enabledMouseCursor: SystemMouseCursors.click,
   visualDensity: VisualDensity.standard,
   // ⚠️ Without this a text button has NO hover state at all.
   //
@@ -1496,12 +1659,40 @@ ButtonStyle _textButtonStyle() => TextButton.styleFrom(
   // [AppSurface.hoverFill] is the same wash the rows and menu items already
   // use, so a button now answers the pointer the way everything around it does.
   overlayColor: AppSurface.hoverFill,
-);
+).copyWith(side: _controlRim(scheme, highContrast: highContrast));
+
+/// Keep a real focus boundary without changing the control's layout. A filled
+/// primary uses its contrasting label color; neutral controls use the accent.
+WidgetStateProperty<BorderSide> _controlRim(
+  ColorScheme scheme, {
+  bool filled = false,
+  bool highContrast = false,
+}) => WidgetStateProperty.resolveWith((states) {
+  final disabled = states.contains(WidgetState.disabled);
+  final focused = states.contains(WidgetState.focused) && !disabled;
+  return BorderSide(
+    width: highContrast ? 2 : 1.5,
+    color: focused
+        ? filled
+              ? scheme.onPrimary
+              : scheme.brightness == Brightness.dark
+              ? AppDesktop.focusDark
+              : scheme.primary
+        : filled
+        ? Colors.transparent
+        : scheme.onSurface.withValues(
+            alpha: disabled
+                ? .06
+                : highContrast
+                ? .6
+                : .09,
+          ),
+  );
+});
 
 TextTheme _appTextTheme(Color primary, Color secondary) {
-  // Material's fifteen roles folded onto [AppType]'s steps: headings and
-  // labels in mono, body in sans. A heading keeps semibold; a role that names a
-  // control drops to medium.
+  // App controls share the system type hierarchy. Monospace is requested
+  // explicitly by terminal content, code, and identifiers.
   final display = AppType.display(color: primary);
   final title = AppType.title(color: primary);
   final heading = AppType.heading(color: primary);
@@ -1522,6 +1713,6 @@ TextTheme _appTextTheme(Color primary, Color secondary) {
     bodySmall: body.copyWith(color: secondary),
     labelLarge: label,
     labelMedium: label,
-    labelSmall: AppType.monoMeta(color: primary, fontWeight: AppFont.medium),
+    labelSmall: AppType.caption(color: primary, fontWeight: AppFont.medium),
   );
 }

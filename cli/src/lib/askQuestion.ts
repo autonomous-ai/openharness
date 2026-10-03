@@ -11,7 +11,9 @@
  *        `commander_question`, in the SAME shape the hosted runtime sends, so the firmware's existing question
  *        screen renders it unchanged (commanderQuestions in websocket.ts). NOT from the transcript —
  *        see the QuestionWatcher docblock for why that source cannot work.
- *   IN   the device's `question_response` → keystrokes into the pane's dialog.
+ *   IN   the device's `question_response` → keystrokes into the pane's dialog — only once the dialog on
+ *        screen is shown to be the one that answer was for (its requestId); a late answer is refused
+ *        with STALE_QUESTION and types nothing.
  *
  * Dialog mechanics (verified against Claude Code 2.1.220, `tmux capture-pane`):
  *   - single-select : the option's digit selects AND submits, advancing to the next question / review.
@@ -23,14 +25,15 @@
 
 import type { RegisteredSession } from './registry.js'
 import type { AgentEngine } from '../engines/types.js'
-import { parseMuseQuestionPane } from '../engines/muse/askQuestion.js'
+import { locateMuseQuestion } from '../engines/muse/askQuestion.js'
 import { ampSelectionKeys, parseAmpQuestionPane } from '../engines/amp/askQuestion.js'
-import { kiloSelectionKeys, parseKiloQuestionPane } from '../engines/kilo/askQuestion.js'
+import { kiloSelectionKeys, locateKiloQuestion, parseKiloQuestionPane } from '../engines/kilo/askQuestion.js'
 import { parseCursorPermissionPane } from '../engines/cursor/askQuestion.js'
-import { parseDevinPermissionPane, parseDevinQuestionPane } from '../engines/devin/askQuestion.js'
+import { locateDevinPermission, locateDevinQuestion } from '../engines/devin/askQuestion.js'
 import { parseGrokQuestionPane } from '../engines/grok/askQuestion.js'
-import { parseAgyQuestionPane } from '../engines/agy/askQuestion.js'
+import { locateAgyQuestion } from '../engines/agy/askQuestion.js'
 import { withCopilotSubject } from '../engines/copilot/askQuestion.js'
+import { earlierDialogEnd, PERMISSION_FOOTER_RE, QUESTION_FOOTER_RE } from './dialogEnd.js'
 
 /** Device-facing question shape — byte-for-byte the hosted runtime’s `commanderQuestions()` output. */
 export interface ShapedQuestion {
@@ -38,6 +41,8 @@ export interface ShapedQuestion {
   q: string
   options: string[]
   multi: boolean
+  /** Observed free-text editor; never inferred for permission prompts. */
+  canText?: boolean
 }
 
 export interface QuestionRow {
@@ -75,6 +80,13 @@ export interface QuestionView {
   multi: boolean
   /** The "Type something." row, when the dialog offers free text. */
   typeRow: QuestionRow | null
+  /**
+   * A permission prompt's WHOLE dialog, every line as painted (ANSI stripped), from its frame to its last
+   * row. `question` is one line clipped for a device's screen; a command that wraps — `npm test &&` on one
+   * line, `git push` on the next — is only whole here. What the pair brain's floor reads (pair/classify.ts),
+   * and part of the dialog's fingerprint, so two prompts that differ below their first line are two ids.
+   */
+  dialog?: string
 }
 
 export interface ReviewView {
@@ -133,19 +145,44 @@ export function shapeQuestions(questions: unknown): ShapedQuestion[] {
   })
 }
 
+/** A dialog one reader found, and the line it anchored on: what ranks two readers of the same pane. */
+export interface FoundDialog {
+  view: QuestionView | ReviewView
+  at: number
+}
+
+function permissionView(view: PaneView): PaneView {
+  return view?.kind === 'question' ? { ...view, permission: true } : view
+}
+
+function asPermission(found: FoundDialog | null): FoundDialog | null {
+  return found && { ...found, view: permissionView(found.view) as QuestionView }
+}
+
 /**
- * The dialog on screen, read the way `engine` paints it.
+ * The LOWEST dialog any reader found: the live one. A pane keeps an answered dialog in its scrollback, and
+ * an engine with two readers (a question and an approval, say) must never let the first reader's hit on
+ * that one shadow the second reader's hit on the dialog under it: devin's approval under its answered
+ * question, muse's approval under a question, opencode's question under an approval. A tie is one dialog
+ * read twice, and the earlier reader, the engine's own, keeps it.
+ */
+function lowest(...found: Array<FoundDialog | null>): PaneView {
+  let best: FoundDialog | null = null
+  for (const f of found) if (f && (!best || f.at > best.at)) best = f
+  return best?.view ?? null
+}
+
+/**
+ * The dialog on screen, read the way `engine` paints it: the LAST one on the pane, and nothing of it from
+ * above an earlier dialog's end (`dialogEnd.ts`).
  *
  * Claude and Command Code share one shape (see parseQuestionPane); devin draws a different one and gets
  * its own parser rather than more branches in here.
  */
-function permissionView(view: PaneView): PaneView {
-  return view?.kind === 'question' ? { ...view, permission: true } : view
-}
 export function parseEngineQuestionPane(engine: AgentEngine, capture: string): PaneView {
   // Devin's two dialogs are told apart by one word in the footer (`↵ select` vs `↵ confirm`), so they can
-  // never both match. Only one can be on screen anyway: answering either replaces it with a summary line.
-  if (engine === 'devin') return parseDevinQuestionPane(capture) ?? permissionView(parseDevinPermissionPane(capture))
+  // never both match the same dialog; but an answered one of either kind can sit above the live one.
+  if (engine === 'devin') return lowest(locateDevinQuestion(capture), asPermission(locateDevinPermission(capture)))
   // Cursor has no ask-the-user tool, so its permission prompt is the ONLY dialog it ever draws — and it
   // numbers nothing, stating each row's key in the row instead.
   if (engine === 'cursor') return permissionView(parseCursorPermissionPane(capture))
@@ -153,22 +190,19 @@ export function parseEngineQuestionPane(engine: AgentEngine, capture: string): P
   // rows — both confuse the shared parser, so it reads its own. Its PERMISSION prompt is a different
   // dialog entirely (`Would you like to allow this network access?` over `1. Yes, proceed (y)` rows under
   // a `Press enter to confirm` footer, `__fixtures__/permission-muse.txt`) and that one the shared parser
-  // reads exactly, so it falls through rather than getting a parser of its own.
-  if (engine === 'muse') return parseMuseQuestionPane(capture) ?? parseQuestionPane(capture)
+  // reads exactly, so it is read by both and the lower wins.
+  if (engine === 'muse') return lowest(locateMuseQuestion(capture), locateQuestionPane(capture))
   // Amp's is a permission prompt with unnumbered rows — nothing the shared parser can anchor on.
   if (engine === 'amp') return permissionView(parseAmpQuestionPane(capture))
   // Kilo's is the same kind of prompt but laid out HORIZONTALLY, sharing its line with the key hints —
   // it is a fork of opencode that did not keep opencode's dialog.
   if (engine === 'kilo') return permissionView(parseKiloQuestionPane(capture))
-  if (engine === 'grok') {
-    const view = parseGrokQuestionPane(capture)
-    // Grok prints this footer only for tool approval, never its questionnaire.
-    return /always-approve|Ctrl\+o:/i.test(capture) ? permissionView(view) : view
-  }
+  // Grok tells its approval from its questionnaire itself, by the live dialog's own footer.
+  if (engine === 'grok') return parseGrokQuestionPane(capture)
   // agy's ask-the-user dialog anchors on `Question N/M:` under an `↑/↓ Navigate` footer, which the
   // shared parser cannot see. Its PERMISSION prompt is numbered rows under `Do you want to proceed?`
-  // and the shared parser reads that one exactly, so it falls through.
-  if (engine === 'agy') return parseAgyQuestionPane(capture) ?? parseQuestionPane(capture)
+  // and the shared parser reads that one exactly, so it is read by both and the lower wins.
+  if (engine === 'agy') return lowest(locateAgyQuestion(capture), locateQuestionPane(capture))
   // Hermes, OpenCode and Copilot paint the dialog inside a box; peel the border and the shared parser
   // fits. Measured on Copilot: framed it returns null, unframed it reads the question, the three
   // options AND spots `4. Other (type your answer)` as the free-text row rather than an option.
@@ -176,17 +210,19 @@ export function parseEngineQuestionPane(engine: AgentEngine, capture: string): P
   // Copilot boxes its dialog the same way, but names the SUBJECT of a permission prompt above the
   // question — "attempting to access the following URL:" over a boxed value. Without it the device
   // shows "Do you want to allow this access?" and a bare "Yes", with nothing to judge.
-  if (engine === 'copilot') return withCopilotSubject(parseQuestionPane(unframe(capture)), capture)
+  if (engine === 'copilot') {
+    const found = locateQuestionPane(unframe(capture))
+    return found ? withCopilotSubject(found.view, capture, found.at) : null
+  }
   if (engine === 'opencode') {
     // OpenCode's PERMISSION prompt is the horizontal one kilo inherited from it — same `△ Permission
     // required` title, same `⇆ select · enter confirm` footer, same unnumbered rows. Measured: the live
     // capture in `permission-opencode.txt` parses through kilo's parser unchanged, so it is shared rather
-    // than copied. Tried FIRST because that dialog numbers nothing: the shared parser would still match
-    // its `enter confirm` footer and then walk up into whatever numbered rows the scrollback holds.
-    const permission = parseKiloQuestionPane(capture)
-    if (permission) return permissionView(permission)
+    // than copied. Listed FIRST because that dialog numbers nothing: on its own dialog the shared parser
+    // still matches the `enter confirm` footer and walks up into whatever numbered rows are above, and
+    // the tie goes to kilo's reader.
     const plain = unframe(capture)
-    return opencodeReview(plain) ?? parseQuestionPane(plain)
+    return lowest(asPermission(locateKiloQuestion(capture)), locateOpencodeReview(plain), locateQuestionPane(plain))
   }
   if (engine === 'codex') return withCodexLabels(parseQuestionPane(capture))
   return parseQuestionPane(capture)
@@ -225,16 +261,17 @@ function withCodexLabels(view: PaneView): PaneView {
  * `submitRow` carries the KEY to press, which for every other CLI happens to be a digit — 'Enter' rides
  * the same field rather than widening the type for one engine.
  */
-function opencodeReview(plain: string): ReviewView | null {
+function locateOpencodeReview(plain: string): FoundDialog | null {
   const lines = stripAnsi(plain).split('\n')
   const footer = lines.findLastIndex((l) => /enter\s+submit/i.test(l))
   if (footer < 0) return null
+  const floor = earlierDialogEnd(lines, footer, 14)
   let sawReview = false
-  for (let i = footer - 1; i >= 0 && footer - i <= 14; i--) {
+  for (let i = footer - 1; i > floor && footer - i <= 14; i--) {
     if (parseRow(lines[i])) return null            // rows above ⇒ still a question, not the review
     if (/^\s*review\s*$/i.test(lines[i])) { sawReview = true; break }
   }
-  return sawReview ? { kind: 'review', submitRow: 'Enter' } : null
+  return sawReview ? { view: { kind: 'review', submitRow: 'Enter' }, at: footer } : null
 }
 
 function unframe(capture: string): string {
@@ -242,7 +279,13 @@ function unframe(capture: string): string {
   // raw text silently never fired — hermes read as "no dialog open" with the dialog plainly on screen.
   return stripAnsi(capture)
     .split('\n')
-    .map((line) => line.replace(/^(\s*)[│┃|]\s?/, '$1').replace(/\s*[│┃|]\s*$/, ''))
+    .map((line) => {
+      const left = line.replace(/^(\s*)[│┃|]\s?/, '$1')
+      // An unanchored whitespace regex retries at every column on blank rows.
+      // Inspect the last non-space character once; keep unframed lines intact.
+      const right = left.trimEnd()
+      return /[│┃|]$/.test(right) ? right.slice(0, -1).trimEnd() : left
+    })
     .join('\n')
 }
 
@@ -253,7 +296,9 @@ function multiSubmitKey(engine: AgentEngine): string {
 }
 
 function parseRow(line: string): QuestionRow | null {
-  const m = /^\s*[❯›>]?\s*(\d+)\.\s+(.+?)\s*$/.exec(line)
+  // Consume indentation once: two adjacent whitespace runs backtrack across
+  // every possible split on the padded non-option lines in terminal captures.
+  const m = /^[❯›>]?\s*(\d+)\.\s+(.+?)\s*$/.exec(line.trimStart())
   if (!m) return null
   const raw = m[2]
   const box = /^\[([^\]])\]\s*(.*)$/.exec(raw)
@@ -373,12 +418,6 @@ const APPROVE_RE = /^(yes|allow|approve|accept|proceed|run|continue)\b/i
 // row is "Tell Claude what to change". Keep `tell ... what to change` narrow so
 // an ordinary numbered list beginning with "Tell" cannot become an approval.
 const REJECT_RE = /^(no|reject|deny|decline|cancel|skip|don'?t|stop)\b|^tell\b.*\bwhat to change\b/i
-/** The key hints a permission dialog prints under its rows: claude `Esc to cancel \u00b7 Tab to amend`,
- *  Command Code `\u2191/\u2193 navigate \u00b7 enter select \u00b7 ctrl+e explain`. Proximity to the rows is what makes this
- *  a guard and not a search \u2014 it must sit within a few lines UNDER them. */
-// Claude's plan review footer changed from Esc/Tab hints to
-// "shift+tab to approve with this feedback" plus ctrl+g.
-const PERMISSION_FOOTER_RE = /\besc\b|enter\s+select|ctrl\+e|shift\+tab\s+to\s+approve/i
 /** The solid rule that opens the frame. Deliberately NOT the dashed one (`\u254c`) that brackets an edit diff,
  *  which sits BELOW the header and would cost the title. */
 const FRAME_RULE_RE = /^\s*[\u2500\u2501\u2550]{6,}\s*$/
@@ -387,6 +426,14 @@ const ANY_RULE_RE = /^\s*[\u2500\u2501\u2550\u254c\u2504\u2508-]{6,}\s*$/
 /** The dialog's own question line, and Command Code's `Press [ctrl+e] \u2026` hint: both sit between the
  *  header and the rows, and neither says what is being approved. */
 const PERMISSION_PROSE_RE = /^((do|would) you\b|press \[)/i
+
+/** The opening rule of the frame the rows at `start` sit in, or -1 when they have none of their own. */
+function frameTop(lines: string[], start: number, floor: number): number {
+  for (let i = start - 1; i > floor && start - i <= 25; i--) {
+    if (FRAME_RULE_RE.test(lines[i])) return i
+  }
+  return -1
+}
 
 /** Keep a synthesised title inside the device's `text[200]` buffer, with the tail marked as cut. */
 function clipTitle(value: string): string {
@@ -402,14 +449,13 @@ function clipTitle(value: string): string {
  * argument: the command, the file, or the sentence naming it.
  */
 function permissionTitle(lines: string[], start: number): string {
-  let top = -1
-  for (let i = start - 1; i >= 0 && start - i <= 25; i--) {
-    if (FRAME_RULE_RE.test(lines[i])) { top = i; break }
-  }
+  // The header must be THIS dialog's: never read past the end of an earlier one still in scrollback.
+  const floor = earlierDialogEnd(lines, start, 25)
+  const top = frameTop(lines, start, floor)
   // No frame above the rows (codex draws none): the nearest text is the dialog's own question, which
   // names the command outright. Better than inventing a header that is not on screen.
   if (top < 0) {
-    for (let i = start - 1; i >= 0 && start - i <= 4; i--) {
+    for (let i = start - 1; i > floor && start - i <= 4; i--) {
       const line = lines[i].trim()
       if (line) return clipTitle(line)
     }
@@ -466,12 +512,26 @@ export function parsePermissionPane(lines: string[]): { view: QuestionView; inde
   // Single-select, and no free-text row: every option here is a choice to be TAPPED. Verified on live
   // panes for claude, codex, devin and grok \u2014 one digit selects and submits, exactly as `rowKeys` assumes.
   return {
-    view: { kind: 'question', permission: true, question: permissionTitle(lines, start), rows, multi: false, typeRow: null },
+    view: { kind: 'question', permission: true, question: permissionTitle(lines, start), rows, multi: false, typeRow: null, dialog: permissionDialog(lines, start, end) },
     index: start,
   }
 }
 
+/** Every line of the dialog, untruncated: from its opening rule (or, with no frame, up to 12 lines above
+ *  the rows) to its last row — never reaching back past the end of an earlier dialog. */
+function permissionDialog(lines: string[], start: number, end: number): string {
+  const floor = earlierDialogEnd(lines, start, 25)
+  const rule = frameTop(lines, start, floor)
+  const top = rule >= 0 ? rule + 1 : Math.max(0, start - 12, floor + 1)
+  return lines.slice(top, end + 1).map((line) => line.trimEnd()).filter((line) => !ANY_RULE_RE.test(line)).join('\n').trim()
+}
+
 export function parseQuestionPane(capture: string): PaneView {
+  return locateQuestionPane(capture)?.view ?? null
+}
+
+/** `parseQuestionPane`, with the line its dialog was anchored on. */
+function locateQuestionPane(capture: string): FoundDialog | null {
   const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n')
   // Each CLI words its own footer, and OpenCode rewords it PER SCREEN — `enter submit` on a single
   // question, `enter toggle` on a multi-select, `enter confirm` on a step of a multi-question. They all
@@ -480,7 +540,7 @@ export function parseQuestionPane(capture: string): PaneView {
   // __fixtures__/question-codex.txt). Without it that dialog was never a question at all here: the dial
   // showed nothing while the pane waited, and a question it DID show could never be closed, because
   // the watcher had no fingerprint to notice leaving.
-  const footer = lines.findLastIndex((l) => /enter to (select|confirm|submit)|enter\s+(submit|confirm|toggle)/i.test(l))
+  const footer = lines.findLastIndex((l) => QUESTION_FOOTER_RE.test(l))
   // The review screen paints no footer and puts its rows BELOW the prompt, so it needs its own anchor.
   // Whichever anchor is LOWER on screen is the live one (the other is scrollback from an earlier step).
   const review = lines.findLastIndex((l) => /Ready to submit your answers/i.test(l))
@@ -489,35 +549,43 @@ export function parseQuestionPane(capture: string): PaneView {
   // rows adjacent, in that order — because the summary lines above are numbered too and reading them as
   // options is how the device answered everything and then sat there, never submitting.
   const submit = findSubmitPair(lines)
-  // A permission prompt is a FOURTH anchor and gets ranked exactly like the other three: whichever sits
-  // lowest on screen is the live dialog. That ordering is what keeps the two apart in both directions —
-  // codex and hermes draw an approval whose footer the question anchor also matches, and there the footer
-  // is BELOW the rows, so the question path (which reads a better title off the same block) still wins.
+  // Command Code paints the SAME dialog with no footer at all — the pane simply ends at the last option.
+  // Its tab bar is the only thing above the rows that is unmistakably part of the dialog, so it anchors
+  // that dialog, read DOWNWARD. Nothing else on either CLI's screen looks like "● X | ◯ Y" followed by a
+  // numbered list, which is what keeps ordinary numbered output from being read as a question.
+  const tabBar = findTabBarDialog(lines)
+  // A permission prompt is one more anchor, and every anchor is ranked the same way: whichever sits
+  // lowest on screen is the live dialog, the others are scrollback. That ordering is what keeps the two
+  // apart in both directions — codex and hermes draw an approval whose footer the question anchor also
+  // matches, and there the footer is BELOW the rows, so the question path (which reads a better title off
+  // the same block) still wins. And a footer-less dialog under an answered one is the live one: anchored
+  // on the answered one's footer instead, Command Code's question was announced as the OLD question.
   const permission = parsePermissionPane(lines)
-  if (permission && permission.index > footer && permission.index > review && permission.index > (submit?.index ?? -1)) {
-    return permission.view
+  if (permission && permission.index > Math.max(footer, review, submit?.index ?? -1, tabBar)) {
+    return { view: permission.view, at: permission.index }
   }
-  if (review > footer) {
+  if (tabBar > Math.max(footer, review, submit?.index ?? -1)) {
+    const view = parseDownward(lines, tabBar)
+    return view && { view, at: tabBar }
+  }
+  if (review > footer && review > (submit?.index ?? -1)) {
     for (let i = review + 1; i < lines.length && i - review <= 10; i++) {
       const row = parseRow(lines[i])
-      if (row && /^submit answers$/i.test(row.label)) return { kind: 'review', submitRow: row.number }
+      if (row && /^submit answers$/i.test(row.label)) return { view: { kind: 'review', submitRow: row.number }, at: review }
     }
     return null
   }
-  if (submit && submit.index > footer) return { kind: 'review', submitRow: submit.row }
-  // Command Code paints the SAME dialog with no footer at all — the pane simply ends at the last option.
-  // Its tab bar is the only thing above the rows that is unmistakably part of the dialog, so anchor on
-  // that and read DOWNWARD. Nothing else on either CLI's screen looks like "● X | ◯ Y" followed by a
-  // numbered list, which is what keeps ordinary numbered output from being read as a question.
-  const anchor = footer >= 0 ? footer : findTabBarDialog(lines)
-  if (anchor < 0) return null
-  if (footer < 0) return parseDownward(lines, anchor)
+  if (submit && submit.index > footer) return { view: { kind: 'review', submitRow: submit.row }, at: submit.index }
+  if (footer < 0) return null
 
-  // Rows belonging to this dialog: the numbered rows just above the footer, back to the row numbered 1.
+  // Rows belonging to this dialog: the numbered rows just above the footer, back to the row numbered 1 —
+  // and never from above an earlier dialog's end, which is where a dialog whose top is scrolled out of
+  // the pane would otherwise borrow its first rows.
   const rows: QuestionRow[] = []
   let checkbox = false   // `[ ]` / `[✔]` on a row ⇒ this question is multi-select
   let start = -1
-  for (let i = footer - 1; i >= 0 && footer - i <= 40; i--) {
+  const floor = earlierDialogEnd(lines, footer, 40)
+  for (let i = footer - 1; i > floor && footer - i <= 40; i--) {
     const row = parseRow(lines[i])
     if (!row) continue
     rows.unshift(row)
@@ -526,7 +594,7 @@ export function parseQuestionPane(capture: string): PaneView {
   }
   const enterSubmits = /enter to submit answer/i.test(lines[footer])
   if (rows.length && start < 0 && enterSubmits) {
-    return { kind: 'question', partial: true, enterSubmits, question: '', rows, multi: checkbox, typeRow: null }
+    return { view: { kind: 'question', partial: true, enterSubmits, question: '', rows, multi: checkbox, typeRow: null }, at: footer }
   }
   if (start < 0 || rows.length === 0) return null
 
@@ -534,25 +602,62 @@ export function parseQuestionPane(capture: string): PaneView {
   // and its rows — `[tab bar | header chip] · blank · question · blank · rows` — so those, and a rule,
   // are the TOP of this frame. Stop there, never skip past: mid-repaint the question line can be blank
   // for one capture, and walking on would pick up the PREVIOUS question still sitting in scrollback and
-  // pair a stale title with the live options. An empty result just means "look again next tick".
+  // pair a stale title with the live options. An empty result just means "look again next tick". The
+  // end of an earlier dialog is a top too: its footer is not this dialog's question.
   let question = ''
-  for (let i = start - 1; i >= 0 && start - i <= 12; i--) {
+  const top = earlierDialogEnd(lines, start, 12)
+  for (let i = start - 1; i > top && start - i <= 12; i--) {
     const line = lines[i].trim()
     if (!line) continue
     if (/[←→]/.test(line) || /^[☐☒✔✓]/.test(line) || /^[─━-]{6,}$/.test(line)) break
-    question = line
+    // Hermes's batch panel marks the active question with `▸`; that marker is chrome, not the question.
+    question = line.replace(/^▸\s*/, '')
     break
   }
 
   const answerable = rows.filter((r) => !CHAT_ROW.test(r.label) && !TYPE_ROW.test(r.label))
   return {
-    kind: 'question',
-    ...(enterSubmits ? { enterSubmits } : {}),
-    question,
-    rows: answerable,
-    multi: checkbox,
-    typeRow: rows.find((r) => TYPE_ROW.test(r.label)) ?? null,
+    view: {
+      kind: 'question',
+      ...(enterSubmits ? { enterSubmits } : {}),
+      question,
+      rows: answerable,
+      multi: checkbox,
+      typeRow: rows.find((r) => TYPE_ROW.test(r.label)) ?? null,
+      dialog: dialogAbove(lines, start, footer),
+    },
+    at: footer,
   }
+}
+
+/**
+ * A footer-anchored dialog, whole: up to 12 lines above its rows — stopping at a rule, a tab bar, the
+ * agent's own output (a `•`/`⏺` bullet) or the end of an earlier dialog — down to its last row. Codex puts
+ * the command it asks about here (`$ …`, wrapped over as many lines as it takes), with its reason and
+ * environment.
+ */
+function dialogAbove(lines: string[], start: number, footer: number): string {
+  let top = start
+  const floor = earlierDialogEnd(lines, start, 12)
+  for (let i = start - 1; i > floor && start - i <= 12; i--) {
+    const line = lines[i].trim()
+    if (/^[•⏺●]/.test(line) || /[←→]/.test(line) || /^[─━═-]{6,}$/.test(line)) break
+    top = i
+  }
+  return lines.slice(top, footer).map((line) => line.trimEnd()).join('\n').trim()
+}
+
+/**
+ * A dialog that asks to RUN or CHANGE something (an approval), whichever parser read it: a framed
+ * permission prompt, or a footer dialog whose first row approves, whose rows include a rejection, and
+ * which names a command (`$ …`) or asks "would you like to run / make …". What the pair's floor treats as
+ * a permission prompt (pair/classify.ts); nothing else reads it.
+ */
+export function isApprovalDialog(view: QuestionView): boolean {
+  if (view.permission) return true
+  if (!view.rows.length || !APPROVE_RE.test(view.rows[0].label) || !view.rows.some((row) => REJECT_RE.test(row.label))) return false
+  const text = view.dialog ?? view.question
+  return /(^|\n)\s*\$ /.test(text) || /would you like to (run|make|apply|execute|edit|write)/i.test(text)
 }
 
 /** Match an answer to a row. The device stores option labels in an 80-byte buffer, so a long label comes
@@ -594,16 +699,54 @@ export function matchRow(rows: QuestionRow[], answer: string): QuestionRow | nul
     ?? null
 }
 
-/** Pick the answer for the question the dialog is currently showing: by its own text, else positionally. */
-export function pickAnswer(answers: Record<string, string>, question: string, used: Set<string>): { key: string; value: string } | null {
+/**
+ * Pick the answer for the question the dialog is currently showing: the entry keyed by its own text.
+ *
+ * `positional` also takes the next unused entry when none names it. Only for a dialog the answer's
+ * requestId proves it was written for: without that proof, an answer that names no question on screen
+ * belongs to one that is gone, and typing it here would answer — or approve — something nobody saw.
+ *
+ * The text must be the question's OWN (case, spacing and a trailing `…` aside), never a prefix either way.
+ * An approval is titled `Approve <header>: <argument>` and the header is shared by every prompt of its
+ * kind: a key left from an earlier prompt — `Approve Bash command` (its argument unread) — was a prefix of
+ * `Approve Bash command: rm -rf ~/projects` and pressed Yes on it, and an old full title named a
+ * header-only prompt the other way round. A client echoes back the key it was announced, so the whole
+ * text is always there to match; one it has cut is answered through its requestId (`positional`).
+ */
+export function pickAnswer(
+  answers: Record<string, string>,
+  question: string,
+  used: Set<string>,
+  opts: { positional?: boolean } = {},
+): { key: string; value: string } | null {
   const entries = Object.entries(answers)
   const q = norm(question)
-  const byText = entries.find(([k]) => norm(k) === q)
-    ?? (q.length >= 6 ? entries.find(([k]) => norm(k).startsWith(q) || q.startsWith(norm(k))) : undefined)
+  const byText = q ? entries.find(([k]) => norm(k) === q) : undefined
   if (byText && !used.has(byText[0])) return { key: byText[0], value: byText[1] }
+  if (!opts.positional) return null
   const next = entries.find(([k]) => !used.has(k))
   return next ? { key: next[0], value: next[1] } : null
 }
+
+/**
+ * The id a dialog is announced under — the SAME function the watcher names it with, so the answer's
+ * requestId can be checked against the dialog on screen at the moment of typing rather than against
+ * whatever the watcher last saw (it polls every 1.5s, and forgets on a reset).
+ */
+export function questionRequestId(sessionId: string, view: QuestionView): string {
+  return `q_${hash(sessionId + fingerprintOf(view))}`
+}
+
+/** Why an answer was not keyed. Sent back to the client as `question_response_result.error`. */
+export type QuestionAnswerError = 'STALE_QUESTION' | 'AGENT_NOT_FOUND' | 'ANSWER_BUSY' | 'ANSWER_FAILED'
+
+export type QuestionAnswerResult = { ok: true } | { ok: false; error: QuestionAnswerError; detail: string }
+
+const STALE_CHANGED: QuestionAnswerResult = { ok: false, error: 'STALE_QUESTION', detail: 'That question changed before your answer arrived.' }
+const STALE_GONE: QuestionAnswerResult = { ok: false, error: 'STALE_QUESTION', detail: 'That question is no longer open.' }
+const failed = (detail: string): QuestionAnswerResult => ({ ok: false, error: 'ANSWER_FAILED', detail })
+const KEYS_FAILED = failed('The answer could not be typed into the agent\'s terminal.')
+const STUCK = failed('The question did not take the answer.')
 
 export interface AskQuestionDeps {
   getSession: (sessionId: string) => RegisteredSession | undefined
@@ -617,6 +760,10 @@ export interface AskQuestionDeps {
 }
 
 export interface QuestionAnswerPayload {
+  /** Exact contents reviewed on the device; guarded submissions never use positional fallback. */
+  expectedQuestions?: ShapedQuestion[]
+  selectedLabels?: Record<string, string[]>
+  freeTextKeys?: string[]
   allowPermissions?: boolean
   requestId?: string
   sessionId?: string
@@ -641,23 +788,41 @@ export class AskQuestionController {
     this.pending.set(requestId, sessionId)
   }
 
-  async answer(payload: QuestionAnswerPayload): Promise<boolean> {
+  async answer(payload: QuestionAnswerPayload): Promise<QuestionAnswerResult> {
     const requestId = payload.requestId ?? ''
-    const sessionId = payload.sessionId || payload.agentId || this.pending.get(requestId) || ''
+    if (payload.expectedQuestions !== undefined && (!Array.isArray(payload.expectedQuestions) ||
+        payload.expectedQuestions.length < 1 || payload.expectedQuestions.length > 4 ||
+        payload.expectedQuestions.some(q => !q || typeof q.key !== 'string' || !q.key ||
+          typeof q.q !== 'string' || !q.q || !Array.isArray(q.options) || !q.options.length ||
+          q.options.some(option => typeof option !== 'string' || !option) ||
+          typeof q.multi !== 'boolean' || (q.multi && !Array.isArray(payload.selectedLabels?.[q.key]))))) {
+      return failed('The reviewed question metadata is invalid.')
+    }
+    if (payload.freeTextKeys !== undefined && (!payload.expectedQuestions || !Array.isArray(payload.freeTextKeys) ||
+        payload.freeTextKeys.some(key => typeof key !== 'string' || !payload.expectedQuestions!.some(q =>
+          q.key === key && q.canText === true && !q.multi)))) {
+      return failed('The reviewed text answer metadata is invalid.')
+    }
+    const remembered = this.pending.get(requestId)
+    const sessionId = payload.sessionId || payload.agentId || remembered || ''
     const answers = payload.answers && typeof payload.answers === 'object' ? payload.answers : null
     if (!sessionId || !answers || Object.keys(answers).length === 0) {
       console.warn(`[question] ignoring answer with no session/answers (req=${requestId})`)
-      return false
+      return failed('The answer named no agent or carried no choice.')
     }
     const session = this.deps.getSession(sessionId)
     const terminalTarget = session?.agentId || session?.sessionId
     if (!terminalTarget) {
       console.warn(`[question] no terminal target for ${sessionId.slice(0, 8)} — answer dropped`)
-      return false
+      return { ok: false, error: 'AGENT_NOT_FOUND', detail: 'That harness is no longer running.' }
     }
-    if (this.driving.has(sessionId)) {
+    if (remembered) {
+      const owner = this.deps.getSession(remembered)
+      if ((owner?.agentId || owner?.sessionId) !== terminalTarget) return STALE_CHANGED
+    }
+    if (this.driving.has(terminalTarget)) {
       console.warn(`[question] ${sessionId.slice(0, 8)} answer dropped · already driving this dialog`)
-      return false
+      return { ok: false, error: 'ANSWER_BUSY', detail: 'Another answer is already being entered for this harness.' }
     }
     // `forAnswer`: a dialog is the engine waiting for input mid-turn, so the open turn must not block it.
     const release = this.deps.acquireControl?.(terminalTarget, { forAnswer: true })
@@ -665,105 +830,186 @@ export class AskQuestionController {
     // nothing keys it in, and the pane sits on the dialog looking like a hung agent.
     if (this.deps.acquireControl && !release) {
       console.warn(`[question] ${sessionId.slice(0, 8)} answer dropped · terminal control unavailable`)
-      return false
+      return { ok: false, error: 'ANSWER_BUSY', detail: 'The agent\'s terminal is busy. Try again.' }
     }
-    this.driving.add(sessionId)
+    // The ids the watcher could have announced this dialog under: the session it was remembered for, and
+    // the session as the registry knows it now.
+    const owners = [...new Set([remembered, session?.sessionId].filter((id): id is string => !!id))]
+    this.driving.add(terminalTarget)
     try {
-      const ok = await this.drive(terminalTarget, answers, this.deps.getSession(sessionId)?.engine ?? 'claude', payload.allowPermissions !== false)
+      const result = await this.drive(terminalTarget, answers, this.deps.getSession(sessionId)?.engine ?? 'claude', payload.allowPermissions !== false, { requestId, owners }, payload.expectedQuestions ? payload : undefined)
       this.pending.delete(requestId)
-      console.log(`[question] ${sessionId.slice(0, 8)} answered from device · ${ok ? 'submitted' : 'FAILED'}`)
-      return ok
+      const outcome = result.ok ? 'submitted' : result.error === 'STALE_QUESTION' ? 'refused · STALE_QUESTION, nothing typed' : 'FAILED'
+      console.log(`[question] ${sessionId.slice(0, 8)} answered from device · ${outcome} (req=${requestId || 'none'})`)
+      return result
     } finally {
-      this.driving.delete(sessionId)
+      this.driving.delete(terminalTarget)
       release?.()
     }
   }
 
-  /** Key the answers into the pane's dialog, question by question, ending on the review screen. */
-  private async drive(terminalTarget: string, answers: Record<string, string>, engine: AgentEngine, allowPermissions = true): Promise<boolean> {
+  /**
+   * Key the answers into the pane's dialog, question by question, ending on the review screen.
+   *
+   * Nothing is typed until the dialog on screen is shown to be the question the answer was written for:
+   * its requestId when the answer carries one, else its own text. An answer can arrive late — the agent
+   * moved on, another client answered, the next question of the form is up — and positionally matching
+   * it to whatever is showing now is how a person's "Yes" lands on a permission prompt they never saw.
+   */
+  private async drive(
+    terminalTarget: string,
+    answers: Record<string, string>,
+    engine: AgentEngine,
+    allowPermissions: boolean,
+    asked: { requestId: string; owners: string[] },
+    reviewed?: QuestionAnswerPayload,
+  ): Promise<QuestionAnswerResult> {
     const wait = this.deps.wait ?? sleep
     const used = new Set<string>()
+    const reviewedComplete = () => !reviewed || used.size === reviewed.expectedQuestions!.length
     let lastQuestion = ''
     let repeats = 0
+    let blanks = 0
     let answered = 0
 
     for (let step = 0; step < MAX_STEPS; step++) {
       const capture = await this.deps.capture(terminalTarget, CAPTURE_LINES)
+      if (reviewed && capture === null) return failed('The question could not be read.')
       const view = parseEngineQuestionPane(engine, capture ?? '')
       if (!view) {
-        // Nothing on screen: either the dialog was never open, or the last keystroke submitted it.
-        return answered > 0
+        // Nothing on screen: either the dialog was already gone, or the last keystroke submitted it.
+        return answered > 0 && reviewedComplete() ? { ok: true } : STALE_GONE
       }
-      if (!allowPermissions && view.kind === 'question' && view.permission) return false
+      if (!allowPermissions && view.kind === 'question' && view.permission) return failed('Permission prompts cannot be answered from here.')
       if (view.kind === 'question' && view.partial) {
         // The dialog's top is out of the pane. If we have keyed an answer it has not been taken yet;
         // give the TUI a beat. If we have not, there is nothing to match an answer against.
-        if (answered === 0) { console.warn('[question] dialog scrolled out of view — cannot key an answer'); return false }
-        if (++repeats >= 2) { console.warn('[question] dialog stuck (scrolled)'); return false }
+        if (answered === 0) { console.warn('[question] dialog scrolled out of view — cannot key an answer'); return failed('The question is scrolled out of view.') }
+        if (++repeats >= 2) { console.warn('[question] dialog stuck (scrolled)'); return STUCK }
         await wait(STEP_MS)
         continue
       }
       if (view.kind === 'review') {
-        if (!allowPermissions && answered === 0) return false
-        return this.deps.sendKey(terminalTarget, view.submitRow)
+        // Reached by our own keys, this submits the form. Reached first, it means every question was
+        // answered somewhere else — submitting would send answers this person never gave.
+        if (answered === 0) return STALE_GONE
+        if (!reviewedComplete()) return STALE_CHANGED
+        return await this.deps.sendKey(terminalTarget, view.submitRow) ? { ok: true } : failed('The answers could not be submitted.')
       }
+      // Mid-repaint the question line can read blank for a capture (see parseQuestionPane). Neither its id
+      // nor its text can be checked against a blank, so look again rather than judge the dialog by it.
+      if (!view.question) {
+        if (++blanks > 2) return answered > 0 && reviewedComplete() ? { ok: true } : failed('The question could not be read.')
+        await wait(STEP_MS)
+        continue
+      }
+      blanks = 0
       // The same question still showing after we acted on it: give the TUI one more beat to repaint,
       // then treat it as stuck rather than hammering the pane with more keystrokes. Never consume a
       // second answer for it.
-      if (view.question && view.question === lastQuestion) {
-        if (++repeats >= 2) { console.warn(`[question] dialog stuck on "${view.question.slice(0, 60)}"`); return false }
+      if (view.question === lastQuestion) {
+        if (++repeats >= 2) { console.warn(`[question] dialog stuck on "${view.question.slice(0, 60)}"`); return STUCK }
         await wait(STEP_MS)
         continue
       }
       repeats = 0
       lastQuestion = view.question
 
+      // Is this the question the answer was for? Only the FIRST one needs the id: every later screen is
+      // one our own keys advanced to, and must be named by its text (below).
+      let positional = false
+      if (answered === 0 && asked.requestId) {
+        if (!asked.owners.some((owner) => questionRequestId(owner, view) === asked.requestId)) {
+          console.warn(`[question] answer for req=${asked.requestId} arrived after the dialog changed to "${view.question.slice(0, 60)}" — nothing typed`)
+          return STALE_CHANGED
+        }
+        positional = true
+      }
+
       // Out of answers with the dialog still up = a multi-QUESTION dialog whose next question the device
       // hasn't been shown yet. Leave it open: the watcher pushes that one and the device answers it next.
-      const picked = pickAnswer(answers, view.question, used)
-      if (!picked) return answered > 0
+      const expected = reviewed?.expectedQuestions?.find(q => q.q === view.question)
+      if (reviewed && (!expected || expected.multi !== view.multi ||
+          JSON.stringify(expected.options) !== JSON.stringify(view.rows.map(row => row.label)))) {
+        // A request id proves the initial dialog; every reviewed screen must also match its full choices.
+        return answered > 0 && reviewedComplete() ? { ok: true } : STALE_CHANGED
+      }
+      const picked = expected
+        ? (!used.has(expected.key) && typeof answers[expected.key] === 'string'
+          ? { key: expected.key, value: answers[expected.key] } : null)
+        : pickAnswer(answers, view.question, used, { positional })
+      if (!picked) {
+        if (answered > 0 && reviewedComplete()) return { ok: true }
+        console.warn(`[question] no answer names "${view.question.slice(0, 60)}" — nothing typed`)
+        return STALE_CHANGED
+      }
       used.add(picked.key)
       answered++
 
+      if (reviewed?.freeTextKeys?.includes(picked.key)) {
+        // Spoken words are explicitly text, even when they happen to equal an option label.
+        // A permission prompt can never acquire consent through this path.
+        if (!expected?.canText || view.permission || view.multi || !view.typeRow ||
+            !picked.value.trim() || Buffer.byteLength(picked.value, 'utf8') > 1200 ||
+            /[\x00-\x09\x0b-\x1f\x7f]/.test(picked.value)) return failed('The text answer cannot be entered into this question.')
+        if (!await this.typeFreeText(terminalTarget, view.typeRow, picked.value, wait)) return KEYS_FAILED
+        await wait(STEP_MS)
+        continue
+      }
+
       if (view.multi) {
         // Device joins the selected labels with ", " (q_done_tap).
-        const labels = picked.value.split(',').map((s) => s.trim()).filter(Boolean)
+        const labels = reviewed ? reviewed.selectedLabels?.[picked.key] ?? []
+          : picked.value.split(',').map((s) => s.trim()).filter(Boolean)
+        if (reviewed && (!labels.length || labels.some(label => !view.rows.some(row => row.label === label)))) return failed('That answer matches no option.')
+        if (reviewed) {
+          // Set the exact reviewed set, including clearing choices selected in another client.
+          for (const row of view.rows) if (row.checked !== labels.includes(row.label)) {
+            if (!await this.deps.sendKey(terminalTarget, row.number)) return KEYS_FAILED
+            await wait(TEXT_MS)
+          }
+          if (!await this.deps.sendKey(terminalTarget, multiSubmitKey(engine))) return KEYS_FAILED
+          await wait(STEP_MS)
+          continue
+        }
         let toggled = 0
         for (const label of labels) {
           const row = matchRow(view.rows, label)
           if (!row || row.checked) continue
-          if (!await this.deps.sendKey(terminalTarget, row.number)) return false
+          if (!await this.deps.sendKey(terminalTarget, row.number)) return KEYS_FAILED
           await wait(TEXT_MS)
           toggled++
         }
         if (!toggled && view.typeRow
-          && !await this.typeFreeText(terminalTarget, view.typeRow, picked.value, wait)) return false
-        if (!await this.deps.sendKey(terminalTarget, multiSubmitKey(engine))) return false // advance to the next question / review
+          && !await this.typeFreeText(terminalTarget, view.typeRow, picked.value, wait)) return KEYS_FAILED
+        if (!await this.deps.sendKey(terminalTarget, multiSubmitKey(engine))) return KEYS_FAILED // advance to the next question / review
         await wait(STEP_MS)
         continue
       }
 
-      const row = matchRow(view.rows, picked.value)
+      const row = reviewed ? view.rows.find(row => row.label === picked.value) ?? null : matchRow(view.rows, picked.value)
       if (row) {
         // One digit selects AND submits — except on Amp, whose rows are unnumbered and reached by
         // walking the list, so this is a short sequence rather than a single key.
         for (const key of rowKeys(engine, row, view)) {
-          if (!await this.deps.sendKey(terminalTarget, key)) return false
+          if (!await this.deps.sendKey(terminalTarget, key)) return KEYS_FAILED
           await wait(TEXT_MS)
         }
         await wait(STEP_MS)
         continue
       }
-      if (!view.typeRow) { console.warn(`[question] no option matched "${picked.value.slice(0, 40)}" and no free-text row`); return false }
-      if (!await this.typeFreeText(terminalTarget, view.typeRow, picked.value, wait)) return false
+      if (reviewed) return failed('That answer matches no option.')
+      if (!view.typeRow) { console.warn(`[question] no option matched "${picked.value.slice(0, 40)}" and no free-text row`); return failed('That answer matches no option.') }
+      if (!await this.typeFreeText(terminalTarget, view.typeRow, picked.value, wait)) return KEYS_FAILED
       await wait(STEP_MS)
     }
-    return false
+    return STUCK
   }
 
   /** True while a dialog is being keyed — the watcher pauses so a half-driven dialog isn't re-announced. */
   isDriving(sessionId: string): boolean {
-    return this.driving.has(sessionId)
+    const session = this.deps.getSession(sessionId)
+    return this.driving.has(session?.agentId || session?.sessionId || sessionId)
   }
 
   /** Free-text answer (a voice answer is always free text): open the "Type something." row, type, Enter. */
@@ -784,7 +1030,7 @@ export interface QuestionWatcherDeps {
   /** Skip the capture entirely when no device is listening — nothing would consume the question. */
   hasDevice: () => boolean
   /** A dialog is open on screen. Fires ONCE per distinct question (until it changes or closes). */
-  onQuestion: (sessionId: string, requestId: string, questions: ShapedQuestion[]) => void
+  onQuestion: (sessionId: string, requestId: string, questions: ShapedQuestion[], detail?: { permission: boolean; dialog: string }) => void
   /**
    * An announced dialog LEFT the screen — answered somewhere else, or abandoned.
    *
@@ -831,7 +1077,10 @@ export function pollsQuestions(engine: AgentEngine): boolean {
  * re-announces to a device that attaches mid-question — neither of which a one-shot event could do.
  */
 export class QuestionWatcher {
-  private timers = new Map<string, NodeJS.Timeout>()
+  private readonly watching = new Set<string>()
+  private timer: NodeJS.Timeout | undefined
+  private readonly pendingPolls = new Map<string, { cancelled: boolean }>()
+  private readonly pendingBaselines = new Map<string, { cancelled: boolean }>()
   private last = new Map<string, string>() // sessionId → fingerprint of the announced question
   private lastId = new Map<string, string>()  // sessionId → requestId of the announced question
   private misses = new Map<string, number>()  // sessionId → consecutive polls with no dialog
@@ -863,27 +1112,44 @@ export class QuestionWatcher {
    */
   noteTurnStart(sessionId: string): void {
     this.preTurn.delete(sessionId)
+    this.cancelPending(sessionId)
+    const pending = { cancelled: false }
+    this.pendingBaselines.set(sessionId, pending)
     void (async () => {
-      const session = this.deps.getSession(sessionId)
-      const target = session?.agentId || session?.sessionId
-      if (!target) return
-      const view = parseEngineQuestionPane(session?.engine ?? 'claude', await this.deps.capture(target, CAPTURE_LINES) ?? '')
-      if (!view || view.kind !== 'question' || !view.question || view.rows.length === 0) return
-      // Only if nothing has been announced for this turn yet: the capture takes
-      // a moment, and a dialog that opened inside that window is this turn's.
-      if (this.lastId.has(sessionId)) return
-      this.preTurn.set(sessionId, fingerprintOf(view))
+      try {
+        const session = this.deps.getSession(sessionId)
+        const target = session?.agentId || session?.sessionId
+        if (!target || session?.active === false || (session?.engine && !pollsQuestions(session.engine))) return
+        const generation = questionCaptureGeneration(session)
+        const capture = await this.deps.capture(target, CAPTURE_LINES)
+        if (pending.cancelled || generation !== questionCaptureGeneration(this.deps.getSession(sessionId))) return
+        const view = parseEngineQuestionPane(session?.engine ?? 'claude', capture ?? '')
+        if (!view || view.kind !== 'question' || !view.question || view.rows.length === 0) return
+        // Only if nothing has been announced for this turn yet: the capture takes
+        // a moment, and a dialog that opened inside that window is this turn's.
+        if (this.lastId.has(sessionId)) return
+        this.preTurn.set(sessionId, fingerprintOf(view))
+      } catch {
+        // A failed read supplies no baseline. Keep watching for a fresh dialog.
+      } finally {
+        if (this.pendingBaselines.get(sessionId) === pending) this.pendingBaselines.delete(sessionId)
+      }
     })()
   }
 
   /** Poll this session's pane while its turn is open (called on turn_started). */
   start(sessionId: string): void {
-    if (this.timers.has(sessionId)) return
+    if (this.watching.has(sessionId)) return
     const session = this.deps.getSession(sessionId)
     // Only the engines that actually paint a question dialog: Claude and Command Code share one shape,
     // devin has its own (parseDevinQuestionPane). Polling any other pane would be pure waste.
     if (!session || session.active === false || !(session.agentId || session.sessionId) || !QUESTION_ENGINES.has(session.engine)) return
-    this.timers.set(sessionId, setInterval(() => { void this.tick(sessionId) }, POLL_MS))
+    this.watching.add(sessionId)
+    // One clock also starts the reads in one event-loop turn, allowing the tmux
+    // backend to batch them without delaying polls or caching terminal content.
+    this.timer ??= setInterval(() => {
+      for (const id of this.watching) void this.tick(id)
+    }, POLL_MS)
   }
 
   /**
@@ -900,9 +1166,11 @@ export class QuestionWatcher {
    * was removed cannot answer either.
    */
   stop(sessionId: string): void {
+    this.cancelPending(sessionId)
     this.preTurn.delete(sessionId)
-    const timer = this.timers.get(sessionId)
-    if (timer) { clearInterval(timer); this.timers.delete(sessionId) }
+    this.blocked.delete(sessionId)
+    this.watching.delete(sessionId)
+    if (!this.watching.size && this.timer) { clearInterval(this.timer); this.timer = undefined }
     const requestId = this.lastId.get(sessionId)
     this.forget(sessionId)
     if (requestId) this.deps.onQuestionGone?.(sessionId, requestId)
@@ -910,8 +1178,13 @@ export class QuestionWatcher {
 
 
   stopAll(): void {
-    for (const timer of this.timers.values()) clearInterval(timer)
-    this.timers.clear()
+    if (this.timer) clearInterval(this.timer)
+    this.timer = undefined
+    this.watching.clear()
+    for (const pending of this.pendingPolls.values()) pending.cancelled = true
+    for (const pending of this.pendingBaselines.values()) pending.cancelled = true
+    this.preTurn.clear()
+    this.blocked.clear()
     this.last.clear()
     this.lastId.clear()
     this.misses.clear()
@@ -928,6 +1201,13 @@ export class QuestionWatcher {
     this.last.delete(sessionId)
     this.lastId.delete(sessionId)
     this.misses.delete(sessionId)
+  }
+
+  private cancelPending(sessionId: string): void {
+    const poll = this.pendingPolls.get(sessionId)
+    if (poll) poll.cancelled = true
+    const baseline = this.pendingBaselines.get(sessionId)
+    if (baseline) baseline.cancelled = true
   }
 
   /**
@@ -948,9 +1228,12 @@ export class QuestionWatcher {
 
 
   private async tick(sessionId: string): Promise<void> {
+    // A capture can take longer than POLL_MS. Keep one outstanding poll per
+    // session, including a cancelled capture that has not returned yet.
+    if (this.pendingPolls.has(sessionId)) return
     const session = this.deps.getSession(sessionId)
     const terminalTarget = session?.agentId || session?.sessionId
-    if (!terminalTarget) { this.stop(sessionId); return }
+    if (!terminalTarget || session?.active === false || (session?.engine && !pollsQuestions(session.engine))) { this.stop(sessionId); return }
     // Both of these silently do nothing, which is how a live dialog can sit on the terminal with no trace
     // in the log. Say it once per transition rather than every 1.5s tick.
     const blocked = !this.deps.hasDevice() ? 'no device' : this.deps.isDriving?.(sessionId) ? 'driving an answer' : ''
@@ -959,8 +1242,25 @@ export class QuestionWatcher {
       console.log(`[question] ${sessionId.slice(0, 8)} watcher ${blocked ? `paused · ${blocked}` : 'polling'}`)
     }
     if (blocked) return
-    const engine = this.deps.getSession(sessionId)?.engine ?? 'claude'
-    const view = parseEngineQuestionPane(engine, await this.deps.capture(terminalTarget, CAPTURE_LINES) ?? '')
+    const pending = { cancelled: false }
+    this.pendingPolls.set(sessionId, pending)
+    const generation = questionCaptureGeneration(session)
+    let capture: string | null
+    try {
+      capture = await this.deps.capture(terminalTarget, CAPTURE_LINES)
+    } catch {
+      capture = null
+    } finally {
+      if (this.pendingPolls.get(sessionId) === pending) this.pendingPolls.delete(sessionId)
+    }
+    if (pending.cancelled || generation !== questionCaptureGeneration(this.deps.getSession(sessionId))
+      || !this.deps.hasDevice() || this.deps.isDriving?.(sessionId)) return
+    if (capture === null) {
+      // Unavailable is not an empty pane, and breaks a run of confirmed misses.
+      this.misses.delete(sessionId)
+      return
+    }
+    const view = parseEngineQuestionPane(session?.engine ?? 'claude', capture)
     if (view?.kind === 'question' && view.partial) {
       // Scrolled so its top is out of the pane: still open, so the client showing it keeps showing it —
       // but there is no question text to announce, and the rows in view are whichever the scroll left.
@@ -984,22 +1284,100 @@ export class QuestionWatcher {
 
     // A pane-derived question has no tool_use id. The key only has to round-trip through the device and
     // back (the answer is keyed into the pane, not matched to a tool call), so the question's own text
-    // serves as both — and the device dedups a repeated push by this id.
-    const requestId = `q_${hash(sessionId + fingerprint)}`
+    // serves as both — and the device dedups a repeated push by this id. The answer brings the id back,
+    // and AskQuestionController recomputes it off the live pane before typing: a different id there
+    // means a different dialog, and the answer is refused (STALE_QUESTION) instead of keyed into it.
+    const requestId = questionRequestId(sessionId, view)
     this.lastId.set(sessionId, requestId)
+    const baseline = this.pendingBaselines.get(sessionId)
+    if (baseline) baseline.cancelled = true
     this.deps.onQuestion(sessionId, requestId, [{
       key: view.question,
       q: view.question,
       options: view.rows.map((r) => r.label),
       multi: view.multi,
-    }])
+      ...(view.typeRow && !view.multi && !view.permission ? { canText: true } : {}),
+    }], { permission: isApprovalDialog(view), dialog: view.dialog ?? view.question })
 
   }
 }
 
-/** What makes two captures the SAME dialog: its words, its options, its arity. */
+/** Snapshot scalar values before awaiting I/O: registry records can change in
+ * place when an engine exits, moves, or is replaced in the same pane. */
+function questionCaptureGeneration(session: RegisteredSession | undefined): string {
+  return session ? JSON.stringify([session.agentId, session.sessionId, session.engine, session.active,
+    session.tmuxPane, session.primaryRuntimeKey, session.runtimes, session.processIdentity]) : ''
+}
+
+/**
+ * What makes two captures the SAME dialog: its words, its options, its arity — and, when the parser kept
+ * the whole dialog, what it says below its first line (a command that differs only on its second line is
+ * another prompt).
+ *
+ * ⚠️ NOT the raw `dialog`. The id is recomputed every 1.5s poll and again at the moment an answer is typed,
+ * so it may only change when the QUESTION does. The raw dialog changes on its own: Hermes and Muse paint a
+ * live timer inside it (`(01m30s · ↓ 82 tok)`, `(21s · esc to interrupt)`), and every engine moves its
+ * `❯`/`›`/`>` cursor and ticks its `[✔]` boxes in place. Hashed raw, a question was re-announced as new on
+ * every poll — the needs-you alert, the sound, the dial push, again and again — and every answer from a
+ * dial, a device or the cable was refused as STALE_QUESTION. `dialogSignature` is the dialog with all of
+ * that taken out; the raw text still goes, unchanged, to the pair's floor (isApprovalDialog, pair/sensor).
+ */
 function fingerprintOf(view: QuestionView): string {
-  return `${view.question}|${view.rows.map((r) => r.label).join('|')}|${view.multi}`
+  const base = `${view.question}|${view.rows.map((r) => r.label).join('|')}|${view.multi}`
+  return view.dialog === undefined ? base : `${base}|${dialogSignature(view.dialog)}`
+}
+
+// A live status group: an elapsed time (`21s`, `30.5s`, `01m30s`, `1h02m`), a token counter (`↓ 82 tok`,
+// `1.2k tokens`) or `esc to interrupt` inside one pair of parentheses. Units hug their digits, as every
+// engine paints them, so `(see 2 files)` or `(tokens.json)` is never mistaken for one.
+const TIMER_GROUP = String.raw`\([^()\n]*?(?:\b\d+(?:\.\d+)?(?:ms|s|m|h)\b|\b\d+m\d+s\b|\b\d+h\d+m\b|\d+(?:\.\d+)?k?\s*tok(?:en)?s?\b|esc to interrupt)[^()\n]*\)`
+const TIMER_GROUP_RE = new RegExp(TIMER_GROUP, 'i')
+const TIMER_GROUPS_RE = new RegExp(TIMER_GROUP, 'gi')
+// The same, outside parentheses: `↓ 82 tokens · esc to interrupt`.
+const STATUS_BITS_RE = /[↑↓]\s*\d+(?:\.\d+)?k?\s*tok(?:en)?s?\b|\besc to interrupt\b/i
+// A bare elapsed time, with no parentheses and no ` · ` to mark it: a status line that is only a word or
+// three and a duration — a verb in -ing/-ed (`waiting 3s`, `thinking 4s`, `Churned for 4s`) or anything
+// trailing off in an ellipsis (`Waiting… 12s`, `Fetch Bitcoin price… 1m33s`). A command's own number stays:
+// `sleep 30s` and `retry after 30s` are neither.
+const DURATION = String.raw`(?:\d+h\d+m(?:\d+s)?|\d+m\d+s|\d+(?:\.\d+)?m?s)`
+const WORDS = String.raw`(?:\p{L}[\p{L}'’-]*\s+){0,2}\p{L}[\p{L}'’-]*`
+const BARE_TIMER_LINE_RE = new RegExp(String.raw`^${WORDS}(?:(?<=ing|ed)(?:\s+for)?\s+|\s*(?:…|\.{3})\s*)${DURATION}$`, 'iu')
+// …and one hung off the end of a longer line, after an ellipsis or a column gap: grok's right-aligned
+// `Waiting on answers for Which color should I report?             4.2s`. Only the time goes.
+const TRAILING_TIMER_RE = new RegExp(String.raw`(?:(?<=…|\.{3})\s*|\s{2,})${DURATION}$`, 'u')
+// Codex's cursor readout under its request_user_input rows: `option 2/4 | tab to add notes`.
+const CURSOR_READOUT_RE = /^option\s+\d+\s*\/\s*\d+\b/i
+// Whatever leads a line and moves on its own: a cursor (`❯ › > ▶`), a spinner frame (braille, `✻`, `◐`,
+// Muse's `◇`/`◆`) or a box/tab state (`☐ ☒ ✔ ○ ● ◉`).
+const LEAD_MARKS_RE = /^(?:[❯›>▶►▸➤\u2800-\u28ff✻✽✶✳✢✺✹✸✷◐◓◑◒◴◵◶◷◇◆☐☑☒✔✓✗✘○◯●◉◎]\s*)+/u
+// A row's own state right after its number, or at the start of an unnumbered row: `[ ]`, `[✔]`, `(•)`, `◉`.
+const ROW_STATE_RE = /^(\d+[.)]\s+|)(?:\[[^\]\n]?\]|\([^)\n]?\)|[☐☑☒✔✓○◯●◉◎])\s*/u
+// Box drawing: frames and rules redraw to the pane's width.
+const BOX_RE = /[\u2500-\u257f]+/g
+
+/**
+ * The dialog as a person reads it, with nothing that changes while it waits: status lines (a live timer,
+ * bare or in parentheses, a token counter, `esc to interrupt`) and Codex's cursor readout dropped; cursor marks, spinner frames
+ * and checkbox/radio state stripped; frames and whitespace collapsed. Every word of the prompt stays —
+ * two commands that differ anywhere are still two signatures.
+ */
+function dialogSignature(dialog: string): string {
+  const out: string[] = []
+  for (const raw of dialog.replace(/\u00a0/g, ' ').split('\n')) {
+    let line = raw.replace(BOX_RE, ' ').trim()
+    if (CURSOR_READOUT_RE.test(line)) continue
+    line = line.replace(LEAD_MARKS_RE, '')
+    const row = /^\d+[.)]\s/.test(line)
+    // A line that carries a live timer is the engine's status line (Hermes' `💻 curl … (01m30s · ↓ 82 tok)`
+    // under its frame, Muse's `◇ Calling tools (21s · esc to interrupt)` above its rule, a bare `waiting 3s`),
+    // not the prompt: the prompt is always painted on lines of its own. A ROW keeps its words; only the
+    // group goes.
+    if (!row && (TIMER_GROUP_RE.test(line) || STATUS_BITS_RE.test(line) || BARE_TIMER_LINE_RE.test(line))) continue
+    if (!row) line = line.replace(TRAILING_TIMER_RE, '')
+    line = line.replace(TIMER_GROUPS_RE, ' ').replace(ROW_STATE_RE, '$1').replace(/\s+/g, ' ').trim()
+    if (line) out.push(line)
+  }
+  return out.join('\n')
 }
 
 function hash(value: string): string {

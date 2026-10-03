@@ -1,0 +1,103 @@
+{
+  "schema": 1,
+  "recordedAt": "2026-10-01T14:25:16.810358+00:00",
+  "platform": {
+    "system": "Darwin",
+    "version": "26.6.2",
+    "machine": "arm64"
+  },
+  "baselineCommit": "6ad3c2077ebfcf2f2b87f319ca42600a3ef56b5b",
+  "correctedSourceSha256": "996bdaef9acb5d7a1214cdabe309052178923a8a651259dcbab44c768f3c8541",
+  "scope": "Native measurement-tool calibration only; no app performance improvement is claimed. Independent CPU is Python getrusage for its measured work; the sampler interval may also include worker startup.",
+  "before": [
+    {
+      "mode": "busy",
+      "independent": {
+        "cpuSeconds": 2.9652439999999998,
+        "workWallSeconds": 3.000027707996196
+      },
+      "measured": {
+        "cpuPercentOneCore": 1.4230064170113295,
+        "cpuSeconds": 0.071171695,
+        "diskReadBytes": 0,
+        "diskWriteBytes": 0,
+        "elapsedSeconds": 5.001502041675849,
+        "interruptWakeupsPerSecond": 0,
+        "packageIdleWakeupsPerSecond": 0,
+        "physicalFootprintMiBEnd": 6.969207763671875,
+        "physicalFootprintMiBMedian": 6.969207763671875,
+        "physicalFootprintMiBPeak": 6.969207763671875,
+        "physicalFootprintMiBStart": 6.969207763671875
+      },
+      "cpuClock": null
+    }
+  ],
+  "after": [
+    {
+      "mode": "busy",
+      "independent": {
+        "cpuSeconds": 2.9960419999999996,
+        "workWallSeconds": 3.0000122919882415
+      },
+      "measured": {
+        "cpuPercentOneCore": 59.91842945300833,
+        "cpuSeconds": 2.99612175,
+        "diskReadBytes": 0,
+        "diskWriteBytes": 0,
+        "elapsedSeconds": 5.000334249998559,
+        "interruptWakeupsPerSecond": 0,
+        "packageIdleWakeupsPerSecond": 0,
+        "physicalFootprintMiBEnd": 6.891059875488281,
+        "physicalFootprintMiBMedian": 6.891059875488281,
+        "physicalFootprintMiBPeak": 6.891059875488281,
+        "physicalFootprintMiBStart": 6.891059875488281
+      },
+      "cpuClock": {
+        "timebaseDenom": 3,
+        "timebaseNumer": 125,
+        "unit": "mach_absolute_time"
+      }
+    },
+    {
+      "mode": "idle",
+      "independent": {
+        "cpuSeconds": 4.4999999999999034e-05,
+        "workWallSeconds": 3.0050897499895655
+      },
+      "measured": {
+        "cpuPercentOneCore": 0.27397346293193237,
+        "cpuSeconds": 0.01370725,
+        "diskReadBytes": 0,
+        "diskWriteBytes": 0,
+        "elapsedSeconds": 5.003130541663268,
+        "interruptWakeupsPerSecond": 0.19987485668674052,
+        "packageIdleWakeupsPerSecond": 0,
+        "physicalFootprintMiBEnd": 6.875434875488281,
+        "physicalFootprintMiBMedian": 6.875434875488281,
+        "physicalFootprintMiBPeak": 6.875434875488281,
+        "physicalFootprintMiBStart": 0.2188873291015625
+      },
+      "cpuClock": {
+        "timebaseDenom": 3,
+        "timebaseNumer": 125,
+        "unit": "mach_absolute_time"
+      }
+    }
+  ],
+  "validation": {
+    "originalFailsSameBusyCalibration": true,
+    "correctedTestsPassed": 4,
+    "covers": [
+      "CPU agreement with independent getrusage",
+      "sleeping-worker CPU",
+      "existing-output preservation",
+      "concurrent-output preservation",
+      "schema 2 clock and process-birth metadata",
+      "output permissions 0600"
+    ],
+    "originalRegressionTestsFailAsExpected": 2,
+    "workloadStart": "Worker begins only after the sampler reports its first counter; no fixed startup sleep."
+  },
+  "historicalPolicy": "Preserve older raw artifacts; withdraw old CPU percentages without recorded timebase rather than guessing a conversion.",
+  "baselineAdaptation": "Only a stderr readiness marker was added to the original sampler so the controlled worker could wait for its first counter. Its original CPU calculation and output writer were preserved."
+}

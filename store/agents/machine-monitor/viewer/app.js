@@ -400,9 +400,10 @@
   /**
    * When the work started.
    *
-   * A roster reports one time per harness that means what it says: when it was created. (Its
-   * `updatedAt` is stamped by the registry's own reconcile pass, so it would draw every harness as
-   * busy right now — this view does not use it, and neither does anything else here.) So each mark
+   * A roster reports one time per harness that means what it says on every daemon: when it was
+   * created. (Its `updatedAt` is when the conversation last moved, but older daemons sent their
+   * reconcile time under that name, which would draw every harness as busy right now — this view
+   * does not use it, and neither does anything else here.) So each mark
    * below is one harness, stacked into the hour or day it began: a machine's week, as a skyline.
    */
   function renderActivity() {

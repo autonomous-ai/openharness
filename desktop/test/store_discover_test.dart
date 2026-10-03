@@ -753,7 +753,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         find.text(
-          'Recorded sessions will appear here when they are available in your catalog.',
+          'Recorded runs will appear here when they are available in your catalog.',
         ),
         findsOneWidget,
       );
@@ -1444,7 +1444,7 @@ void main() {
         findsOneWidget,
       );
       expect(app.swarms.length, count);
-      expect(find.text('Resume Harness'), findsNothing);
+      expect(find.text('Open Harness'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('store-primary-action')));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('create-agent-submit')), findsOneWidget);

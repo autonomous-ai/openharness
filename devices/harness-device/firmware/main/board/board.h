@@ -15,7 +15,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-typedef enum { TOUCH_NONE = 0, TOUCH_CST9217, TOUCH_CST816S } touch_chip_t;
+// GT911 is the Pro's, and it is never the ANSWER to a probe — that board has one controller and knows
+// it at build time (board_pro.c). It is in this enum so the shared log line and `hello.hw` can name it.
+typedef enum { TOUCH_NONE = 0, TOUCH_CST9217, TOUCH_CST816S, TOUCH_GT911 } touch_chip_t;
 
 typedef struct {
     const char  *name;          // goes up the cable in `hello.hw`, and into the boot log
@@ -40,3 +42,10 @@ void board_from_acks(const uint8_t *acks, int n, board_t *out);
 
 // One line, for the boot log and the daemon: "touch=cst816s pmic=no rst=1/2".
 const char *board_describe(void);
+
+// Was a factory reset asked for by holding a button through power-on?
+//
+// A BOARD FACT, not a policy, which is why it lives here. The dial reads BOOT (GPIO0), a button that is
+// up unless somebody is holding it. The Pro has no such button: its only switch is the one that turns the
+// board on, so it is BY DEFINITION held at this moment and can never mean anything else.
+bool board_factory_reset_requested(void);

@@ -128,94 +128,97 @@ class _PaneResizeHandleState extends State<PaneResizeHandle> {
   }
 
   @override
-  Widget build(BuildContext context) => Semantics(
-    label: _horizontal ? 'Resize pane columns' : 'Resize pane rows',
-    value: _value(widget.arrangement),
-    increasedValue: _value(_resized(.02)),
-    decreasedValue: _value(_resized(-.02)),
-    hint:
-        'Arrow keys resize. Double-click balances. Escape returns to the pane.',
-    slider: true,
-    onIncrease: () => _step(.02),
-    onDecrease: () => _step(-.02),
-    child: Focus(
-      focusNode: _focus,
-      onFocusChange: (value) => setState(() => _focused = value),
-      onKeyEvent: (_, event) {
-        if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
-          return KeyEventResult.ignored;
-        }
-        final keyboard = HardwareKeyboard.instance;
-        if (keyboard.isMetaPressed ||
-            keyboard.isControlPressed ||
-            keyboard.isAltPressed) {
-          return KeyEventResult.ignored;
-        }
-        if (event.logicalKey == LogicalKeyboardKey.escape) {
-          _cancel();
-          widget.onLeave();
+  Widget build(BuildContext context) => Tooltip(
+    message: 'Drag to resize panes · Double-click to balance',
+    excludeFromSemantics: true,
+    child: Semantics(
+      label: _horizontal ? 'Resize pane columns' : 'Resize pane rows',
+      value: _value(widget.arrangement),
+      increasedValue: _value(_resized(.02)),
+      decreasedValue: _value(_resized(-.02)),
+      hint: 'Arrow keys resize. Double-click balances. Escape returns to the pane.',
+      slider: true,
+      onIncrease: () => _step(.02),
+      onDecrease: () => _step(-.02),
+      child: Focus(
+        focusNode: _focus,
+        onFocusChange: (value) => setState(() => _focused = value),
+        onKeyEvent: (_, event) {
+          if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+            return KeyEventResult.ignored;
+          }
+          final keyboard = HardwareKeyboard.instance;
+          if (keyboard.isMetaPressed ||
+              keyboard.isControlPressed ||
+              keyboard.isAltPressed) {
+            return KeyEventResult.ignored;
+          }
+          if (event.logicalKey == LogicalKeyboardKey.escape) {
+            _cancel();
+            widget.onLeave();
+            return KeyEventResult.handled;
+          }
+          final decrease = _horizontal
+              ? LogicalKeyboardKey.arrowLeft
+              : LogicalKeyboardKey.arrowUp;
+          final increase = _horizontal
+              ? LogicalKeyboardKey.arrowRight
+              : LogicalKeyboardKey.arrowDown;
+          if (event.logicalKey != decrease && event.logicalKey != increase) {
+            return KeyEventResult.ignored;
+          }
+          _step(
+            (event.logicalKey == decrease ? -1 : 1) *
+                (keyboard.isShiftPressed ? .1 : .02),
+          );
           return KeyEventResult.handled;
-        }
-        final decrease = _horizontal
-            ? LogicalKeyboardKey.arrowLeft
-            : LogicalKeyboardKey.arrowUp;
-        final increase = _horizontal
-            ? LogicalKeyboardKey.arrowRight
-            : LogicalKeyboardKey.arrowDown;
-        if (event.logicalKey != decrease && event.logicalKey != increase) {
-          return KeyEventResult.ignored;
-        }
-        _step(
-          (event.logicalKey == decrease ? -1 : 1) *
-              (keyboard.isShiftPressed ? .1 : .02),
-        );
-        return KeyEventResult.handled;
-      },
-      child: MouseRegion(
-        cursor: _horizontal
-            ? SystemMouseCursors.resizeColumn
-            : SystemMouseCursors.resizeRow,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() => _hover = false),
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          dragStartBehavior: DragStartBehavior.down,
-          onDoubleTap: _balance,
-          onHorizontalDragStart: _horizontal ? _begin : null,
-          onHorizontalDragUpdate: _horizontal ? _drag : null,
-          onHorizontalDragEnd: _horizontal ? _end : null,
-          onHorizontalDragCancel: _horizontal ? _cancel : null,
-          onVerticalDragStart: _horizontal ? null : _begin,
-          onVerticalDragUpdate: _horizontal ? null : _drag,
-          onVerticalDragEnd: _horizontal ? null : _end,
-          onVerticalDragCancel: _horizontal ? null : _cancel,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              if (_hover || _focused || _start != null)
+        },
+        child: MouseRegion(
+          cursor: _horizontal
+              ? SystemMouseCursors.resizeColumn
+              : SystemMouseCursors.resizeRow,
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            dragStartBehavior: DragStartBehavior.down,
+            onDoubleTap: _balance,
+            onHorizontalDragStart: _horizontal ? _begin : null,
+            onHorizontalDragUpdate: _horizontal ? _drag : null,
+            onHorizontalDragEnd: _horizontal ? _end : null,
+            onHorizontalDragCancel: _horizontal ? _cancel : null,
+            onVerticalDragStart: _horizontal ? null : _begin,
+            onVerticalDragUpdate: _horizontal ? null : _drag,
+            onVerticalDragEnd: _horizontal ? null : _end,
+            onVerticalDragCancel: _horizontal ? null : _cancel,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                if (_hover || _focused || _start != null)
+                  Center(
+                    child: Container(
+                      width: _horizontal ? 1 : double.infinity,
+                      height: _horizontal ? double.infinity : 1,
+                      color: grid.AppPalette.swarmAccent.withValues(alpha: .35),
+                    ),
+                  ),
                 Center(
-                  child: Container(
-                    width: _horizontal ? 1 : double.infinity,
-                    height: _horizontal ? double.infinity : 1,
-                    color: grid.AppPalette.swarmAccent.withValues(alpha: .35),
+                  child: AnimatedContainer(
+                    duration: MediaQuery.disableAnimationsOf(context)
+                        ? Duration.zero
+                        : grid.AppMotion.hover,
+                    width: _horizontal ? 3 : 36,
+                    height: _horizontal ? 36 : 3,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(2),
+                      color: _hover || _focused || _start != null
+                          ? grid.AppPalette.swarmAccent
+                          : Colors.transparent,
+                    ),
                   ),
                 ),
-              Center(
-                child: AnimatedContainer(
-                  duration: MediaQuery.disableAnimationsOf(context)
-                      ? Duration.zero
-                      : grid.AppMotion.hover,
-                  width: _horizontal ? 3 : 36,
-                  height: _horizontal ? 36 : 3,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(2),
-                    color: _hover || _focused || _start != null
-                        ? grid.AppPalette.swarmAccent
-                        : Colors.transparent,
-                  ),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

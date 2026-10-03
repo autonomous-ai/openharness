@@ -40,7 +40,7 @@ void main() {
     expect(
       app.activeSwarmId,
       second.id,
-      reason: 'The active swarm also contains this agent',
+      reason: 'The active tab also contains this harness',
     );
     expect(app.focusedPane, same(pane));
     expect(first.panes, [pane]);
@@ -66,7 +66,7 @@ void main() {
     expect(search.submit(), isNull);
   });
 
-  test('location search uses only its own swarm context and output reuses the catalog', () async {
+  test('location search uses only its own tab context and output reuses the catalog', () async {
     final app = createApp();
     addTearDown(app.dispose);
     final session = terminal('a0', []);

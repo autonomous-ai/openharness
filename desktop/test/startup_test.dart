@@ -7,6 +7,8 @@ import 'package:harness/core/harness_file_store.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/snapshot_store.dart';
 import 'package:harness/core/startup.dart';
+import 'package:harness/notify/alert_sounds.dart';
+import 'package:harness/notify/system_notifications.dart';
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/shared/theme/color_palette.dart';
 import 'package:harness/stats/harness_stats.dart';
@@ -97,6 +99,9 @@ void main() {
       terminalTheme: nextScheme,
       appearance: nextAppearance,
       stats: nextStats,
+      alertSounds: AlertSoundStore(storage: storage),
+      screenAlerts: ScreenAlertStore(storage: storage),
+      desktopNotifications: DesktopNotificationStore(storage: storage),
     );
 
     expect(nextFont.family, TerminalFontChoice.menlo);
@@ -122,6 +127,9 @@ void main() {
       terminalTheme: scheme,
       appearance: appearance,
       stats: stats,
+      alertSounds: AlertSoundStore(storage: storage),
+      screenAlerts: ScreenAlertStore(storage: storage),
+      desktopNotifications: DesktopNotificationStore(storage: storage),
     );
     expect(font.family, TerminalFontChoice.defaultForPlatform);
     expect(font.size, terminalFontSize);
@@ -153,6 +161,9 @@ void main() {
         terminalTheme: scheme,
         appearance: appearance,
         stats: stats,
+        alertSounds: AlertSoundStore(storage: storage),
+        screenAlerts: ScreenAlertStore(storage: storage),
+        desktopNotifications: DesktopNotificationStore(storage: storage),
       ).then((_) => finished = true);
 
       expect(fontStorage.requests, [
@@ -167,6 +178,8 @@ void main() {
           'app_ui_font_size',
           'app_color_palette',
           'harness_start_background',
+          'harness_custom_background',
+          'harness_background_behind_harnesses',
           'workspace_prompt_v1',
         },
       ]);
@@ -225,6 +238,9 @@ void main() {
       terminalTheme: scheme,
       appearance: appearance,
       stats: stats,
+      alertSounds: AlertSoundStore(storage: storage),
+      screenAlerts: ScreenAlertStore(storage: storage),
+      desktopNotifications: DesktopNotificationStore(storage: storage),
     ).then((_) => finished = true);
     broken.ready.completeError(const FileSystemException('unreadable'));
     await Future<void>.delayed(Duration.zero);

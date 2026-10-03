@@ -25,7 +25,7 @@ import {
   ENGINE_EXIT_PANE_OPTION,
   listPaneTitles,
   LSTART_MARKER_RE,
-  resolvePaneEngineProcess,
+  lookupPaneEngineProcess,
   sendKeyToTmux,
   sendLiteralToTmux,
   sendToTmux,
@@ -315,17 +315,17 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
 
   async validate(runtime: TmuxRuntimeRef, expected: TerminalProcessExpectation): Promise<RuntimeValidation> {
     try {
-      const live = await resolvePaneEngineProcess(runtime.paneId, expected.engine)
-      if (!live) return { state: 'gone', reason: `no ${expected.engine} process under tmux pane` }
+      const found = await lookupPaneEngineProcess(runtime.paneId, expected.engine)
+      if (!found.ok) return { state: found.unknown ? 'unknown' : 'gone', reason: found.reason }
+      const live = found.identity
       // A saved marker that is not a C-locale `lstart` stamp was written either by the pre-fix parser,
       // with its fields shifted, or by a `ps` that still inherited the user's LC_TIME (see psEnv in
       // lib/childLocale.ts). Either way it can never equal the corrected stamp for the same live
       // process, so comparing it would report a running engine as gone — once, on the upgrade that
       // fixed the reading. The pane still has a matching engine process; take it.
       //
-      // checkSessionRuntime makes the same allowance, but nothing calls that function today, so this
-      // is where the allowance has to live: coordinator.validate/acquireLease pass the PERSISTED
-      // identity straight through to here.
+      // Resume's checkSessionRuntime makes the same allowance. The coordinator passes persisted
+      // identities directly here when validating or acquiring a terminal lease.
       if (expected.processIdentity && !LSTART_MARKER_RE.test(expected.processIdentity.startMarker)) {
         return { state: 'alive' }
       }
@@ -398,8 +398,8 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
    * `TmuxControlStream.open` reads `paneMeta` first and refuses a missing pane and a multi-pane
    * window. Dropping the check also takes a whole-process-table `ps` scan off every terminal open.
    *
-   * `expected` stays in the signature because `TerminalBackend` defines it and Herdr may still want
-   * it; it is intentionally unused here.
+   * `expected` stays in the signature because `TerminalBackend` defines it; it is intentionally
+   * unused here.
    */
   async openStream(
     runtime: TmuxRuntimeRef,

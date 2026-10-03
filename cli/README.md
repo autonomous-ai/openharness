@@ -28,6 +28,20 @@ native module to compile — the same `cli.js` runs everywhere.
 
 Windows is not supported.
 
+## Swarm tabs and agent communication
+
+Turn on **Settings → Experimental → Swarm collaboration** to try it; it is **off by default**.
+Each tab is a swarm, with membership supplied by its agent panes. Agents keep their engines and contexts,
+automatically discover peers in their tab, ask a focused question, and continue with the answer.
+Agents consult peers only within their current tab. Cross-swarm requests and
+Cmd+Shift+A are deferred. **Cmd+Shift+P → Swarm conversation** opens the shared
+questions, replies, and delivery states without starting work. Desktop/web and
+mobile show the same shared history.
+
+See the [channel guide](../docs/tab-channels.md) for the account opt-in, ownership,
+scope, and verification limits. Run `harness channel --help` for commands. The underlying [team protocol](../docs/agent-teams.md) and advanced
+`harness team` CLI remain available; delivery preserves busy sessions, drafts, and dialogs.
+
 ## Remote media previews
 
 Harness Desktop can download an agent's image/video and open it on the viewing
@@ -49,28 +63,30 @@ it uses temporary identities and loopback sockets, never live machine state.
 
 ## Install & run (`harness`)
 
-Prerequisite: **Node ≥ 20**. Install the CLI, then sign in once with the same SSO account used by
-Harness:
+Install the CLI and run `hn` to work locally. Sign in when you want to connect other machines:
 
 ```bash
 curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash
 ```
 
-(The installer is a first-party hosted script; it downloads the published bundle and writes the
-`~/.local/bin/harness` command.)
+(The installer is a first-party hosted script. It brings its own Node, downloads the published
+bundle and writes the `~/.local/bin/harness` command, and `hn`: Harness in a terminal, which starts
+your local daemon the first time you run it. Local use requires no login.)
 
 ```bash
-harness login         # opens browser SSO and saves this computer's session
+harness login         # asks how to sign in (Google, Apple, or a QR your phone scans) and saves this computer's session
+harness login --google # or --apple: straight to that account in the browser, without asking
 harness login --force # stop the daemon and sign in as a different SSO account
-harness start         # starts the adapter from the saved SSO session
+harness start         # starts the local adapter; uses a saved SSO session if present
 harness start -f      # foreground mode for a supervisor; logs to stdout
 harness status     # is it running? shows pid + the chat link
 harness stop       # stop the background adapter
 harness version    # print the installed version
+harness tui        # all of Harness in this terminal — tabs, panes, every machine (see tui/README.md)
 harness logout     # stop the adapter and clear this computer's SSO session
 ```
 
-`login` uses the browser's native loopback SSO flow. Its access token, refresh token, expiry and
+`login` uses the browser's native loopback SSO flow, as the auth-service client of whoever asked — `harness-cli` from a terminal, `harness-desktop` when the desktop app runs it — and the session remembers that client, because a refresh has to name it again. Its access token, refresh token, expiry and
 backend-resolved machine id are stored atomically with owner-only permissions in
 `~/.harness/auth/session.json`; the immutable computer id lives separately at
 `~/.harness/computer-id`. Later `harness start` invocations reuse and refresh that session as needed.
@@ -96,10 +112,6 @@ with one already running it says so and touches nothing, leaving the update to t
 on the backend link refreshes the SSO token and reconnects; only a refresh token the backend rejects
 signs the computer out. See [`RELEASE.md`](RELEASE.md) for publishing and the update internals.
 Disable with `ADAPTER_UPDATE_DISABLE=true`.
-
-Custom Herdr-capable builds must keep self-update disabled or use a fork-owned signed
-`ADAPTER_UPDATE_URL` until that build is available in the configured upstream manifest. Otherwise the
-updater can legitimately replace the custom bundle with a release that lacks its terminal support.
 
 **From source (dev):** `cd this package && npm install && npm run build && node dist/cli.js login`
 (or `npm run dev -- login` via tsx — always foreground; self-update is off in dev). `npm run bundle`
@@ -159,8 +171,8 @@ claude under a terminal backend ──writes──▶ ~/.claude/projects/**.json
   profile agent comes back under its `CODEX_HOME` with its hooks installed. A grid row written before
   the launch was persisted is not relaunched; it is marked `GRID_CREDENTIAL_REQUIRED` instead. An
   engine with no resume flag (devin) comes back fresh.
-- **Hooks bind mutable engine sessions** to the process agent using authenticated tmux and/or Herdr
-  runtime hints plus verified caller ancestry. Hook socket paths are lookup hints only. They do not
+- **Hooks bind mutable engine sessions** to the process agent using authenticated tmux
+  runtime hints plus verified caller ancestry. They do not
   require `MACHINE_ID`. `SessionStart` and catch hooks attach transcript/store metadata; `SessionEnd` only
   requests an immediate process reconciliation. `/clear`, `/new`, and resume move or rotate the binding
   without changing the live process agent's UUID.
@@ -199,47 +211,61 @@ claude under a terminal backend ──writes──▶ ~/.claude/projects/**.json
   authoritative flags** (`compactEventFromRaw` in `lib/normalize.ts`) so the summary is never rendered
   as a fake user turn — an auto-compact firing mid-turn keeps the open turn open.
 - A web chat message arrives as a `message` frame and is submitted through one validated primary runtime.
-  Herdr prompt bytes use its bounded local socket API and never command-line arguments or environment.
 
 ### Terminal backend behavior
 
-- **tmux is the only supported backend.** Herdr was retired: nothing puts it in the backend list any
-  more, so none of its code paths are reached. `TERMINAL_BACKENDS=herdr` is not an error — it is
-  dropped with a warning and the daemon runs on tmux, because the CLI self-updates and a retired
-  setting must not stop an unattended machine from starting.
-- **Unset means auto**, which now resolves to tmux alone. `TERMINAL_BACKENDS` survives only as a pin.
-- `HERDR_SESSIONS` and `HERDR_BIN` still parse so an existing environment does not fail boot, but they
-  select nothing.
+- **tmux is the only supported backend.** The retired Herdr backend has been removed.
+  `TERMINAL_BACKENDS=herdr` is not an error — it is dropped with a warning and the daemon runs on tmux,
+  because the CLI self-updates and a retired setting must not stop an unattended machine from starting.
+  `HERDR_SESSIONS` and `HERDR_BIN` are no longer read.
+- **Unset means auto**, which resolves to tmux alone. `TERMINAL_BACKENDS` survives only as a pin.
 - Harness never auto-starts a session.
 - `harness status` answers "is my pane being watched?" — `terminalSelection` says `auto` or `configured`,
   and `terminalTargets` lists what is live right now, not what was configured at boot.
-- The shared backend contract can create and close a tmux session or Herdr workspace when explicitly
+- The shared backend contract can create and close a tmux session when explicitly
   invoked. This is lifecycle capability, not automatic startup behavior; normal discovery observes
   user-owned sessions, and agent deletion still terminates only the validated engine process.
-- One process visible through nested/coexisting backends remains one Harness agent with multiple runtime
-  locators. A Herdr workspace move preserves its stable terminal identity; an engine process replacement does not.
-- Backend and endpoint failures are independent. A failed probe is `unknown`, not proof of death. An
+- One process visible through nested panes remains one Harness agent with multiple runtime locators;
+  an engine process replacement does not.
+- Backend failures are independent. A failed probe is `unknown`, not proof of death. An
   agent with no verified runtime becomes dormant and is republished with the same id after recovery.
 - Existing `tmuxPane` registry rows migrate in place. tmux rows retain their legacy projection during
-  the compatibility window; Herdr-only rows never claim a tmux pane. For code rollback, stop the daemon,
-  archive the mixed registry, and give the old binary a copied tmux-only projection.
+  the compatibility window. Runtimes an earlier build recorded for a Herdr pane are dropped on load, and
+  an agent that lived only in one is removed.
 
-For reproducible multiplexer verification, install dependencies and run both opt-in real suites from
+For reproducible multiplexer verification, install dependencies and run the opt-in real suite from
 `cli/` under a normal umask:
 
 ```bash
 umask 022
 npm ci
 npm run test:tmux-real
-npm run test:herdr-real
 ```
 
-The Herdr suite requires Herdr 0.8.x protocol 19. Both suites use isolated, test-owned lifecycle
-fixtures. Their engine matrix explicitly skips commands that are not installed; authentication or
+The tmux suite creates and cleans up its own private server, including when run from inside a
+Harness pane. No outer `tmux kill-server` cleanup is needed. Setting `TMUX_TMPDIR` alone does not
+isolate tmux: an inherited `TMUX` still selects the parent server. Any separate fixture must clear
+`TMUX`/`TMUX_PANE` and name its private socket explicitly with `tmux -S` for cleanup.
+
+The suite uses isolated, test-owned lifecycle fixtures. Its engine matrix explicitly skips commands that are not installed; authentication or
 first-run onboarding that prevents a proprietary CLI from running is unavailable evidence and must be
 reported as such, not described as exercised.
 
-## Config (`.env`, see `.env.example`)
+## Config (environment variables; see `.env.example`)
+
+Dev and release builds use the same production backend, account and machine state by default.
+Harness does **not** load a project's `.env` when started from that folder. To run against a
+different backend deliberately, export the settings or select a file explicitly:
+
+```bash
+HARNESS_ENV_FILE=/absolute/path/to/harness.env harness start
+```
+
+Exported variables take precedence. An explicit `DOTENV_CONFIG_PATH` remains supported.
+If you previously relied on automatic `.env` loading, set one of these paths before starting
+Harness. `harness status` reports the running daemon's backend, account environment and state
+directories; those can differ from the shell that invokes the command. Older daemons may not
+report all fields.
 
 | var | default | meaning |
 |-----|---------|---------|
@@ -251,8 +277,6 @@ reported as such, not described as exercised.
 | `ADAPTER_DATA_DIR` | `~/.harness/cli/data` | registry and daemon-local state (SSO session is always `~/.harness/auth/session.json`) |
 | `DISABLE_HOOK_INSTALL` | `false` | skip auto-installing the claude hooks |
 | `TERMINAL_BACKENDS` | *(auto)* | pin the set. `tmux` is the only supported value; a retired `herdr` is dropped with a warning |
-| `HERDR_SESSIONS` | *(inert)* | retired with the Herdr backend; still parses, selects nothing |
-| `HERDR_BIN` | *(inert)* | retired with the Herdr backend |
 | `TERMINAL_RECONCILE_INTERVAL_MS` | `5000` | backend-neutral discovery interval; minimum 5000 ms |
 | `TMUX_REAP_INTERVAL_MS` | `5000` | process discovery interval (removal requires two confirmed misses) |
 | `ADAPTER_UPDATE_URL` | `…/adapter/metadata.json` | GCS release manifest the daemon polls for a newer build |

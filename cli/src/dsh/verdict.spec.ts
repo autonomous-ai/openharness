@@ -174,8 +174,9 @@ describe('DshVerdictWatcher, event by event', () => {
         listener = (name, at) => { if (name === event && at === path) resolve(true) }
         inner.on('all', listener)
       })
-      // a change within the same millisecond as the last one can read as no change at all
-      await settle(20)
+      // a change within the same millisecond as the last one can read as no change at all, and chokidar
+      // drops a second `change` to one file within 50 ms of the first (Linux delivers them that fast)
+      await settle(80)
       act()
       const seenIt = await Promise.race([landed, settle(3_000).then(() => false)])
       inner.off('all', listener)

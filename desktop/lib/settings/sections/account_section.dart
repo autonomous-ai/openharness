@@ -26,22 +26,30 @@ class AccountSection extends StatelessWidget {
               'This computer works without one. An account adds your other '
               'machines, the shared desk and voice on the dial.',
           child: SingleChildScrollView(
-            child: SettingRow(
-              title: 'Not signed in',
-              detail: 'Sign in to reach your other machines',
-              control: FilledButton(
-                key: const Key('settings-sign-in-button'),
-                // Straight back to the desk once the account lands. Settings is
-                // where the person WENT to sign in, not where they were going:
-                // leaving them on a row that now just says their email is the
-                // app asking them to find their own way out (owner,
-                // 2026-09-23). Sign out is the same shape, in reverse.
-                onPressed: () async {
-                  final signedIn = await showSignInSheet(context, notifier);
-                  if (signedIn && context.mounted) Navigator.of(context).pop();
-                },
-                child: const Text('Sign in'),
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SettingRow(
+                  title: 'Not signed in',
+                  detail: 'Sign in to reach your other machines',
+                  control: FilledButton(
+                    key: const Key('settings-sign-in-button'),
+                    // Straight back to the desk once the account lands.
+                    // Settings is where the person WENT to sign in, not where
+                    // they were going: leaving them on a row that now just
+                    // says their email is the app asking them to find their
+                    // own way out (owner, 2026-09-23). Sign out is the same
+                    // shape, in reverse.
+                    onPressed: () async {
+                      final signedIn = await showSignInSheet(context, notifier);
+                      if (signedIn && context.mounted) {
+                        Navigator.of(context).pop();
+                      }
+                    },
+                    child: const Text('Sign in'),
+                  ),
+                ),
+              ],
             ),
           ),
         );

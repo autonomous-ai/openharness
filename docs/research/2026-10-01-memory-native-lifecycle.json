@@ -1,0 +1,1509 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-01",
+  "kind": "synthetic-native-lifecycle-and-restricted-extraction",
+  "claude": {
+    "version": "2.1.286 (Claude Code)",
+    "requests": [
+      {
+        "phase": "first",
+        "path": "/v1/messages",
+        "model": "claude-opus-4-6",
+        "markers": [
+          "first"
+        ],
+        "contextRoles": [
+          "user"
+        ],
+        "tools": []
+      },
+      {
+        "phase": "resume",
+        "path": "/v1/messages",
+        "model": "claude-opus-4-6",
+        "markers": [
+          "first",
+          "resume"
+        ],
+        "contextRoles": [
+          "user",
+          "user"
+        ],
+        "tools": []
+      },
+      {
+        "phase": "compact",
+        "path": "/v1/messages",
+        "model": "claude-opus-4-6",
+        "markers": [
+          "first",
+          "resume"
+        ],
+        "contextRoles": [
+          "user",
+          "user"
+        ],
+        "tools": []
+      },
+      {
+        "phase": "after_compact",
+        "path": "/v1/messages",
+        "model": "claude-opus-4-6",
+        "markers": [
+          "after_compact"
+        ],
+        "contextRoles": [
+          "user"
+        ],
+        "tools": []
+      },
+      {
+        "phase": "model_change",
+        "path": "/v1/messages",
+        "model": "claude-sonnet-4-6",
+        "markers": [
+          "after_compact",
+          "model_change"
+        ],
+        "contextRoles": [
+          "user",
+          "user"
+        ],
+        "tools": []
+      }
+    ],
+    "hooks": [
+      {
+        "phase": "first",
+        "route": "/api/hook/session-start",
+        "event": "SessionStart",
+        "source": "startup",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "first",
+        "route": "/api/hook/session-start",
+        "event": "UserPromptSubmit",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "first",
+        "route": "/api/hook/memory-emitted",
+        "session": "session_1",
+        "receipt": true
+      },
+      {
+        "phase": "resume",
+        "route": "/api/hook/session-start",
+        "event": "SessionStart",
+        "source": "resume",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "resume",
+        "route": "/api/hook/session-start",
+        "event": "UserPromptSubmit",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "resume",
+        "route": "/api/hook/memory-emitted",
+        "session": "session_1",
+        "receipt": true
+      },
+      {
+        "phase": "compact",
+        "route": "/api/hook/session-start",
+        "event": "SessionStart",
+        "source": "resume",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "compact",
+        "route": "/api/hook/session-start",
+        "event": "PreCompact",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "compact",
+        "route": "/api/hook/session-start",
+        "event": "SessionStart",
+        "source": "compact",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "compact",
+        "route": "/api/hook/session-start",
+        "event": "PostCompact",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "after_compact",
+        "route": "/api/hook/session-start",
+        "event": "SessionStart",
+        "source": "resume",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "after_compact",
+        "route": "/api/hook/session-start",
+        "event": "UserPromptSubmit",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "after_compact",
+        "route": "/api/hook/memory-emitted",
+        "session": "session_1",
+        "receipt": true
+      },
+      {
+        "phase": "model_change",
+        "route": "/api/hook/session-start",
+        "event": "SessionStart",
+        "source": "resume",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "model_change",
+        "route": "/api/hook/session-start",
+        "event": "UserPromptSubmit",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "model_change",
+        "route": "/api/hook/memory-emitted",
+        "session": "session_1",
+        "receipt": true
+      }
+    ],
+    "runs": [
+      {
+        "phase": "first",
+        "code": 0,
+        "signal": null,
+        "timedOut": false,
+        "events": [
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "session": "session_1"
+          },
+          {
+            "type": "assistant",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "informational",
+            "session": "session_1"
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "session": "session_1",
+            "isError": false,
+            "result": "Synthetic response."
+          }
+        ],
+        "stderr": ""
+      },
+      {
+        "phase": "resume",
+        "code": 0,
+        "signal": null,
+        "timedOut": false,
+        "events": [
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "session": "session_1"
+          },
+          {
+            "type": "assistant",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "informational",
+            "session": "session_1"
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "session": "session_1",
+            "isError": false,
+            "result": "Synthetic response."
+          }
+        ],
+        "stderr": ""
+      },
+      {
+        "phase": "compact",
+        "code": 0,
+        "signal": null,
+        "timedOut": false,
+        "events": [
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "status",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "status",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "informational",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "compact_boundary",
+            "session": "session_1",
+            "compactMetadata": {
+              "trigger": "manual",
+              "pre_tokens": 1020,
+              "post_tokens": 353,
+              "cumulative_dropped_tokens": 667,
+              "duration_ms": 85,
+              "preserved_segment": {
+                "head_uuid": "94e639e5-4afe-44b9-9b75-c9088cbc717e",
+                "anchor_uuid": "f729d417-073c-45a8-aa75-2e82592f7053",
+                "tail_uuid": "94e639e5-4afe-44b9-9b75-c9088cbc717e"
+              },
+              "preserved_messages": {
+                "anchor_uuid": "f729d417-073c-45a8-aa75-2e82592f7053",
+                "uuids": [
+                  "94e639e5-4afe-44b9-9b75-c9088cbc717e"
+                ],
+                "all_uuids": [
+                  "94e639e5-4afe-44b9-9b75-c9088cbc717e",
+                  "4e93ff43-b3d2-455f-9b91-dbb4c13d2141"
+                ]
+              }
+            }
+          },
+          {
+            "type": "user",
+            "session": "session_1"
+          },
+          {
+            "type": "user",
+            "session": "session_1"
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "session": "session_1",
+            "isError": false,
+            "result": ""
+          }
+        ],
+        "stderr": ""
+      },
+      {
+        "phase": "after_compact",
+        "code": 0,
+        "signal": null,
+        "timedOut": false,
+        "events": [
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "session": "session_1"
+          },
+          {
+            "type": "assistant",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "informational",
+            "session": "session_1"
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "session": "session_1",
+            "isError": false,
+            "result": "Synthetic response."
+          }
+        ],
+        "stderr": ""
+      },
+      {
+        "phase": "model_change",
+        "code": 0,
+        "signal": null,
+        "timedOut": false,
+        "events": [
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "session": "session_1"
+          },
+          {
+            "type": "assistant",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "informational",
+            "session": "session_1"
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "session": "session_1",
+            "isError": false,
+            "result": "Synthetic response."
+          }
+        ],
+        "stderr": ""
+      }
+    ],
+    "limitations": [
+      "Synthetic localhost provider; no inference or semantic quality measured.",
+      "Adapter uses synthetic responses; this does not verify real host authorization."
+    ]
+  },
+  "codex": {
+    "engine": "codex",
+    "version": "codex-cli 0.159.3",
+    "launch": "model_change",
+    "runs": [
+      {
+        "step": "first",
+        "code": 0,
+        "signal": null,
+        "timedOut": false
+      },
+      {
+        "step": "resume",
+        "code": 0,
+        "signal": null,
+        "timedOut": false
+      },
+      {
+        "step": "model_change",
+        "code": 0,
+        "signal": null,
+        "timedOut": false
+      }
+    ],
+    "hooks": [
+      {
+        "launch": "first",
+        "promptNumber": 0,
+        "route": "/api/hook/session-start",
+        "event": "SessionStart",
+        "source": "startup",
+        "engine": "codex",
+        "receipt": false
+      },
+      {
+        "launch": "first",
+        "promptNumber": 1,
+        "route": "/api/hook/session-start",
+        "event": "UserPromptSubmit",
+        "engine": "codex",
+        "receipt": false
+      },
+      {
+        "launch": "first",
+        "promptNumber": 1,
+        "route": "/api/hook/memory-emitted",
+        "engine": "codex",
+        "receipt": true
+      },
+      {
+        "launch": "first",
+        "promptNumber": 1,
+        "route": "/api/hook/session-start",
+        "event": "PreCompact",
+        "engine": "codex",
+        "receipt": false
+      },
+      {
+        "launch": "first",
+        "promptNumber": 1,
+        "route": "/api/hook/session-start",
+        "event": "PostCompact",
+        "engine": "codex",
+        "receipt": false
+      },
+      {
+        "launch": "first",
+        "promptNumber": 1,
+        "route": "/api/hook/session-start",
+        "event": "SessionStart",
+        "source": "compact",
+        "engine": "codex",
+        "receipt": false
+      },
+      {
+        "launch": "first",
+        "promptNumber": 2,
+        "route": "/api/hook/session-start",
+        "event": "UserPromptSubmit",
+        "engine": "codex",
+        "receipt": false
+      },
+      {
+        "launch": "first",
+        "promptNumber": 2,
+        "route": "/api/hook/memory-emitted",
+        "engine": "codex",
+        "receipt": true
+      },
+      {
+        "launch": "resume",
+        "promptNumber": 2,
+        "route": "/api/hook/session-start",
+        "event": "SessionStart",
+        "source": "resume",
+        "engine": "codex",
+        "receipt": false
+      },
+      {
+        "launch": "resume",
+        "promptNumber": 3,
+        "route": "/api/hook/session-start",
+        "event": "UserPromptSubmit",
+        "engine": "codex",
+        "receipt": false
+      },
+      {
+        "launch": "resume",
+        "promptNumber": 3,
+        "route": "/api/hook/memory-emitted",
+        "engine": "codex",
+        "receipt": true
+      },
+      {
+        "launch": "model_change",
+        "promptNumber": 3,
+        "route": "/api/hook/session-start",
+        "event": "SessionStart",
+        "source": "resume",
+        "engine": "codex",
+        "receipt": false
+      },
+      {
+        "launch": "model_change",
+        "promptNumber": 4,
+        "route": "/api/hook/session-start",
+        "event": "UserPromptSubmit",
+        "engine": "codex",
+        "receipt": false
+      },
+      {
+        "launch": "model_change",
+        "promptNumber": 4,
+        "route": "/api/hook/memory-emitted",
+        "engine": "codex",
+        "receipt": true
+      }
+    ],
+    "requests": [
+      {
+        "launch": "first",
+        "model": "gpt-5.4",
+        "route": "/v1/responses",
+        "promptNumber": 1,
+        "markers": [
+          1
+        ],
+        "inputTypes": [
+          {
+            "type": "message",
+            "role": "developer"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "developer"
+          }
+        ],
+        "contextReceived": true,
+        "contextRoles": [
+          "developer"
+        ],
+        "promptReceived": true,
+        "tools": [
+          "request_user_input"
+        ]
+      },
+      {
+        "launch": "first",
+        "model": "gpt-5.4",
+        "route": "/v1/responses",
+        "promptNumber": 1,
+        "markers": [],
+        "inputTypes": [
+          {
+            "type": "message",
+            "role": "developer"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          }
+        ],
+        "contextReceived": false,
+        "contextRoles": [],
+        "promptReceived": true,
+        "tools": []
+      },
+      {
+        "launch": "first",
+        "model": "gpt-5.4",
+        "route": "/v1/responses",
+        "promptNumber": 1,
+        "markers": [
+          1
+        ],
+        "inputTypes": [
+          {
+            "type": "message",
+            "role": "developer"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "developer"
+          },
+          {
+            "type": "message",
+            "role": "assistant"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          }
+        ],
+        "contextReceived": true,
+        "contextRoles": [
+          "developer"
+        ],
+        "promptReceived": true,
+        "tools": []
+      },
+      {
+        "launch": "first",
+        "model": "gpt-5.4",
+        "route": "/v1/responses",
+        "promptNumber": 2,
+        "markers": [
+          2
+        ],
+        "inputTypes": [
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "developer"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "developer"
+          }
+        ],
+        "contextReceived": true,
+        "contextRoles": [
+          "developer"
+        ],
+        "promptReceived": true,
+        "tools": [
+          "request_user_input"
+        ]
+      },
+      {
+        "launch": "first",
+        "model": "gpt-5.4",
+        "route": "/v1/responses",
+        "promptNumber": 2,
+        "markers": [],
+        "inputTypes": [
+          {
+            "type": "message",
+            "role": "developer"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          }
+        ],
+        "contextReceived": false,
+        "contextRoles": [],
+        "promptReceived": true,
+        "tools": []
+      },
+      {
+        "launch": "resume",
+        "model": "gpt-5.4",
+        "route": "/v1/responses",
+        "promptNumber": 3,
+        "markers": [
+          2,
+          3
+        ],
+        "inputTypes": [
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "developer"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "developer"
+          },
+          {
+            "type": "message",
+            "role": "assistant"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "developer"
+          }
+        ],
+        "contextReceived": true,
+        "contextRoles": [
+          "developer",
+          "developer"
+        ],
+        "promptReceived": true,
+        "tools": [
+          "request_user_input"
+        ]
+      },
+      {
+        "launch": "resume",
+        "model": "gpt-5.4",
+        "route": "/v1/responses",
+        "promptNumber": 3,
+        "markers": [],
+        "inputTypes": [
+          {
+            "type": "message",
+            "role": "developer"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          }
+        ],
+        "contextReceived": false,
+        "contextRoles": [],
+        "promptReceived": true,
+        "tools": []
+      },
+      {
+        "launch": "model_change",
+        "model": "gpt-5.4-mini",
+        "route": "/v1/responses",
+        "promptNumber": 4,
+        "markers": [
+          2,
+          3,
+          4
+        ],
+        "inputTypes": [
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "developer"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "developer"
+          },
+          {
+            "type": "message",
+            "role": "assistant"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "developer"
+          },
+          {
+            "type": "message",
+            "role": "assistant"
+          },
+          {
+            "type": "message",
+            "role": "developer"
+          },
+          {
+            "type": "message",
+            "role": "developer"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "developer"
+          }
+        ],
+        "contextReceived": true,
+        "contextRoles": [
+          "developer",
+          "developer",
+          "developer"
+        ],
+        "promptReceived": true,
+        "tools": [
+          "request_user_input"
+        ]
+      },
+      {
+        "launch": "model_change",
+        "model": "gpt-5.4-mini",
+        "route": "/v1/responses",
+        "promptNumber": 4,
+        "markers": [],
+        "inputTypes": [
+          {
+            "type": "message",
+            "role": "developer"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          },
+          {
+            "type": "message",
+            "role": "user"
+          }
+        ],
+        "contextReceived": false,
+        "contextRoles": [],
+        "promptReceived": true,
+        "tools": []
+      }
+    ]
+  },
+  "restrictedCodexExtraction": [
+    {
+      "case": "old_model_metadata",
+      "result": {
+        "date": "2026-10-01T15:13:31.146Z",
+        "engine": "codex",
+        "version": "codex-cli 0.159.3",
+        "passed": false,
+        "runs": [
+          {
+            "mode": "text",
+            "requests": [
+              {
+                "model": "gpt-5.4",
+                "tools": [
+                  "request_user_input"
+                ],
+                "toolResults": []
+              }
+            ],
+            "events": [
+              {
+                "type": "thread.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "error",
+                "syntheticDiagnostic": "Model metadata for `gpt-5.4` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+              },
+              {
+                "type": "turn.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "agent_message"
+              },
+              {
+                "type": "turn.completed"
+              }
+            ],
+            "code": 0,
+            "signal": null,
+            "timedOut": false,
+            "oversized": false,
+            "invalidEvents": 0,
+            "expectedAnswer": true,
+            "forbiddenFileExists": false,
+            "diagnostics": {
+              "unknownFlag": false,
+              "networkError": false,
+              "fallbackModelMetadata": false
+            },
+            "passed": false
+          },
+          {
+            "mode": "request_user_input",
+            "requests": [
+              {
+                "model": "gpt-5.4",
+                "tools": [
+                  "request_user_input"
+                ],
+                "toolResults": []
+              },
+              {
+                "model": "gpt-5.4",
+                "tools": [
+                  "request_user_input"
+                ],
+                "toolResults": [
+                  {
+                    "unavailable": false,
+                    "syntheticOutput": "request_user_input is unavailable in Default mode"
+                  }
+                ]
+              }
+            ],
+            "events": [
+              {
+                "type": "thread.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "error",
+                "syntheticDiagnostic": "Model metadata for `gpt-5.4` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+              },
+              {
+                "type": "turn.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "agent_message"
+              },
+              {
+                "type": "turn.completed"
+              }
+            ],
+            "code": 0,
+            "signal": null,
+            "timedOut": false,
+            "oversized": false,
+            "invalidEvents": 0,
+            "expectedAnswer": true,
+            "forbiddenFileExists": false,
+            "diagnostics": {
+              "unknownFlag": false,
+              "networkError": false,
+              "fallbackModelMetadata": false
+            },
+            "passed": false
+          },
+          {
+            "mode": "exec_command",
+            "requests": [
+              {
+                "model": "gpt-5.4",
+                "tools": [
+                  "request_user_input"
+                ],
+                "toolResults": []
+              },
+              {
+                "model": "gpt-5.4",
+                "tools": [
+                  "request_user_input"
+                ],
+                "toolResults": [
+                  {
+                    "unavailable": true,
+                    "syntheticOutput": "unsupported call: exec_command"
+                  }
+                ]
+              }
+            ],
+            "events": [
+              {
+                "type": "thread.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "error",
+                "syntheticDiagnostic": "Model metadata for `gpt-5.4` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+              },
+              {
+                "type": "turn.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "agent_message"
+              },
+              {
+                "type": "turn.completed"
+              }
+            ],
+            "code": 0,
+            "signal": null,
+            "timedOut": false,
+            "oversized": false,
+            "invalidEvents": 0,
+            "expectedAnswer": true,
+            "forbiddenFileExists": false,
+            "diagnostics": {
+              "unknownFlag": false,
+              "networkError": false,
+              "fallbackModelMetadata": false
+            },
+            "passed": true
+          }
+        ],
+        "limitations": [
+          "Local mock responses with fake credentials; no model inference or quality measurement.",
+          "Native restrictions and event observations only; production adapter rejection also requires its regression tests.",
+          "The gpt-5.4 identifier is a mock label; native model metadata may fall back in the isolated home."
+        ]
+      }
+    },
+    {
+      "case": "current_model_code_mode",
+      "result": {
+        "date": "2026-10-01T15:14:33.279Z",
+        "engine": "codex",
+        "version": "codex-cli 0.159.3",
+        "passed": false,
+        "runs": [
+          {
+            "mode": "text",
+            "requests": [
+              {
+                "model": "gpt-6.1-sol",
+                "tools": [],
+                "toolResults": []
+              }
+            ],
+            "events": [
+              {
+                "type": "thread.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "error",
+                "syntheticDiagnostic": "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`."
+              },
+              {
+                "type": "turn.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "agent_message"
+              },
+              {
+                "type": "turn.completed"
+              }
+            ],
+            "code": 0,
+            "signal": null,
+            "timedOut": false,
+            "oversized": false,
+            "invalidEvents": 0,
+            "expectedAnswer": true,
+            "forbiddenFileExists": false,
+            "diagnostics": {
+              "unknownFlag": false,
+              "networkError": false,
+              "fallbackModelMetadata": false
+            },
+            "passed": false
+          },
+          {
+            "mode": "request_user_input",
+            "requests": [
+              {
+                "model": "gpt-6.1-sol",
+                "tools": [],
+                "toolResults": []
+              },
+              {
+                "model": "gpt-6.1-sol",
+                "tools": [],
+                "toolResults": [
+                  {
+                    "unavailable": true,
+                    "syntheticOutput": "request_user_input is unavailable in Default mode"
+                  }
+                ]
+              }
+            ],
+            "events": [
+              {
+                "type": "thread.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "error",
+                "syntheticDiagnostic": "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`."
+              },
+              {
+                "type": "turn.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "agent_message"
+              },
+              {
+                "type": "turn.completed"
+              }
+            ],
+            "code": 0,
+            "signal": null,
+            "timedOut": false,
+            "oversized": false,
+            "invalidEvents": 0,
+            "expectedAnswer": true,
+            "forbiddenFileExists": false,
+            "diagnostics": {
+              "unknownFlag": false,
+              "networkError": false,
+              "fallbackModelMetadata": false
+            },
+            "passed": true
+          },
+          {
+            "mode": "exec_command",
+            "requests": [
+              {
+                "model": "gpt-6.1-sol",
+                "tools": [],
+                "toolResults": []
+              },
+              {
+                "model": "gpt-6.1-sol",
+                "tools": [],
+                "toolResults": [
+                  {
+                    "unavailable": true,
+                    "syntheticOutput": "unsupported call: exec_command"
+                  }
+                ]
+              }
+            ],
+            "events": [
+              {
+                "type": "thread.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "error",
+                "syntheticDiagnostic": "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`."
+              },
+              {
+                "type": "turn.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "agent_message"
+              },
+              {
+                "type": "turn.completed"
+              }
+            ],
+            "code": 0,
+            "signal": null,
+            "timedOut": false,
+            "oversized": false,
+            "invalidEvents": 0,
+            "expectedAnswer": true,
+            "forbiddenFileExists": false,
+            "diagnostics": {
+              "unknownFlag": false,
+              "networkError": false,
+              "fallbackModelMetadata": false
+            },
+            "passed": true
+          }
+        ],
+        "limitations": [
+          "Local mock responses with fake credentials; no model inference or quality measurement.",
+          "Native restrictions and event observations only; production adapter rejection also requires its regression tests.",
+          "Model identifiers are mock labels; native model metadata may fall back in the isolated home."
+        ]
+      }
+    },
+    {
+      "case": "explicit_code_mode_disabled",
+      "result": {
+        "date": "2026-10-01T15:16:24.565Z",
+        "engine": "codex",
+        "version": "codex-cli 0.159.3",
+        "passed": false,
+        "runs": [
+          {
+            "mode": "text",
+            "requests": [
+              {
+                "model": "gpt-6.1-sol",
+                "tools": [],
+                "toolResults": []
+              }
+            ],
+            "events": [
+              {
+                "type": "thread.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "error",
+                "syntheticDiagnostic": "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`."
+              },
+              {
+                "type": "turn.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "agent_message"
+              },
+              {
+                "type": "turn.completed"
+              }
+            ],
+            "code": 0,
+            "signal": null,
+            "timedOut": false,
+            "oversized": false,
+            "invalidEvents": 0,
+            "expectedAnswer": true,
+            "forbiddenFileExists": false,
+            "diagnostics": {
+              "unknownFlag": false,
+              "networkError": false,
+              "fallbackModelMetadata": false
+            },
+            "passed": false
+          },
+          {
+            "mode": "request_user_input",
+            "requests": [
+              {
+                "model": "gpt-6.1-sol",
+                "tools": [],
+                "toolResults": []
+              },
+              {
+                "model": "gpt-6.1-sol",
+                "tools": [],
+                "toolResults": [
+                  {
+                    "unavailable": true,
+                    "syntheticOutput": "request_user_input is unavailable in Default mode"
+                  }
+                ]
+              }
+            ],
+            "events": [
+              {
+                "type": "thread.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "error",
+                "syntheticDiagnostic": "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`."
+              },
+              {
+                "type": "turn.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "agent_message"
+              },
+              {
+                "type": "turn.completed"
+              }
+            ],
+            "code": 0,
+            "signal": null,
+            "timedOut": false,
+            "oversized": false,
+            "invalidEvents": 0,
+            "expectedAnswer": true,
+            "forbiddenFileExists": false,
+            "diagnostics": {
+              "unknownFlag": false,
+              "networkError": false,
+              "fallbackModelMetadata": false
+            },
+            "passed": true
+          },
+          {
+            "mode": "exec_command",
+            "requests": [
+              {
+                "model": "gpt-6.1-sol",
+                "tools": [],
+                "toolResults": []
+              },
+              {
+                "model": "gpt-6.1-sol",
+                "tools": [],
+                "toolResults": [
+                  {
+                    "unavailable": true,
+                    "syntheticOutput": "unsupported call: exec_command"
+                  }
+                ]
+              }
+            ],
+            "events": [
+              {
+                "type": "thread.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "error",
+                "syntheticDiagnostic": "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`."
+              },
+              {
+                "type": "turn.started"
+              },
+              {
+                "type": "item.completed",
+                "itemType": "agent_message"
+              },
+              {
+                "type": "turn.completed"
+              }
+            ],
+            "code": 0,
+            "signal": null,
+            "timedOut": false,
+            "oversized": false,
+            "invalidEvents": 0,
+            "expectedAnswer": true,
+            "forbiddenFileExists": false,
+            "diagnostics": {
+              "unknownFlag": false,
+              "networkError": false,
+              "fallbackModelMetadata": false
+            },
+            "passed": true
+          }
+        ],
+        "limitations": [
+          "Local mock responses with fake credentials; no model inference or quality measurement.",
+          "Native restrictions and event observations only; production adapter rejection also requires its regression tests.",
+          "Model identifiers are mock labels; native model metadata may fall back in the isolated home."
+        ]
+      }
+    }
+  ],
+  "manualObservations": [
+    "Codex disposable-folder and exact-hook trust were accepted through its native UI under the user's prior explicit authorization.",
+    "Codex displayed Context compacted and resumed the same temporary conversation on both later launches.",
+    "Codex displayed fallback model-metadata warnings for the mock model names and an expected changed-model warning."
+  ],
+  "limitations": [
+    "No real model inference or semantic quality measured.",
+    "The adapter is a localhost mock; real host process ownership and receipt binding are covered separately by regression tests.",
+    "Delivery was observed for fresh user prompts after resume, manual compaction and a model change, not automatic mid-turn compaction or account/profile changes.",
+    "Codex also sent four unidentified additional requests without the memory marker; their purpose and delivery are not certified.",
+    "Production receipts remain unverified delivery; a mock request observation is not acknowledgement by a real model.",
+    "The first extraction-diagnostic classifier was too permissive about startup errors; the saved diagnostics and runner reject a normal path with an error item. Native tool restrictions alone do not certify the production extraction adapter."
+  ],
+  "references": [
+    "https://learn.chatgpt.com/docs/hooks",
+    "https://code.claude.com/docs/en/hooks"
+  ]
+}

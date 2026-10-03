@@ -52,18 +52,17 @@ const kRestingUntilNextMessage = 'Running · resting until your next message';
 /// minutes, hours and days — rounded down, so a list is never called younger than it is.
 String listAge(int seconds) {
   if (seconds < 60) return 'just now';
-  if (seconds < 3600) return '${seconds ~/ 60} min ago';
-  if (seconds < 86400) return '${seconds ~/ 3600} h ago';
-  return '${seconds ~/ 86400} d ago';
+  if (seconds < 3600) return '${seconds ~/ 60}min ago';
+  if (seconds < 86400) return '${seconds ~/ 3600}h ago';
+  return '${seconds ~/ 86400}d ago';
 }
 
 /// The asleep section's subtitle. The age is left off when the daemon did not send one — a list
 /// with no known age is still a resting section, and "from ? ago" would be a guess.
 String restingSubtitle(int? lastKnownAge) => [
   'Asleep',
-  'starts when you send a message (about 10–30 s)',
-  if (lastKnownAge != null) 'list from ${listAge(lastKnownAge)}',
-].join(' · ');
+  if (lastKnownAge != null) listAge(lastKnownAge),
+].join(' ');
 
 /// A wake that could not start [section]. The account's own section is "your models" — its name is
 /// an internal id nobody chose — and a shared one goes by the name it is listed under.

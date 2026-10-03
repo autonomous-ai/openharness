@@ -4,8 +4,8 @@
   "name": "Harness Monitor",
   "category": "Compute",
   "author": "Autonomous",
-  "description": "htop for your harnesses. Every harness on every machine in one dense list — running, paused, idle for a week — with a policy you can drag until the numbers look right, and one keystroke to pause an idle one or resume it with its conversation intact.",
-  "engine": "claude",
+  "description": "Inspect harnesses across your machines. See workspace and session storage separately, stop work, or review permanent session and Git worktree cleanup.",
+  "engine": "opencode",
   "workspace": {
     "template": "template",
     "marker": "NOTES.md",
@@ -18,7 +18,8 @@
     ],
     "env": {
       "HPS_CLI": "${dsh}/toolchain/hps",
-      "MONITOR_DSH_DIR": "${dsh}"
+      "MONITOR_DSH_DIR": "${dsh}",
+      "OPENCODE_CONFIG_CONTENT": "{\"model\":\"opencode/muse-spark-1.3-contributor-free\",\"small_model\":\"opencode/muse-spark-1.3-contributor-free\"}"
     }
   },
   "toolchain": {

@@ -9,7 +9,7 @@ import 'resource_picker.dart';
 /// Tests for the landing mode itself send Cmd-O directly instead.
 Future<void> openHarnessPicker(WidgetTester tester) async {
   final linux = defaultTargetPlatform == TargetPlatform.linux;
-  await key(tester, LogicalKeyboardKey.keyO, cmd: !linux, ctrl: linux);
+  await key(tester, LogicalKeyboardKey.keyO, cmd: !linux, alt: linux);
   await tester.pump(const Duration(milliseconds: 100));
   if (resourceScope('#').evaluate().isNotEmpty &&
       resourceSearch(tester).matchQuery.isEmpty) {

@@ -26,6 +26,15 @@ Dio attachHttpLog(Dio dio) {
 /// the only place an interceptor can keep per-request state.
 const String _startedAtKey = 'harnessLogStartedAt';
 
+/// Statuses a request expects as ROUTINE, as a `Set<int>` in its
+/// `Options.extra` under this key: they log at `debug` like a success.
+///
+/// For a poll whose "not yet" is an HTTP error by design — Add Phone asks the
+/// daemon `POST /api/pair` every 1.5 s, and "no phone is waiting" is a 409.
+/// Logged at `warn`, a minute with the dialog open was forty lines in the
+/// Failed lens about nothing going wrong.
+const String httpLogRoutineStatusesKey = 'harnessLogRoutineStatuses';
+
 class _HttpLogInterceptor extends Interceptor {
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
@@ -41,7 +50,10 @@ class _HttpLogInterceptor extends Interceptor {
     final status = response.statusCode;
     // `validateStatus` lets 4xx and 5xx through as responses in both of this
     // app's clients, so "it answered" is not the same as "it worked".
-    final failed = status == null || status < 200 || status >= 300;
+    final routine = response.requestOptions.extra[httpLogRoutineStatusesKey];
+    final failed =
+        (status == null || status < 200 || status >= 300) &&
+        !(routine is Set<int> && routine.contains(status));
     final line =
         '${_line(response.requestOptions)} → $status'
         '${_took(response.requestOptions)}';

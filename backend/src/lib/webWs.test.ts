@@ -12,9 +12,10 @@ describe('frames a web client may never forge', () => {
   it('refuses the backend-authoritative frames that are not `__`-prefixed', () => {
     // machine_meta names the account's private grid — the inference endpoint every agent on that
     // computer is then pointed at. machine_revoked makes the adapter clear its session and exit.
-    // desk_changed / machines_changed make every window on that computer re-read from the backend:
-    // forged in a loop, that is request amplification against our own API.
-    expect([...BACKEND_ONLY_DOWN_TYPES].sort()).toEqual(['desk_changed', 'machine_meta', 'machine_revoked', 'machines_changed'])
+    // desk_changed / zoo_changed / machines_changed make every window on that computer re-read from the backend:
+    // forged in a loop, that is request amplification against our own API. device_keys_changed makes the
+    // daemon re-read its device key log; devlog_append_result is the backend's answer to its own append.
+    expect([...BACKEND_ONLY_DOWN_TYPES].sort()).toEqual(['desk_changed', 'device_keys_changed', 'devlog_append_result', 'machine_meta', 'machine_revoked', 'machines_changed', 'zoo_changed'])
   })
 
   it('covers only frames that are NOT already caught by the `__` rule', () => {

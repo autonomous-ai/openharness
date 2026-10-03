@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/terminal/terminal_binary.dart';
-import 'package:harness/terminal/terminal_text.dart';
 import 'package:harness/state/swarm_navigation.dart';
 
 import 'swarm_screen_test.dart' show mount, terminal;
@@ -27,8 +26,7 @@ void main() {
     expect(find.byKey(const ValueKey('swarm-search-new-agent')), findsNothing);
     final panelRect = tester.getRect(results);
     final fieldRect = tester.getRect(field);
-    final cell = terminalCellSizeOf(tester.element(field));
-    expect(fieldRect.left - panelRect.left, closeTo(cell.width * 4, .01));
+    expect(fieldRect.left - panelRect.left, inInclusiveRange(40, 64));
     expect(fieldRect.right, lessThanOrEqualTo(panelRect.right));
     expect(fieldRect.width, greaterThan(panelRect.width / 2));
     await chord(tester, LogicalKeyboardKey.keyN);

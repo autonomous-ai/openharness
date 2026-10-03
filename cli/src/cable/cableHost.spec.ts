@@ -46,9 +46,27 @@ function fleetOf(machines: FleetMachine[]): MachineFleet {
 
 const REMOTE: FleetMachine = { machineId: 'other', name: 'office-imac', state: 'ready', authMode: 'remote' }
 
+describe('notification read receipts', () => {
+  it('routes the exact occurrence to its machine without focusing or answering', () => {
+    const w = wiring({ notificationRead: vi.fn(), opened: vi.fn(), focused: vi.fn() })
+    const host = new DaemonCableHost(w)
+    const item = { agentId: 'a', machineId: 'other', text: 'Same words.', question: true, readToken: 'turn-2' }
+    host.setUnread([item])
+    for (const [agent, token] of [['a', 'turn-1'], ['b', 'turn-2'], ['a', 'x'.repeat(64)], ['a', '']]) host.readNotification(agent, token)
+    expect(w.notificationRead).not.toHaveBeenCalled()
+    host.readNotification('a', 'turn-2'); host.readNotification('a', 'turn-2')
+    expect(w.notificationRead).toHaveBeenCalledTimes(2)
+    expect(w.notificationRead).toHaveBeenLastCalledWith('other', 'a', 'turn-2')
+    expect(w.opened).not.toHaveBeenCalled(); expect(w.focused).not.toHaveBeenCalled(); expect(w.answer).not.toHaveBeenCalled()
+    expect(host.listUnread()).toEqual([item]) // only the window confirms the clear
+    host.setUnread([]); host.readNotification('a', 'turn-2')
+    expect(w.notificationRead).toHaveBeenCalledTimes(2)
+  })
+})
+
 /** The window, open on one tab that holds these panes in this order. */
 function onTab(host: DaemonCableHost, agentIds: string[], id = 't1'): void {
-  host.setSwarms({ active: id, swarms: [{ id, name: 'Tab', agentIds, panes: agentIds.length }] })
+  host.setSwarms({ active: id, swarms: [{ id, name: 'Tab', agentIds, panes: agentIds.length }], tiles: [] })
   host.setDesk(agentIds)
 }
 
@@ -357,6 +375,25 @@ describe('DaemonCableHost.listAgentsFlat across machines, and the tab the dial g
     expect(host.activeSwarm()).toBe('')
   })
 
+  it('takes workspace identity and pane membership from one desktop announcement', async () => {
+    AGENTS.length = 0
+    for (const agentId of ['old-pane', 'new-pane'])
+      AGENTS.push({ agentId, registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
+    const host = new DaemonCableHost(wiring())
+    onTab(host, ['old-pane'], 'old-tab')
+    host.setDesk(['new-pane']) // app_panes arrives before its matching app_swarms.
+    expect((await host.listAgents()).map(a => a.id)).toEqual(['old-pane'])
+    host.setSwarms({ active: 'new-tab', tiles: [], swarms: [{ id: 'new-tab', name: 'New', agentIds: ['new-pane'], panes: 1 }] })
+    const snapshot = await host.listAgentSnapshot()
+    expect(snapshot.tab).toBe('new-tab')
+    expect(snapshot.agents.map(a => a.id)).toEqual(['new-pane'])
+    expect(snapshot.total).toBe(2)
+    onTab(host, [], 'empty-tab')
+    expect(snapshot.tab).toBe('new-tab')
+    expect(snapshot.agents.map(a => a.id)).toEqual(['new-pane'])
+    expect(await host.listAgentSnapshot()).toMatchObject({ tab: 'empty-tab', agents: [] })
+  })
+
   it('names the machine, and routes an open, for an agent heard from before it was listed', async () => {
     // A remote machine's question can arrive before its agent list has ever been read. The card still has
     // to say where it came from, and a tap on it has to open — "ignored open for unknown agent" was a
@@ -629,6 +666,7 @@ describe('DaemonCableHost.listSwarms', () => {
         { id: 'shell', name: 'harness-2', agentIds: [], panes: 1 },
         { id: 'fresh', name: 'New Harness', agentIds: [], panes: 0 },
       ],
+      tiles: [],
     })
     expect(host.listSwarms()).toEqual({
       selected: 'work',
@@ -639,13 +677,14 @@ describe('DaemonCableHost.listSwarms', () => {
         // Nothing on it at all — still nothing the dial can offer, which was always the intent.
         { id: 'fresh', name: 'New Harness', agents: 0, panes: 0 },
       ],
+      tiles: [],
     })
   })
 
   it('says nothing at all while no window is connected', () => {
     const host = new DaemonCableHost(wiring(), fleetOf([]))
     host.setSwarms(null)
-    expect(host.listSwarms()).toEqual({ selected: '', swarms: [] })
+    expect(host.listSwarms()).toEqual({ selected: '', swarms: [], tiles: [] })
   })
 })
 
@@ -656,5 +695,58 @@ describe('cableEventFor', () => {
     expect(cableEventFor({ ...base, payload: { ...base.payload, subagent: true } })?.subagent).toBe(true)
     expect(cableEventFor({ ...base, payload: { ...base.payload, subagent: 'yes' } })?.subagent).toBe(false)
     expect(cableEventFor({ ...base, payload: { kind: 'tool', text: 'Bash' } })).toBeNull()
+  })
+})
+
+
+describe('reviewed device answer receipts', () => {
+  const answer = { agentId: 'review-local', requestId: 'question-1',
+    questions: [{ key: 'scope', q: 'Which scope?', options: ['File', 'Project'], multi: false }],
+    answers: { scope: 'File' }, selections: { scope: ['File'] } }
+  it('reports the local terminal driver result without invoking the legacy answer path', async () => {
+    AGENTS.length = 0
+    AGENTS.push({ agentId: answer.agentId, registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
+    const reviewed = vi.fn(async () => true), legacy = vi.fn()
+    const host = new DaemonCableHost(wiring({ answerReviewed: reviewed, answer: legacy }))
+    expect(await host.answerReviewed(answer)).toEqual({ ok: true })
+    reviewed.mockResolvedValue(false)
+    expect((await host.answerReviewed(answer)).ok).toBe(false)
+    expect(legacy).not.toHaveBeenCalled()
+  })
+  it('distinguishes remote handoff from completion and refuses unreachable or ambiguous answers', async () => {
+    AGENTS.length = 0
+    const fleet = fleetOf([REMOTE]); fleet.answerReviewed = vi.fn()
+    const host = new DaemonCableHost(wiring(), fleet); host.noteAgent('other','review-remote')
+    const remote = { ...answer, agentId: 'review-remote' }
+    expect(await host.answerReviewed(remote)).toEqual({ ok: true, pending: true })
+    expect(fleet.answerReviewed).toHaveBeenCalledTimes(1)
+    fleet.reachable = () => ({ ok: false, at: Date.now() })
+    expect((await host.answerReviewed(remote)).ok).toBe(false)
+    fleet.reachable = () => ({ ok: true, at: Date.now() })
+    expect((await host.answerReviewed({ ...remote, questions: [{ ...remote.questions[0], multi: true }],
+      selections: { scope: ['CSV, UTF-8'] } })).ok).toBe(false)
+    expect(fleet.answerReviewed).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('spoken question capability', () => {
+  it('offers speech only for a known local receiver and never forwards text to an older remote driver', async () => {
+    AGENTS.length = 0
+    AGENTS.push({ agentId: 'spoken-local', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
+    const answerReviewed = vi.fn(async () => true), fleet = fleetOf([REMOTE])
+    fleet.answerReviewed = vi.fn()
+    const host = new DaemonCableHost(wiring({ answerReviewed }), fleet)
+    host.noteAgent('mine','spoken-local'); host.noteAgent('other','spoken-remote')
+    await host.listAgentsFlat()
+    expect(host.canSpeakQuestion('spoken-local')).toBe(true)
+    expect(host.canSpeakQuestion('spoken-remote')).toBe(false)
+    expect(host.canSpeakQuestion('unknown')).toBe(false)
+    const answer = { requestId: 'q', agentId: 'spoken-local',
+      questions: [{ key: 'scope', q: 'Which scope?', options: ['File'], multi: false, canText: true }],
+      answers: { scope: 'Just the parser' }, selections: { scope: [] }, freeTextKeys: ['scope'] }
+    expect(await host.answerReviewed(answer)).toEqual({ ok: true })
+    expect((await host.answerReviewed({ ...answer, agentId: 'spoken-remote' })).ok).toBe(false)
+    expect(fleet.answer).not.toHaveBeenCalled(); expect(fleet.answerReviewed).not.toHaveBeenCalled()
+    expect(answerReviewed).toHaveBeenCalledTimes(1)
   })
 })

@@ -32,7 +32,11 @@ class WsCredentialRevoked implements Exception {
   String toString() => message;
 }
 
-enum WsTransportKind { cloudE2ee, localPlaintext }
+/// Socket construction can be replaced by an in-process channel in tests.
+typedef WsChannelFactory = WebSocketChannel Function(
+  Uri uri, {
+  Iterable<String>? protocols,
+});
 
 /// A `request()` call got no reply within its timeout — distinct from other request-level errors
 /// (an explicit `{error: ...}` response) so callers can tell "the peer is unresponsive" apart from
@@ -80,22 +84,16 @@ class WsRequestFailure implements Exception {
 
 /// One SSO-authenticated, machine-scoped connection to `/api/web-ws`.
 class WsConn {
+  final WsChannelFactory? connectChannel;
   final String wsBaseUrl;
   final String autonomousEnv;
   final String machineId;
   final AccessTokenProvider accessTokenProvider;
   final void Function(String message) onAuthFailure;
 
-  /// The local CLI closed this connection with a specific, non-retryable reason (currently just
-  /// `NO_PEER_LINK`: the target machine has no `harness link import`ed trust yet) — surfaced instead
-  /// of silently reconnecting forever against a failure the user has to act on to fix.
+  /// A peer-link failure that needs user action, surfaced instead of retrying
+  /// a connection until trust has been established.
   final void Function(int code, String reason)? onLocalFailure;
-  final WsTransportKind transportKind;
-  final Uri? localWsUri;
-
-  /// Retained only for fixture constructor compatibility. Local transport ignores it.
-  final String? localApiKey;
-  final int localProtocolVersion;
 
   /// A viewer build's end-to-end session with the machine, minted fresh on every connect — the
   /// role the harness CLI plays everywhere else (see [RelayCodec]). Null leaves the relay's frames
@@ -129,7 +127,6 @@ class WsConn {
   int _attempt = 0;
   Timer? _reconnectTimer;
   String? _tokenUsed;
-  bool _forceRelayReconnect = false;
 
   /// How long a dial may take to open before it counts as failed. Without one, a socket dialled
   /// into a network that swallows packets waits out the OS's own TCP timeout — over a minute on
@@ -174,13 +171,11 @@ class WsConn {
   /// True once this connection has permanently given up (a deliberate [close], or a non-retryable
   /// local failure like NO_PEER_LINK) — [WsPool] must not hand a closed connection back out.
   bool get isClosed => _closing;
-  bool get isLocal => transportKind == WsTransportKind.localPlaintext;
-  String get endpointKey => isLocal
-      ? 'local:${localWsUri.toString()}'
-      : 'cloud:$wsBaseUrl:$autonomousEnv';
+  String get endpointKey => 'cloud:$wsBaseUrl:$autonomousEnv';
 
   WsConn({
     required this.wsBaseUrl,
+    this.connectChannel,
     required this.autonomousEnv,
     required this.machineId,
     required this.accessTokenProvider,
@@ -188,10 +183,6 @@ class WsConn {
     this.onLocalFailure,
     required this.onEvent,
     required this.onStatus,
-    this.transportKind = WsTransportKind.cloudE2ee,
-    this.localWsUri,
-    this.localApiKey,
-    this.localProtocolVersion = 1,
     this.relayCodecs,
     this.transportPlugins,
   });
@@ -224,13 +215,11 @@ class WsConn {
       // In series they were two waits stacked in front of the dial, on the
       // stretch the phone shows as "Connecting to your machine…", and every
       // reconnect paid it again.
-      final codecs = isLocal ? null : relayCodecs;
-      final pendingToken = isLocal
-          ? null
-          : StartupTrace.time(
-              'ws.accessToken',
-              () => accessTokenProvider(false, null),
-            );
+      final codecs = relayCodecs;
+      final pendingToken = StartupTrace.time(
+        'ws.accessToken',
+        () => accessTokenProvider(false, null),
+      );
       // ⚠️ **The codec's own failure is captured HERE, where the future is made,
       // not where it is awaited.** The credential is awaited first and can
       // throw — a refresh against a dead network does — and every path out of
@@ -245,13 +234,15 @@ class WsConn {
       // it is rethrown below into the catch that schedules the reconnect.
       final pendingCodec = codecs == null
           ? null
-          : StartupTrace.time('ws.relayCodec', () => codecs(machineId))
-                .then<({RelayCodec? codec, Object? error})>(
-                  (codec) => (codec: codec, error: null),
-                  onError: (Object error) => (codec: null, error: error),
-                );
+          : StartupTrace.time(
+              'ws.relayCodec',
+              () => codecs(machineId),
+            ).then<({RelayCodec? codec, Object? error})>(
+              (codec) => (codec: codec, error: null),
+              onError: (Object error) => (codec: null, error: error),
+            );
       final token = await pendingToken;
-      if (!isLocal && (token == null || token.isEmpty)) {
+      if (token.isEmpty) {
         throw StateError('WebSocket credential is missing');
       }
       if (_closing) return;
@@ -272,26 +263,17 @@ class WsConn {
         final plugins = transportPlugins;
         if (plugins != null) _plugin = plugins(_PluginHost(this), machineId);
       }
-      final Uri uri;
-      if (isLocal) {
-        final local = localWsUri;
-        if (local == null ||
-            (local.host != '127.0.0.1' && local.host != 'localhost')) {
-          throw StateError('Local WebSocket must use loopback');
-        }
-        uri = local;
-      } else {
-        final base = Uri.parse('$wsBaseUrl/api/web-ws');
-        uri = base.replace(
-          queryParameters: {
-            ...base.queryParameters,
-            'autonomousEnv': autonomousEnv,
-          },
-        );
-      }
-      final channel = dialing = isLocal
-          ? WebSocketChannel.connect(uri)
-          : WebSocketChannel.connect(uri, protocols: [token!]);
+      final base = Uri.parse('$wsBaseUrl/api/web-ws');
+      final uri = base.replace(
+        queryParameters: {
+          ...base.queryParameters,
+          'autonomousEnv': autonomousEnv,
+        },
+      );
+      final channel = dialing = (connectChannel ?? WebSocketChannel.connect)(
+        uri,
+        protocols: [token],
+      );
       _channel = channel;
       await StartupTrace.time(
         'ws.dial',
@@ -305,7 +287,7 @@ class WsConn {
         appLog.warn(
           'ws',
           'dial abandoned after ready (closing=$_closing '
-          'superseded=$superseded) $machineId',
+              'superseded=$superseded) $machineId',
         );
         await channel.sink.close();
         // ⚠️ A superseded dial must leave a live connection behind it. This used
@@ -322,8 +304,6 @@ class WsConn {
         onDone: () => _onDone(channel),
         onError: (_) => _onDone(channel),
       );
-      final forceRelayReconnect = _forceRelayReconnect;
-      _forceRelayReconnect = false;
       // ⚠️ **Armed BEFORE the send, and deliberately not after it.** `sendFrame`
       // queues behind `_outboundTail`, so it resolves when this frame reaches
       // the socket — which is not guaranteed to be soon, and on a fresh dial was
@@ -339,14 +319,14 @@ class WsConn {
       appLog.debug('ws', '→ machine_select $machineId');
       await sendFrame({
         'type': 'machine_select',
-        'payload': {
-          'machineId': machineId,
-          if (isLocal) 'localProtocolVersion': localProtocolVersion,
-          if (isLocal && forceRelayReconnect) 'forceReconnect': true,
-        },
+        'payload': {'machineId': machineId},
       });
     } on WsCredentialRevoked catch (error) {
-      _signOut(error.message);
+      // ⚠️ Not for a connection somebody already closed. Signing out closes every connection, and
+      // one still waiting on its credential then learns the session is gone — which is the
+      // sign-out in progress, not news. Reported, it re-entered the app's sign-out halfway through
+      // that one, which then stopped early.
+      if (!_closing) _signOut(error.message);
     } catch (error) {
       // Swallowed for control flow — a failed dial is retried, not surfaced —
       // but not silently: this branch covers the credential, the codec, the
@@ -509,6 +489,10 @@ class WsConn {
         }
         return;
       case 'e2e_welcome':
+        // One per session (see `RelaySessionCrypto.handleWelcome`): another once this one is up
+        // is the relay repeating itself — not the machine failing to prove who it is, which is
+        // what refusing the peer below would take it for.
+        if (_ready) return;
         // The verify and key agreement behind this are pure-Dart Ed25519/X25519
         // on the UI isolate, so this span is CPU on the very thread drawing the
         // spinner — worth its own line to tell it apart from time spent waiting
@@ -881,20 +865,6 @@ class WsConn {
       return;
     }
     final code = channel.closeCode;
-    if (isLocal) {
-      if (code == 4404) {
-        _closing = true;
-        // needsLink first: AppNotifier's onStatus handler reads machine.needsLink
-        // to decide whether a disconnect should be treated as the node going
-        // offline — it has to see it flipped before onStatus runs, or the very
-        // first 4404 for this machine reads as offline for one retry cycle.
-        onLocalFailure?.call(code!, channel.closeReason ?? 'NO_PEER_LINK');
-        onStatus(ConnectionStatus.disconnected);
-        return;
-      }
-      _scheduleReconnect();
-      return;
-    }
     if (code == 4401) {
       unawaited(_refreshAndReconnect());
       return;
@@ -911,14 +881,28 @@ class WsConn {
     try {
       await accessTokenProvider(true, _tokenUsed);
     } on WsCredentialRevoked {
-      _signOut('Your SSO session expired. Please sign in again.');
+      // As in [connect]: a closed connection has nobody left to sign out.
+      if (!_closing) {
+        _signOut('Your SSO session expired. Please sign in again.');
+      }
       return;
     } catch (_) {
       // The token is still stale, so the next dial refreshes again on its own.
       _scheduleReconnect();
       return;
     }
-    if (!_closing) await connect();
+    if (_closing) return;
+    // ⚠️ **Straight back only the first time.** An expired token is renewed and redialled at once
+    // — the ordinary case, and nobody should wait for it. But a relay that refuses every token (the
+    // backend and the account API disagreeing about a session, say) was asked again the moment
+    // each refresh landed: a refresh and a dial per round trip, with no backoff at all, for as
+    // long as the app stayed open. A second 4401 before the session came up waits its turn.
+    if (_attempt == 0) {
+      _attempt++;
+      await connect();
+    } else {
+      _scheduleReconnect();
+    }
   }
 
   void _scheduleReconnect() {
@@ -1009,8 +993,7 @@ class WsConn {
   Future<void> forceReconnect() async {
     // A viewer's relay connection holds that session itself, so for it this is simply a fresh dial
     // — and with it a fresh session.
-    if (_closing || (!isLocal && relayCodecs == null)) return;
-    _forceRelayReconnect = true;
+    if (_closing || relayCodecs == null) return;
     _reconnectTimer?.cancel();
     // This dials again itself; a pending watchdog would make that two dials.
     _selectWatchdog?.cancel();

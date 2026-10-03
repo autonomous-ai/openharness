@@ -1,9 +1,18 @@
 #include "cable_frame.h"
 
 #include <string.h>
+#ifdef ESP_PLATFORM
+#include "esp_rom_crc.h"
+#endif
 
 uint16_t cable_crc16(const uint8_t *data, size_t len)
 {
+#ifdef ESP_PLATFORM
+    // CRC-16/CCITT-FALSE: Espressif's ROM API complements both ends.
+    // Init 0xffff and xorout zero therefore use input 0 and a final complement.
+    // No table in application flash and no RAM allocation.
+    return (uint16_t)~esp_rom_crc16_be(0, data, (uint32_t)len);
+#else
     uint16_t crc = 0xFFFF;
     for (size_t i = 0; i < len; i++) {
         crc ^= (uint16_t)data[i] << 8;
@@ -12,6 +21,7 @@ uint16_t cable_crc16(const uint8_t *data, size_t len)
         }
     }
     return crc;
+#endif
 }
 
 int cable_frame_encode(uint8_t type, const uint8_t *payload, size_t payload_len,
@@ -146,12 +156,30 @@ static bool take_front(cable_decoder_t *d, cable_frame_cb cb, void *ctx)
 void cable_decoder_feed(cable_decoder_t *d, const uint8_t *data, size_t n,
                         cable_frame_cb cb, void *ctx)
 {
-    for (size_t i = 0; i < n; i++) {
+    while (n) {
         // Full and still no frame means the head was never a real one. Making room by dropping the oldest
         // byte keeps the link alive; refusing the new byte instead would wedge it permanently.
         if (d->len == sizeof(d->buf)) discard(d, 1);
 
-        d->buf[d->len++] = data[i];
+        // Once a valid header is waiting for its payload, no intermediate
+        // byte can complete a frame. Copy directly to that boundary instead
+        // of rechecking the same header for every byte. Noise still reaches
+        // take_front at the original six-byte boundary, preserving resync and
+        // counters even when magic, payload or CRC straddles USB reads.
+        size_t needed = CABLE_HEADER_BYTES;
+        if (d->len >= CABLE_HEADER_BYTES && d->buf[0] == CABLE_MAGIC_0 &&
+            d->buf[1] == CABLE_MAGIC_1) {
+            size_t payload_len = (size_t)d->buf[4] | ((size_t)d->buf[5] << 8);
+            if (payload_len <= CABLE_MAX_PAYLOAD)
+                needed += payload_len + CABLE_CRC_BYTES;
+        }
+        size_t take = needed > d->len ? needed - d->len : 1;
+        if (take > n) take = n;
+        if (take > sizeof d->buf - d->len) take = sizeof d->buf - d->len;
+        memcpy(d->buf + d->len, data, take);
+        d->len += take;
+        data += take;
+        n -= take;
 
         // Only worth attempting once a header could be complete. This also keeps the magic scan
         // amortised: it runs on resync, not per byte.

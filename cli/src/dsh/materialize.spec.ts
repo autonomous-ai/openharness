@@ -173,7 +173,8 @@ describe('materializeWorkspace, on harnesses other than the starter', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const slow = install({ engine: 'codex', workspace: { marker: 'done', init: 'sleep 30' } })
     const pending = materializeWorkspace(slow, workspace)
-    vi.advanceTimersByTime(5 * 60_000)
+    // And the SIGKILL grace after it: an interactive bash, the usual shell on Linux, ignores SIGTERM.
+    vi.advanceTimersByTime(5 * 60_000 + 3_000)
     const result = await pending
     expect(result.warnings).toEqual(['init exited by timeout'])
   })

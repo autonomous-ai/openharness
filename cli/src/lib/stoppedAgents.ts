@@ -1,5 +1,5 @@
 /** Stopped work is durable history, separate from the registry of live terminal routes. */
-import { closeSync, constants, fsyncSync, openSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fsyncSync, lstatSync, openSync, readdirSync, statSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
@@ -8,7 +8,21 @@ import { atomicWriteJson, projectDisplayName, strictPersistedRow, type Registere
 import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
 
 const SAFE_ID = /^[a-zA-Z0-9_-]{1,128}$/
+const CATALOG_CACHE_RECORDS = 2048
+const CATALOG_CACHE_BYTES = 4 * 1024 * 1024
+const CATALOG_CACHE_MS = 30_000
+
+function catalogFingerprint(stat: BigIntStats): string {
+  // ctime catches in-place edits even if a writer restores mtime. Inode/device
+  // distinguish atomic replacements; mode/owner/type changes must miss too.
+  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.birthtimeNs,
+    stat.mode, stat.uid, stat.gid, stat.nlink].join(':')
+}
+
 export class StoppedAgentStore {
+  private readonly catalogCache = new Map<string, { fingerprint: string; bytes: number; at: number; session: RegisteredSession }>()
+  private catalogCacheBytes = 0
+
   constructor(private readonly directory = join(env.ADAPTER_DATA_DIR, 'stopped-agents')) {}
 
   get(agentId: string): RegisteredSession | null {
@@ -28,19 +42,59 @@ export class StoppedAgentStore {
   list(): RegisteredSession[] {
     try {
       secureStateDirectory(this.directory, false)
-      return readdirSync(this.directory).filter(name => name.endsWith('.json')).flatMap(name => {
+      const ids = readdirSync(this.directory).filter(name => name.endsWith('.json')).map(name => name.slice(0, -5))
+      const present = new Set(ids)
+      for (const id of this.catalogCache.keys()) if (!present.has(id)) this.forgetCatalogRecord(id)
+      return ids.flatMap(id => {
         try {
-          const saved = this.get(name.slice(0, -5))
+          const saved = this.catalogRecord(id)
           return saved ? [saved] : []
         } catch {
+          this.forgetCatalogRecord(id)
           // One unreadable record must not hide the other saved harnesses.
           return []
         }
       })
     } catch (error) {
+      this.catalogCache.clear()
+      this.catalogCacheBytes = 0
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
       throw error
     }
+  }
+
+  /** Status snapshots repeatedly enumerate the same saved metadata. Recheck
+   * every file's identity on every read, but only reopen/parse changed files.
+   * Actions still use get(), which always performs a fresh guarded read. */
+  private catalogRecord(agentId: string): RegisteredSession | null {
+    if (!SAFE_ID.test(agentId)) return null
+    const file = join(this.directory, `${agentId}.json`)
+    const before = lstatSync(file, { bigint: true })
+    const fingerprint = catalogFingerprint(before)
+    const cached = this.catalogCache.get(agentId)
+    const now = Date.now()
+    // Some mounted filesystems have coarse timestamps. Bound reuse even when
+    // their metadata cannot distinguish two writes; no background timer is needed.
+    if (cached?.fingerprint === fingerprint && now >= cached.at && now - cached.at < CATALOG_CACHE_MS) {
+      return structuredClone(cached.session)
+    }
+    this.forgetCatalogRecord(agentId)
+    const session = this.get(agentId)
+    const bytes = Number(before.size)
+    if (session && this.catalogCache.size < CATALOG_CACHE_RECORDS
+      && this.catalogCacheBytes + bytes <= CATALOG_CACHE_BYTES
+      && catalogFingerprint(lstatSync(file, { bigint: true })) === fingerprint) {
+      this.catalogCache.set(agentId, { fingerprint, bytes, at: now, session: structuredClone(session) })
+      this.catalogCacheBytes += bytes
+    }
+    return session
+  }
+
+  private forgetCatalogRecord(agentId: string): void {
+    const cached = this.catalogCache.get(agentId)
+    if (!cached) return
+    this.catalogCacheBytes -= cached.bytes
+    this.catalogCache.delete(agentId)
   }
 
   save(session: RegisteredSession): void {
@@ -66,15 +120,18 @@ export class StoppedAgentStore {
       active: false,
       launch: { state: 'ready' },
       defaultName: projectDisplayName(session),
-      updatedAt: Date.now(),
+      touchedAt: Date.now(),
     }
-    // Herdr-only snapshots omit the legacy alias just like registry persistence.
+    // A later Resume is an explicit new visit, never an instruction to close it again.
+    delete snapshot.closePlan
+    // A snapshot without a tmux pane omits the legacy alias just like registry persistence.
     if (!snapshot.tmuxPane) delete (snapshot as Partial<RegisteredSession>).tmuxPane
     atomicWriteJson(join(this.directory, `${session.agentId}.json`), { version: 1, session: snapshot })
+    this.forgetCatalogRecord(session.agentId)
   }
 
   /** Correct one field of an archive in place — the folder a Claude row drifted out of (cwdRepair.ts).
-   *  Not `save`: that recomputes the name and stamps `updatedAt`, and a repair must not reorder the
+   *  Not `save`: that recomputes the name and stamps `touchedAt`, and a repair must not reorder the
    *  catalog or rename anything. Nothing else on the row changes. */
   patch(agentId: string, patch: Partial<Pick<RegisteredSession, 'cwd'>>): boolean {
     const saved = this.get(agentId)
@@ -82,6 +139,7 @@ export class StoppedAgentStore {
     secureStateDirectory(dirname(this.directory))
     secureStateDirectory(this.directory)
     atomicWriteJson(join(this.directory, `${agentId}.json`), { version: 1, session: { ...saved, ...patch } })
+    this.forgetCatalogRecord(agentId)
     return true
   }
 
@@ -138,6 +196,15 @@ export class StoppedAgentStore {
   private syncDirectory(): void {
     const fd = openSync(this.directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
     try { fsyncSync(fd) } finally { closeSync(fd) }
+  }
+
+  /** Permanent deletion is separate from Stop, which always retains this record. */
+  remove(agentId: string): void {
+    if (!SAFE_ID.test(agentId)) throw new Error('Invalid stopped harness identity.')
+    if (!this.get(agentId)) return
+    unlinkSync(join(this.directory, `${agentId}.json`))
+    this.forgetCatalogRecord(agentId)
+    this.syncDirectory()
   }
 
   /** Suppress archives whose identity or conversation is already running. */

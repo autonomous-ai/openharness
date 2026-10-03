@@ -153,7 +153,7 @@ void main() {
       find.byKey(const Key('remote-password-connect-field')),
       'correct horse battery staple',
     );
-    await tester.tap(find.text('enter  link machine'));
+    await tester.tap(find.text('Link machine'));
     await tester.pumpAndSettle();
 
     expect(link.asked, ['correct horse battery staple']);

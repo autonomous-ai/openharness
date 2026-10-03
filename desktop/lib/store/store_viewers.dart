@@ -1,5 +1,5 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -33,7 +33,7 @@ class StoreViewers extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         Text(
-          'Shared previews and the agents that use them.',
+          'Shared previews and the harnesses that use them.',
           style: grid.AppType.body(color: grid.AppPalette.textSecondary),
         ),
         const SizedBox(height: 24),
@@ -74,7 +74,7 @@ class StoreViewers extends StatelessWidget {
           Row(
             children: [
               Icon(
-                LucideIcons.panelsTopLeft300,
+                AppIcons.panelsTopLeft,
                 size: 20,
                 color: grid.AppPalette.textSecondary,
               ),
@@ -119,7 +119,7 @@ class StoreViewers extends StatelessWidget {
           const SizedBox(height: 4),
           if (uses.isEmpty)
             Text(
-              'No agents reported in this catalog.',
+              'No harnesses reported in this catalog.',
               style: grid.AppType.body(color: grid.AppPalette.textSecondary),
             )
           else

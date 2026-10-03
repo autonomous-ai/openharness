@@ -1,11 +1,11 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../shortcuts/keymap_commands.dart';
-import 'box_chrome.dart';
+import 'desktop_chrome.dart';
 import 'welcome_project_example.dart';
 
 /// A quiet, live keyboard map for an empty workspace. The drawing illustrates
@@ -29,12 +29,12 @@ class WorkspaceStartGuide extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final ink = grid.AppTheme.palette.value.foreground;
-    final faint = ink.withValues(alpha: .62);
-    final accent = grid.AppPalette.swarmAccent;
-    final stroke = faint.withValues(alpha: .30);
+    final ink = DesktopChrome.foreground;
+    final faint = DesktopChrome.muted;
+    final accent = DesktopChrome.accent;
+    final stroke = DesktopChrome.rim;
     return Material(
-      color: grid.AppPalette.swarmWelcome,
+      color: DesktopChrome.surface,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final scale = grid.appTextScaleOf(context);
@@ -57,43 +57,63 @@ class WorkspaceStartGuide extends StatelessWidget {
                           TextSpan(text: label),
                         ],
                       ),
-                      style: boxMonoStyle(color: ink),
+                      style: DesktopChrome.control(medium: true),
                     ),
                     const SizedBox(height: 4),
-                    Text(explanation, style: boxMonoStyle(color: faint)),
+                    Text(explanation, style: DesktopChrome.metadata()),
                   ],
                 ),
               );
+          final newTab = callout(
+            'swarm.new',
+            'New Tab',
+            'Group multiple harnesses in one tab.',
+          );
+          final store = callout(
+            'app.store',
+            'Harness Store',
+            'Code, 3D design, circuits, video, and more.',
+          );
+          final shortcuts = Align(
+            alignment: Alignment.centerLeft,
+            child: DesktopPill(
+              key: const ValueKey('workspace-all-shortcuts'),
+              onPressed: onShortcuts,
+              quiet: true,
+              label:
+                  '${_hint(context, 'keyboard.help')}  All keyboard shortcuts'
+                      .trimLeft(),
+            ),
+          );
+          final newPane = callout(
+            'agent.open',
+            'New Pane',
+            'Add a harness beside your work.',
+          );
           final diagram = Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Padding(
-                padding: const EdgeInsets.only(bottom: 40),
+                padding: const EdgeInsets.only(bottom: 24),
                 child: Text(
                   'Follow your curiosity. Build across disciplines.',
                   textAlign: TextAlign.center,
-                  style: boxMonoStyle(color: ink, weight: FontWeight.w600),
+                  style: DesktopChrome.heading(),
                 ),
               ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Flexible(
-                    child: callout(
-                      'swarm.new',
-                      'New Tab',
-                      'Group multiple harnesses in one tab.',
-                    ),
-                  ),
-                  Flexible(
-                    child: callout(
-                      'app.store',
-                      'Harness Store',
-                      'Code, 3D design, circuits, video, and more.',
-                    ),
-                  ),
-                ],
-              ),
+              if (compact)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [newTab, const SizedBox(height: 8), store],
+                )
+              else
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Flexible(child: newTab),
+                    Flexible(child: store),
+                  ],
+                ),
               SizedBox(
                 height: 14,
                 width: double.infinity,
@@ -101,7 +121,11 @@ class WorkspaceStartGuide extends StatelessWidget {
               ),
               ExcludeSemantics(
                 child: Container(
-                  decoration: BoxDecoration(border: Border.all(color: stroke)),
+                  decoration: BoxDecoration(
+                    color: DesktopChrome.field,
+                    border: Border.all(color: stroke),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -123,24 +147,24 @@ class WorkspaceStartGuide extends StatelessWidget {
                                       'robot arm',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: boxMonoStyle(color: faint),
+                                      style: DesktopChrome.control(),
                                     ),
                                   ),
                                   if (!compact) ...[
                                     const SizedBox(width: 32),
                                     Text(
                                       'launch video',
-                                      style: boxMonoStyle(color: faint),
+                                      style: DesktopChrome.control(),
                                     ),
                                   ],
                                   const SizedBox(width: 20),
-                                  Text('+', style: boxMonoStyle(color: faint)),
+                                  Icon(AppIcons.plus, size: 16, color: faint),
                                 ],
                               ),
                             ),
                             Text(
                               compact ? 'Store' : 'Harness Store',
-                              style: boxMonoStyle(color: faint),
+                              style: DesktopChrome.control(),
                             ),
                           ],
                         ),
@@ -213,35 +237,18 @@ class WorkspaceStartGuide extends StatelessWidget {
                 width: double.infinity,
                 child: CustomPaint(painter: _GuideArrows(stroke)),
               ),
-              Row(
-                children: [
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton(
-                        key: const ValueKey('workspace-all-shortcuts'),
-                        onPressed: onShortcuts,
-                        style: TextButton.styleFrom(foregroundColor: faint),
-                        child: Text(
-                          '${_hint(context, 'keyboard.help')}  All Keyboard Shortcuts'
-                              .trimLeft(),
-                          style: boxMonoStyle(color: faint),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.center,
-                      child: callout(
-                        'agent.open',
-                        'New Pane',
-                        'Add a harness beside your work.',
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+              if (compact)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [newPane, const SizedBox(height: 8), shortcuts],
+                )
+              else
+                Row(
+                  children: [
+                    Expanded(child: shortcuts),
+                    Expanded(child: newPane),
+                  ],
+                ),
             ],
           );
           final horizontalPadding = compact ? 16.0 : 24.0;
@@ -286,7 +293,6 @@ class _DrawnPane extends StatelessWidget {
   final bool showLocation;
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
     final copy = Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -295,7 +301,7 @@ class _DrawnPane extends StatelessWidget {
           name,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: boxMonoStyle(color: ink),
+          style: DesktopChrome.control(color: ink, medium: true),
         ),
         if (showLocation) ...[
           const SizedBox(height: 6),
@@ -303,7 +309,7 @@ class _DrawnPane extends StatelessWidget {
             'This Mac:~/work/robot-arm',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: boxMonoStyle(color: faint),
+            style: grid.AppType.monoMeta(color: faint),
           ),
         ],
         const SizedBox(height: 10),
@@ -319,7 +325,7 @@ class _DrawnPane extends StatelessWidget {
           ),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
-          style: boxMonoStyle(color: ink),
+          style: grid.AppType.monoLabel(color: ink),
         ),
       ],
     );

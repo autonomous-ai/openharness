@@ -21,8 +21,8 @@ String retargetRefusalMessage(String code, {required String engineLabel}) {
     'GRID_CONFIG_FAILED' =>
       "Couldn't write $engineLabel's Local-model configuration on this machine.",
     'GRID_CLEAR_FAILED' =>
-      "Couldn't clear the Local-model settings from this agent's terminal.",
-    'TMUX_TOO_OLD_FOR_GRID' => "This machine's tmux is too old to move an agent to a Local model. Update tmux there.",
+      "Couldn't clear the Local-model settings from this harness's terminal.",
+    'TMUX_TOO_OLD_FOR_GRID' => "This machine's tmux is too old to move a harness to a Local model. Update tmux there.",
     'TMUX_UNAVAILABLE' || 'TMUX_FAILED' =>
       "This machine's tmux did not answer. Try again in a moment.",
     // Changing model restarts the agent's process, which would cut off the
@@ -30,18 +30,18 @@ String retargetRefusalMessage(String code, {required String engineLabel}) {
     // sentence says what to do rather than naming the state ("mid-turn" read
     // as an error).
     'AGENT_BUSY' =>
-      'This agent is still responding. Stop it or let it finish, then '
+      'This harness is still responding. Stop it or let it finish, then '
           'choose the model again.',
     'AGENT_NOT_FOUND' ||
-    'MISSING_AGENT_ID' => 'This agent is no longer on the machine.',
+    'MISSING_AGENT_ID' => 'This harness is no longer on the machine.',
     'NO_ACTIVE_PROCESS' || 'RETARGET_UNSUPPORTED_BACKEND' =>
-      'This agent cannot change model right now.',
+      'This harness cannot change model right now.',
     'RESPAWN_FAILED' =>
       "$engineLabel did not start on the new model. The terminal shows what happened.",
     'INVALID_GRID' =>
       "This machine's Local models could not be resolved. Sign in again on it.",
     'UNSUPPORTED_ON_REMOTE' ||
     'UNSUPPORTED' => 'Update the harness CLI on this machine to change models.',
-    _ => "Couldn't change this agent's model.",
+    _ => "Couldn't change this harness's model.",
   };
 }

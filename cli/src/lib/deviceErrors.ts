@@ -24,7 +24,7 @@ const URL_CLAUSE = /\s*(?:visit|see|go to|open)?\s+https?:\/\/\S+/gi
 
 export function deviceErrorText(message: string, engine?: string | null): string {
   if (message === AGENT_DID_NOT_ACCEPT && engine === 'claude') {
-    return "Claude didn't start. Check the terminal, then try again."
+    return "Couldn't confirm delivery to Claude. Check its pane."
   }
   if (CODEX_USAGE_LIMIT.test(message)) {
     const when = TRY_AGAIN_AT.exec(message)?.[1]?.trim()

@@ -1,0 +1,9 @@
+{
+  "name": "harness-trailofbits-skills-toolchain",
+  "private": true,
+  "type": "module",
+  "description": "What the Trail of Bits Skills harness prints its PDF report with. Installed by toolchain/setup.sh into this package, never globally.",
+  "dependencies": {
+    "playwright-core": "1.63.0"
+  }
+}

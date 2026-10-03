@@ -1,8 +1,12 @@
 // The desk: the account's tabs, the same on every computer. The pure half
 // (diff and replay) and the window's half (a document becomes `swarms`, an
 // edit becomes ops, and what a window keeps for itself stays put).
-import 'dart:ui' show Rect;
+import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
 
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
@@ -13,9 +17,14 @@ import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/state/pane_preset.dart';
 import 'package:harness/state/swarm.dart';
 import 'package:harness/state/terminal_pane.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/terminal/terminal_session.dart';
+import 'package:harness/widgets/pane_grid.dart';
+import 'package:xterm/xterm.dart';
 
 import 'swarm_state_test.dart' show MemoryStore, createApp;
+import 'swarm_screen_test.dart' show terminal;
+import 'box_render_preview_test.dart' show loadPreviewFonts;
 
 DeskTab tab(
   String id, {
@@ -36,6 +45,7 @@ class _DeskApi extends ApiClient {
   DeskDoc? doc = const DeskDoc(revision: 0, tabs: []);
   bool available = true;
   Object? failWith;
+  Completer<void>? readGate;
   final batches = <List<Map<String, dynamic>>>[];
 
   Map<String, dynamic>? _json(DeskDoc d) => {
@@ -47,7 +57,9 @@ class _DeskApi extends ApiClient {
   Future<Map<String, dynamic>?> desk() async {
     if (failWith != null) throw failWith!;
     if (!available || doc == null) return null;
-    return _json(doc!);
+    final snapshot = _json(doc!);
+    if (readGate case final gate?) await gate.future;
+    return snapshot;
   }
 
   @override
@@ -62,6 +74,174 @@ class _DeskApi extends ApiClient {
 }
 
 void main() {
+  final captureDir = Platform.environment['HARNESS_SHARED_LAYOUT_CAPTURE_DIR'];
+  setUpAll(() async {
+    if (captureDir != null) await loadPreviewFonts();
+  });
+  test(
+    'closing syncs the default layout and reopening restores split order',
+    () async {
+      final api = _DeskApi();
+      final app = createApp()..api = api;
+      addTearDown(app.dispose);
+      await app.deskStartForTest();
+      for (var i = 0; i < 5; i++) {
+        await app.addAgentToSwarm('m', 'a$i');
+      }
+      final work = app.activeSwarm;
+      final panes = work.panes.toList();
+      final split = PaneArrangement(const [
+        Rect.fromLTRB(0, 0, .5, .25),
+        Rect.fromLTRB(0, .25, .5, .5),
+        Rect.fromLTRB(.5, 0, 1, .5),
+        Rect.fromLTRB(0, .5, .5, 1),
+        Rect.fromLTRB(.5, .5, 1, 1),
+      ]);
+      work.savePaneSizes('5:manual', split);
+      app.togglePinPane(panes[4].id);
+
+      await app.closePane(panes[3].id);
+      await app.deskFlushForTest();
+
+      expect(work.panes.map((p) => p.agentId), ['a0', 'a2', 'a1', 'a4']);
+      expect(work.manualLayout!.tiles, PanePreset.quad.tilesFor(4));
+      final synced = api.doc!.tabs.singleWhere((t) => t.id == work.id);
+      expect(synced.panes.map((p) => p.agentId), ['a0', 'a2', 'a1', 'a4']);
+      expect(synced.layout!.sizes['4:manual'], work.manualLayout!.toJson());
+
+      expect(app.reopenClosed(), isTrue);
+      expect(work.panes.map((p) => p.agentId), ['a0', 'a1', 'a2', 'a3', 'a4']);
+      expect(work.manualLayout!.tiles, split.tiles);
+      expect(app.pinnedSlotFor(panes[4]), 4);
+      await app.deskFlushForTest();
+      expect(
+        api.doc!.tabs
+            .singleWhere((t) => t.id == work.id)
+            .layout!
+            .sizes['5:manual'],
+        split.toJson(),
+      );
+    },
+  );
+
+  testWidgets(
+    'shared slots survive viewport, focus and zoom changes without writes or terminal remounts',
+    (tester) async {
+      final api = _DeskApi();
+      final app = createApp()..api = api;
+      app.machineStates['m']!.nodeOnline = true;
+      for (var i = 0; i < 5; i++) {
+        final session = terminal('Shared pane ${i + 1}', []);
+        session.terminal.write(
+          'Shared pane ${i + 1}\r\n\r\nSame position and proportions\r\non desktop and hn.\r\n',
+        );
+        app.adoptSessionForTest(session);
+      }
+      await app.deskStartForTest();
+      app.setPreset(5, PanePreset.middleMain);
+      app.focusPane(app.panes[1].id);
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1600, 1000);
+      addTearDown(tester.view.reset);
+      final capture = GlobalKey();
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: capture,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: Scaffold(
+              backgroundColor: grid.AppPalette.swarmField,
+              body: PaneGrid(notifier: app, swarmMode: true),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      if (captureDir != null) {
+        await tester.runAsync(() async {
+          final boundary =
+              capture.currentContext!.findRenderObject()!
+                  as RenderRepaintBoundary;
+          final image = await boundary.toImage();
+          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+          await Directory(captureDir).create(recursive: true);
+          await File('$captureDir/desktop-five.png')
+              .writeAsBytes(bytes!.buffer.asUint8List());
+          image.dispose();
+        });
+      }
+      final swarm = app.activeSwarm;
+      final source = swarm.manualLayout!.tiles;
+      final views = [
+        for (final pane in app.panes)
+          find.byWidgetPredicate(
+            (w) => w is TerminalView && w.terminal == pane.session!.terminal,
+          ),
+      ];
+      final states = [for (final view in views) tester.state(view)];
+      api.batches.clear();
+      for (final size in [
+        const Size(800, 1200),
+        const Size(2400, 800),
+        const Size(1600, 1000),
+      ]) {
+        tester.view.physicalSize = size;
+        await tester.pump();
+        expect(swarm.arranged?.tiles, source);
+        expect(swarm.manualLayout!.tiles, source);
+        for (var i = 0; i < views.length; i++) {
+          expect(tester.state(views[i]), same(states[i]));
+        }
+      }
+      app.focusPane(app.panes.last.id);
+      app.toggleZoomPane();
+      await tester.pump();
+      app.toggleZoomPane();
+      await tester.pump();
+      expect(swarm.arranged?.tiles, source);
+      expect(api.batches, isEmpty);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    },
+  );
+
+  test(
+    'shared defaults and presets freeze for every supported count',
+    () async {
+      for (var count = 2; count <= 9; count++) {
+        final id = 'shared-$count';
+        final api = _DeskApi()
+          ..doc = DeskDoc(
+            revision: 1,
+            tabs: [tab(id, agents: List.generate(count, (i) => 'a$i'))],
+          );
+        final app = createApp()..api = api;
+        await app.deskStartForTest();
+        app.selectSwarm(id);
+        expect(app.activeSwarm.manualLayout, isNotNull);
+        for (final preset in PanePreset.forCount(count)) {
+          app.setPreset(count, preset);
+          await Future<void>.delayed(Duration.zero);
+          final expected = PaneArrangement(preset.tilesFor(count)).toJson();
+          expect(
+            api.doc!.tabs
+                .singleWhere((tab) => tab.id == id)
+                .layout
+                ?.sizes['$count:manual'],
+            expected,
+          );
+          expect(app.activeSwarm.manualLayout?.toJson(), expected);
+        }
+        api.batches.clear();
+        await app.deskFetchForTest();
+        expect(api.batches, isEmpty);
+        app.dispose();
+      }
+    },
+  );
+
   group('deskDiff', () {
     test('creates a tab with its panes, closes, renames only what the person named, and reorders', () {
       final before = [
@@ -327,7 +507,14 @@ void main() {
         isTrue,
         reason: 'the local tab was given a desk id',
       );
-      expect(api.batches.single.single['op'], 'seed');
+      expect(api.batches.expand((batch) => batch).map((op) => op['op']), [
+        'seed',
+        'tab.layout',
+      ]);
+      expect(api.doc!.tabs.first.layout?.sizes['2:manual'], [
+        [0.0, 0.0, .5, 1.0],
+        [.5, 0.0, 1.0, 1.0],
+      ]);
       // The desk's own tabs first, this computer's after them — that is where the seed puts them.
       expect(app.swarms.map((s) => s.id), ['d1', own.id]);
       final remote = app.swarms.first;
@@ -392,6 +579,127 @@ void main() {
       },
     );
 
+    test('a pending desk join preserves a rename and neighboring tab closure', () async {
+      final officeId = newDeskId(), termId = newDeskId();
+      final office = Swarm(id: officeId, name: 'term');
+      final term = Swarm(id: termId, name: 'term');
+      final api = _DeskApi()
+        ..doc = DeskDoc(
+          revision: 1,
+          tabs: [
+            tab(termId, name: 'term', custom: true),
+            tab(officeId, name: 'term', custom: true),
+          ],
+        )
+        ..readGate = Completer<void>();
+      final app = createApp()..api = api;
+      addTearDown(app.dispose);
+      app.swarms
+        ..clear()
+        ..addAll([term, office]);
+      app.selectSwarm(termId);
+      final joining = app.deskStartForTest();
+
+      app.renameSwarm(officeId, 'office');
+      await app.closeSwarm(termId);
+      expect(app.activeSwarm, same(office));
+      expect(office.name, 'office');
+
+      api.readGate!.complete();
+      await joining;
+      expect(office.name, 'office');
+      expect(app.swarms, [office]);
+      expect(api.doc!.tabs.single.id, officeId);
+      expect(api.doc!.tabs.single.name, 'office');
+      expect(api.doc!.tabs.single.nameIsCustom, isTrue);
+      expect(app.deskSyncForTest.pending, isEmpty);
+    });
+
+    test('a pending join keeps remote renames and seeds new tabs with local edits', () async {
+      final officeId = newDeskId(), termId = newDeskId();
+      final office = Swarm(id: officeId, name: 'term');
+      final term = Swarm(id: termId, name: 'term');
+      final api = _DeskApi()
+        ..doc = DeskDoc(
+          revision: 2,
+          tabs: [
+            tab(termId, name: 'term', custom: true),
+            tab(officeId, name: 'office', custom: true),
+          ],
+        )
+        ..readGate = Completer<void>();
+      final app = createApp()..api = api;
+      addTearDown(app.dispose);
+      app.swarms
+        ..clear()
+        ..addAll([term, office]);
+      app.selectSwarm(termId);
+      final joining = app.deskStartForTest();
+
+      await app.closeSwarm(termId);
+      app.newSwarm(name: 'scratch');
+      final scratch = app.activeSwarm;
+      api.readGate!.complete();
+      await joining;
+
+      expect(office.name, 'office');
+      expect(app.swarms, [office, scratch]);
+      expect(app.activeSwarm, same(scratch));
+      expect(isDeskId(scratch.id), isTrue);
+      expect(api.doc!.tabs.map((tab) => tab.name), ['office', 'scratch']);
+      expect(
+        api.batches
+            .expand((batch) => batch)
+            .where((op) => op['op'] == 'tab.rename'),
+        isEmpty,
+        reason: 'An unchanged local name must not undo a rename on another machine',
+      );
+    });
+
+    test('closing term preserves office through an older desk reply and retry', () async {
+      final officeId = newDeskId(), termId = newDeskId();
+      final api = _DeskApi()
+        ..doc = DeskDoc(
+          revision: 1,
+          tabs: [
+            tab(termId, name: 'term', custom: true, agents: ['a2']),
+            tab(officeId, name: 'office', custom: true, agents: ['a0', 'a1']),
+          ],
+        );
+      final app = createApp()..api = api;
+      addTearDown(app.dispose);
+      await app.deskStartForTest();
+      final office = app.swarms.singleWhere((tab) => tab.id == officeId);
+      final panes = office.panes.toList();
+      app.selectSwarm(termId);
+      api.batches.clear();
+      api.failWith = StateError('offline');
+      await app.closeSwarm(termId);
+      await Future<void>.delayed(Duration.zero);
+      expect(app.activeSwarm, same(office));
+
+      api.failWith = null;
+      await app.deskFetchForTest();
+      expect(app.swarms.any((tab) => tab.id == termId), isFalse);
+      expect(office.name, 'office');
+      expect(office.nameIsCustom, isTrue);
+      expect(office.panes, orderedEquals(panes));
+      expect(app.deskSyncForTest.pending, [
+        {'op': 'tab.close', 'id': termId},
+      ]);
+
+      await app.deskFlushForTest();
+      expect(app.deskSyncForTest.pending, isEmpty);
+      expect(office.name, 'office');
+      expect(
+        api.doc!.tabs.singleWhere((tab) => tab.id == officeId).name,
+        'office',
+      );
+      expect(api.batches.expand((batch) => batch), [
+        {'op': 'tab.close', 'id': termId},
+      ]);
+    });
+
     test('a desk_changed push closes a tab closed elsewhere and opens one opened elsewhere, keeping this window\'s focus', () async {
       final api = _DeskApi()
         ..doc = DeskDoc(
@@ -436,11 +744,11 @@ void main() {
       expect(d1.name, 'One, really');
       expect(d1.panes.map((p) => p.agentId), ['a1', 'a2', 'a4']);
       expect(d1.focusedPaneId, second.id, reason: 'focus is this window\'s');
-      expect(
-        api.batches,
-        isEmpty,
-        reason: 'applying the desk sends nothing back',
-      );
+      expect(api.batches.expand((batch) => batch).map((op) => op['op']), ['tab.layout'],
+          reason: 'the legacy new pane count gets shared geometry once');
+      api.batches.clear();
+      await app.deskFetchForTest();
+      expect(api.batches, isEmpty, reason: 'canonical geometry never echoes');
     });
 
     test('a document that did not move a tab\'s order leaves this window\'s tiles, sizes and pins alone', () async {
@@ -680,7 +988,7 @@ void main() {
 
       app.setPreset(2, PanePreset.rows);
       await Future<void>.delayed(Duration.zero);
-      final onDesk = () =>
+      DeskLayout? onDesk() =>
           api.doc!.tabs.singleWhere((t) => t.id == work.id).layout;
       expect(onDesk()?.presets, {'2': 'rows'});
       expect(
@@ -778,9 +1086,9 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(work.presets[2], PanePreset.rows);
       expect(
-        work.paneSizes,
-        isEmpty,
-        reason: 'the preset replaced the split, as choosing it here would',
+        work.manualLayout?.tiles,
+        PanePreset.rows.tilesFor(2),
+        reason: 'the preset replaces the split with shared normalized slots',
       );
     });
 

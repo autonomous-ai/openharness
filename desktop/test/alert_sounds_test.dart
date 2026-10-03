@@ -100,7 +100,16 @@ void main() {
     expect(played, hasLength(1));
   });
 
-  test('the rate limit is per KIND, so a stuck agent is never swallowed by a busy one', () async {
+  test('failed and successful turns share the existing completion sound limit', () async {
+    final player = sounds(await switchedOn());
+    player.play(AlertKind.done);
+    player.play(AlertKind.failed);
+    player.play(AlertKind.needsYou);
+    await Future<void>.delayed(Duration.zero);
+    expect(played, [AlertKind.done.sound, AlertKind.needsYou.sound]);
+  });
+
+  test('the rate limit is per sound, so a stuck agent is never swallowed by a busy one', () async {
     var at = DateTime(2026, 9, 23, 12);
     final player = sounds(await switchedOn(), clock: () => at);
     player.play(AlertKind.done);

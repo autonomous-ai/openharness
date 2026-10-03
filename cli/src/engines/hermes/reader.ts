@@ -20,6 +20,14 @@ import {
 
 // `YYYYMMDD_HHMMSS_<hex>` — CLI/TUI use 6 hex chars, the gateway 8.
 const SESSION_ID_RE = /^[0-9]{8}_[0-9]{6}_[0-9a-fA-F]{4,16}$/
+/**
+ * Every id a Hermes store keeps a conversation under: the ones above, and an editor's. The ACP adapter
+ * names its sessions with a uuid4 (`acp_adapter/session.py`; all six ACP rows on the machine measured
+ * were uuids), so their history is readable too. `hermesSessionSource` keeps the narrower shape: it
+ * decides whether a hook's session is a pane's own, and editors' sessions never are.
+ */
+export const HERMES_HISTORY_ID_RE =
+  /^(?:[0-9]{8}_[0-9]{6}_[0-9a-fA-F]{4,16}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/
 const POLL_MS = 1_000
 const MAX_BUFFER = 32 * 1024 * 1024
 
@@ -43,7 +51,7 @@ export async function readHermesMessages(
   sessionId: string,
   afterId?: number | null,
 ): Promise<HmMessage[]> {
-  if (!SESSION_ID_RE.test(sessionId)) return []
+  if (!HERMES_HISTORY_ID_RE.test(sessionId)) return []
   const bounded = Number.isFinite(afterId as number) && (afterId as number) > 0
   const sql = `SELECT ${COLUMNS} FROM messages WHERE session_id = ?${bounded ? ' AND id > ?' : ''} ORDER BY id;`
   const params = bounded ? [sessionId, Math.trunc(afterId as number)] : [sessionId]
@@ -73,13 +81,17 @@ export async function readHermesMessages(
  * itself to the adapter from the parent's pane. Measured live: dispatching two sub-agents fired
  * `on_session_start` for `20260805_111618_8e3027` / `…_0777bc` 0.2s after the parent's rows appeared, the
  * pane re-bound to them, and the parent was `forgotten` mid-turn — taking its delegation bookkeeping and
- * its sub-agent list with it. `sessions.source` separates them: 'cli' for the real one, 'subagent'/'tool'
+ * its sub-agent list with it. `sessions.source` separates them: 'cli'/'tui' for the real one, 'subagent'/'tool'
  * for the children (`cwd` also points into `/tmp`, but source is the explicit marker).
  *
  */
+export function isHermesInteractiveSource(source: string): boolean {
+  return source === '' || source === 'cli' || source === 'tui'
+}
+
 export async function isHermesSubagentSession(dbPath: string, sessionId: string): Promise<boolean> {
   const source = await hermesSessionSource(dbPath, sessionId)
-  return source !== null && source !== '' && source !== 'cli'
+  return source !== null && !isHermesInteractiveSource(source)
 }
 
 /**

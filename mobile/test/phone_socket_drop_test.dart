@@ -11,7 +11,7 @@ import 'agent_pager_fixture.dart';
 /// line going, not the machine — and the screen must read it that way.
 void main() {
   test('a viewer keeps the machine online and its agents on screen', () async {
-    final app = pagerApp(PagerConn(), viewer: true);
+    final app = pagerApp(PagerConn());
     addTearDown(app.dispose);
     final session = await liveAgent(app, 'b');
 
@@ -30,18 +30,8 @@ void main() {
     expect(machine.pendingOfflineAgentId, 'b');
   });
 
-  test('a desktop still reads its CLI socket dropping as offline', () async {
-    final app = pagerApp(PagerConn());
-    addTearDown(app.dispose);
-    await liveAgent(app, 'b');
-
-    app.connectionStatusForTest('m', ConnectionStatus.reconnecting);
-
-    expect(app.stateOf('m')!.nodeOnline, isFalse);
-  });
-
   test('a machine that has never answered lists nothing yet', () {
-    final app = pagerApp(PagerConn(), viewer: true);
+    final app = pagerApp(PagerConn());
     addTearDown(app.dispose);
     app.stateOf('m')!
       ..connectionStatus = ConnectionStatus.connecting

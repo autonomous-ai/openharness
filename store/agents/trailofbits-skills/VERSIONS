@@ -1,0 +1,12 @@
+# Trail of Bits Skills — trailofbits/skills, wrapped here as it is on its main branch.
+# A newer release is a bump of UPSTREAM_COMMIT to a later commit there, then `harness dsh update`.
+UPSTREAM_NAME="trailofbits/skills"
+UPSTREAM_REPO="https://github.com/trailofbits/skills.git"
+UPSTREAM_COMMIT="82fe8226252622fa807643bdca1710901198553a"
+# The code-audit plugins whose skills this harness links (harness.json agent.skills), their licence and
+# README; not the other 34 plugins, their evals or the repository's own tooling.
+UPSTREAM_SPARSE_MODE="no-cone"
+UPSTREAM_SPARSE="/LICENSE /README.md /plugins/audit-context-building/ /plugins/differential-review/ /plugins/sharp-edges/ /plugins/static-analysis/ /plugins/supply-chain-risk-auditor/ /plugins/variant-analysis/ /plugins/fp-check/ /plugins/vulnerability-triage-brocards/ /plugins/agentic-actions-auditor/ /plugins/c-review/ /plugins/rust-review/"
+# The versions upstream's static-analysis scripts were verified against.
+SEMGREP_VERSION="1.173.0"
+PIP_AUDIT_VERSION="2.10.1"

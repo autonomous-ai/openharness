@@ -33,15 +33,15 @@ No SSH keys. No Tailscale. No port forwarding.
 
 ### Keyboard first
 
-⌘O finds any session on any machine. ⇧⌘I jumps to the agent waiting on you. ⌘D splits. Every key remaps.
+⌘P finds any harness on any machine. ⇧⌘I jumps to the harness waiting on you. ⌘D splits. Every key remaps.
 
-<p align="center"><img src=".github/assets/readme/keyboard.gif" width="960" alt="Keyboard only: open a session by typing a few letters, zoom it, jump to the agent asking a question and answer it, then split a new pane below."></p>
+<p align="center"><img src=".github/assets/readme/keyboard.gif" width="960" alt="Keyboard only: open a harness by typing a few letters, zoom it, jump to the agent asking a question and answer it, then split a new pane below."></p>
 
 ### End-to-end encrypted
 
 Code, keys and keystrokes are sealed on your machine. The relay forwards bytes it can't read.
 
-<p align="center"><img src=".github/assets/readme/e2ee.gif" width="960" alt="On the left, an agent rotates a secret and redeploys. On the right, the same session as the relay sees it: numbered frames of ciphertext."></p>
+<p align="center"><img src=".github/assets/readme/e2ee.gif" width="960" alt="On the left, an agent rotates a secret and redeploys. On the right, the same harness as the relay sees it: numbered frames of ciphertext."></p>
 
 ### Fast and light
 
@@ -69,6 +69,16 @@ for workloads, slow tails, connection failures and raw data.
 - **Open source, all of it.** App, CLI, daemon, relay and device, in this repo.
 
 ## How it works
+
+In the workspace, a **harness** is one running session of an agent such as Codex
+or Claude Code, with its own conversation and working context. A **swarm** groups
+harnesses. Use **New Harness** to start one and **New Swarm** to group work.
+Enable **Settings → Experimental → Swarm collaboration** to let their agents
+consult peers in the same swarm; it is off by default.
+
+The Store offers **harnesses** with instructions, tools, and optional viewers for
+specific crafts. Install a harness, then start it in your workspace. See the
+[terminology guide](docs/terminology.md) for the complete naming rules.
 
 One daemon per machine runs your agents in tmux. It dials out, so no machine opens a port.
 
@@ -101,11 +111,12 @@ Cloudflare's TURN network. Harness keeps trying for a direct path.
 
 **Through our relay.** A fallback while WebRTC negotiates. The relay holds no keys and forwards ciphertext.
 
-<p align="center"><img src=".github/assets/readme/connect/relay.gif" width="800" alt="The Harness relay keeps the session reachable over its WebSocket while WebRTC negotiates. It holds no keys."></p>
+<p align="center"><img src=".github/assets/readme/connect/relay.gif" width="800" alt="The Harness relay keeps the harness reachable over its WebSocket while WebRTC negotiates. It holds no keys."></p>
 
 The [architecture guide](docs/architecture.md) has the details.
 
 <a id="run-it"></a>
+
 ## Get started
 
 **[Download the app](https://harness.autonomous.ai/desktop)** for macOS or Linux.
@@ -117,6 +128,15 @@ curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash
 harness login
 harness remote-password set
 harness start
+```
+
+**In a terminal:** the same line installs `hn` — tmux's keys and your `~/.tmux.conf`, with every
+harness on every machine ([hn](tui/README.md)). The first time, `hn` signs in and connects the
+computer:
+
+```bash
+curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash
+hn
 ```
 
 <details>
@@ -141,6 +161,7 @@ flutter run -d macos
 </details>
 
 <a id="beyond-code"></a>
+
 ## Beyond code: Build across disciplines
 
 > “World-class entrepreneurs are polymaths.” — [Peter Thiel](https://www.youtube.com/watch?v=h10kXgTdhNU&t=811s)
@@ -204,15 +225,15 @@ A **domain-specific harness** turns a coding agent into a specialist. It brings 
 instructions and skills, a pinned toolchain, a project template, checks and a **live viewer**.
 You chat on one side. The board, the part or the game takes shape on the other.
 
-The agent does the reasoning. The harness brings the tools and the view. It's a folder with a
+The agent does the reasoning. The harness supplies the tools and the view. It's a folder with a
 `harness.json`, so adding a craft never touches the app.
 
 <!-- store-catalog:start -->
-### 49 harnesses in the Store
+### 50 harnesses in the Store
 
 | Category | Agents and harnesses |
 |---|---|
-| **Coding** | [Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin, Muse Code, Amp, Antigravity, GitHub Copilot, Grok Build, Kilo Code](docs/engines.md), [Harness Monitor](store/agents/harness-monitor/), [Machine Monitor](store/agents/machine-monitor/) |
+| **Coding** | [Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin, Muse Code, Amp, Antigravity, GitHub Copilot, Grok Build, Kilo Code](docs/engines.md), [Harness Monitor](store/agents/harness-monitor/), [Machine Monitor](store/agents/machine-monitor/), [Trail of Bits Skills](store/agents/trailofbits-skills/) |
 | Design | [Autonomous Workshop](store/agents/autonomous-workshop/), [Blender](store/agents/blender/), [Bonsai MCP](store/agents/bonsai-mcp/), [Creative Direction](store/agents/creative-direction/), [Excalidraw](store/agents/excalidraw/), [FreeCAD](store/agents/freecad/), [Generative Art](store/agents/generative-art/), [OpenSCAD](store/agents/openscad/), [text-to-cad](store/agents/text-to-cad/) |
 | Engineering | [Autonomous Circuit](store/agents/autonomous-circuit/), [CircuitJS](store/agents/circuitjs/), [Home Assistant](store/agents/home-assistant/), [KiCad](store/agents/kicad/), [Orca Slicer](store/agents/orca-slicer/), [Yosys](store/agents/yosys/) |
 | Media | [Comfy MCP](store/agents/comfy-mcp/), [Manim](store/agents/manim/), [OpenMontage](store/agents/openmontage/), [Remotion](store/agents/remotion/) |
@@ -222,7 +243,7 @@ The agent does the reasoning. The harness brings the tools and the view. It's a 
 | Simulation | [DimOS](store/agents/dimos/), [Drone Pilot](store/agents/drone-pilot/), [Foam-Agent](store/agents/foam-agent/), [MuJoCo](store/agents/mujoco/), [SimSkill](store/agents/simskill/) |
 | Games | [Game Master](store/agents/game-master/), [Godogen](store/agents/godogen/), [Phaser](store/agents/phaser/), [Voxel Worlds](store/agents/voxel-worlds/) |
 | Research | [Jev Browser](store/agents/jev-browser/), [Roundtable](store/agents/roundtable/) |
-| Local AI | [Grid](store/agents/autonomous-grid/), [MLX-LM](store/agents/mlx-lm/), [Ollama](store/agents/ollama/), [vLLM](store/agents/vllm/) |
+| Local AI | [MLX-LM](store/agents/mlx-lm/), [Model Manager](store/agents/autonomous-grid/), [Ollama](store/agents/ollama/), [vLLM](store/agents/vllm/) |
 
 Upstream open-source tools and original workflows. 10 [shared viewers](store/viewers/) install alongside
 the harnesses that need them. Unlisted experiments are not shown.
@@ -256,6 +277,10 @@ Press **⌘N → Hello World** and say hello. The [authoring guide](store/README
 
 ## Harness device
 
+[**Get a Harness device**](https://www.autonomous.ai/harness-device), or build your own from the files below. The
+[firmware guide](devices/harness-device/firmware/README.md) lists the supported boards and build
+commands, and the [hardware guide](devices/harness-device/hardware/README.md) covers the design files.
+
 <p align="center"><img src=".github/assets/readme/device.gif" width="960" alt="A finger taps the round Harness device, speaks a task to fix the login flow, and the device shows the agent deploying, then a summary of the shipped fix."></p>
 
 The optional **Harness device** is a round, always-on display that sits beside
@@ -271,14 +296,11 @@ It is open hardware, all the way down. This repository has everything it takes t
 | [PCB](devices/harness-device/hardware/pcb/) | The EasyEDA Pro project, the schematic, Gerbers, the bill of materials, and pick-and-place data for assembly. |
 | [Enclosure](devices/harness-device/hardware/3d/) | STEP for editing and STL for printing: the housing, an iron counterweight base, the USB clamp, and the button. |
 
-[**Get a Harness device**](https://www.autonomous.ai/harness), or build your own from these files. The
-[firmware guide](devices/harness-device/firmware/README.md) lists the supported boards and build
-commands, and the [hardware guide](devices/harness-device/hardware/README.md) covers the design files.
-
 ## Contribute
 
 Make a harness for a tool you love. Improve terminals, engines, the daemon or the relay. Port the
 firmware. Start with the [contribution guide](CONTRIBUTING.md).
 
+[Architecture](docs/architecture.md) · [Product direction (proposal)](docs/product-direction.md) ·
 [Development](docs/development.md) · [Extending](docs/extending.md) · [CLI](docs/cli.md) ·
 [Security](SECURITY.md) · [MIT license](LICENSE); upstream tools keep their own.

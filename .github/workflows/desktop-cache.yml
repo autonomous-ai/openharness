@@ -1,0 +1,63 @@
+name: Prepare desktop caches
+
+# A tag can restore main's caches, but cannot restore a previous tag's caches.
+# Prepare these once when dependencies/toolchain change, outside any release.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/pubspec.yaml'
+      - '**/pubspec.lock'
+      - '.github/actions/desktop-flutter/**'
+      - '.github/actions/desktop-flutter-arm64/**'
+      - '.github/workflows/desktop-cache.yml'
+      - '.github/workflows/release-desktop.yml'
+  pull_request:
+    paths:
+      - 'desktop/pubspec.yaml'
+      - '**/pubspec.lock'
+      - '.github/actions/desktop-flutter/**'
+      - '.github/actions/desktop-flutter-arm64/**'
+      - '.github/workflows/desktop-cache.yml'
+      - '.github/workflows/release-desktop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-cache-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-22.04, ubuntu-22.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /desktop/
+            /.github/actions/
+            /.github/workflows/release-desktop.yml
+            /mobile/pubspec.lock
+          sparse-checkout-cone-mode: false
+      - id: toolchain
+        run: |
+          version="$(sed -n "s/^  FLUTTER_VERSION: '\([^']*\)'.*/\1/p" .github/workflows/release-desktop.yml)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/desktop-flutter
+        if: runner.os != 'Linux' || runner.arch != 'ARM64'
+        with:
+          version: ${{ steps.toolchain.outputs.version }}
+          save-cache: 'true'
+      - uses: ./.github/actions/desktop-flutter-arm64
+        if: runner.os == 'Linux' && runner.arch == 'ARM64'
+        with:
+          version: ${{ steps.toolchain.outputs.version }}
+          save-cache: 'true'

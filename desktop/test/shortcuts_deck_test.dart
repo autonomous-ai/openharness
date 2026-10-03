@@ -2,6 +2,8 @@
 // What this guards is the reason the deck exists: the rows have to reflow into
 // the width the pane actually has, instead of sitting in one 460px lane with
 // the rest of the window empty.
+
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart';
@@ -243,7 +245,7 @@ void main() {
         reason: 'The cap needs room for its full label and vertical padding.',
       );
       expect(
-        tester.getSize(find.byIcon(Icons.keyboard_tab)).height,
+        tester.getSize(find.byIcon(AppIcons.arrowRightToLine)).height,
         greaterThan(14),
         reason: 'The Tab symbol should enlarge along with the letter keys.',
       );

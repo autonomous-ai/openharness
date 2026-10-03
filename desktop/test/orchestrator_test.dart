@@ -57,6 +57,8 @@ class _LaunchConnection extends WsConn {
         onEvent: (_) {},
         onStatus: (_) {},
       );
+  @override
+  bool get isReady => true;
   final Exception failure;
   final starts = <Map<String, dynamic>>[];
   @override
@@ -85,7 +87,10 @@ void main() {
                 )
               : const WsRequestTimeout('orchestrator'),
         );
-        final app = createApp(connectionForTest: (_) => connection);
+        final app = createApp(
+          connected: true,
+          connectionForTest: (_) => connection,
+        );
         app.machineStates['m']!.localOnly = true;
         addTearDown(app.dispose);
         await tester.pumpWidget(
@@ -119,25 +124,28 @@ void main() {
     );
   }
 
-  test('Cmd-P opens a pane and the orchestrator remains a palette command', () {
-    final shortcut = appShortcuts()
-        .singleWhere((s) => s.action == ShortcutAction.addAgent)
-        .activator;
-    expect(shortcut.trigger, LogicalKeyboardKey.keyP);
-    expect(shortcut.meta, isTrue);
-    expect(shortcut.shift, isFalse);
-    expect(
-      kAppShortcuts.where((s) => s.action == ShortcutAction.orchestrate),
-      isEmpty,
-    );
-    expect(
-      kAppShortcuts
-          .singleWhere((s) => s.action == ShortcutAction.routeTask)
-          .activator
-          .trigger,
-      LogicalKeyboardKey.keyB,
-    );
-  });
+  test(
+    'Cmd-O opens projects and the orchestrator remains a palette command',
+    () {
+      final shortcut = appShortcuts()
+          .singleWhere((s) => s.action == ShortcutAction.addAgent)
+          .activator;
+      expect(shortcut.trigger, LogicalKeyboardKey.keyO);
+      expect(shortcut.meta, isTrue);
+      expect(shortcut.shift, isFalse);
+      expect(
+        kAppShortcuts.where((s) => s.action == ShortcutAction.orchestrate),
+        isEmpty,
+      );
+      expect(
+        kAppShortcuts
+            .singleWhere((s) => s.action == ShortcutAction.routeTask)
+            .activator
+            .trigger,
+        LogicalKeyboardKey.keyB,
+      );
+    },
+  );
 
   test(
     'transient chat failure retries the same receipt and retains the draft',

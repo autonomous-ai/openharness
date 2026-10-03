@@ -105,7 +105,7 @@ void main() {
   );
 
   testWidgets(
-    'both scroll positions restore on the first frame across different Swarm sizes',
+    'both scroll positions restore on the first frame across different Tab sizes',
     (tester) async {
       final app = createApp();
       app.machineStates['m']!.nodeOnline = true;

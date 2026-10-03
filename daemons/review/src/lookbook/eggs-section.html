@@ -1,0 +1,225 @@
+  <!-- eggs:start -->
+  <style>
+    .eggs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+    .eggs-grid button { display: grid; gap: 4px; justify-items: center; padding: 12px 6px 10px; background: var(--deep); text-align: center; }
+    .eggs-grid pre { font: 400 6.4px/1.2 var(--mono); min-height: 150px; display: grid; align-items: end; filter: drop-shadow(0 0 4px var(--glow2, transparent)); }
+    .eggs-grid .nm { font: 12px var(--mono); color: var(--bright); }
+    .eggs-grid .how { font: 11px/1.35 var(--mono); color: var(--dim); }
+    .eggs-grid .one { font: 12px var(--mono); color: var(--faint); }
+    .egg-stage { background: var(--deep); border: 1px solid var(--line); border-radius: 6px; padding: 16px; display: grid; place-items: center; min-height: 460px; transition: background .25s; }
+    .egg-stage.dark { background: #000; }
+    .egg-stage pre { font: 400 clamp(6.5px, calc((100vw - 72px) / 34), 12px)/1.2 var(--mono); white-space: pre; filter: drop-shadow(0 0 2px var(--glow, transparent)) drop-shadow(0 0 10px var(--glow2, transparent)); }
+    .egg-words { font: 13px/1.6 var(--mono); color: var(--dim); text-align: center; min-height: 3.2em; margin-top: 8px; white-space: pre-line; }
+    .egg-words b { color: var(--bright); font-weight: 600; }
+  </style>
+  <section aria-labelledby="s-eggs3">
+    <h2 id="s-eggs3">EGGS, FILLED (TRY)</h2>
+    <div class="ind">
+      <p class="lede">The eggs are drawn like drop 1 now: a shaded shell in each kind's colour and pattern.</p>
+      <p>What you do picks the egg, so each kind looks different, the way a blind box's art tells you the series. The egg you are earning cracks as you get closer: a crack part way across, then all the way with a chip knocked out, then the shell splits open a little with light inside; when it is earned it rocks in the nest with two eyes peeking out of the chip, until you open it. Opening it: two big rocks, the top lifts and light pours out in the rarity's colour (white, cyan for rare, gold for legendary; for a secret the lights go out and something violet shows through), the top breaks in two and tumbles off either side, bits of shell scatter, and the hatchling rises out of the bottom half. Rarity shows only then: while you earn it, the light is plain. The status line keeps each egg's one-line look, shown under it.</p>
+      <div class="eggs-grid" id="eggGrid" role="group" aria-label="Egg kinds"></div>
+      <div class="egg-stage" id="eggStage"><pre id="eggArt" aria-live="off"></pre><div class="egg-words" id="eggWords"></div></div>
+      <div class="row" role="group" aria-label="Progress toward this egg" id="eggProgress"><span class="lbl">earned</span></div>
+      <div class="row" role="group" aria-label="Rarity inside" id="eggRarity"><span class="lbl">inside</span></div>
+      <div class="row"><button type="button" id="eggHatch">hatch it</button><span class="note" id="eggNote"></span></div>
+    </div>
+  </section>
+  <script type="application/json" id="eggs-data">__EGGS__</script>
+  <script>
+  // The roster is injected at the end of the page, so this runs once the page has loaded.
+  document.addEventListener('DOMContentLoaded', () => {
+    const E = JSON.parse(document.getElementById('eggs-data').textContent);
+    const R = JSON.parse(document.getElementById('roster-data').textContent);
+    const INK = R.rules.plate.ink;
+    const KINDS = {
+      first: ['#ffffd7', '#d7d7af', 'your first habits', 3, 'habits', 'with a finished turn'],
+      setup: ['#d7d7ff', '#8787d7', 'six habits: set up', 6, 'habits'],
+      turn: ['#eeeeee', '#a8a8a8', 'every 40 turns (20 count a day)', 40, 'turns'],
+      week: ['#afffff', '#5fafaf', 'three days in one week', 3, 'days this week'],
+      marathon: ['#ffd7af', '#d7875f', '500 turns, or a second machine', 500, 'turns'],
+      night: ['#8787d7', '#3a3a78', 'late nights; can hold the secret', 3, 'nights'],
+      easter: ['#ffafd7', '#af5faf', 'an easter word; can hold the secret', 1, 'easter word'],
+      history: ['#d7af87', '#875f5f', 'a day in computing history', 1, 'turn in its week'],
+    };
+    const LIGHT = { common: '#eeeeee', rare: '#5fd7ff', legendary: '#ffd75f', secret: '#af87ff' };
+    const PLAIN = '#ffffd7';   // the light while you earn it: no rarity yet
+    // Steps toward an egg: how far along, and the crack level it shows (0 whole .. 4 ready).
+    function steps(k) {
+      const n = KINDS[k][3], unit = KINDS[k][4];
+      const counts = n <= 6 ? [...Array(n + 1).keys()] : [0, n / 4, n / 2, (3 * n) / 4, n];
+      return counts.map((c) => {
+        const f = c / n, level = f === 0 ? 0 : f >= 1 ? 4 : 1 + Math.min(2, Math.floor(f * 3));
+        return { level, label: n === 1 ? (c ? 'ready' : 'not yet') : c + '/' + n + (c === n ? ' ready' : '') , unit };
+      });
+    }
+    const INSIDE = { common: 'tim', rare: 'bug', legendary: 'tux', secret: 'beastie' };
+    const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const $ = (id) => document.getElementById(id);
+    const rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+    const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
+    const css = (c) => 'rgb(' + c.join(',') + ')';
+    const BG = [12, 12, 12], WHITE = [255, 255, 255];
+    function cellColour(base, ch) {
+      const l = INK[ch];
+      if (l === undefined) return null;
+      return css(l > 1 ? mix(base, WHITE, l - 1) : mix(BG, base, l));
+    }
+    function paintRows(rows, rowBase, cellBase) {
+      return rows.map((row, r) => {
+        let html = '', run = '', key = null;
+        const flush = () => { if (run) html += key === null ? run : '<span style="color:' + key + '">' + run + '</span>'; run = ''; };
+        [...row].forEach((ch, c) => {
+          const k = cellColour(cellBase ? cellBase(r, c) : rowBase(r), ch);
+          if (k !== key) { flush(); key = k; }
+          run += ch;
+        });
+        flush();
+        return html;
+      });
+    }
+    // An egg frame: the kind's gradient down the shell, light through the cracks in the rarity's colour.
+    function eggHtml(frame, kind, rarity, dim, plain) {
+      const rows = frame.rows.split('\n'), mats = frame.mats.split('\n');
+      const [top, bottom] = KINDS[kind].map((h, i) => (i < 2 ? rgb(h) : null));
+      const n = Math.max(1, rows.length - 1);
+      return paintRows(rows, null, (r, c) => {
+        if (mats[r][c] === 'g') return rgb(plain ? PLAIN : LIGHT[rarity]);
+        if (mats[r][c] === 's') return dim ? mix(BG, rgb('#ffffd7'), 0.3) : rgb('#ffffd7');
+        if (mats[r][c] === 'p') return rgb('#ffffff');
+        const base = mix(top, bottom, r / n);
+        return dim ? mix(BG, base, 0.22) : base;
+      });
+    }
+    function plateHtml(text, d) {
+      const rows = text.split('\n'), top = rgb(d.gradient.top.hex), bottom = rgb(d.gradient.bottom.hex), n = Math.max(1, rows.length - 1);
+      return paintRows(rows, (r) => mix(top, bottom, r / n));
+    }
+    function glow(el, hex) {
+      const [r, g, b] = rgb(hex);
+      el.style.setProperty('--glow', 'rgba(' + r + ',' + g + ',' + b + ',.5)');
+      el.style.setProperty('--glow2', 'rgba(' + r + ',' + g + ',' + b + ',.3)');
+    }
+    const pad = (s, w) => { const l = Math.floor((w - s.length) / 2); return ' '.repeat(Math.max(0, l)) + s; };
+
+    // The grid: every kind resting, with the one-line look the status line keeps.
+    let kind = 'first', rarity = 'common', tick = 0, level = 4, idle = null;
+    const cards = {};
+    for (const k of Object.keys(KINDS)) {
+      if (!E[k]) continue;
+      const b = document.createElement('button');
+      b.type = 'button'; b.setAttribute('aria-pressed', String(k === kind));
+      const pre = document.createElement('pre'); glow(pre, KINDS[k][1]);
+      const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = k;
+      const how = document.createElement('span'); how.className = 'how'; how.textContent = KINDS[k][2];
+      const one = document.createElement('span'); one.className = 'one'; one.textContent = (R.rules.eggs[k] && R.rules.eggs[k].look) || '';
+      b.append(pre, nm, how, one);
+      b.onclick = () => { $('eggGrid').querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x === b))); kind = k; level = 4; progressPicker(); reset(); };
+      $('eggGrid').appendChild(b);
+      cards[k] = pre;
+    }
+    function drawGrid() {
+      for (const [k, pre] of Object.entries(cards)) {
+        const f = E[k].thumb[still ? 0 : tick % E[k].thumb.length];
+        pre.innerHTML = '<span>' + eggHtml(f, k, 'common', false).join('\n') + '</span>';
+      }
+    }
+    for (const r of Object.keys(LIGHT)) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = r + ' (' + INSIDE[r] + ')'; b.setAttribute('aria-pressed', String(r === rarity));
+      b.onclick = () => { $('eggRarity').querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x === b))); rarity = r; reset(); };
+      $('eggRarity').appendChild(b);
+    }
+
+    function progressPicker() {
+      const el = $('eggProgress');
+      el.querySelectorAll('button').forEach((b) => b.remove());
+      const list = steps(kind);
+      list.forEach((st, i) => {
+        const b = document.createElement('button');
+        b.type = 'button'; b.textContent = st.label; b.title = st.unit;
+        b.setAttribute('aria-pressed', String(i === list.length - 1));
+        b.onclick = () => { el.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x === b))); level = st.level; reset(); };
+        el.appendChild(b);
+      });
+      el.querySelector('.lbl').textContent = KINDS[kind][4];
+    }
+    progressPicker();
+
+    // The hatch: a timeline of frames, then the hatchling rising out of the lower shell.
+    let timer = null, playing = false;
+    function show(html, dark, glowHex) {
+      $('eggArt').innerHTML = html;
+      $('eggStage').classList.toggle('dark', !!dark);
+      glow($('eggArt'), glowHex);
+    }
+    // Resting at its progress: the frames of its crack level, looping.
+    function reset() {
+      clearTimeout(timer); clearTimeout(idle); playing = false;
+      $('eggWords').textContent = level === 4 ? 'earned: it glows and rocks in the nest until you open it' : 'still earning: ' + KINDS[kind][2];
+      let i = 0;
+      const loop = () => {
+        const frames = E[kind]['p' + level];
+        show(eggHtml(frames[still ? 0 : i++ % frames.length], kind, rarity, false, true).join('\n'), false, level >= 3 ? PLAIN : KINDS[kind][1]);
+        if (!still && !playing) idle = setTimeout(loop, 190);
+      };
+      loop();
+    }
+    function risen(k) {
+      // the hatchling's last k rows above the open shell, both centred on one width
+      const d = R.daemons.find((x) => x.id === INSIDE[rarity]);
+      const plate = R.plates.daemons[d.id].reveal['0.1'].idle;
+      const text = plate[Math.floor(tick) % plate.length];
+      const drows = text.split('\n');
+      const shellF = E[kind].open[0];
+      const srows = shellF.rows.split('\n');
+      let first = srows.findIndex((l) => l.trim());
+      if (first < 0) first = 0;
+      const shellRows = srows.slice(first), shellMats = shellF.mats.split('\n').slice(first);
+      const W = Math.max(drows[0].length, srows[0].length);
+      const dPart = plateHtml(drows.slice(drows.length - k).join('\n'), d);
+      const sPart = eggHtml({ rows: shellRows.join('\n'), mats: shellMats.join('\n') }, kind, rarity, false);
+      const indent = (html, w) => ' '.repeat(Math.max(0, Math.floor((W - w) / 2))) + html;
+      const blank = Array.from({ length: drows.length - k }, () => '');
+      return [...blank, ...dPart.map((h) => indent(h, drows[0].length)), ...sPart.map((h) => indent(h, srows[0].length))].join('\n');
+    }
+    function hatch() {
+      if (level < 4) { $('eggNote').textContent = 'not ready yet: an egg opens only once it is earned'; return; }
+      $('eggNote').textContent = '';
+      clearTimeout(timer); clearTimeout(idle); playing = true;
+      const d = R.daemons.find((x) => x.id === INSIDE[rarity]);
+      const secret = rarity === 'secret';
+      const steps = [];
+      const frames = (stage, ms, opts = {}) => E[kind][stage].forEach((f) => steps.push({ html: () => eggHtml(f, kind, rarity, opts.dim).join('\n'), ms, dark: opts.dark, glow: opts.glow || KINDS[kind][1] }));
+      E[kind].p4.slice(0, 4).forEach((f) => steps.push({ html: () => eggHtml(f, kind, rarity, false, true).join('\n'), ms: 110, glow: PLAIN }));
+      frames('rock', 65); frames('rock', 65);
+      // The light turns the rarity's colour as it bursts; for a secret, the lights go out.
+      E[kind].burst.forEach((f, i) => steps.push({ html: () => eggHtml(f, kind, rarity, secret).join('\n'), ms: i === 0 ? 420 : 150, dark: secret, glow: LIGHT[rarity] }));
+      // the top breaks in two and tumbles off; bits of shell scatter
+      E[kind].tumble.forEach((f) => steps.push({ html: () => eggHtml(f, kind, rarity, false).join('\n'), ms: 75, dark: false, glow: LIGHT[rarity] }));
+      E[kind].open.forEach((f) => steps.push({ html: () => eggHtml(f, kind, rarity, false).join('\n'), ms: 380, glow: LIGHT[rarity] }));
+      const rows = R.plates.daemons[d.id].reveal['0.1'].idle[0].split('\n').length;
+      for (let k = 1; k <= rows; k++) steps.push({ html: () => risen(k), ms: 55, dark: false, glow: d.gradient.bottom.hex });
+      if (still) steps.splice(0, steps.length - 1);
+      let i = 0;
+      const next = () => {
+        if (!playing) return;
+        if (i < steps.length) {
+          const s = steps[i++];
+          show(s.html(), s.dark, s.glow);
+          timer = setTimeout(next, s.ms);
+        } else {
+          $('eggWords').innerHTML = "fork() returned 0. it's a <b>" + d.id + '</b>.\n[ ' + d.rarity.toUpperCase() + ' ]  ' + d.id + ' 0.1: ' + d.first.replace(/</g, '&lt;');
+          const loop = () => { if (!playing) return; tick++; show(risen(R.plates.daemons[d.id].reveal['0.1'].idle[0].split('\n').length), false, d.gradient.bottom.hex); timer = setTimeout(loop, R.plates.frameMs); };
+          if (!still) loop();
+        }
+      };
+      $('eggWords').textContent = '';
+      next();
+    }
+    $('eggHatch').onclick = hatch;
+    reset();
+    drawGrid();
+    if (!still) setInterval(() => { tick++; drawGrid(); }, 200);
+  });
+  </script>
+  <!-- eggs:end -->

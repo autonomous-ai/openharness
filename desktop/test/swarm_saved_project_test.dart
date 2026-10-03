@@ -53,42 +53,56 @@ void main() {
     },
   );
 
-  testWidgets('adding a project derives its name from the selected folder', (
-    tester,
-  ) async {
-    final original = FileSelectorPlatform.instance;
-    FileSelectorPlatform.instance = _Folders();
-    addTearDown(() => FileSelectorPlatform.instance = original);
-    final app = createApp();
-    app.machineStates['m']!.localEndpoint = LocalCliEndpoint(
-      computerId: 'local',
-      wsUri: Uri.parse('ws://fixture.invalid'),
-      protocolVersion: 1,
-      terminalProtocolVersion: 3,
-    );
-    SavedSwarmProject? saved;
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Builder(
-          builder: (context) => TextButton(
-            onPressed: () async {
-              saved = await showSwarmProjectDialog(context, app);
-            },
-            child: const Text('Open'),
+  for (final scale in [1.0, 2.0]) {
+    testWidgets(
+      'adding a project derives its name from the selected folder at ${scale}x text',
+      (tester) async {
+        tester.view.physicalSize = const Size(640, 420);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final original = FileSelectorPlatform.instance;
+        FileSelectorPlatform.instance = _Folders();
+        addTearDown(() => FileSelectorPlatform.instance = original);
+        final app = createApp();
+        app.machineStates['m']!.localEndpoint = LocalCliEndpoint(
+          computerId: 'local',
+          wsUri: Uri.parse('ws://fixture.invalid'),
+          protocolVersion: 1,
+          terminalProtocolVersion: 3,
+        );
+        SavedSwarmProject? saved;
+        await tester.pumpWidget(
+          MaterialApp(
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context)
+                  .copyWith(textScaler: TextScaler.linear(scale)),
+              child: child!,
+            ),
+            home: Builder(
+              builder: (context) => TextButton(
+                onPressed: () async {
+                  saved = await showSwarmProjectDialog(context, app);
+                },
+                child: const Text('Open'),
+              ),
+            ),
           ),
-        ),
-      ),
+        );
+        await tester.tap(find.text('Open'));
+        await tester.pumpAndSettle();
+        expect(find.byType(TextField), findsNothing);
+        await tester.ensureVisible(find.text('Choose folder'));
+        await tester.tap(find.text('Choose folder'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(FilledButton, 'Add project'));
+        await tester.pumpAndSettle();
+        expect(saved!.name, 'autonomous-harness');
+        expect(saved!.path, '/work/autonomous-harness/');
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+      },
     );
-    await tester.tap(find.text('Open'));
-    await tester.pumpAndSettle();
-    expect(find.byType(TextField), findsNothing);
-    await tester.tap(find.text('Choose folder'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Add project'));
-    await tester.pumpAndSettle();
-    expect(saved!.name, 'autonomous-harness');
-    expect(saved!.path, '/work/autonomous-harness/');
-    await tester.pumpWidget(const SizedBox());
-    app.dispose();
-  });
+  }
 }

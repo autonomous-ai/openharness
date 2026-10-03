@@ -7,7 +7,16 @@ class CursorStyle {
 
   int attrs;
 
-  CursorStyle({this.foreground = 0, this.background = 0, this.attrs = 0});
+  /// The OSC 8 hyperlink target the next printed cells carry, or null. SGR
+  /// resets leave it alone; only another OSC 8 changes it.
+  String? hyperlink;
+
+  CursorStyle({
+    this.foreground = 0,
+    this.background = 0,
+    this.attrs = 0,
+    this.hyperlink,
+  });
 
   static final empty = CursorStyle();
 

@@ -271,6 +271,7 @@ void main() {
       manifest.answer(version: '1.0.0');
       await tester.pumpAndSettle();
       expect(find.text('You’re up to date'), findsOneWidget);
+      expect(find.text('Harness 1.0.0 is the latest version.'), findsOneWidget);
       expect(find.text('Up to date'), findsOneWidget);
       expect(app.isCheckingForUpdate, isFalse);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
@@ -567,6 +568,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(Dialog), findsOneWidget, reason: 'it does not vanish');
     expect(find.textContaining('up to date'), findsWidgets);
+    expect(find.text('Harness 1.0.0 is the latest version.'), findsOneWidget);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     await dialog;

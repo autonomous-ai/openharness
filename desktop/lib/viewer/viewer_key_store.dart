@@ -62,17 +62,22 @@ class ViewerKeyStore {
 
   static const _seedKey = 'viewer_e2ee_identity_seed';
   static const _peersKey = 'viewer_e2ee_machine_peers';
+  static const _groupKey = 'viewer_e2ee_group';
+  static const _devLogKey = 'viewer_e2ee_devlog';
+  static const _devLogArchiveKey = 'viewer_e2ee_devlog_archive';
+  static const _signInKey = 'viewer_e2ee_sign_in';
 
   /// Minted on first use and kept: every linked machine has pinned it.
   Future<E2eeIdentity> identity() => _identity ??= _loadOrMintIdentity();
 
-  Future<E2eeIdentity> _loadOrMintIdentity() async {
-    final stored = await _storage.read(_seedKey);
-    if (stored != null) return E2eeIdentity.fromSeed(b64d(stored));
-    final minted = await E2eeIdentity.generate();
-    await _storage.write(_seedKey, b64e(minted.seed));
-    return minted;
-  }
+  Future<E2eeIdentity> _loadOrMintIdentity() =>
+      _storage.synchronized('viewer_identity', () async {
+        final stored = await _storage.read(_seedKey);
+        if (stored != null) return E2eeIdentity.fromSeed(b64d(stored));
+        final minted = await E2eeIdentity.generate();
+        await _storage.write(_seedKey, b64e(minted.seed));
+        return minted;
+      });
 
   /// Newest link first.
   Future<List<MachinePeer>> peers() async {
@@ -96,27 +101,93 @@ class ViewerKeyStore {
     return null;
   }
 
-  Future<void> pin(String machineId, List<int> pub, {String label = ''}) async {
-    await _write([
-      for (final peer in await peers())
-        if (peer.machineId != machineId) peer,
-      MachinePeer(
-        machineId: machineId,
-        pub: Uint8List.fromList(pub),
-        label: label,
-        linkedAt: DateTime.now(),
-      ),
-    ]);
-  }
+  Future<void> pin(String machineId, List<int> pub, {String label = ''}) =>
+      _storage.synchronized('viewer_peers', () async {
+        await _write([
+          for (final peer in await peers())
+            if (peer.machineId != machineId) peer,
+          MachinePeer(
+            machineId: machineId,
+            pub: Uint8List.fromList(pub),
+            label: label,
+            linkedAt: DateTime.now(),
+          ),
+        ]);
+      });
 
   /// False when [machineId] was not linked.
-  Future<bool> unlink(String machineId) async {
-    final current = await peers();
-    final remaining = current.where((peer) => peer.machineId != machineId).toList();
-    if (remaining.length == current.length) return false;
-    await _write(remaining);
-    return true;
+  Future<bool> unlink(String machineId) =>
+      _storage.synchronized('viewer_peers', () async {
+        final current = await peers();
+        final remaining = current
+            .where((peer) => peer.machineId != machineId)
+            .toList();
+        if (remaining.length == current.length) return false;
+        await _write(remaining);
+        return true;
+      });
+
+  /// The trust group as this device last knew it (`group_sync.dart`), as stored JSON; null when
+  /// there is none yet or it cannot be read.
+  Future<Object?> groupRoster() async {
+    final raw = await _storage.read(_groupKey);
+    if (raw == null) return null;
+    try {
+      return jsonDecode(raw);
+    } on FormatException {
+      return null;
+    }
   }
+
+  Future<void> writeGroupRoster(Map<String, Object> roster) =>
+      _storage.write(_groupKey, jsonEncode(roster));
+
+  /// This device's verified copy of the account's device key log (`device_log_sync.dart`), as stored
+  /// JSON; null when there is none yet or it cannot be read.
+  Future<Object?> deviceLog() async {
+    final raw = await _storage.read(_devLogKey);
+    if (raw == null) return null;
+    try {
+      return jsonDecode(raw);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  Future<void> writeDeviceLog(Map<String, Object?> log) =>
+      _storage.write(_devLogKey, jsonEncode(log));
+
+  /// The device key logs of accounts this device was signed in to before, by account id, as stored
+  /// JSON; empty when there are none or they cannot be read.
+  Future<Map<String, Object?>> deviceLogArchive() async {
+    final raw = await _storage.read(_devLogArchiveKey);
+    if (raw == null) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      return decoded is Map ? decoded.cast<String, Object?>() : {};
+    } on FormatException {
+      return {};
+    }
+  }
+
+  Future<void> writeDeviceLogArchive(Map<String, Object?> archive) =>
+      _storage.write(_devLogArchiveKey, jsonEncode(archive));
+
+  /// Which sign-in by hand this device is under (`device_log_sync.dart` keeps its marks per sign-in);
+  /// null when none was recorded.
+  Future<String?> signInEpoch() => _storage.read(_signInKey);
+
+  Future<void> writeSignInEpoch(String epoch) =>
+      _storage.write(_signInKey, epoch);
+
+  /// This device was removed from the account's device key log: its identity is spent. The next one
+  /// minted is a new device, which every other device announces as one. The log as this device
+  /// verified it stays, with every mark on it: signing in again to the same account goes on from there.
+  Future<void> forgetIdentity() =>
+      _storage.synchronized('viewer_identity', () async {
+        _identity = null;
+        await _storage.delete(_seedKey);
+      });
 
   Future<void> _write(List<MachinePeer> peers) => _storage.write(
     _peersKey,

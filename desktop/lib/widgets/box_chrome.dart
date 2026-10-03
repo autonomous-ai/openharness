@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
@@ -7,45 +8,83 @@ import '../terminal/terminal_text.dart';
 
 const double kTerminalCornerRadius = 3;
 
-/// One rim for workspace panes and the dialogs that take their keyboard focus.
-BorderSide terminalPaneBorder({bool focused = false}) => BorderSide(
-  color: focused ? grid.AppPalette.accentOnSurface : grid.AppPalette.divider,
-  width: 1,
-);
+/// A stable rim for the terminal pane, independent of the desktop dialog frame.
+BorderSide terminalPaneBorder({bool focused = false, bool remote = false}) =>
+    BorderSide(
+      color: !focused
+          ? grid.AppPalette.divider
+          : remote
+          ? grid.AppPalette.remotePaneFocus
+          : grid.AppPalette.accentOnSurface,
+      width: 1,
+    );
 
 /// One gutter around the workspace, between panes, and beside command docks.
 const double kWorkspaceInset = 9.5;
 
-/// The selected tab joins the workspace with the same small radius used at
-/// its top corners. The bottom curves turn outward, like a browser tab.
-class TerminalTabBorder extends ShapeBorder {
-  const TerminalTabBorder({this.radius = kTerminalCornerRadius});
+/// How solid the workspace's panes paint their own fill: below 1 while the
+/// background shows through them (any Background but Blank). Only fills turn
+/// translucent — text, colored cells, banners and the composer stay solid.
+class PaneOpacity extends InheritedWidget {
+  const PaneOpacity({super.key, required this.opacity, required super.child});
+  final double opacity;
+
+  /// 1 outside a workspace that set one.
+  static double of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<PaneOpacity>()?.opacity ?? 1;
+
+  /// [color] at the pane opacity.
+  static Color fill(BuildContext context, Color color) {
+    final opacity = of(context);
+    return opacity >= 1 ? color : color.withValues(alpha: color.a * opacity);
+  }
+
+  @override
+  bool updateShouldNotify(PaneOpacity old) => old.opacity != opacity;
+}
+
+/// A desktop tab joins its workspace through two outward lower shoulders.
+/// AppKit mirrors these geometry tokens in SwarmTitlebar.swift.
+class DesktopTabBorder extends ShapeBorder {
+  const DesktopTabBorder({
+    this.radius = grid.AppDesktop.tabRadius,
+    this.shoulder = grid.AppDesktop.tabShoulder,
+    this.side = BorderSide.none,
+  });
   final double radius;
+  final double shoulder;
+  final BorderSide side;
 
   @override
   EdgeInsetsGeometry get dimensions => EdgeInsets.zero;
 
   @override
-  ShapeBorder scale(double t) => TerminalTabBorder(radius: radius * t);
+  ShapeBorder scale(double t) => DesktopTabBorder(
+    radius: radius * t,
+    shoulder: shoulder * t,
+    side: side.scale(t),
+  );
 
   @override
   Path getOuterPath(Rect rect, {TextDirection? textDirection}) {
-    final r = radius.clamp(0.0, rect.shortestSide / 4);
+    final r = radius.clamp(0.0, rect.shortestSide / 2);
+    final s = shoulder.clamp(0.0, rect.shortestSide / 2);
     final c = r * .5522847498;
-    final left = rect.left + r, right = rect.right - r;
+    final sc = s * .5522847498;
+    final left = rect.left + s, right = rect.right - s;
     final top = rect.top, bottom = rect.bottom;
     return Path()
       ..moveTo(rect.left, bottom)
-      ..cubicTo(rect.left + c, bottom, left, bottom - r + c, left, bottom - r)
+      ..cubicTo(rect.left + sc, bottom, left, bottom - s + sc, left, bottom - s)
       ..lineTo(left, top + r)
       ..cubicTo(left, top + r - c, left + r - c, top, left + r, top)
       ..lineTo(right - r, top)
       ..cubicTo(right - r + c, top, right, top + r - c, right, top + r)
-      ..lineTo(right, bottom - r)
+      ..lineTo(right, bottom - s)
       ..cubicTo(
         right,
-        bottom - r + c,
-        rect.right - c,
+        bottom - s + sc,
+        rect.right - sc,
         bottom,
         rect.right,
         bottom,
@@ -58,15 +97,41 @@ class TerminalTabBorder extends ShapeBorder {
       getOuterPath(rect, textDirection: textDirection);
 
   @override
-  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {}
+  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {
+    if (side.style == BorderStyle.none) return;
+    canvas.drawPath(
+      getOuterPath(rect.deflate(side.width / 2), textDirection: textDirection),
+      side.toPaint(),
+    );
+  }
 }
+
+/// Box ink at [alpha] for rims, hairlines and washes: white on a dark palette,
+/// the palette's own ink on a light one.
+Color boxInk(double alpha) {
+  final palette = grid.AppTheme.palette.value;
+  return palette.isDark
+      ? Colors.white.withValues(alpha: alpha)
+      : palette.foreground.withValues(alpha: alpha);
+}
+
+/// Box ink at [alpha] for text and icons. White at 54% is 5.4:1 on Graphite's
+/// workspace, but the same share of near-black is only 3.4:1 on Paper's, so a
+/// light palette never drops below 68% (4.9:1 on its darkest field).
+Color boxText(double alpha) =>
+    boxInk(grid.AppTheme.palette.value.isDark || alpha > .68 ? alpha : .68);
+
+/// Error text in a box: the pale orange reads on a dark field and vanishes on
+/// a light one.
+Color get boxErrorText =>
+    grid.AppTheme.pick(grid.AppPalette.dangerFill, Colors.orangeAccent);
 
 /// Fixed UI typography for shared dialogs. Setup screens opt into the
 /// terminal's size explicitly so zoom does not resize unrelated controls.
 TextStyle boxMonoStyle({Color? color, FontWeight? weight, double? height}) =>
     grid.AppType.mono(
       height: height ?? 1.35,
-      color: color ?? Colors.white,
+      color: color ?? boxText(1),
       fontWeight: weight,
     );
 
@@ -85,12 +150,10 @@ class TerminalBox extends StatelessWidget {
         color: grid.AppPalette.swarmField,
         surfaceTintColor: Colors.transparent,
         shape: docked
-            ? Border(
-                top: BorderSide(color: Colors.white.withValues(alpha: .24)),
-              )
+            ? Border(top: BorderSide(color: boxInk(.24)))
             : RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(kTerminalCornerRadius),
-                side: BorderSide(color: Colors.white.withValues(alpha: .24)),
+                side: BorderSide(color: boxInk(.24)),
               ),
         clipBehavior: Clip.antiAlias,
         child: DefaultTextStyle.merge(style: boxMonoStyle(), child: child),
@@ -104,18 +167,30 @@ double boxRowHeight(TextScaler scale) =>
     (scale.scale(grid.AppType.monoSize) * 1.35 + 8).clamp(26, double.infinity);
 
 /// Key hints, shortcut glyphs and counts: the box's meta line.
-const kBoxFaint = Colors.white54;
+Color get kBoxFaint => boxText(.54);
 TextStyle get kBoxFaintStyle => grid.AppType.monoMeta(color: kBoxFaint);
 
+/// Linux spells its chords out (`spellsModifierKeys`); the box prints them in
+/// its own lower-case, dash-joined form, as it does a Mac's glyphs.
+String _unspelled(String hint) =>
+    kIsWeb || defaultTargetPlatform != TargetPlatform.linux
+    ? hint
+    : hint
+          .replaceAll('Ctrl+', 'ctrl-')
+          .replaceAll('Alt+', 'alt-')
+          .replaceAll('Shift+', 'shift-')
+          .replaceAll('Super+', 'super-');
+
 /// Keep the user's actual binding, printed like a terminal's local key guide.
-String boxKeyLabel(String hint) => hint
-    .replaceAll('⌃', 'ctrl-')
-    .replaceAll('⌥', 'alt-')
-    .replaceAll('⇧', 'shift-')
-    .replaceAll('⌘', 'cmd-')
-    .replaceAll('↵', 'enter')
-    .replaceAll('⇥', 'tab')
-    .replaceAll('Esc', 'esc');
+String boxKeyLabel(String hint) =>
+    _unspelled(hint)
+        .replaceAll('⌃', 'ctrl-')
+        .replaceAll('⌥', 'alt-')
+        .replaceAll('⇧', 'shift-')
+        .replaceAll('⌘', 'cmd-')
+        .replaceAll('↵', 'enter')
+        .replaceAll('⇥', 'tab')
+        .replaceAll('Esc', 'esc');
 
 /// The highlighted row: a bar at its left edge, fzf's `▌`, with a fill you can
 /// see. A 5% wash on its own was about 1.15:1 — the keyboard's whole position
@@ -139,9 +214,7 @@ class BoxRowHighlight extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       animationDuration: Duration.zero,
-      color: highlighted
-          ? Colors.white.withValues(alpha: .10)
-          : Colors.transparent,
+      color: highlighted ? boxInk(.10) : Colors.transparent,
       borderRadius: BorderRadius.circular(terminal ? 0 : 6),
       // No clip: nothing in a row overflows it, and an antialiased rounded clip
       // per row was paid again on every arrow key.
@@ -233,7 +306,7 @@ class BoxHintStrip extends StatelessWidget {
                   maxLines: 3,
                   minLines: 1,
                   style: boxMonoStyle(
-                    color: isError ? Colors.orangeAccent : Colors.white70,
+                    color: isError ? boxErrorText : boxText(.70),
                   ),
                 ),
               ),
@@ -271,7 +344,7 @@ class BoxHintStrip extends StatelessWidget {
                         children: [
                           TextSpan(
                             text: boxKeyLabel(hint.keys),
-                            style: const TextStyle(color: Colors.white70),
+                            style: TextStyle(color: boxText(.70)),
                           ),
                           TextSpan(text: '  ${hint.label}'),
                         ],
@@ -290,9 +363,7 @@ class BoxHintStrip extends StatelessWidget {
       alignment: Alignment.centerLeft,
       padding: const EdgeInsets.symmetric(horizontal: 8),
       decoration: BoxDecoration(
-        border: Border(
-          top: BorderSide(color: Colors.white.withValues(alpha: .08)),
-        ),
+        border: Border(top: BorderSide(color: boxInk(.08))),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,

@@ -11,7 +11,7 @@ import { AgentRestartCoordinator } from './restartAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
 import { listTmuxPanes } from './tmuxAgentDiscovery.js'
 import { checkSessionRuntime, clearPaneRemainOnExit, resolvePaneEngineProcess, tmuxPaneState } from './tmux.js'
-import { buildEngineLaunchArgv } from './engineLaunch.js'
+import { buildEngineLaunchArgv, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
 import { enginePathOverride } from './engineBin.js'
 import { installedDsh } from '../dsh/installed.js'
 
@@ -26,6 +26,7 @@ vi.mock('./engineLaunch.js', async importOriginal => ({
   ...(await importOriginal<typeof import('./engineLaunch.js')>()),
   buildEngineLaunchArgv: vi.fn(() => ['fixture-engine']),
   dropPermissionFlagIfUnsupported: vi.fn(async (_engine: unknown, choice: unknown) => ({ choice, droppedFlag: null })),
+  refusePermissionFlagIfUnsupported: vi.fn(async () => null),
 }))
 vi.mock('./engineBin.js', () => ({ enginePathOverride: vi.fn(() => undefined) }))
 vi.mock('./engineInstall.js', () => ({ engineInstallRecipe: () => ({ command: 'fixture-install' }) }))
@@ -60,6 +61,7 @@ beforeEach(() => {
   kill.mockReset().mockResolvedValue({ state: 'succeeded' })
   vi.mocked(validTranscriptPath).mockReturnValue(true)
   vi.mocked(enginePathOverride).mockReturnValue(undefined)
+  vi.mocked(refusePermissionFlagIfUnsupported).mockReset().mockResolvedValue(null)
   vi.mocked(installedDsh).mockReturnValue(undefined)
   vi.mocked(listTmuxPanes).mockReset().mockResolvedValue(inventory())
   vi.mocked(checkPidRuntime).mockReset().mockResolvedValue({ state: 'gone', reason: 'fixture' })
@@ -82,6 +84,52 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); for (const row of registry.list()) registry.removeAgent(row.agentId); rmSync(dir, { recursive: true, force: true }) })
 
 describe('production resume handler', () => {
+  it.each(['auto', 'ask'])('resumes the same conversation with an explicit %s permission choice', async permissionMode => {
+    rewrite({ engine: 'opencode', permissionMode: permissionMode === 'auto' ? 'ask' : 'auto' })
+    vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: true, overrides: {
+      env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: 'custom/kept', permission: 'ask', mcp: { custom: { enabled: true } } }) },
+      extraArgs: [], clearEnv: [],
+    } })
+    const result = await createResumeAgentService(deps)(saved.agentId, permissionMode)
+    expect(result).toMatchObject({ ok: true, resumed: true, session: { agentId: saved.agentId, sessionId: saved.sessionId,
+      permissionMode, bypassPermission: permissionMode === 'auto' } })
+    expect(buildEngineLaunchArgv).toHaveBeenCalledWith('opencode', expect.objectContaining({
+      permissionMode, bypassPermission: permissionMode === 'auto', resumeSessionId: saved.sessionId,
+    }))
+    expect(JSON.parse(create.mock.calls[0][0].env.OPENCODE_CONFIG_CONTENT)).toEqual({
+      model: 'custom/kept', permission: permissionMode === 'auto' ? 'allow' : 'ask', mcp: { custom: { enabled: true } },
+    })
+    registry.load()
+    expect(registry.byAgent(saved.agentId)?.permissionMode).toBe(permissionMode)
+  })
+
+  it('refuses an unsupported explicit permission choice before allocating a pane', async () => {
+    rewrite({ engine: 'opencode', permissionMode: 'ask' })
+    expect(await createResumeAgentService(deps)(saved.agentId, 'full')).toMatchObject({ error: 'INVALID_PERMISSION_MODE' })
+    vi.mocked(refusePermissionFlagIfUnsupported).mockResolvedValue({ error: 'CODEX_CLI_TOO_OLD', detail: 'Update OpenCode.' })
+    expect(await createResumeAgentService(deps)(saved.agentId, 'auto')).toMatchObject({ error: 'CODEX_CLI_TOO_OLD' })
+    expect(create).not.toHaveBeenCalled()
+    expect(deps.stoppedAgents.get(saved.agentId)?.permissionMode).toBe('ask')
+  })
+
+  it('does not claim a permission change when Open attaches to a running process', async () => {
+    rewrite({ engine: 'opencode', permissionMode: 'ask' })
+    live({ resumeOnly: undefined, permissionMode: 'ask' })
+    vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' })
+    expect(await createResumeAgentService(deps)(saved.agentId, 'auto')).toMatchObject({ error: 'PERMISSION_CHANGE_REQUIRES_STOP' })
+    expect(create).not.toHaveBeenCalled()
+    expect(registry.byAgent(saved.agentId)?.permissionMode).toBe('ask')
+  })
+
+  it('does not join concurrent Open requests with different permission choices', async () => {
+    const stop = deferred<void>(); (deps.stopJobs as Map<string, Promise<void>>).set(saved.agentId, stop.promise)
+    const resume = createResumeAgentService(deps)
+    const first = resume(saved.agentId, 'ask')
+    expect(await resume(saved.agentId, 'auto')).toMatchObject({ error: 'AGENT_BUSY' })
+    stop.resolve(); expect(await first).toMatchObject({ ok: true })
+    expect(create).toHaveBeenCalledTimes(1)
+  })
+
   it.each(['claude', 'codex'] as const)('resumes exact %s conversation on a new route and persists it', async engine => {
     rewrite({ engine, codexHome: '/profile', permissionMode: 'plan', bypassPermission: true, dsh: 'fixture' })
     vi.mocked(installedDsh).mockReturnValue({} as any)
@@ -111,7 +159,20 @@ describe('production resume handler', () => {
     // muse never hooks, so nothing else would ever leave this row `starting` — it would read as
     // "Starting" for ever and keep discovery out of the pane.
     rewrite({ engine: 'muse' })
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity)
     expect(await start()).toMatchObject({ ok: true, session: { launch: { state: 'ready' } } })
+  })
+
+  it('persists the verified process before announcing a resume that has no hook yet', async () => {
+    // A process probe only reads. The ordinary fixture also imitates discovery, which used to
+    // hide a ready row with no process identity until the next reconcile or SessionStart hook.
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity)
+    const result = await start()
+    expect(result).toMatchObject({ ok: true, session: { processIdentity: identity, launch: { state: 'ready' } } })
+    expect(registry.byAgent(saved.agentId)?.processIdentity).toEqual(identity)
+    expect(deps.announceSession).toHaveBeenLastCalledWith(expect.objectContaining({ processIdentity: identity }))
+    registry.load()
+    expect(registry.byAgent(saved.agentId)?.processIdentity).toEqual(identity)
   })
 
   it('opens a retained terminal as a new shell without a vendor resume argument', async () => {

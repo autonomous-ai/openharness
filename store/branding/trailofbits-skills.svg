@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Trail of Bits Skills Harness package — a code audit under the lens</title>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="#232a36"/>
+  <path d="M32 9.5 50.5 15.8v14.6c0 11.6-7.6 19.7-18.5 23.6-10.9-3.9-18.5-12-18.5-23.6V15.8Z" fill="#dfe6ee"/>
+  <path d="M22 22.5h9M22 27.5h6M22 32.5h8" stroke="#9aa6b5" stroke-width="2.2" stroke-linecap="round"/>
+  <circle cx="34.5" cy="30.5" r="7" fill="#7fd1c7" fill-opacity=".35" stroke="#232a36" stroke-width="3"/>
+  <path d="m39.6 35.6 5.6 5.6" stroke="#232a36" stroke-width="4" stroke-linecap="round"/>
+</svg>

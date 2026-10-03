@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
@@ -38,6 +39,7 @@ Future<void> mount(
   addTearDown(tester.view.resetDevicePixelRatio);
   await tester.pumpWidget(
     MaterialApp(
+      debugShowCheckedModeBanner: false,
       theme: grid.buildAppTheme(brightness: Brightness.dark),
       home: SwarmScreen(
         notifier: app,
@@ -86,7 +88,7 @@ TerminalSession terminal(String id, List<TerminalBinaryFrame> input) =>
 
 void main() {
   testWidgets(
-    'tabs omit close buttons and redundant hints; Command-W closes the active tab',
+    'tabs show names, reveal hover close and Command hints, and preserve Command-W',
     (tester) async {
       final app = createApp();
       final first = app.activeSwarm;
@@ -94,18 +96,40 @@ void main() {
       app.newSwarm(name: 'Second tab');
       final second = app.activeSwarm;
       await mount(tester, app);
-      expect(find.byKey(ValueKey('tab-close:${first.id}')), findsNothing);
-      expect(find.byKey(ValueKey('tab-close:${second.id}')), findsNothing);
-      final label = find.text('2:Second tab');
+      final close = find.byKey(ValueKey('tab-close:${second.id}'));
+      expect(close.hitTestable(), findsNothing);
+      final label = find.byKey(ValueKey('tab-label:${second.id}'));
       final tab = find.byKey(ValueKey(second.id));
+      final nameBounds = tester.getRect(label);
+      expect(nameBounds.left, greaterThan(tester.getRect(tab).left));
+      expect(nameBounds.center.dx, closeTo(tester.getCenter(tab).dx, .01));
+      expect(find.text('2:Second tab'), findsNothing);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: const Offset(1200, 700));
+      await mouse.moveTo(tester.getCenter(label));
+      await tester.pumpAndSettle();
+      expect(close.hitTestable(), findsOneWidget);
+      expect(tester.getRect(label), nameBounds);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+      await tester.pump();
+      expect(find.text('⌘1'), findsOneWidget);
+      expect(find.text('⌘2'), findsOneWidget);
+      expect(close.hitTestable(), findsOneWidget);
+      final commandName = tester.getRect(label);
+      final commandHint = tester.getRect(find.text('⌘2'));
+      expect(commandHint.left - commandName.right, closeTo(6, .1));
       expect(
-        find.descendant(of: tab, matching: find.byType(Tooltip)),
-        findsNothing,
+        (commandName.left + commandHint.right) / 2,
+        closeTo(tester.getCenter(tab).dx, .1),
       );
-      expect(
-        tester.getCenter(label).dx,
-        closeTo(tester.getCenter(tab).dx, .01),
-      );
+      expect(commandName.size, nameBounds.size);
+      expect(app.activeSwarm, same(second));
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+      await tester.pump();
+      expect(close.hitTestable(), findsOneWidget);
+      await mouse.removePointer();
+      await tester.pump();
+      expect(close.hitTestable(), findsNothing);
       Focus.of(tester.element(label)).requestFocus();
       await tester.pumpAndSettle();
       await chord(tester, LogicalKeyboardKey.keyW);
@@ -214,7 +238,7 @@ void main() {
           isFalse,
         );
       } else {
-        expect(find.text('1:store'), findsOneWidget);
+        expect(find.text('store'), findsOneWidget);
       }
     });
 
@@ -275,7 +299,13 @@ void main() {
           );
           expect(row['iconAsset'], 'assets/engine-icons/marp.png');
         } else {
-          expect(find.text('1:Quarterly deck'), findsOneWidget);
+          expect(
+            find.descendant(
+              of: find.byKey(ValueKey(tab.id)),
+              matching: find.text('Quarterly deck'),
+            ),
+            findsOneWidget,
+          );
         }
 
         // An agent the machine no longer lists is drawn as its session's engine,
@@ -293,7 +323,7 @@ void main() {
           expect(row['engine'], isNull);
           expect(row['iconAsset'], isNull);
         } else {
-          expect(find.text('2:Leftovers'), findsOneWidget);
+          expect(find.text('Leftovers'), findsOneWidget);
         }
         final session = terminal('gone', []);
         other.session = session;
@@ -304,7 +334,7 @@ void main() {
           expect(row['engine'], 'codex');
           expect(row['iconAsset'], 'assets/engine-icons/codex.png');
         } else {
-          expect(find.text('2:Leftovers again'), findsOneWidget);
+          expect(find.text('Leftovers again'), findsOneWidget);
         }
         tab.panes.removeWhere((pane) => pane.id == 900);
         leftovers.panes.clear();
@@ -366,7 +396,7 @@ void main() {
           final position = tester.state<ScrollableState>(strip).position;
           position.jumpTo(position.maxScrollExtent);
           await tester.pump();
-          expect(find.text('42:store'), findsOneWidget);
+          expect(find.text('store'), findsOneWidget);
         }
         await tester.pumpWidget(const SizedBox());
         app.dispose();
@@ -407,7 +437,7 @@ void main() {
         expect(row['engine'], 'codex');
         expect(row['iconAsset'], 'assets/engine-icons/codex.png');
       } else {
-        expect(find.text('1:code'), findsOneWidget);
+        expect(find.text('code'), findsOneWidget);
       }
 
       // A harness's viewer beside its agent is the same agent: still its mark, not a group.
@@ -427,7 +457,7 @@ void main() {
         expect(row['agentCount'], 1);
         expect(row['engine'], 'codex');
       } else {
-        expect(find.text('1:New Tab'), findsOneWidget);
+        expect(find.text('New Tab'), findsOneWidget);
         expect(find.byKey(ValueKey('tab-group:${tab.id}')), findsNothing);
       }
       tab.panes.removeWhere((pane) => pane.id == 900);
@@ -439,7 +469,7 @@ void main() {
         expect(row['agentCount'], 2);
         expect(row['engine'], isNull);
       } else {
-        expect(find.text('1:New Tab'), findsOneWidget);
+        expect(find.text('New Tab'), findsOneWidget);
       }
 
       await app.closePane(app.panes.last.id);
@@ -450,7 +480,7 @@ void main() {
           'codex',
         );
       } else {
-        expect(find.text('1:New Tab'), findsOneWidget);
+        expect(find.text('New Tab'), findsOneWidget);
         expect(find.byKey(ValueKey('tab-group:${tab.id}')), findsNothing);
       }
       expect(app.activeSwarm, same(tab));
@@ -516,9 +546,9 @@ void main() {
         find.byKey(const ValueKey('harness-start-search')),
         findsOneWidget,
       );
-      expect(find.byKey(const ValueKey('swarm-models-button')), findsOneWidget);
+      expect(find.byKey(const ValueKey('swarm-search-button')), findsOneWidget);
       expect(find.text('Machines'), findsNothing);
-      await openHarnessPicker(tester);
+      await tester.tap(find.byKey(const ValueKey('swarm-search-button')));
       await tester.pump();
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
@@ -727,7 +757,7 @@ void main() {
   );
 
   testWidgets(
-    'attention shortcut opens current questions in Harnesses and their originating swarm',
+    'attention shortcut opens current questions in Harnesses and their originating tab',
     (tester) async {
       final app = createApp();
       app.machineStates['m']!

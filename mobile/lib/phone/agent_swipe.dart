@@ -15,6 +15,7 @@ import 'phone_search_catalog.dart' show phoneAgentId;
 import 'agent_swipe_list.dart';
 import 'terminal_page.dart';
 import 'voice_input_controller.dart';
+import 'voice_input_scope.dart';
 
 /// One agent's terminal, with the agents beside it a swipe away.
 ///
@@ -186,10 +187,15 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
   ///
   /// Transcribes through `notifier.api` read at CALL time, not captured here: the notifier replaces
   /// its client when the session changes, and a captured one would sign with a token that is gone.
-  late final VoiceInputController _voice = VoiceInputController(
-    transcriber: (wav, lang) =>
-        widget.notifier.api.transcribeVoice(wav, lang: lang),
-  );
+  ///
+  /// A [VoiceInputScope] above the pager makes it instead — sample mode's, which records nothing
+  /// and hears scripted words. Read on first use, in [build], where the scope can be looked up.
+  late final VoiceInputController _voice =
+      VoiceInputScope.maybeOf(context)?.create() ??
+      VoiceInputController(
+        transcriber: (wav, lang) =>
+            widget.notifier.api.transcribeVoice(wav, lang: lang),
+      );
 
   /// Tell the search this agent was reached.
   ///
@@ -200,9 +206,15 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
   /// meant the history stayed nearly empty no matter how much the app was used,
   /// and the box kept falling through to its last-resort ordering. A swipe
   /// between agents is this app's focus change; this is where it belongs.
-  void _rememberVisit(AgentRef agent) => widget.notifier.searchHistory.remember(
-    phoneAgentId(agent.machineId, agent.agentId),
-  );
+  ///
+  /// And the machine that owns it is told too (`touchAgent`), so the visit is the ACCOUNT'S, not
+  /// only this phone's: every desktop's ⌘P and this phone's Find sort by the same last use.
+  void _rememberVisit(AgentRef agent) {
+    widget.notifier.searchHistory.remember(
+      phoneAgentId(agent.machineId, agent.agentId),
+    );
+    widget.notifier.touchAgent(agent.machineId, agent.agentId);
+  }
 
   @override
   void initState() {
@@ -416,6 +428,8 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
               voice: _voice,
               // Exactly one mounted page, by page number — see [_page].
               isActive: i == _page,
+              // The sideways axis is this pager's — see [TerminalPage.sideSwipes].
+              sideSwipes: false,
             ),
           );
         },

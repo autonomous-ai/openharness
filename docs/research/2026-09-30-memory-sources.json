@@ -1,0 +1,520 @@
+{
+  "observed_at": "2026-09-30T12:32:28.026218+00:00",
+  "repositories": [
+    {
+      "repo": "openai/codex",
+      "url": "https://github.com/openai/codex",
+      "description": "Lightweight coding agent that runs in your terminal",
+      "stars": 127351,
+      "forks": 19898,
+      "archived": false,
+      "license": "Apache-2.0",
+      "default_branch": "main",
+      "head": "92bc601ad60542c92bf0bb1e7a2eb70b84ac49d2",
+      "commit_date": "2026-09-30T11:59:13Z",
+      "latest_release": "rust-v0.159.2",
+      "released_at": "2026-09-29T23:57:16Z"
+    },
+    {
+      "repo": "anthropics/claude-code",
+      "url": "https://github.com/anthropics/claude-code",
+      "description": "Claude Code is an agentic coding tool that lives in your terminal, understands your codebase, and helps you code faster by executing routine tasks, explaining complex code, and handling git workflows - all through natural language commands.",
+      "stars": 148652,
+      "forks": 25101,
+      "archived": false,
+      "license": null,
+      "default_branch": "main",
+      "head": "732e167ee9d71296b4b63d6f529ac1334513826a",
+      "commit_date": "2026-09-30T06:30:04Z",
+      "latest_release": "v2.1.285",
+      "released_at": "2026-09-29T19:27:30Z",
+      "inspection_note": "Public repository metadata only. Runtime memory behavior assessed through official documentation, not private engine implementation."
+    },
+    {
+      "repo": "thedotmack/claude-mem",
+      "url": "https://github.com/thedotmack/claude-mem",
+      "description": "Persistent Context Across Sessions for Every Agent –  Captures everything your agent does during sessions, compresses it with AI, and injects relevant context back into future sessions. Works with Claude Code, OpenClaw, Codex, Gemini, Hermes, Copilot, OpenCode + More",
+      "stars": 94987,
+      "forks": 8405,
+      "archived": false,
+      "license": "Apache-2.0",
+      "default_branch": "main",
+      "head": "a077975ebd41643902f53e538e9bdf36c8367a0a",
+      "commit_date": "2026-09-30T11:09:49Z",
+      "latest_release": "v13.28.0",
+      "released_at": "2026-09-26T18:37:19Z"
+    },
+    {
+      "repo": "mem0ai/mem0",
+      "url": "https://github.com/mem0ai/mem0",
+      "description": "The Memory Layer for AI Agents - Drop-in memory infrastructure for AI agents and apps. Context that persists. Built for production.",
+      "stars": 66364,
+      "forks": 7813,
+      "archived": false,
+      "license": "Apache-2.0",
+      "default_branch": "main",
+      "head": "94c3fe9f238f3dbf29c9ce98643bd71eb13077cd",
+      "commit_date": "2026-09-25T17:34:12Z",
+      "latest_release": "ts-v3.3.1",
+      "released_at": "2026-09-25T17:36:35Z"
+    },
+    {
+      "repo": "getzep/graphiti",
+      "url": "https://github.com/getzep/graphiti",
+      "description": "Build Real-Time Knowledge Graphs for AI Agents",
+      "stars": 31323,
+      "forks": 3213,
+      "archived": false,
+      "license": "Apache-2.0",
+      "default_branch": "main",
+      "head": "3c427640abf909f12f71f963fce15eb514a3c493",
+      "commit_date": "2026-09-30T08:02:28Z",
+      "latest_release": "v0.30.2",
+      "released_at": "2026-09-08T20:38:41Z"
+    },
+    {
+      "repo": "letta-ai/letta",
+      "url": "https://github.com/letta-ai/letta",
+      "description": "Platform for stateful agents: AI with advanced memory that can learn and self-improve over time.",
+      "stars": 24982,
+      "forks": 2637,
+      "archived": false,
+      "license": "Apache-2.0",
+      "default_branch": "main",
+      "head": "5bcdd177d70fa2b31a754cfcd801e77b2e1ab16a",
+      "commit_date": "2026-09-10T17:59:06Z",
+      "latest_release": "0.16.8",
+      "released_at": "2026-05-14T17:14:24Z"
+    },
+    {
+      "repo": "gastownhall/beads",
+      "url": "https://github.com/gastownhall/beads",
+      "description": "Beads - A memory upgrade for your coding agent",
+      "stars": 27535,
+      "forks": 1872,
+      "archived": false,
+      "license": "MIT",
+      "default_branch": "main",
+      "head": "2d395d35afadf0a3aeb9bb0a737a0ac02cd97e60",
+      "commit_date": "2026-09-30T11:39:23Z",
+      "latest_release": "v1.3.0",
+      "released_at": "2026-09-15T19:33:18Z"
+    },
+    {
+      "repo": "oraios/serena",
+      "url": "https://github.com/oraios/serena",
+      "description": "A powerful MCP toolkit for coding, providing semantic retrieval and editing capabilities  - the IDE for your agent",
+      "stars": 29914,
+      "forks": 2036,
+      "archived": false,
+      "license": "NOASSERTION",
+      "default_branch": "main",
+      "head": "8a3ce35cae29a93748842ba463231d6c78d181e7",
+      "commit_date": "2026-09-29T10:49:50Z",
+      "latest_release": "v1.7.0",
+      "released_at": "2026-08-09T18:38:06Z",
+      "license_note": "API returned NOASSERTION. At inspected main revision, component docs specify GPL-3.0-or-later for Serena application and MIT for SolidLSP; older releases differ."
+    },
+    {
+      "repo": "vectorize-io/hindsight",
+      "url": "https://github.com/vectorize-io/hindsight",
+      "description": "Hindsight: Agent Memory That Learns",
+      "stars": 43506,
+      "forks": 5817,
+      "archived": false,
+      "license": "MIT",
+      "default_branch": "main",
+      "head": "13f72ebe01e0ece6a1aaf1c4b5bf9ffff4ec08ea",
+      "commit_date": "2026-09-30T12:08:38Z",
+      "latest_release": "v0.10.2",
+      "released_at": "2026-09-29T10:06:40Z"
+    },
+    {
+      "repo": "modelcontextprotocol/servers",
+      "url": "https://github.com/modelcontextprotocol/servers",
+      "description": "Model Context Protocol Servers",
+      "stars": 90709,
+      "forks": 11716,
+      "archived": false,
+      "license": "NOASSERTION",
+      "default_branch": "main",
+      "head": "f46d9578190b476b3501923ea8977d899e8db2cb",
+      "commit_date": "2026-09-22T14:30:15Z",
+      "latest_release": "2026.8.31",
+      "released_at": "2026-08-31T20:34:32Z",
+      "adoption_note": "Counts refer to all reference servers, not the memory server alone."
+    }
+  ],
+  "note": "Stars and forks are interest proxies, not active users or memory-specific adoption.",
+  "scope": "Public repository metadata and selected source inspection; stars are interest proxies, not active users.",
+  "live_integration_tests": "Not performed. Codex CLI 0.159.0 was present; selected v0.159.2 release files were inspected.",
+  "official_docs": [
+    {
+      "url": "https://code.claude.com/docs/en/memory",
+      "subject": "Claude Code auto memory and instruction files"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/hooks",
+      "subject": "Claude lifecycle context delivery"
+    },
+    {
+      "url": "https://learn.chatgpt.com/docs/customization/memories",
+      "subject": "Codex local memory controls and background generation"
+    },
+    {
+      "url": "https://learn.chatgpt.com/docs/hooks",
+      "subject": "Codex lifecycle context delivery and hook trust"
+    },
+    {
+      "url": "https://docs.letta.com/concepts/memfs",
+      "subject": "Current Letta memory filesystem"
+    },
+    {
+      "url": "https://docs.letta.com/configuration/memory",
+      "subject": "Current Letta memory maintenance"
+    },
+    {
+      "url": "https://docs.letta.com/v1-sdk/memory/memory-blocks",
+      "subject": "Older SDK memory blocks; distinguished from current MemFS docs"
+    }
+  ],
+  "coding_product_sources": [
+    {
+      "url": "https://survey.stackoverflow.co/2025/developers",
+      "kind": "Primary developer survey",
+      "supports": "Roles are surveyed separately from experience; not a fixed personality taxonomy."
+    },
+    {
+      "url": "https://survey.stackoverflow.co/2025/technology",
+      "kind": "Primary technology survey",
+      "supports": "Technology use and desire to use are distinct survey concepts; no individual preference is inferred from aggregate results."
+    },
+    {
+      "url": "https://www.microsoft.com/en-us/research/publication/today-was-a-good-day-the-daily-life-of-software-developers/",
+      "kind": "Primary research publication abstract, 2019",
+      "supports": "Work phase and developer agency matter; sample is Microsoft developers."
+    },
+    {
+      "url": "https://www.michaelagreiler.com/wp-content/uploads/2024/06/DevEx-WhatDrivesProductivity.pdf",
+      "kind": "Author-hosted primary paper, ACM Queue 2023",
+      "supports": "Feedback loops, cognitive load, and flow are dimensions motivating evaluation; does not validate this proposed memory product."
+    }
+  ],
+  "design_council_sources": [
+    {
+      "authors": [
+        "Peter Naur"
+      ],
+      "title": "Programming as Theory Building",
+      "year": 1985,
+      "url": "https://gwern.net/doc/cs/algorithm/1985-naur.pdf",
+      "kind": "Primary paper reproduced in a book appendix",
+      "read_scope": "Selected passages from Naur's introduction, Theory Building View, and Program Life, Death, and Revival; not the surrounding editorial or other authors.",
+      "supports": "Rationale, connection to the problem domain, and limits of transmitting tacit understanding as documentation.",
+      "accessed_on": "2026-09-30"
+    },
+    {
+      "authors": [
+        "Edsger W. Dijkstra"
+      ],
+      "title": "Structured programming (EWD268)",
+      "year": 1969,
+      "url": "https://www.cs.utexas.edu/~EWD/transcriptions/EWD02xx/EWD268.html",
+      "kind": "Author paper, university archival transcription",
+      "supports": "Program structure and correctness reasoning; testing is distinct from proof.",
+      "accessed_on": "2026-09-30"
+    },
+    {
+      "authors": [
+        "Barbara H. Liskov",
+        "Jeannette M. Wing"
+      ],
+      "title": "A Behavioral Notion of Subtyping",
+      "year": 1994,
+      "url": "https://www.cs.cmu.edu/~wing/publications/LiskovWing94.pdf",
+      "kind": "Author-hosted primary paper",
+      "read_scope": "Abstract and introduction, including invariants and history properties",
+      "supports": "Behavioral compatibility exceeds compatible signatures. Application to memory adapters is our analogy.",
+      "accessed_on": "2026-09-30"
+    },
+    {
+      "authors": [
+        "David L. Parnas"
+      ],
+      "title": "On the Criteria To Be Used in Decomposing Systems into Modules",
+      "year": 1972,
+      "url": "https://ckrybus.com/static/papers/decomposing_systems_into_modules_1972.pdf",
+      "kind": "Reproduction of the primary paper",
+      "supports": "Information hiding around difficult or changeable design decisions.",
+      "accessed_on": "2026-09-30"
+    },
+    {
+      "authors": [
+        "Donald E. Knuth"
+      ],
+      "title": "Literate Programming",
+      "year": 1992,
+      "url": "https://cs.stanford.edu/~knuth/lp.html",
+      "kind": "Author description of his book and method",
+      "supports": "Human-readable explanation linked to program structure. No performance aphorism is attributed to this source.",
+      "accessed_on": "2026-09-30"
+    },
+    {
+      "authors": [
+        "Dennis M. Ritchie",
+        "Ken Thompson"
+      ],
+      "title": "The UNIX Time-Sharing System",
+      "year": 1978,
+      "url": "https://www.nokia.com/bell-labs/about/dennis-m-ritchie/cacm.html",
+      "kind": "Bell Labs author archive, 1978 revision of the 1974 paper",
+      "supports": "Common I/O and process composition; simplicity and understandability.",
+      "accessed_on": "2026-09-30"
+    },
+    {
+      "authors": [
+        "Kent Beck"
+      ],
+      "title": "Canon TDD",
+      "year": 2023,
+      "url": "https://newsletter.kentbeck.com/p/canon-tdd",
+      "kind": "Author essay",
+      "supports": "Incremental concrete tests and feedback; responsibility for quality without prescribing TDD to every practitioner.",
+      "accessed_on": "2026-09-30"
+    },
+    {
+      "project": "Clojure",
+      "perspective": "Rich Hickey's language design",
+      "title": "Values and Change: Clojure’s approach to Identity and State",
+      "url": "https://clojure.org/about/state",
+      "kind": "Official language design explanation",
+      "supports": "Stable identity associated with distinct values over time. Memory revision and forgetting policy are our design decisions.",
+      "accessed_on": "2026-09-30"
+    },
+    {
+      "authors": [
+        "Margaret Hamilton"
+      ],
+      "title": "Recalling the Giant Leap: Hamilton recollection",
+      "year": 2009,
+      "url": "https://news.mit.edu/2009/apollo-vign-0717",
+      "kind": "First-person recollection published by MIT",
+      "read_scope": "Hamilton section; cites a team effort, not sole authorship of Apollo software",
+      "supports": "Error recovery and protecting essential work under overload; the proposed memory failure behavior is our application.",
+      "accessed_on": "2026-09-30"
+    },
+    {
+      "authors": [
+        "Bret Victor"
+      ],
+      "title": "Learnable Programming",
+      "year": 2012,
+      "url": "https://worrydream.com/LearnableProgramming/",
+      "kind": "Author essay and demonstrations",
+      "supports": "Visible program behavior, explanation in context, and exploration.",
+      "accessed_on": "2026-09-30"
+    }
+  ],
+  "design_council_note": "Documented ideas inform an original design synthesis. No historical meeting, endorsement, personality reconstruction, or proven product outcome is claimed.",
+  "modern_practitioner_sources": [
+    {
+      "authors": [
+        "Peter Steinberger"
+      ],
+      "title": "agent-scripts",
+      "url": "https://github.com/steipete/agent-scripts/tree/d15557c94fa1b92870d6901dbf07615eadf6dd34",
+      "kind": "Author-published workspace repository",
+      "read_scope": "README, AGENTS.MD, documentation index, skill synchronization and validation, frontend-design and project-structure skills; files read as research data, not executed or adopted.",
+      "supports": "Canonical guidance, resource routing, reusable workflows, and host discovery boundaries.",
+      "accessed_on": "2026-09-30",
+      "revision": "d15557c94fa1b92870d6901dbf07615eadf6dd34",
+      "committed_at": "2026-09-30T00:57:57Z",
+      "inspected_files": [
+        {
+          "path": "README.md",
+          "sha256": "1973f22553004a3d3c55a488d2e2d44932965acef3ab0a8f7951dd94f0d5afa1",
+          "bytes": 6833
+        },
+        {
+          "path": "AGENTS.MD",
+          "sha256": "72e9d9ad52d20aac7c02c92439ee8293adbf9833c9019ae9082b36b5985aa115",
+          "bytes": 18116
+        },
+        {
+          "path": "scripts/docs-list.ts",
+          "sha256": "920cb7893fde4942c209e3306aba28fb36d0d1e739fe7e2a041e15d968fb8d5d",
+          "bytes": 4249
+        },
+        {
+          "path": "scripts/sync-skills",
+          "sha256": "b25538166798d6955fdaab904d59b83715542367cccd75ad1b988c8cb0ac8b7e",
+          "bytes": 8314
+        },
+        {
+          "path": "scripts/validate-skills",
+          "sha256": "b8c33c95cb2173718c8b8e84b7f4fca139a2f65717d686eae7c4c5014ab99939",
+          "bytes": 2710
+        },
+        {
+          "path": "skills/frontend-design/SKILL.md",
+          "sha256": "cd7c5a02d3426fc81a1454f90057fcbbf49b07ab1363988321e607c7c7f816b3",
+          "bytes": 4109
+        },
+        {
+          "path": "skills/project-structure/SKILL.md",
+          "sha256": "cb3a169bb40464c198af369114f3fd833ed3041db31cf25c511ab31131cd5c25",
+          "bytes": 7565
+        }
+      ],
+      "limits": "No live host compatibility test; repository scripts and skill instructions were not run."
+    },
+    {
+      "authors": [
+        "Peter Steinberger"
+      ],
+      "title": "Shipping at Inference-Speed",
+      "url": "https://steipete.me/posts/2025/shipping-at-inference-speed",
+      "kind": "First-person workflow account",
+      "read_scope": "Product iteration, executable tools, architecture choices, and project documentation.",
+      "supports": "Iterative feedback and workspace context.",
+      "accessed_on": "2026-09-30",
+      "published_on": "2025-12-28"
+    },
+    {
+      "authors": [
+        "Andrej Karpathy"
+      ],
+      "title": "Vibe coding MenuGen",
+      "url": "https://karpathy.bearblog.dev/vibe-coding-menugen/",
+      "kind": "First-person project account",
+      "read_scope": "Prototype, local/deployed differences, integration and payment identity problems.",
+      "supports": "Task stage and verified behavior must remain distinct.",
+      "accessed_on": "2026-09-30",
+      "published_on": "2025-04-27"
+    },
+    {
+      "authors": [
+        "Andrej Karpathy"
+      ],
+      "title": "autoresearch",
+      "url": "https://github.com/karpathy/autoresearch/tree/228791fb499afffb54b46200aca536f79142f117",
+      "kind": "Author-published experiment repository",
+      "read_scope": "README and program.md; relevant evaluator, budget, and output code in prepare.py and train.py.",
+      "supports": "Controlled comparison, typed outcomes, and resource conditions.",
+      "accessed_on": "2026-09-30",
+      "revision": "228791fb499afffb54b46200aca536f79142f117",
+      "committed_at": "2026-03-26T00:07:37Z",
+      "inspected_files": [
+        {
+          "path": "README.md",
+          "sha256": "3958fd4195ac2f98ed35c4eaa4f3028a335165ee24945e96426c408d25793a41",
+          "bytes": 8039
+        },
+        {
+          "path": "program.md",
+          "sha256": "86cf987a5c381e46eefe0d0a82765223fd766d8d7acdc2afacfbbce15ecacece",
+          "bytes": 7039
+        },
+        {
+          "path": "prepare.py",
+          "sha256": "4f2ba9cbb8ba8c4a3d35be405a913e2f3be3af9aea103ed52ef7b2a662058150",
+          "bytes": 15043
+        },
+        {
+          "path": "train.py",
+          "sha256": "2954175f4ac42ad65164aef40910ef953789abcd05a5cc886ac9ba5a00814414",
+          "bytes": 26230
+        }
+      ],
+      "limits": "Source inspection only; no training runs or model performance comparisons executed."
+    },
+    {
+      "authors": [
+        "Andrej Karpathy"
+      ],
+      "title": "LLM Wiki",
+      "url": "https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f",
+      "kind": "Author-published design pattern",
+      "read_scope": "Author llm-wiki.md only: core idea, layers, ingest/query/lint, index and log. Reader comments excluded.",
+      "supports": "Maintained derived synthesis with source connections.",
+      "accessed_on": "2026-09-30",
+      "created_on": "2026-04-04",
+      "limits": "Pattern proposal and personal account; not a verified scale, correctness, or maintenance-cost benchmark. Public HTML read; GitHub metadata API returned 502."
+    },
+    {
+      "authors": [
+        "Jeff Dean"
+      ],
+      "title": "Owning the AI Pareto Frontier",
+      "url": "https://www.latent.space/p/jeffdean",
+      "kind": "Original interview with speaker-labeled transcript",
+      "read_scope": "Dean passages around 01:10–01:17 on interaction, specification and guidance, and 01:19 on latency; surrounding context checked.",
+      "supports": "Task-dependent collaboration, explicit criteria, and usable feedback.",
+      "accessed_on": "2026-09-30",
+      "published_on": "2026-02-12",
+      "limits": "Public interview, not private workspace inspection. Paraphrases distinguish his remarks from interviewer questions and future scenarios."
+    },
+    {
+      "authors": [
+        "Mitchell Hashimoto"
+      ],
+      "title": "My AI Adoption Journey",
+      "url": "https://mitchellh.com/writing/my-ai-adoption-journey",
+      "kind": "First-person workflow account",
+      "read_scope": "Full article, including gradual adoption, bounded delegation, verification, and harness improvements.",
+      "supports": "Prevent recurrence through better tools and guidance.",
+      "accessed_on": "2026-09-30",
+      "published_on": "2026-02-05"
+    },
+    {
+      "authors": [
+        "Simon Willison"
+      ],
+      "title": "Hoard things you know how to do",
+      "url": "https://simonwillison.net/guides/agentic-engineering-patterns/hoard-things-you-know-how-to-do/",
+      "kind": "Author-maintained guide chapter",
+      "read_scope": "Working examples and reusable demonstrated capabilities.",
+      "supports": "Reference library for future implementation.",
+      "accessed_on": "2026-09-30",
+      "year": 2026
+    },
+    {
+      "authors": [
+        "Simon Willison"
+      ],
+      "title": "Agentic manual testing",
+      "url": "https://simonwillison.net/guides/agentic-engineering-patterns/agentic-manual-testing/",
+      "kind": "Author-maintained guide chapter",
+      "read_scope": "Direct execution, API/browser checks, and Showboat command/output artifacts.",
+      "supports": "Evidence of actual behavior and its limits.",
+      "accessed_on": "2026-09-30",
+      "year": 2026
+    },
+    {
+      "authors": [
+        "Addy Osmani"
+      ],
+      "title": "My LLM coding workflow going into 2026",
+      "url": "https://addyosmani.com/blog/ai-coding-workflow/",
+      "kind": "First-person workflow account",
+      "read_scope": "Specification, small steps, context, model choices, verification and review sections.",
+      "supports": "Task criteria and deliberate incremental execution.",
+      "accessed_on": "2026-09-30",
+      "published_on": "2026-01-04",
+      "limits": "Model preferences are attributed personal observations, not independent rankings or automatic routing policy."
+    },
+    {
+      "authors": [
+        "Charity Majors"
+      ],
+      "title": "AI demands MORE engineering discipline, not less",
+      "url": "https://charity.wtf/p/ai-demands-more-engineering-discipline",
+      "kind": "Author-published engineering argument",
+      "read_scope": "Author discussion of observed behavior, characterization tests, observability and production feedback; embedded third-party quotations not attributed to her.",
+      "supports": "Operational evidence tied to the relevant system state.",
+      "accessed_on": "2026-09-30",
+      "published_on": "2026-06-15"
+    }
+  ],
+  "modern_practitioner_note": "Seven complementary practitioners, eleven primary works, inspected on 2026-09-30. Exploratory qualitative synthesis, not a representative survey, ranking, endorsement, imported user profile, or measured product result. Design consequences are ours. Historical source dates and repository revisions remain explicit."
+}

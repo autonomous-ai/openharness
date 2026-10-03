@@ -2,9 +2,9 @@ import { WebSocket } from 'ws'
 import { b64e, newEphemeral } from '../lib/e2ee/core.js'
 import type { AuthSessionManager } from '../lib/authSession.js'
 import type { Frame, LocalClientSink } from '../backendSocket.js'
-import type { RelaySession } from '../lib/remoteRelay.js'
+import { DAEMON_LOCAL_ONLY_TYPES, type RelaySession } from '../lib/remoteRelay.js'
 import { recipientHandshake, type ObserverCipher } from './crypto.js'
-import { watchSocketLiveness } from '../lib/wsLiveness.js'
+import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness } from '../lib/wsLiveness.js'
 
 export interface SharedHarnessReference {
   id: string; agentId: string; name: string; engine: string | null; ownerPublicKey: string; expiresAt: string
@@ -48,7 +48,7 @@ export class HarnessShareRelay {
           if (!settled) reject(new Error(reason.toString() || 'The owner’s machine is offline.'))
           if (!detached) onClosed(code === 4403 ? 4403 : 1012, reason.toString() || 'Owner disconnected')
         })
-        ws.on('open', () => { heartbeat = watchSocketLiveness(ws) })
+        ws.on('open', () => { heartbeat = watchSocketLiveness(ws, { peerGivesUpAfterMs: BACKEND_IDLE_DEADLINE_MS }) })
         ws.on('message', raw => {
           try {
             const frame = JSON.parse(raw.toString()) as { type: string; payload: Record<string, unknown> }
@@ -67,7 +67,7 @@ export class HarnessShareRelay {
               if (clear.type === 'observer_binary') {
                 const bytes = (clear.payload as { bytes?: unknown })?.bytes
                 if (typeof bytes === 'string') sink.sendBinary(Buffer.from(bytes, 'base64'))
-              } else sink.sendFrame(clear)
+              } else if (!(typeof clear.type === 'string' && DAEMON_LOCAL_ONLY_TYPES.has(clear.type))) sink.sendFrame(clear)
             }
           } catch {
             clearTimeout(timeout)
@@ -83,7 +83,7 @@ export class HarnessShareRelay {
         // The owner repeats this check after decrypting. Restrict here too so a local client cannot
         // accidentally send terminal responses, resize events or pasted data into an observer stream.
         if (!['terminal_capabilities', 'terminal_open', 'terminal_alive', 'terminal_ack', 'terminal_resync',
-          'terminal_close', 'observer_viewer'].includes(String(frame.type))) {
+          'terminal_close', 'observer_viewer', 'observer_comments', 'observer_comment_post', 'observer_comment_remove'].includes(String(frame.type))) {
           sink.sendFrame({ type: `${String(frame.type)}_result`, payload: {
             requestId: (frame.payload as { requestId?: unknown })?.requestId, error: 'VIEW_ONLY',
           } }); return

@@ -1,11 +1,11 @@
+import '../core/wire_counter.dart' show maxSafeInteger;
+export '../core/wire_counter.dart' show maxSafeInteger;
+
 /// replayWindow.ts: the counters of one key domain are accepted each once, in any order, within
 /// [e2eeReplayWindowSize] of the highest seen. The machine can deliver a stream's frames over two
 /// transports (P2P and the relay) that reorder against each other, so "strictly increasing" would
 /// drop authentic frames.
 const int e2eeReplayWindowSize = 4096;
-
-/// JavaScript's `Number.MAX_SAFE_INTEGER` — the CLI refuses any counter above it, so this does too.
-const int maxSafeInteger = 9007199254740991;
 
 class ReplayWindow {
   int _highest = -1;

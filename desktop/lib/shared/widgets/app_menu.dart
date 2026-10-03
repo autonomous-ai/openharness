@@ -1,13 +1,12 @@
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../theme/app_theme.dart';
 
-/// A row names a choice, so it is set in [AppType.mono] like every other
-/// label; its detail line is prose, in [AppType.caption]. Compact and roomy variants only change padding and icon
-/// spacing.
+/// Menu choices use the system UI face; technical values can supply their own
+/// style. Compact and roomy variants change padding and icon spacing.
 @immutable
 class AppMenuRowMetrics {
   const AppMenuRowMetrics({required this.iconSize, required this.padding});
@@ -65,14 +64,8 @@ double get kMenuRowExtent => AppMenuRowMetrics.compact.extent;
 /// hand-written `appMenuStyle()` this file used to export was the second of four
 /// disagreeing recipes — see that class.
 ///
-/// Hand-rolled rather than a [MenuItemButton] because the app has no
-/// `menuButtonTheme`, so a bare one takes Material's M3 defaults and lands
-/// wrong on four counts at once: radius 0, 14pt text, a grey 8% hover, and a
-/// ripple every other menu here has turned off.
-///
-/// Stateful for its own hover: the glyph has to climb to [AppPalette.textPrimary]
-/// under the pointer. An icon that stays dim while the cursor sits on it reads
-/// as decoration, and nothing above this row tracks hover per-row to do it.
+/// Adds subject marks, qualifiers and detail lines to the same selection
+/// treatment supplied by the app's ordinary MenuItemButton theme.
 class AppMenuItem extends StatefulWidget {
   const AppMenuItem({
     super.key,
@@ -124,10 +117,8 @@ class AppMenuItem extends StatefulWidget {
   /// asks [AppMenuRowMetrics.detailExtent] rather than [AppMenuRowMetrics.extent].
   final String? detail;
 
-  /// A mark that belongs to the ROW's subject rather than to its action — an
-  /// engine's logo, say. It gets a slot of its own AFTER the tick's, so the tick
-  /// still has somewhere to go and a picked row's label does not shift sideways
-  /// from an unpicked one's.
+  /// A subject's mark, such as its agent logo. Replaces [icon] in the fixed
+  /// leading slot. The trailing check never displaces this identity.
   final Widget? leading;
 
   /// Which of the two row sizes this is. Defaults to a context menu's; a picker
@@ -138,14 +129,14 @@ class AppMenuItem extends StatefulWidget {
   /// This row is the current choice.
   ///
   /// Marked THREE ways, never by one: an accent wash, a heavier label, and a
-  /// tick in the leading slot. Colour alone fails anyone who cannot separate
+  /// tick in the trailing slot. Colour alone fails anyone who cannot separate
   /// these two greys, and a tick alone is easy to miss in a long list.
   final bool selected;
 
   final VoidCallback onPressed;
 
-  /// Tints the row red and gives it a red hover wash — for the row that
-  /// destroys something.
+  /// Red at rest for a destructive action. Active rows retain the common
+  /// white-on-blue selection so pointer and keyboard feedback remain legible.
   final bool danger;
 
   @override
@@ -154,48 +145,45 @@ class AppMenuItem extends StatefulWidget {
 
 class _AppMenuItemState extends State<AppMenuItem> {
   bool _hovered = false;
+  bool _focused = false;
 
   @override
   Widget build(BuildContext context) {
     // Lives in the MenuAnchor's overlay, so it watches for itself.
     AppTheme.watch(context);
     final error = Theme.of(context).colorScheme.error;
-    // A danger row is already red at rest, so it deepens rather than climbs.
-    final tint = widget.danger
+    final active = _hovered || _focused;
+    final tint = active
+        ? AppDesktop.onSelection
+        : widget.danger
         ? error
-        : (_hovered || widget.selected
-              ? AppPalette.textPrimary
-              : AppPalette.textSecondary);
-    // The tick takes the leading slot when this row is the choice; otherwise the
-    // row's own glyph does, and a row with neither keeps the slot EMPTY.
-    //
-    // ⚠️ Empty means an empty box, not `Icons.check_box_outline_blank`. That
-    // glyph draws a real outlined square — which turns a pick-one menu into what
-    // reads as a checkbox list, and puts a border somewhere §1 does not allow
-    // one. It shipped that way once; this comment is why it will not again.
-    final glyph = widget.selected ? LucideIcons.check300 : widget.icon;
+        : AppPalette.textSecondary;
+    // Keep the identity column even when a row has no mark.
+    final glyph = widget.icon;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
       child: Material(
         color: Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppDesktop.rowRadius),
         child: InkWell(
           focusNode: widget.focusNode,
           onTap: widget.onPressed,
           onHover: (hovered) => setState(() => _hovered = hovered),
-          borderRadius: BorderRadius.circular(8),
-          hoverColor: widget.danger
-              ? error.withValues(alpha: 0.09)
-              : AppSurface.hoverFill,
-          focusColor: AppSurface.hoverFill,
+          onFocusChange: (focused) => setState(() => _focused = focused),
+          mouseCursor: SystemMouseCursors.click,
+          borderRadius: BorderRadius.circular(AppDesktop.rowRadius),
+          hoverColor: Colors.transparent,
+          focusColor: Colors.transparent,
           splashFactory: NoSplash.splashFactory,
           child: Ink(
             decoration: BoxDecoration(
-              color: widget.selected
+              color: active
+                  ? AppDesktop.selection
+                  : widget.selected
                   ? AppSurface.accentWash
                   : Colors.transparent,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(AppDesktop.rowRadius),
             ),
             padding: widget.metrics.padding,
             child: Row(
@@ -205,18 +193,23 @@ class _AppMenuItemState extends State<AppMenuItem> {
                 // ticked row would sit a few pixels off an unticked one.
                 SizedBox(
                   width: widget.metrics.iconSize,
-                  child: glyph == null
-                      ? null
-                      : Icon(glyph, size: widget.metrics.iconSize, color: tint),
+                  child: widget.leading != null
+                      ? IconTheme.merge(
+                          data: IconThemeData(
+                            color: tint,
+                            size: widget.metrics.iconSize,
+                          ),
+                          child: widget.leading!,
+                        )
+                      : (glyph == null
+                            ? null
+                            : Icon(
+                                glyph,
+                                size: widget.metrics.iconSize,
+                                color: tint,
+                              )),
                 ),
                 const SizedBox(width: 9),
-                if (widget.leading != null) ...[
-                  SizedBox(
-                    width: widget.metrics.iconSize,
-                    child: Center(child: widget.leading),
-                  ),
-                  const SizedBox(width: 9),
-                ],
                 Flexible(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -226,8 +219,12 @@ class _AppMenuItemState extends State<AppMenuItem> {
                         widget.label,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: AppType.mono(
-                          color: widget.danger ? error : AppPalette.textPrimary,
+                        style: (widget.textStyle ?? AppType.body()).copyWith(
+                          color: active
+                              ? AppDesktop.onSelection
+                              : widget.danger
+                              ? error
+                              : AppPalette.textPrimary,
                           height: 1.2,
                           fontWeight: widget.selected
                               ? AppFont.medium
@@ -241,7 +238,9 @@ class _AppMenuItemState extends State<AppMenuItem> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: AppType.caption(
-                            color: AppPalette.textSecondary,
+                            color: active
+                                ? AppDesktop.selectionDetail
+                                : AppPalette.textSecondary,
                             height: 1.25,
                           ),
                         ),
@@ -256,8 +255,10 @@ class _AppMenuItemState extends State<AppMenuItem> {
                       widget.note!,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: AppType.mono(
-                        color: AppPalette.textFaint,
+                      style: AppType.body(
+                        color: active
+                            ? AppDesktop.selectionDetail
+                            : AppPalette.textSecondary,
                         height: 1.2,
                       ),
                     ),
@@ -266,6 +267,14 @@ class _AppMenuItemState extends State<AppMenuItem> {
                 if (widget.trailing != null) ...[
                   const SizedBox(width: 8),
                   widget.trailing!,
+                ],
+                if (widget.selected) ...[
+                  const SizedBox(width: 12),
+                  Icon(
+                    AppIcons.check,
+                    size: widget.metrics.iconSize,
+                    color: tint,
+                  ),
                 ],
               ],
             ),

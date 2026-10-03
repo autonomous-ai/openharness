@@ -55,6 +55,16 @@ d('HermesReader (sqlite3 CLI)', () => {
     expect(await readHermesMessages(db, "x'; DROP TABLE messages;--")).toEqual([])
   })
 
+  it("reads an editor's (ACP) session, whose id is a uuid", async () => {
+    const acp = '3f2a9c1e-8b4d-4e6f-9a1b-2c3d4e5f6a7b'
+    run(db, `INSERT INTO messages (id, session_id, role, content, timestamp) VALUES (1, '${acp}', 'user', 'hi', 1)`)
+    run(db, `INSERT INTO messages (id, session_id, role, content, finish_reason, timestamp) VALUES (2, '${acp}', 'assistant', 'hello', 'stop', 2)`)
+    expect((await readHermesMessages(db, acp)).map((r) => r.role)).toEqual(['user', 'assistant'])
+    // Uuid-shaped with a tail is not an id: refused, rows or not.
+    run(db, `INSERT INTO messages (id, session_id, role, content, timestamp) VALUES (3, '${acp}-0', 'user', 'x', 3)`)
+    expect(await readHermesMessages(db, `${acp}-0`)).toEqual([])
+  })
+
   it('hydrates silently, then streams a new turn incrementally', async () => {
     insert(db, { id: 1, role: 'user', content: 'old' })
     insert(db, { id: 2, role: 'assistant', content: 'done', finishReason: 'stop' })

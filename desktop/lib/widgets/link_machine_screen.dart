@@ -1,11 +1,14 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
-import '../terminal/terminal_text.dart';
+import '../shared/theme/app_theme.dart' as grid;
+import 'desktop_chrome.dart';
+
 import 'box_chrome.dart';
 
 /// Opens [LinkMachineScreen] as a modal popup for [machineId], closing itself automatically once
@@ -31,12 +34,10 @@ Future<void> showLinkMachineScreenDialog(
     context: context,
     transitionDuration: Duration.zero,
     veilBlur: 0,
-    veilTint: Colors.transparent,
     builder: (context) => Dialog(
-      alignment: Alignment.topCenter,
       backgroundColor: Colors.transparent,
       elevation: 0,
-      insetPadding: const EdgeInsets.fromLTRB(16, 56, 16, 18),
+      insetPadding: const EdgeInsets.all(20),
       child: ListenableBuilder(
         listenable: notifier,
         builder: (context, _) {
@@ -211,162 +212,193 @@ class _LinkMachineScreenState extends State<LinkMachineScreen> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
+    grid.AppTheme.watch(context);
     return ListenableBuilder(
-      listenable: Listenable.merge([widget.notifier, terminalFontStore]),
+      listenable: widget.notifier,
       builder: (context, _) {
         final machineName = widget.machineState.machine.displayName;
-        return Focus(
-          onKeyEvent: _key,
-          child: SizedBox(
-            width: 620,
-            child: TerminalBox(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Flexible(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(
-                            'Link this machine',
-                            style: boxMonoStyle(color: kBoxFaint),
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            machineName,
-                            style: boxMonoStyle(weight: FontWeight.w600),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Enter the remote password set on this machine.',
-                            style: boxMonoStyle(color: Colors.white70),
-                          ),
-                          const SizedBox(height: 14),
-                          ReadlineKeys(
-                            controller: _passwordController,
-                            enabled: !_submitting,
-                            onChanged: _edited,
-                            child: TextField(
-                              key: const Key('remote-password-connect-field'),
-                              controller: _passwordController,
-                              focusNode: _passwordFocus,
-                              autofocus: true,
-                              readOnly: _submitting,
-                              obscureText: _obscure,
-                              enableSuggestions: false,
-                              autocorrect: false,
-                              textInputAction: TextInputAction.done,
-                              textAlignVertical: TextAlignVertical.center,
-                              style: boxMonoStyle(),
-                              decoration: InputDecoration(
-                                hintText: 'Remote password for $machineName',
-                                hintStyle: boxMonoStyle(color: kBoxFaint),
-                                isDense: true,
-                                filled: false,
-                                border: InputBorder.none,
-                                enabledBorder: InputBorder.none,
-                                focusedBorder: InputBorder.none,
-                                prefixIcon: Padding(
-                                  padding: const EdgeInsets.only(right: 10),
-                                  child: Center(
-                                    widthFactor: 1,
-                                    heightFactor: 1,
-                                    child: Text(
-                                      'password >',
-                                      style: boxMonoStyle(
-                                        color: Colors.white70,
+        return DesktopChrome(
+          child: Focus(
+            skipTraversal: true,
+            onKeyEvent: _key,
+            child: SizedBox(
+              width: 480,
+              child: DesktopDialogSurface(
+                child: Padding(
+                  padding: const EdgeInsets.all(DesktopChrome.panelPadding),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Flexible(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Semantics(
+                                header: true,
+                                child: Text(
+                                  'Link this machine',
+                                  style: DesktopChrome.heading(),
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                machineName,
+                                style: DesktopChrome.text(medium: true),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Enter the remote password set on this machine.',
+                                style: DesktopChrome.text(
+                                  color: DesktopChrome.muted,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              ReadlineKeys(
+                                controller: _passwordController,
+                                enabled: !_submitting,
+                                onChanged: _edited,
+                                child: TextField(
+                                  key: const Key(
+                                    'remote-password-connect-field',
+                                  ),
+                                  controller: _passwordController,
+                                  focusNode: _passwordFocus,
+                                  autofocus: true,
+                                  readOnly: _submitting,
+                                  obscureText: _obscure,
+                                  enableSuggestions: false,
+                                  autocorrect: false,
+                                  textInputAction: TextInputAction.done,
+                                  textAlignVertical: TextAlignVertical.center,
+                                  style: DesktopChrome.text(),
+                                  decoration: InputDecoration(
+                                    hintText:
+                                        'Remote password for $machineName',
+                                    hintStyle: DesktopChrome.text(
+                                      color: DesktopChrome.muted,
+                                    ),
+                                    suffixIconConstraints: const BoxConstraints(
+                                      minWidth: 40,
+                                      minHeight: 36,
+                                    ),
+                                    suffixIcon: Center(
+                                      widthFactor: 1,
+                                      heightFactor: 1,
+                                      child: IconButton(
+                                        tooltip: _obscure
+                                            ? 'Show password'
+                                            : 'Hide password',
+                                        icon: Icon(
+                                          _obscure
+                                              ? AppIcons.eye
+                                              : AppIcons.eyeOff,
+                                          size: 16,
+                                        ),
+                                        constraints:
+                                            const BoxConstraints.tightFor(
+                                              width: 32,
+                                              height: 32,
+                                            ),
+                                        style: ButtonStyle(
+                                          side: WidgetStateProperty.resolveWith(
+                                            (states) => BorderSide(
+                                              width: 1.5,
+                                              color:
+                                                  states.contains(
+                                                    WidgetState.focused,
+                                                  )
+                                                  ? DesktopChrome.accent
+                                                  : Colors.transparent,
+                                            ),
+                                          ),
+                                        ),
+                                        onPressed: _submitting
+                                            ? null
+                                            : () => setState(
+                                                () => _obscure = !_obscure,
+                                              ),
                                       ),
                                     ),
                                   ),
+                                  // Native Done keeps Escape available while connecting.
+                                  onEditingComplete: () {},
+                                  onSubmitted: (_) => _submit(),
+                                  onChanged: _edited,
                                 ),
-                                prefixIconConstraints: const BoxConstraints(
-                                  minHeight: 36,
-                                ),
-                                suffixIconConstraints: const BoxConstraints(
-                                  minWidth: 28,
-                                  minHeight: 28,
-                                ),
-                                suffixIcon: IconButton(
-                                  tooltip: _obscure
-                                      ? 'Show password'
-                                      : 'Hide password',
-                                  icon: Icon(
-                                    _obscure
-                                        ? Icons.visibility_outlined
-                                        : Icons.visibility_off_outlined,
-                                    size: 16,
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                _submitting
+                                    ? 'Connecting continues if you close this prompt.'
+                                    : 'Your previous harness will reconnect automatically after linking.',
+                                style: DesktopChrome.metadata(),
+                              ),
+                              const SizedBox(height: 8),
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: TextButton(
+                                  key: const Key(
+                                    'link-troubleshooting-details',
                                   ),
-                                  onPressed: _submitting
-                                      ? null
-                                      : () => setState(
-                                          () => _obscure = !_obscure,
-                                        ),
+                                  onPressed: () => setState(
+                                    () => _showTroubleshootingDetails =
+                                        !_showTroubleshootingDetails,
+                                  ),
+                                  child: Text(
+                                    _showTroubleshootingDetails
+                                        ? 'Hide details'
+                                        : 'Troubleshooting details',
+                                  ),
                                 ),
-                                contentPadding: EdgeInsets.zero,
                               ),
-                              // Native Done must keep the prompt's key scope alive
-                              // while connecting, so Escape still closes it.
-                              onEditingComplete: () {},
-                              onSubmitted: (_) => _submit(),
-                              onChanged: _edited,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            _submitting
-                                ? 'Connecting continues if you close this prompt.'
-                                : 'Your previous agent will reconnect automatically after linking.',
-                            style: boxMonoStyle(color: kBoxFaint),
-                          ),
-                          const SizedBox(height: 8),
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: TextButton(
-                              key: const Key('link-troubleshooting-details'),
-                              style: TextButton.styleFrom(
-                                textStyle: boxMonoStyle(),
-                                foregroundColor: Colors.white70,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 4,
+                              if (_showTroubleshootingDetails)
+                                SelectableText(
+                                  'Machine ID: $_machineId',
+                                  style: grid.AppType.mono(
+                                    color: DesktopChrome.muted,
+                                  ),
                                 ),
-                                minimumSize: const Size(0, 28),
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              ),
-                              onPressed: () => setState(
-                                () => _showTroubleshootingDetails =
-                                    !_showTroubleshootingDetails,
-                              ),
-                              child: Text(
-                                _showTroubleshootingDetails
-                                    ? 'Hide details'
-                                    : 'Troubleshooting details',
-                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      if (_error != null || _submitting) ...[
+                        const SizedBox(height: 16),
+                        Semantics(
+                          liveRegion: true,
+                          child: SelectableText(
+                            _error ?? _progress,
+                            minLines: 1,
+                            maxLines: 3,
+                            style: DesktopChrome.control(
+                              color: _error != null
+                                  ? Theme.of(context).colorScheme.error
+                                  : DesktopChrome.muted,
                             ),
                           ),
-                          if (_showTroubleshootingDetails)
-                            SelectableText(
-                              'Machine ID: $_machineId',
-                              style: boxMonoStyle(color: kBoxFaint),
-                            ),
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      Wrap(
+                        alignment: WrapAlignment.end,
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          TextButton(
+                            onPressed: _close,
+                            child: const Text('Close'),
+                          ),
+                          FilledButton(
+                            onPressed: _submitting ? null : _submit,
+                            child: const Text('Link machine'),
+                          ),
                         ],
                       ),
-                    ),
-                  ),
-                  BoxHintStrip(
-                    message: _error ?? (_submitting ? _progress : null),
-                    isError: _error != null,
-                    hints: [
-                      if (!_submitting)
-                        BoxHint('enter', 'link machine', onTap: _submit),
-                      BoxHint('tab', 'controls'),
-                      BoxHint('esc', 'close', onTap: _close),
                     ],
                   ),
-                ],
+                ),
               ),
             ),
           ),

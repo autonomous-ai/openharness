@@ -15,7 +15,7 @@
  * `session_locks/<id>.lock` holds the owning PID and the log is `logs/devin_<stamp>_<pid>.log`.
  */
 
-import { readdirSync, readFileSync, statSync } from 'fs'
+import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'fs'
 import { join } from 'path'
 
 /** The ACP translator line Devin logs when a turn dies. WARN-level, but terminal for the turn. */
@@ -46,6 +46,21 @@ export function devinLogPathForSession(devinHome: string, sessionId: string): st
     } catch { /* rotated away mid-scan */ }
   }
   return newest?.path ?? null
+}
+
+/**
+ * Bytes [start, end) of a file, read in place: a long-lived session's log grows without bound, and
+ * this runs on the event loop (once a second while a take-over waits for the turn to end).
+ */
+function readRange(path: string, start: number, end: number): string {
+  const fd = openSync(path, 'r')
+  try {
+    const buffer = Buffer.alloc(Math.max(0, end - start))
+    const read = readSync(fd, buffer, 0, buffer.length, start)
+    return buffer.subarray(0, read).toString('utf8')
+  } finally {
+    closeSync(fd)
+  }
 }
 
 /** Strip Devin's doubled prefixes and the trace id so the web/device message stays readable. */
@@ -90,9 +105,9 @@ export class DevinErrorTail {
 
     let text: string
     try {
-      const buffer = readFileSync(this.path)
       // Bounded look-back: a long-lived session's log can be large and only the tail can be relevant.
-      text = buffer.subarray(Math.max(0, buffer.length - SCAN_BACK_BYTES)).toString('utf8')
+      const size = statSync(this.path).size
+      text = readRange(this.path, Math.max(0, size - SCAN_BACK_BYTES), size)
     } catch { return [] }
 
     const out: string[] = []
@@ -120,8 +135,7 @@ export class DevinErrorTail {
 
     let chunk: string
     try {
-      const fd = readFileSync(this.path)
-      chunk = fd.subarray(this.offset, size).toString('utf8')
+      chunk = readRange(this.path, this.offset, size)
     } catch { return [] }
     this.offset = size
 

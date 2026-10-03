@@ -170,7 +170,8 @@ export function parseOpencodeFooter(capture: string): OpencodeFooter | null {
   // [0] is the mode (Build/Plan) and is not ours to report; the chips show model and effort.
   const parts = line.split('·').map((part) => part.trim()).filter(Boolean)
   if (parts.length < 2) return null
-  const target = parts[1]
+  // Wide panes put the project path in a separate, padded column.
+  const target = parts[1].split(/\s{3,}/)[0].trim()
   if (!target) return null
   const trailing = parts[2]?.toLowerCase() ?? null
   // Only a single bare word is treated as a level. Anything longer is part of the name of something,

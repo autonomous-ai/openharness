@@ -89,6 +89,7 @@ DshEntry _currentEntry(String id, List<DshEntry> entries) {
     installedCommit: installation.installedCommit,
     availableCommit: installation.availableCommit,
     updateAvailable: installation.updateAvailable,
+    unverified: installation.unverified || metadata.unverified,
     viewer: installation.installed ? installation.viewer : metadata.viewer,
     viewerUse: installation.installed
         ? installation.viewerUse

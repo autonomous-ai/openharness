@@ -29,7 +29,7 @@ export const GRID_HANDOFF_FLAG = '--harness'
  */
 const ARGPARSE_USAGE_EXIT = 2
 
-export type GridHandoffCode = 'OK' | 'GRID_CLI_MISSING' | 'GRID_CLI_OUTDATED' | 'GRID_LOGIN_FAILED'
+export type GridHandoffCode = 'OK' | 'GRID_CLI_MISSING' | 'GRID_CLI_OUTDATED' | 'GRID_LOGIN_FAILED' | 'GRID_NEEDS_SSO'
 
 export interface GridHandoffResult {
   code: GridHandoffCode
@@ -105,6 +105,11 @@ export async function handOffToGrid(
   // installing one, not a spawn error the caller has to recognise — and a present-but-unrunnable
   // one (EACCES, never ENOENT) is caught too. Resolved off this process's own environment, which is
   // the one place the override and the runtime dir are read from.
+  // A computer a phone signed in by QR holds a session Harness issued itself; grid signs in with the
+  // Autonomous account, which does not know it. Say what to do rather than let `grid` refuse it.
+  if (token.startsWith('hna_')) {
+    return { code: 'GRID_NEEDS_SSO', exitCode: 1, message: 'Grid needs a Google or Apple sign-in on this computer: harness login --force', stdout: '', stderr: '' }
+  }
   const binary = gridBinaryPath()
   if (!binaryOnPath(binary)) {
     return { code: 'GRID_CLI_MISSING', exitCode: 1, message: MISSING_MESSAGE, stdout: '', stderr: '' }

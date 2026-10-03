@@ -80,7 +80,10 @@ void main() {
   for (final failure in [false, true]) {
     test('a missing Store harness waits for installation (failure=$failure)', () async {
       final connection = _Connection();
-      final app = createApp(connectionForTest: (_) => connection);
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
       final box = NewHarnessController(
         app,
         machineId: 'm',
@@ -124,7 +127,10 @@ void main() {
     'an unsupported Store catalog is actionable and does not launch',
     () async {
       final connection = _Connection()..catalogUnavailable = true;
-      final app = createApp(connectionForTest: (_) => connection);
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
       final box = NewHarnessController(
         app,
         machineId: 'm',
@@ -149,7 +155,10 @@ void main() {
     'dismissal during installation cannot launch after the dialog is disposed',
     () async {
       final connection = _Connection();
-      final app = createApp(connectionForTest: (_) => connection);
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
       final box = NewHarnessController(
         app,
         machineId: 'm',
@@ -171,7 +180,10 @@ void main() {
     'an oversized carried task is retained and can be shortened before retry',
     () async {
       final connection = _Connection();
-      final app = createApp(connectionForTest: (_) => connection);
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
       final task = 'x' * (kFirstTaskMaxLength + 1);
       final box = NewHarnessController(
         app,

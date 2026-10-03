@@ -1,6 +1,7 @@
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:unorm_dart/unorm_dart.dart' as unorm;
 
 import 'bytes.dart';
@@ -27,6 +28,18 @@ const _scryptDkLen = 32;
 Future<Uint8List> stretchPassword(String password, String machineId) {
   final secret = utf8Bytes(unorm.nfkc(password));
   final salt = sha256(utf8Bytes('e2e-remote-password-salt-v1|$machineId'));
+  // Browsers have no Dart isolates. Yield between batches of the same KDF
+  // instead of freezing the workspace or weakening the password cost.
+  if (kIsWeb) {
+    return scryptCooperative(
+      secret,
+      salt,
+      n: _scryptN,
+      r: _scryptR,
+      p: _scryptP,
+      dkLen: _scryptDkLen,
+    );
+  }
   return Isolate.run(
     () => scrypt(
       secret,
@@ -44,5 +57,8 @@ Future<Uint8List> stretchPassword(String password, String machineId) {
 String pwContext(String machineId) =>
     'autonomous-e2e-pw-pair|agent:$machineId|a:adapter|b:machine';
 
-RistrettoPoint pwCpaceGenerator(List<int> stretched, List<int> sid, String ci) =>
-    hashToRistretto255(lvCat([_pwDsi, stretched, sid, ci]), utf8Bytes(_pwDsi));
+RistrettoPoint pwCpaceGenerator(
+  List<int> stretched,
+  List<int> sid,
+  String ci,
+) => hashToRistretto255(lvCat([_pwDsi, stretched, sid, ci]), utf8Bytes(_pwDsi));

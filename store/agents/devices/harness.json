@@ -1,0 +1,11 @@
+{
+  "spec": 1,
+  "id": "autonomous/devices",
+  "name": "Devices",
+  "category": "Hardware",
+  "author": "Autonomous",
+  "description": "Manage your Harness devices across your computers, with a dashboard and a conversation.",
+  "engine": "codex",
+  "workspace": { "template": "template", "marker": "devices.json" },
+  "agent": { "instructions": "AGENTS.md", "env": { "DSH_PERMISSION_MODE": "ask" } }
+}

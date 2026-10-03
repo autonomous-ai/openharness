@@ -3,7 +3,6 @@ import 'dart:convert';
 
 import '../core/harness_file_store.dart';
 import '../core/local_key_value_store.dart';
-import 'pane_preset.dart';
 import 'terminal_pane.dart';
 import 'swarm.dart';
 
@@ -18,19 +17,6 @@ class PaneLayoutStore {
     : _storage = storage ?? HarnessFileStore.shared;
 
   static const _key = 'terminal_pane_layout';
-
-  /// Chosen shapes, by tile count. A SECOND key rather than a field on the
-  /// layout entries: the two answer different questions — which agents were
-  /// open, and what shape the grid was in — and the entry schema above already
-  /// refuses anything it does not recognise, so widening it would make an old
-  /// build drop a new build's whole layout rather than just the part it cannot
-  /// use.
-  ///
-  /// A third key, `terminal_pane_splits`, is written by older builds and no
-  /// longer read: dividers were draggable and their positions were remembered.
-  /// Nothing deletes it — a downgrade would want it back, and a few hundred
-  /// bytes of dead JSON costs less than a file this build has to migrate.
-  static const _presetsKey = 'terminal_pane_presets';
 
   /// The ceiling on tiles, enforced on the way IN as well as out: a file written
   /// by a future build that allows more must not make this one try to open
@@ -80,45 +66,6 @@ class PaneLayoutStore {
       return entries;
     } catch (_) {
       return const [];
-    }
-  }
-
-  /// A failed write costs the layout at the next launch, which is a far smaller
-  /// wrong than an exception thrown out of a pane close.
-
-  /// Chosen shapes, by tile count. An id this build does not know is dropped —
-  /// a shape it cannot draw is worse than the default it can.
-  Future<Map<int, PanePreset>> loadPresets() async {
-    try {
-      final raw = await _storage.read(_presetsKey);
-      if (raw == null || raw.isEmpty) return const {};
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) return const {};
-      final out = <int, PanePreset>{};
-      for (final entry in decoded.entries) {
-        final count = int.tryParse(entry.key.toString());
-        if (count == null || count < 2 || count > maxPanes) continue;
-        final preset = PanePreset.byId(entry.value?.toString());
-        if (preset == null) continue;
-        if (!preset.supportsCount(count)) continue;
-        out[count] = preset;
-      }
-      return out;
-    } catch (_) {
-      return const {};
-    }
-  }
-
-  Future<void> savePresets(Map<int, PanePreset> presets) async {
-    try {
-      await _storage.write(
-        _presetsKey,
-        jsonEncode({
-          for (final entry in presets.entries) '${entry.key}': entry.value.id,
-        }),
-      );
-    } catch (_) {
-      // Kept in memory for this run; see above.
     }
   }
 

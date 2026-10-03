@@ -67,9 +67,9 @@ function harnessRow(raw, machineId) {
       warnings: Number.isFinite(raw.verdict.warnings) ? raw.verdict.warnings : 0,
     } : null,
     createdAt: iso(raw?.createdAt),
-    // The registry stamps this when it reconciles, so a whole machine's harnesses share the moment
-    // it was last polled. It is kept for completeness and is never read as "last worked on": the
-    // honest time signal a roster carries is when each harness was CREATED.
+    // When the conversation last moved (the daemon's `lastActivityAt`). Older daemons sent their
+    // reconcile time under this name, so it is kept for completeness and never read as "last
+    // worked on": the time signal every roster carries honestly is when each harness was CREATED.
     updatedAt: iso(raw?.updatedAt),
   };
 }

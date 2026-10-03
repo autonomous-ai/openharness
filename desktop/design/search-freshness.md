@@ -10,7 +10,7 @@ and update the data without making typing wait for another machine.
 | New Harness → New Project | Refresh the parent folder on entry/revisit so a project created elsewhere becomes an “Open existing” choice. |
 | Remote folder browser | Read the directory on navigation. Refresh or ⌘/Ctrl+R updates the current directory while preserving its rows, selection, and typed path. |
 | Recent projects | Combine saved project history with live harness project metadata. This is a list of used projects, not a recursive disk index. Open Folder discovers other folders. |
-| Open Harness (⌘O), project/machine groups, and Harnesses | Filter the live harness inventory, including its branch metadata. These surfaces do not query every repository's Git branches. |
+| Open Harness (⌘P), Open Project (⌘O), and machine groups | Filter the live harness inventory, including its branch metadata. These surfaces do not query every repository's Git branches. |
 
 ## Cost and failure behavior
 

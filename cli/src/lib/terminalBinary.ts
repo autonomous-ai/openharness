@@ -60,6 +60,8 @@ export interface TerminalBinaryClear {
   compressed: boolean
   cols?: number
   rows?: number
+  /** Origin of this input, inside the authenticated/encrypted payload. */
+  tabId?: string
 }
 
 export interface TerminalBinaryEnvelope {
@@ -74,6 +76,9 @@ const MAGIC = Uint8Array.of(0x48, 0x54, 0x52, 0x4d) // HTRM
 const HOP_MAGIC = Uint8Array.of(0x48, 0x54, 0x52, 0x48) // HTRH
 const LOCAL_MAGIC = Uint8Array.of(0x48, 0x54, 0x52, 0x4c) // HTRL
 const FLAG_ZLIB = 1
+const FLAG_SWARM = 2
+const canCarrySwarm = (kind: TerminalBinaryKind): boolean => kind === TerminalBinaryKind.input || kind === TerminalBinaryKind.paste
+const flagsFor = (frame: TerminalBinaryClear): number => (frame.compressed ? FLAG_ZLIB : 0) | (frame.tabId !== undefined ? FLAG_SWARM : 0)
 const TERMINAL_KEY_INFO = utf8('harness-terminal-binary-v3')
 
 /** Keep binary terminal nonces independent from JSON control-frame nonces. */
@@ -145,7 +150,9 @@ export function encodeTerminalPlain(frame: TerminalBinaryClear): Uint8Array | nu
     || frame.kind === TerminalBinaryKind.pasteFile)
     && frame.compressed) return null
   if (frame.kind === TerminalBinaryKind.sync && frame.bytes.length !== 0) return null
-  const metaBytes = frame.kind === TerminalBinaryKind.keyframe ? 28 : 24
+  const scope = frame.tabId === undefined ? null : Buffer.from(frame.tabId, 'utf8')
+  if (scope && (!canCarrySwarm(frame.kind) || !/^[A-Za-z0-9_-]{1,128}$/.test(frame.tabId!))) return null
+  const metaBytes = frame.kind === TerminalBinaryKind.keyframe ? 28 : 24 + (scope ? 1 + scope.length : 0)
   const out = new Uint8Array(metaBytes + frame.bytes.length)
   out.set(id, 0)
   const view = new DataView(out.buffer)
@@ -156,16 +163,25 @@ export function encodeTerminalPlain(frame: TerminalBinaryClear): Uint8Array | nu
     view.setUint16(24, frame.cols!, false)
     view.setUint16(26, frame.rows!, false)
   }
+  if (scope) { out[24] = scope.length; out.set(scope, 25) }
   out.set(frame.bytes, metaBytes)
   return out
 }
 
 export function decodeTerminalPlain(kind: TerminalBinaryKind, flags: number, plaintext: Uint8Array): TerminalBinaryClear | null {
-  if ((flags & ~FLAG_ZLIB) !== 0
+  if ((flags & ~(FLAG_ZLIB | FLAG_SWARM)) !== 0 || ((flags & FLAG_SWARM) && !canCarrySwarm(kind))
     || ((kind === TerminalBinaryKind.input || kind === TerminalBinaryKind.sync
       || kind === TerminalBinaryKind.paste || kind === TerminalBinaryKind.imagePaste
-      || kind === TerminalBinaryKind.pasteFile) && flags !== 0)) return null
-  const metaBytes = kind === TerminalBinaryKind.keyframe ? 28 : 24
+      || kind === TerminalBinaryKind.pasteFile) && (flags & FLAG_ZLIB) !== 0)) return null
+  let metaBytes = kind === TerminalBinaryKind.keyframe ? 28 : 24
+  let tabId: string | undefined
+  if (flags & FLAG_SWARM) {
+    const length = plaintext[24]
+    if (!length || length > 128 || plaintext.length < 25 + length) return null
+    tabId = Buffer.from(plaintext.subarray(25, 25 + length)).toString('utf8')
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(tabId)) return null
+    metaBytes = 25 + length
+  }
   if (plaintext.length < metaBytes || (kind === TerminalBinaryKind.sync && plaintext.length !== metaBytes)) return null
   const view = new DataView(plaintext.buffer, plaintext.byteOffset, plaintext.byteLength)
   const seq = safeU64(view, 16)
@@ -176,6 +192,7 @@ export function decodeTerminalPlain(kind: TerminalBinaryKind, flags: number, pla
     seq,
     bytes: plaintext.slice(metaBytes),
     compressed: (flags & FLAG_ZLIB) !== 0,
+    ...(tabId === undefined ? {} : { tabId }),
     ...(kind === TerminalBinaryKind.keyframe ? { cols: view.getUint16(24, false), rows: view.getUint16(26, false) } : {}),
   }
 }
@@ -203,7 +220,7 @@ export function sealTerminalBinary(key: Uint8Array, counter: number, frame: Term
   if (!Number.isSafeInteger(counter) || counter < 0) return null
   const plaintext = encodeTerminalPlain(frame)
   if (!plaintext) return null
-  const flags = frame.compressed ? FLAG_ZLIB : 0
+  const flags = flagsFor(frame)
   const header = new Uint8Array(TERMINAL_BINARY_HEADER_BYTES)
   header.set(MAGIC, 0)
   header[4] = TERMINAL_BINARY_VERSION
@@ -233,7 +250,7 @@ export function openTerminalBinary(key: Uint8Array, raw: Uint8Array): { counter:
 export function encodeTerminalLocal(frame: TerminalBinaryClear): Uint8Array | null {
   const payload = encodeTerminalPlain(frame)
   if (!payload || payload.length > maxLocalPayloadBytesFor(frame.kind)) return null
-  const flags = frame.compressed ? FLAG_ZLIB : 0
+  const flags = flagsFor(frame)
   const header = new Uint8Array(TERMINAL_LOCAL_HEADER_BYTES)
   header.set(LOCAL_MAGIC, 0)
   header[4] = TERMINAL_LOCAL_VERSION

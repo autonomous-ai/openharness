@@ -1,4 +1,6 @@
-import 'dart:io';
+import 'dart:async';
+
+import 'ws/memory_web_socket.dart';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/models.dart';
@@ -10,46 +12,33 @@ import 'package:harness_mobile/ws/ws_conn.dart';
 /// these tests reproduce is the shape of that loss, not its cause: the wire goes away, and the app
 /// finds out by being unable to use it.
 class _Hub {
-  _Hub._(this.server);
-
-  final HttpServer server;
-  final List<WebSocket> live = [];
+  final List<MemoryWebSocket> live = [];
   int opened = 0;
-
-  /// Answers every dial with a 404 rather than an upgrade — a dial that fails.
   bool refuse = false;
-
-  /// Closes the next socket opened with this code the moment it opens.
   int? closeNextWith;
 
-  int get port => server.port;
+  static Future<_Hub> start() async => _Hub();
 
-  static Future<_Hub> start() async {
-    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    final hub = _Hub._(server);
-    server.listen((request) async {
-      if (hub.refuse || !WebSocketTransformer.isUpgradeRequest(request)) {
-        request.response.statusCode = 404;
-        await request.response.close();
-        return;
-      }
-      final ws = await WebSocketTransformer.upgrade(
-        request,
-        protocolSelector: (protocols) =>
-            protocols.isNotEmpty ? protocols.first : null,
-      );
-      hub.opened++;
-      final closeWith = hub.closeNextWith;
-      if (closeWith != null) {
-        hub.closeNextWith = null;
-        await ws.close(closeWith);
-        return;
-      }
-      hub.live.add(ws);
-      // Whatever the client says, this hub only counts connections.
-      ws.listen((_) {}, onDone: () => hub.live.remove(ws));
-    });
-    return hub;
+  MemoryWebSocket connect(Uri uri, {Iterable<String>? protocols}) {
+    final (client, server) = MemoryWebSocket.pair(
+      protocol: protocols?.firstOrNull,
+    );
+    if (refuse) {
+      client.reject();
+      unawaited(client.close());
+      return client;
+    }
+    client.accept();
+    opened++;
+    final closeWith = closeNextWith;
+    if (closeWith != null) {
+      closeNextWith = null;
+      unawaited(server.close(closeWith));
+      return client;
+    }
+    live.add(server);
+    server.stream.listen((_) {}, onDone: () => live.remove(server));
+    return client;
   }
 
   Future<void> dropAll() async {
@@ -60,7 +49,7 @@ class _Hub {
     }
   }
 
-  Future<void> stop() async => server.close(force: true);
+  Future<void> stop() => dropAll();
 }
 
 void main() {
@@ -77,7 +66,8 @@ void main() {
   tearDown(() async => hub.stop());
 
   WsConn newConn({AccessTokenProvider? tokens}) => WsConn(
-    wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+    wsBaseUrl: 'ws://hub.invalid',
+    connectChannel: hub.connect,
     autonomousEnv: 'test',
     machineId: 'm',
     accessTokenProvider: tokens ?? (_, _) async => 'token',

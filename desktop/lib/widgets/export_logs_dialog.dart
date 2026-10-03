@@ -1,14 +1,15 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../core/harness_cli_runner.dart';
 import '../core/reveal_folder.dart';
 import '../logging/log_export.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
-import '../shared/widgets/toolbar_pill.dart';
+import 'desktop_chrome.dart';
+import 'desktop_prompt_surface.dart';
 
 /// Help ▸ Export Logs… — the one thing a bug report needs, from a menu every
 /// build has.
@@ -83,95 +84,58 @@ class _ExportLogsDialogState extends State<_ExportLogsDialog> {
         : 'Saved to ${result.path}\n'
               'Send this file with your report. It holds no credentials.';
 
-    return Dialog(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 372),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: mark.withValues(alpha: 0.13),
-                  borderRadius: BorderRadius.circular(grid.AppCard.insetRadius),
-                ),
-                alignment: Alignment.center,
-                child: busy
-                    ? SizedBox(
-                        width: 17,
-                        height: 17,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: mark,
-                        ),
-                      )
-                    : Icon(
-                        failed
-                            ? LucideIcons.circleAlert300
-                            : LucideIcons.packageCheck300,
-                        size: 18,
+    return DesktopPromptSurface(
+      body: DesktopPromptScrollBody(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: mark.withValues(alpha: 0.13),
+                borderRadius: BorderRadius.circular(grid.AppCard.insetRadius),
+              ),
+              alignment: Alignment.center,
+              child: busy
+                  ? SizedBox(
+                      width: 17,
+                      height: 17,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
                         color: mark,
                       ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                title,
-                style: grid.AppType.heading(color: grid.AppPalette.textPrimary),
-              ),
-              const SizedBox(height: 5),
-              SelectableText(
-                body,
-                style: grid.AppType.body(
-                  color: grid.AppPalette.textSecondary,
-                  height: 1.5,
-                ),
-              ),
-              if (!busy) ...[
-                const SizedBox(height: 15),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    if (result.path != null) ...[
-                      ToolbarPill(
-                        onTap: () => unawaited(revealFile(result.path!)),
-                        rimmed: true,
-                        child: _Label('Show in Finder'),
-                      ),
-                      const SizedBox(width: 8),
-                    ],
-                    ToolbarPill(
-                      onTap: () => Navigator.of(context).pop(),
-                      tinted: true,
-                      child: _Label('Close', tinted: true),
+                    )
+                  : Icon(
+                      failed ? AppIcons.circleAlert : AppIcons.packageCheck,
+                      size: 18,
+                      color: mark,
                     ),
-                  ],
-                ),
-              ],
-            ],
-          ),
+            ),
+            const SizedBox(height: 12),
+            Text(title, style: DesktopChrome.heading()),
+            const SizedBox(height: 8),
+            SelectableText(
+              body,
+              style: DesktopChrome.text(color: DesktopChrome.muted),
+            ),
+          ],
         ),
       ),
-    );
-  }
-}
-
-class _Label extends StatelessWidget {
-  const _Label(this.text, {this.tinted = false});
-
-  final String text;
-  final bool tinted;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: grid.AppType.label(
-        color: ToolbarPill.tint(tinted: tinted, enabled: true),
-      ),
+      actions: [
+        if (!busy && result.path != null)
+          TextButton(
+            onPressed: () => unawaited(revealFile(result.path!)),
+            child: const Text('Show in Finder'),
+          ),
+        if (!busy)
+          FilledButton(
+            autofocus: true,
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+      ],
     );
   }
 }

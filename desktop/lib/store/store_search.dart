@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
@@ -157,7 +157,7 @@ class _History extends StatelessWidget {
         children: [
           AppIconButton(
             key: const ValueKey('store-back'),
-            icon: LucideIcons.chevronLeft300,
+            icon: AppIcons.chevronLeft,
             tooltip: back == null ? 'Back' : 'Back  $back',
             onPressed: onBack,
             size: 17,
@@ -170,7 +170,7 @@ class _History extends StatelessWidget {
           ),
           AppIconButton(
             key: const ValueKey('store-nav-forward'),
-            icon: LucideIcons.chevronRight300,
+            icon: AppIcons.chevronRight,
             tooltip: forward == null ? 'Forward' : 'Forward  $forward',
             onPressed: onForward,
             size: 17,
@@ -238,8 +238,8 @@ class _Field extends StatelessWidget {
               child: Row(
                 children: [
                   Icon(
-                    LucideIcons.search300,
-                    size: 15,
+                    AppIcons.search,
+                    size: 16,
                     color: grid.AppPalette.textSecondary,
                   ),
                   const SizedBox(width: 8),
@@ -252,14 +252,14 @@ class _Field extends StatelessWidget {
                       onChanged: onChanged,
                       textInputAction: TextInputAction.search,
                       textAlignVertical: TextAlignVertical.center,
-                      style: grid.AppType.mono(
+                      style: grid.AppType.body(
                         color: grid.AppPalette.textPrimary,
                       ),
                       // Bare: the outline around it is this field's border,
                       // so none of the theme's own may draw inside it.
                       decoration: InputDecoration(
                         hintText: 'Search harnesses',
-                        hintStyle: grid.AppType.mono(
+                        hintStyle: grid.AppType.body(
                           color: grid.AppPalette.textSecondary,
                         ),
                         isCollapsed: true,
@@ -279,7 +279,7 @@ class _Field extends StatelessWidget {
                   ),
                   if (controller.text.isNotEmpty)
                     AppIconButton(
-                      icon: LucideIcons.x300,
+                      icon: AppIcons.close,
                       tooltip: 'Clear search',
                       onPressed: onClear,
                     )
@@ -338,7 +338,7 @@ class _CreateHarness extends StatelessWidget {
         ),
         child: labelled
             ? const Text('Create Harness')
-            : const Icon(LucideIcons.plus300, size: 16),
+            : const Icon(AppIcons.plus, size: 16),
       ),
     );
   }

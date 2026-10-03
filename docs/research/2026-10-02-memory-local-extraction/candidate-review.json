@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "7dc39946c368508d49a8be43d9b2ae791f0e74679548eb456e7ab864421de878",
+  "suiteSha256": "135545eb05370bac04fbaf555c36255afd21fbcbd4190b0e21895e17d31273c3",
+  "reviewer": {
+    "id": "codex-source-review",
+    "kind": "agent",
+    "independent": false
+  },
+  "cases": [
+    {
+      "id": "conditional-debugging",
+      "records": [
+        {
+          "id": "bf0d7f2a-8dd6-4a64-8d8b-100102d8b7e9",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "The record preserves the debugging-only preference and production-incident exception, uses its own user quotation, and invents no reason or incident workflow."
+        }
+      ],
+      "probes": [
+        {
+          "id": "debugging",
+          "relevantIds": [
+            "bf0d7f2a-8dd6-4a64-8d8b-100102d8b7e9"
+          ],
+          "requiredIds": [
+            "bf0d7f2a-8dd6-4a64-8d8b-100102d8b7e9"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The packet preserves the applicable source-supported memory, including scope, reasons, unknowns and exceptions."
+        },
+        {
+          "id": "incident",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "This negative probe correctly receives no context."
+        },
+        {
+          "id": "unclassified-task",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "This negative probe correctly receives no context."
+        }
+      ]
+    },
+    {
+      "id": "project-database-decision",
+      "records": [
+        {
+          "id": "c9eff5f2-fdf3-4193-ba95-054c020e25ba",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "The record preserves the accepted SQLite decision within desktop-repo and its stated single-file/no-server rationale, with no invented applicability conditions, scale or performance claims."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-repository",
+          "relevantIds": [
+            "c9eff5f2-fdf3-4193-ba95-054c020e25ba"
+          ],
+          "requiredIds": [
+            "c9eff5f2-fdf3-4193-ba95-054c020e25ba"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The packet preserves the applicable source-supported memory, including scope, reasons, unknowns and exceptions."
+        },
+        {
+          "id": "different-repository",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "This negative probe correctly receives no context."
+        }
+      ]
+    },
+    {
+      "id": "routine-tool-choice",
+      "records": [],
+      "probes": [
+        {
+          "id": "no-assumed-taste",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "This negative probe correctly receives no context."
+        }
+      ]
+    },
+    {
+      "id": "quoted-third-party",
+      "records": [],
+      "probes": [
+        {
+          "id": "no-borrowed-opinion",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "This negative probe correctly receives no context."
+        }
+      ]
+    },
+    {
+      "id": "unstated-rationale",
+      "records": [
+        {
+          "id": "bc0f8778-2ce4-4478-bc8c-1ab3e92e1e5a",
+          "revision": 1,
+          "supported": false,
+          "specific": true,
+          "useful": false,
+          "note": "The source states an unconditional database default. taskType=implementation is invented and prevents recall for the ordinary database-choice probe. Structural acceptance is not semantic support."
+        }
+      ],
+      "probes": [
+        {
+          "id": "database-choice",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": true,
+          "faithfulContext": true,
+          "note": "The required unconditional default is missing because its stored implementation-only condition is unsupported."
+        },
+        {
+          "id": "irrelevant-ui-task",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "This negative probe correctly receives no context."
+        }
+      ]
+    },
+    {
+      "id": "unbound-project-fact",
+      "records": [],
+      "probes": [
+        {
+          "id": "no-project-leak",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "This negative probe correctly receives no context."
+        }
+      ]
+    }
+  ]
+}

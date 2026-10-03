@@ -2,7 +2,7 @@
  * `harness dsh …` — the terminal face of domain-specific harnesses, for a server with no desktop
  * and for the development loop (`--link` a checkout, iterate, no re-clone).
  */
-import { ensureBundledModelManager } from './builtins.js'
+import { ensureBundledCoreHarnesses } from './builtins.js'
 import { listDshState, installedDsh } from './installed.js'
 import { DSH_ID_RE, dshTier } from './manifest.js'
 import { registrySourceUrl } from './registry.js'
@@ -37,7 +37,7 @@ export async function dshCommand(verb: string | undefined, rest: readonly string
   const args = rest.filter((arg, at) => !arg.startsWith('-') && !valued.has(rest[at - 1] ?? ''))
   switch (verb) {
     case 'builtins':
-      return ensureBundledModelManager() ? 0 : 1
+      return ensureBundledCoreHarnesses() ? 0 : 1
     case 'list': {
       const { installed, broken } = listDshState()
       const registry = await refreshDshRegistry()

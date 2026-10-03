@@ -13,7 +13,7 @@ const hasPty = process.platform !== 'win32' && spawnSync('python3', ['-c', 'impo
 
 it.skipIf(!hasPty)('keeps DNS and file I/O working across repeated silent tty closes with one worker', async () => {
   const scratch = await mkdtemp(join(tmpdir(), 'serial-idle-'))
-  // The master stays open and sends nothing. This exercises the real kernel tty and real fs reads,
+  // The master stays open and sends nothing. This exercises the real kernel tty and native reads,
   // without touching a USB device or requiring a native production dependency.
   const python = spawn('python3', ['-u', '-c',
     'import os, pty, sys\nmaster, slave = pty.openpty()\nprint(os.ttyname(slave), flush=True)\nsys.stdin.read()\n',
@@ -36,3 +36,21 @@ it.skipIf(!hasPty)('keeps DNS and file I/O working across repeated silent tty cl
     await rm(scratch, { recursive: true, force: true })
   }
 }, 15_000)
+
+it.skipIf(!hasPty).each(['duplex', 'disconnect', 'close'])(
+  'preserves binary serial frames and handles %s while writes are backpressured', async mode => {
+    const scratch = await mkdtemp(join(tmpdir(), 'serial-duplex-'))
+    try {
+      const worker = join(scratch, 'serial-duplex.mjs')
+      await build({
+        entryPoints: [fileURLToPath(new URL('./__fixtures__/serialDuplex.ts', import.meta.url))],
+        outfile: worker, bundle: true, platform: 'node', format: 'esm', target: 'node20',
+      })
+      const driver = fileURLToPath(new URL('./__fixtures__/serialDuplex.py', import.meta.url))
+      const { stdout } = await promisify(execFile)('python3', [driver, process.execPath, worker, mode], { timeout: 12_000 })
+      expect(JSON.parse(stdout)).toEqual({ mode, passed: true, sessionLeader: true })
+    } finally {
+      await rm(scratch, { recursive: true, force: true })
+    }
+  }, 15_000,
+)

@@ -9,19 +9,40 @@ class PaneArrangement {
   PaneArrangement(Iterable<Rect> tiles) : tiles = List.unmodifiable(tiles);
   final List<Rect> tiles;
 
-  /// The split a harness tab opens with: the viewer on the left at two
-  /// thirds, its terminal on the right. A third of a laptop window is the
-  /// narrowest a coding agent's interface reads well at (they are laid out
-  /// for 80 columns); a board, a part or a slide has enough at two thirds.
+  /// The split a harness tab opens with: 70% viewer on the left, 30% assistant
+  /// terminal on the right. Either pane can be zoomed explicitly.
   /// One shared instance, so the code that opened the pair can tell its own
   /// split from one the user dragged.
   static final viewerBesideTerminal = PaneArrangement(const [
-    Rect.fromLTRB(0, 0, 2 / 3, 1),
-    Rect.fromLTRB(2 / 3, 0, 1, 1),
+    Rect.fromLTRB(0, 0, .7, 1),
+    Rect.fromLTRB(.7, 0, 1, 1),
   ]);
   static const _epsilon = 0.000001;
 
   late final List<PaneDivider> dividers = _findDividers();
+
+  /// Older lattice presets left an empty tail in the last row. A shared split
+  /// canvas has no empty panes: let that row's last pane use the remaining room.
+  /// Existing cuts and the identity/order of every slot stay intact.
+  PaneArrangement fillRowEnds() {
+    var changed = false;
+    final filled = <Rect>[];
+    for (final tile in tiles) {
+      final emptyTail =
+          tile.right < 1 - _epsilon &&
+          !tiles.any(
+            (other) =>
+                other.left >= tile.right - _epsilon &&
+                other.top < tile.bottom - _epsilon &&
+                other.bottom > tile.top + _epsilon,
+          );
+      changed |= emptyTail;
+      filled.add(
+        emptyTail ? Rect.fromLTRB(tile.left, tile.top, 1, tile.bottom) : tile,
+      );
+    }
+    return changed ? PaneArrangement(filled) : this;
+  }
 
   PaneArrangement? split(
     int index,

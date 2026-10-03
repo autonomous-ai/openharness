@@ -27,6 +27,7 @@ async function updatePackage(opts: DshUpdateOptions): Promise<DshInstallResult> 
   const record = readInstalledIndex().find(row => row.id === opts.id)
   if (!record) return { ok: false, error: 'NOT_INSTALLED', detail: `${opts.id} is not installed` }
   if (record.linked) return { ok: false, error: 'LINKED_INSTALL', detail: `${opts.id} is linked to a checkout. Update that checkout directly.` }
+  if (record.source.startsWith('builtin:')) return { ok: false, error: 'BUNDLED_PACKAGE', detail: `${opts.id} updates automatically with Harness. Update Harness to receive the latest core packages.` }
   const unlock = lockDsh(opts.id)
   if (!unlock) return dshBusy(opts.id)
   let staged: string | null = null

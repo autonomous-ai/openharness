@@ -1,0 +1,139 @@
+server backspace C-?
+server buffer-limit 50
+server command-alias[0] split-pane=split-window
+server command-alias[1] splitp=split-window
+server command-alias[2] "server-info=show-messages -JT"
+server command-alias[3] "info=show-messages -JT"
+server command-alias[4] "choose-window=choose-tree -w"
+server command-alias[5] "choose-session=choose-tree -s"
+server copy-command ''
+server default-terminal tmux-256color
+server editor /usr/bin/vi
+server escape-time 10
+server exit-empty on
+server exit-unattached off
+server extended-keys off
+server extended-keys-format xterm
+server focus-events off
+server history-file ''
+server message-limit 1000
+server prefix-timeout 0
+server prompt-history-limit 100
+server set-clipboard external
+server terminal-overrides[0] linux*:AX@
+server terminal-features[0] xterm*:clipboard:ccolour:cstyle:focus:title
+server terminal-features[1] screen*:title
+server terminal-features[2] rxvt*:ignorefkeys
+server user-keys
+session activity-action other
+session assume-paste-time 1
+session base-index 0
+session bell-action any
+session default-command ''
+session default-shell /bin/zsh
+session default-size 80x24
+session destroy-unattached off
+session detach-on-destroy on
+session display-panes-active-colour red
+session display-panes-colour blue
+session display-panes-time 1000
+session display-time 750
+session history-limit 2000
+session key-table root
+session lock-after-time 0
+session lock-command "lock -np"
+session message-command-style bg=black,fg=yellow
+session message-line 0
+session message-style bg=yellow,fg=black
+session mouse off
+session prefix C-b
+session prefix2 None
+session renumber-windows off
+session repeat-time 500
+session set-titles off
+session set-titles-string "#S:#I:#W - \"#T\" #{session_alerts}"
+session silence-action other
+session status on
+session status-bg default
+session status-fg default
+session status-format[0] "#[align=left range=left #{E:status-left-style}]#[push-default]#{T;=/#{status-left-length}:status-left}#[pop-default]#[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{W:#[range=window|#{window_index} #{E:window-status-style}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-format}#[pop-default]#[norange default]#{?window_end_flag,,#{window-status-separator}},#[range=window|#{window_index} list=focus #{?#{!=:#{E:window-status-current-style},default},#{E:window-status-current-style},#{E:window-status-style}}#{?#{&&:#{window_last_flag},#{!=:#{E:window-status-last-style},default}}, #{E:window-status-last-style},}#{?#{&&:#{window_bell_flag},#{!=:#{E:window-status-bell-style},default}}, #{E:window-status-bell-style},#{?#{&&:#{||:#{window_activity_flag},#{window_silence_flag}},#{!=:#{E:window-status-activity-style},default}}, #{E:window-status-activity-style},}}]#[push-default]#{T:window-status-current-format}#[pop-default]#[norange list=on default]#{?window_end_flag,,#{window-status-separator}}}#[nolist align=right range=right #{E:status-right-style}]#[push-default]#{T;=/#{status-right-length}:status-right}#[pop-default]#[norange default]"
+session status-format[1] "#[align=centre]#{P:#{?pane_active,#[reverse],}#{pane_index}[#{pane_width}x#{pane_height}]#[default] }"
+session status-interval 15
+session status-justify left
+session status-keys emacs
+session status-left "[#{session_name}] "
+session status-left-length 10
+session status-left-style default
+session status-position bottom
+session status-right "#{?window_bigger,[#{window_offset_x}#,#{window_offset_y}] ,}\"#{=21:pane_title}\" %H:%M %d-%b-%y"
+session status-right-length 40
+session status-right-style default
+session status-style bg=green,fg=black
+session update-environment[0] DISPLAY
+session update-environment[1] KRB5CCNAME
+session update-environment[2] SSH_ASKPASS
+session update-environment[3] SSH_AUTH_SOCK
+session update-environment[4] SSH_AGENT_PID
+session update-environment[5] SSH_CONNECTION
+session update-environment[6] WINDOWID
+session update-environment[7] XAUTHORITY
+session visual-activity off
+session visual-bell off
+session visual-silence off
+session word-separators "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~"
+window cursor-colour none
+window cursor-style default
+window menu-style default
+window menu-selected-style bg=yellow,fg=black
+window menu-border-style default
+window menu-border-lines single
+window aggressive-resize off
+window allow-passthrough off
+window allow-rename off
+window allow-set-title on
+window alternate-screen on
+window automatic-rename on
+window automatic-rename-format "#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}"
+window clock-mode-colour blue
+window clock-mode-style 24
+window copy-mode-match-style bg=cyan,fg=black
+window copy-mode-current-match-style bg=magenta,fg=black
+window copy-mode-mark-style bg=red,fg=black
+window fill-character ''
+window main-pane-height 24
+window main-pane-width 80
+window mode-keys emacs
+window mode-style bg=yellow,fg=black
+window monitor-activity off
+window monitor-bell on
+window monitor-silence 0
+window other-pane-height 0
+window other-pane-width 0
+window pane-active-border-style "#{?pane_in_mode,fg=yellow,#{?synchronize-panes,fg=red,fg=green}}"
+window pane-base-index 0
+window pane-border-format "#{?pane_active,#[reverse],}#{pane_index}#[default] \"#{pane_title}\""
+window pane-border-indicators colour
+window pane-border-lines single
+window pane-border-status off
+window pane-border-style default
+window pane-colours
+window popup-style default
+window popup-border-style default
+window popup-border-lines single
+window remain-on-exit off
+window remain-on-exit-format "Pane is dead (#{?#{!=:#{pane_dead_status},},status #{pane_dead_status},}#{?#{!=:#{pane_dead_signal},},signal #{pane_dead_signal},}, #{t:pane_dead_time})"
+window scroll-on-clear on
+window synchronize-panes off
+window window-active-style default
+window window-size latest
+window window-style default
+window window-status-activity-style reverse
+window window-status-bell-style reverse
+window window-status-current-format "#I:#W#{?window_flags,#{window_flags}, }"
+window window-status-current-style default
+window window-status-format "#I:#W#{?window_flags,#{window_flags}, }"
+window window-status-last-style default
+window window-status-separator " "
+window window-status-style default
+window wrap-search on
+window xterm-keys on

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/widgets/desktop_prompt_surface.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -107,7 +108,7 @@ void main() {
       });
       await tester.pumpAndSettle();
       expect(find.text('Wait for the other operation.'), findsOneWidget);
-      expect(find.text('enter  retry'), findsOneWidget);
+      expect(find.text('Retry'), findsOneWidget);
       await key(tester, LogicalKeyboardKey.enter);
       expect(connection.requests, hasLength(2));
       connection.restartReplies.last.complete(restartReceipt(id()));
@@ -134,7 +135,7 @@ void main() {
     await tester.pumpAndSettle();
     await key(tester, LogicalKeyboardKey.escape);
     await open(tester);
-    expect(find.text('enter  check status'), findsOneWidget);
+    expect(find.text('Check status'), findsOneWidget);
     expect(connection.requests, hasLength(1));
     await key(tester, LogicalKeyboardKey.enter);
     connection.checkReplies.single.complete(
@@ -143,17 +144,65 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       find.text(
-        'Started a new conversation. The previous session could not be resumed.',
+        'Started a new conversation. The previous conversation could not be resumed.',
       ),
       findsOneWidget,
     );
-    expect(find.text('enter  close'), findsOneWidget);
+    expect(find.text('Close'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.enter);
     expect(connection.requests, hasLength(1));
     await tester.pumpAndSettle();
     expect(_prompt, findsNothing);
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets(
+    'restart details can be selected while Tab still reaches the visible actions',
+    variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    (tester) async {
+      app.adoptSessionForTest(terminal('a0', []));
+      await mount(tester);
+      await open(tester);
+      final detail = List.generate(
+        12,
+        (index) => 'Diagnostic ${index + 1}: wait for the other operation.',
+      ).join('\n');
+      connection.restartReplies.single.complete({
+        'creationId': id(),
+        'state': 'failed',
+        'failure': {'code': 'AGENT_BUSY', 'detail': detail},
+      });
+      await tester.pumpAndSettle();
+      final message = find.text(detail);
+      final editor = tester.widget<EditableText>(message);
+      await tester.tap(
+        find.ancestor(of: message, matching: find.byType(DesktopPromptMessage)),
+      );
+      await key(tester, LogicalKeyboardKey.keyA, cmd: true);
+      expect(editor.focusNode.hasPrimaryFocus, isTrue);
+      expect(editor.controller.selection.textInside(detail), detail);
+      await key(tester, LogicalKeyboardKey.tab);
+      expect(
+        Focus.of(tester.element(find.text('Close'))).hasPrimaryFocus,
+        isTrue,
+      );
+      await key(tester, LogicalKeyboardKey.tab);
+      expect(
+        Focus.of(tester.element(find.text('Retry'))).hasPrimaryFocus,
+        isTrue,
+      );
+      await key(tester, LogicalKeyboardKey.tab);
+      expect(
+        Focus.of(tester.element(find.text('Close'))).hasPrimaryFocus,
+        isTrue,
+      );
+      expect(connection.requests, hasLength(1));
+      await key(tester, LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(_prompt, findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   testWidgets(
     'restarting again after uncertainty requires a separate keyboard confirmation',
@@ -238,7 +287,7 @@ void main() {
       {"keys":"f4","command":"picker.cancel","when":"picker"}
     ]}''');
     await tester.pump();
-    expect(find.text('F4  close'), findsOneWidget);
+    expect(find.byTooltip('Close · F4'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.f4);
     await tester.pumpAndSettle();
     expect(_prompt, findsNothing);
@@ -247,28 +296,29 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('enlarged short window keeps uncertainty and Escape visible', (
-    tester,
-  ) async {
-    app.adoptSessionForTest(terminal('a0', []));
-    await mount(tester, size: const Size(480, 360), scale: 1.7);
-    await open(tester);
-    expect(find.text('esc  close').hitTestable(), findsOneWidget);
-    connection.restartReplies.single.completeError(
-      const WsRequestTimeout('agent_restart'),
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('Restart not confirmed.').hitTestable(), findsOneWidget);
-    expect(find.text('esc  close').hitTestable(), findsOneWidget);
-    await key(tester, LogicalKeyboardKey.tab);
-    await key(tester, LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
-    expect(find.text('esc  back').hitTestable(), findsOneWidget);
-    expect(tester.takeException(), isNull);
-    await key(tester, LogicalKeyboardKey.escape);
-    await key(tester, LogicalKeyboardKey.escape);
-    await tester.pumpAndSettle();
-    expect(_prompt, findsNothing);
-    await tester.pumpWidget(const SizedBox());
-  });
+  testWidgets(
+    'enlarged short window keeps uncertainty and close actions visible',
+    (tester) async {
+      app.adoptSessionForTest(terminal('a0', []));
+      await mount(tester, size: const Size(480, 360), scale: 1.7);
+      await open(tester);
+      expect(find.text('Close').hitTestable(), findsOneWidget);
+      connection.restartReplies.single.completeError(
+        const WsRequestTimeout('agent_restart'),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Restart not confirmed.').hitTestable(), findsOneWidget);
+      expect(find.text('Close').hitTestable(), findsOneWidget);
+      await key(tester, LogicalKeyboardKey.tab);
+      await key(tester, LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(find.text('Cancel').hitTestable(), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await key(tester, LogicalKeyboardKey.escape);
+      await key(tester, LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(_prompt, findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 }

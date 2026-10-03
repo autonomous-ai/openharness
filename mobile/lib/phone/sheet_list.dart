@@ -2,15 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
-import 'package:harness_mobile/widgets/engine_identity.dart';
 
-import 'phone_prompt_context.dart';
-import 'phone_status.dart';
-import 'status_pill.dart';
-
-// The pieces the terminal's search sheet lists with: iOS's inset-grouped list
-// — one card of rows with hairlines between them, a caption over it. See
-// [SheetRow] for why the tabs and the results share them.
+// The pieces the branch picker (`branch_picker_sheet.dart`) lists with: iOS's
+// inset-grouped list — one card of rows with hairlines between them, a caption
+// over it.
 
 /// How far a group stands in from the sheet's sides — the field and the tab
 /// pills keep the same margin, so the sheet has one left edge.
@@ -47,7 +42,7 @@ const double _minRowHeight = 56;
 /// LIGHTER, which is how iOS draws its own sheets.
 Color get sheetFill => AppPalette.cardBg;
 
-/// A group's rows, the search field and the mode chips: the sheet's fill with
+/// A group's rows and the search field: the sheet's fill with
 /// a wash of white over it.
 ///
 /// A wash rather than the palette's next step, because the steps are not
@@ -65,91 +60,6 @@ Color get sheetRowPressedFill =>
 TextStyle sheetRowTitleStyle() =>
     TextStyle(color: AppPalette.textPrimary, fontSize: 16, height: 1.25);
 
-/// The line under a row's name.
-TextStyle sheetRowSubtitleStyle() =>
-    TextStyle(color: AppPalette.textSecondary, fontSize: 13, height: 1.3);
-
-/// The line over a run of rows: what the run is, and how many it holds.
-///
-/// With [onBack] it is also the way out of what it names — a project or a
-/// machine the search was narrowed to. iOS has no back button to do that, and
-/// without it the only way out of a machine was Cancel, which throws the
-/// search away with it.
-class SheetCaption extends StatelessWidget {
-  const SheetCaption({super.key, required this.label, this.count, this.onBack});
-
-  final String label;
-
-  /// The run's size, or `4/14` once a query has narrowed it. Null leaves the
-  /// right-hand end empty.
-  final String? count;
-
-  final VoidCallback? onBack;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final onBack = this.onBack;
-    final style = TextStyle(
-      // The ink of the line under a row's name, not the faint one: on the
-      // lifted sheet the faint ink fell under 3:1 at this size.
-      color: onBack == null
-          ? AppPalette.textSecondary
-          : AppPalette.accentOnSurface,
-      fontSize: 12,
-      fontWeight: FontWeight.w500,
-      letterSpacing: 0.4,
-    );
-    final caption = Padding(
-      // Closer to the rows it labels than to what is above it, so it reads as
-      // theirs.
-      padding: const EdgeInsets.fromLTRB(
-        kSheetCaptionInset,
-        10,
-        kSheetCaptionInset,
-        7,
-      ),
-      child: Row(
-        children: [
-          if (onBack != null) ...[
-            Icon(LucideIcons.chevronLeft500, size: 14, color: style.color),
-            const SizedBox(width: 2),
-          ],
-          Expanded(
-            child: Text(
-              label.toUpperCase(),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: style,
-            ),
-          ),
-          if (count != null)
-            Padding(
-              padding: const EdgeInsets.only(left: 12),
-              child: Text(
-                count!,
-                style: style.copyWith(
-                  color: AppPalette.textSecondary,
-                  fontFeatures: AppFont.tabularFigures,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-    if (onBack == null) return Semantics(header: true, child: caption);
-    return Semantics(
-      button: true,
-      label: 'Back',
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onBack,
-        child: caption,
-      ),
-    );
-  }
-}
-
 /// One row of an inset group: a tile, a name with a line under it, and what
 /// the row ends in.
 ///
@@ -163,16 +73,6 @@ class SheetCaption extends StatelessWidget {
 ///  │    codex-2026-09-22 · Mac mini       │
 ///  ╰──────────────────────────────────────╯
 /// ```
-///
-/// ⚠️ **One row for the tabs and for the search, and that is what it is for.**
-/// The sheet reads the account's tabs until its field is focused, then swaps
-/// them in place for results — and the same agent was drawn two unrelated
-/// ways either side of that swap: a tall card in the tabs, a flat monospaced
-/// line in the results. The swap read as a second app arriving. Both lists are
-/// built from this now, so focusing the field changes which rows are listed
-/// and nothing about how a row looks.
-///
-/// Status is said with a mark, not a word — see [SheetAgentStatus].
 ///
 /// ⚠️ **Each row draws its own share of the card**, rounding the corners only
 /// where it opens or closes the group ([first], [last]). A card drawn once
@@ -354,102 +254,6 @@ class SheetTile extends StatelessWidget {
   );
 }
 
-/// An agent's tile: its engine's own mark on a wash of the engine's colour.
-///
-/// ⚠️ **A wash, not the solid tile iOS Settings draws.** Settings can fill its
-/// tiles because it draws the glyphs on them, in white. These are the engines'
-/// own marks — most of them full-colour pictures (Codex's blue cloud, Amp's
-/// whole app icon) — and a solid fill behind one is a picture on a picture,
-/// while a white mark on white (Pi, Grok) disappears outright. The wash keeps
-/// the tile telling engines apart by colour and leaves each mark as its
-/// owner draws it.
-class SheetEngineTile extends StatelessWidget {
-  const SheetEngineTile({super.key, required this.engine, this.displayName});
-
-  final String? engine;
-  final String? displayName;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final identity = engineIdentity(engine, displayName: displayName);
-    return SheetTile(
-      fill: identity.color.withValues(alpha: 0.2),
-      child: EngineMark(engine: engine, displayName: displayName, size: 18),
-    );
-  }
-}
-
-/// A tile holding the character that reaches its row from the field: `>` for
-/// a command, `#` a project, `@` a machine. The row is its own lesson in the
-/// modes.
-class SheetGlyphTile extends StatelessWidget {
-  const SheetGlyphTile(this.glyph, {super.key});
-
-  final String glyph;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return SheetTile(
-      fill: AppSurface.recessHover,
-      child: Text(
-        glyph,
-        // ⚠️ Sized to the tile, which does not grow with the app's text size
-        // — so neither may the glyph, or it outgrows its own square.
-        textScaler: TextScaler.noScaling,
-        style: phoneBoxMonoStyle(
-          size: 14,
-          color: AppPalette.textPrimary,
-          weight: FontWeight.w700,
-        ).copyWith(height: 1),
-      ),
-    );
-  }
-}
-
-/// What an agent's row ends in: the check on the agent already on screen, and
-/// otherwise what it is doing — only when that is something, and never in
-/// words.
-///
-/// ⚠️ **The spinner is drawn in the row's own grey, not the accent.** A list
-/// with four agents working is four spinners, and four accent-blue ones were
-/// the loudest thing on the sheet — louder than the names. Waiting keeps its
-/// colour: it is the one state somebody has to act on.
-class SheetAgentStatus extends StatelessWidget {
-  const SheetAgentStatus({
-    super.key,
-    required this.summary,
-    this.onScreen = false,
-  });
-
-  final PhoneSummary summary;
-
-  /// The agent this sheet was opened over: it says so, and nothing else —
-  /// whatever it is doing is on the screen behind the sheet.
-  final bool onScreen;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    if (onScreen) {
-      return Icon(
-        LucideIcons.check500,
-        size: 18,
-        color: AppPalette.accentOnSurface,
-      );
-    }
-    return switch (summary.tone) {
-      PhoneTone.busy || PhoneTone.attention => StatusDot(
-        summary: summary,
-        size: 11,
-        spinnerColor: AppPalette.textSecondary,
-      ),
-      _ => const SizedBox.shrink(),
-    };
-  }
-}
-
 /// A row's quiet word at its end — `Stopped`, `Offline` — iOS's detail text.
 class SheetRowNote extends StatelessWidget {
   const SheetRowNote(this.text, {super.key});
@@ -463,23 +267,6 @@ class SheetRowNote extends StatelessWidget {
       text,
       maxLines: 1,
       style: TextStyle(color: AppPalette.textSecondary, fontSize: 14),
-    );
-  }
-}
-
-/// The wait on a row being brought back — stopped work resuming.
-class SheetRowSpinner extends StatelessWidget {
-  const SheetRowSpinner({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return SizedBox.square(
-      dimension: 13,
-      child: CircularProgressIndicator(
-        strokeWidth: 1.6,
-        color: AppPalette.textFaint,
-      ),
     );
   }
 }

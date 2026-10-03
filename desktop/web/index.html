@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base href="$FLUTTER_BASE_HREF">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Your Harness workspace. Connect to your machines and work with your agents from the browser.">
+  <meta name="theme-color" content="#141414">
+  <meta name="referrer" content="no-referrer">
+  <link rel="manifest" href="manifest.json">
+  <!-- Drawn by docs/branding/app-logo/render-app-icon.swift; bump ?v= when the logo changes,
+       since browsers keep a favicon long after its file is replaced. -->
+  <link rel="icon" href="favicon.ico?v=5" sizes="16x16 32x32 48x48">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=5">
+  <title>Harness</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #141414; color: #dedede; }
+  </style>
+</head>
+<body>
+  <noscript>Enable JavaScript to open your Harness workspace.</noscript>
+  <!-- iOS Safari zooms the page when an input under 16px takes focus, and
+       Flutter's hidden editing input takes the terminal's smaller font: a tap
+       on the tab menu zoomed the whole app. maximum-scale=1 stops that
+       auto-zoom; iOS ignores it for pinch, so zooming by hand still works.
+       Flutter swaps in its own viewport tag (maximum-scale=5) at startup, so
+       the tag is re-pinned whenever one lands. Other platforms keep Flutter's. -->
+  <script>
+    (function () {
+      var iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      if (!iOS) return;
+      var content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0';
+      function pin() {
+        document.querySelectorAll('meta[name="viewport"]').forEach(function (meta) {
+          if (meta.content !== content) meta.content = content;
+        });
+      }
+      pin();
+      new MutationObserver(pin).observe(document.head, { childList: true });
+    })();
+  </script>
+  <!-- Inline Flutter's generated loader so startup needs no extra script round trip. -->
+  <script>{{flutter_bootstrap_js}}</script>
+</body>
+</html>

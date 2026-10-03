@@ -1,8 +1,7 @@
-import 'dart:io' show Platform;
-
 import 'package:window_manager/window_manager.dart';
 import 'package:flutter/services.dart';
 
+import 'runtime_platform.dart';
 import '../shared/theme/color_palette.dart';
 import 'build_identity.dart';
 
@@ -14,7 +13,7 @@ import 'build_identity.dart';
 /// runtime, thrown from `main` before the first frame. The guard therefore has
 /// to live here rather than being left to each call site to remember.
 bool get hasManagedWindow =>
-    Platform.isMacOS || Platform.isWindows || Platform.isLinux;
+    RuntimePlatform.isMacOS || RuntimePlatform.isWindows || RuntimePlatform.isLinux;
 
 /// Configures the native window before the first Flutter frame.
 ///
@@ -36,7 +35,7 @@ Future<void> configureDesktopWindow({
   // The plugin's optional callback is a VoidCallback: an async callback would
   // return before native setup finishes and detach any error from this future.
   await windowManager.waitUntilReadyToShow(options);
-  if (Platform.isMacOS) {
+  if (RuntimePlatform.isMacOS) {
     await const MethodChannel('harness/swarm_tabs').invokeMethod('configure', {
       'palette': palette.nativeColors,
     });

@@ -1,0 +1,1 @@
+{"function": "keepLog", "checks": [{"args": [{"completed": true, "completedAtMs": 0}, 1123200000], "expected": true}, {"args": [{"completed": true, "completedAtMs": 0}, 1209600000], "expected": false}, {"args": [{"completed": true, "completedAtMs": 0}, 1728000000], "expected": false}, {"args": [{"completed": false, "completedAtMs": 0}, 1728000000], "expected": true}]}

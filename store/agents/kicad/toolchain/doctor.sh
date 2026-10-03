@@ -11,7 +11,7 @@ if [ ! -f upstream/.harness-commit ]; then
   echo "miss autonomous-circuit is not fetched — run toolchain/setup.sh"; exit 1
 fi
 [ "$(cat upstream/.harness-commit)" = "${UPSTREAM_COMMIT}" ] \
-  && echo "ok   autonomous-circuit @ ${UPSTREAM_COMMIT:0:12} (KiCad, v2 branch)" \
+  && echo "ok   autonomous-circuit @ ${UPSTREAM_COMMIT:0:12} (KiCad, main)" \
   || echo "warn autonomous-circuit @ $(cut -c1-12 upstream/.harness-commit), VERSIONS pins ${UPSTREAM_COMMIT:0:12} — run toolchain/setup.sh"
 harness_node 22.12 >/dev/null || true
 venv=0

@@ -1,0 +1,8 @@
+{
+  "spec": 1,
+  "target": { "name": "", "path": ".", "commit": "", "scope": [] },
+  "phase": "scope",
+  "final": false,
+  "summary": "",
+  "findings": []
+}

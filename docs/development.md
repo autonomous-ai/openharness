@@ -85,6 +85,25 @@ brings up a second machine in Docker so the remote path can be exercised from on
 
 ## Isolated end-to-end testing
 
+A dev CLI uses the production backend and existing machine identity unless explicitly configured
+otherwise. Running it from a repository does not load that repository's `.env`. For an intentional
+local/staging daemon, export the settings or set `HARNESS_ENV_FILE` to an absolute config path
+(see [CLI configuration](../cli/README.md)). Keep its
+`ADAPTER_DATA_DIR`, `HARNESS_AUTH_DIR`, `ADAPTER_COMPUTER_ID_FILE` and port separate from the
+everyday daemon. `harness status` reports the running daemon's backend and account environment.
+
+The connection regression tests use local WebSockets and real encryption. The packaged daemon's
+account routing and status can also be checked without a real account or installed daemon:
+
+```bash
+cd cli
+npm run bundle
+node scripts/check-connection-environment.mjs
+```
+
+This smoke test uses temporary state, a fixture tmux command and a loopback backend; it verifies
+both production and staging sign-ins against conflicting shell settings.
+
 With Node, tmux, Flutter and a running Docker engine, run from the repository root:
 
 ```bash

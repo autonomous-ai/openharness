@@ -82,7 +82,7 @@ function makeHost(over: Partial<CableHost> = {}) {
     listMachines: async () => ({ machines: [LOCAL_ROW], source: 'backend' as const }),
     selectedMachine: () => 'mac-local',
     selectMachine: async () => ({ ok: true as const }),
-    listSwarms: () => ({ selected: '', swarms: [] }),
+    listSwarms: () => ({ selected: '', swarms: [], tiles: [] }),
     listUnread: () => [],
     selectSwarm: vi.fn(),
     appName: () => 'harness',
@@ -128,6 +128,516 @@ async function connect(host: CableHost = makeHost(), log = tmpLog()) {
 const settle = () => new Promise((r) => setTimeout(r, 0))
 
 describe('cable session', () => {
+  const companionSettings = {
+    brightness: 40, character: 2, face: 466, muted: true, quiet: false,
+    straightTitle: false, focusFace: false, scrollReversed: false, round: true,
+    voiceLang: 'en', followCompanion: true, companion: null as string | null,
+  }
+
+  it('follows all ten paired species, deduplicates acknowledgements and restores the saved skin', async () => {
+    let paired: string | null = 'tim'
+    const { session, port } = await connect(makeHost({ companion: () => paired }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: 'companions', settings: companionSettings })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'companion.set', id: 'tim' }))
+      for (const id of ['tim', 'gnu', 'lynx', 'mutt', 'yak', 'gopher', 'bug', 'tux', 'auk', 'beastie']) {
+        paired = id
+        await session['syncCompanion']()
+        expect(port.sent.filter(m => m.t === 'companion.set').at(-1)).toEqual({ t: 'companion.set', id })
+        port.say({ t: 'settings.state', ok: true, settings: { ...companionSettings, companion: id } })
+        await settle()
+        const count = port.sent.length
+        await session['syncCompanion']()
+        expect(port.sent).toHaveLength(count)
+      }
+      paired = null // unpair, sign out or disable Focus-bar creature
+      await session['syncCompanion']()
+      expect(port.sent.at(-1)).toEqual({ t: 'companion.set', id: null })
+      expect(port.types()).not.toContain('settings.set') // brightness and saved Focus skin survive
+    } finally { await session.stop() }
+  })
+
+  it('syncs individual changes and sends fresh celebrations once without replay on hello', async () => {
+    let identity = {id:'tim',uid:'tim_1',seed:42,name:'Pip',version:'0.1' as '0.1'|'1.0',colour:2,mark:1}
+    let event: import('./companionIdentity.js').CompanionMilestone | null = null
+    const {session,port}=await connect(makeHost({companion:()=>identity.id, companionIdentity:()=>identity, companionMilestone:()=>event}))
+    const settings={...companionSettings,companionProtocol:2,companionDetails:null as unknown}
+    try {
+      port.say({t:'hello',product:'harness',mac:'aa:bb',settings})
+      await vi.waitFor(()=>expect(port.sent).toContainEqual({t:'companion.set',id:'tim',identity}))
+      port.say({t:'settings.state',settings:{...settings,companion:'tim',companionDetails:identity}})
+      identity={...identity,name:'Dot',version:'1.0',colour:3,mark:2}
+      await session['syncCompanion']()
+      expect(port.sent.filter(m=>m.t==='companion.set').at(-1)).toEqual({t:'companion.set',id:'tim',identity})
+      port.say({t:'settings.state',settings:{...settings,companion:'tim',companionDetails:identity}})
+      event={token:'tim_1:grow:1.0',kind:'grow',at:Date.now(),companion:identity}
+      await session['syncCompanion'](); await session['syncCompanion']()
+      expect(port.sent.filter(m=>m.t==='companion.celebrate')).toHaveLength(1)
+      port.say({t:'hello',product:'harness',mac:'aa:bb',settings})
+      await session['syncCompanion']()
+      expect(port.sent.filter(m=>m.t==='companion.celebrate')).toHaveLength(1)
+      event={...event,token:'old-event',at:Date.now()-9_000}
+      await session['syncCompanion']()
+      expect(port.sent.filter(m=>m.t==='companion.celebrate')).toHaveLength(1)
+      port.say({t:'settings.state',settings:{...settings,quiet:true}})
+      event={...event,token:'quiet-event',at:Date.now()}
+      await session['syncCompanion']()
+      port.say({t:'settings.state',settings:{...settings,quiet:false}})
+      await session['syncCompanion']()
+      expect(port.sent.filter(m=>m.t==='companion.celebrate')).toHaveLength(1)
+    } finally { await session.stop() }
+  })
+
+  it('honours follow-off, refuses unknown species and never sends companion commands to old firmware', async () => {
+    let paired = 'gnu'
+    const { session, port } = await connect(makeHost({ companion: () => paired }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', settings: { ...companionSettings, followCompanion: false } })
+      await settle(); await session['syncCompanion']()
+      expect(port.types()).not.toContain('companion.set')
+      paired = 'unknown'
+      port.say({ t: 'settings.state', settings: companionSettings })
+      await settle(); await session['syncCompanion']()
+      expect(port.types()).not.toContain('companion.set')
+      paired = 'gnu'
+      await session['syncCompanion']()
+      expect(port.sent.at(-1)).toEqual({ t: 'companion.set', id: 'gnu' })
+      port.sent.length = 0
+      port.say({ t: 'hello', product: 'harness', mac: 'other', fw: 'old' })
+      await settle(); await session['syncCompanion']()
+      expect(port.types()).not.toContain('companion.set')
+    } finally { await session.stop() }
+  })
+
+  it('bounds unacknowledged retries, sends a newer choice immediately and restores after reboot', async () => {
+    let paired = 'tim'
+    const { session, port } = await connect(makeHost({ companion: () => paired }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', settings: companionSettings })
+      await vi.waitFor(() => expect(port.types()).toContain('companion.set'))
+      port.sent.length = 0
+      await session['syncCompanion']()
+      expect(port.sent).toHaveLength(0)
+      paired = 'gnu'
+      await session['syncCompanion']()
+      expect(port.sent).toEqual([{ t: 'companion.set', id: 'gnu' }])
+      session['companionAttempt']!.at -= 5_001
+      await session['syncCompanion']()
+      expect(port.sent.filter(m => m.t === 'companion.set')).toHaveLength(2)
+      port.say({ t: 'settings.state', settings: { ...companionSettings, companion: 'gnu' } })
+      await settle(); await session['syncCompanion']()
+      port.sent.length = 0
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', settings: companionSettings })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'companion.set', id: 'gnu' }))
+    } finally { await session.stop() }
+  })
+
+  it('recovers the selected terminal footer without a transcript start event and bounds captures', async () => {
+    const activityText = vi.fn(async () => 'Coalescing...')
+    const { session, port } = await connect(makeHost({ activityText }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      await session.focusAgent('a1')
+      port.sent.length = 0
+      await session['refreshFocusedActivity']()
+      expect(port.sent).toEqual([
+        { t: 'turn.started', agentId: 'a1', text: 'Coalescing...' },
+        { t: 'turn.activity', agentId: 'a1', text: 'Coalescing...' },
+      ])
+      await session['refreshFocusedActivity']()
+      expect(activityText).toHaveBeenCalledTimes(1)
+      // A different selected pane is checked immediately, without forwarding the old word.
+      activityText.mockResolvedValueOnce('Working')
+      await session.focusAgent('a2')
+      await session['refreshFocusedActivity']()
+      expect(port.sent.at(-1)).toEqual({ t: 'turn.activity', agentId: 'a2', text: 'Working' })
+    } finally { await session.stop() }
+  })
+
+  it.each(['done', 'summary', 'error', 'focus', 'disconnect'])(
+    'does not recover stale work if %s happens during a footer capture', async end => {
+      let finish!: (text: string | null) => void
+      const activityText = vi.fn(() => new Promise<string | null>(resolve => { finish = resolve }))
+      const { session, port } = await connect(makeHost({ activityText }))
+      try {
+        port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+        await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+        await session.focusAgent('a1')
+        port.sent.length = 0
+        const pending = session['refreshFocusedActivity'](); await settle()
+        await session['refreshFocusedActivity']()
+        expect(activityText).toHaveBeenCalledTimes(1)
+        if (end === 'done') await session.turnDone('a1')
+        else if (end === 'summary') await session.summary('a1', 'Completed.', 'Completed. All checks passed.')
+        else if (end === 'error') await session.turnError('a1', 'Stopped')
+        else if (end === 'focus') await session.focusAgent('a2')
+        else await session.stop()
+        finish('Coalescing...'); await pending
+        expect(port.types()).not.toContain('turn.activity')
+        expect(port.types()).not.toContain('turn.started')
+        if (end === 'done' || end === 'summary' || end === 'error') {
+          await session['refreshFocusedActivity']()
+          expect(activityText).toHaveBeenCalledTimes(1)
+        }
+      } finally { await session.stop() }
+    })
+
+  it('does not read before connection or invent liveness when no native footer exists', async () => {
+    const activityText = vi.fn(async () => null)
+    const { session, port } = await connect(makeHost({ activityText }))
+    try {
+      await session.focusAgent('a1')
+      await session['refreshFocusedActivity']()
+      expect(activityText).not.toHaveBeenCalled()
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      port.sent.length = 0
+      await session['refreshFocusedActivity']()
+      expect(port.sent).toEqual([{ t: 'turn.activity', agentId: 'a1', text: '' }])
+    } finally { await session.stop() }
+  })
+
+  it('sends the exact terminal activity without delaying turn liveness', async () => {
+    let finish!: (text: string | null) => void
+    const { session, port } = await connect(makeHost({ activityText: () => new Promise(resolve => { finish = resolve }) }))
+    try {
+      const pending = session.turnStarted('a1', 'Processing'); await settle()
+      expect(port.sent).toEqual([{ t: 'turn.started', agentId: 'a1', text: 'Processing' }])
+      finish('Coalescing...'); await pending
+      expect(port.sent.at(-1)).toEqual({ t: 'turn.activity', agentId: 'a1', text: 'Coalescing...' })
+    } finally { await session.stop() }
+  })
+
+  it.each(['done', 'summary', 'error', 'disconnect'])(
+    'drops a terminal activity read arriving after %s', async end => {
+      let finish!: (text: string | null) => void
+      const { session, port } = await connect(makeHost({ activityText: () => new Promise(resolve => { finish = resolve }) }))
+      try {
+        const pending = session.turnStarted('a1', 'Processing'); await settle()
+        if (end === 'done') await session.turnDone('a1')
+        else if (end === 'summary') await session.summary('a1', 'Done.', 'Done. All checks passed.')
+        else if (end === 'error') await session.turnError('a1', 'Stopped')
+        else await session.stop()
+        finish('Coalescing...'); await pending
+        expect(port.sent.some(message => message.t === 'turn.activity')).toBe(false)
+      } finally { await session.stop() }
+    })
+
+  it('keeps a newer activity read and clears a disappeared footer without inventing a label', async () => {
+    const finishes: Array<(text: string | null) => void> = []
+    const { session, port } = await connect(makeHost({ activityText: () => new Promise(resolve => finishes.push(resolve)) }))
+    try {
+      const older = session.turnStarted('a1', 'Processing'); await settle()
+      const newer = session.turnStarted('a1', 'Processing'); await settle()
+      finishes[1]('Boogieing...'); await newer
+      finishes[0]('Coalescing...'); await older
+      expect(port.sent.filter(message => message.t === 'turn.activity').map(message => message.text)).toEqual(['Boogieing...'])
+      const cleared = session.turnStarted('a1', 'Processing'); await settle()
+      finishes[2](null); await cleared
+      expect(port.sent.at(-1)).toEqual({ t: 'turn.activity', agentId: 'a1', text: '' })
+    } finally { await session.stop() }
+  })
+
+  it('extends a live short recap from the supplied body', async () => {
+    const { session, port } = await connect()
+    try {
+      await session.summary('a1', 'Yes.', 'Yes. The fix is installed.')
+      expect(port.sent.at(-1)).toMatchObject({ t: 'summary', recap: 'Yes. The fix is installed.', text: 'Yes. The fix is installed.' })
+    } finally { await session.stop() }
+  })
+  it('does not restore an old inbox after a newer empty snapshot', async () => {
+    let finish!: (value: Array<{ recap: string; text: string }>) => void
+    const history = new Promise<Array<{ recap: string; text: string }>>(resolve => { finish = resolve })
+    const { session, port } = await connect(makeHost({ recentSummaries: () => history }))
+    try {
+      const older = session.replaceNotifications([{ agentId: 'a1', machineId: 'mac-local', question: false, text: '' }])
+      await session.replaceNotifications([])
+      finish([{ recap: 'Old result.', text: 'Old result.' }]); await older
+      expect(port.sent).toEqual([{ t: 'notif.replace', items: [] }])
+    } finally { await session.stop() }
+  })
+
+  it('keeps a completion seen during a slow restore cleared without losing other questions', async () => {
+    let finish!: (value: Array<{ recap: string; text: string }>) => void
+    const history = new Promise<Array<{ recap: string; text: string }>>(resolve => { finish = resolve })
+    const { session, port } = await connect(makeHost({ recentSummaries: () => history }))
+    try {
+      const older = session.replaceNotifications([
+        { agentId: 'a1', machineId: 'mac-local', question: false, text: '' },
+        { agentId: 'a2', machineId: 'mac-local', question: true, text: 'Which branch?' },
+      ])
+      await session.agentSeen('a1')
+      await session.agentSeen('a2')
+      finish([{ recap: 'Old result.', text: 'Old result.' }]); await older
+      expect(port.sent.at(-1)).toMatchObject({ t: 'notif.replace', items: [
+        { agentId: 'a2', question: true, summary: 'Which branch?' },
+      ] })
+      // A later completion for the same agent is new news, not permanently suppressed.
+      await session.replaceNotifications([{ agentId: 'a1', machineId: 'mac-local', question: false, text: 'New result.' }])
+      expect(port.sent.at(-1)).toMatchObject({ t: 'notif.replace', items: [
+        { agentId: 'a1', question: false, summary: 'New result.' },
+      ] })
+    } finally { await session.stop() }
+  })
+
+  it('carries read tokens through snapshots and accepts only bounded read receipts', async () => {
+    const readNotification = vi.fn(), openAgent = vi.fn()
+    const { session, port } = await connect(makeHost({ readNotification, openAgent }))
+    try {
+      await session.replaceNotifications([{ agentId: 'a1', machineId: 'mac-local', question: true, text: 'Which branch?', readToken: 'question-2' }])
+      expect(port.sent.at(-1)).toMatchObject({ t: 'notif.replace', items: [{ readToken: 'question-2' }] })
+      port.say({ t: 'notif.read', agentId: 'a1', readToken: 'question-2' })
+      for (const readToken of ['', 42, null, 'a'.repeat(64), 'line\nbreak']) port.say({ t: 'notif.read', agentId: 'a1', readToken })
+      await settle()
+      expect(readNotification).toHaveBeenCalledExactlyOnceWith('a1', 'question-2')
+      expect(openAgent).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  it.each(['turn-1', 'turn-2'])('a late read of %s cannot clear a newer snapshot occurrence', async readToken => {
+    let finish!: (value: Array<{ recap: string; text: string }>) => void
+    const history = new Promise<Array<{ recap: string; text: string }>>(resolve => { finish = resolve })
+    const { session, port } = await connect(makeHost({ recentSummaries: () => history }))
+    try {
+      const pending = session.replaceNotifications([{ agentId: 'a1', machineId: 'mac-local', question: false, text: '', readToken: 'turn-2' }])
+      await session.agentSeen('a1', readToken)
+      finish([{ recap: 'Same words.', text: 'Same words.' }]); await pending
+      const items = port.sent.at(-1)!.items as unknown[]
+      expect(items).toHaveLength(readToken === 'turn-2' ? 0 : 1)
+    } finally { await session.stop() }
+  })
+
+  it('fetches the chosen agent question and submits its reviewed token once', async () => {
+    const answerReviewed = vi.fn<NonNullable<CableHost['answerReviewed']>>(async () => ({ ok: true as const }))
+    const { session, port } = await connect(makeHost({ answerReviewed }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
+      const questions = [{ key: 'scope', q: 'Which scope?', options: ['File', 'Project'], multi: false }]
+      await session.question('a1', 'first', questions)
+      await session.question('a2', 'second', questions)
+      port.say({ t: 'question.read', agentId: 'a1', requestId: 'read-1' })
+      await vi.waitFor(() => expect(port.types()).toContain('question.state'))
+      const state = port.sent.find(m => m.t === 'question.state')!
+      expect(state).toMatchObject({ ok: true, agentId: 'a1', id: 'first', requestId: 'read-1' })
+      const submit = { t: 'answer.reviewed', agentId: 'a1', requestId: 'send-1', token: state.token, choices: [2] }
+      port.say(submit); port.say(submit)
+      await vi.waitFor(() => expect(port.types().filter(t => t === 'answer.receipt')).toHaveLength(2))
+      expect(answerReviewed).toHaveBeenCalledTimes(1)
+      expect(answerReviewed.mock.calls[0][0]).toMatchObject({ agentId: 'a1', requestId: 'first', answers: { scope: 'Project' } })
+      await session.questionClose('a1', 'first')
+      port.say(submit); await settle()
+      expect(answerReviewed).toHaveBeenCalledTimes(1)
+    } finally { await session.stop() }
+  })
+
+  it('carries exact text to another explicit recipient, and consumes it only when sending', async () => {
+    const selectPassage = vi.fn<NonNullable<CableHost['selectPassage']>>(async command => command.op === 'pin'
+      ? { ok: true, selectionId: 'pick-1', revision: 4, rows: 2, extending: true,
+          excerpt: 'source output', text: '  source line\nsecond line' }
+      : { ok: false, error: 'Closed' })
+    const host = makeHost({ selectPassage, transcribe: vi.fn(async () => 'Compare this with your plan.'), route: vi.fn() })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
+      port.say({ t: 'carry.prepare', carryId: 'carry-1', requestId: 'carry-request', agentId: 'a1', selectionId: 'pick-1', revision: 3 })
+      await vi.waitFor(() => expect(port.types()).toContain('carry.state'))
+      expect(port.sent.find(x => x.t === 'carry.state')).toMatchObject({ active: true, carryId: 'carry-1', rows: 2 })
+      expect(port.sent.find(x => x.t === 'carry.state')).not.toHaveProperty('text')
+      expect(host.sendTurn).not.toHaveBeenCalled()
+      port.say({ t: 'voice.begin', uploadId: 'carried', agentId: 'a2', carryId: 'carry-1' })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledOnce())
+      const sent = vi.mocked(host.sendTurn).mock.calls[0]!
+      expect(sent[0]).toBe('a2')
+      expect(sent[1]).toContain('Compare this with your plan.\n\nContext I selected from harness ')
+      expect(sent[1]).toContain('>   source line\n> second line')
+      expect(host.route).not.toHaveBeenCalled()
+      expect(port.sent.find(x => x.t === 'voice.transcript')).toMatchObject({ carryId: 'carry-1', agentId: 'a2' })
+      port.say({ t: 'voice.begin', uploadId: 'duplicate', agentId: 'a2', carryId: 'carry-1' })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(port.sent.some(x => x.t === 'voice.error' && x.uploadId === 'duplicate')).toBe(true))
+      expect(host.sendTurn).toHaveBeenCalledOnce()
+    } finally { await session.stop() }
+  })
+
+  it.each([{}, { carryId: null }, { carryId: 'expired', agentId: 'a2' },
+    { carryId: 'expired', formId: 'f', formRevision: 1 }, { carryId: 'expired', agentId: 'a2', selectionId: 'pick' }])(
+    'invalid carried voice never falls back to bare words or inferred routing: %j', async fields => {
+      const host = makeHost({ transcribe: vi.fn(), route: vi.fn(), routeInWindow: vi.fn() })
+      const { session, port } = await connect(host)
+      try {
+        port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
+        port.say({ t: 'voice.begin', uploadId: 'invalid-carry', carryId: 'missing', ...fields })
+        port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+        await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
+        expect(host.transcribe).not.toHaveBeenCalled()
+        expect(host.sendTurn).not.toHaveBeenCalled()
+        expect(host.route).not.toHaveBeenCalled()
+        expect(host.routeInWindow).not.toHaveBeenCalled()
+      } finally { await session.stop() }
+    })
+
+  it('dropping carried text during transcription prevents later delivery', async () => {
+    let finish!: (s: string) => void
+    const host = makeHost({
+      selectPassage: async command => command.op === 'pin'
+        ? { ok: true, selectionId: 'p', revision: 2, rows: 1, extending: false, excerpt: 'source', text: 'source' }
+        : { ok: false, error: 'Closed' },
+      transcribe: vi.fn(() => new Promise<string>(resolve => { finish = resolve })),
+    })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
+      port.say({ t: 'carry.prepare', carryId: 'carry-drop', requestId: 'r', agentId: 'a1', selectionId: 'p', revision: 1 })
+      await vi.waitFor(() => expect(port.types()).toContain('carry.state'))
+      port.say({ t: 'voice.begin', uploadId: 'drop', agentId: 'a2', carryId: 'carry-drop' })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(host.transcribe).toHaveBeenCalledOnce())
+      port.say({ t: 'carry.cancel', carryId: 'carry-drop' }); await settle()
+      finish('Explain this'); await settle()
+      expect(host.sendTurn).not.toHaveBeenCalled()
+      expect(port.types()).not.toContain('voice.transcript')
+    } finally { await session.stop() }
+  })
+
+  it('a refused recipient keeps the passage for an explicit retry', async () => {
+    const host = makeHost({
+      selectPassage: async command => command.op === 'pin'
+        ? { ok: true, selectionId: 'p', revision: 2, rows: 1, extending: false, excerpt: 'source', text: 'source' }
+        : { ok: false, error: 'Closed' },
+      sendTurn: vi.fn().mockReturnValueOnce({ ok: false, reason: 'offline' }).mockReturnValue({ ok: true }),
+    })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
+      port.say({ t: 'carry.prepare', carryId: 'carry-retry', requestId: 'r', agentId: 'a1', selectionId: 'p', revision: 1 })
+      await vi.waitFor(() => expect(port.types()).toContain('carry.state'))
+      port.say({ t: 'voice.begin', uploadId: 'refused', agentId: 'a2', carryId: 'carry-retry' })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
+      expect(port.types()).not.toContain('voice.transcript')
+      expect(host.sendTurn).toHaveBeenCalledOnce()
+      port.say({ t: 'voice.begin', uploadId: 'retry', agentId: 'a2', carryId: 'carry-retry' })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(port.types()).toContain('voice.transcript'))
+      expect(host.sendTurn).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(host.sendTurn).mock.calls[1]![1]).toContain('> source')
+    } finally { await session.stop() }
+  })
+
+  it('routes form choices without terminal input and acknowledges the exact device request', async () => {
+    const form = vi.fn<NonNullable<CableHost['form']>>(async () => ({
+      ok: true, active: true, revision: 2, label: 'Codex', position: 1, total: 3, busy: false, enabled: true }))
+    const host = makeHost({ form }), { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
+      port.say({ t: 'form', op: 'move', formId: 'form-one', requestId: 'form-2', revision: 1, delta: 1 })
+      await vi.waitFor(() => expect(port.sent.some(x => x.t === 'form.state')).toBe(true))
+      expect(form).toHaveBeenCalledExactlyOnceWith({ op: 'move', formId: 'form-one', revision: 1, delta: 1 })
+      expect(port.sent.find(x => x.t === 'form.state')).toMatchObject({ requestId: 'form-2', formId: 'form-one', label: 'Codex' })
+      expect(host.openAgent).not.toHaveBeenCalled()
+      expect(host.sendTurn).not.toHaveBeenCalled()
+      expect(host.answer).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  it('visits and returns with correlated acknowledgements and no terminal actions', async () => {
+    const visit = vi.fn<NonNullable<CableHost['visit']>>(async command => ({
+      ok: true, active: command.op === 'open', agentId: command.op === 'open' ? 'a2' : 'a1', label: 'My work' }))
+    const host = makeHost({ visit })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
+      port.say({ t: 'visit', op: 'open', visitId: 'visit-one', requestId: 'open-one', agentId: 'a2' })
+      await vi.waitFor(() => expect(port.sent.some(x => x.t === 'visit.state')).toBe(true))
+      expect(port.sent.find(x => x.t === 'visit.state')).toMatchObject({ requestId: 'open-one', visitId: 'visit-one', active: true, agentId: 'a2' })
+      port.say({ t: 'visit', op: 'back', visitId: 'visit-one', requestId: 'back-one' }); await settle()
+      expect(port.sent.find(x => x.requestId === 'back-one')).toMatchObject({ active: false, agentId: 'a1' })
+      expect(host.openAgent).not.toHaveBeenCalled()
+      expect(host.sendTurn).not.toHaveBeenCalled()
+      expect(host.answer).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  it('latest-output requests use the visit receipt and never become agent input', async () => {
+    const visit = vi.fn<NonNullable<CableHost['visit']>>(async () => ({
+      ok: true, active: true, agentId: 'a1', label: 'Your reading' }))
+    const host = makeHost({ visit })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
+      port.say({ t: 'visit', op: 'latest', visitId: 'visit-reading', requestId: 'reading-1', agentId: 'a1' })
+      await vi.waitFor(() => expect(port.sent.some(x => x.t === 'visit.state')).toBe(true))
+      expect(visit).toHaveBeenCalledExactlyOnceWith({ op: 'latest', visitId: 'visit-reading', agentId: 'a1' })
+      expect(port.sent.find(x => x.t === 'visit.state')).toMatchObject({
+        requestId: 'reading-1', visitId: 'visit-reading', active: true, agentId: 'a1' })
+      expect(host.openAgent).not.toHaveBeenCalled()
+      expect(host.sendTurn).not.toHaveBeenCalled()
+      expect(host.answer).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  it('pins selected terminal text at voice start and sends it with the spoken instruction', async () => {
+    const selectPassage = vi.fn<CableHost['selectPassage'] & {}>(async command => command.op === 'pin'
+      ? { ok: true, selectionId: 'selection-1', revision: 4, rows: 2, extending: true,
+          excerpt: 'quoted output', text: '  first line\nsecond line' }
+      : { ok: false, error: 'Selection closed.' })
+    const host = makeHost({ selectPassage, transcribe: vi.fn(async () => 'Explain this.') })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await settle()
+      port.say({ t: 'voice.begin', uploadId: 'quoted', agentId: 'a2', selectionId: 'selection-1', selectionRevision: 3 })
+      await settle()
+      expect(selectPassage).toHaveBeenCalledWith({ op: 'pin', agentId: 'a2', selectionId: 'selection-1', revision: 3 })
+      port.pcm(Buffer.alloc(3200))
+      port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledOnce())
+      expect(host.sendTurn).toHaveBeenCalledWith('a2', 'Explain this.\n\nContext I selected from this agent\'s terminal:\n>   first line\n> second line')
+      expect(port.sent.find(x => x.t === 'voice.transcript')).toMatchObject({ text: 'Explain this.', uploadId: 'quoted' })
+    } finally { await session.stop() }
+  })
+
+  it('refuses quoted voice when the selected text changed, without submitting bare words', async () => {
+    const host = makeHost({ selectPassage: vi.fn(async () => ({ ok: false as const, error: 'That text changed. Choose it again.' })),
+      transcribe: vi.fn(async () => 'explain this') })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await settle()
+      port.say({ t: 'voice.begin', uploadId: 'changed', agentId: 'a2', selectionId: 'old', selectionRevision: 1 })
+      port.pcm(Buffer.alloc(3200))
+      port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
+      expect(host.sendTurn).not.toHaveBeenCalled()
+      expect(host.transcribe).not.toHaveBeenCalled()
+      expect(port.sent.find(x => x.t === 'voice.error')).toMatchObject({ uploadId: 'changed', message: 'That text changed. Choose it again.' })
+    } finally { await session.stop() }
+  })
+
+  it('discard during a pending text pin cannot send or revive the recording', async () => {
+    let pin!: (result: import('./windowSelection.js').SelectionResult) => void
+    const host = makeHost({ selectPassage: command => command.op === 'pin'
+      ? new Promise(resolve => { pin = resolve }) : Promise.resolve({ ok: false, error: 'Closed' }),
+      transcribe: vi.fn(async () => 'explain') })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await settle()
+      port.say({ t: 'voice.begin', uploadId: 'cancelled-quote', agentId: 'a1', selectionId: 'selected', selectionRevision: 1 })
+      port.pcm(Buffer.alloc(3200))
+      port.say({ t: 'voice.end' })
+      await settle()
+      port.say({ t: 'voice.abort', uploadId: 'cancelled-quote' })
+      pin({ ok: true, selectionId: 'selected', revision: 2, rows: 1, excerpt: 'a', extending: false, text: 'a' })
+      await settle()
+      expect(host.sendTurn).not.toHaveBeenCalled()
+      expect(host.transcribe).not.toHaveBeenCalled()
+      expect(port.types()).not.toContain('voice.transcript')
+    } finally { await session.stop() }
+  })
+
   it('answers hello with welcome and pushes the agent list once', async () => {
     const { session, port } = await connect()
     port.say({ t: 'hello', product: 'harness', fw: '0.1.0', proto: 1, mac: 'aa:bb' })
@@ -151,6 +661,66 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  it('advertises only the optional device controls this host implements', async () => {
+    const core = await connect()
+    core.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await vi.waitFor(() => expect(core.port.types()).toContain('welcome'))
+    expect(core.port.sent[0].features).toEqual(['voice.draft', 'agents.refresh', 'settings'])
+    await core.session.stop()
+
+    const advanced = await connect(makeHost({
+      form: async () => ({ ok: false, active: false, error: 'test' }),
+      visit: async () => ({ ok: false, active: false, error: 'test' }),
+      selectPassage: async () => ({ ok: false, error: 'test' }),
+      answerReviewed: async () => ({ ok: false, error: 'test' }),
+    }))
+    advanced.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await vi.waitFor(() => expect(advanced.port.types()).toContain('welcome'))
+    expect(advanced.port.sent[0].features).toEqual(['voice.draft', 'agents.refresh', 'form', 'selection', 'visit', 'question.review', 'settings'])
+    await advanced.session.stop()
+  })
+
+  it('carries the device settings both ways, and lets a refusal correct the window', async () => {
+    /*
+     * The device owns these. This computer proposes, and what comes back is what the device HOLDS —
+     * read back from its own NVS, not echoed from the request. That is what makes a refusal
+     * self-correcting: a window that asked for a character this image does not have is told the real
+     * one rather than left showing its own optimism.
+     */
+    const seen: unknown[] = []
+    const lines: string[] = []
+    const { session, port } = await connect(makeHost({ onDialStatus: (s) => seen.push(s), log: (l) => lines.push(l) }))
+    const settings = {
+      brightness: 80, character: 0, face: 466, muted: false, quiet: false, straightTitle: false,
+      focusFace: false, scrollReversed: false, round: true, voiceLang: 'vi',
+    }
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '0.0.90', proto: 3, settings })
+    await vi.waitFor(() => expect(seen.at(-1)).toMatchObject({ attached: true, settings }))
+
+    // Only the named field crosses. Two windows open on one device must not overwrite each other with
+    // whatever each of them last saw.
+    await session.setSettings({ character: 9 })
+    expect(port.sent.at(-1)).toEqual({ t: 'settings.set', character: 9 })
+    await session.setSettings({})
+    expect(port.sent.at(-1)).toEqual({ t: 'settings.set', character: 9 })   // nothing to say, nothing sent
+
+    port.say({ t: 'settings.state', ok: false, error: 'This device has no such character.', settings })
+    await vi.waitFor(() => expect(seen.at(-1)).toMatchObject({ settings }))
+    expect(lines.some((l) => l.includes('refused a settings change: This device has no such character.'))).toBe(true)
+
+    // A change made on the glass arrives unprompted and moves the pane.
+    const quieter = { ...settings, quiet: true, brightness: 20 }
+    port.say({ t: 'settings.state', ok: true, settings: quieter })
+    await vi.waitFor(() => expect(seen.at(-1)).toMatchObject({ settings: quieter }))
+
+    // Half an object is refused whole: a default here is a value this computer invented, and the pane
+    // would then show a setting the device does not have.
+    port.say({ t: 'settings.state', ok: true, settings: { brightness: 50 } })
+    await settle()
+    expect(seen.at(-1)).toMatchObject({ settings: quieter })
+    await session.stop()
+  })
+
   it('answers a repeat hello WITHOUT re-pushing the list', async () => {
     const { session, port } = await connect()
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
@@ -171,14 +741,16 @@ describe('cable session', () => {
     const seen: unknown[] = []
     const { session, port } = await connect(makeHost({ onDialStatus: (status) => seen.push(status) }))
     port.say({ t: 'hello', product: 'harness', fw: '0.0.58', proto: 1, mac: 'aa:bb' })
-    await vi.waitFor(() => expect(seen).toEqual([{ attached: true, fw: '0.0.58' }]))
+    await vi.waitFor(() => expect(seen).toEqual([{ attached: true, fw: '0.0.58', mac: 'aa:bb' }]))
 
     port.say({ t: 'hello', product: 'harness', fw: '0.0.58', proto: 1, mac: 'aa:bb' })
     await settle()
     expect(seen).toHaveLength(1)
 
+    // Unplugged still says WHICH device left. A desk can hold two, and the settings pane has to know
+    // whose rows to show read-only rather than dropping a robot off the list.
     await port.close('unplugged')
-    await vi.waitFor(() => expect(seen.at(-1)).toEqual({ attached: false }))
+    await vi.waitFor(() => expect(seen.at(-1)).toEqual({ attached: false, mac: 'aa:bb' }))
     await session.stop()
   })
 
@@ -204,13 +776,13 @@ describe('cable session', () => {
   })
 
   it('names the swarms once and again only when they change, and relays a pick', async () => {
-    let swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Workshop', agents: 2, panes: 2 }, { id: 's2', name: 'Launch', agents: 0, panes: 0 }] }
+    let swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Workshop', agents: 2, panes: 2 }, { id: 's2', name: 'Launch', agents: 0, panes: 0 }], tiles: [] }
     const host = makeHost({ listSwarms: () => swarms })
     const { session, port } = await connect(host)
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
     await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
     expect(port.sent.filter((m) => m.t === 'swarms')).toEqual([
-      { t: 'swarms', selected: 's1', items: [{ id: 's1', name: 'Workshop', agents: 2, panes: 2 }, { id: 's2', name: 'Launch', agents: 0, panes: 0 }] },
+      { t: 'swarms', selected: 's1', items: [{ id: 's1', name: 'Workshop', agents: 2, panes: 2 }, { id: 's2', name: 'Launch', agents: 0, panes: 0 }], tiles: [] },
     ])
 
     // Ticks with nothing new say nothing new — the same rule as the wheel.
@@ -232,13 +804,13 @@ describe('cable session', () => {
     // The change this field exists for: a terminal opened on a tab that holds no agent moves the
     // TILE count and nothing else. A diff watching only `agents` swallowed that push and left the
     // dial showing a row it still believed was empty — the row it would then refuse to list.
-    let swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Shell', agents: 0, panes: 0 }] }
+    let swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Shell', agents: 0, panes: 0 }], tiles: [] }
     const host = makeHost({ listSwarms: () => swarms })
     const { session, port } = await connect(host)
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
     await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(1))
 
-    swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Shell', agents: 0, panes: 1 }] }
+    swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Shell', agents: 0, panes: 1 }], tiles: [] }
     await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(2))
     expect(port.sent.filter((m) => m.t === 'swarms')[1]).toMatchObject({
       items: [{ id: 's1', agents: 0, panes: 1 }],
@@ -255,6 +827,42 @@ describe('cable session', () => {
     await settle()
     expect(host.sendTurn).toHaveBeenCalledWith('a2', 'flash it')
     await session.stop()
+  })
+
+  it('says so when the port is another product\'s, or never speaks at all, and never of a real dial', async () => {
+    // Told to whoever owns discovery, so a second ESP32 on the desk stops being opened every minute.
+    // A port that has been a dial is never reported: a hung or rebooting dial goes quiet and comes back.
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    try {
+      const reports: Array<[string, string]> = []
+      const host = makeHost({ onForeignPort: (path, why) => { reports.push([path, why]) } })
+
+      // 1. Another product's greeting.
+      const other = await connect(host)
+      other.port.say({ t: 'hello', product: 'grid', fw: '0.1.2', proto: 1, mac: 'aa:bb' })
+      await settle()
+      expect(reports).toEqual([['/dev/loopback', "greeted as 'grid'"]])
+      await other.session.stop()
+
+      // 2. A port that never says anything.
+      reports.length = 0
+      const quiet = await connect(host)
+      await settle()
+      for (let sec = 0; sec < 25; sec++) { vi.advanceTimersByTime(1_000); await settle() }
+      expect(reports).toEqual([['/dev/loopback', 'silent']])
+      await quiet.session.stop()
+
+      // 3. A real dial that then goes quiet is not written off.
+      reports.length = 0
+      const dial = await connect(host)
+      dial.port.say({ t: 'hello', product: 'harness', fw: '0.1.0', proto: 1, mac: 'aa:bb' })
+      await settle()
+      for (let sec = 0; sec < 25; sec++) { vi.advanceTimersByTime(1_000); await settle() }
+      expect(reports).toEqual([])
+      await dial.session.stop()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("refuses a dial that names another product, and lets go of its port", async () => {
@@ -729,6 +1337,125 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  it('forwards Finder as a distinct surface without focusing or typing into an agent', async () => {
+    const form = vi.fn(async () => ({ ok: true, active: true, title: 'Find Harness', revision: 1 }))
+    const host = makeHost({ form }), { session, port } = await connect(host)
+    try {
+      port.say({ t: 'form', formId: 'find-one', requestId: 'request-one', op: 'open', surface: 'find' })
+      await vi.waitFor(() => expect(port.types()).toContain('form.state'))
+      expect(form).toHaveBeenCalledWith({ formId: 'find-one', op: 'open', surface: 'find', revision: undefined, delta: undefined })
+      expect(host.focus).not.toHaveBeenCalled(); expect(host.sendTurn).not.toHaveBeenCalled()
+      expect(port.sent.at(-1)).toMatchObject({ formId: 'find-one', requestId: 'request-one', title: 'Find Harness' })
+    } finally { await session.stop() }
+  })
+
+  it('uses spoken form text only as a pinned query, never a task', async () => {
+    const form = vi.fn(async (c: import('./windowForm.js').FormCommand) => ({
+      ok: true, active: true, canQuery: true, queryId: c.queryId, revision: 2,
+    }))
+    const route = vi.fn(), routeInWindow = vi.fn()
+    const host = makeHost({ form, route, routeInWindow, transcribe: async () => 'Codex.' })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'voice.begin', formId: 'form-one', formRevision: 2, uploadId: 'speech' })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(port.types()).toContain('voice.form'))
+      expect(form.mock.calls.map(([c]) => c.op)).toEqual(['query.begin', 'query', 'query.cancel'])
+      expect(form).toHaveBeenCalledWith({ op: 'query', formId: 'form-one', revision: 2, queryId: 'speech', text: 'Codex.' })
+      expect(host.sendTurn).not.toHaveBeenCalled(); expect(route).not.toHaveBeenCalled(); expect(routeInWindow).not.toHaveBeenCalled()
+      expect(port.sent.at(-1)).toMatchObject({ t: 'voice.form', uploadId: 'speech', formId: 'form-one' })
+    } finally { await session.stop() }
+  })
+
+  it.each([{ formId: 17 }, { formId: 'form-one', formRevision: 2, agentId: 'a1' },
+    { formId: 'form-one', formRevision: -1 }, { formRevision: 2 }])('malformed form voice cannot fall back to routing: %j', async metadata => {
+    const transcribe = vi.fn(), route = vi.fn(), routeInWindow = vi.fn()
+    const host = makeHost({ transcribe, route, routeInWindow })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'voice.begin', uploadId: 'speech', ...metadata })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
+      expect(transcribe).not.toHaveBeenCalled(); expect(host.sendTurn).not.toHaveBeenCalled()
+      expect(route).not.toHaveBeenCalled(); expect(routeInWindow).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  it('discard during transcription releases its field and ignores the late words', async () => {
+    let complete!: (s: string) => void
+    const transcribe = vi.fn(() => new Promise<string>(resolve => { complete = resolve }))
+    const form = vi.fn(async (c: import('./windowForm.js').FormCommand) => ({ ok: true, active: true, canQuery: true, queryId: c.queryId }))
+    const host = makeHost({ form, transcribe })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'voice.begin', formId: 'form-one', formRevision: 2, uploadId: 'speech' })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(transcribe).toHaveBeenCalled())
+      port.say({ t: 'voice.abort', uploadId: 'speech' }); await settle()
+      complete('Codex'); await settle()
+      expect(form.mock.calls.map(([c]) => c.op)).toEqual(['query.begin', 'query.cancel'])
+      expect(host.sendTurn).not.toHaveBeenCalled(); expect(port.types()).not.toContain('voice.form')
+    } finally { await session.stop() }
+  })
+
+  it.each(['cancelled', 'abandoned', 'sent'] as const)('ignores a discarded home route that later replies %s', async (outcome) => {
+    let complete!: (value: { t: 'cancelled' } | { t: 'abandoned' } | { t: 'sent'; agentId: string }) => void
+    const routeInWindow = vi.fn(() => new Promise<{ t: 'cancelled' } | { t: 'abandoned' } | { t: 'sent'; agentId: string }>((resolve) => { complete = resolve }))
+    const host = makeHost({ routeInWindow })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'voice.begin', uploadId: 'old' })
+      port.pcm(Buffer.alloc(3200))
+      port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(routeInWindow).toHaveBeenCalled())
+      port.say({ t: 'voice.abort', uploadId: 'old' })
+      port.say({ t: 'voice.begin', uploadId: 'new', agentId: 'a1' })
+      port.pcm(Buffer.alloc(3200))
+      // This can arrive after the replacement starts: it still belongs to the old turn.
+      port.say({ t: 'voice.abort', uploadId: 'old' })
+      complete(outcome === 'sent' ? { t: 'sent', agentId: 'a2' } : { t: outcome })
+      await settle()
+      expect(port.sent.filter((m) => String(m.t).startsWith('voice.'))).toEqual([])
+      port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledWith('a1', 'fix the login screen'))
+      expect(host.sendTurn).toHaveBeenCalledTimes(1)
+      expect(port.sent.filter((m) => String(m.t).startsWith('voice.'))).toEqual([
+        expect.objectContaining({ t: 'voice.transcript', uploadId: 'new', agentId: 'a1' }),
+      ])
+    } finally { await session.stop() }
+  })
+
+  it('does not route or submit a recording discarded during transcription', async () => {
+    let complete!: (text: string) => void
+    const transcribe = vi.fn(() => new Promise<string>((resolve) => { complete = resolve }))
+    const routeInWindow = vi.fn()
+    const host = makeHost({ transcribe, routeInWindow })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'voice.begin', uploadId: 'discarded' })
+      port.pcm(Buffer.alloc(3200))
+      port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(transcribe).toHaveBeenCalled())
+      port.say({ t: 'voice.abort', uploadId: 'discarded' })
+      complete('discard this instruction')
+      await settle()
+      expect(routeInWindow).not.toHaveBeenCalled()
+      expect(host.sendTurn).not.toHaveBeenCalled()
+      expect(port.sent.filter((m) => String(m.t).startsWith('voice.'))).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('tags transcription errors with the recording id', async () => {
+    const host = makeHost({ transcribe: async () => { throw new Error('retry voice') } })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'voice.begin', uploadId: 'failed' })
+      port.pcm(Buffer.alloc(3200))
+      port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'failed', message: 'retry voice' }))
+    } finally { await session.stop() }
+  })
+
   it('routes a voice turn that names no agent', async () => {
     const host = makeHost()
     const { session, port } = await connect(host)
@@ -954,6 +1681,42 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  it('keeps streamed pane rows and their workspace metadata in the same snapshot', async () => {
+    let tab = 'old-tab', total = 2
+    const { session, port } = await connect(makeHost({ activeSwarm: () => tab, agentTotal: () => total }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      port.sent.length = 0
+      const write = port.write.bind(port)
+      port.write = async bytes => {
+        await write(bytes)
+        if (port.sent.at(-1)?.t === 'agent') { tab = 'new-tab'; total = 99 }
+      }
+      await session.syncAgents(true)
+      expect(port.sent.find(m => m.t === 'agents.end')).toMatchObject({ tab: 'old-tab', total: 2 })
+      expect(port.sent.filter(m => m.t === 'agent').map(m => m.id)).toEqual(['a1', 'a2'])
+    } finally { await session.stop() }
+  })
+
+  it.each(['agents.refresh', 'agents.list'])('acknowledges an empty-workspace refresh via %s', async command => {
+    let tab = 'empty-a'
+    const { session, port } = await connect(makeHost({ activeSwarm: () => tab, listAgents: async () => [] }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      port.sent.length = 0
+      tab = 'empty-b'; await session.syncAgents()
+      expect(port.sent).toEqual([]) // Unchanged rows are normally deduplicated.
+      port.say({ t: command })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      if (command === 'agents.refresh') expect(port.types()).toEqual(['agents.begin', 'agents.end'])
+      else expect(port.types()).toContain('swarms') // Legacy full state push is still a valid receipt.
+      expect(port.sent.find(m => m.t === 'agents.end')).toMatchObject({ total: 2, tab: 'empty-b' })
+      expect(port.types()).not.toContain('voice.transcript')
+    } finally { await session.stop() }
+  })
+
   it('forks on the dial\'s agent.fork and toasts only a refusal', async () => {
     const forkAgent = vi.fn(async (id: string) => id === 'a1'
       ? { ok: true as const, agentId: 'a1-fork' }
@@ -1052,6 +1815,22 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  it('echoes bounded model request serials and preserves legacy replies', async () => {
+    const { session, port } = await connect(makeHost({ listModels: async () => ['test-model'] }))
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await settle()
+    for (const request of [1, 0x7fffffff, undefined, 0, -1, 1.5, 0x80000000, '12', { value: 1 }]) {
+      port.sent.length = 0
+      port.say({ t: 'models.list', agentId: 'a1', request })
+      await vi.waitFor(() => expect(port.types()).toContain('models'))
+      const reply = port.sent.find((m) => m.t === 'models')!
+      expect(reply).toMatchObject({ agentId: 'a1', items: [{ id: 'test-model' }] })
+      if (request === 1 || request === 0x7fffffff) expect(reply.request).toBe(request)
+      else expect(reply).not.toHaveProperty('request')
+    }
+    await session.stop()
+  })
+
   it('names the board a dial greets with, and lives without it', async () => {
     // Two dials ship on one image; the firmware says which it is in `hw`. A firmware from before the
     // field greets without it, and that is not an error — only a shorter line.
@@ -1060,10 +1839,10 @@ describe('cable session', () => {
     const { session, port } = await connect(makeHost({ log: (l) => lines.push(l), onDialStatus: (s) => seen.push(s) }))
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '0.0.68', proto: 3, hw: 'cst816s' })
     await vi.waitFor(() => expect(lines.some((l) => l.includes('on fw 0.0.68 proto 3 hw cst816s'))).toBe(true))
-    expect(seen).toEqual([{ attached: true, fw: '0.0.68', hw: 'cst816s' }])
+    expect(seen).toEqual([{ attached: true, fw: '0.0.68', hw: 'cst816s', mac: 'aa:bb' }])
     port.say({ t: 'hello', product: 'harness', mac: 'cc:dd', fw: '0.0.67', proto: 3 })
     await vi.waitFor(() => expect(lines.some((l) => l.includes('dial cc:dd on fw 0.0.67 proto 3'))).toBe(true))
-    expect(seen.at(-1)).toEqual({ attached: true, fw: '0.0.67' })
+    expect(seen.at(-1)).toEqual({ attached: true, fw: '0.0.67', mac: 'cc:dd' })
     await session.stop()
   })
 
@@ -1326,17 +2105,25 @@ describe('cable session', () => {
     port.say({ t: 'agents.list' })
     await vi.waitFor(() => {
       expect(port.sent.filter((m) => m.t === 'machines.end').length).toBeGreaterThanOrEqual(3)
+      expect(port.sent.filter((m) => m.t === 'agents.end').length).toBeGreaterThanOrEqual(2)
+      expect(port.sent.filter((m) => m.t === 'notif.replace').length).toBeGreaterThanOrEqual(2)
     })
 
     // Walk the wire: a `begin` may never open inside another, and each pair must hold the rows of ONE list.
-    let open = false
+    let open = ''
     let seen = 0
     for (const m of port.sent) {
-      if (m.t === 'machines.begin') { expect(open, 'a begin arrived inside another begin').toBe(false); open = true; seen = 0 }
-      else if (m.t === 'machine') { expect(open, 'a row arrived outside a begin/end pair').toBe(true); seen++ }
-      else if (m.t === 'machines.end') { expect(open).toBe(true); expect(seen).toBe(rows.length); open = false }
+      if (m.t === 'machines.begin' || m.t === 'agents.begin') {
+        expect(open, 'a begin arrived inside another begin').toBe('')
+        open = m.t === 'machines.begin' ? 'machine' : 'agent'; seen = 0
+      } else if (m.t === 'machine' || m.t === 'agent') {
+        expect(open, 'a row arrived outside its own begin/end pair').toBe(m.t); seen++
+      } else if (m.t === 'machines.end' || m.t === 'agents.end') {
+        expect(open).toBe(m.t === 'machines.end' ? 'machine' : 'agent')
+        expect(seen).toBe(open === 'machine' ? rows.length : AGENTS.length); open = ''
+      }
     }
-    expect(open, 'a begin was never closed').toBe(false)
+    expect(open, 'a begin was never closed').toBe('')
     await session.stop()
   })
   it('tells the host when the dial arrives and when it goes', async () => {
@@ -1358,5 +2145,246 @@ describe('cable session', () => {
 
     await session.stop()
     expect(host.onDialGone).toHaveBeenCalled()
+  })
+})
+
+describe('speak an answer, then review', () => {
+  const qs = [{ key: 'scope', q: 'Which scope?', options: ['File', 'Project'], multi: false, canText: true }]
+  async function prepare(over: Partial<CableHost> = {}) {
+    const answerReviewed = vi.fn<NonNullable<CableHost['answerReviewed']>>(async () => ({ ok: true }))
+    const host = makeHost({ answerReviewed, canSpeakQuestion: () => true, transcribe: async () => 'Only the parser, please.', ...over })
+    const c = await connect(host)
+    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
+    await c.session.question('a1', 'q-speak', qs)
+    c.port.say({ t: 'question.read', agentId: 'a1', requestId: 'read' })
+    await vi.waitFor(() => expect(c.port.types()).toContain('question.state'))
+    const token = c.port.sent.find(m => m.t === 'question.state')!.token
+    return { ...c, token, answerReviewed }
+  }
+  it('returns recognized words for review with no agent input, then delivers the exact approved draft once', async () => {
+    const { session, port, host, token, answerReviewed } = await prepare()
+    try {
+      port.say({ t: 'voice.begin', agentId: 'a1', questionToken: token, questionIndex: 0, uploadId: 'speech-q' })
+      port.pcm(Buffer.alloc(640)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(port.types()).toContain('voice.question'))
+      const draft = port.sent.find(m => m.t === 'voice.question')!
+      expect(draft).toMatchObject({ agentId: 'a1', token, questionIndex: 0, text: 'Only the parser, please.', uploadId: 'speech-q' })
+      expect(answerReviewed).not.toHaveBeenCalled(); expect(host.sendTurn).not.toHaveBeenCalled()
+      const submit = { t: 'answer.reviewed', agentId: 'a1', requestId: 'send', token, choices: [0], drafts: [draft.draftId] }
+      port.say(submit); port.say(submit)
+      await vi.waitFor(() => expect(answerReviewed).toHaveBeenCalledTimes(1))
+      expect(answerReviewed.mock.calls[0][0]).toMatchObject({ freeTextKeys: ['scope'], answers: { scope: 'Only the parser, please.' } })
+    } finally { await session.stop() }
+  })
+  it.each(['discard', 'close', 'replace', 'disconnect'] as const)('drops a late transcript after %s', async reason => {
+    let resolve!: (s: string) => void
+    const transcribe = vi.fn(() => new Promise<string>(r => { resolve = r }))
+    const { session, port, host, token, answerReviewed } = await prepare({ transcribe })
+    try {
+      port.say({ t: 'voice.begin', agentId: 'a1', questionToken: token, questionIndex: 0, uploadId: 'speech-q' })
+      port.pcm(Buffer.alloc(640)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(transcribe).toHaveBeenCalled())
+      if (reason === 'discard') port.say({ t: 'voice.abort', uploadId: 'speech-q' })
+      if (reason === 'close') await session.questionClose('a1', 'q-speak')
+      if (reason === 'replace') await session.question('a1', 'q-new', qs)
+      if (reason === 'disconnect') await port.close()
+      resolve('This must not send'); await settle(); await settle()
+      expect(port.types()).not.toContain('voice.question')
+      expect(answerReviewed).not.toHaveBeenCalled(); expect(host.sendTurn).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+  it.each([{ questionIndex: 0 }, { questionToken: 'wrong', questionIndex: 0 },
+    { questionToken: 'bad', questionIndex: -1 }, { questionToken: null }])('never routes malformed question voice: %j', async metadata => {
+    const transcribe = vi.fn(async () => 'wrong'), route = vi.fn()
+    const { session, port, host, answerReviewed } = await prepare({ transcribe, route })
+    try {
+      port.say({ t: 'voice.begin', agentId: 'a1', ...metadata, uploadId: 'speech-q' })
+      port.pcm(Buffer.alloc(640)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
+      expect(transcribe).not.toHaveBeenCalled(); expect(route).not.toHaveBeenCalled()
+      expect(answerReviewed).not.toHaveBeenCalled(); expect(host.sendTurn).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+  it('does not offer speech without a capable local receiver', async () => {
+    const { session, port } = await prepare({ canSpeakQuestion: () => false })
+    try {
+      const state = port.sent.find(m => m.t === 'question.state')!
+      expect(state.questions).toMatchObject([{ canText: false }])
+    } finally { await session.stop() }
+  })
+})
+
+describe('task voice draft over the cable', () => {
+  async function recorded(port: LoopbackPort, fields: Record<string, unknown> = {}, review = true) {
+    const uploadId = `draft-${port.sent.length}`
+    port.say({ t: 'voice.begin', uploadId, ...fields }); port.pcm(Buffer.alloc(320))
+    port.say({ t: 'voice.end', uploadId, review })
+    await vi.waitFor(() => expect(port.sent.some(m => m.uploadId === uploadId && ['voice.draft','voice.error','voice.transcript'].includes(m.t as string))).toBe(true))
+    return port.sent.find(m => m.uploadId === uploadId && m.t !== 'voice.quota')!
+  }
+  async function command(port: LoopbackPort, page: Record<string,unknown>, op: string, fields:Record<string,unknown>={}) {
+    const requestId=`draft-cmd-${port.sent.length}`
+    port.say({ t:'draft.command', draftId:page.id, revision:page.revision, requestId, op, ...fields })
+    await vi.waitFor(()=>expect(port.sent.some(m=>m.requestId===requestId)).toBe(true))
+    return port.sent.find(m=>m.requestId===requestId)!
+  }
+  it('reviews, replaces a section, appends, undoes, and sends once to the original recipient', async () => {
+    const transcribe=vi.fn().mockResolvedValueOnce('First idea.').mockResolvedValueOnce('Better idea.').mockResolvedValueOnce('Keep the tests.')
+    const host=makeHost({transcribe}), {session,port}=await connect(host)
+    try {
+      let p=await recorded(port,{agentId:'a2'})
+      expect(p).toMatchObject({ t:'voice.draft', agentId:'a2', text:'First idea.', active:true })
+      expect(host.sendTurn).not.toHaveBeenCalled()
+      p=await recorded(port,{draftId:p.id,draftRevision:p.revision,draftOp:'replace'},false)
+      expect(p.text).toBe('Better idea.')
+      p=await recorded(port,{draftId:p.id,draftRevision:p.revision,draftOp:'append'},false)
+      expect(p.text).toBe('Better idea.\n\nKeep the tests.')
+      p=await command(port,p,'undo'); expect(p.text).toBe('Better idea.')
+      const receipt=await command(port,p,'send'); expect(receipt.sent).toBe(true)
+      await command(port,p,'send')
+      expect(host.sendTurn).toHaveBeenCalledExactlyOnceWith('a2','Better idea.')
+      expect(host.focus).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+  it('keeps selected text frozen through re-speaking and sending', async () => {
+    const selectPassage=vi.fn<NonNullable<CableHost['selectPassage']>>(async () => ({ok:true,selectionId:'sel',revision:2,text:'const answer = 42;',excerpt:'const answer = 42;',rows:1,extending:false}))
+    const transcribe=vi.fn().mockResolvedValueOnce('Explain.').mockResolvedValueOnce('Simplify this.')
+    const host=makeHost({selectPassage,transcribe}), {session,port}=await connect(host)
+    try {
+      let p=await recorded(port,{agentId:'a2',selectionId:'sel',selectionRevision:2})
+      expect(p.context).toBe('With selected text')
+      p=await recorded(port,{draftId:p.id,draftRevision:p.revision,draftOp:'replace'},false)
+      await command(port,p,'send')
+      expect(host.sendTurn).toHaveBeenCalledTimes(1)
+      const args=vi.mocked(host.sendTurn).mock.calls[0]
+      expect(args[0]).toBe('a2'); expect(args[1]).toContain('Simplify this.'); expect(args[1]).toContain('const answer = 42;')
+    } finally { await session.stop() }
+  })
+  it('discarding an unseen creation releases the next recording', async () => {
+    const {host,session,port}=await connect()
+    try {
+      const p=await recorded(port,{agentId:'a1'})
+      port.say({t:'voice.abort',uploadId:p.uploadId}); await settle()
+      expect((await recorded(port,{agentId:'a2'})).t).toBe('voice.draft')
+      expect(host.sendTurn).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+  it.each([{draftId:'missing',draftRevision:1,draftOp:'replace'}, {draftId:null},
+    {draftId:'id',draftRevision:1,draftOp:'append',agentId:'a2'},
+    {draftId:'id',draftRevision:1,draftOp:'replace',formId:'form'}])('never routes malformed draft speech %j', async fields => {
+    const host=makeHost({transcribe:vi.fn(async()=> 'No fallback')}), {session,port}=await connect(host)
+    try {
+      expect((await recorded(port,fields,false)).t).toBe('voice.error')
+      expect(host.sendTurn).not.toHaveBeenCalled(); expect(host.transcribe).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+  it('requires a named recipient for initial review', async () => {
+    const host=makeHost({route:vi.fn(),routeInWindow:vi.fn()}),{session,port}=await connect(host)
+    try {
+      expect((await recorded(port)).t).toBe('voice.error')
+      expect(host.route).not.toHaveBeenCalled();expect(host.routeInWindow).not.toHaveBeenCalled();expect(host.sendTurn).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+  it('ignores an old voice.end and keeps the new capture alive', async () => {
+    const {host,session,port}=await connect()
+    try {
+      port.say({t:'voice.begin',agentId:'a1',uploadId:'new'});port.pcm(Buffer.alloc(320))
+      port.say({t:'voice.end',uploadId:'old',review:true});await settle()
+      expect(port.types()).not.toContain('voice.draft');expect(host.sendTurn).not.toHaveBeenCalled()
+      port.say({t:'voice.end',uploadId:'new',review:true})
+      await vi.waitFor(()=>expect(port.types()).toContain('voice.draft'))
+    } finally { await session.stop() }
+  })
+  it('does not apply late transcription after the draft was discarded', async () => {
+    let resolve!:(v:string)=>void
+    const transcribe=vi.fn().mockResolvedValueOnce('Keep me.').mockImplementationOnce(()=>new Promise<string>(r=>{resolve=r}))
+    const host=makeHost({transcribe}),{session,port}=await connect(host)
+    try {
+      const p=await recorded(port,{agentId:'a1'})
+      port.say({t:'voice.begin',draftId:p.id,draftRevision:p.revision,draftOp:'replace',uploadId:'late'});port.pcm(Buffer.alloc(320));port.say({t:'voice.end',uploadId:'late'})
+      await vi.waitFor(()=>expect(transcribe).toHaveBeenCalledTimes(2));await command(port,p,'discard')
+      resolve('Too late.');await settle();await settle()
+      expect(port.sent.some(m=>m.t==='voice.draft' && m.uploadId==='late')).toBe(false)
+      expect(host.sendTurn).not.toHaveBeenCalled()
+    } finally {await session.stop()}
+  })
+  it('keeps a carried quote through discard and consumes only the accepted send', async () => {
+    const selectPassage=vi.fn<NonNullable<CableHost['selectPassage']>>(async()=>({ok:true,selectionId:'sel',revision:2,text:'  original\nsource',excerpt:'original source',rows:2,extending:true}))
+    const host=makeHost({selectPassage}),{session,port}=await connect(host)
+    try {
+      port.say({t:'carry.prepare',carryId:'quote',requestId:'prepare',agentId:'a1',selectionId:'sel',revision:2})
+      await vi.waitFor(()=>expect(port.types()).toContain('carry.state'))
+      let p=await recorded(port,{agentId:'a2',carryId:'quote'})
+      expect(p.context).toContain('Fix login screen');expect(host.sendTurn).not.toHaveBeenCalled()
+      await command(port,p,'discard')
+      p=await recorded(port,{agentId:'a2',carryId:'quote'})
+      expect(p.t).toBe('voice.draft')
+      expect(await command(port,p,'send')).toMatchObject({sent:true,carryId:'quote'})
+      expect(vi.mocked(host.sendTurn).mock.calls[0][1]).toContain('>   original\n> source')
+      expect((await recorded(port,{agentId:'a2',carryId:'quote'})).t).toBe('voice.error')
+      expect(host.sendTurn).toHaveBeenCalledTimes(1)
+    } finally {await session.stop()}
+  })
+  it('preserves the draft when cancelling an edit whose reply already arrived', async () => {
+    const host=makeHost({transcribe:vi.fn().mockResolvedValueOnce('Original.').mockResolvedValueOnce('Edited.')}),{session,port}=await connect(host)
+    try {
+      let p=await recorded(port,{agentId:'a1'})
+      p=await recorded(port,{draftId:p.id,draftRevision:p.revision,draftOp:'replace'},false)
+      port.say({t:'voice.abort',uploadId:p.uploadId});await settle()
+      expect(await command(port,p,'state')).toMatchObject({active:true,text:'Edited.'})
+      expect(host.sendTurn).not.toHaveBeenCalled()
+    } finally {await session.stop()}
+  })
+
+})
+
+
+describe('spoken output search purpose', () => {
+  const metadata = { agentId: 'a2', searchId: 'search-one', searchRevision: 3 }
+  const read = { ok: true as const, selectionId: 'search-one', revision: 3, rows: 1, excerpt: 'line', extending: false }
+  it.each([0, 2])('returns %i matches without routing, delivering, or drafting', async matches => {
+    const selectPassage = vi.fn<NonNullable<CableHost['selectPassage']>>(async c => c.op === 'read' ? read : {
+      ...read, revision: 4, query: c.query, match: matches ? 1 : 0, matches, rows: matches ? 1 : 0, excerpt: matches ? 'ERROR [x]' : '',
+    })
+    const route = vi.fn(), routeInWindow = vi.fn()
+    const host = makeHost({ selectPassage, route, routeInWindow, transcribe: async () => 'error [x].' })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'voice.begin', uploadId: 'search-voice', ...metadata })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end', review: true })
+      await vi.waitFor(() => expect(port.types()).toContain('voice.search'))
+      expect(selectPassage.mock.calls.map(([c]) => c.op)).toEqual(['read', 'search'])
+      expect(selectPassage).toHaveBeenLastCalledWith({ op: 'search', agentId: 'a2', selectionId: 'search-one', revision: 3, query: 'error [x]' })
+      expect(port.sent.at(-1)).toMatchObject({ t: 'voice.search', uploadId: 'search-voice', agentId: 'a2', matches })
+      expect(host.sendTurn).not.toHaveBeenCalled(); expect(route).not.toHaveBeenCalled(); expect(routeInWindow).not.toHaveBeenCalled()
+      expect(port.types()).not.toContain('voice.draft')
+    } finally { await session.stop() }
+  })
+  it.each([{searchId:17}, {searchRevision:3}, {searchId:'bad id'}, {searchRevision:0}, {searchRevision:0x80000000},
+    {cmd:''}, {formId:'f'}, {selectionId:'s'}, {carryId:'c'}, {draftId:'d'}, {questionToken:'q'}])(
+    'malformed or mixed metadata never falls back to task input: %j', async extra => {
+      const transcribe = vi.fn(), route = vi.fn(), selectPassage = vi.fn()
+      const host = makeHost({ transcribe, route, selectPassage }), { session, port } = await connect(host)
+      try {
+        port.say({ t:'voice.begin', uploadId:'bad-search', ...metadata, ...extra,
+          ...(Object.keys(extra).length === 1 && 'searchRevision' in extra && extra.searchRevision === 3 ? {searchId:undefined} : {}) })
+        port.pcm(Buffer.alloc(3200)); port.say({t:'voice.end'})
+        await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
+        expect(host.sendTurn).not.toHaveBeenCalled(); expect(transcribe).not.toHaveBeenCalled(); expect(route).not.toHaveBeenCalled()
+      } finally { await session.stop() }
+    })
+  it('discard during transcription cancels only the original cursor', async () => {
+    let finish!: (s:string)=>void
+    const transcribe=vi.fn(()=>new Promise<string>(r=>{finish=r}))
+    const selectPassage=vi.fn<NonNullable<CableHost['selectPassage']>>(async()=>read)
+    const host=makeHost({selectPassage,transcribe}), {session,port}=await connect(host)
+    try {
+      port.say({t:'voice.begin',uploadId:'cancel-search',...metadata}); port.pcm(Buffer.alloc(3200)); port.say({t:'voice.end'})
+      await vi.waitFor(()=>expect(transcribe).toHaveBeenCalled())
+      port.say({t:'voice.abort',uploadId:'cancel-search'}); await settle(); finish('late phrase'); await settle()
+      expect(selectPassage.mock.calls.map(([c])=>c.op)).toEqual(['read','cancel'])
+      expect(selectPassage).toHaveBeenLastCalledWith({op:'cancel',agentId:'a2',selectionId:'search-one',revision:3})
+      expect(port.types()).not.toContain('voice.search'); expect(host.sendTurn).not.toHaveBeenCalled()
+    } finally {await session.stop()}
   })
 })

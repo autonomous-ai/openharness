@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import 'host_platform.dart';
 import 'viewer_mode.dart';
 import 'local_key_value_store.dart';
@@ -55,12 +57,24 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
   /// Whether this store may hold [_cached] at all. See its doc comment.
   final bool _cacheable;
 
-  HarnessFileStore({Directory? directory})
-    : directory = directory ?? Directory(defaultDirectoryPath()),
-      // Only the shared, default-location store on a phone: a store pointed at a
-      // directory a caller chose is a test's, or a second copy of the same file,
-      // and neither may assume it is the only writer.
-      _cacheable = isMobileHost && directory == null;
+  /// [cacheableForTest] runs a store in a test's own directory the way the
+  /// phone's shared one runs — the cache is the phone's, and a test host is
+  /// never a phone.
+  HarnessFileStore({
+    Directory? directory,
+    @visibleForTesting bool cacheableForTest = false,
+  }) : directory = directory ?? Directory(defaultDirectoryPath()),
+       // Only the shared, default-location store on a phone: a store pointed at a
+       // directory a caller chose is a test's, or a second copy of the same file,
+       // and neither may assume it is the only writer.
+       _cacheable = cacheableForTest || (isMobileHost && directory == null);
+
+  /// The home every default path resolves under instead of the real one — set
+  /// once for the whole test suite by `test/flutter_test_config.dart`, so that no
+  /// test, however it builds the app, can read or write a developer's own
+  /// `~/.harness`. A test that passes its own `environment` still gets its own.
+  @visibleForTesting
+  static String? homeForTest;
 
   /// [name] names the sibling under `~/.harness`; it defaults to this store's own.
   static String defaultDirectoryPath({
@@ -68,7 +82,7 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
     String? name,
   }) {
     final env = environment ?? Platform.environment;
-    var home = env['HOME'];
+    var home = environment == null ? homeForTest ?? env['HOME'] : env['HOME'];
     if ((home == null || home.isEmpty) && Platform.isWindows) {
       home = env['USERPROFILE'];
       if (home == null || home.isEmpty) {

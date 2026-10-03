@@ -1,8 +1,9 @@
 // The one status a harness's verdict puts in the viewer pane's title: ready,
 // or what stands in the way, or where the work is. One mark, each new state
 // replacing the last — a status, not a history.
+
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/models.dart';
@@ -32,25 +33,25 @@ class VerdictStatus extends StatelessWidget {
     final last = verdict.currentPhase;
     final (icon, color, label, weight) = working
         ? (
-            LucideIcons.loaderCircle,
+            AppIcons.loaderCircle,
             AppColors.text,
             active?.name ?? 'Working',
             FontWeight.w600,
           )
         : verdict.ready
-        ? (LucideIcons.circleCheck, AppColors.success, 'Ready', FontWeight.w700)
+        ? (AppIcons.circleCheck, AppColors.success, 'Ready', FontWeight.w700)
         : verdict.errors > 0
         ? (
-            LucideIcons.circleX,
+            AppIcons.circleX,
             AppColors.danger,
             _count(verdict.errors, 'error'),
             FontWeight.w600,
           )
         : active != null
-        ? (LucideIcons.circleDot, AppColors.text, active.name, FontWeight.w700)
+        ? (AppIcons.circleDot, AppColors.text, active.name, FontWeight.w700)
         : verdict.warnings > 0
         ? (
-            LucideIcons.triangleAlert,
+            AppIcons.triangleAlert,
             AppColors.warning,
             _count(verdict.warnings, 'warning'),
             FontWeight.w600,
@@ -58,8 +59,8 @@ class VerdictStatus extends StatelessWidget {
         : last != null
         ? (
             last.state == AgentPhaseState.failed
-                ? LucideIcons.x
-                : LucideIcons.check,
+                ? AppIcons.close
+                : AppIcons.check,
             last.state == AgentPhaseState.failed
                 ? AppColors.danger
                 : AppColors.success,
@@ -67,7 +68,7 @@ class VerdictStatus extends StatelessWidget {
             FontWeight.w500,
           )
         : (
-            LucideIcons.circleDashed,
+            AppIcons.circleDashed,
             AppColors.mutedStrong,
             'Checked',
             FontWeight.w500,

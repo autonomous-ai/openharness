@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
@@ -39,7 +40,7 @@ class EmptyState extends StatelessWidget {
 
   /// Nothing matched the current search or filter. Deliberately actionless.
   const EmptyState.noMatches({super.key, this.message, this.compact = true})
-    : icon = Icons.search_off_rounded,
+    : icon = AppIcons.searchX,
       title = 'No matches',
       action = null;
 

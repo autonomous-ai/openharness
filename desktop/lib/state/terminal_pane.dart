@@ -10,8 +10,9 @@ import '../core/models.dart' show SharedHarness;
 /// terminal. It is DERIVED from the agent (the daemon says where the viewer
 /// is, and the tile follows) and never persisted: a restored layout re-opens
 /// it from the agent's next frame, so a stale URL from a previous run can
-/// never be loaded.
-enum PaneKind { terminal, web }
+/// never be loaded. [companion] and [devices] are built-in native DSH viewers,
+/// derived only after their account's experiment is enabled.
+enum PaneKind { terminal, web, companion, devices }
 
 /// One tile in the terminal grid.
 ///
@@ -32,23 +33,28 @@ class TerminalPane {
     this.viewerError,
     this.ownerAgentId,
   }) : assert(
-         kind == PaneKind.terminal || (agentId == null && ownerAgentId != null),
+         kind != PaneKind.web || (agentId == null && ownerAgentId != null),
          'a web tile belongs to an agent through ownerAgentId, never agentId',
        );
 
   final PaneKind kind;
   bool get isWeb => kind == PaneKind.web;
+  bool get isCompanion => kind == PaneKind.companion;
+  bool get isDevices => kind == PaneKind.devices;
+  bool get isViewer => isWeb || isCompanion || isDevices;
 
   /// [PaneKind.web] only: what the tile loads. Changes when the agent's frame
   /// names a new viewer URL; the panel navigates rather than remounts.
   String? url;
   String? viewerError;
 
-  /// [PaneKind.web] only: the agent whose viewer this is. Kept OFF [agentId]
+  /// The agent whose viewer this is. The native companion viewer can exist
+  /// before its agent starts, then follows the selected individual.
+  /// Kept OFF [agentId]
   /// on purpose — everything that attaches a terminal, persists a layout or
   /// remembers a closed agent keys on [agentId] being set, and none of that
   /// applies to a viewer.
-  final String? ownerAgentId;
+  String? ownerAgentId;
 
   /// Stable for the tile's whole life, including across a machine going away
   /// and returning. Widget keys hang off this: keying on the agent id instead
@@ -74,6 +80,9 @@ class TerminalPane {
   bool claimOnFirstAttach = false;
 
   TerminalSession? session;
+
+  /// Browser viewer input, installed only while its renderer is mounted.
+  bool Function()? focusViewerInput;
   SharedHarness? sharedHarness;
   String? sharedOwnerName;
 

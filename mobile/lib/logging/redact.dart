@@ -20,6 +20,12 @@ final RegExp _secretKey = RegExp(
   caseSensitive: false,
 );
 
+/// Key names whose value is what the person wrote: a harness's first task
+/// (`agent_create`'s `prompt`), a search typed or spoken into Find
+/// (`session_search`'s `query`). Not a credential, but not a diagnostic either —
+/// the log keeps its length, which is all a reader needs, and never the words.
+final RegExp _wordsKey = RegExp(r'^(prompt|query)$', caseSensitive: false);
+
 /// Values longer than this are clipped — a log line is read by a person, and a
 /// base64 blob buries the fields either side of it.
 const int _maxValue = 120;
@@ -46,9 +52,12 @@ String redactValue(Object? value) {
     final parts = <String>[];
     for (final entry in value.entries) {
       final key = '${entry.key}';
+      final words = entry.value;
       parts.add(
         _secretKey.hasMatch(key)
             ? '$key: <redacted>'
+            : _wordsKey.hasMatch(key) && words is String
+            ? '$key: <${words.length} chars>'
             : '$key: ${redactValue(entry.value)}',
       );
     }
@@ -67,7 +76,7 @@ String redactValue(Object? value) {
 ///
 /// [redactValue] above works on a decoded frame, where a secret is identified
 /// by its KEY. A CLI's stdout has no keys: `harness auth status --json` prints
-/// a session, and it goes into the transcript `cliLog` keeps. This is the same denylist idea applied to text — ported from
+/// a session, and it can appear in an error log. This is the same denylist idea applied to text — ported from
 /// Grid's `redactLogSecrets` (`features/feedback/logic/log_bundle.dart`), so a
 /// log line means the same thing in both products. Keep the two in step.
 ///
@@ -84,9 +93,22 @@ String redactSecretsInText(String input) {
 typedef _Redaction = ({RegExp pattern, String Function(Match) replace});
 
 final List<_Redaction> _textRedactions = [
-  // `Bearer <token>` — the shape auth takes if it ever lands in output.
+  // `Bearer <token>` — the shape auth takes if it ever lands in output. The
+  // alphabet is RFC 6750's `b64token`, `+`, `/`, `~` and padding included: a
+  // narrower one cut an opaque plain-base64 token short at its first `+`, and
+  // left all of it on disk when that came before the eighth character.
   (
-    pattern: RegExp(r'(Bearer\s+)[A-Za-z0-9._\-]{8,}', caseSensitive: false),
+    pattern: RegExp(
+      r'(Bearer\s+)[A-Za-z0-9._~+/\-]{8,}=*',
+      caseSensitive: false,
+    ),
+    replace: (m) => '${m[1]}<redacted>',
+  ),
+  // `Basic <base64 of user:password>` — the other scheme an `Authorization`
+  // header carries, and a password outright. Case-sensitive, unlike the rule
+  // above, so "basic authentication" in prose stays readable.
+  (
+    pattern: RegExp(r'(Basic\s+)[A-Za-z0-9+/]{8,}=*'),
     replace: (m) => '${m[1]}<redacted>',
   ),
   // Vendor keys with a well-known prefix (OpenAI `sk-…`, Anthropic `sk-ant-…`).
@@ -103,10 +125,12 @@ final List<_Redaction> _textRedactions = [
     ),
     replace: (m) => '${m[1]}<redacted>',
   ),
-  // A `?…token=…` or `?…key=…` inside a logged URL.
+  // A `?…token=…` or `?…key=…` inside a logged URL — and the two a sign-in
+  // puts there: an OAuth redirect's one-time `code`, which is a credential
+  // until it is spent, and a password (`pass…`, `pwd`).
   (
     pattern: RegExp(
-      r'([?&][^=\s&]*(?:token|key|secret|sig|signature)[^=\s&]*=)[^\s&]+',
+      r'([?&][^=\s&]*(?:token|key|secret|sig|signature|code|pass|pwd)[^=\s&]*=)[^\s&]+',
       caseSensitive: false,
     ),
     replace: (m) => '${m[1]}<redacted>',

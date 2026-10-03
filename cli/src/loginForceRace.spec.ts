@@ -210,6 +210,6 @@ describe('login --force beside a start that lands mid-sign-in', () => {
       .filter((line) => line.type === 'result')
     expect(results).toEqual([expect.objectContaining({ type: 'result', status: 'success' })])
     expect(JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8')))
-      .toMatchObject({ accessToken: 'tok_new', machineId: 'm_new' })
+      .toMatchObject({ accessToken: 'tok_new', machineId: 'm_new', signInEpoch: expect.stringMatching(/^[0-9a-f]{32}@\d+$/) })
   }, 30_000)
 })

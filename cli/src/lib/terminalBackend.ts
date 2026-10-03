@@ -34,7 +34,7 @@ export interface TerminalBackend<Ref extends TerminalRuntimeRef = TerminalRuntim
   setTitle(runtime: Ref, title: string): Promise<TerminalActionResult>
   notify(runtime: Ref, title: string, body: string): Promise<TerminalActionResult>
 
-  /** Byte streaming is optional per backend. MVP is implemented by tmux; Herdr remains capture-only. */
+  /** Byte streaming is optional per backend. */
   openStream?(
     runtime: Ref,
     expected: TerminalProcessExpectation,

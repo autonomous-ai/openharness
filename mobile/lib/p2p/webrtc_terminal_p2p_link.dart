@@ -472,7 +472,12 @@ class WebRtcTerminalP2pLink implements TerminalP2pLink {
           unawaited(_opened());
         case RTCDataChannelState.RTCDataChannelClosing:
         case RTCDataChannelState.RTCDataChannelClosed:
-          if (_ready) _fail('channel_closed');
+          // ⚠️ On the next turn, not inside this callback. flutter_webrtc calls it from its own
+          // event listener and then adds the same state to a stream of its own — which tearing
+          // the channel down here (`stop` → `close`) has just closed. That threw "Cannot add new
+          // events after calling close" out of the plugin's listener, uncaught: a crash report
+          // every time a channel closed under an open link.
+          if (_ready) scheduleMicrotask(() => _fail('channel_closed'));
         case RTCDataChannelState.RTCDataChannelConnecting:
           break;
       }

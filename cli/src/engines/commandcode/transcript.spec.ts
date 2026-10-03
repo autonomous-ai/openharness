@@ -28,6 +28,15 @@ describe('the Command Code transcript layout', () => {
     expect(commandcodeTranscriptPath('', 'abc')).toBeNull()
     expect(commandcodeTranscriptPath(null, 'abc')).toBeNull()
     expect(commandcodeTranscriptPath('/Users/me/Work/App', '')).toBeNull()
-    expect(commandcodeTranscriptPath('///', 'abc')).toBeNull()   // slug collapses to nothing
+  })
+
+  it.each([
+    ['/Users/me/myProject/HTTPServer', 'users-me-my-project-http-server'],
+    ['/Users/José/Über Café', 'users-jose-ueber-cafe'],
+    ['/work/R&D', 'work-r-and-d'],
+    ['/', 'root'],
+  ])('matches the vendor slug for %s', (cwd, expected) => {
+    expect(commandcodeProjectSlug(cwd)).toBe(expected)
+    expect(commandcodeTranscriptPath(cwd, 'session-1')).toContain(`/projects/${expected}/session-1.jsonl`)
   })
 })

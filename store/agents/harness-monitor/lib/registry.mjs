@@ -7,7 +7,7 @@
  * file — never writes it. The registry is the daemon's; this is a reader with no lock and no repair.
  *
  * It is also the fallback when the daemon cannot be reached at all: a fleet you can still SEE when the
- * app is not running is worth more than an error, and pausing is pure tmux, so most of Harness Monitor keeps
+ * app is not running is worth more than an error, and stopping is pure tmux, so most of Harness Monitor keeps
  * working from this file alone.
  */
 

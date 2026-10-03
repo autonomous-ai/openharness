@@ -52,7 +52,6 @@ describe('Codex profile on the live terminal discovery path', () => {
     const probe = await probeTerminalAgents(
       [backendWith([{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }, { runtime: OTHER_RUNTIME, rootPid: 20, cwd: '/work' }])],
       ['tmux'],
-      [],
       999,
     )
     const byEngine = Object.fromEntries(probe.agents.map((agent) => [agent.engine, agent.codexHome]))
@@ -64,7 +63,7 @@ describe('Codex profile on the live terminal discovery path', () => {
   it('passes an unreadable probe through as undefined, so the registry keeps what it knew', async () => {
     processRows.mockResolvedValue([row(10, 1, 'bash'), row(30, 10, 'codex')])
     probeCodexHome.mockResolvedValue(undefined)
-    const probe = await probeTerminalAgents([backendWith([{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }])], ['tmux'], [], 999)
+    const probe = await probeTerminalAgents([backendWith([{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }])], ['tmux'], 999)
     expect(probe.agents[0]).toHaveProperty('codexHome', undefined)
   })
 })

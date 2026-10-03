@@ -12,8 +12,7 @@ import 'voice_mic_button.dart';
 import 'voice_mic_face.dart';
 import 'voice_mic_mode.dart';
 
-/// The mic, floating over the terminal's bottom right corner at the top of
-/// [TerminalActionColumn].
+/// The mic, floating over the terminal, in [TerminalActionColumn].
 ///
 /// ⚠️ **Floating rather than in a row.** A row under the terminal would take
 /// its height off the remote shell; floating, the button costs the terminal
@@ -23,31 +22,22 @@ import 'voice_mic_mode.dart';
 /// terminal's newest output is the line being read, and it runs left to right:
 /// the right end of the last few lines is the least of it.
 ///
-/// ⚠️ **The `×` is NOT here.** It is in the capsule body behind the mic, at the
-/// far end from it — see `voice_status_pill.dart`.
+/// ⚠️ **No `×` and no status body.** The mic says what it is doing with its own
+/// face and the halo behind it, and words appear above it only when something
+/// went wrong — see `voice_bar_line.dart`.
 class VoiceMicFab extends StatefulWidget {
   const VoiceMicFab({
     super.key,
     required this.voice,
     required this.session,
-    this.onSlipChanged,
+    this.working = false,
   });
 
   final VoiceInputController voice;
   final TerminalSession session;
 
-  /// The thumb crossed in or out of the button mid-hold, in
-  /// [VoiceMicMode.holdToTalk]. Unused in the tap mode, which has no hold.
-  final ValueChanged<bool>? onSlipChanged;
-
-  /// What the whole floating cluster asks of the corner it sits in.
-  ///
-  /// Bigger than [VoiceMicButton.extent] because the mic's hit area spills past
-  /// its slot: this is what the page keeps clear of anything else tappable.
-  static const double extent = VoiceMicButton.touchExtent;
-
-  /// How far the cluster sits from the terminal's right and bottom edges.
-  static const double inset = 8;
+  /// The agent is working — see [VoiceMicCore.working].
+  final bool working;
 
   /// How long a landed send wears its tick before the mic is back at rest.
   static const Duration sentHold = Duration(milliseconds: 900);
@@ -148,7 +138,11 @@ class _VoiceMicFabState extends State<VoiceMicFab>
           : () => unawaited(showVoiceLanguagePicker(context)),
       onHoldStart: action.onHoldStart,
       onHoldFinish: action.onHoldFinish,
-      onSlipChanged: widget.onSlipChanged,
+      working: widget.working,
+      level: voice.level,
+      onSwipeDown: voice.status == VoiceInputStatus.listening
+          ? voice.clear
+          : null,
     );
   }
 }

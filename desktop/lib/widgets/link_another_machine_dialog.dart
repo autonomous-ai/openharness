@@ -468,7 +468,7 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
     focusNode: focus,
     onPressed: action,
     style: TextButton.styleFrom(
-      foregroundColor: Colors.white70,
+      foregroundColor: boxText(.70),
       textStyle: boxMonoStyle(),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
       minimumSize: const Size(0, 28),
@@ -492,7 +492,7 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
         onTap: entry.enabled ? () => unawaited(_open(entry)) : null,
         child: BoxRowHighlight(
           highlighted: selected,
-          accent: Colors.white70,
+          accent: boxText(.70),
           terminal: true,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -503,7 +503,7 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
                   width: 20,
                   child: Text(
                     selected ? '>' : ' ',
-                    style: boxMonoStyle(color: Colors.white70),
+                    style: boxMonoStyle(color: boxText(.70)),
                   ),
                 ),
                 Expanded(
@@ -572,7 +572,7 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
           const SizedBox(height: 4),
           SelectableText(
             kHarnessDownloadUrl.toString(),
-            style: boxMonoStyle(color: Colors.white70),
+            style: boxMonoStyle(color: boxText(.70)),
           ),
           Wrap(
             spacing: 8,
@@ -631,7 +631,7 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
           children: [
             Text(title, style: boxMonoStyle()),
             const SizedBox(height: 4),
-            SelectableText(command, style: boxMonoStyle(color: Colors.white70)),
+            SelectableText(command, style: boxMonoStyle(color: boxText(.70))),
             Align(
               alignment: Alignment.centerLeft,
               child: _button(
@@ -723,7 +723,7 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
                                       child: Text(
                                         'machine >',
                                         style: boxMonoStyle(
-                                          color: Colors.white70,
+                                          color: boxText(.70),
                                         ),
                                       ),
                                     ),
@@ -770,7 +770,7 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
                                         Padding(
                                           padding: const EdgeInsets.all(8),
                                           child: Text(
-                                            'Already linked. Open its agents from New Tab or New Pane.',
+                                            'Already linked. Open its harnesses from New Tab or New Pane.',
                                             style: boxMonoStyle(
                                               color: kBoxFaint,
                                             ),

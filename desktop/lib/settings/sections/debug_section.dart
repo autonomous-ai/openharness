@@ -1,5 +1,6 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../../logging/log_file.dart';
 import '../../logging/log_stream.dart';
@@ -85,19 +86,21 @@ class _DebugSectionState extends State<DebugSection> {
     AppTheme.watch(context);
     return SectionScaffold(
       title: 'Debug',
-      subtitle:
-          'Everything this app logged this session, and the dial\'s own log '
-          'as the daemon writes it — the same lines '
-          '${DailyLogFile.defaultDirectory.path} keeps for a fortnight (the '
-          'dial\'s for a week). Credentials are stripped before anything is '
-          'written. Export logs zips the last seven days to the Desktop.',
+      subtitle: kIsWeb
+          ? 'Browser logs for this harness. Credentials are redacted.'
+          : 'Everything this app logged this harness, and the dial\'s own log '
+                'as the daemon writes it — the same lines '
+                '${DailyLogFile.defaultDirectory.path} keeps for a fortnight (the '
+                'dial\'s for a week). Credentials are stripped before anything is '
+                'written. Export logs zips the last seven days to the Desktop.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // Outside the builder below: what the two CLIs resolved to has nothing
           // to do with the log, and a card that re-probed on every socket frame
           // would be a second thing to explain.
-          DebugPathsCard(probe: widget.probe ?? probeDebugEnvironment),
+          if (!kIsWeb)
+            DebugPathsCard(probe: widget.probe ?? probeDebugEnvironment),
           const SizedBox(height: 14),
           Expanded(
             child: ListenableBuilder(
@@ -121,8 +124,8 @@ class _DebugSectionState extends State<DebugSection> {
                             'Search messages, categories, errors',
                           ).copyWith(
                             prefixIcon: Icon(
-                              LucideIcons.search,
-                              size: 15,
+                              AppIcons.search,
+                              size: 16,
                               color: AppPalette.textFaint,
                             ),
                             prefixIconConstraints: const BoxConstraints(
@@ -212,7 +215,7 @@ class _DebugSectionState extends State<DebugSection> {
     // so the search box stays above and the user has a way back out.
     if (nothingLogged) {
       return const EmptyState(
-        icon: LucideIcons.terminal300,
+        icon: AppIcons.terminal,
         title: 'Nothing logged yet',
         message:
             'Use the app and every command, socket frame and request it makes '

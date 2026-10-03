@@ -6,7 +6,11 @@ import 'package:flutter/widgets.dart';
 
 import 'app_shell.dart';
 import 'p2p/phone_terminal_p2p.dart';
+import 'phone/daemon_scope.dart';
 import 'phone/phone_shell.dart';
+import 'demo/sample_mode.dart';
+import 'phone/welcome/phone_boot.dart';
+import 'phone/welcome/phone_welcome.dart';
 
 /// Harness for iOS and Android: a viewer onto the machines this device has
 /// linked, one agent at a time.
@@ -29,7 +33,13 @@ import 'phone/phone_shell.dart';
 Future<void> main() {
   _drawEdgeToEdgeOnEveryAndroid();
   return startHarness(
-    authenticatedScreen: (app) => PhoneShell(notifier: app),
+    // The paired daemon rides over the whole signed-in app: one face for every
+    // header, fed from the app's own state (`phone/daemon_scope.dart`).
+    authenticatedScreen: (app) =>
+        DaemonHost(notifier: app, child: PhoneShell(notifier: app)),
+    signedOutScreen: (app) =>
+        PhoneWelcome(notifier: app, onTrySample: openSampleMode),
+    bootScreen: (_) => const PhoneBoot(),
     transportPlugins: phoneTerminalP2p.create,
   );
 }

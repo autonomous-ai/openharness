@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:file_selector_platform_interface/file_selector_platform_interface.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,7 +24,7 @@ import 'support/agent_picker.dart';
 
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_interactions_test.dart' show chord;
-import 'keymap_host_test.dart' show MemoryKeymap;
+import 'keymap_host_test.dart' show MemoryKeymap, key;
 import 'keymap_runtime_test.dart' as runtime;
 
 final _newHarness = find.byKey(const ValueKey('harness-start-new-pane'));
@@ -529,7 +530,7 @@ void main() {
             find.byKey(const ValueKey('swarm-new-pane-button')),
             findsNothing,
           );
-          expect(find.byTooltip('Harnesses'), findsOneWidget);
+          expect(find.byTooltip('Harnesses'), findsNothing);
           expect(
             find.byKey(const ValueKey('swarm-new-harness-button')),
             findsNothing,
@@ -599,7 +600,8 @@ void main() {
       FileSelectorPlatform.instance = picker;
       addTearDown(() => FileSelectorPlatform.instance = oldPicker);
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyN);
+      final linux = defaultTargetPlatform == TargetPlatform.linux;
+      await key(tester, LogicalKeyboardKey.keyN, cmd: !linux, alt: linux);
       await tester.pump();
 
       // The dialog opens with focus on the harness bar, ready to type.

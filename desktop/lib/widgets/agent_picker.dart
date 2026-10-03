@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:harness/terminal/terminal_text.dart';
@@ -365,13 +366,14 @@ class _AgentPickerState extends State<AgentPicker> {
   Widget _chosen(AgentChoice? choice) => KeyedSubtree(
     key: Key('new-agent-${widget.label.toLowerCase()}-choice'),
     child: Text(
-      choice?.label ?? 'Choose an agent',
+      choice?.label ??
+          (widget.label == 'Agent' ? 'Choose an agent' : 'Choose a harness'),
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: widget.terminalStyle
           ? boxMonoStyle()
           : grid.AppType.monoLabel(
-              color: choice == null ? Colors.white60 : Colors.white,
+              color: choice == null ? boxText(.60) : boxText(1),
             ),
     ),
   );
@@ -399,7 +401,7 @@ class _AgentPickerState extends State<AgentPicker> {
             side: BorderSide(
               color: focused && !_open
                   ? grid.AppPalette.swarmAccent.withValues(alpha: .7)
-                  : Colors.white.withValues(alpha: .10),
+                  : boxInk(.10),
               width: focused && !_open ? 1.5 : 1,
             ),
           ),
@@ -407,7 +409,7 @@ class _AgentPickerState extends State<AgentPicker> {
           child: InkWell(
             canRequestFocus: false,
             mouseCursor: SystemMouseCursors.click,
-            hoverColor: Colors.white.withValues(alpha: .03),
+            hoverColor: boxInk(.03),
             onTap: () {
               _barFocus.requestFocus();
               _show();
@@ -432,18 +434,18 @@ class _AgentPickerState extends State<AgentPicker> {
                             ),
                           )
                         : Icon(
-                            Icons.search,
+                            AppIcons.search,
                             size: _fontSize + 4,
-                            color: Colors.white60,
+                            color: boxText(.60),
                           ),
                   ),
                   Expanded(child: _chosen(choice)),
-                  const Padding(
-                    padding: EdgeInsets.only(left: 12, right: 22),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 12, right: 22),
                     child: Icon(
-                      Icons.keyboard_arrow_down,
+                      AppIcons.chevronDown,
                       size: 22,
-                      color: Colors.white60,
+                      color: boxText(.60),
                     ),
                   ),
                 ],
@@ -590,6 +592,9 @@ class _AgentPickerState extends State<AgentPicker> {
     final preview = showPreview
         ? _AgentPreview(
             key: ValueKey('new-agent-${widget.label.toLowerCase()}-preview'),
+            semanticLabel: widget.label == 'Agent'
+                ? 'Agent preview'
+                : 'Harness preview',
             choice: highlighted,
             status: widget.statusOf?.call(highlighted.id),
             current: highlighted.id == widget.value,
@@ -613,12 +618,12 @@ class _AgentPickerState extends State<AgentPicker> {
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    'No agents match “${_query.text.trim()}”.',
+                    'No ${widget.label == 'Agent' ? 'agents' : 'harnesses'} match “${_query.text.trim()}”.',
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: grid.AppType.monoLabel(
                       fontWeight: FontWeight.w400,
-                      color: Colors.white60,
+                      color: boxText(.60),
                     ),
                   ),
                 ),
@@ -640,7 +645,7 @@ class _AgentPickerState extends State<AgentPicker> {
           shadowColor: Colors.black26,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(_radius),
-            side: BorderSide(color: Colors.white.withValues(alpha: .10)),
+            side: BorderSide(color: boxInk(.10)),
           ),
           clipBehavior: Clip.antiAlias,
           child: DefaultTextStyle.merge(
@@ -761,7 +766,7 @@ class _AgentPickerState extends State<AgentPicker> {
       if (needle.isEmpty || text == null) return const [];
       final field = text.toLowerCase();
       return field.contains(needle)
-          ? [(field: field, term: needle, title: title)]
+          ? [(field: field, term: needle, title: title, strict: false)]
           : const [];
     }
 
@@ -780,11 +785,11 @@ class _AgentPickerState extends State<AgentPicker> {
         ),
         minTileHeight: rowHeight,
         selected: highlighted,
-        textColor: Colors.white,
-        iconColor: Colors.white60,
-        selectedColor: Colors.white,
+        textColor: boxText(1),
+        iconColor: boxText(.60),
+        selectedColor: boxText(1),
         hoverColor: Colors.transparent,
-        selectedTileColor: Colors.white.withValues(alpha: .055),
+        selectedTileColor: boxInk(.055),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(widget.terminalStyle ? 0 : 12),
         ),
@@ -814,7 +819,7 @@ class _AgentPickerState extends State<AgentPicker> {
                     ? boxMonoStyle()
                     : grid.AppType.monoLabel(
                         fontWeight: FontWeight.w600,
-                        color: Colors.white,
+                        color: boxText(1),
                       ),
               ),
             ),
@@ -830,7 +835,7 @@ class _AgentPickerState extends State<AgentPicker> {
                   overflow: TextOverflow.ellipsis,
                   style: widget.terminalStyle
                       ? boxMonoStyle(color: kBoxFaint)
-                      : grid.AppType.monoMeta(color: Colors.white54),
+                      : grid.AppType.monoMeta(color: kBoxFaint),
                 ),
               ),
             ],
@@ -842,8 +847,8 @@ class _AgentPickerState extends State<AgentPicker> {
                 choice.detail!,
                 matches: matches(choice.detail, title: false),
                 style: widget.terminalStyle
-                    ? boxMonoStyle(color: Colors.white60)
-                    : grid.AppType.monoMeta(color: Colors.white60),
+                    ? boxMonoStyle(color: boxText(.60))
+                    : grid.AppType.monoMeta(color: boxText(.60)),
               ),
         trailing: widget.terminalStyle && highlighted
             ? Text('↵', style: boxMonoStyle(color: kBoxFaint))
@@ -860,15 +865,15 @@ class _AgentPickerState extends State<AgentPicker> {
                     'new-agent-${widget.label.toLowerCase()}-row-action',
                   ),
                   onPressed: () => _choose(choice),
-                  style: TextButton.styleFrom(foregroundColor: Colors.white),
+                  style: TextButton.styleFrom(foregroundColor: boxText(1)),
                   child: SwarmSearchActionLabel(
-                    current ? 'Keep agent' : 'Use agent',
+                    '${current ? 'Keep' : 'Use'} ${widget.label == 'Agent' ? 'agent' : 'harness'}',
                     compact: compactAction,
                   ),
                 ),
               )
             : current
-            ? const Icon(Icons.check, size: 16, color: Colors.white60)
+            ? Icon(AppIcons.check, size: 16, color: boxText(.60))
             : null,
         onTap: () => _choose(choice),
       ),
@@ -939,20 +944,25 @@ class _AgentPreview extends StatelessWidget {
     required this.current,
     this.controller,
     this.terminalStyle = false,
+    this.semanticLabel = 'Agent preview',
   });
 
   final AgentChoice choice;
+  final String semanticLabel;
   final String? status;
   final bool current;
   final ScrollController? controller;
   final bool terminalStyle;
 
   static TextStyle get _muted =>
-      grid.AppType.monoMeta(height: 1.5, color: Colors.white54);
+      grid.AppType.monoMeta(height: 1.5, color: kBoxFaint);
   static TextStyle get _body => grid.AppType.monoLabel(
     fontWeight: FontWeight.w400,
     height: 1.6,
-    color: Color(0xffe1e1e4),
+    color: grid.AppTheme.pick(
+      grid.AppPalette.textPrimary,
+      const Color(0xffe1e1e4),
+    ),
   );
 
   @override
@@ -962,7 +972,7 @@ class _AgentPreview extends StatelessWidget {
     final chips = [if (current) 'Chosen', ?status];
     return Semantics(
       container: true,
-      label: 'Agent preview',
+      label: semanticLabel,
       child: SingleChildScrollView(
         controller: controller,
         padding: terminalStyle
@@ -987,7 +997,7 @@ class _AgentPreview extends StatelessWidget {
                               ? boxMonoStyle()
                               : grid.AppType.monoLabel(
                                   fontWeight: FontWeight.w600,
-                                  color: Colors.white,
+                                  color: boxText(1),
                                 ),
                         ),
                         if (choice.creator case final creator?)
@@ -995,7 +1005,7 @@ class _AgentPreview extends StatelessWidget {
                             text: '  by $creator',
                             style: terminalStyle
                                 ? boxMonoStyle(color: kBoxFaint)
-                                : grid.AppType.monoMeta(color: Colors.white54),
+                                : grid.AppType.monoMeta(color: kBoxFaint),
                           ),
                       ],
                     ),
@@ -1010,11 +1020,11 @@ class _AgentPreview extends StatelessWidget {
               Text(
                 detail,
                 style: terminalStyle
-                    ? boxMonoStyle(color: Colors.white70)
+                    ? boxMonoStyle(color: boxText(.70))
                     : grid.AppType.monoLabel(
                         fontWeight: FontWeight.w400,
                         height: 1.4,
-                        color: Colors.white70,
+                        color: boxText(.70),
                       ),
               ),
             ],
@@ -1030,7 +1040,7 @@ class _AgentPreview extends StatelessWidget {
                     for (final chip in chips)
                       DecoratedBox(
                         decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: .06),
+                          color: boxInk(.06),
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Padding(
@@ -1040,7 +1050,7 @@ class _AgentPreview extends StatelessWidget {
                           ),
                           child: Text(
                             chip,
-                            style: grid.AppType.monoMeta(color: Colors.white70),
+                            style: grid.AppType.monoMeta(color: boxText(.70)),
                           ),
                         ),
                       ),

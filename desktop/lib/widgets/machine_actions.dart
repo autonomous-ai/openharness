@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 
 import '../shortcuts/app_keymap.dart';
 import '../state/app_state.dart';
-import '../terminal/terminal_text.dart';
-import 'box_chrome.dart';
+import '../shared/theme/app_theme.dart' as grid;
+import 'desktop_chrome.dart';
+import 'desktop_prompt_surface.dart';
+import 'box_chrome.dart' show BoxAnnouncer;
 import 'terminal_prompt.dart';
 
 /// Account deletion, shared by the manager and native/legacy machine menus.
@@ -101,88 +103,72 @@ class _DeleteMachinePromptState extends State<_DeleteMachinePrompt> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
-    return ListenableBuilder(
-      listenable: terminalFontStore,
-      builder: (context, _) => TerminalPromptKeys(
-        focusNode: _promptFocus,
-        cancel: _close,
-        child: TerminalPrompt(
+    grid.AppTheme.watch(context);
+    final danger = Theme.of(context).colorScheme.error;
+    final closeLabel = _deleting ? 'Close' : 'Cancel';
+    return TerminalPromptKeys(
+      focusNode: _promptFocus,
+      cancel: _close,
+      child: DesktopPromptSurface(
+        body: DesktopPromptScrollBody(
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Flexible(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(
-                        'Delete machine',
-                        style: boxMonoStyle(color: kBoxFaint),
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        widget.displayName,
-                        style: boxMonoStyle(weight: FontWeight.w600),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Delete this machine from your account and close its panes in this window?',
-                        style: boxMonoStyle(color: Colors.white70),
-                      ),
-                      const SizedBox(height: 12),
-                      if (!_deleting)
-                        Wrap(
-                          spacing: 12,
-                          children: [
-                            terminalPromptButton(
-                              'Cancel',
-                              _close,
-                              focusNode: _cancel,
-                            ),
-                            terminalPromptButton(
-                              'Delete',
-                              _delete,
-                              danger: true,
-                              key: const Key('machine-delete-confirm'),
-                            ),
-                          ],
-                        )
-                      else
-                        Text(
-                          'Deletion continues if you close this prompt.',
-                          style: boxMonoStyle(color: kBoxFaint),
-                        ),
-                    ],
+              Text('Delete machine', style: DesktopChrome.heading()),
+              const SizedBox(height: DesktopChrome.groupGap),
+              Text(
+                widget.displayName,
+                style: DesktopChrome.text(size: 14, medium: true),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Delete this machine from your account and close its panes in this window?',
+                style: DesktopChrome.text(size: 13),
+              ),
+              if (_deleting) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'Deletion continues if you close this dialog.',
+                  style: DesktopChrome.text(
+                    size: 13,
+                    color: DesktopChrome.muted,
                   ),
                 ),
-              ),
-              BoxHintStrip(
-                message: _error ?? (_deleting ? 'Deleting machine…' : null),
-                isError: _error != null,
-                hints: [
-                  if (!_deleting)
-                    BoxHint(
-                      terminalPromptHint(context, 'picker.accept', 'enter'),
-                      'select',
-                    ),
-                  if (!_deleting)
-                    BoxHint(
-                      terminalPromptHint(context, 'picker.complete', 'tab'),
-                      'controls',
-                    ),
-                  BoxHint(
-                    terminalPromptHint(context, 'picker.cancel', 'esc'),
-                    'close',
-                    onTap: _close,
-                  ),
-                ],
-              ),
+              ],
             ],
           ),
         ),
+        footer: _error != null || _deleting
+            ? Semantics(
+                liveRegion: true,
+                child: DesktopPromptMessage(
+                  _error ?? 'Deleting machine…',
+                  color: _error == null ? DesktopChrome.muted : danger,
+                ),
+              )
+            : null,
+        actions: [
+          Tooltip(
+            message:
+                '$closeLabel · ${terminalPromptHint(context, 'picker.cancel', 'esc')}',
+            child: TextButton(
+              focusNode: _deleting ? null : _cancel,
+              onPressed: _close,
+              child: Text(closeLabel),
+            ),
+          ),
+          if (!_deleting)
+            Tooltip(
+              message:
+                  'Delete · ${terminalPromptHint(context, 'picker.accept', 'enter')}',
+              child: FilledButton(
+                key: const Key('machine-delete-confirm'),
+                onPressed: _delete,
+                style: grid.dangerButtonStyle(),
+                child: const Text('Delete'),
+              ),
+            ),
+        ],
       ),
     );
   }

@@ -88,7 +88,8 @@ void main() {
     );
     expect(
       ((container.decoration! as BoxDecoration).border! as Border).top.color,
-      Colors.transparent,
+      isNot(Colors.transparent),
+      reason: 'The returned keyboard focus stays visible without selecting it',
     );
     expect(
       tester

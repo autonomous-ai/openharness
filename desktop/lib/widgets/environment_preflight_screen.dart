@@ -1,21 +1,14 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../bootstrap/environment_provisioner.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import 'box_chrome.dart';
-import 'terminal_progress.dart';
+import 'desktop_chrome.dart';
 
 /// The read-only gate shown before either sign-in or environment setup.
 ///
-/// Printed as a session, not as a screen: a prompt line, one line per thing
-/// checked with its answer in the same column, a bar counting what is done, and
-/// a cursor waiting at the end. Everything is the terminal's face at the
-/// terminal's size — one cell size, the way a terminal has one (owner,
-/// 2026-09-23). A person who has lived in a terminal has read this exact shape
-/// ten thousand times, which is the welcome.
-///
-/// The figure is honest because it is counted: each dependency the provisioner
-/// probed is a line, and the bar is how many of them have answered.
+/// Every row reflects a dependency the provisioner actually probes. Progress
+/// counts checks that have answered, including those that need attention.
 ///
 /// This is deliberately not part of the environment setup wizard: a computer
 /// that is already ready should never look as though it has entered an
@@ -27,12 +20,11 @@ class EnvironmentPreflightScreen extends StatelessWidget {
 
   final EnvironmentReadiness readiness;
 
-  /// What each dependency is called in the print-out. The enum names the thing
-  /// the app runs; these name it the way the person would say it.
+  /// Readable names for the dependencies the app actually checks.
   static const _labels = {
-    EnvironmentStep.tmux: 'tmux',
-    EnvironmentStep.harness: 'harness cli',
-    EnvironmentStep.clipboard: 'clipboard helper',
+    EnvironmentStep.tmux: 'Terminal tools',
+    EnvironmentStep.harness: 'Harness CLI',
+    EnvironmentStep.clipboard: 'Clipboard helper',
   };
 
   @override
@@ -44,68 +36,131 @@ class EnvironmentPreflightScreen extends StatelessWidget {
         .toList();
     final settled = steps.where((entry) => _settled(entry.value)).length;
     final value = steps.isEmpty ? (ready ? 1.0 : null) : settled / steps.length;
+    final progress = steps.isEmpty
+        ? 'Waiting for checks…'
+        : '$settled of ${steps.length} checks finished';
+    final status = ready
+        ? 'All checks passed. Opening your workspace…'
+        : "This check doesn't install anything.";
+    final iconSize = MediaQuery.textScalerOf(context).scale(18);
+    final progressTrack = MediaQuery.highContrastOf(context)
+        ? DesktopChrome.muted
+        : DesktopChrome.rim;
 
-    return Scaffold(
-      backgroundColor: grid.AppPalette.swarmField,
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 470),
-            child: TerminalBox(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-                child: Semantics(
-                  key: const Key('environment-status'),
-                  container: true,
-                  liveRegion: true,
-                  label: 'Harness setup status',
-                  value: ready ? 'Environment ready' : 'Checking this computer',
-                  child: ExcludeSemantics(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          '$kBootPrompt harness doctor',
-                          style: boxMonoStyle(weight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: 8),
-                        for (final entry in steps) ...[
-                          TerminalCheckLine(
-                            label: _labels[entry.key]!,
-                            status: _status(entry.value),
-                            ink: _ink(entry.value),
-                          ),
-                          const SizedBox(height: 1),
-                        ],
-                        const SizedBox(height: 9),
-                        TerminalProgressLine(
-                          value: ready ? 1 : value,
-                          color: ready ? grid.AppPalette.online : null,
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Flexible(
-                              child: Text(
-                                ready
-                                    ? 'all checks passed · opening your workspace'
-                                    : 'read-only: nothing is installed by this check',
-                                style: boxMonoStyle(
-                                  color: ready ? null : kBoxFaint,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            const TerminalCursor(),
-                          ],
-                        ),
-                      ],
+    return DesktopChrome(
+      child: Scaffold(
+        backgroundColor: grid.AppPalette.windowBg,
+        body: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(DesktopChrome.panelPadding),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 470),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Semantics(
+                    header: true,
+                    child: Text(
+                      ready
+                          ? 'Your computer is ready'
+                          : 'Checking this computer',
+                      style: grid.AppType.title(
+                        color: DesktopChrome.foreground,
+                        height: 1.3,
+                      ),
                     ),
                   ),
-                ),
+                  const SizedBox(height: DesktopChrome.panelPadding),
+                  for (final entry in steps)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: MergeSemantics(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            ExcludeSemantics(
+                              child: Icon(
+                                _icon(entry.value),
+                                size: iconSize,
+                                color: _ink(entry.value),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                _labels[entry.key]!,
+                                style: DesktopChrome.control(),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Flexible(
+                              fit: FlexFit.tight,
+                              child: Text(
+                                _status(entry.value),
+                                textAlign: TextAlign.end,
+                                style: DesktopChrome.metadata(),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: DesktopChrome.panelPadding),
+                  Semantics(
+                    key: const Key('environment-status'),
+                    container: true,
+                    liveRegion: true,
+                    label: 'Harness setup status',
+                    value: ready
+                        ? 'Environment ready'
+                        : 'Checking this computer. $progress',
+                    child: ExcludeSemantics(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (value != null)
+                            LinearProgressIndicator(
+                              value: ready ? 1 : value,
+                              minHeight: 4,
+                              borderRadius: BorderRadius.circular(2),
+                              color: ready
+                                  ? grid.AppPalette.online
+                                  : DesktopChrome.accent,
+                              backgroundColor: progressTrack,
+                              stopIndicatorRadius: 0,
+                            )
+                          else if (MediaQuery.disableAnimationsOf(context))
+                            Icon(
+                              AppIcons.hourglass,
+                              size: 20,
+                              color: DesktopChrome.muted,
+                            )
+                          else
+                            LinearProgressIndicator(
+                              minHeight: 4,
+                              borderRadius: BorderRadius.circular(2),
+                              color: DesktopChrome.accent,
+                              backgroundColor: progressTrack,
+                            ),
+                          const SizedBox(height: DesktopChrome.controlGap),
+                          Text(progress, style: DesktopChrome.metadata()),
+                          const SizedBox(height: DesktopChrome.groupGap),
+                          Text(
+                            status,
+                            style: DesktopChrome.text(
+                              color: ready
+                                  ? DesktopChrome.foreground
+                                  : DesktopChrome.muted,
+                              size: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -120,22 +175,31 @@ class EnvironmentPreflightScreen extends StatelessWidget {
     _ => true,
   };
 
-  /// The word in the right-hand column, in a terminal's vocabulary.
   static String _status(EnvironmentStepStatus status) => switch (status) {
-    EnvironmentStepStatus.ready => 'ok',
-    EnvironmentStepStatus.notApplicable => 'n/a',
-    EnvironmentStepStatus.failed => 'fail',
-    EnvironmentStepStatus.unavailable => 'missing',
-    EnvironmentStepStatus.needsTerminal => 'needs a terminal',
-    EnvironmentStepStatus.running => '..',
-    EnvironmentStepStatus.pending => '--',
+    EnvironmentStepStatus.ready => 'Ready',
+    EnvironmentStepStatus.notApplicable => 'Not needed',
+    EnvironmentStepStatus.failed => 'Check failed',
+    EnvironmentStepStatus.unavailable => 'Unavailable',
+    EnvironmentStepStatus.needsTerminal => 'Needs Terminal',
+    EnvironmentStepStatus.running => 'Checking…',
+    EnvironmentStepStatus.pending => 'Waiting',
   };
 
-  static Color? _ink(EnvironmentStepStatus status) => switch (status) {
+  static IconData _icon(EnvironmentStepStatus status) => switch (status) {
+    EnvironmentStepStatus.ready => AppIcons.circleCheck,
+    EnvironmentStepStatus.notApplicable => AppIcons.circleMinus,
+    EnvironmentStepStatus.failed ||
+    EnvironmentStepStatus.unavailable => AppIcons.circleAlert,
+    EnvironmentStepStatus.needsTerminal => AppIcons.externalLink,
+    EnvironmentStepStatus.running => AppIcons.ellipsis,
+    EnvironmentStepStatus.pending => AppIcons.clock,
+  };
+
+  static Color _ink(EnvironmentStepStatus status) => switch (status) {
     EnvironmentStepStatus.ready => grid.AppPalette.online,
     EnvironmentStepStatus.failed ||
     EnvironmentStepStatus.unavailable => grid.AppPalette.dangerFill,
     EnvironmentStepStatus.needsTerminal => grid.AppPalette.warn,
-    _ => null,
+    _ => DesktopChrome.muted,
   };
 }

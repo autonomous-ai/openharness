@@ -9,8 +9,7 @@ enum AppLogLevel { debug, info, warn, error }
 ///
 /// Ported from Grid, with one change: Riverpod out, a singleton in. The call
 /// sites here are `main`, `AppNotifier`, `WsConn` and the CLI runner, and most
-/// were never handed a `Ref` — the same reasoning that made `analytics` a
-/// singleton (see `analytics/analytics.dart`).
+/// were never handed a `Ref`.
 ///
 /// **Distinct from [CrashLog], and both are kept.** `CrashLog` answers "what
 /// threw", in one file, forever, with a full stack; this answers "what was the
@@ -31,6 +30,17 @@ abstract interface class AppLog {
     Object? error,
     StackTrace? stackTrace,
   });
+}
+
+/// File-backed sinks expose their pending diagnostics without requiring
+/// in-memory sinks or test recorders to manage a buffer.
+abstract interface class FlushableAppLog implements AppLog {
+  void flush();
+}
+
+void flushAppLog() {
+  final sink = appLog;
+  if (sink is FlushableAppLog) sink.flush();
 }
 
 /// Level-named conveniences over [AppLog.record], kept as extensions so every
@@ -60,13 +70,22 @@ extension AppLogX on AppLog {
 }
 
 /// [AppLog] backed by a per-day file under `~/.harness/logs`. Writes are
-/// synchronous and flushed (see [DailyLogFile]); IO errors are swallowed.
-class FileAppLog implements AppLog {
-  FileAppLog(this._file, {ErrorBurstFilter? burst, DateTime Function()? clock})
-    : _burst = burst ?? ErrorBurstFilter(),
-      _clock = clock ?? DateTime.now;
+/// synchronous and flushed except when [bufferDebug] is enabled for routine
+/// debug entries. Errors and lifecycle records also commit pending context.
+class FileAppLog implements FlushableAppLog {
+  FileAppLog(
+    this._file, {
+    this.bufferDebug = false,
+    ErrorBurstFilter? burst,
+    DateTime Function()? clock,
+  }) : _burst = burst ?? ErrorBurstFilter(),
+       _clock = clock ?? DateTime.now;
 
   final DailyLogFile _file;
+  final bool bufferDebug;
+
+  @override
+  void flush() => _file.flush();
 
   /// Injected so the stamp this writes is a thing a test can assert, rather than
   /// a thing a test has to watch happen. Same reason [ErrorBurstFilter] takes one.
@@ -96,17 +115,20 @@ class FileAppLog implements AppLog {
     if (error != null) body.write('  err=$error');
 
     if (level != AppLogLevel.error) {
-      _file.append('[${logStamp(_clock())}] $body');
-      _appendStack(stackTrace);
+      final buffered = bufferDebug && level == AppLogLevel.debug;
+      _file.append('[${logStamp(_clock())}] $body', buffered: buffered);
+      _appendStack(stackTrace, buffered: buffered);
       return;
     }
+    // A suppressed per-frame error must not turn interleaved debug traffic
+    // back into a per-frame fsync. Its context keeps the normal batch deadline.
     final admitted = _burst.admit(body.toString());
     if (admitted == null) return;
     _file.append('[${logStamp(_clock())}] $admitted');
     _appendStack(stackTrace);
   }
 
-  void _appendStack(StackTrace? stackTrace) {
+  void _appendStack(StackTrace? stackTrace, {bool buffered = false}) {
     if (stackTrace == null) return;
     _file.append(
       stackTrace
@@ -115,6 +137,7 @@ class FileAppLog implements AppLog {
           .split('\n')
           .map((l) => '    $l')
           .join('\n'),
+      buffered: buffered,
     );
   }
 
@@ -132,7 +155,7 @@ class FileAppLog implements AppLog {
 }
 
 /// No-op [AppLog]. The default, so a `flutter test` run never writes into a real
-/// `~/.harness` — the same rule analytics follows, and for the same reason.
+/// `~/.harness`.
 class NoopAppLog implements AppLog {
   const NoopAppLog();
 

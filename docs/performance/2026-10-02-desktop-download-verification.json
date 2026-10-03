@@ -1,0 +1,91 @@
+{
+  "version": "1.2.51",
+  "manifest_url": "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/metadata.json",
+  "started_at": "2026-10-02T13:34:26.289351+00:00",
+  "source_sha": null,
+  "run_id": null,
+  "status": "passed",
+  "artifacts": [
+    {
+      "version": "1.2.51",
+      "url": "https://cdn.autonomous.ai/harness/desktop/1.2.51/Harness-macos.zip",
+      "sha256": "c8b27b4d9c752a590c95449681581fe540a4563a6bfafbea7f627ae2cd0333d8",
+      "size": 115374651,
+      "key": "desktop-macos",
+      "started_at": "2026-10-02T13:34:26.652294+00:00",
+      "status": "passed",
+      "actual_size": 115374651,
+      "actual_sha256": "c8b27b4d9c752a590c95449681581fe540a4563a6bfafbea7f627ae2cd0333d8",
+      "finished_at": "2026-10-02T13:34:30.953515+00:00",
+      "duration_seconds": 4.301
+    },
+    {
+      "version": "1.2.51",
+      "url": "https://cdn.autonomous.ai/harness/desktop/1.2.51/Harness-macos.dmg",
+      "sha256": "806c3e5e80d1657e824bcc933d9c6019bd48d9ffa52f8eebad8dd486eb82728f",
+      "size": 119272496,
+      "key": "desktop-macos-dmg",
+      "started_at": "2026-10-02T13:34:26.652495+00:00",
+      "status": "passed",
+      "actual_size": 119272496,
+      "actual_sha256": "806c3e5e80d1657e824bcc933d9c6019bd48d9ffa52f8eebad8dd486eb82728f",
+      "finished_at": "2026-10-02T13:34:31.212793+00:00",
+      "duration_seconds": 4.56
+    },
+    {
+      "version": "1.2.51",
+      "url": "https://cdn.autonomous.ai/harness/desktop/1.2.51/Harness-macos-arm64.zip",
+      "sha256": "c92bd90f1e9639abeb85f8842e555211a6e8ca48d8ae37a07b9e514205769c6e",
+      "size": 115374684,
+      "key": "desktop-macos-arm64",
+      "started_at": "2026-10-02T13:34:26.652650+00:00",
+      "status": "passed",
+      "actual_size": 115374684,
+      "actual_sha256": "c92bd90f1e9639abeb85f8842e555211a6e8ca48d8ae37a07b9e514205769c6e",
+      "finished_at": "2026-10-02T13:34:32.560767+00:00",
+      "duration_seconds": 5.908
+    },
+    {
+      "version": "1.2.51",
+      "url": "https://cdn.autonomous.ai/harness/desktop/1.2.51/Harness-macos-arm64.dmg",
+      "sha256": "97c38cdcd37f530a017fafc564865ef5ec33095d292c5c02e25c3c429e14cbe0",
+      "size": 119275758,
+      "key": "desktop-macos-arm64-dmg",
+      "started_at": "2026-10-02T13:34:30.953717+00:00",
+      "status": "passed",
+      "actual_size": 119275758,
+      "actual_sha256": "97c38cdcd37f530a017fafc564865ef5ec33095d292c5c02e25c3c429e14cbe0",
+      "finished_at": "2026-10-02T13:34:36.102927+00:00",
+      "duration_seconds": 5.149
+    },
+    {
+      "version": "1.2.51",
+      "url": "https://cdn.autonomous.ai/harness/desktop/1.2.51/Harness-linux-x64.AppImage",
+      "sha256": "aca7f467d99676766301e5735ea0c4c9671b13dd6ac8a1f852b29cb69a05180d",
+      "size": 95910392,
+      "key": "desktop-linux-x64",
+      "started_at": "2026-10-02T13:34:31.212978+00:00",
+      "status": "passed",
+      "actual_size": 95910392,
+      "actual_sha256": "aca7f467d99676766301e5735ea0c4c9671b13dd6ac8a1f852b29cb69a05180d",
+      "finished_at": "2026-10-02T13:34:34.918303+00:00",
+      "duration_seconds": 3.705
+    },
+    {
+      "version": "1.2.51",
+      "url": "https://cdn.autonomous.ai/harness/desktop/1.2.51/Harness-linux-arm64.AppImage",
+      "sha256": "0a9cb996e7297f5ea24326b82296fcf0ce1c557b270aa5212ae55c281ff910d7",
+      "size": 95427080,
+      "key": "desktop-linux-arm64",
+      "started_at": "2026-10-02T13:34:32.560979+00:00",
+      "status": "passed",
+      "actual_size": 95427080,
+      "actual_sha256": "0a9cb996e7297f5ea24326b82296fcf0ce1c557b270aa5212ae55c281ff910d7",
+      "finished_at": "2026-10-02T13:34:35.782691+00:00",
+      "duration_seconds": 3.222
+    }
+  ],
+  "manifest_sha256": "ff0935300e107f944f3a04beb6e7c2dbb163dd8da99ebcf30789b49b6009f7f0",
+  "finished_at": "2026-10-02T13:34:36.103211+00:00",
+  "duration_seconds": 9.814
+}

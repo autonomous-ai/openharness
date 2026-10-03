@@ -411,7 +411,10 @@ void main() {
 
   test('Return sends one create, with the project name when there is one', () async {
     final connection = _Connection();
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -448,7 +451,10 @@ void main() {
   ]) {
     test('a missing $engine goes directly to the daemon launch', () async {
       final connection = _Connection();
-      final app = createApp(connectionForTest: (_) => connection);
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
       addTearDown(app.dispose);
       app.machineStates['m']!.engines.replace([
         EngineAvailability(engine: engine, installed: false),
@@ -476,7 +482,10 @@ void main() {
   test('a failed first launch shows the daemon error', () async {
     final connection = _Connection()
       ..createFailure = 'Automatic installation failed.';
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     addTearDown(app.dispose);
     app.machineStates['m']!.engines.replace([
       const EngineAvailability(engine: 'amp', installed: false),
@@ -500,7 +509,10 @@ void main() {
     'a lost reply is checked on, never answered with a second harness',
     () async {
       final connection = _Connection()..loseFirstReply = true;
-      final app = createApp(connectionForTest: (_) => connection);
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
       final box = NewHarnessController(
         app,
         machineId: 'm',
@@ -516,14 +528,16 @@ void main() {
       expect(box.query, isEmpty);
       expect(box.returnCreates, isTrue);
       expect(await box.create(), NewHarnessOutcome.created);
-      expect(connection.calls.map((call) => call.type), [
-        'agent_create',
-        'agent_create_status',
-      ]);
+      expect(
+        connection.calls
+            .map((call) => call.type)
+            .where((type) => type.startsWith('agent_create')),
+        ['agent_create', 'agent_create_status'],
+      );
     },
   );
 
-  testWidgets('⌘N opens the box over live panes, and Escape closes it', (
+  testWidgets('⌘N focuses the prompt over live panes and Escape dismisses it', (
     tester,
   ) async {
     newHarnessOpensInBox = true;
@@ -531,6 +545,10 @@ void main() {
     final app = createApp();
     seedMixedAgents(app);
     app.adoptSessionForTest(terminal('a0', []));
+    app.machineStates['m']!.localOnly = true;
+    app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+    await app.agentPreference.remember('codex');
+    await app.projectHistory.select('m', '/work/openharness');
     await app.addAgentToSwarm('m', 'a0');
     await mount(tester, app);
     await chord(tester, LogicalKeyboardKey.keyN);
@@ -543,7 +561,14 @@ void main() {
     expect(frame.center.dx, tester.view.physicalSize.width / 2);
     expect(frame.bottom, lessThan(tester.view.physicalSize.height));
     expect(find.byKey(const ValueKey('new-harness-input')), findsNothing);
-    expect(FocusManager.instance.primaryFocus!.debugLabel, 'new-harness-form');
+    expect(find.byKey(const ValueKey('new-harness-task')), findsOneWidget);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const ValueKey('new-harness-task')))
+          .focusNode!
+          .hasFocus,
+      isTrue,
+    );
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
     expect(find.byKey(const ValueKey('new-harness-form')), findsNothing);
@@ -553,7 +578,10 @@ void main() {
 
   test('a typed task is never dropped without being said, on any path', () async {
     final connection = _Connection();
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -897,7 +925,7 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
     expect(box.engine, 'claude');
-    expect(box.field, NewHarnessField.harness);
+    expect(box.field, NewHarnessField.launch);
     expect(closed, 0);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();

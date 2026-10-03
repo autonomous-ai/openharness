@@ -1,5 +1,7 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/desktop_window.dart';
@@ -30,18 +32,32 @@ class CloneRepositoryDialog extends StatefulWidget {
 
 class _CloneRepositoryDialogState extends State<CloneRepositoryDialog> {
   final _url = TextEditingController();
+  final _inputFocus = FocusNode(debugLabel: 'Clone repository URL');
   final _actionFocus = FocusNode(debugLabel: 'Clone repository');
   final _errorAnchor = GlobalKey(debugLabel: 'Clone error');
   String? _parent, _error;
   RepositoryClone? _clone;
   bool _picking = false, _closing = false;
   bool get _busy => _clone != null;
+  bool get _composing =>
+      _url.value.composing.isValid && !_url.value.composing.isCollapsed;
   GitHubRepository? get _repository => GitHubRepository.parse(_url.text);
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && ModalRoute.of(context)?.isCurrent == true) {
+        _inputFocus.requestFocus();
+      }
+    });
+  }
 
   @override
   void dispose() {
     _clone?.cancel();
     _url.dispose();
+    _inputFocus.dispose();
     _actionFocus.dispose();
     super.dispose();
   }
@@ -148,7 +164,7 @@ class _CloneRepositoryDialogState extends State<CloneRepositoryDialog> {
           // respect PopScope, so an accidental click cannot stop a clone.
           DismissIntent: CallbackAction<DismissIntent>(
             onInvoke: (_) {
-              _cancel();
+              if (!_composing) _cancel();
               return null;
             },
           ),
@@ -163,19 +179,28 @@ class _CloneRepositoryDialogState extends State<CloneRepositoryDialog> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const FieldLabel('GitHub repository'),
-                  TextField(
-                    key: const ValueKey('clone-repository-url'),
-                    controller: _url,
-                    autofocus: true,
-                    readOnly: _busy,
-                    style: grid.AppType.mono(
-                      color: grid.AppPalette.textPrimary,
+                  Focus(
+                    skipTraversal: true,
+                    onKeyEvent: (_, event) =>
+                        event.logicalKey == LogicalKeyboardKey.escape &&
+                            _composing
+                        ? KeyEventResult.skipRemainingHandlers
+                        : KeyEventResult.ignored,
+                    child: TextField(
+                      key: const ValueKey('clone-repository-url'),
+                      controller: _url,
+                      focusNode: _inputFocus,
+                      autofocus: true,
+                      readOnly: _busy,
+                      style: grid.AppType.mono(
+                        color: grid.AppPalette.textPrimary,
+                      ),
+                      decoration: const InputDecoration(
+                        hintText: 'https://github.com/owner/repository',
+                      ),
+                      onChanged: (_) => setState(() => _error = null),
+                      onSubmitted: (_) => _submit(),
                     ),
-                    decoration: const InputDecoration(
-                      hintText: 'https://github.com/owner/repository',
-                    ),
-                    onChanged: (_) => setState(() => _error = null),
-                    onSubmitted: (_) => _submit(),
                   ),
                   const SizedBox(height: 6),
                   Text(
@@ -186,7 +211,7 @@ class _CloneRepositoryDialogState extends State<CloneRepositoryDialog> {
                   const FieldLabel('Destination on this computer'),
                   OutlinedButton.icon(
                     onPressed: _busy || _picking ? null : _chooseDestination,
-                    icon: const Icon(Icons.folder_open_outlined, size: 18),
+                    icon: const Icon(AppIcons.folderOpen, size: 18),
                     label: Text(
                       _parent ?? 'Choose folder…',
                       maxLines: 2,

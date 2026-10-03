@@ -2,12 +2,13 @@ import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
-import 'package:harness_mobile/widgets/link_machine_screen.dart';
 
-import 'phone_header.dart';
 import 'phone_shell_scope.dart';
+import 'tty.dart';
+import 'tty_controls.dart';
+import 'welcome/unlock_computer.dart';
 
-/// A machine's password form, as a phone page — the same [LinkMachineScreen] the desktop pops
+/// A machine's password form, as a phone page — the form the desktop's `LinkMachineScreen` pops
 /// up, since the exchange behind it is the same.
 ///
 /// It leaves by itself either way — once the link lands, and when the form's own Close is pressed —
@@ -23,14 +24,14 @@ class LinkPage extends StatefulWidget {
   final AppNotifier notifier;
   final String machineId;
 
-  /// Whether this form is a PAGE INSIDE something else — [MachinePage] in the machine pager — rather
-  /// than a route of its own.
+  /// Whether this form is drawn INSIDE another page — [AgentHome], when the account's one machine
+  /// needs its password — rather than being a route of its own.
   ///
   /// ⚠️ **It turns off every navigation this page does, and it has to.** The route belongs to the
-  /// pager, not to this page: a `pushReplacement` here would swap out the PAGER and take the swipe
-  /// with it, and a `maybePop` would drop the person back to the tab from a page they were only
-  /// swiping past. Embedded, the page just draws the form; the builder above it watches the same
-  /// `needsLink` and puts the agents there the moment the link lands.
+  /// page around the form, not to the form: a `pushReplacement` here would swap out the home
+  /// screen itself, and a `maybePop` has nothing behind it to go back to. Embedded, the page just
+  /// draws the form; the builder above it watches the same `needsLink` and puts the agents there
+  /// the moment the link lands.
   final bool embedded;
 
   @override
@@ -58,10 +59,8 @@ class _LinkPageState extends State<LinkPage> {
     // run and pops the page on the frame it opened. The desktop fixes the same bug the same way
     // (`revisitLinkPrompt`, 051ea5b), where the reactive gates check the mark before calling.
     //
-    // ⚠️ Embedded, mounting is NOT somebody asking. A pager builds the pages either side of the one
-    // on screen, so this would clear the dismissal of a machine nobody has opened — reopening a form
-    // that was Closed, one page over, out of sight. There the mark is [MachinePage]'s to read and the
-    // "Enter password" button's to clear, and both act on the machine actually being looked at.
+    // ⚠️ Embedded, mounting is NOT somebody asking: the page around the form put it up by itself,
+    // so the mark is that page's to read and clear, not this form's.
     if (!widget.embedded) {
       widget.notifier.revisitLinkPrompt(widget.machineId);
       widget.notifier.addListener(_follow);
@@ -75,7 +74,7 @@ class _LinkPageState extends State<LinkPage> {
   }
 
   void _follow() {
-    // Embedded, there is nowhere for this page to go: [MachinePage] rebuilds off the same notifier
+    // Embedded, there is nowhere for this page to go: [AgentHome] rebuilds off the same notifier
     // and swaps the form for the agents itself. Listening at all would only risk the pops below.
     if (widget.embedded || _leaving || !mounted) return;
     final machine = widget.notifier.stateOf(widget.machineId);
@@ -106,27 +105,33 @@ class _LinkPageState extends State<LinkPage> {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
+    final tty = Tty.of(context);
     final machine = widget.notifier.stateOf(widget.machineId);
     return Scaffold(
-      backgroundColor: AppPalette.windowBg,
+      backgroundColor: tty.ground,
       body: SafeArea(
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            PhoneHeader(
-              title: machine?.machine.displayName ?? 'Machine',
-              subtitle: Text(
-                'Enter the password set on this machine',
-                style: TextStyle(color: AppPalette.textSecondary, fontSize: 13),
+            if (!widget.embedded)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TtyBackButton(
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
               ),
-            ),
             if (machine != null)
               Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                  child: LinkMachineScreen(
-                    notifier: widget.notifier,
-                    machineState: machine,
-                  ),
+                child: UnlockComputer(
+                  notifier: widget.notifier,
+                  machineState: machine,
+                  // Home, not a pushed page: nothing pops here, so the shell is told — and it
+                  // carries on to the harnesses, or to New when there are none.
+                  onUnlocked: widget.embedded
+                      ? () =>
+                            PhoneShellScope.maybeOf(context)
+                                ?.onMachineLinked(widget.machineId)
+                      : null,
                 ),
               ),
           ],

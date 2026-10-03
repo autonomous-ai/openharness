@@ -1,4 +1,4 @@
-/// Built-in backgrounds for empty Harness pages. Wallpaper never covers agents.
+/// Backgrounds for empty Harness pages. A background never covers agents.
 enum HarnessBackground {
   plain('Blank'),
   renaissance('Renaissance notebook', 'renaissance-notebook.jpg'),
@@ -9,7 +9,11 @@ enum HarnessBackground {
   lake('Lake', 'swarm-welcome-dusk.jpg'),
   silk('Silk', 'swarm-welcome-abstract.jpg'),
   threads('Threads', 'swarm-welcome-associative-memory.jpg'),
-  constellation('Constellation', 'swarm-welcome-ai.jpg');
+  constellation('Constellation', 'swarm-welcome-ai.jpg'),
+
+  /// The user's own image (`CustomBackground`). Not in [gallery]: it has
+  /// its own card, which can be empty.
+  custom('Custom');
 
   const HarnessBackground(this.label, [this.fileName]);
   final String label;

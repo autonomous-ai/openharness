@@ -7,11 +7,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/shared/theme/app_pane_icon.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/pane_preset.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/new_harness_form.dart';
+import 'package:harness/state/app_state.dart';
+import 'package:harness/widgets/agent_drag.dart';
 import 'package:harness/ws/ws_conn.dart';
 import 'package:xterm/xterm.dart';
 
@@ -33,6 +36,7 @@ class _Creation extends WsConn {
       );
   final reply = Completer<Map<String, dynamic>>();
   final calls = <String>[];
+  Map<String, dynamic>? creation;
   @override
   Future<Map<String, dynamic>> request(
     String type, {
@@ -43,48 +47,80 @@ class _Creation extends WsConn {
     if (type == 'engines_probe') {
       return Future.value({
         'engines': [
-          {'engine': 'claude', 'installed': true},
+          for (final engine in ['claude', 'codex'])
+            {'engine': engine, 'installed': true},
         ],
       });
     }
+    if (type == 'agent_create') creation = Map.of(payload);
     return type == 'agent_create' ? reply.future : Future.value({});
   }
 
   void complete() => reply.complete({
-    'agent': {'id': 'created', 'name': 'Created', 'engine': 'claude'},
+    'agent': {
+      'id': 'created',
+      'name': 'Created',
+      'engine': creation?['engine'] ?? 'claude',
+    },
   });
+}
+
+(AppNotifier, _Creation) _splitApp({MemoryStore? store}) {
+  newHarnessOpensInBox = true;
+  addTearDown(() => newHarnessOpensInBox = false);
+  final connection = _Creation();
+  final app = createApp(store: store, connectionForTest: (_) => connection);
+  app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+  final machine = app.machineStates['m']!;
+  machine.nodeOnline = true;
+  machine.localOnly = true;
+  machine.agents = [
+    for (final agent in machine.agents)
+      Agent(
+        id: agent.id,
+        name: agent.name,
+        engine: agent.id == 'a0' ? 'claude' : 'codex',
+        terminalAvailable: true,
+        project: AgentProject(name: 'work', cwd: '/work/${agent.id}'),
+      ),
+  ];
+  return (app, connection);
+}
+
+NewHarnessController _form(WidgetTester tester) =>
+    tester.widget<NewHarnessForm>(find.byType(NewHarnessForm)).controller;
+
+Future<void> _create(WidgetTester tester, _Creation connection) async {
+  await startHarness(tester);
+  expect(
+    connection.calls.where((call) => call == 'agent_create'),
+    hasLength(1),
+  );
+  connection.complete();
+  await tester.pump();
+  // The fake transport does not attach the created terminal, so its loading
+  // indicator keeps animating after the receipt has settled.
+  await tester.pump(const Duration(milliseconds: 300));
+  await tester.pump();
 }
 
 void main() {
   for (final axis in PaneResizeAxis.values) {
     final direction = axis == PaneResizeAxis.x ? 'right' : 'down';
-    final title = axis == PaneResizeAxis.x
-        ? 'New Pane to the Right'
-        : 'New Pane Below';
-    testWidgets('five-pane side tile can split $direction with scrolling', (
+    final shortcut = axis == PaneResizeAxis.x
+        ? LogicalKeyboardKey.keyR
+        : LogicalKeyboardKey.keyD;
+    testWidgets('five-pane side tile can create $direction with scrolling', (
       tester,
     ) async {
       final store = MemoryStore();
-      final app = createApp(store: store);
-      final machine = app.machineStates['m']!;
-      machine.nodeOnline = true;
-      machine.localOnly = true;
-      machine.agents[5] = const Agent(
-        id: 'a5',
-        name: 'Sixth helper',
-        engine: 'codex',
-        terminalAvailable: true,
-      );
+      final (app, connection) = _splitApp(store: store);
       final frames = <TerminalBinaryFrame>[];
       final original = [
         for (var i = 0; i < 5; i++)
           app.adoptSessionForTest(terminal('a$i', frames)),
       ];
-      final swarm = app.activeSwarm;
       app.setPreset(5, PanePreset.middleMain);
-      app.newSwarm();
-      final helper = app.adoptSessionForTest(terminal('a5', frames));
-      app.selectSwarm(swarm.id);
       final target = original[3];
       app.focusPane(target.id);
       await mount(tester, app);
@@ -93,46 +129,20 @@ void main() {
         matching: find.byType(TerminalView),
       );
       final retained = tester.element(view);
-      final button = find.descendant(
-        of: find.byKey(target.cellKey),
-        matching: find.byKey(ValueKey('pane-split-$direction')),
-      );
-      expect(button, findsNothing);
-      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      final targetRect = tester.getRect(find.byKey(target.cellKey));
-      await mouse.addPointer(location: targetRect.center);
-      await mouse.moveTo(
-        axis == PaneResizeAxis.x
-            ? Offset(targetRect.right - 2, targetRect.center.dy)
-            : Offset(targetRect.center.dx, targetRect.bottom - 2),
-      );
+      final rect = tester.getRect(find.byKey(target.cellKey));
+      await chord(tester, shortcut);
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 120));
-      expect(button, findsNothing);
-      await chord(
-        tester,
-        axis == PaneResizeAxis.x
-            ? LogicalKeyboardKey.keyR
-            : LogicalKeyboardKey.keyD,
-      );
-      await tester.pump();
-      expect(find.text(title), findsOneWidget);
+      expect(_form(tester).split?.paneId, target.id);
+      expect(_form(tester).project.folder, '/work/a3');
+      expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       expect(app.panes, original);
-      await chord(
-        tester,
-        axis == PaneResizeAxis.x
-            ? LogicalKeyboardKey.keyR
-            : LogicalKeyboardKey.keyD,
-      );
-      final search = find.byKey(const ValueKey('swarm-search-input'));
-      expect(search, findsOneWidget);
-      await tester.enterText(search, 'Sixth helper');
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
+      expect(tester.getRect(find.byKey(target.cellKey)), rect);
+      expect(tester.element(view), same(retained));
+      await chord(tester, shortcut);
+      await _create(tester, connection);
+      final helper = app.panes.singleWhere((pane) => pane.agentId == 'created');
       expect(app.panes, [...original.take(4), helper, original.last]);
       expect(tester.element(view), same(retained));
       final before = tester.getRect(find.byKey(target.cellKey));
@@ -144,6 +154,11 @@ void main() {
         expect(after.top, greaterThan(before.bottom));
         expect(after.left, before.left);
       }
+      expect(
+        app.focusedPaneId,
+        helper.id,
+        reason: 'creation reveals its new pane',
+      );
       final viewport = tester.view.physicalSize;
       expect(after.left, greaterThanOrEqualTo(0));
       expect(after.top, greaterThanOrEqualTo(0));
@@ -160,15 +175,9 @@ void main() {
           )
           .controller!;
       expect(scroll.position.maxScrollExtent, greaterThan(0));
-      // Directional focus also reveals an existing pane outside the viewport.
       app.focusPane(original[2].id);
       await chord(tester, LogicalKeyboardKey.arrowDown);
-      await tester.pump();
       expect(app.focusedPaneId, original.last.id);
-      expect(
-        tester.getRect(find.byKey(original.last.cellKey)).right,
-        lessThanOrEqualTo(viewport.width + .001),
-      );
       app.focusPane(original.last.id);
       await chord(tester, LogicalKeyboardKey.arrowLeft);
       await tester.pump();
@@ -176,16 +185,13 @@ void main() {
       final focused = tester.getRect(find.byKey(original[1].cellKey));
       expect(focused.left, greaterThanOrEqualTo(0));
       expect(focused.right, lessThanOrEqualTo(viewport.width + .001));
-      app.focusPane(helper.id, reveal: true);
-      await tester.pump();
       expect(frames, isEmpty);
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
       await tester.pump(const Duration(milliseconds: 10));
-      expect(frames.single.streamId, helper.session!.streamId);
+      expect(frames.single.streamId, original[1].session!.streamId);
       final savedTiles = app.activeSwarm.manualLayout!.tiles;
       final savedExtent = scroll.position.maxScrollExtent;
       await app.flushPaneLayout();
-      await mouse.removePointer();
       await tester.pumpWidget(const SizedBox());
       app.dispose();
       final restored = createApp(store: store);
@@ -210,26 +216,12 @@ void main() {
     });
 
     for (final trigger in ['shortcut', 'palette', 'native menu']) {
-      testWidgets('$trigger splits the focused pane $direction', (
+      testWidgets('$trigger creates a new pane $direction without searching', (
         tester,
       ) async {
-        final app = createApp();
-        final machine = app.machineStates['m']!;
-        machine.nodeOnline = true;
-        machine.localOnly = true;
-        machine.agents[2] = const Agent(
-          id: 'a2',
-          name: 'New split helper',
-          engine: 'codex',
-          terminalAvailable: true,
-        );
+        final (app, connection) = _splitApp();
         final frames = <TerminalBinaryFrame>[];
         final first = app.adoptSessionForTest(terminal('a0', frames));
-        final original = app.activeSwarmId;
-        app.newSwarm();
-        final helper = app.adoptSessionForTest(terminal('a2', frames));
-        app.selectSwarm(original);
-        app.focusPane(first.id);
         const channel = MethodChannel('harness/swarm_tabs');
         final messenger = tester.binding.defaultBinaryMessenger;
         messenger.setMockMethodCallHandler(channel, (_) async => true);
@@ -239,12 +231,7 @@ void main() {
         await tester.pump();
         switch (trigger) {
           case 'shortcut':
-            await chord(
-              tester,
-              axis == PaneResizeAxis.x
-                  ? LogicalKeyboardKey.keyR
-                  : LogicalKeyboardKey.keyD,
-            );
+            await chord(tester, shortcut);
           case 'palette':
             await chord(tester, LogicalKeyboardKey.keyP, shift: true);
             await tester.enterText(
@@ -265,17 +252,19 @@ void main() {
             );
         }
         await tester.pump();
-        final search = find.byKey(const ValueKey('swarm-search-input'));
-        expect(search, findsOneWidget);
-        expect(find.text(title), findsOneWidget);
+        expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
+        final form = _form(tester);
+        expect(form.split?.axis, axis);
+        expect(form.split?.paneId, first.id);
+        expect(form.engine, 'claude');
+        expect(form.machineId, 'm');
+        expect(form.project.folder, '/work/a0');
         expect(app.panes, [first]);
-        await tester.enterText(search, 'New split helper');
-        await tester.pump();
-        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-        await tester.pump();
-        expect(app.panes, [first, helper]);
+        expect(connection.creation, isNull);
+        await _create(tester, connection);
+        expect(app.panes.map((pane) => pane.agentId), ['a0', 'created']);
         final before = tester.getRect(find.byKey(first.cellKey));
-        final after = tester.getRect(find.byKey(helper.cellKey));
+        final after = tester.getRect(find.byKey(app.panes.last.cellKey));
         if (axis == PaneResizeAxis.x) {
           expect(after.left, greaterThan(before.right));
           expect(after.top, before.top);
@@ -290,25 +279,12 @@ void main() {
     }
 
     testWidgets(
-      'hovering the $direction edge stays quiet and the shortcut splits the focused pane',
+      'hovering the $direction edge splits with its project and keeps the terminal',
       (tester) async {
-        final app = createApp();
-        final machine = app.machineStates['m']!;
-        machine.nodeOnline = true;
-        machine.localOnly = true;
-        machine.agents[2] = const Agent(
-          id: 'a2',
-          name: 'Existing helper',
-          engine: 'codex',
-          terminalAvailable: true,
-        );
+        final (app, connection) = _splitApp();
         final frames = <TerminalBinaryFrame>[];
         final first = app.adoptSessionForTest(terminal('a0', frames));
         final neighbor = app.adoptSessionForTest(terminal('a1', frames));
-        final original = app.activeSwarmId;
-        app.newSwarm();
-        final helper = app.adoptSessionForTest(terminal('a2', frames));
-        app.selectSwarm(original);
         app.focusPane(neighbor.id);
         await mountWide(tester, app);
         tester.view.physicalSize = const Size(3000, 1800);
@@ -321,50 +297,73 @@ void main() {
           matching: find.byType(TerminalView),
         );
         final retained = tester.element(view);
-        final previousFocus = FocusManager.instance.primaryFocus;
-        final button = find.descendant(
+        final splitButton = find.descendant(
           of: target,
           matching: find.byKey(ValueKey('pane-split-$direction')),
         );
-        expect(button, findsNothing);
+        expect(splitButton.hitTestable(), findsNothing);
         final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
         await mouse.addPointer(location: rect.center);
-        await mouse.moveTo(
+        final edge = axis == PaneResizeAxis.x
+            ? Offset(rect.right - 2, rect.center.dy)
+            : Offset(rect.center.dx, rect.bottom - 2);
+        await mouse.moveTo(edge);
+        await tester.pump(const Duration(milliseconds: 150));
+        expect(splitButton.hitTestable(), findsOneWidget);
+        expect(
+          tester
+              .widget<AppPaneIcon>(
+                find.descendant(
+                  of: splitButton,
+                  matching: find.byType(AppPaneIcon),
+                ),
+              )
+              .symbol,
           axis == PaneResizeAxis.x
-              ? Offset(rect.right - 2, rect.center.dy)
-              : Offset(rect.center.dx, rect.bottom - 2),
+              ? AppPaneSymbol.splitRight
+              : AppPaneSymbol.splitDown,
         );
-        await tester.pump(const Duration(milliseconds: 120));
-        expect(button, findsNothing);
         expect(app.focusedPaneId, neighbor.id);
-        expect(FocusManager.instance.primaryFocus, same(previousFocus));
         expect(tester.element(view), same(retained));
         expect(tester.getRect(target), rect);
         expect(frames, isEmpty);
-
-        await chord(tester, LogicalKeyboardKey.arrowLeft);
+        await mouse.moveTo(rect.center);
+        await tester.pump(const Duration(milliseconds: 150));
+        expect(splitButton.hitTestable(), findsNothing);
+        await mouse.moveTo(edge);
+        await tester.pump(const Duration(milliseconds: 150));
+        await mouse.moveTo(tester.getCenter(splitButton));
+        await tester.pump();
+        expect(splitButton.hitTestable(), findsOneWidget);
+        await mouse.down(tester.getCenter(splitButton));
+        await mouse.up();
+        await tester.pump();
+        expect(_form(tester).split?.paneId, first.id);
+        expect(_form(tester).engine, 'claude');
+        expect(_form(tester).project.folder, '/work/a0');
         expect(app.focusedPaneId, first.id);
-        await chord(
-          tester,
-          axis == PaneResizeAxis.x
-              ? LogicalKeyboardKey.keyR
-              : LogicalKeyboardKey.keyD,
-        );
+        expect(connection.creation, isNull);
+        // Opening schedules focus after layout. Deliver it before Escape so
+        // the key reaches the composer rather than the previous terminal.
         await tester.pump();
-        final search = find.byKey(const ValueKey('swarm-search-input'));
-        expect(search, findsOneWidget);
-        expect(find.text(title), findsOneWidget);
-        expect(app.focusedPaneId, first.id);
-        await tester.enterText(search, 'Existing helper');
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pump();
-        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        expect(find.byType(NewHarnessForm), findsNothing);
+        expect(app.panes, [first, neighbor]);
+        expect(tester.getRect(target), rect);
+        expect(tester.element(view), same(retained));
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+        await tester.pump(const Duration(milliseconds: 10));
+        expect(frames.single.streamId, first.session!.streamId);
+        frames.clear();
+        await chord(tester, shortcut);
         await tester.pump();
-        expect(search, findsNothing);
-        expect(app.panes, [first, helper, neighbor]);
+        await _create(tester, connection);
+        expect(app.panes.map((pane) => pane.agentId), ['a0', 'created', 'a1']);
         expect(tester.element(view), same(retained));
         expect(tester.getRect(find.byKey(neighbor.cellKey)), neighborRect);
         final splitRect = tester.getRect(target);
-        final addedRect = tester.getRect(find.byKey(helper.cellKey));
+        final addedRect = tester.getRect(find.byKey(app.panes[1].cellKey));
         if (axis == PaneResizeAxis.x) {
           expect(addedRect.left, greaterThan(splitRect.right));
           expect(addedRect.top, splitRect.top);
@@ -375,94 +374,63 @@ void main() {
           expect(addedRect.width, splitRect.width);
         }
         expect(frames, isEmpty);
-        await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-        await tester.pump(const Duration(milliseconds: 10));
-        expect(frames.single.streamId, helper.session!.streamId);
-        expect(frames.single.bytes, [27, 91, 67]);
         await mouse.removePointer();
         await tester.pumpWidget(const SizedBox());
         app.dispose();
       },
     );
-
-    testWidgets('split $direction creates through the same picker as Cmd-P', (
-      tester,
-    ) async {
-      newHarnessOpensInBox = true;
-      addTearDown(() => newHarnessOpensInBox = false);
-      final connection = _Creation();
-      final app = createApp(connectionForTest: (_) => connection);
-      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
-      final machine = app.machineStates['m']!;
-      machine.nodeOnline = true;
-      machine.localOnly = true;
-      machine.agents[0] = const Agent(
-        id: 'a0',
-        name: 'Checkout',
-        engine: 'claude',
-        project: AgentProject(name: 'work', cwd: '/work/checkout'),
-      );
-      final frames = <TerminalBinaryFrame>[];
-      final pane = app.adoptSessionForTest(terminal('a0', frames));
-      final original = app.activeSwarmId;
-      await mountWide(tester, app);
-      final rect = tester.getRect(find.byKey(pane.cellKey));
-      final shortcut = axis == PaneResizeAxis.x
-          ? LogicalKeyboardKey.keyR
-          : LogicalKeyboardKey.keyD;
-      await chord(tester, shortcut);
-      expect(find.text(title), findsOneWidget);
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pump();
-      expect(app.panes, [pane]);
-      expect(tester.getRect(find.byKey(pane.cellKey)), rect);
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-      await tester.pump(const Duration(milliseconds: 10));
-      expect(frames.single.bytes, [27, 91, 67]);
-      frames.clear();
-
-      // Empty search selects creation, just as New Pane does.
-      await chord(tester, shortcut);
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pump();
-      final box = tester
-          .widget<NewHarnessForm>(find.byType(NewHarnessForm))
-          .controller;
-      expect(box.split?.axis, axis);
-      expect(box.split?.paneId, pane.id);
-      expect(box.engine, 'claude');
-      expect(box.machineId, 'm');
-      expect(box.project.folder, '/work/checkout');
-      expect(app.panes, [pane]);
-      expect(connection.calls, isNot(contains('agent_create')));
-      await startHarness(tester);
-      await tester.pump();
-      expect(
-        connection.calls.where((call) => call == 'agent_create'),
-        hasLength(1),
-      );
-      expect(app.panes, [pane]);
-      connection.complete();
-      await tester.pump();
-      // The fake connection never attaches the new terminal, whose loading
-      // indicator keeps animating after creation has already completed.
-      await tester.pump(const Duration(milliseconds: 200));
-      expect(app.activeSwarmId, original);
-      expect(app.panes.map((pane) => pane.agentId), ['a0', 'created']);
-      final before = tester.getRect(find.byKey(pane.cellKey));
-      final after = tester.getRect(find.byKey(app.panes.last.cellKey));
-      if (axis == PaneResizeAxis.x) {
-        expect(after.left, greaterThan(before.right));
-        expect(after.top, before.top);
-      } else {
-        expect(after.top, greaterThan(before.bottom));
-        expect(after.left, before.left);
-      }
-      expect(frames, isEmpty);
-      await tester.pumpWidget(const SizedBox());
-      app.dispose();
-    });
   }
+
+  testWidgets('zoom restores the layout and keeps terminal renderers alive', (
+    tester,
+  ) async {
+    final (app, connection) = _splitApp();
+    final frames = <TerminalBinaryFrame>[];
+    final first = app.adoptSessionForTest(terminal('a0', frames));
+    final neighbor = app.adoptSessionForTest(terminal('a1', frames));
+    await mountWide(tester, app);
+    final pane = find.byKey(first.cellKey);
+    final view = find.descendant(of: pane, matching: find.byType(TerminalView));
+    final retained = tester.element(view);
+    final rect = tester.getRect(pane);
+    app.focusPane(first.id);
+    await tester.pump();
+    await chord(tester, LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(app.focusedPaneId, first.id);
+    expect(app.zoomedPaneId, first.id);
+    expect(tester.element(view), same(retained));
+    expect(tester.getSize(pane).width, greaterThan(rect.width));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    final zoomed = tester.getRect(pane);
+    await mouse.addPointer(location: zoomed.center);
+    await mouse.moveTo(Offset(zoomed.right - 2, zoomed.center.dy));
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(
+      find.byKey(const ValueKey('pane-split-right')).hitTestable(),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('pane-zoom')), findsNothing);
+    await chord(tester, LogicalKeyboardKey.keyR);
+    await tester.pump();
+    expect(find.byType(NewHarnessForm), findsNothing);
+    expect(connection.creation, isNull);
+    await chord(tester, LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(app.zoomedPaneId, isNull);
+    expect(tester.getRect(pane), rect);
+    expect(tester.element(view), same(retained));
+    expect(frames, isEmpty);
+    await tester.tap(
+      find.descendant(of: pane, matching: find.byType(PaneCloseButton)),
+    );
+    await tester.pump();
+    expect(app.panes, [neighbor]);
+    expect(neighbor.session, isNotNull);
+    await mouse.removePointer();
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+  });
 
   testWidgets(
     'manual split keeps neighboring terminals and pins, restores offline and closes/reopens precisely',
@@ -537,7 +505,8 @@ void main() {
       restored.dispose();
       await app.closePane(shared.id);
       await tester.pump();
-      expect(app.activeSwarm.manualLayout!.tiles, before.tiles);
+      expect(app.activeSwarm.manualLayout, isNull);
+      expect(app.activeSwarm.arranged!.tiles, before.tiles);
       expect(app.pinnedSlotFor(second), 1);
       expect(app.reopenClosed(), isTrue);
       await tester.pump();
@@ -546,13 +515,14 @@ void main() {
       expect(app.pinnedSlotFor(second), 2);
       await app.closePane(shared.id);
       await tester.pump();
-      final current = app.activeSwarm.manualLayout!;
+      final current = app.activeSwarm.arranged!;
+      final layoutKey = app.activeSwarm.arrangedKey!;
       final resized = current.resize(
         current.dividers.firstWhere((d) => d.axis == PaneResizeAxis.x),
         .6,
         minimum: app.activeSwarm.arrangedMinimum!,
       );
-      app.resizePanes(original, '3:manual', resized);
+      app.resizePanes(original, layoutKey, resized);
       await tester.pump();
       expect(app.reopenClosed(), isTrue);
       await tester.pump();
@@ -561,7 +531,7 @@ void main() {
         isNull,
         reason: 'Reopening must not resurrect the old layout over newer sizing choices',
       );
-      expect(app.activeSwarm.paneSizes['3:manual']!.tiles, resized.tiles);
+      expect(app.activeSwarm.paneSizes[layoutKey]!.tiles, resized.tiles);
       app.setPreset(4, PanePreset.quad);
       await tester.pump();
       expect(app.activeSwarm.manualLayout, isNull);
@@ -629,6 +599,8 @@ void main() {
   testWidgets('split creation dismissal restores terminal input immediately', (
     tester,
   ) async {
+    newHarnessOpensInBox = true;
+    addTearDown(() => newHarnessOpensInBox = false);
     final connection = _Creation();
     final app = createApp(connectionForTest: (_) => connection);
     final machine = app.machineStates['m']!;
@@ -652,24 +624,15 @@ void main() {
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
-    expect(find.text('New Pane to the Right'), findsOneWidget);
-    expect(find.byKey(const ValueKey('swarm-row-action')), findsOneWidget);
-    expect(find.byType(AlertDialog), findsNothing);
-    await chord(tester, LogicalKeyboardKey.keyN);
-    await tester.pump();
-    expect(find.text('New Harness to the right'), findsOneWidget);
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('new-agent-project-browse')),
-        matching: find.text('checkout'),
-      ),
-      findsOneWidget,
-    );
+    expect(_form(tester).split?.paneId, pane.id);
+    expect(_form(tester).project.folder, '/work/checkout');
     expect(app.panes, [pane]);
+    await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
     await tester.pump();
     expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(NewHarnessForm), findsNothing);
     expect(app.panes, [pane]);
     expect(connection.calls, isNot(contains('agent_create')));
     expect(frames, isEmpty);

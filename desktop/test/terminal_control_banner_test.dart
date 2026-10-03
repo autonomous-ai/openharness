@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -228,7 +229,10 @@ void main() {
     expect(banner, findsOneWidget);
     expect(hint, findsOneWidget);
     expect(
-      find.descendant(of: banner, matching: find.byIcon(Icons.keyboard_return)),
+      find.descendant(
+        of: banner,
+        matching: find.byIcon(AppIcons.cornerDownLeft),
+      ),
       findsOneWidget,
       reason: 'the key is drawn on the button itself',
     );
@@ -240,9 +244,10 @@ void main() {
     // A pane-level notice (offline, unlinked) already explains itself.
     await pump(
       tester,
+      readOnly: true,
       notice: terminalNotice(
         label: 'Offline',
-        icon: Icons.cloud_off,
+        icon: AppIcons.cloudOff,
         detail: 'Test host is offline.',
       ),
     );
@@ -260,7 +265,7 @@ void main() {
       tester,
       notice: terminalNotice(
         label: 'Not confirmed',
-        icon: Icons.help_outline,
+        icon: AppIcons.circleHelp,
         detail:
             'The engine is still running here; the daemon has not confirmed '
             'which conversation it reopened.',
@@ -276,7 +281,10 @@ void main() {
     expect(button, findsOneWidget);
     // ⏎ belongs to taking the stream back; this action has no chord behind it.
     expect(
-      find.descendant(of: button, matching: find.byIcon(Icons.keyboard_return)),
+      find.descendant(
+        of: button,
+        matching: find.byIcon(AppIcons.cornerDownLeft),
+      ),
       findsNothing,
     );
     await tester.tap(button);
@@ -294,7 +302,7 @@ void main() {
         tester,
         notice: terminalNotice(
           label: 'Link required',
-          icon: Icons.link_off,
+          icon: AppIcons.unlink,
           detail: 'Test host needs linking.',
           actionLabel: 'Link',
           onAction: () {},
@@ -311,9 +319,10 @@ void main() {
   ) async {
     await pump(
       tester,
+      readOnly: true,
       notice: terminalNotice(
         label: 'Offline',
-        icon: Icons.cloud_off,
+        icon: AppIcons.cloudOff,
         detail: 'Test host is offline.',
       ),
     );
@@ -323,31 +332,32 @@ void main() {
     await finish(tester);
   });
 
-  testWidgets('a noticed pane keeps its own band when the stream is taken', (
-    tester,
-  ) async {
-    await pump(
-      tester,
-      notice: terminalNotice(
-        label: 'Not confirmed',
-        icon: Icons.help_outline,
-        detail: 'Still checking.',
-        banner: true,
-        actionLabel: 'Check again',
-        onAction: () {},
-      ),
-    );
-    takeOver();
-    await tester.pump();
-    // A noticed pane is not "blocked" in the takeover sense — `_inputBlocked`
-    // excludes it, because nothing the takeover band offers would help a pane
-    // whose machine or launch is the problem. So the strip stays the notice's,
-    // and there is still exactly one band.
-    expect(takenOverTitle, findsNothing);
-    expect(find.text('Not confirmed'), findsNWidgets(2));
-    expect(find.widgetWithText(FilledButton, 'Check again'), findsOneWidget);
-    await finish(tester);
-  });
+  testWidgets(
+    'a startup notice still allows taking control to answer prompts',
+    (tester) async {
+      await pump(
+        tester,
+        notice: terminalNotice(
+          label: 'Not confirmed',
+          icon: AppIcons.circleHelp,
+          detail: 'Still checking.',
+          banner: true,
+          actionLabel: 'Check again',
+          onAction: () {},
+        ),
+      );
+      takeOver();
+      await tester.pump();
+      // Launch status cannot hide the control action needed to answer a prompt.
+      expect(takenOverTitle, findsOneWidget);
+      expect(find.text('Not confirmed'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Check again'), findsNothing);
+      await tester.tap(banner);
+      await tester.pump();
+      expect(opens(), ['terminal_open']);
+      await finish(tester);
+    },
+  );
 
   testWidgets('⏎ in the terminal takes control back, once', (tester) async {
     await pump(tester);
@@ -730,9 +740,10 @@ void main() {
     app.stateOf('m')!.nodeOnline = false;
     await pump(
       tester,
+      readOnly: true,
       notice: terminalNotice(
         label: 'Offline',
-        icon: Icons.cloud_off,
+        icon: AppIcons.cloudOff,
         detail: 'Test host is offline.',
       ),
     );

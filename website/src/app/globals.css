@@ -1,0 +1,155 @@
+/* Modern Reset */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+:root {
+  /* Warm dark palette - SF startup late night energy */
+  /* Not pure black - subtle brown/amber undertones */
+  --bg-base: #141413;
+  --bg-surface: #1C1C1A;
+  --bg-elevated: #262624;
+  --bg-muted: #3A3A36;
+  --bg-subtle: #52524C;
+
+  /* Borders - warm tint */
+  --border-default: rgba(255, 250, 240, 0.10);
+  --border-muted: rgba(255, 250, 240, 0.06);
+  --border-strong: rgba(255, 250, 240, 0.15);
+
+  /* Text - warm cream whites */
+  --text-primary: #F5F5F0;
+  --text-secondary: #D4D4CC;
+  --text-muted: #9A9A90;
+  --text-faint: #6B6B62;
+
+  /* Warm accent colors - team energy */
+  --accent-warm: #E8927C;
+  --accent-gold: #D4A574;
+  --accent-rose: #E879A0;
+
+  /* Primary accent - warm amber for activity */
+  --accent-primary: #FF9F0A;
+  --accent-primary-hover: #FFB340;
+  --accent-green: #32D74B;
+  --accent-amber: #FF9F0A;
+  --accent-yellow: #FFD60A;
+  --accent-red: #FF453A;
+  --accent-blue: #0A84FF;
+
+  /* Tool colors - bold and friendly */
+  --tool-read: #32D74B;
+  --tool-write: #FF9F0A;
+  --tool-search: #BF5AF2;
+  --tool-bash: #8E8E93;
+  --tool-web: #64D2FF;
+  --tool-task: #FF9F0A;
+
+  /* Shadows - slightly warm */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
+
+  /* Fonts - Apple system fonts */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'Segoe UI', sans-serif;
+}
+
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Smooth scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Focus states */
+*:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+/* Selection */
+::selection {
+  background: rgba(14, 165, 233, 0.3);
+}
+
+/* Mobile optimization */
+@media (max-width: 640px) {
+
+  html,
+  body {
+    overflow-x: hidden;
+    width: 100%;
+    overscroll-behavior-y: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  body {
+    font-size: 14px;
+    -webkit-text-size-adjust: 100%;
+    touch-action: pan-y pinch-zoom;
+    /* Safe area for notched devices */
+    padding-left: env(safe-area-inset-left, 0);
+    padding-right: env(safe-area-inset-right, 0);
+  }
+
+  /* Minimum touch target height 44px (Apple HIG) for tap areas */
+  button:not(.noTouchTarget),
+  a[href],
+  [role="button"]:not(.noTouchTarget) {
+    min-height: 44px;
+    -webkit-tap-highlight-color: rgba(14, 165, 233, 0.2);
+    touch-action: manipulation;
+  }
+
+  button.inlineTouch,
+  [role="button"].inlineTouch {
+    min-height: 0;
+  }
+
+  [class*="scroll"],
+  [class*="Scroll"] {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+}
+
+/* Very small screens: slightly larger tap targets and spacing */
+@media (max-width: 480px) {
+  body {
+    font-size: 15px;
+  }
+}

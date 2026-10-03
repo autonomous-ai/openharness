@@ -1,4 +1,5 @@
 #include "board.h"
+#include "board_pins.h"
 
 #include <stdio.h>
 
@@ -75,4 +76,19 @@ const char *board_describe(void)
              b->touch == TOUCH_CST9217 ? "cst9217" : b->touch == TOUCH_CST816S ? "cst816s" : "none",
              b->has_pmic ? "yes" : "no", b->lcd_rst, b->touch_rst);
     return s_describe;
+}
+
+// BOOT (GPIO0) held at power-on. Two reads a moment apart: a single sample catches the pin mid-transition
+// on a cold boot. Moved here from app_main.c when the Pro — which has no such button — joined the build.
+bool board_factory_reset_requested(void)
+{
+    const gpio_config_t io = {
+        .pin_bit_mask = 1ULL << BSP_BOOT_BUTTON,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+    };
+    gpio_config(&io);
+    if (gpio_get_level(BSP_BOOT_BUTTON) != 0) return false;
+    vTaskDelay(pdMS_TO_TICKS(50));
+    return gpio_get_level(BSP_BOOT_BUTTON) == 0;
 }

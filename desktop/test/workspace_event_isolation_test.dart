@@ -149,17 +149,33 @@ void main() {
   }
 
   testWidgets(
-    'quiet heartbeats renew the watchdog and expiry still publishes',
+    'fresh heartbeat evidence renews the watchdog without workspace redraws',
     (tester) async {
       final app = createApp();
       addTearDown(app.dispose);
       var notifications = 0;
       app.addListener(() => notifications++);
-      await _event(app, 'turn_heartbeat', {'agentId': 'a0'});
+      await _event(app, 'turn_heartbeat', {
+        'agentId': 'a0',
+        'activity': {
+          'state': 'working',
+          'epoch': 'fixture-daemon',
+          'revision': 1,
+          'validForMs': 12000,
+        },
+      });
       expect(app.agentIsProcessing('m', 'a0'), isTrue);
       expect(notifications, 1);
       await tester.pump(const Duration(seconds: 8));
-      await _event(app, 'turn_heartbeat', {'agentId': 'a0'});
+      await _event(app, 'turn_heartbeat', {
+        'agentId': 'a0',
+        'activity': {
+          'state': 'working',
+          'epoch': 'fixture-daemon',
+          'revision': 2,
+          'validForMs': 12000,
+        },
+      });
       await tester.pump(const Duration(seconds: 8));
       expect(app.agentIsProcessing('m', 'a0'), isTrue);
       expect(notifications, 1);
@@ -175,6 +191,7 @@ void main() {
       final app = createApp();
       addTearDown(app.dispose);
       var workspaceChanges = 0;
+      app.machineStates['m']!.localOnly = true;
       var deviceChanges = 0;
       app.addListener(() => workspaceChanges++);
       app.dial.addListener(() => deviceChanges++);

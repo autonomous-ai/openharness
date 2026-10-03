@@ -444,7 +444,11 @@ function realUserText(msg: NormalizedMessage): string | null {
  */
 export function lastTurnTextFromRawLines(rawLines: string[]): LastTurnText | null {
   let userMessage = ''
+  // What the assistant said AFTER its last tool call: the answer. Everything before it is narration of
+  // the work ("Let me check the logs"), kept aside because a turn that never reached an answer (it ended
+  // on a tool call, or was interrupted) still has something to summarize.
   let assistantParts: string[] = []
+  let narration: string[] = []
 
   for (const line of rawLines) {
     if (!line.trim()) continue
@@ -460,6 +464,7 @@ export function lastTurnTextFromRawLines(rawLines: string[]): LastTurnText | nul
     if (userText !== null) {
       userMessage = userText
       assistantParts = []
+      narration = []
       continue
     }
 
@@ -470,9 +475,16 @@ export function lastTurnTextFromRawLines(rawLines: string[]): LastTurnText | nul
       .join('')
       .trim()
     if (text) assistantParts.push(text)
+    // A tool call closes the stretch of text before it: that was narration, and the answer is what comes
+    // after the last one. Without this a long working turn is summarized by its FIRST line, so the
+    // dial and the reader show "Let me look at the logs" instead of what was found.
+    if (msg.message.content.some((c) => c.type === 'tool_use')) {
+      narration = narration.concat(assistantParts)
+      assistantParts = []
+    }
   }
 
-  const assistantText = assistantParts.join('\n\n').trim()
+  const assistantText = (assistantParts.length ? assistantParts : narration).join('\n\n').trim()
   return assistantText ? { userMessage, assistantText } : null
 }
 

@@ -6,8 +6,10 @@ import 'package:flutter/services.dart';
 import '../core/agent_names.dart';
 import '../shortcuts/app_keymap.dart';
 import '../state/app_state.dart';
-import '../terminal/terminal_text.dart';
-import 'box_chrome.dart';
+import '../shared/theme/app_theme.dart' as grid;
+import 'desktop_chrome.dart';
+import 'desktop_prompt_surface.dart';
+import 'box_chrome.dart' show BoxAnnouncer, ReadlineKeys;
 import 'terminal_prompt.dart';
 
 export '../core/agent_names.dart' show forkNameFor;
@@ -261,188 +263,207 @@ class _ForkAgentPromptState extends State<_ForkAgentPrompt> {
     TextEditingController controller,
     FocusNode focus, {
     bool task = false,
-  }) => Semantics(
-    label: task ? 'Fork first task, optional' : 'Fork name',
-    child: ReadlineKeys(
-      controller: controller,
-      enabled: !_locked,
-      onChanged: _changed,
-      child: TextField(
-        key: ValueKey(task ? 'fork-task' : 'fork-name'),
-        controller: controller,
-        focusNode: focus,
-        readOnly: _locked,
-        style: boxMonoStyle(),
-        textAlignVertical: TextAlignVertical.center,
-        minLines: 1,
-        maxLines: task ? 6 : 1,
-        textInputAction: task ? TextInputAction.done : TextInputAction.next,
-        decoration: InputDecoration(
-          hintText: task ? 'first task (optional)' : 'name',
-          hintStyle: boxMonoStyle(color: kBoxFaint),
-          isDense: true,
-          filled: false,
-          border: InputBorder.none,
-          enabledBorder: InputBorder.none,
-          focusedBorder: InputBorder.none,
-          contentPadding: EdgeInsets.zero,
-          prefixIcon: Padding(
-            padding: const EdgeInsets.only(right: 10),
-            child: Center(
-              widthFactor: 1,
-              heightFactor: 1,
-              child: Text(
-                '$label >',
-                style: boxMonoStyle(color: Colors.white70),
+  }) {
+    final border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
+      borderSide: BorderSide(color: DesktopChrome.rim),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(label, style: DesktopChrome.control(medium: true)),
+        const SizedBox(height: DesktopChrome.controlGap),
+        Semantics(
+          label: task ? 'Fork first task, optional' : 'Fork name',
+          child: ReadlineKeys(
+            controller: controller,
+            enabled: !_locked,
+            onChanged: _changed,
+            child: TextField(
+              key: ValueKey(task ? 'fork-task' : 'fork-name'),
+              controller: controller,
+              focusNode: focus,
+              readOnly: _locked,
+              style: DesktopChrome.text(size: 14),
+              cursorColor: DesktopChrome.accent,
+              textAlignVertical: TextAlignVertical.center,
+              minLines: task ? 3 : 1,
+              maxLines: task ? 6 : 1,
+              textInputAction: task
+                  ? TextInputAction.done
+                  : TextInputAction.next,
+              decoration: InputDecoration(
+                hintText: task
+                    ? 'What should the fork work on?'
+                    : 'Harness name',
+                hintStyle: DesktopChrome.text(
+                  size: 14,
+                  color: DesktopChrome.muted,
+                ),
+                isDense: true,
+                filled: true,
+                fillColor: DesktopChrome.field,
+                border: border,
+                enabledBorder: border,
+                focusedBorder: border.copyWith(
+                  borderSide: BorderSide(
+                    color: DesktopChrome.focusRing,
+                    width: grid.AppDesktop.focusWidth,
+                  ),
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
               ),
+              onChanged: _changed,
+              onEditingComplete: () {},
+              onSubmitted: (_) {
+                if (task) {
+                  _submit();
+                } else {
+                  _taskFocus.requestFocus();
+                }
+              },
             ),
           ),
-          prefixIconConstraints: const BoxConstraints(minHeight: 38),
         ),
-        onChanged: _changed,
-        onEditingComplete: () {},
-        onSubmitted: (_) {
-          if (task) {
-            _submit();
-          } else {
-            _taskFocus.requestFocus();
-          }
-        },
-      ),
-    ),
-  );
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
-    return ListenableBuilder(
-      listenable: terminalFontStore,
-      builder: (context, _) => TerminalPromptKeys(
-        composing: () => _composing,
-        inputFocus: _nameFocus.hasFocus ? _nameFocus : _taskFocus,
-        cancel: _close,
-        accept: _accept,
-        submit: _submit,
-        next: () => _vertical(1),
-        previous: () => _vertical(-1),
-        pageDown: () => _page(1),
-        pageUp: () => _page(-1),
-        child: CallbackShortcuts(
-          bindings: {
-            const SingleActivator(LogicalKeyboardKey.enter, alt: true):
-                _newline,
-            if (KeymapTheme.of(context) == null)
-              const SingleActivator(LogicalKeyboardKey.enter, meta: true):
-                  _submit,
-          },
-          child: TerminalPrompt(
-            width: 760,
+    grid.AppTheme.watch(context);
+    final uncertain = _attempt.awaitingConfirmation;
+    final status = _busy
+        ? 'Waiting for fork…'
+        : uncertain
+        ? 'Fork may already exist.'
+        : null;
+    final actionLabel = uncertain ? 'Check status' : 'Fork';
+    final closeLabel = _locked ? 'Close' : 'Cancel';
+    final cwd = _attempt.source?.project?.cwd;
+    return TerminalPromptKeys(
+      composing: () => _composing,
+      inputFocus: _nameFocus.hasFocus ? _nameFocus : _taskFocus,
+      cancel: _close,
+      accept: _accept,
+      submit: _submit,
+      next: () => _vertical(1),
+      previous: () => _vertical(-1),
+      pageDown: () => _page(1),
+      pageUp: () => _page(-1),
+      child: CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.enter, alt: true): _newline,
+          if (KeymapTheme.of(context) == null)
+            const SingleActivator(LogicalKeyboardKey.enter, meta: true):
+                _submit,
+        },
+        child: DesktopPromptSurface(
+          width: 520,
+          body: DesktopPromptScrollBody(
+            controller: _body,
             child: Column(
-              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Flexible(
-                  child: SingleChildScrollView(
-                    controller: _body,
-                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          'Fork Harness',
-                          style: boxMonoStyle(color: kBoxFaint),
-                        ),
-                        const SizedBox(height: 10),
-                        Text(
-                          'from  ${_attempt.source?.name ?? widget.sourceName}',
-                          style: boxMonoStyle(),
-                        ),
-                        if (widget.notifier
-                                .stateOf(widget.machineId)
-                                ?.machine
-                                .displayName
-                            case final machine?)
-                          Text(
-                            [
-                              machine,
-                              if (_attempt.source?.project?.cwd case final cwd?
-                                  when cwd.isNotEmpty)
-                                cwd,
-                            ].join('  '),
-                            style: boxMonoStyle(color: kBoxFaint),
-                          ),
-                        const SizedBox(height: 6),
-                        Text(
-                          widget.engine == 'opencode'
-                              ? 'Starts from a handoff summary, in the same project folder.'
-                              : 'Continues the conversation in the same project folder.',
-                          style: boxMonoStyle(color: kBoxFaint),
-                        ),
-                        const SizedBox(height: 8),
-                        _input('name', _name, _nameFocus),
-                        _input('task', _task, _taskFocus, task: true),
-                        if (_error case final error?) ...[
-                          const SizedBox(height: 8),
-                          Text(
-                            error,
-                            style: boxMonoStyle(color: Colors.orangeAccent),
-                          ),
-                        ],
-                        if (_busy)
-                          Text(
-                            'Forking continues if you close this prompt.',
-                            style: boxMonoStyle(color: kBoxFaint),
-                          ),
-                      ],
-                    ),
+                Text('Fork Harness', style: DesktopChrome.heading()),
+                const SizedBox(height: DesktopChrome.groupGap),
+                Text(
+                  'From ${_attempt.source?.name ?? widget.sourceName}',
+                  style: DesktopChrome.text(size: 14, medium: true),
+                ),
+                if (widget.notifier
+                        .stateOf(widget.machineId)
+                        ?.machine
+                        .displayName
+                    case final machine?) ...[
+                  const SizedBox(height: 4),
+                  Text(machine, style: DesktopChrome.metadata()),
+                ],
+                if (cwd != null && cwd.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    cwd,
+                    style: grid.AppType.monoMeta(color: DesktopChrome.muted),
+                  ),
+                ],
+                const SizedBox(height: 8),
+                Text(
+                  widget.engine == 'opencode'
+                      ? 'Starts from a handoff summary, in the same project folder.'
+                      : 'Continues the conversation in the same project folder.',
+                  style: DesktopChrome.text(
+                    size: 13,
+                    color: DesktopChrome.muted,
                   ),
                 ),
-                if (_attempt.awaitingConfirmation && !_busy)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: terminalPromptButton(
-                        'Start another fork',
-                        _startAnother,
-                        key: const Key('fork-start-another'),
-                      ),
+                const SizedBox(height: DesktopChrome.groupGap),
+                _input('Name', _name, _nameFocus),
+                const SizedBox(height: DesktopChrome.groupGap),
+                _input('First task (optional)', _task, _taskFocus, task: true),
+                if (_error case final error?) ...[
+                  const SizedBox(height: 12),
+                  Semantics(
+                    liveRegion: true,
+                    child: DesktopPromptMessage(
+                      error,
+                      color: uncertain
+                          ? grid.AppPalette.warn
+                          : Theme.of(context).colorScheme.error,
                     ),
                   ),
-                BoxHintStrip(
-                  message: _busy
-                      ? 'Waiting for fork…'
-                      : (_attempt.awaitingConfirmation
-                            ? 'Fork may already exist.'
-                            : null),
-                  isError: !_busy && _attempt.awaitingConfirmation,
-                  hints: [
-                    if (!_busy)
-                      BoxHint(
-                        terminalPromptHint(context, 'picker.accept', 'enter'),
-                        _attempt.awaitingConfirmation
-                            ? 'check status'
-                            : (_nameFocus.hasFocus ? 'edit task' : 'fork'),
-                        onTap: _nameFocus.hasFocus
-                            ? _taskFocus.requestFocus
-                            : _submit,
-                      ),
-                    if (!_locked)
-                      BoxHint(
-                        terminalPromptHint(context, 'picker.complete', 'tab'),
-                        'fields',
-                      ),
-                    if (!_locked) const BoxHint('alt-enter', 'newline'),
-                    BoxHint(
-                      terminalPromptHint(context, 'picker.cancel', 'esc'),
-                      'close',
-                      onTap: _close,
+                ],
+                if (uncertain && !_busy) ...[
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton(
+                      key: const Key('fork-start-another'),
+                      onPressed: _startAnother,
+                      child: const Text('Start another fork'),
                     ),
-                  ],
-                ),
+                  ),
+                ],
+                if (_busy) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    'Forking continues if you close this dialog.',
+                    style: DesktopChrome.text(
+                      size: 13,
+                      color: DesktopChrome.muted,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
+          footer: status == null
+              ? null
+              : Semantics(
+                  liveRegion: true,
+                  child: DesktopPromptMessage(
+                    status,
+                    color: _busy ? DesktopChrome.muted : grid.AppPalette.warn,
+                  ),
+                ),
+          actions: [
+            Tooltip(
+              message:
+                  '$closeLabel · ${terminalPromptHint(context, 'picker.cancel', 'esc')}',
+              child: TextButton(onPressed: _close, child: Text(closeLabel)),
+            ),
+            Tooltip(
+              message:
+                  '$actionLabel · ${terminalPromptHint(context, 'picker.add_here', 'cmd-enter')}',
+              child: FilledButton(
+                key: const Key('fork-confirm'),
+                onPressed: _busy ? null : _submit,
+                child: Text(actionLabel),
+              ),
+            ),
+          ],
         ),
       ),
     );

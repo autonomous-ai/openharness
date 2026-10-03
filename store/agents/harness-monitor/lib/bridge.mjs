@@ -6,11 +6,9 @@
  * wait for `connected`, then typed request/reply frames whose answer is `<type>_result` carrying the
  * same `requestId`. Nothing here reaches the network, and no credential passes through this file.
  *
- * Exactly one call is ever made: `agents_list` — who the agents are, where their panes are, what they
- * are on. Nothing on this socket writes: pausing is a signal to a process, and resuming is a line typed
- * into a pane (lib/actions.mjs). `agent_delete` and `agent_restart` exist on this protocol and are
- * deliberately never sent — the first destroys, and the second gives a released row a fresh shell
- * rather than its conversation, which is the whole reason resume does not use it.
+ * Inventory and lifecycle use the same daemon APIs as the desktop. `agent_delete` stops the validated
+ * process and retains its history; `agent_resume` restores the daemon's saved launch configuration.
+ * Writes are never automatically retried after a lost reply.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -32,8 +30,8 @@ export function bridgeUrl(env = process.env) {
 }
 
 /** Every machine this daemon can reach, the current one flagged, and — when the list could not be
- *  read — why. `harness` not on PATH is an answer, not a crash: the caller falls back to reading this
- *  machine's registry directly. The command runs from the home folder, never from this package's
+ *  read — why. `harness` not on PATH is reported as unavailable; no registry guesses enable actions.
+ *  The command runs from the home folder, never from this package's
  *  directory: a package update swaps that directory out from under a running viewer, and a CLI
  *  started in a directory that no longer exists fails in a way that reads exactly like a dead daemon. */
 export async function machinesReport(env = process.env) {
@@ -101,7 +99,7 @@ function openSession(machineId, { env, timeoutMs, WebSocketImpl, forceReconnect 
     const deadline = setTimeout(() => { const m = 'The Harness daemon did not answer on the local bridge. Is Harness running?'; fail(m); reject(new Error(m)) }, Math.min(timeoutMs, 15_000))
     // `forceReconnect` tells Harness the session it kept for this machine is dead (the machine's own
     // Harness restarted under it) and must be dialled fresh rather than handed back once more.
-    socket.addEventListener('open', () => socket.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, relayIsolation: true, ...(forceReconnect ? { forceReconnect: true } : {}) } })))
+    socket.addEventListener('open', () => socket.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, relayIsolation: true, tool: true, ...(forceReconnect ? { forceReconnect: true } : {}) } })))
     socket.addEventListener('error', () => { clearTimeout(deadline); const m = 'Could not open the local Harness bridge. Start Harness and try again.'; fail(m); reject(new Error(m)) })
     socket.addEventListener('close', (event) => {
       clearTimeout(deadline)
@@ -123,7 +121,7 @@ function openSession(machineId, { env, timeoutMs, WebSocketImpl, forceReconnect 
       if (!entry || type !== `${entry.type}_result`) return
       pending.delete(payload.requestId)
       clearTimeout(entry.deadline)
-      if (payload.error) entry.reject(new Error(String(payload.error)))
+      if (payload.error) entry.reject(Object.assign(new Error(String(payload.detail || payload.error)), { code: payload.error }))
       else entry.resolve(payload)
     })
   })
@@ -177,10 +175,11 @@ export async function withBridge(machineId, fn, { env = process.env, timeoutMs =
 /** The fleet as the daemon sees it, for one machine — on the kept session. A kept socket that has
  *  gone quiet (the daemon behind it restarted without closing it) is dropped and the read retried
  *  ONCE on a fresh one before the machine is reported silent. */
-export async function listAgents(machineId, options = {}) {
+export async function listInventory(machineId, options = {}) {
   const ask = async ({ session }) => {
-    const reply = await session.rpc('agents_list', {})
-    return Array.isArray(reply.agents) ? reply.agents : []
+    const reply = await session.rpc('agents_list', { includeStopped: true, monitor: true })
+    return { agents: Array.isArray(reply.agents) ? reply.agents : [],
+      shared: Array.isArray(reply.sharedResources) ? reply.sharedResources : [], sampledAt: reply.sampledAt ?? null }
   }
   const first = await bridgeSession(machineId, options)
   try {
@@ -192,6 +191,16 @@ export async function listAgents(machineId, options = {}) {
     const second = await bridgeSession(machineId, { ...options, forceReconnect: true })
     try { return await ask(second) } catch (again) { if (again?.timedOut) second.session.close(); throw again }
   }
+}
+
+export async function listAgents(machineId, options = {}) {
+  return (await listInventory(machineId, options)).agents
+}
+
+/** A single owner RPC. Only reads above reconnect/retry; callers reconcile uncertain writes by receipt. */
+export async function request(machineId, type, payload = {}, options = {}) {
+  const { session } = await bridgeSession(machineId, options)
+  return session.rpc(type, payload, { callTimeoutMs: options.timeoutMs ?? 30_000 })
 }
 
 /** Drop every kept bridge session (the pane is closing). */

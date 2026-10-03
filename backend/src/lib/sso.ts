@@ -37,13 +37,17 @@ export interface SsoTx {
   redirectUri: string
   webOrigin: string
   autonomousEnv: AutonomousEnvironment
+  /** The auth-service client the authorize URL named, which the code exchange has to name again.
+   *  Absent is the configured one (`SSO_CLIENT_ID`), as every sign-in was before clients were split. */
+  clientId?: SsoClientId
 }
 
 function validTx(raw: unknown): raw is SsoTx {
   const tx = raw as Partial<SsoTx> | null
   return !!tx && typeof tx.verifier === 'string' && typeof tx.state === 'string' &&
     typeof tx.next === 'string' && typeof tx.redirectUri === 'string' && typeof tx.webOrigin === 'string' &&
-    (tx.autonomousEnv === undefined || isAutonomousEnvironment(tx.autonomousEnv))
+    (tx.autonomousEnv === undefined || isAutonomousEnvironment(tx.autonomousEnv)) &&
+    (tx.clientId === undefined || normalizeSsoClientId(tx.clientId) === tx.clientId)
 }
 
 export async function createTx(tx: SsoTx): Promise<string> {
@@ -142,6 +146,55 @@ export function normalizeEntryPoint(raw: unknown): string | undefined {
   return /^[a-z0-9][a-z0-9._-]{0,63}$/.test(value) ? value : undefined
 }
 
+/**
+ * auth-service's client for each Harness surface: the terminal, the desktop app, the web app and
+ * the phone sign in as themselves, so a sign-in is attributed to — and can be configured for — the
+ * surface it came from.
+ *
+ * ⚠️ A token belongs to the client it was issued to: the code exchange and every later refresh
+ * must name the SAME client, or auth-service refuses them. So a client that names one here keeps
+ * it with its session and sends it again on `/api/auth/refresh`; one that names none (every build
+ * from before this) stays on the configured `SSO_CLIENT_ID` end to end.
+ */
+export const SSO_CLIENT_IDS = ['harness-cli', 'harness-desktop', 'harness-web', 'harness-mobile'] as const
+export type SsoClientId = (typeof SSO_CLIENT_IDS)[number]
+
+/** An allowlist, like [normalizeSignInProvider]: the routes that take it need no token. */
+export function normalizeSsoClientId(raw: unknown): SsoClientId | undefined {
+  return typeof raw === 'string' ? SSO_CLIENT_IDS.find((id) => id === raw.trim()) : undefined
+}
+
+/** The client a request signs in as, and its secret — which is the configured client's alone. */
+function ssoClient(autonomousEnv: AutonomousEnvironment, clientId?: SsoClientId): { id: string; secret?: string } {
+  const config = autonomousEnvironmentConfig(autonomousEnv)
+  const id = clientId ?? config.ssoClientId
+  return { id, ...(id === config.ssoClientId && config.ssoClientSecret ? { secret: config.ssoClientSecret } : {}) }
+}
+
+/** The accounts a sign-in can go straight to: the two buttons every Harness client shows. */
+export const SIGN_IN_PROVIDERS = ['google', 'apple'] as const
+export type SignInProvider = (typeof SIGN_IN_PROVIDERS)[number]
+
+/**
+ * Which of [SIGN_IN_PROVIDERS] the person pressed, or nothing — and nothing is the sign-in page's
+ * own chooser, which is what every client sent before the buttons moved into the app.
+ *
+ * An allowlist for the reason [normalizeEntryPoint] is a pattern: both authorize routes need no
+ * token and this value goes into the authorize URL's query.
+ */
+export function normalizeSignInProvider(raw: unknown): SignInProvider | undefined {
+  if (typeof raw !== 'string') return undefined
+  const value = raw.trim().toLowerCase()
+  return SIGN_IN_PROVIDERS.find((provider) => provider === value)
+}
+
+/** What an authorize URL carries beyond the OAuth request itself. All optional, all plain keys. */
+export interface AuthorizeHints {
+  entryPoint?: string
+  provider?: SignInProvider
+  clientId?: SsoClientId
+}
+
 /** Where to send the browser to log in. `prompt=select_account` (env) forces the account picker so
  *  a user can switch accounts even when an SSO session already exists. */
 export function authorizeUrl(
@@ -149,12 +202,12 @@ export function authorizeUrl(
   state: string,
   redirectUri: string,
   autonomousEnv: AutonomousEnvironment,
-  entryPoint?: string,
+  { entryPoint, provider, clientId }: AuthorizeHints = {},
 ): string {
   const config = autonomousEnvironmentConfig(autonomousEnv)
   const u = new URL('/oauth2/authorize', config.ssoIssuer)
   u.searchParams.set('response_type', 'code')
-  u.searchParams.set('client_id', config.ssoClientId)
+  u.searchParams.set('client_id', ssoClient(autonomousEnv, clientId).id)
   u.searchParams.set('redirect_uri', redirectUri)
   u.searchParams.set('scope', env.SSO_SCOPE)
   u.searchParams.set('code_challenge', challenge)
@@ -162,6 +215,8 @@ export function authorizeUrl(
   u.searchParams.set('state', state)
   if (env.SSO_PROMPT) u.searchParams.set('prompt', env.SSO_PROMPT)
   if (entryPoint) u.searchParams.set('entry_point', entryPoint)
+  // auth-service opens that account's own sign-in instead of its chooser.
+  if (provider) u.searchParams.set('provider', provider)
   return u.toString()
 }
 
@@ -193,11 +248,14 @@ export class SsoTokenError extends Error {
 }
 
 async function requestTokens(
-  body: URLSearchParams,
+  grant: Record<string, string>,
   autonomousEnv: AutonomousEnvironment,
+  clientId?: SsoClientId,
 ): Promise<SsoTokens> {
   const config = autonomousEnvironmentConfig(autonomousEnv)
-  if (config.ssoClientSecret) body.set('client_secret', config.ssoClientSecret)
+  const client = ssoClient(autonomousEnv, clientId)
+  const body = new URLSearchParams({ ...grant, client_id: client.id })
+  if (client.secret) body.set('client_secret', client.secret)
 
   let res: Response
   try {
@@ -233,27 +291,24 @@ export async function exchangeCode(
   verifier: string,
   redirectUri: string,
   autonomousEnv: AutonomousEnvironment,
+  clientId?: SsoClientId,
 ): Promise<SsoTokens> {
-  const config = autonomousEnvironmentConfig(autonomousEnv)
-  const body = new URLSearchParams({
+  return requestTokens({
     grant_type: 'authorization_code',
     code,
-    redirect_uri: redirectUri, // MUST match the one sent to /authorize
-    client_id: config.ssoClientId,
+    redirect_uri: redirectUri, // MUST match the one sent to /authorize — as must the client
     code_verifier: verifier,
-  })
-  return requestTokens(body, autonomousEnv)
+  }, autonomousEnv, clientId)
 }
 
 /** Exchange a browser-held refresh token for a fresh SSO access token. */
 export async function refreshAccessToken(
   refreshToken: string,
   autonomousEnv: AutonomousEnvironment,
+  clientId?: SsoClientId,
 ): Promise<SsoTokens> {
-  const config = autonomousEnvironmentConfig(autonomousEnv)
-  return requestTokens(new URLSearchParams({
+  return requestTokens({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
-    client_id: config.ssoClientId,
-  }), autonomousEnv)
+  }, autonomousEnv, clientId)
 }

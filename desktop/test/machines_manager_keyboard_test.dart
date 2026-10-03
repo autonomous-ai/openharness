@@ -366,10 +366,7 @@ void main() {
       {"keys":"f4","command":"picker.cancel","when":"picker"}
     ]}''');
       await tester.pump();
-      expect(
-        find.textContaining(RegExp('f10  save', caseSensitive: false)),
-        findsOneWidget,
-      );
+      expect(find.byTooltip('Save · F10'), findsOneWidget);
       await key(tester, LogicalKeyboardKey.enter);
       expect(app.edits.renames, isEmpty);
       await key(tester, LogicalKeyboardKey.f10);
@@ -403,7 +400,7 @@ void main() {
       expect(tester.takeException(), isNull);
       await _typeOpen(tester, 'rename');
       expect(_rename.hitTestable(), findsOneWidget);
-      expect(find.text('esc  close').hitTestable(), findsOneWidget);
+      expect(find.text('Cancel').hitTestable(), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );

@@ -91,8 +91,6 @@ export const LOCAL_WEB_HTML = /* html */ `<!doctype html>
   </div>
   <div class="bar" style="margin-top:10px;">
     <span class="mut">machine fingerprint</span> <span id="fp" class="fp">—</span>
-    <span class="spacer"></span>
-    <a id="weblink" href="#" target="_blank" rel="noreferrer">open in web ↗</a>
   </div>
 
   <div id="pending"></div>
@@ -128,10 +126,6 @@ let lastStatus = null;   // last /api/status snapshot (for closeModal to re-rend
 // clicks in their own browser (loopback), never through the backend — so CPace security is preserved.
 const params = new URLSearchParams(location.search);
 const urlCode = (params.get('code') || '').toUpperCase();
-const setupMode = params.get('setup') === 'browser';
-let setupModalOpen = false;
-let setupInFlight = false;
-let setupAutoAttempted = false;
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),1800); }
 function fmtDur(s){ s=Math.max(0,s|0); const d=s/86400|0,h=s%86400/3600|0,m=s%3600/60|0; return d?d+'d '+h+'h':h?h+'h '+m+'m':m?m+'m':s+'s'; }
@@ -144,62 +138,6 @@ async function post(path, body){
 // Strip ?code=… from the address bar (no reload) once the pairing is handled — so a refresh doesn't
 // re-open the modal with a stale/consumed code, and the code doesn't linger in history.
 function clearUrlCode(){ try { history.replaceState(null, '', location.pathname); } catch(e) {} }
-function clearSetupUrl(){ try { history.replaceState(null, '', location.pathname); } catch(e) {} }
-
-function showBrowserSetup(html){
-  document.getElementById('pending').innerHTML = '<div class="pending">'+html+'</div>';
-}
-function buildSetupApproveModal(s){
-  const machineUrl = s && s.webUrl && s.agentId ? (s.webUrl.replace(/\\/$/,'')+'/machine/'+s.agentId) : 'Machine';
-  document.getElementById('pending').innerHTML =
-    '<div class="modal"><div class="modalCard">'
-    + '<div class="mTitle">Set up browser encryption?</div>'
-    + '<div class="mSub">This creates a reusable 7-day setup link. Anyone with the link can pair a browser until it expires, so keep it private.</div>'
-    + '<div class="mCodeLabel">machine</div><div class="mFp"><span class="fp">'+esc((s&&s.fingerprint)||'—')+'</span></div>'
-    + '<div class="mCodeLabel">destination</div><div class="mFp">'+esc(machineUrl)+'</div>'
-    + '<div class="mBtns"><button class="btn" onclick="closeSetupModal()">Cancel</button><button id="setupApproveBtn" class="btn primary" onclick="approveBrowserSetup()">Approve</button></div>'
-    + '</div></div>';
-}
-function startBrowserSetup(){
-  if (setupInFlight) return;
-  setupModalOpen = true;
-  buildSetupApproveModal(lastStatus || {});
-}
-function closeSetupModal(){
-  setupModalOpen = false;
-  if (setupMode) {
-    history.back();
-    setTimeout(() => {
-      clearSetupUrl();
-      document.getElementById('pending').innerHTML = '';
-      if (lastStatus) render(lastStatus);
-    }, 250);
-    return;
-  }
-  clearSetupUrl();
-  document.getElementById('pending').innerHTML = '';
-  if (lastStatus) render(lastStatus);
-}
-async function approveBrowserSetup(){
-  if (setupInFlight) return;
-  setupInFlight = true;
-  setupModalOpen = false;
-  const btn = document.getElementById('setupApproveBtn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Approving…'; }
-  showBrowserSetup('<b>Generating browser setup link…</b><div class="mut" style="margin-top:6px">You will be returned to Machine automatically.</div>');
-  const { ok, j } = await post('/api/e2ee/setup-link');
-  if (ok && typeof j.url === 'string' && j.url) {
-    location.replace(j.url);
-    return;
-  }
-  setupInFlight = false;
-  clearSetupUrl();
-  showBrowserSetup(
-    '<b>Could not generate setup link</b>'
-    + '<div class="mut" style="margin-top:6px">'+esc(j.error || 'Try running harness browser-link in the terminal.')+'</div>'
-    + '<div style="margin-top:10px"><button class="btn" onclick="startBrowserSetup()">Try again</button></div>'
-  );
-}
 
 async function doApprove(){
   const el = document.getElementById('code');
@@ -263,8 +201,6 @@ function render(s){
     : nAgents === 0 ? 'no agents' : nAgents + (nAgents === 1 ? ' agent' : ' agents');
   document.getElementById('uptime').textContent = fmtDur(s.uptimeSec);
   document.getElementById('fp').textContent = s.fingerprint || '—';
-  const wl = document.getElementById('weblink');
-  wl.href = s.webUrl ? (s.webUrl.replace(/\\/$/,'')+'/machine/'+s.agentId) : '#';
 
   // sessions
   const se = document.getElementById('sessions');
@@ -279,7 +215,7 @@ function render(s){
   pe.innerHTML = (s.pairs&&s.pairs.length) ? s.pairs.map(p => {
     const role = isDevicePair(p) ? 'device' : (p.role || 'web');
     return '<div class="row"><span class="dot '+(p.online?'on':'idle')+'"></span><div class="main"><div class="name fp">'+esc(p.fingerprint)+'</div><div class="sub"><span class="pill">'+esc(role)+'</span>'+esc(p.label)+'  ·  paired '+fmtWhen(p.pairedAt)+'</div></div><button class="btn danger" onclick="unpair(\\''+esc(p.fingerprint)+'\\')">Unpair</button></div>';
-  }).join('') : '<div class="empty">No clients paired. Use Set up browser or run <span class="mono">harness browser-link</span>.</div>';
+  }).join('') : '<div class="empty">No clients paired.</div>';
 
   // pending — rebuild ONLY when it actually changes (new/rotated pairing), else leave the code input
   // and whatever the user typed/pasted intact (polling every 2.5s must not wipe the field).
@@ -287,25 +223,20 @@ function render(s){
   // doesn't clobber it. If the web link supplied ?code=…, it's pre-filled and the user just clicks
   // Approve — nothing to type. Otherwise a code input is shown as a fallback.
   const pd = document.getElementById('pending');
-  if (setupModalOpen) {
-    buildSetupApproveModal(s);
-  } else if (!setupInFlight) {
-    if (s.pending) {
-      const key = s.pending.expiresAt + '|' + s.pending.label;
-      if (key !== pendKey) {
-        pendKey = key;
-        // A blocking modal ONLY when arrived via the web "Approve" link (?code=…) and not yet closed;
-        // opening directly (or after Close) shows a subtle inline banner instead (normal UI, no overlay).
-        if (dismissedKey !== key) { if (urlCode && !modalClosed) buildApproveModal(s); else buildInlinePending(s); }
-      }
-    } else if (pendKey !== null) { pd.innerHTML = ''; pendKey = null; dismissedKey = null; }
-  }
+  if (s.pending) {
+    const key = s.pending.expiresAt + '|' + s.pending.label;
+    if (key !== pendKey) {
+      pendKey = key;
+      // A blocking modal ONLY when arrived via the web "Approve" link (?code=…) and not yet closed;
+      // opening directly (or after Close) shows a subtle inline banner instead (normal UI, no overlay).
+      if (dismissedKey !== key) { if (urlCode && !modalClosed) buildApproveModal(s); else buildInlinePending(s); }
+    }
+  } else if (pendKey !== null) { pd.innerHTML = ''; pendKey = null; dismissedKey = null; }
 
   // machine summary — keep the default view human-readable; tuck raw paths/ports into Advanced.
   const cfg = s.config||{};
   const sessionCount = (s.sessions&&s.sessions.length) || 0;
   const pairCount = (s.pairs&&s.pairs.length) || 0;
-  const machineUrl = s.webUrl ? (s.webUrl.replace(/\\/$/,'')+'/machine/'+s.agentId) : '#';
   document.getElementById('about').innerHTML =
     '<div class="statusGrid">'
     + metric('Machine cloud', s.connected ? 'Connected' : 'Reconnecting')
@@ -313,7 +244,7 @@ function render(s){
     + metric('Browsers', pairCount ? (pairCount+' paired') : 'None paired')
     + metric('Device', deviceOnline ? 'Connected' : deviceTransport ? 'Pairing' : 'Offline')
     + '</div>'
-    + '<div class="actions"><a class="btn" href="'+esc(machineUrl)+'" target="_blank" rel="noreferrer">Open machine</a><button class="btn" onclick="startBrowserSetup()">Set up browser</button><a class="btn" href="#pairs">Clients</a><button class="btn" onclick="document.getElementById(\\'logsBox\\').open=true;document.getElementById(\\'logsBox\\').scrollIntoView({behavior:\\'smooth\\',block:\\'nearest\\'});">View logs</button></div>'
+    + '<div class="actions"><a class="btn" href="#pairs">Clients</a><button class="btn" onclick="document.getElementById(\\'logsBox\\').open=true;document.getElementById(\\'logsBox\\').scrollIntoView({behavior:\\'smooth\\',block:\\'nearest\\'});">View logs</button></div>'
     + '<details class="adv"><summary>Advanced</summary>'
     + kv('Backend URL', s.backendUrl)
     + kv('Watched folder', cfg.watching)
@@ -328,7 +259,6 @@ async function refresh(){
   try {
     const s = await (await fetch('/api/status')).json();
     render(s);
-    if (setupMode && !setupAutoAttempted) { setupAutoAttempted = true; startBrowserSetup(); }
     fetch('/api/logs').then(r=>r.ok?r.text():'').then(t=>{ if(t) document.getElementById('logs').textContent = t; }).catch(()=>{});
   } catch { document.getElementById('conn').innerHTML = '<span class="dot off"></span> <span class="mut">cloud unreachable</span>'; }
 }

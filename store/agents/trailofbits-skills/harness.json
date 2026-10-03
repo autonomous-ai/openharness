@@ -1,0 +1,47 @@
+{
+  "spec": 1,
+  "id": "autonomous/trailofbits-skills",
+  "name": "Trail of Bits Skills",
+  "category": "Security",
+  "author": "Trail of Bits",
+  "description": "Point it at a codebase; get a security audit the Trail of Bits way — context first, static analysis, variants, supply chain, every finding checked for false positives — as a live report in the pane.",
+  "engine": "claude",
+  "workspace": {
+    "template": "template",
+    "marker": "security-audit/findings.json",
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills",
+      "upstream/plugins/audit-context-building/skills",
+      "upstream/plugins/differential-review/skills",
+      "upstream/plugins/sharp-edges/skills",
+      "upstream/plugins/static-analysis/skills",
+      "upstream/plugins/supply-chain-risk-auditor/skills",
+      "upstream/plugins/variant-analysis/skills",
+      "upstream/plugins/fp-check/skills",
+      "upstream/plugins/vulnerability-triage-brocards/skills",
+      "upstream/plugins/agentic-actions-auditor/skills",
+      "upstream/plugins/c-review/skills",
+      "upstream/plugins/rust-review/skills"
+    ],
+    "env": {
+      "TOB_SKILLS": "${dsh}/upstream",
+      "TOB_BIN": "${dsh}/bin",
+      "TOB_REPORT": "${dsh}/toolchain/report.sh",
+      "SEMGREP_SEND_METRICS": "off",
+      "SEMGREP_ENABLE_VERSION_CHECK": "0"
+    }
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "use": "autonomous/web-viewer",
+    "url": "http://127.0.0.1:${port}/?file=security-audit/index.html"
+  },
+  "verdict": ".harness/verdict.json"
+}

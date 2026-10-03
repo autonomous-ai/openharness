@@ -1,0 +1,12 @@
+{
+  "type": "error",
+  "error": {
+    "name": "APIError",
+    "data": {
+      "message": "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode",
+      "statusCode": 403,
+      "isRetryable": false,
+      "responseBody": "{\"type\":\"error\",\"error\":{\"type\":\"FreeTierError\",\"message\":\"Error from provider (Console): OpenCode's free tier can only be used from within OpenCode\"}}"
+    }
+  }
+}

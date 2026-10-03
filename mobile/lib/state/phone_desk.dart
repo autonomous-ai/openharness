@@ -270,7 +270,9 @@ class PhoneDesk {
       {
         'op': 'tab.create',
         'id': id,
-        'name': (name == null || name.trim().isEmpty) ? 'New tab' : name.trim(),
+        'name': (name == null || name.trim().isEmpty)
+            ? 'New Swarm'
+            : name.trim(),
         'nameIsCustom': false,
         'index': _state.synced.length,
       },
@@ -301,12 +303,7 @@ class PhoneDesk {
     final tab = _state.synced.where((t) => t.id == tabId).firstOrNull;
     if (tab == null || (tab.name == trimmed && tab.nameIsCustom)) return;
     _queue([
-      {
-        'op': 'tab.rename',
-        'id': tabId,
-        'name': trimmed,
-        'nameIsCustom': true,
-      },
+      {'op': 'tab.rename', 'id': tabId, 'name': trimmed, 'nameIsCustom': true},
     ]);
   }
 

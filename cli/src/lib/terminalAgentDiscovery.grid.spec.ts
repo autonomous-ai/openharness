@@ -32,12 +32,10 @@ const row = (pid: number, parentPid: number, executable: string, args = executab
   ({ pid, parentPid, executable, startMarker: START, args })
 
 const TMUX_RUNTIME: TerminalRuntimeRef = { backend: 'tmux', paneId: '%1' }
-const HERDR_RUNTIME: TerminalRuntimeRef = {
-  backend: 'herdr', endpointId: 'endpoint-a', sessionName: 'default', terminalId: 'terminal-a', paneId: 'w1:p1',
-}
+const SECOND_RUNTIME: TerminalRuntimeRef = { backend: 'tmux', paneId: '%2' }
 const ASSIGNMENT = { baseUrl: 'https://grid.autonomous.ai/grid-3378218621364f16/relay', model: 'GLM-4.7-Flash' }
 
-function backendWith(name: 'tmux' | 'herdr', instanceId: string, roots: TerminalRootObservation[]): TerminalBackend {
+function backendWith(name: 'tmux', instanceId: string, roots: TerminalRootObservation[]): TerminalBackend {
   return {
     name,
     instanceId,
@@ -53,7 +51,7 @@ beforeEach(() => {
 })
 
 describe('grid assignment on the live terminal discovery path', () => {
-  it('reports the grid under EITHER backend, from the process rather than the pane', async () => {
+  it('reports the grid for every pane, from the process rather than the pane', async () => {
     processRows.mockResolvedValue([
       row(10, 1, 'bash'), row(30, 10, 'claude'),
       row(20, 1, 'bash'), row(40, 20, 'codex'),
@@ -62,11 +60,12 @@ describe('grid assignment on the live terminal discovery path', () => {
 
     const probe = await probeTerminalAgents(
       [
-        backendWith('tmux', 'tmux', [{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }]),
-        backendWith('herdr', 'herdr:endpoint-a', [{ runtime: HERDR_RUNTIME, rootPid: 20, cwd: '/work' }]),
+        backendWith('tmux', 'tmux', [
+          { runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' },
+          { runtime: SECOND_RUNTIME, rootPid: 20, cwd: '/work' },
+        ]),
       ],
-      ['tmux', 'herdr'],
-      ['default'],
+      ['tmux'],
       999,
     )
 
@@ -84,7 +83,6 @@ describe('grid assignment on the live terminal discovery path', () => {
     const probe = await probeTerminalAgents(
       [backendWith('tmux', 'tmux', [{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }])],
       ['tmux'],
-      [],
       999,
     )
     expect(probe.agents[0].grid).toBeNull()
@@ -95,7 +93,6 @@ describe('grid assignment on the live terminal discovery path', () => {
     const probe = await probeTerminalAgents(
       [backendWith('tmux', 'tmux', [{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }])],
       ['tmux'],
-      [],
       999,
     )
     expect(probe.processTableAvailable).toBe(false)

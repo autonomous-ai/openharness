@@ -1,0 +1,279 @@
+{
+  "recorded_at": "2026-10-02",
+  "scope": "Follow-up native CI and TUI build/test performance; these are workflow timings, not end-to-end release-task timings.",
+  "limitations": [
+    "Historical baseline and new runs are not a controlled repeated benchmark. Runner allocation and queue time vary.",
+    "Optimized CI uses scope=tui; the old full CI was dominated by its two native jobs. CLI, serial, and backend jobs were unchanged.",
+    "All optimized release runs use publish=false. Their timings exclude production publication. Compare tests_and_builds_complete_seconds for the equivalent stage.",
+    "Cold and warm optimized runs use the identical implementation commit. The final follow-up changes only comments and documentation."
+  ],
+  "runs": [
+    {
+      "kind": "baseline_ci_full",
+      "run_id": 36992127857,
+      "url": "https://github.com/autonomous-ai/openharness/actions/runs/36992127857",
+      "source_commit": "c748f0a203f8c022c2c3693a6fc9fdbdbaf4c235",
+      "created_at": "2026-10-02T09:50:51Z",
+      "completed_at": "2026-10-02T09:58:35Z",
+      "elapsed_seconds": 464,
+      "conclusion": "success",
+      "jobs": [
+        {
+          "name": "process-checks",
+          "started_at": "2026-10-02T09:50:55Z",
+          "completed_at": "2026-10-02T09:51:11Z",
+          "elapsed_seconds": 16,
+          "conclusion": "success"
+        },
+        {
+          "name": "tui-test (ubuntu-latest, x86_64-unknown-linux-musl)",
+          "started_at": "2026-10-02T09:50:55Z",
+          "completed_at": "2026-10-02T09:58:34Z",
+          "elapsed_seconds": 459,
+          "conclusion": "success"
+        },
+        {
+          "name": "tui-test (ubuntu-24.04-arm, aarch64-unknown-linux-musl)",
+          "started_at": "2026-10-02T09:50:59Z",
+          "completed_at": "2026-10-02T09:57:51Z",
+          "elapsed_seconds": 412,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "kind": "baseline_tui_release",
+      "run_id": 36983065309,
+      "url": "https://github.com/autonomous-ai/openharness/actions/runs/36983065309",
+      "source_commit": "d59ec434c945baf7eb6924114f551a3c87d2e28a",
+      "created_at": "2026-10-02T08:16:00Z",
+      "completed_at": "2026-10-02T08:23:14Z",
+      "elapsed_seconds": 434,
+      "conclusion": "success",
+      "jobs": [
+        {
+          "name": "test",
+          "started_at": "2026-10-02T08:16:05Z",
+          "completed_at": "2026-10-02T08:19:17Z",
+          "elapsed_seconds": 192,
+          "conclusion": "success"
+        },
+        {
+          "name": "build (linux-arm64, ubuntu-24.04-arm, aarch64-unknown-linux-musl)",
+          "started_at": "2026-10-02T08:19:23Z",
+          "completed_at": "2026-10-02T08:21:27Z",
+          "elapsed_seconds": 124,
+          "conclusion": "success"
+        },
+        {
+          "name": "build (darwin-arm64, macos-15, aarch64-apple-darwin)",
+          "started_at": "2026-10-02T08:19:26Z",
+          "completed_at": "2026-10-02T08:22:17Z",
+          "elapsed_seconds": 171,
+          "conclusion": "success"
+        },
+        {
+          "name": "build (darwin-x64, macos-15, x86_64-apple-darwin)",
+          "started_at": "2026-10-02T08:19:28Z",
+          "completed_at": "2026-10-02T08:22:27Z",
+          "elapsed_seconds": 179,
+          "conclusion": "success"
+        },
+        {
+          "name": "build (linux-x64, ubuntu-latest, x86_64-unknown-linux-musl)",
+          "started_at": "2026-10-02T08:19:22Z",
+          "completed_at": "2026-10-02T08:21:40Z",
+          "elapsed_seconds": 138,
+          "conclusion": "success"
+        },
+        {
+          "name": "publish",
+          "started_at": "2026-10-02T08:22:30Z",
+          "completed_at": "2026-10-02T08:23:14Z",
+          "elapsed_seconds": 44,
+          "conclusion": "success"
+        }
+      ],
+      "tests_and_builds_complete_seconds": 387,
+      "publish_enabled": true
+    },
+    {
+      "kind": "optimized_ci_cold",
+      "run_id": 36995306666,
+      "url": "https://github.com/autonomous-ai/openharness/actions/runs/36995306666",
+      "source_commit": "3874d7c07bcd498a202952abc0936e8503ade472",
+      "created_at": "2026-10-02T10:24:36Z",
+      "completed_at": "2026-10-02T10:30:18Z",
+      "elapsed_seconds": 342,
+      "conclusion": "success",
+      "jobs": [
+        {
+          "name": "tui-test (ubuntu-24.04-arm, aarch64-unknown-linux-musl)",
+          "started_at": "2026-10-02T10:24:43Z",
+          "completed_at": "2026-10-02T10:29:57Z",
+          "elapsed_seconds": 314,
+          "conclusion": "success"
+        },
+        {
+          "name": "tui-test (ubuntu-latest, x86_64-unknown-linux-musl)",
+          "started_at": "2026-10-02T10:24:41Z",
+          "completed_at": "2026-10-02T10:30:17Z",
+          "elapsed_seconds": 336,
+          "conclusion": "success"
+        },
+        {
+          "name": "process-checks",
+          "started_at": "2026-10-02T10:24:41Z",
+          "completed_at": "2026-10-02T10:24:55Z",
+          "elapsed_seconds": 14,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "kind": "optimized_release_cold",
+      "run_id": 36995312221,
+      "url": "https://github.com/autonomous-ai/openharness/actions/runs/36995312221",
+      "source_commit": "3874d7c07bcd498a202952abc0936e8503ade472",
+      "created_at": "2026-10-02T10:24:39Z",
+      "completed_at": "2026-10-02T10:28:23Z",
+      "elapsed_seconds": 224,
+      "conclusion": "success",
+      "jobs": [
+        {
+          "name": "version",
+          "started_at": "2026-10-02T10:24:44Z",
+          "completed_at": "2026-10-02T10:24:56Z",
+          "elapsed_seconds": 12,
+          "conclusion": "success"
+        },
+        {
+          "name": "build (linux-arm64, ubuntu-24.04-arm, aarch64-unknown-linux-musl)",
+          "started_at": "2026-10-02T10:25:02Z",
+          "completed_at": "2026-10-02T10:27:04Z",
+          "elapsed_seconds": 122,
+          "conclusion": "success"
+        },
+        {
+          "name": "test",
+          "started_at": "2026-10-02T10:25:00Z",
+          "completed_at": "2026-10-02T10:26:17Z",
+          "elapsed_seconds": 77,
+          "conclusion": "success"
+        },
+        {
+          "name": "build (darwin-x64, macos-15, x86_64-apple-darwin)",
+          "started_at": "2026-10-02T10:25:05Z",
+          "completed_at": "2026-10-02T10:28:22Z",
+          "elapsed_seconds": 197,
+          "conclusion": "success"
+        },
+        {
+          "name": "build (darwin-arm64, macos-15, aarch64-apple-darwin)",
+          "started_at": "2026-10-02T10:25:03Z",
+          "completed_at": "2026-10-02T10:28:18Z",
+          "elapsed_seconds": 195,
+          "conclusion": "success"
+        },
+        {
+          "name": "build (linux-x64, ubuntu-latest, x86_64-unknown-linux-musl)",
+          "started_at": "2026-10-02T10:24:59Z",
+          "completed_at": "2026-10-02T10:27:46Z",
+          "elapsed_seconds": 167,
+          "conclusion": "success"
+        }
+      ],
+      "tests_and_builds_complete_seconds": 223,
+      "publish_enabled": false
+    },
+    {
+      "kind": "optimized_ci_warm",
+      "run_id": 36995903505,
+      "url": "https://github.com/autonomous-ai/openharness/actions/runs/36995903505",
+      "source_commit": "3874d7c07bcd498a202952abc0936e8503ade472",
+      "created_at": "2026-10-02T10:31:03Z",
+      "completed_at": "2026-10-02T10:35:56Z",
+      "elapsed_seconds": 293,
+      "conclusion": "success",
+      "jobs": [
+        {
+          "name": "process-checks",
+          "started_at": "2026-10-02T10:31:08Z",
+          "completed_at": "2026-10-02T10:31:23Z",
+          "elapsed_seconds": 15,
+          "conclusion": "success"
+        },
+        {
+          "name": "tui-test (ubuntu-24.04-arm, aarch64-unknown-linux-musl)",
+          "started_at": "2026-10-02T10:31:10Z",
+          "completed_at": "2026-10-02T10:35:53Z",
+          "elapsed_seconds": 283,
+          "conclusion": "success"
+        },
+        {
+          "name": "tui-test (ubuntu-latest, x86_64-unknown-linux-musl)",
+          "started_at": "2026-10-02T10:31:08Z",
+          "completed_at": "2026-10-02T10:35:56Z",
+          "elapsed_seconds": 288,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "kind": "optimized_release_warm",
+      "run_id": 36995747218,
+      "url": "https://github.com/autonomous-ai/openharness/actions/runs/36995747218",
+      "source_commit": "3874d7c07bcd498a202952abc0936e8503ade472",
+      "created_at": "2026-10-02T10:29:26Z",
+      "completed_at": "2026-10-02T10:32:38Z",
+      "elapsed_seconds": 192,
+      "conclusion": "success",
+      "jobs": [
+        {
+          "name": "version",
+          "started_at": "2026-10-02T10:29:30Z",
+          "completed_at": "2026-10-02T10:29:42Z",
+          "elapsed_seconds": 12,
+          "conclusion": "success"
+        },
+        {
+          "name": "test",
+          "started_at": "2026-10-02T10:29:46Z",
+          "completed_at": "2026-10-02T10:30:42Z",
+          "elapsed_seconds": 56,
+          "conclusion": "success"
+        },
+        {
+          "name": "build (linux-arm64, ubuntu-24.04-arm, aarch64-unknown-linux-musl)",
+          "started_at": "2026-10-02T10:29:48Z",
+          "completed_at": "2026-10-02T10:31:24Z",
+          "elapsed_seconds": 96,
+          "conclusion": "success"
+        },
+        {
+          "name": "build (linux-x64, ubuntu-latest, x86_64-unknown-linux-musl)",
+          "started_at": "2026-10-02T10:29:45Z",
+          "completed_at": "2026-10-02T10:31:53Z",
+          "elapsed_seconds": 128,
+          "conclusion": "success"
+        },
+        {
+          "name": "build (darwin-arm64, macos-15, aarch64-apple-darwin)",
+          "started_at": "2026-10-02T10:29:51Z",
+          "completed_at": "2026-10-02T10:31:29Z",
+          "elapsed_seconds": 98,
+          "conclusion": "success"
+        },
+        {
+          "name": "build (darwin-x64, macos-15, x86_64-apple-darwin)",
+          "started_at": "2026-10-02T10:29:53Z",
+          "completed_at": "2026-10-02T10:32:37Z",
+          "elapsed_seconds": 164,
+          "conclusion": "success"
+        }
+      ],
+      "tests_and_builds_complete_seconds": 191,
+      "publish_enabled": false
+    }
+  ]
+}

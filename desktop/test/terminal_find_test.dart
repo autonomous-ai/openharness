@@ -107,7 +107,9 @@ void main() {
     app.adoptSessionForTest(session);
     addTearDown(app.dispose);
     await mount(tester, app);
-    tester.view.physicalSize = const Size(600, 800);
+    // Terminal chrome ignores platform text scaling; a truly narrow pane
+    // offers compact actions, whose desktop popup still uses the larger type.
+    tester.view.physicalSize = const Size(340, 800);
     tester.platformDispatcher.textScaleFactorTestValue = 1.7;
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     await tester.pump();

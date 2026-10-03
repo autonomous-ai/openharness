@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto'
 import { constants, type BigIntStats } from 'node:fs'
 import { open, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, extname, isAbsolute, resolve, sep } from 'node:path'
+import { basename, extname, isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tempRoots, withinRoots } from './pathContainment.js'
 
 // Base64 inside an E2EE JSON envelope stays below 256 KiB per reply. The client
 // requests bounded chunks, so neither machine holds an entire video in memory.
@@ -22,12 +23,17 @@ const extensions = new Set([
 
 function fail(code: string): never { throw new MediaPreviewError(code) }
 
-/** A media-only variant of agent_read_file, not a relaxation of its text-file
- * guard. Absolute paths are intentional: agent artifacts often live in /tmp.
- * Relative paths stay under the selected agent's working folder; ~ and file://
- * are resolved on the machine that owns the file, never on the viewing machine. */
-function resolveTarget(root: string, target: string): { path: string; relative: boolean } {
-  if (!target || target.length > 4096 || /[\x00-\x1f\x7f]/.test(target)) fail('MEDIA_INVALID_REQUEST')
+/** Normalises what the client asked for into one absolute path on THIS machine: `~` and `file://`
+ * are resolved here, on the machine that owns the file, never on the viewing machine.
+ *
+ * Containment is deliberately NOT done here — only `realpath` can say where a path lands, so the
+ * caller resolves it first. What IS decided here is how much the request is allowed to ask for: a
+ * relative path is a promise about the workspace and is held to it, while an absolute one may name
+ * an artifact the agent dropped elsewhere. Either way the promise is measured on the real path. */
+function resolveTarget(root: string, target: string): { path: string; workspaceOnly: boolean } {
+  // Typed as a string, but it arrives off the wire: a number or an object is a bad request, not a
+  // TypeError thrown from whichever string method happens to be reached first.
+  if (typeof target !== 'string' || !target || target.length > 4096 || /[\x00-\x1f\x7f]/.test(target)) fail('MEDIA_INVALID_REQUEST')
   let path = target
   if (/^file:/i.test(path)) {
     try {
@@ -41,13 +47,7 @@ function resolveTarget(root: string, target: string): { path: string; relative: 
   }
   if (path.startsWith('~/')) path = resolve(homedir(), path.slice(2))
   if (!extensions.has(extname(path).toLowerCase())) fail('MEDIA_UNSUPPORTED')
-  const relative = !isAbsolute(path)
-  if (relative) {
-    const base = resolve(root)
-    path = resolve(base, path)
-    if (!path.startsWith(base.endsWith(sep) ? base : base + sep)) fail('MEDIA_INVALID_REQUEST')
-  }
-  return { path, relative }
+  return isAbsolute(path) ? { path, workspaceOnly: false } : { path: resolve(root, path), workspaceOnly: true }
 }
 
 /** Check content as well as the suffix, so a renamed text/credential file does
@@ -99,27 +99,33 @@ export interface MediaPreviewChunk {
   contentBase64: string
 }
 
-/** Stateless bounded reads: cancelling stops future requests, and disconnects
- * leave no file handles or transfer sessions behind on the remote machine. */
+/**
+ * Stateless bounded reads: cancelling stops future requests, and disconnects leave no file handles or
+ * transfer sessions behind on the remote machine.
+ *
+ * A relative target never leaves `root`, the selected agent's working folder. An absolute one may
+ * also name `extraRoots` — by default the temp directories agents drop artifacts into — so a chart
+ * written to /tmp still opens. A caller that wants the workspace alone passes `[]`.
+ *
+ * Both checks run on the REAL path, so a symlink planted in the workspace cannot walk out of it
+ * (lib/pathContainment.ts).
+ */
 export async function readMediaPreviewChunk(
   root: string,
   target: string,
   offset: unknown,
   expectedRevision?: unknown,
+  extraRoots: readonly string[] = tempRoots(),
 ): Promise<MediaPreviewChunk> {
   if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0
     || offset % MEDIA_PREVIEW_CHUNK_BYTES !== 0
     || (offset > 0 && (typeof expectedRevision !== 'string' || !/^[a-f0-9]{64}$/.test(expectedRevision)))) {
     fail('MEDIA_INVALID_REQUEST')
   }
-  const requested = resolveTarget(root, target)
-  const requestedPath = requested.path
+  const { path: requestedPath, workspaceOnly } = resolveTarget(root, target)
   try {
     const canonicalPath = await realpath(requestedPath)
-    if (requested.relative) {
-      const base = await realpath(root)
-      if (!canonicalPath.startsWith(base.endsWith(sep) ? base : base + sep)) fail('MEDIA_INVALID_REQUEST')
-    }
+    if (!(await withinRoots(canonicalPath, workspaceOnly ? [root] : [root, ...extraRoots]))) fail('MEDIA_INVALID_REQUEST')
     // Resolve symlinks once, then refuse a last-component swap. NONBLOCK avoids
     // hanging on a FIFO before fstat can reject anything other than a file.
     const file = await open(canonicalPath, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW)

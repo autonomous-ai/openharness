@@ -1,3 +1,4 @@
+import type { ReviewedAnswer } from './questionInbox.js'
 // The daemon's view of the OTHER machines the owner has, and the one lane that reaches them.
 //
 // Split out of cableHost.ts so the cable protocol layer never learns the word "relay": everything the dial
@@ -32,6 +33,7 @@ export class FleetError extends Error {
 export type FleetEvent =
   | { machineId: string; kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string; subagent?: boolean }
   | { machineId: string; kind: 'question'; agentId: string; requestId: string; questions: unknown }
+  | { machineId: string; kind: 'questionClosed'; agentId: string; requestId: string }
   | { machineId: string; kind: 'state'; state: FleetMachine['state'] }
 
 /**
@@ -70,6 +72,7 @@ export interface MachineFleet {
   sendTurn(machineId: string, agentId: string, text: string): void
   stopTurn(machineId: string, agentId: string): void
   answer(machineId: string, agentId: string, requestId: string, answers: Record<string, string>): void
+  answerReviewed?(machineId: string, answer: ReviewedAnswer): void
   updateAgent(machineId: string, agentId: string, model?: string, effort?: string): void
   /** Fork an agent on that machine (`agent_fork`); resolves to the new agent's id, rejects with the
    *  far end's refusal. Optional: a fleet built before forks existed simply cannot. */

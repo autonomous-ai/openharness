@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_theme.dart' as grid;
 import '../theme/app_theme.dart';
 
 class EngineIdentity {
@@ -140,6 +141,7 @@ class EngineMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dark = grid.AppTheme.watch(context) == Brightness.dark;
     final identity = engineIdentity(engine, displayName: displayName);
     final mark = identity.asset != null
         ? Image.asset(
@@ -159,14 +161,41 @@ class EngineMark extends StatelessWidget {
         ? CustomPaint(
             key: const ValueKey('engine-icon-claude'),
             size: Size.square(size),
-            painter: _ClaudeMarkPainter(identity.color),
+            // The brand clay is 2.5:1 on a light workspace; there the same
+            // hue a step deeper (3.1:1+), so the mark still reads as a shape.
+            painter: _ClaudeMarkPainter(
+              dark ? identity.color : const Color(0xffc2633f),
+            ),
           )
         : _InitialMark(
             key: ValueKey('engine-fallback-${identity.id}'),
             identity: identity,
             size: size,
           );
-    return Opacity(opacity: enabled ? 1 : 0.45, child: mark);
+    // These vendor assets use near-white ink with no ground of their own. They
+    // sit bare on a dark palette as they always have; on a light one they get
+    // the desktop's dark tile, or their shapes are white on white.
+    final needsDarkTile =
+        !dark &&
+        const {'cursor', 'opencode', 'grok', 'copilot'}.contains(identity.id);
+    return Opacity(
+      opacity: enabled ? 1 : 0.45,
+      child: needsDarkTile
+          ? SizedBox.square(
+              dimension: size,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: const Color(0xff29322f),
+                  borderRadius: BorderRadius.circular(size * .2),
+                ),
+                child: Padding(
+                  padding: EdgeInsets.all(size * .08),
+                  child: mark,
+                ),
+              ),
+            )
+          : mark,
+    );
   }
 }
 

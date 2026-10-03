@@ -52,7 +52,7 @@ void main() {
     expect(SwarmSearchController.action(row()), 'Open Harness');
     final picker = SwarmSearchController(app, const [], adding: true);
     addTearDown(picker.dispose);
-    expect(picker.actionLabel(row()), 'Resume & open');
+    expect(picker.actionLabel(row()), 'Open');
     expect(rankSwarmDestinations(rows, 'saved').single.agentId, 'saved');
     expect(app.allPanes, isEmpty);
     expect(connection.requests, isEmpty);
@@ -165,6 +165,31 @@ void main() {
       expect(app.allPanes, isEmpty);
     },
   );
+
+  test('duplicate retained-stop events cannot erase an in-flight saved-history refresh', () async {
+    connection.inventory = Completer<Map<String, dynamic>>();
+    for (var event = 0; event < 2; event++) {
+      await app.handleEventForTest('m', {
+        'type': 'agent_deleted',
+        'payload': {'agentId': 'a0', 'retained': true},
+      });
+    }
+    connection.inventory!.complete({
+      'agents': [
+        {
+          'id': 'a0',
+          'name': 'Retained work',
+          'engine': 'codex',
+          'sessionId': 'original-conversation',
+          'status': 'stopped',
+          'terminal': {'available': false},
+        },
+      ],
+    });
+    await Future<void>.delayed(Duration.zero);
+    expect(app.stateOf('m')!.agents.single.isStopped, isTrue);
+    expect(swarmDestinations(app).any((row) => row.agentId == 'a0'), isTrue);
+  });
 
   for (final placement in HarnessPlacement.values) {
     test('Enter resumes directly before opening ${placement.name}', () async {
@@ -432,7 +457,11 @@ void main() {
       'Saved work',
     );
     await tester.pump();
-    expect(find.widgetWithText(TextButton, 'Resume & open'), findsNothing);
+    // The preview offers the same action for pointer users; Return submits
+    // directly from search without first opening a confirmation dialog.
+    expect(find.widgetWithText(TextButton, 'Open'), findsOneWidget);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(connection.types, isEmpty);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
     expect(connection.types, ['agent_resume']);

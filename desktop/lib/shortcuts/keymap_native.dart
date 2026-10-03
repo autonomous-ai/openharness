@@ -14,7 +14,8 @@ Map<String, Object> nativeKeymapSnapshot(
       context.name: [
         for (final binding in keymap.current.bindingsFor(context))
           if (binding.command != null &&
-              !disabledCommands.contains(binding.command))
+              !disabledCommands.contains(binding.command) &&
+              harnessCommandActive(binding.command!))
             {
               'keys': binding.keys.map((key) => key.toString()).toList(),
               'command': binding.command!,

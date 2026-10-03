@@ -1,0 +1,13 @@
+{
+  "homepage": "https://github.com/trailofbits/skills",
+  "upstream": "https://github.com/trailofbits/skills",
+  "license": "CC-BY-SA-4.0",
+  "tagline": "Skills to enhance AI-assisted security analysis and testing",
+  "examples": [
+    {
+      "prompt": "Audit this Node.js app for security issues. Verify every finding before it counts, and give me a report I can hand to the team.",
+      "image": "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/trailofbits-skills/nodegoat-audit.jpg",
+      "caption": "OWASP NodeGoat · 27 findings: 5 confirmed, 5 dismissed as false positives, 17 awaiting verification"
+    }
+  ]
+}

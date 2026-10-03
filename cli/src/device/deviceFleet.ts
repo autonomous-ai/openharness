@@ -1,3 +1,4 @@
+import type { ReviewedAnswer } from '../cable/questionInbox.js'
 // `MachineFleet` for real: the REST machine list, plus one device socket to whichever machine the dial is
 // currently on.
 //
@@ -229,6 +230,12 @@ export class DeviceFleet implements MachineFleet {
     this.tagged(machineId, { type: 'question_response', payload: { agentId, requestId, answers } })
   }
 
+  answerReviewed(machineId: string, answer: ReviewedAnswer): void {
+    this.tagged(machineId, { type: 'question_response', payload: { agentId: answer.agentId,
+      requestId: answer.requestId, answers: answer.answers,
+      expectedQuestions: answer.questions, selectedLabels: answer.selections } })
+  }
+
   updateAgent(machineId: string, agentId: string, model?: string, effort?: string): void {
     if (!model) return
     // The far end owns what the profile means; this only reassembles the opaque string it round-trips.
@@ -318,9 +325,9 @@ export class DeviceFleet implements MachineFleet {
 
   // ── internals ───────────────────────────────────────────────────────────────────────────────────
 
-  /** Send a frame addressed to one machine. The tag is what the backend routes on. */
+  /** Send a frame addressed to one machine, sealed for it. The tag is what the backend routes on. */
   private tagged(machineId: string, frame: DeviceFrame): void {
-    this.opts.link.send({ ...frame, machineId })
+    void this.opts.link.sendSealed({ ...frame, machineId })
   }
 
   private async prefetchRecaps(machineId: string): Promise<void> {
@@ -365,6 +372,10 @@ export class DeviceFleet implements MachineFleet {
         // A specialist on another Mac is as silent here as one on this one.
         ...(payload.subagent === true ? { subagent: true } : {}),
       })
+      return
+    }
+    if (frame.type === 'commander_question_close' && frame.agentId && typeof payload.requestId === 'string') {
+      this.emit({ machineId: from, kind: 'questionClosed', agentId: frame.agentId, requestId: payload.requestId })
       return
     }
     if (frame.type === 'commander_question' && frame.agentId) {

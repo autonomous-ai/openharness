@@ -62,6 +62,14 @@ test('the collector follows a changed selection on its next poll',async t=>{
   assert.equal((await readConfig(dir)).grid,'tuan-dev-991371e4');
   assert.ok(asked.some(a=>a[0]==='engines'&&a[1]==='tuan-dev-991371e4'),'the new grid is what gets polled');
 });
+test('grid signed out answers nothing, and the agent is told to set grid up itself, not to send the person to sign in',async t=>{
+  const {dir,profilePath}=await setup(t);
+  const signedOut={ok:false,error:"You're not signed in. Run `grid login` to sign in."};
+  const result=await initializeWorkspace(dir,{profilePath,discover,runJson:async()=>signedOut,email:async()=>null,env:{HARNESS_PRIVATE_GRID:'tuan-dev-991371e4'}});
+  assert.equal(result.config.grid,null);assert.equal(result.config.personalGrid,'tuan-dev-991371e4');
+  assert.match(result.connection.message,/harness grid setup/);assert.match(result.connection.message,/fleet init/);
+  assert.doesNotMatch(result.connection.message,/signs? in to Harness|grid login/);
+});
 test('no private grid and an ambiguous inventory selects nothing and tells the agent to ask',async t=>{
   const {dir,profilePath}=await setup(t);
   const runJson=async(_host,mode,args)=>args[0]==='mode'?{ok:true,value:{mode:'remote'}}:args[0]==='engines'?{ok:false,error:'unreachable'}:{ok:true,value:mode==='local'?[{grid:'home'}]:[{grid:'working'},{grid:'other'}]};

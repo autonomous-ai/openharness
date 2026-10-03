@@ -6,30 +6,37 @@ import '../auth/auth_session.dart';
 import '../core/config.dart';
 import '../core/models.dart';
 import '../logging/http_log.dart';
+import '../viewer/device_log.dart';
+import '../viewer/device_log_sync.dart' show DeviceLogAppendAnswer, DeviceLogFetched;
 import 'access_token_source.dart';
 import 'bearer_auth_interceptor.dart';
 import 'multipart_body.dart';
 
-/// Control-plane REST client.
-///
-/// In a desktop build every call goes to the LOCAL `harness` CLI (loopback, no credential — see
-/// CLAUDE.md's naming/architecture notes for why), which proxies to the real backend using its own
-/// saved SSO session, and this app never holds a bearer token itself. A viewer build has no CLI:
-/// given [auth], the same calls go straight to the backend, signed with the session the app holds.
-/// Terminal bytes ride the WS path either way.
+/// Authenticated control-plane REST client for the phone.
 class ApiClient {
   final AppConfig config;
   final AuthSession session;
   final AccessTokenSource? auth;
+
+  /// An in-process transport for tests; authentication and serialization still run.
+  final HttpClientAdapter? httpClientAdapter;
   late final Dio _dio = _buildDio();
 
-  ApiClient({required this.config, required this.session, this.auth});
+  ApiClient({
+    required this.config,
+    required this.session,
+    this.auth,
+    this.httpClientAdapter,
+  });
 
   Dio _buildDio() {
+    // In-memory subclasses override requests; every real API call requires auth.
+    final source =
+        auth ?? (throw StateError('API calls require an access token source'));
     final dio = attachHttpLog(
       Dio(
         BaseOptions(
-          baseUrl: auth == null ? config.localCliBaseUrl : config.apiBaseUrl,
+          baseUrl: config.apiBaseUrl,
           connectTimeout: const Duration(seconds: 15),
           receiveTimeout: const Duration(seconds: 30),
           // Let the API wrapper turn HTTP failures into short, user-facing
@@ -39,22 +46,21 @@ class ApiClient {
         ),
       ),
     );
-    final source = auth;
-    if (source != null) {
-      dio.interceptors.add(
-        BearerAuthInterceptor(source, dio, autonomousEnv: config.autonomousEnv),
-      );
-    }
+    dio.interceptors.add(
+      BearerAuthInterceptor(source, dio, autonomousEnv: config.autonomousEnv),
+    );
+    final adapter = httpClientAdapter;
+    if (adapter != null) dio.httpClientAdapter = adapter;
     return dio;
   }
 
-  // -- auth (proxied by the local CLI — no credential on this leg) --
+  // -- auth --
   Future<Map<String, dynamic>?> me() async {
     final res = await _dio.get('/api/auth/me');
     return unwrapApiResponse(res) as Map<String, dynamic>?;
   }
 
-  // -- machines (control plane, proxied by the local CLI) --
+  // -- machines --
   Future<List<Machine>> machines() async {
     final res = await _dio.get('/api/machines');
     final data = unwrapApiResponse(res) as Map<String, dynamic>;
@@ -85,6 +91,76 @@ class ApiClient {
     unwrapApiResponse(res);
   }
 
+  // -- the account's device key log (viewer/device_log_sync.dart) --
+
+  /// `GET /api/device-keys?since=` — the log from [since]; null when there is none to read (an older
+  /// backend, signed out, or unreachable).
+  Future<DeviceLogFetched?> deviceKeys(int since) async {
+    try {
+      final res = await _dio.get('/api/device-keys', queryParameters: {'since': since});
+      if (res.statusCode != 200) return null;
+      final data = unwrapApiResponse(res);
+      if (data is! Map) return null;
+      final acct = data['acct'], head = DevLogHead.fromJson(data['head']), entries = data['entries'];
+      if (acct is! String || head == null || entries is! List) return null;
+      return (acct: acct, head: head, entries: entries.cast<Object?>());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// `POST /api/device-keys` — append one entry this phone signed. Null when the backend could not
+  /// be reached; a refusal comes back as its code (`STALE_HEAD` with the current head).
+  Future<DeviceLogAppendAnswer?> appendDeviceKey(DevLogEntry entry) async {
+    try {
+      final res = await _dio.post('/api/device-keys', data: {'entry': entry.toJson()});
+      final body = res.data;
+      if (body is! Map) return null;
+      final data = body['data'];
+      final head = data is Map ? DevLogHead.fromJson(data['head']) : null;
+      if (res.statusCode == 200) return (head: head, error: null);
+      final error = body['error'];
+      final code = error is Map && error['code'] is String ? error['code'] as String : 'HTTP_${res.statusCode}';
+      return (head: head, error: code);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// `GET /api/device-keys/seen` — when each key last opened a session, `{pub: ms}`; empty when it
+  /// cannot be read. A hint for offering to remove apps not used in a long while.
+  Future<Map<String, int>> deviceKeysSeen() async {
+    try {
+      final res = await _dio.get('/api/device-keys/seen');
+      if (res.statusCode != 200) return const {};
+      final data = unwrapApiResponse(res);
+      final seen = data is Map ? data['seen'] : null;
+      return {
+        if (seen is Map)
+          for (final e in seen.entries)
+            if (e.key is String && e.value is int) e.key as String: e.value as int,
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  // -- signing a computer in by its QR (backend routes/qrSignIn.ts) --
+
+  /// What is asking to sign in: `{label, kind, country?, ipHint?, sameNetwork, status}`.
+  Future<Map<String, dynamic>> signInLookup(String code) async {
+    final res = await _dio.post('/api/auth/qr/lookup', data: {'code': code});
+    return Map<String, dynamic>.from(unwrapApiResponse(res) as Map);
+  }
+
+  Future<void> approveSignIn(String code) async {
+    unwrapApiResponse(await _dio.post('/api/auth/qr/approve', data: {'code': code}));
+  }
+
+  Future<void> denySignIn(String code) async {
+    unwrapApiResponse(await _dio.post('/api/auth/qr/deny', data: {'code': code}));
+  }
+
   // -- the desk: the account's tabs, the same on every computer --
 
   /// `{revision, tabs}` as the backend holds it (its `routes/desk.ts`); null on
@@ -102,6 +178,29 @@ class ApiClient {
   Future<Map<String, dynamic>?> deskOps(List<Map<String, dynamic>> ops) async {
     final res = await _dio.post(
       '/api/desk/ops',
+      data: {'ops': ops},
+      options: Options(headers: {'x-adapter-local': '1'}),
+    );
+    if (res.statusCode == 404 || res.statusCode == 401) return null;
+    return unwrapApiResponse(res) as Map<String, dynamic>?;
+  }
+
+  // -- the zoo: the account's daemons and eggs (daemons/README.md), its own document --
+
+  /// `{revision, zoo}` (the backend's `routes/zoo.ts`); null on a backend that
+  /// predates the zoo (404) or a session it will not take (401) — the phone
+  /// then draws no daemon at all.
+  Future<Map<String, dynamic>?> zoo() async {
+    final res = await _dio.get('/api/zoo');
+    if (res.statusCode == 404 || res.statusCode == 401) return null;
+    return unwrapApiResponse(res) as Map<String, dynamic>?;
+  }
+
+  /// Apply [ops] in order; answers `{revision, zoo, hatched, grants,
+  /// levelUps}`. Null under the same two conditions as [zoo].
+  Future<Map<String, dynamic>?> zooOps(List<Map<String, dynamic>> ops) async {
+    final res = await _dio.post(
+      '/api/zoo/ops',
       data: {'ops': ops},
       options: Options(headers: {'x-adapter-local': '1'}),
     );
@@ -150,10 +249,6 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
-bool isUnauthorizedError(Object error) =>
-    error is DioException && error.response?.statusCode == 401 ||
-    error is ApiException && error.status == 401;
-
 /// Unwraps the backend's `{success, data, error}` envelope, which both legs
 /// speak: the CLI's loopback server mirrors it, and the viewer's own auth calls
 /// (`viewer/direct_auth_api.dart`) read it straight from the backend.
@@ -172,28 +267,21 @@ dynamic unwrapApiResponse(Response res) {
   );
 }
 
-/// The sentence a failed local-CLI call earns on an error strip. A raw
-/// `DioException` is a paragraph about `RequestOptions.receiveTimeout` — true,
-/// and useless to the person reading it: what they need is which leg failed.
-/// The daemon not listening, the daemon not answering (it proxies to the
-/// backend, so that is nearly always the backend being slow), or the backend
-/// answering with a sentence of its own, which the daemon forwards verbatim.
+/// A short explanation of a failed request to the Harness backend.
 String describeApiError(Object error) {
   if (error is ApiException) return error.message;
   if (error is DioException) {
     switch (error.type) {
       case DioExceptionType.connectionError:
-        return 'the local Harness service is not answering on its port. '
-            'It usually restarts on its own; retry in a moment.';
+        return 'could not reach Harness. Check your connection and try again.';
       case DioExceptionType.connectionTimeout:
       case DioExceptionType.sendTimeout:
       case DioExceptionType.receiveTimeout:
         final limit = error.requestOptions.receiveTimeout?.inSeconds;
-        return 'the local Harness service did not answer'
-            '${limit == null ? '' : ' within ${limit}s'} — the Harness '
-            'backend is probably slow right now. Retry in a moment.';
+        return 'Harness did not answer'
+            '${limit == null ? '' : ' within ${limit}s'}. Try again in a moment.';
       case DioExceptionType.badResponse:
-        return 'the local Harness service answered '
+        return 'Harness answered '
             '${error.response?.statusCode ?? 'with an error'}.';
       case DioExceptionType.badCertificate:
       case DioExceptionType.cancel:

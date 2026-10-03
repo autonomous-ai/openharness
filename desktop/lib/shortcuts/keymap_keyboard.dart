@@ -97,6 +97,33 @@ final _logicalKeys = <LogicalKeyboardKey, String>{
     key: key.keyLabel.toLowerCase(),
 };
 
+/// macOS reports the SHIFTED character as the logical key of a symbol: ⇧⌘]
+/// arrives as `}`, not `]`. The binding names the key, and the shift is
+/// already in the stroke, so read the shifted symbol back as the key under it
+/// (US positions, the only ones the binding names can spell).
+final _shiftedKeys = <LogicalKeyboardKey, String>{
+  LogicalKeyboardKey.braceLeft: 'bracketleft',
+  LogicalKeyboardKey.braceRight: 'bracketright',
+  LogicalKeyboardKey.bar: 'backslash',
+  LogicalKeyboardKey.colon: 'semicolon',
+  LogicalKeyboardKey.less: 'comma',
+  LogicalKeyboardKey.greater: 'period',
+  LogicalKeyboardKey.question: 'slash',
+  LogicalKeyboardKey.tilde: 'backquote',
+  LogicalKeyboardKey.underscore: 'minus',
+  LogicalKeyboardKey.add: 'equal',
+  LogicalKeyboardKey.exclamation: '1',
+  LogicalKeyboardKey.at: '2',
+  LogicalKeyboardKey.numberSign: '3',
+  LogicalKeyboardKey.dollar: '4',
+  LogicalKeyboardKey.percent: '5',
+  LogicalKeyboardKey.caret: '6',
+  LogicalKeyboardKey.ampersand: '7',
+  LogicalKeyboardKey.asterisk: '8',
+  LogicalKeyboardKey.parenthesisLeft: '9',
+  LogicalKeyboardKey.parenthesisRight: '0',
+};
+
 KeyStroke? keyStrokeFor(
   LogicalKeyboardKey key, {
   bool control = false,
@@ -104,7 +131,7 @@ KeyStroke? keyStrokeFor(
   bool command = false,
   bool shift = false,
 }) {
-  final name = _logicalKeys[key];
+  final name = _logicalKeys[key] ?? (shift ? _shiftedKeys[key] : null);
   return name == null
       ? null
       : KeyStroke(

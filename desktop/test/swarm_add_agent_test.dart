@@ -9,7 +9,6 @@ import 'package:harness/state/swarm_search.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:xterm/xterm.dart';
 
-import 'swarm_interactions_test.dart' show chord;
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 
@@ -52,7 +51,7 @@ void main() {
 
   for (final axis in PaneResizeAxis.values) {
     testWidgets(
-      'split ${axis.name} chooses an existing agent and preserves its neighbors',
+      'placing an existing agent into a ${axis.name} split preserves its neighbors',
       (tester) async {
         final app = createApp();
         final input = <TerminalBinaryFrame>[];
@@ -69,20 +68,15 @@ void main() {
         await tester.pump();
         final neighborRect = tester.getRect(find.byKey(neighbor.cellKey));
         final expected = app.preparePaneSplit(axis)!;
-        await chord(tester, LogicalKeyboardKey.keyP, shift: true);
-        final inputField = find.byKey(const ValueKey('swarm-search-input'));
-        await tester.enterText(
-          inputField,
-          axis == PaneResizeAxis.x ? '> split right' : '> split down',
+        // Split commands now create a new harness directly. Existing sessions
+        // still use this placement path when assigned to a split destination.
+        await app.assignAgentToPane(
+          null,
+          'm',
+          'a2',
+          swarmId: target.id,
+          split: expected,
         );
-        await tester.pump();
-        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-        await tester.pump();
-        expect(find.byType(AlertDialog), findsNothing);
-        expect(app.panes, [first, neighbor]);
-        await tester.enterText(inputField, 'Agent 2');
-        await tester.pump();
-        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
         expect(app.panes, [first, shared, neighbor]);
         expect(source.panes, [shared]);
@@ -97,7 +91,7 @@ void main() {
   }
 
   test(
-    'adding a group uses this swarm, skips duplicates and keeps the source',
+    'adding a group uses this tab, skips duplicates and keeps the source',
     () async {
       final app = createApp();
       addTearDown(app.dispose);

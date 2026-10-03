@@ -7,6 +7,9 @@ import { authenticateAccessToken, type AuthUser } from './ssoAuth.js'
 import { parseAutonomousEnvironment } from './autonomousEnvironment.js'
 import { extractKey } from '../utils/crypto.js'
 import { recipientShare } from '../routes/harnessShares.js'
+import { recipientLink } from '../routes/harnessLinks.js'
+import type { AutonomousEnvironment } from './autonomousEnvironment.js'
+import { prisma } from './prisma.js'
 import { publishDown, subscribeUp, subscribeShareChanged } from './bus.js'
 import { guardedSendJson } from './wsSend.js'
 import { trackSocketLiveness } from './hub.js'
@@ -18,20 +21,23 @@ export function handleObserverUpgrade(req: IncomingMessage, socket: Duplex, head
   void (async () => {
     const token = extractKey(req)
     const url = new URL(req.url ?? '/', 'http://localhost')
-    const id = url.searchParams.get('share') ?? ''
-    if (!token || !/^[a-f0-9-]{36}$/.test(id)) { socket.destroy(); return }
-    const user = await authenticateAccessToken(token, parseAutonomousEnvironment(url.searchParams.get('autonomousEnv')))
-    const share = await recipientShare(id, user)
+    const linkMode = url.searchParams.has('link')
+    const id = url.searchParams.get(linkMode ? 'link' : 'share') ?? ''
+    if ((!token && !linkMode) || !/^[a-f0-9-]{36}$/.test(id)) { socket.destroy(); return }
+    const autonomousEnv = parseAutonomousEnvironment(url.searchParams.get('autonomousEnv'))
+    const user = token ? await authenticateAccessToken(token, autonomousEnv) : null
+    const share = linkMode ? await recipientLink(id, user, autonomousEnv) : await recipientShare(id, user!)
     if (socket.destroyed) return
     wss.handleUpgrade(req, socket, head, ws => {
       if (!share) { ws.close(4403, 'Sharing ended or invitation expired'); return }
-      void attachObserver(ws, user, share).catch(() => ws.close(1013, 'Sharing temporarily unavailable'))
+      void attachObserver(ws, user, share, linkMode ? autonomousEnv : undefined).catch(() => ws.close(1013, 'Sharing temporarily unavailable'))
     })
   })().catch(() => { if (!socket.destroyed) socket.destroy() })
 }
 
 /** Separate from the machine hub: no group key, machine inventory, P2P, or generic RPC route. */
-export async function attachObserver(ws: WebSocket, user: AuthUser, share: NonNullable<Awaited<ReturnType<typeof recipientShare>>>): Promise<void> {
+export async function attachObserver(ws: WebSocket, user: AuthUser | null,
+  share: { id: string; machineId: string; ownerId: string }, linkEnv?: AutonomousEnvironment): Promise<void> {
   const connId = `observer:${randomUUID()}`
   const send = (frame: unknown) => guardedSendJson(ws, frame, 'must')
   const disposers: Array<() => void> = [trackSocketLiveness(ws)]
@@ -46,7 +52,8 @@ export async function attachObserver(ws: WebSocket, user: AuthUser, share: NonNu
   ws.once('close', close)
   const check = async () => {
     try {
-      if (!await recipientShare(share.id, user)) ws.close(4403, 'Sharing ended or invitation expired')
+      const allowed = linkEnv ? await recipientLink(share.id, user, linkEnv) : await recipientShare(share.id, user!)
+      if (!allowed) ws.close(4403, 'Sharing ended or invitation expired')
     } catch { ws.close(1013, 'Sharing temporarily unavailable') }
   }
   const timer = setInterval(() => { void check() }, 5000)
@@ -66,6 +73,8 @@ export async function attachObserver(ws: WebSocket, user: AuthUser, share: NonNu
   if (closed) return
   await check()
   if (ws.readyState !== WebSocket.OPEN) return
+  const profile = user ? await prisma.user.findUnique({ where: { id: user.sub }, select: { name: true } }) : null
+  if (closed) return
   send({ type: 'observer_connected' })
   // Each message is bounded before decoding; encrypted content is interpreted only on the owner daemon.
   let windowStart = Date.now(), count = 0
@@ -78,7 +87,9 @@ export async function attachObserver(ws: WebSocket, user: AuthUser, share: NonNu
     if (!opened && frame.type === 'observer_hello' && typeof frame.payload?.ephemeral === 'string'
       && /^[A-Za-z0-9+/]{43}=$/.test(frame.payload.ephemeral)) {
       opened = true
-      await down('observer_open', { shareId: share.id, email: user.email.trim().toLowerCase(),
+      await down('observer_open', { ...(linkEnv ? { linkId: share.id } : { shareId: share.id }),
+        email: user?.email.trim().toLowerCase() ?? '',
+        ...(user ? { authorId: user.sub, authorName: profile?.name || user.email.trim().split('@')[0], owner: user.sub === share.ownerId } : {}),
         ephemeral: frame.payload.ephemeral }).catch(() => ws.close(1013, 'Owner unavailable'))
     } else if (opened && frame.type === 'observer_frame' && frame.payload?.__e2e) {
       await down('observer_frame', frame.payload).catch(() => ws.close(1013, 'Owner unavailable'))

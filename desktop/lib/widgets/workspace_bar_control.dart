@@ -12,6 +12,7 @@ class WorkspaceBarControl extends StatefulWidget {
     this.tooltip,
     this.foreground,
     this.selected,
+    this.highlighted = false,
     this.onPressed,
   });
 
@@ -20,6 +21,10 @@ class WorkspaceBarControl extends StatefulWidget {
   final Color? selectedBackground;
   final Color? foreground;
   final bool? selected;
+
+  /// Drawn as focused though no focus node of its own holds the keys: the
+  /// selected tab while the tab strip as a whole has the keyboard.
+  final bool highlighted;
   final Widget Function(BuildContext context, bool emphasized) builder;
   final VoidCallback? onPressed;
 
@@ -33,7 +38,8 @@ class _WorkspaceBarControlState extends State<WorkspaceBarControl> {
   @override
   Widget build(BuildContext context) {
     final enabled = widget.onPressed != null;
-    final active = enabled && (_hovered || _focused || _pressed);
+    final active =
+        enabled && (_hovered || _focused || _pressed || widget.highlighted);
     Widget content = widget.builder(context, active);
     if (widget.foreground case final foreground?) {
       content = DefaultTextStyle.merge(
@@ -86,19 +92,19 @@ class _WorkspaceBarControlState extends State<WorkspaceBarControl> {
         : Tooltip(
             message: hint,
             excludeFromSemantics: true,
-            waitDuration: const Duration(milliseconds: 700),
+            waitDuration: const Duration(milliseconds: 500),
             child: control,
           );
   }
 }
 
-/// The numeric prefix is navigation, not a different name worth repeating.
+/// The visible name needs a tooltip only when clipped or shortened.
 String? workspaceTabTooltip(
   String label,
   String name, {
   required bool clipped,
 }) {
-  final visibleName = label.replaceFirst(RegExp(r'^\d+:'), '').trim();
+  final visibleName = label.trim();
   final hint = [
     if (clipped) label,
     if (name.trim().isNotEmpty && name.trim() != visibleName && name != label)

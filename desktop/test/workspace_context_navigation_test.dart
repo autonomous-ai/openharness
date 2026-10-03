@@ -14,8 +14,8 @@ import 'package:harness/widgets/workspace_bar_control.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 
 import 'support/resource_picker.dart';
+import 'support/open_harness.dart';
 import 'swarm_screen_test.dart' show mount, terminal;
-import 'swarm_interactions_test.dart' show chord;
 import 'swarm_state_test.dart' show createApp;
 
 AppNotifier fixture() {
@@ -262,8 +262,8 @@ void main() {
         await mount(tester, app, nativeTabs: native);
         for (final field in StatusLineField.values) {
           if (field == StatusLineField.machine) {
-            await chord(tester, LogicalKeyboardKey.keyR);
-            expect(resourceSearch(tester).split, isNotNull);
+            await openHarnessPicker(tester);
+            expect(resourceSearch(tester).scopePrefix, isEmpty);
             // Flutter's modal barrier covers its bar; AppKit's native bar
             // remains available while a picker is open.
             if (!native) {

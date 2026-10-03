@@ -81,16 +81,58 @@ function isBlockedIPv4(ip: string): boolean {
   return false
 }
 
+/** The 16 bytes of an IPv6 address in any spelling — hex groups, `::`, an embedded dotted IPv4 —
+ *  or null when it is not one. Judging bytes, not text, is what makes every spelling of one address
+ *  get one answer: `new URL` and `dns.lookup` both print mapped IPv4 as hex (`::ffff:a9fe:a9fe`). */
+function ipv6Bytes(raw: string): Uint8Array | null {
+  let ip = raw.toLowerCase().replace(/^\[|\]$/g, '')
+  const zone = ip.indexOf('%')
+  if (zone >= 0) ip = ip.slice(0, zone)
+  // A trailing dotted IPv4 stands for the last two groups.
+  const v4 = /^(.*:)(\d+\.\d+\.\d+\.\d+)$/.exec(ip)
+  if (v4) {
+    const parts = v4[2]!.split('.').map(Number)
+    if (parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null
+    ip = `${v4[1]}${((parts[0]! << 8) | parts[1]!).toString(16)}:${((parts[2]! << 8) | parts[3]!).toString(16)}`
+  }
+  const halves = ip.split('::')
+  if (halves.length > 2) return null
+  const head = halves[0] ? halves[0].split(':') : []
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : []
+  const missing = 8 - head.length - tail.length
+  if (halves.length === 1 ? head.length !== 8 : missing < 1) return null
+  const groups = [...head, ...Array<string>(halves.length === 2 ? missing : 0).fill('0'), ...tail]
+  const bytes = new Uint8Array(16)
+  for (let i = 0; i < 8; i++) {
+    if (!/^[0-9a-f]{1,4}$/.test(groups[i]!)) return null
+    const n = parseInt(groups[i]!, 16)
+    bytes[2 * i] = n >> 8
+    bytes[2 * i + 1] = n & 0xff
+  }
+  return bytes
+}
+
+const startsWith = (bytes: Uint8Array, prefix: number[]): boolean => prefix.every((b, i) => bytes[i] === b)
+const v4At = (bytes: Uint8Array, at: number): string => [...bytes.slice(at, at + 4)].join('.')
+
 function isBlockedIPv6(raw: string): boolean {
-  const ip = raw.toLowerCase().replace(/^\[|\]$/g, '')
-  if (ip === '::' || ip === '::1') return true    // unspecified, loopback
-  // IPv4-mapped (::ffff:10.0.0.1) and IPv4-compatible forms must be judged as IPv4, or every rule
-  // above is trivially bypassed.
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(ip) ?? /^::(\d+\.\d+\.\d+\.\d+)$/.exec(ip)
-  if (mapped) return isBlockedIPv4(mapped[1]!)
-  if (/^f[cd]/.test(ip)) return true              // fc00::/7 unique-local
-  if (/^fe[89ab]/.test(ip)) return true           // fe80::/10 link-local
-  if (/^ff/.test(ip)) return true                 // multicast
+  const b = ipv6Bytes(raw)
+  if (!b) return true                                         // not an address we can reason about → refuse
+  const zeros = (n: number) => Array<number>(n).fill(0)
+  // Every form that carries an IPv4 address is judged as that IPv4, or each rule above is bypassed.
+  if (startsWith(b, [...zeros(10), 0xff, 0xff])) return isBlockedIPv4(v4At(b, 12))       // ::ffff:0:0/96 mapped
+  if (startsWith(b, [...zeros(8), 0xff, 0xff, 0, 0])) return isBlockedIPv4(v4At(b, 12))  // ::ffff:0:0:0/96 translated
+  if (startsWith(b, zeros(12))) return true                    // ::/96: ::, ::1 and the deprecated IPv4-compatible
+  if (startsWith(b, [0x00, 0x64, 0xff, 0x9b, ...zeros(8)])) return isBlockedIPv4(v4At(b, 12)) // 64:ff9b::/96 NAT64
+  if (startsWith(b, [0x00, 0x64, 0xff, 0x9b, 0x00, 0x01])) return true                 // 64:ff9b:1::/48 local NAT64
+  if (startsWith(b, [0x20, 0x02])) return isBlockedIPv4(v4At(b, 2))                     // 2002::/16 6to4
+  if (startsWith(b, [0x01, 0x00, ...zeros(6)])) return true    // 100::/64 discard-only
+  if (startsWith(b, [0x20, 0x01, 0x0d, 0xb8])) return true     // 2001:db8::/32 documentation
+  if (startsWith(b, [0x20, 0x01, 0x00, 0x00])) return true     // 2001::/32 Teredo (carries an obfuscated IPv4)
+  if ((b[0]! & 0xfe) === 0xfc) return true                     // fc00::/7 unique-local
+  if (b[0] === 0xfe && (b[1]! & 0xc0) === 0x80) return true    // fe80::/10 link-local
+  if (b[0] === 0xfe && (b[1]! & 0xc0) === 0xc0) return true    // fec0::/10 site-local (deprecated, still routed internally)
+  if (b[0] === 0xff) return true                               // multicast
   return false
 }
 

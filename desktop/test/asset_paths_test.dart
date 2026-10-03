@@ -22,16 +22,19 @@ import 'package:flutter_test/flutter_test.dart';
 ///
 /// Interpolated paths (the wallpapers build theirs from an enum) cannot be seen
 /// from here and are covered by the suites that load them.
-final _assetLiteral = RegExp(r'''['"](assets/[A-Za-z0-9_./-]+\.[A-Za-z0-9]+)['"]''');
+final _assetLiteral = RegExp(
+  r'''['"](assets/[A-Za-z0-9_./-]+\.[A-Za-z0-9]+)['"]''',
+);
 
 void main() {
   test('every asset path named in lib/ resolves to a file', () {
     final missing = <String>[];
     var checked = 0;
-    for (final file in Directory('lib')
-        .listSync(recursive: true)
-        .whereType<File>()
-        .where((f) => f.path.endsWith('.dart'))) {
+    for (final file
+        in Directory('lib')
+            .listSync(recursive: true)
+            .whereType<File>()
+            .where((f) => f.path.endsWith('.dart'))) {
       final source = file.readAsStringSync();
       for (final match in _assetLiteral.allMatches(source)) {
         final path = match.group(1)!;
@@ -39,10 +42,20 @@ void main() {
         if (!File(path).existsSync()) missing.add('$path  (${file.path})');
       }
     }
-    expect(checked, greaterThan(50), reason: 'the scan found almost nothing — '
-        'the pattern probably stopped matching how paths are written');
-    expect(missing, isEmpty, reason: 'named in code, absent on disk:\n'
-        '${missing.join('\n')}');
+    expect(
+      checked,
+      greaterThan(50),
+      reason:
+          'the scan found almost nothing — '
+          'the pattern probably stopped matching how paths are written',
+    );
+    expect(
+      missing,
+      isEmpty,
+      reason:
+          'named in code, absent on disk:\n'
+          '${missing.join('\n')}',
+    );
   });
 
   test('every bundled asset is named by code, or is a licence beside one', () {
@@ -63,7 +76,12 @@ void main() {
         .where((f) => f.path.endsWith('.dart'))
         .map((f) => f.readAsStringSync())
         .join('\n');
-    final manifest = File('assets/store/covers/sources.json').readAsStringSync();
+    final manifest = File('assets/store/covers/sources.json')
+        .readAsStringSync();
+    // Thousands of animation frames share this one directory expression.
+    final namesDaemonArt = source.contains(
+      r"assets/daemon-art/${slot ? 'slot' : 'portrait'}",
+    );
 
     bool named(String name) => source.contains(name) || manifest.contains(name);
     bool attribution(String name) =>
@@ -73,21 +91,34 @@ void main() {
         name == 'sources.json';
 
     final orphans = <String>[];
-    for (final file in Directory('assets')
-        .listSync(recursive: true)
-        .whereType<File>()) {
+    final siblingCache = <String, List<String>>{};
+    for (final file in Directory(
+      'assets',
+    ).listSync(recursive: true).whereType<File>()) {
       final path = file.path;
       final name = path.split('/').last;
       final dir = path.substring(0, path.length - name.length);
+      // These two directories are selected by the literal slot/portrait ternary.
+      if ((dir == 'assets/daemon-art/slot/' ||
+              dir == 'assets/daemon-art/portrait/') &&
+          namesDaemonArt) {
+        continue;
+      }
       if (attribution(name) || named(name)) continue;
       // A folder code builds paths into. `assets/` itself is excluded: every
       // path in the app starts with it, so it would account for everything.
       if (dir != 'assets/' && source.contains(dir)) continue;
       final stem = name.split('.').first;
-      final siblings = Directory(dir)
-          .listSync()
-          .whereType<File>()
-          .map((f) => f.path.split('/').last)
+      final siblings = siblingCache
+          .putIfAbsent(
+            dir,
+            () =>
+                Directory(dir)
+                    .listSync()
+                    .whereType<File>()
+                    .map((f) => f.path.split('/').last)
+                    .toList(),
+          )
           .where((s) => s != name && s.split('.').first == stem);
       if (siblings.any(named)) continue;
       orphans.add(path);

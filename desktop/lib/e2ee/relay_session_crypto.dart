@@ -61,8 +61,13 @@ class RelaySessionCrypto {
   String _epoch = '';
   final Map<String, int> _groupRecv = {};
   int _terminalP2pVersion = 0;
+  bool _strictDown = false;
 
   bool get ready => _c2s != null && _s2c != null;
+
+  /// The machine's `features.strictDown`: it opens a sealed request of any type and refuses
+  /// [strictDownTypes] unsealed, so those go sealed to it.
+  bool get strictDown => _strictDown;
 
   /// The machine's `features.terminalP2p` — 0 when it offers no P2P terminal channel.
   int get terminalP2pVersion => _terminalP2pVersion;
@@ -103,6 +108,7 @@ class RelaySessionCrypto {
       final features = initial!['features'];
       final p2p = features is Map ? features['terminalP2p'] : null;
       _terminalP2pVersion = p2p is int ? p2p : 0;
+      _strictDown = features is Map && features['strictDown'] == 1;
       return true;
     } on FormatException {
       return false;
@@ -136,7 +142,9 @@ class RelaySessionCrypto {
   /// frame goes as it is.
   Map<String, dynamic> wrapOutgoing(Map<String, dynamic> frame) {
     final type = frame['type'], c2s = _c2s;
-    if (type is! String || c2s == null || !encryptedDownTypes.contains(type)) {
+    if (type is! String ||
+        c2s == null ||
+        !sealsDown(type, strictDown: _strictDown)) {
       return frame;
     }
     final payload = wrapPayload(c2s, 'p', _c2sCounter++, type, null, frame['payload']);

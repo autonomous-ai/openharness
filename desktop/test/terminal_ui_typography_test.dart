@@ -1,3 +1,5 @@
+import 'package:harness/widgets/workspace_store_button.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -12,6 +14,9 @@ import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_text.dart';
 import 'package:harness/widgets/delete_agent_dialog.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
+import 'package:harness/widgets/desktop_workspace_tab.dart';
+import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/pane_header_actions.dart';
 import 'package:harness/widgets/swarm_dialogs.dart';
@@ -60,8 +65,9 @@ void main() {
     grid.AppType.titleSize,
     grid.AppType.headingSize,
     grid.AppType.bodySize,
-    grid.AppType.monoLabelSize,
     grid.AppType.captionSize,
+    DesktopChrome.heading().fontSize!,
+    DesktopChrome.text().fontSize!,
   };
 
   /// General UI and workspace bars keep their fixed scales during terminal zoom.
@@ -73,6 +79,7 @@ void main() {
       InlineSpan span,
       TextStyle inherited, {
       bool workspaceBar = false,
+      bool desktopTab = false,
     }) {
       final style = inherited.merge(span.style);
       if (span is TextSpan) {
@@ -84,7 +91,10 @@ void main() {
               'LucideIcons',
             ].any((icon) => style.fontFamily?.contains(icon) == true)) {
           checked++;
-          if (workspaceBar) {
+          if (desktopTab) {
+            expect(style.fontSize, 13, reason: text);
+            expect(style.fontFamily, grid.AppType.sansFamily, reason: text);
+          } else if (workspaceBar) {
             expect(style.fontSize, 13, reason: text);
             expect(
               style.fontFamily,
@@ -102,13 +112,18 @@ void main() {
           }
         }
         for (final child in span.children ?? <InlineSpan>[]) {
-          check(child, style, workspaceBar: workspaceBar);
+          check(
+            child,
+            style,
+            workspaceBar: workspaceBar,
+            desktopTab: desktopTab,
+          );
         }
       }
     }
 
-    // The welcome page stands where a terminal will and is set like one, so
-    // it follows the terminal's size instead; see [checkWelcome].
+    // The welcome composer and search use the shared desktop type scale;
+    // their controls are checked separately below.
     final welcome = find.byType(WorkspaceWelcome);
     final setup = find.byWidgetPredicate(
       (widget) =>
@@ -129,13 +144,22 @@ void main() {
       check(
         (element.widget as RichText).text,
         const TextStyle(),
+        desktopTab:
+            (element.findAncestorWidgetOfExactType<DesktopWorkspaceTab>() !=
+                    null &&
+                element.findAncestorWidgetOfExactType<ActivityMark>() ==
+                    null) ||
+            element.findAncestorWidgetOfExactType<WorkspaceStoreButton>() !=
+                null,
         workspaceBar: find
             .descendant(
               of: find.byWidgetPredicate(
                 (widget) =>
                     widget.key == const ValueKey('workspace-status-bar') ||
+                    widget.key == const ValueKey('workspace-tab-bar') ||
                     widget.key == const ValueKey('terminal-pane-title') ||
                     widget.key == const ValueKey('viewer-pane-title') ||
+                    widget is ActivityMark ||
                     widget is PaneHeaderActions,
               ),
               matching: find.byWidget(element.widget),
@@ -144,9 +168,20 @@ void main() {
             .isNotEmpty,
       );
     }
-    for (final widget in tester.widgetList<EditableText>(
-      find.byType(EditableText),
-    )) {
+    for (final element in find.byType(EditableText).evaluate()) {
+      final widget = element.widget as EditableText;
+      if (element.findAncestorWidgetOfExactType<TextField>()?.key ==
+          const ValueKey('new-harness-task')) {
+        expect(widget.style.fontSize, 15);
+        expect(widget.style.fontFamily, grid.AppType.sansFamily);
+        continue;
+      }
+      if (element.findAncestorWidgetOfExactType<TextField>()?.key ==
+          const ValueKey('swarm-search-input')) {
+        expect(widget.style.fontSize, 17);
+        expect(widget.style.fontFamily, grid.AppType.sansFamily);
+        continue;
+      }
       // A field is on the scale, or it types into the terminal and follows it.
       expect({
         ...ramp,
@@ -158,14 +193,21 @@ void main() {
     return sizes;
   }
 
-  /// The welcome page is terminal text: the terminal's face at its size.
+  /// The welcome page uses the same system-font composer at every terminal zoom.
   void checkWelcome(WidgetTester tester) {
-    final tagline = find.byKey(const ValueKey('welcome-tagline'));
-    final line = tester.widget<Text>(tagline);
-    final style = DefaultTextStyle.of(tester.element(tagline)).style
-        .merge(line.style);
-    expect(style.fontSize, terminalFontStore.size);
-    expect(style.fontFamily, terminalFontStore.value.fontFamily);
+    expect(
+      tester.widget<NewHarnessForm>(find.byType(NewHarnessForm)).embedded,
+      isTrue,
+    );
+    final task = tester.widget<TextField>(
+      find.byKey(const ValueKey('new-harness-task')),
+    );
+    expect(task.style!.fontSize, 15);
+    expect(task.style!.fontFamily, grid.AppType.sansFamily);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('new-harness-composer'))).width,
+      680,
+    );
   }
 
   /// Zooming the terminal leaves every UI text where it was.
@@ -216,22 +258,22 @@ void main() {
       selectFont(size);
       final theme = grid.buildAppTheme(brightness: Brightness.dark);
       final t = theme.textTheme;
-      final mono = grid.AppType.monoFamily;
       final sans = grid.AppType.sansFamily;
-      // Headings, labels and what the user types are mono; prose is sans.
+      // App headings, controls and fields use the system face. Terminal and
+      // explicit code styles remain independent and are checked below.
       final expected = {
-        t.displayLarge: (grid.AppType.displaySize, mono),
-        t.headlineSmall: (grid.AppType.titleSize, mono),
-        t.titleLarge: (grid.AppType.titleSize, mono),
-        t.titleMedium: (grid.AppType.headingSize, mono),
-        t.titleSmall: (grid.AppType.bodySize, mono),
-        t.labelLarge: (grid.AppType.bodySize, mono),
-        t.labelSmall: (grid.AppType.monoMetaSize, mono),
+        t.displayLarge: (grid.AppType.displaySize, sans),
+        t.headlineSmall: (grid.AppType.titleSize, sans),
+        t.titleLarge: (grid.AppType.titleSize, sans),
+        t.titleMedium: (grid.AppType.headingSize, sans),
+        t.titleSmall: (grid.AppType.bodySize, sans),
+        t.labelLarge: (grid.AppType.bodySize, sans),
+        t.labelSmall: (grid.AppType.captionSize, sans),
         t.bodyLarge: (grid.AppType.bodySize, sans),
         t.bodyMedium: (grid.AppType.bodySize, sans),
         t.bodySmall: (grid.AppType.bodySize, sans),
-        grid.kFieldTextStyle: (grid.AppType.monoSize, mono),
-        theme.dialogTheme.titleTextStyle: (grid.AppType.headingSize, mono),
+        grid.kFieldTextStyle: (grid.AppType.bodySize, sans),
+        theme.dialogTheme.titleTextStyle: (grid.AppType.headingSize, sans),
         theme.dialogTheme.contentTextStyle: (grid.AppType.bodySize, sans),
         theme.tooltipTheme.textStyle: (grid.AppType.captionSize, sans),
       };
@@ -247,8 +289,6 @@ void main() {
   test('mono takes the terminal face but not its size', () {
     selectFont(22);
     for (final (style, size) in [
-      (grid.AppType.heading(), grid.AppType.headingSize),
-      (grid.AppType.label(), grid.AppType.bodySize),
       (grid.AppType.mono(), grid.AppType.monoSize),
       (grid.AppType.monoLabel(), grid.AppType.monoLabelSize),
       (grid.AppType.monoMeta(), grid.AppType.monoMetaSize),
@@ -261,9 +301,13 @@ void main() {
   });
 
   testWidgets(
-    'tabs, welcome, and setup screens follow terminal zoom while general UI keeps its scale',
+    'welcome, native setup, and workspace chrome keep their scale during terminal zoom',
     (tester) async {
       final app = createApp();
+      app.machineStates['m']!.localOnly = true;
+      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+      await app.agentPreference.remember('codex');
+      await app.projectHistory.select('m', '/work/openharness');
       final map = MemoryKeymap();
       addTearDown(app.dispose);
       addTearDown(map.dispose);
@@ -276,6 +320,7 @@ void main() {
       expectSameSizes(before, checkText(tester));
 
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+      await tester.pumpAndSettle();
       expect(find.byType(WorkspaceWelcome), findsOneWidget);
       // Only the tab chrome is UI text here; the page itself is checked below.
       checkText(tester, atLeast: 1);
@@ -288,48 +333,53 @@ void main() {
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       expect(find.byType(NewHarnessForm), findsOneWidget);
       final box = checkText(tester, atLeast: 1);
-      expect(
-        tester.widget<Text>(find.text('[ New Harness ]')).style!.fontSize,
-        18,
+      final start = find.descendant(
+        of: find.byKey(const ValueKey('new-harness-field-start')),
+        matching: find.text('New Harness'),
       );
+      TextStyle startStyle() =>
+          DefaultTextStyle.of(tester.element(start)).style
+              .merge(tester.widget<Text>(start).style);
+      expect(startStyle().fontSize, 13);
+      expect(startStyle().fontFamily, grid.AppType.sansFamily);
       selectFont(22);
       await tester.pumpAndSettle();
       expectSameSizes(box, checkText(tester, atLeast: 1));
-      expect(
-        tester.widget<Text>(find.text('[ New Harness ]')).style!.fontSize,
-        22,
-      );
+      expect(startStyle().fontSize, 13);
+      expect(startStyle().fontFamily, grid.AppType.sansFamily);
       await key(tester, LogicalKeyboardKey.escape);
-      for (final shortcut in [
-        LogicalKeyboardKey.keyP,
-        LogicalKeyboardKey.keyP,
-      ]) {
-        await key(tester, shortcut, cmd: true);
+      for (final terminalSize in [9.0, 18.0]) {
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
         final input = find.byKey(const ValueKey('swarm-search-input'));
         await tester.enterText(input, 'Agent');
         await key(tester, LogicalKeyboardKey.arrowDown);
         await tester.pumpAndSettle();
         expect(find.byType(SwarmSearchPreview), findsOneWidget);
         final search = checkText(tester, atLeast: 1);
-        selectFont(
-          shortcut == LogicalKeyboardKey.keyP ? 9 : 18,
-          TerminalFontChoice.monaco,
-        );
+        final resultSizes = {
+          for (final text in tester.widgetList<SearchResultText>(
+            find.byType(SearchResultText),
+          ))
+            text.text: text.style.fontSize,
+        };
+        selectFont(terminalSize, TerminalFontChoice.monaco);
         await tester.pumpAndSettle();
         expect(tester.widget<TextField>(input).controller!.text, 'Agent');
         expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
         expectSameSizes(search, checkText(tester, atLeast: 1));
+        expect(tester.widget<TextField>(input).style!.fontSize, 17);
         expect(
-          tester.widget<TextField>(input).style!.fontSize,
-          terminalFontStore.size,
+          tester.widget<TextField>(input).style!.fontFamily,
+          grid.AppType.sansFamily,
         );
         for (final text in tester.widgetList<SearchResultText>(
           find.byType(SearchResultText),
         )) {
-          expect(text.style.fontFamily, terminalFontStore.value.fontFamily);
-          expect(text.style.fontSize, terminalFontStore.size);
-          expect(text.style.height, terminalFontStore.value.height);
-          expect(text.style.letterSpacing, 0);
+          expect(text.style.fontSize, resultSizes[text.text]);
+          expect([
+            grid.AppType.sansFamily,
+            grid.AppType.monoFamily,
+          ], contains(text.style.fontFamily));
         }
         await key(tester, LogicalKeyboardKey.escape);
       }
@@ -383,7 +433,7 @@ void main() {
   });
 
   testWidgets(
-    'native tabs keep 13 pt platform monospace during terminal font changes',
+    'native footer payload keeps its 13 pt status face during terminal font changes',
     (tester) async {
       final updates = <Map<dynamic, dynamic>>[];
       const channel = MethodChannel('harness/swarm_tabs');

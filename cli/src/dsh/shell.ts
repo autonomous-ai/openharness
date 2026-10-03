@@ -26,12 +26,16 @@ export interface DshCommandResult {
 /**
  * What the shell itself says about being interactive without a terminal — not the DSH's output.
  * `zsh -lic` with no tty cannot enable the line editor, and an rc file that sets `zle` makes zsh
- * complain once per option; the engine never sees this because its pane HAS a tty. Dropped so a
- * doctor's lines, which the desktop shows verbatim, are the doctor's.
+ * complain once per option. `bash -lic`, the usual shell on Linux, says it has no job control, and a
+ * login bash says `logout` when a script exits. The engine never sees any of this because its pane
+ * HAS a tty. Dropped so a doctor's lines, which the desktop shows verbatim, are the doctor's.
  */
 export function isShellNoise(line: string): boolean {
   return /can't change option: zle$/.test(line) || /^\(eval\):\d+: can't change option: zle$/.test(line)
+    || BASH_NO_TTY.test(line) || line === 'logout'
 }
+
+const BASH_NO_TTY = /^(?:\S*\/)?bash: (?:cannot set terminal process group \(-?\d+\): Inappropriate ioctl for device|no job control in this shell)$/
 
 /**
  * `[path, ...args]` that runs `script` through the user's shell, or `/bin/sh -c` when none is known.

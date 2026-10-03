@@ -1,0 +1,182 @@
+{
+  "schema": 1,
+  "purpose": "Native OpenCode foreground binding and companion extraction transport verification",
+  "personalConversationsUsed": 0,
+  "semanticQualityMeasured": false,
+  "runs": [
+    {
+      "at": "2026-10-02T00:46:04.231Z",
+      "version": "1.18.34",
+      "keySource": "auth",
+      "requests": [
+        {
+          "phase": "off",
+          "route": "/v1/chat/completions",
+          "model": "provider-native-id",
+          "reasoningEffort": "high",
+          "tools": [],
+          "selectedCredential": true
+        },
+        {
+          "phase": "foreground",
+          "route": "/v1/chat/completions",
+          "model": "provider-native-id",
+          "reasoningEffort": "high",
+          "tools": [],
+          "selectedCredential": true
+        },
+        {
+          "phase": "compaction",
+          "route": "/v1/chat/completions",
+          "model": "provider-native-id",
+          "tools": [],
+          "selectedCredential": true
+        },
+        {
+          "phase": "extraction",
+          "route": "/v1/chat/completions",
+          "model": "provider-native-id",
+          "reasoningEffort": "high",
+          "tools": [],
+          "selectedCredential": true
+        }
+      ],
+      "hooks": [
+        {
+          "phase": "off",
+          "kind": "probe"
+        },
+        {
+          "phase": "foreground",
+          "kind": "probe"
+        },
+        {
+          "phase": "foreground",
+          "kind": "observe",
+          "nativeVersion": "1.18.34",
+          "model": "memory-fixture/alias",
+          "variant": "high",
+          "selectedCredential": true
+        }
+      ],
+      "result": {
+        "observedSelection": true,
+        "selectedProcessAliveDuringExtraction": true,
+        "inheritedAccountModelVariant": true,
+        "manualCompactionPreservedSelection": true,
+        "offSentCredentials": false,
+        "offLaunchedExtraction": false,
+        "credentialsPersistedInProfile": false,
+        "privateStorageRemoved": true
+      },
+      "limitations": [
+        "Synthetic localhost responses; no personal conversations or semantic-quality measurement.",
+        "Consent and process ownership are fixture inputs; the actual hook-server authorization is covered separately.",
+        "No OAuth, OpenCode 2.x, automatic compaction, capture or recall certification."
+      ]
+    },
+    {
+      "at": "2026-10-02T00:45:02.210Z",
+      "version": "1.18.34",
+      "keySource": "config",
+      "requests": [
+        {
+          "phase": "off",
+          "route": "/v1/chat/completions",
+          "model": "provider-native-id",
+          "reasoningEffort": "high",
+          "tools": [],
+          "selectedCredential": true
+        },
+        {
+          "phase": "foreground",
+          "route": "/v1/chat/completions",
+          "model": "provider-native-id",
+          "reasoningEffort": "high",
+          "tools": [],
+          "selectedCredential": true
+        },
+        {
+          "phase": "compaction",
+          "route": "/v1/chat/completions",
+          "model": "provider-native-id",
+          "tools": [],
+          "selectedCredential": true
+        },
+        {
+          "phase": "extraction",
+          "route": "/v1/chat/completions",
+          "model": "provider-native-id",
+          "reasoningEffort": "high",
+          "tools": [],
+          "selectedCredential": true
+        }
+      ],
+      "hooks": [
+        {
+          "phase": "off",
+          "kind": "probe"
+        },
+        {
+          "phase": "foreground",
+          "kind": "probe"
+        },
+        {
+          "phase": "foreground",
+          "kind": "observe",
+          "nativeVersion": "1.18.34",
+          "model": "memory-fixture/alias",
+          "variant": "high",
+          "selectedCredential": true
+        }
+      ],
+      "result": {
+        "observedSelection": true,
+        "selectedProcessAliveDuringExtraction": true,
+        "inheritedAccountModelVariant": true,
+        "manualCompactionPreservedSelection": true,
+        "offSentCredentials": false,
+        "offLaunchedExtraction": false,
+        "credentialsPersistedInProfile": false,
+        "privateStorageRemoved": true
+      },
+      "limitations": [
+        "Synthetic localhost responses; no personal conversations or semantic-quality measurement.",
+        "Consent and process ownership are fixture inputs; the actual hook-server authorization is covered separately.",
+        "No OAuth, OpenCode 2.x, automatic compaction, capture or recall certification."
+      ]
+    }
+  ],
+  "validation": {
+    "affectedTestFiles": 34,
+    "affectedTestsPassed": 516,
+    "typecheck": "passed",
+    "bundle": "passed",
+    "tmuxDiscovery": {
+      "tmux": "3.7c",
+      "isolatedServer": true,
+      "passed": 9,
+      "unavailableRows": 9,
+      "engines": {
+        "claude": "2.1.287",
+        "codex": "0.159.3",
+        "opencode": "1.18.34",
+        "pi": "0.85.1",
+        "hermes": "0.18.0 (2026.7.1)",
+        "grok": "1.0.44"
+      },
+      "scope": "Installed process discovery, pane-preserving deletion, input and test-owned session lifecycle only"
+    }
+  },
+  "limits": [
+    "Local mock responses establish request routing and authorization behavior, not model understanding.",
+    "Production daemon settings and the installed review app were not changed."
+  ],
+  "regressions": [
+    {
+      "case": "Manual native compaction with the same provider and model",
+      "before": "Internal compaction replaced the user-selected high variant with its default.",
+      "after": "Only chat.params for the latest submitted chat.message and its selected agent may observe credentials; the native compaction path does not request a grant."
+    }
+  ]
+}

@@ -5,7 +5,7 @@
 /// the CLI's `FIRST_PROMPT_ARGS` (cli/src/lib/engineLaunch.ts). A machine refuses
 /// a first message for any other engine (`PROMPT_UNSUPPORTED`).
 /// test/first_task_test.dart holds the two lists to the same answer.
-const kFirstTaskEngines = {'claude', 'codex', 'opencode'};
+const kFirstTaskEngines = {'claude', 'codex', 'opencode', 'hermes'};
 
 /// Whether a harness on [engine] — its base engine, for a Store harness — can
 /// start on a first task.

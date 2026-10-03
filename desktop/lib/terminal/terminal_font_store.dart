@@ -28,6 +28,7 @@ import 'terminal_typography.dart';
 /// carried to a Linux box still loads, and the Settings dropdown keeps showing
 /// whatever is actually selected (see `_FamilyDropdown`).
 enum TerminalFontChoice {
+  robotoMono('Roboto Mono', webTerminalFontFamily, []),
   sfMono('SF Mono', macTerminalFontFamily, macTerminalFontFallback),
   menlo('Menlo', 'Menlo', ['Monaco', 'Courier New', 'monospace']),
   monaco('Monaco', 'Monaco', ['Menlo', 'Courier New', 'monospace']),
@@ -85,12 +86,13 @@ enum TerminalFontChoice {
   /// runner is unexercised (see CLAUDE.md), and of the two lists the Linux one
   /// at least ends every fallback at the generic `monospace`, which Windows
   /// does resolve.
-  static List<TerminalFontChoice> get available =>
-      hasAppleFonts ? _macChoices : _linuxChoices;
+  static List<TerminalFontChoice> get available => kIsWeb
+      ? const [robotoMono]
+      : (hasAppleFonts ? _macChoices : _linuxChoices);
 
   /// What a fresh install opens with, and what `reset()` returns to.
   static TerminalFontChoice get defaultForPlatform =>
-      hasAppleFonts ? sfMono : dejaVuSansMono;
+      kIsWeb ? robotoMono : (hasAppleFonts ? sfMono : dejaVuSansMono);
 }
 
 /// The user's chosen terminal typography (family + size), remembered across
@@ -153,7 +155,11 @@ class TerminalFontStore extends ValueNotifier<TerminalStyle> {
       final savedFamily = saved[_familyKey];
       final savedSize = saved[_sizeKey];
       final choice = TerminalFontChoice.values
-          .where((c) => c.name == savedFamily)
+          .where(
+            (c) =>
+                c.name == savedFamily &&
+                (!kIsWeb || c == TerminalFontChoice.robotoMono),
+          )
           .firstOrNull;
       final size = savedSize == null ? null : double.tryParse(savedSize);
       value = _styleFor(

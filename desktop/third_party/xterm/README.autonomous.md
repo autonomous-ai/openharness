@@ -13,6 +13,48 @@ fix and the regression in `test/terminal_session_test.dart` passes against it.
 
 ## Local patches
 
+- **Single-byte output avoids a code-point list copy**
+  (`lib/src/utils/byte_consumer.dart`). On native runtimes, Latin-1 strings use
+  their immutable code-unit view, whose entries already equal their Unicode
+  code points.
+  Wider text and browser runtimes retain the original rune decoder: mixed
+  queue-list types slowed Unicode parsing in the JavaScript benchmark.
+  Queue positions, rollback,
+  split escape sequences and supplementary characters keep their existing
+  semantics. Regressions: `test/terminal_byte_consumer_test.dart`, also run in
+  Chrome. Compare an earlier revision with the working tree using
+  `python3 tool/benchmark_terminal_parser.py --flutter /path/to/flutter
+  --baseline REVISION --output /tmp/parser-result.json` from `desktop/`.
+  That benchmark measures parsing, not rendering or whole-app energy.
+
+- **OSC 8 hyperlinks are kept per cell** (`lib/src/core/escape/parser.dart`,
+  `lib/src/core/cursor.dart`, `lib/src/core/buffer/line.dart`,
+  `lib/src/core/buffer/buffer.dart`, `lib/src/terminal.dart`). Upstream drops
+  OSC 8, so a Claude Code markdown link printed as just its label (`!125`)
+  had no address to open. The target rides on `CursorStyle.hyperlink`, which
+  SGR resets leave alone, and `BufferLine.getHyperlink` reads it back; the
+  per-line array is allocated only once a linked cell is written. Regressions:
+  the `OSC 8 hyperlinks` group in `test/terminal_links_test.dart`.
+
+- **Pane-local wheel coordinates** (`lib/src/terminal_view.dart`). Convert the
+  pointer's global position to renderer-local coordinates before constructing
+  alternate-screen mouse-wheel reports. Offset panes otherwise report the
+  wrong cell (often clamped to the bottom/right edge), so a TUI can receive a
+  wheel event over its prompt instead of its scrollable content. Regression:
+  `test/swarm_terminal_scroll_test.dart` checks every four-pane preset, exact
+  emitted coordinates, and normal-buffer history scrolling.
+
+- **Browser accessibility input and editor switching**
+  (`lib/src/ui/custom_text_edit.dart`). The browser's text-input strategy needs
+  an editable semantics node when accessibility is enabled. The custom adapter
+  now publishes its editing value and focus through one such node, while the
+  enclosing `Focus` omits duplicate semantics. That prevents switching between
+  terminal and remote-viewer editors from deactivating the new DOM editor.
+  Read-only surfaces stay read-only; native input uses its existing path.
+  `semanticLabel` lets the viewer reuse the IME adapter. Validation includes
+  the native input regressions and `desktop/scripts/check-workspace.cjs`, which
+  checks actual received terminal bytes and remote viewer input after switching.
+
 - **Linux clipboard and Meta keys leave shell editing intact**
   (`lib/src/ui/shortcut/shortcuts.dart`, `lib/src/terminal_view.dart`,
   `lib/src/core/input/handler.dart`). Linux uses Ctrl-Shift-C/V/A for clipboard
@@ -246,3 +288,24 @@ it if one is dropped.
     as before; underlined spaces become U+00A0 as in the per-cell path.
     Regression: `test/terminal_line_paint_cache_test.dart` (where runs are cut,
     and a rendering within antialiasing of the per-cell one).
+
+15. **`deleteDetection` keeps its pad** (`lib/src/ui/custom_text_edit.dart`).
+    Upstream seeds the hidden input buffer with two spaces so an on-screen
+    keyboard's Backspace (which sends no key event) still deletes something
+    and is seen, but never puts them back: after two deletes the buffer was
+    empty and every later Backspace changed nothing, so nothing reached the
+    PTY — a pasted `[Image #1]` at an agent prompt could not be removed on a
+    phone. The pad is restored whenever deletes eat into it. Only reached with
+    `deleteDetection: true`, which the app sets for touch browsers alone
+    (`isTouchBrowser` in `lib/widgets/terminal_panel.dart`). Regression:
+    `test/terminal_delete_detection_test.dart`.
+
+16. **A browser sends its own Backspace** (`lib/src/terminal_view.dart`).
+    Native macOS/iOS hand a bare Backspace to Apple's text input client, which
+    answers with `deleteBackward:` (see 15's neighbour in
+    `custom_text_edit.dart`). Flutter web reports the same platforms — macOS in
+    Chrome on a Mac, iOS on an iPhone — but sends no performSelectors: the
+    browser only deleted from the hidden input, so with nothing typed there a
+    Backspace never reached the PTY. On the web the key now goes to
+    `keyInput` everywhere. Regression: `test/web/terminal_backspace_test.dart`
+    (run with `--platform=chrome`).

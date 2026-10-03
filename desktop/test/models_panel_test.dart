@@ -5,11 +5,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/models/model_manager_controller.dart';
 import 'package:harness/models/models_panel.dart';
@@ -290,9 +290,9 @@ void main() {
         find.descendant(
           of: control,
           matching: find.byIcon(switch (state) {
-            'running' => LucideIcons.pause,
-            'downloaded' => LucideIcons.play,
-            _ => LucideIcons.download,
+            'running' => AppIcons.pause,
+            'downloaded' => AppIcons.play,
+            _ => AppIcons.download,
           }),
         ),
         findsOneWidget,
@@ -311,7 +311,7 @@ void main() {
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('model-action-gemma')),
-          matching: find.byIcon(LucideIcons.play),
+          matching: find.byIcon(AppIcons.play),
         ),
         findsOneWidget,
       );
@@ -561,7 +561,7 @@ void main() {
           );
         }
         if (scenario == 'ready') {
-          expect(find.byIcon(LucideIcons.pause), findsOneWidget);
+          expect(find.byIcon(AppIcons.pause), findsOneWidget);
           expect(
             find.text('16.2 GB · 17.6 tok/s · 42 requests / 24h'),
             findsOneWidget,
@@ -693,11 +693,14 @@ void main() {
     expect(find.text('Explore models'), findsNothing);
     await openWorkspaceTool(tester, 'models');
     await tester.pump();
+    await tester.enterText(resourceField, ':Qwen3.8-27B');
+    await tester.pump();
     await selectResource(tester, 'model:local:qwen');
     await tester.pump();
     expect(find.text('Qwen3.8-27B'), findsWidgets);
-    expect(find.text('Search models'), findsOneWidget);
-    expect(tester.getSize(resourceScope(':')).height, greaterThan(620));
+    expect(resourceSearch(tester).isModelMode, isTrue);
+    expect(tester.getSize(resourceScope(':')).height, greaterThan(300));
+    expect(tester.getRect(resourceScope(':')).top, greaterThan(24));
     expect(tester.getRect(resourceScope(':')).bottom, lessThan(760));
     tester.view.physicalSize = const Size(1200, 480);
     await tester.pump();
@@ -730,12 +733,18 @@ void main() {
     final panel = tester.getRect(resourceScope(':'));
     expect(panel.right, lessThanOrEqualTo(1200));
     expect(panel.top, greaterThan(0));
-    expect(panel.width, greaterThan(1000));
+    expect(panel.width, 1120);
     expect(find.byType(Dialog), findsNothing);
-    expect(find.text('Search models'), findsOneWidget);
+    expect(resourceSearch(tester).isModelMode, isTrue);
+    // The top-5 catalog model stays visible without pressing "Get models".
     expect(
       resourceSearch(tester).rows
           .any((row) => row.modelId == 'model:local:qwen'),
+      isTrue,
+    );
+    expect(
+      resourceSearch(tester).rows
+          .any(resourceSearch(tester).isModelDownloadsRow),
       isTrue,
     );
     expect(find.text('Run AI on this computer'), findsNothing);

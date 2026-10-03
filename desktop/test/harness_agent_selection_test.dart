@@ -676,7 +676,7 @@ void main() {
     ('compact', const Size(600, 720)),
   ]) {
     testWidgets(
-      '$layout form keeps Agent and Project visible and expands Advanced inline',
+      '$layout form keeps Options collapsed and chooses a specialized agent inline',
       (tester) async {
         final renderDir = Platform.environment['HARNESS_LAUNCH_RENDER_DIR'];
         if (renderDir != null) await tester.runAsync(loadPreviewFonts);
@@ -708,7 +708,7 @@ void main() {
                     controller: box,
                     onClose: () {},
                     onCreated: () {},
-                    onNeedsForm: () => fail('Advanced must stay inline'),
+                    onNeedsForm: () => fail('Settings must stay inline'),
                   ),
                 ),
               ),
@@ -728,7 +728,12 @@ void main() {
         );
         await tester.tap(find.byKey(const ValueKey('new-harness-field-agent')));
         await tester.pump();
-        expect(find.text('Browse Harness Store'), findsOneWidget);
+        expect(
+          box.options.any(
+            (option) => option.id == NewHarnessController.storeId,
+          ),
+          isTrue,
+        );
         if (renderDir != null) {
           await expectLater(
             find.byType(MaterialApp),
@@ -742,8 +747,9 @@ void main() {
         await tester.pump();
         expect(find.text('Browse Harness Store'), findsNothing);
         expect(box.options.map((row) => row.id).toSet(), {'codex', 'claude'});
-        await openLaunchRow(tester, 'advanced');
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
+        await openLaunchRow(tester, 'advanced');
         expect(
           find.byKey(const ValueKey('new-harness-field-machine')),
           findsNothing,

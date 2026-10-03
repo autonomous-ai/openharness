@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/serial_port_lease.dart';
@@ -9,6 +10,7 @@ import '../core/config.dart';
 import '../core/harness_cli_runner.dart';
 import '../core/harness_file_store.dart';
 import '../core/models.dart';
+import 'local_daemon_transport.dart';
 
 const localWsProtocolVersion = 1;
 const localTerminalProtocolVersion = 3;
@@ -35,6 +37,17 @@ class LocalCliEndpoint {
   /// project metadata in agent frames. This snapshot never describes a peer.
   final Map<String, AgentProject> agentProjects;
 
+  /// The daemon's Unix socket when it answered there, or null when it answered
+  /// on the loopback port. [wsUri] names the same endpoint either way.
+  final String? socketPath;
+
+  /// The daemon is still on its first scan for agents (`discoveryReady: false`). NOT part of
+  /// readiness, for the same reason [backendOnline] is not: its socket already serves every agent it
+  /// knows, restored tiles wait as intent and attach as each agent's `agent_synced` arrives, so
+  /// holding the app on "Starting local service…" for the scan only made the window late (owner,
+  /// 2026-10-01; measured 2–2.5 s of a cold start). The next probe clears it.
+  final bool scanning;
+
   const LocalCliEndpoint({
     required this.computerId,
     required this.wsUri,
@@ -43,6 +56,8 @@ class LocalCliEndpoint {
     this.machineId,
     this.backendOnline = true,
     this.agentProjects = const {},
+    this.socketPath,
+    this.scanning = false,
   });
 }
 
@@ -106,6 +121,10 @@ Future<void> runHarnessStart(HarnessCliRunner runner) async {
 }
 
 Future<void> _defaultSpawnCommand() => runHarnessStart(HarnessCliRunner());
+
+Future<void> _defaultStopCommand() async {
+  await HarnessCliRunner().run(['stop']);
+}
 
 /// The wall-clock window in which the supervisor may spawn `harness start`: seconds :10–:20 of
 /// every minute. The CLI's own updater ticks at :45 (`ADAPTER_UPDATE_SLOT_SEC` in the harness CLI's
@@ -185,14 +204,25 @@ class LocalCliDiscovery {
   final Dio _dio;
   final LocalMachineIdentity identity;
   final Future<void> Function() _spawnCommand;
+  final Future<void> Function() _stopCommand;
+
+  /// Which way the daemon is reached — its socket or the loopback port. Shared
+  /// with REST and the local WebSocket; [probe] decides it.
+  final LocalDaemonTransport transport;
 
   LocalCliDiscovery({
     required this.config,
     Dio? dio,
     LocalMachineIdentity? identity,
     Future<void> Function()? spawnCommand,
+    Future<void> Function()? stopCommand,
+    LocalDaemonTransport? transport,
   }) : identity = identity ?? LocalMachineIdentity(),
+       transport =
+           transport ??
+           LocalDaemonTransport.detect(Uri.parse(config.localCliBaseUrl)),
        _spawnCommand = spawnCommand ?? _defaultSpawnCommand,
+       _stopCommand = stopCommand ?? _defaultStopCommand,
        _dio =
            dio ??
            Dio(
@@ -266,6 +296,26 @@ class LocalCliDiscovery {
     return last;
   }
 
+  /// Stops the running daemon and starts one from this process, so the new daemon descends from
+  /// the app (see `core/process_responsibility.dart` on why that matters). Returns the probe
+  /// [ensureRunning] ends on.
+  Future<LocalCliProbe> restart({
+    Duration stopTimeout = const Duration(seconds: 10),
+  }) async {
+    try {
+      await _stopCommand();
+    } catch (_) {
+      // Judged by the port below, not by the exit code.
+    }
+    final deadline = DateTime.now().add(stopTimeout);
+    var seen = await probe();
+    while (seen.alive && DateTime.now().isBefore(deadline)) {
+      await Future.delayed(const Duration(milliseconds: 250));
+      seen = await probe();
+    }
+    return ensureRunning();
+  }
+
   /// Keeps the local daemon alive for as long as the returned [Timer] runs: polls [probe] every
   /// [checkInterval] and, when the port has gone quiet, spawns `harness start` and gives it a short
   /// grace window to bind its port before concluding the attempt failed. Failed spawn attempts back
@@ -311,8 +361,11 @@ class LocalCliDiscovery {
     void Function(LocalCliEndpoint endpoint)? onReady,
     void Function(LocalCliEndpoint endpoint)? onSnapshot,
     void Function(bool online)? onBackendOnline,
+    Future<void> Function(int pid)? checkOwner,
   }) {
     var backoff = initialBackoff;
+    // The daemon pid [checkOwner] last saw: it is asked once per daemon, not once per tick.
+    int? ownerCheckedPid;
     var nextSpawnAllowedAt = DateTime.now();
     var quietTicks = 0;
     var wasReady = false;
@@ -362,6 +415,17 @@ class LocalCliDiscovery {
           }
           final seen = await probe();
           observe(seen);
+          // A new daemon — replaced from a terminal while the app is open, say. Awaited inside the
+          // tick so the spawn path below cannot race a restart [checkOwner] makes.
+          final seenPid = seen.pid;
+          if (checkOwner != null &&
+              seen.ready &&
+              seenPid != null &&
+              seenPid != ownerCheckedPid) {
+            ownerCheckedPid = seenPid;
+            await checkOwner(seenPid);
+            return;
+          }
           // Running — ready or on its way. Nothing to spawn, nothing to back off from.
           if (seen.alive) return;
           quietTicks += 1;
@@ -377,8 +441,26 @@ class LocalCliDiscovery {
           // Asked here and not on every tick because it costs a `harness auth status` process, and
           // the respawn point is already rate-limited by the backoff above — so this runs once per
           // spawn attempt rather than once every [checkInterval].
-          if (stillSignedIn != null && !await stillSignedIn()) {
-            onSignedOut?.call();
+          //
+          // Asked BESIDE the spawn, never before it: the spawn goes ahead whatever the answer, so
+          // waiting for it only delays the one thing that brings the terminals back. It used to be
+          // awaited first, and a check that threw — `auth status` sitting out the refresh lock a
+          // dying daemon left behind, 30s, the app's own timeout for it — skipped the spawn and left
+          // the terminals dark until something else happened to start the daemon (measured
+          // 2026-09-28 18:47: a minute and eight seconds). A slow answer still arrives and is still
+          // told; a failed one is not a sign-out.
+          final signedInCheck = stillSignedIn?.call();
+          if (signedInCheck != null) {
+            unawaited(
+              signedInCheck.then(
+                (signedIn) {
+                  if (!signedIn) onSignedOut?.call();
+                },
+                onError: (Object error) => debugPrint(
+                  'LocalCliDiscovery.startSupervising: auth check failed: $error',
+                ),
+              ),
+            );
           }
           try {
             await _spawnCommand();
@@ -423,14 +505,71 @@ class LocalCliDiscovery {
       return const LocalCliProbe.down('computer id mismatch');
     }
     final base = Uri.parse(config.localCliBaseUrl);
+    // The socket first: only this user can have opened it. A daemon that
+    // answers there — ready or not — is the daemon; one that does not may
+    // predate the socket, so the port is asked next.
+    final socket = transport.candidate;
+    if (socket != null && transport.socketPresent) {
+      final viaSocket = await _probeStatus(
+        _socketDio(socket),
+        Uri.parse('http://localhost/api/status'),
+        base,
+        localComputerId,
+        socketPath: socket,
+      );
+      if (viaSocket.state != LocalCliProbeState.down) {
+        transport.useSocket();
+        return viaSocket;
+      }
+    }
+    transport.useTcp();
     if (base.host != '127.0.0.1' && base.host != 'localhost') {
       return const LocalCliProbe.down('the local CLI address is not loopback');
     }
+    return _probeStatus(
+      _dio,
+      base.resolve('/api/status'),
+      base,
+      localComputerId,
+      socketPath: null,
+    );
+  }
+
+  Dio? _socketProbe;
+  String? _socketProbePath;
+
+  Dio _socketDio(String path) {
+    if (_socketProbe == null || _socketProbePath != path) {
+      _socketProbe?.close(force: true);
+      _socketProbePath = path;
+      _socketProbe =
+          Dio(
+              BaseOptions(
+                connectTimeout: const Duration(milliseconds: 400),
+                receiveTimeout: const Duration(milliseconds: 400),
+                sendTimeout: const Duration(milliseconds: 400),
+              ),
+            )
+            ..httpClientAdapter = IOHttpClientAdapter(
+              createHttpClient: () => unixHttpClient(path),
+            );
+    }
+    return _socketProbe!;
+  }
+
+  /// Reads and validates `/api/status` from [statusUri] with [dio]. [base] is
+  /// the loopback address the WebSocket URI is named from, whichever way the
+  /// status was read.
+  Future<LocalCliProbe> _probeStatus(
+    Dio dio,
+    Uri statusUri,
+    Uri base,
+    String localComputerId, {
+    required String? socketPath,
+  }) async {
     final Map<String, dynamic>? body;
     try {
-      final response = await _dio.getUri<Map<String, dynamic>>(
-        base.resolve('/api/status'),
-      );
+      final response = await dio.getUri<Map<String, dynamic>>(statusUri);
       body = response.data;
     } on DioException catch (error) {
       switch (error.type) {
@@ -475,16 +614,9 @@ class LocalCliDiscovery {
     if (body == null) {
       return const LocalCliProbe.notReady('not a harness status');
     }
-    // New CLIs expose the initial terminal scan explicitly. A missing field means an older CLI and
-    // remains accepted for backward compatibility; false means the daemon is alive but not ready to
-    // publish an authoritative empty/non-empty agent list yet.
-    if (body['discoveryReady'] == false) {
-      return LocalCliProbe.notReady(
-        'still scanning for agents',
-        pid: pid,
-        version: version,
-      );
-    }
+    // New CLIs expose the initial terminal scan explicitly; false means the daemon is alive but its
+    // agent list is not complete yet. Reported, not gated on — see [LocalCliEndpoint.scanning].
+    final scanning = body['discoveryReady'] == false;
     // `connected` is the daemon's own backend-socket state. It used to gate readiness — so a
     // computer that could not reach the backend never got past "Starting local service…", with a
     // daemon, tmux and every agent sitting right there on the loopback. It is reported instead
@@ -540,6 +672,8 @@ class LocalCliDiscovery {
           body['sessions'],
           identity.environment,
         ),
+        socketPath: socketPath,
+        scanning: scanning,
       ),
       pid: pid,
       version: version,

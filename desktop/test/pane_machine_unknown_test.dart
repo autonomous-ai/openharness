@@ -3,10 +3,13 @@
 // "Waiting for this machine to answer…" is only honest while there is something to wait FOR. When the
 // machine LIST itself could not be read, the machine is not slow — it is unknown, and a spinner that
 // never ends tells the user nothing and offers them nothing. This is the difference between those two.
+
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:harness/auth/sign_in_provider.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -39,6 +42,10 @@ class _Api extends ApiClient {
   @override
   Future<Map<String, dynamic>?> me() async => null;
 
+  // A retry also re-reads the daemon's pending devices: a daemon that predates them.
+  @override
+  Future<Map<String, dynamic>?> daemonDevices() async => null;
+
   @override
   Future<List<Machine>> machines() {
     final result = Completer<List<Machine>>();
@@ -52,7 +59,10 @@ class _Cli extends CliLogin {
   Future<CliAuthStatus> checkStatus() async =>
       const CliAuthStatus(loggedIn: true);
   @override
-  Future<void> login({void Function(String url)? onAuthorizeUrl}) async {}
+  Future<void> login({
+    void Function(String url)? onAuthorizeUrl,
+    SignInProvider? provider,
+  }) async {}
   @override
   Future<void> logout() async {}
 }
@@ -195,7 +205,7 @@ void main() {
         find.text('Could not load machines. Retry to reconnect.'),
         findsOneWidget,
       );
-      expect(find.byIcon(Icons.cloud_off), findsOneWidget);
+      expect(find.byIcon(AppIcons.cloudOff), findsOneWidget);
 
       // And the button reaches the same reload the error strip's RETRY does.
       expect(api.lists, hasLength(1));
@@ -213,7 +223,7 @@ void main() {
     api.lists.single.completeError(ApiException('boom', status: 502));
     await failed;
     await _pump(tester, app);
-    expect(find.byIcon(Icons.cloud_off), findsOneWidget);
+    expect(find.byIcon(AppIcons.cloudOff), findsOneWidget);
 
     final ok = app.retryMachines();
     await _untilRequested(tester, api, 2);

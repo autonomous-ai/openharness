@@ -1,9 +1,9 @@
 import 'dart:typed_data';
 
 import '../terminal/terminal_binary.dart';
+import '../core/wire_counter.dart';
 import 'bytes.dart';
 import 'primitives.dart';
-import 'replay_window.dart';
 
 /// HTRM v3 — terminalBinary.ts's encrypted binary terminal frame, the only form terminal bytes take
 /// on the relay. The plaintext inside is the same one the loopback HTRL frame carries
@@ -17,7 +17,6 @@ const int terminalBinaryVersion = 3;
 const int terminalBinaryHeaderBytes = 20;
 const int _aadBytes = 16;
 const int _tagBytes = 16;
-const int _flagZlib = 1;
 final Uint8List _magic = Uint8List.fromList(const [0x48, 0x54, 0x52, 0x4d]);
 
 /// Binary frames get their own key, so their nonces never collide with the JSON frames'.
@@ -38,8 +37,9 @@ Uint8List? sealTerminalBinary(
   final header = Uint8List(terminalBinaryHeaderBytes)..setRange(0, 4, _magic);
   header[4] = terminalBinaryVersion;
   header[5] = frame.kind.code;
-  header[6] = frame.compressed ? _flagZlib : 0;
-  final view = ByteData.sublistView(header)..setUint64(8, counter);
+  header[6] = terminalFrameFlags(frame);
+  final view = ByteData.sublistView(header);
+  writeWireCounter(view, 8, counter);
   final ciphertext = aeadSeal(
     key,
     counter,
@@ -66,10 +66,9 @@ Uint8List? sealTerminalBinary(
     return null;
   }
   final view = ByteData.sublistView(raw);
-  final counter = view.getUint64(8);
+  final counter = readWireCounter(view, 8);
   final length = view.getUint32(16);
-  if (counter < 0 ||
-      counter > maxSafeInteger ||
+  if (counter == null ||
       length < _tagBytes ||
       length > maxTerminalPayloadBytesFor(kind) ||
       raw.length != terminalBinaryHeaderBytes + length) {

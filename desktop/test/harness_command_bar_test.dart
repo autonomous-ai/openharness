@@ -431,8 +431,11 @@ void main() {
         findsOneWidget,
       );
       expect(
-        FocusManager.instance.primaryFocus?.debugLabel,
-        'new-harness-form',
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('new-harness-task')))
+            .focusNode!
+            .hasFocus,
+        isTrue,
       );
       // Opening the experimental prompt saves this draft and removes its dock.
       await chord(tester, LogicalKeyboardKey.keyJ, shift: true);

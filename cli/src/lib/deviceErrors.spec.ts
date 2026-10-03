@@ -4,7 +4,7 @@ import { deviceErrorText } from './deviceErrors.js'
 describe('deviceErrorText', () => {
   it('makes Claude submit-verification failures device-friendly', () => {
     expect(deviceErrorText('The agent did not accept the message. Please try again.', 'claude'))
-      .toBe("Claude didn't start. Check the terminal, then try again.")
+      .toBe("Couldn't confirm delivery to Claude. Check its pane.")
   })
 
   it('keeps the generic text for non-Claude engines and unrelated errors', () => {

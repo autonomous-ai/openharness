@@ -1,10 +1,19 @@
+import 'dart:async';
+
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 
+import '../auth/sign_in_provider.dart';
+import '../shared/widgets/qr_code_view.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
 import '../widgets/login_fleet_map.dart';
 import '../widgets/login_relay_diagram.dart';
+import '../widgets/or_divider.dart';
+import '../widgets/sign_in_provider_button.dart';
+import '../widgets/web_download_button.dart';
 
 /// The sign-in screen.
 ///
@@ -12,11 +21,16 @@ import '../widgets/login_relay_diagram.dart';
 /// window — the picture is [LoginFleetMap], and it moves only where a packet
 /// moves. The privacy guarantee stays in the quiet footer.
 ///
-/// **All four states live here**, in one card, rather than the two screens this
-/// used to be. Pressing Sign in swapped the whole window for
+/// **All four states live here**, in one layout, rather than the two screens this
+/// used to be. The web uses a full-page fleet map and prominent CTA; native
+/// sign-in retains its compact card. Pressing Sign in once swapped the window for
 /// `AwaitingBrowserLoginScreen`, at a different type scale — a hard cut in the
 /// middle of a flow, and the reason the button's own spinner was almost never
 /// seen. The wait is now a state of the button, so the frame never jumps.
+///
+/// The way in is two buttons, Continue with Google and Continue with Apple
+/// ([SignInProviderButton]), as on the Autonomous storefront — not one Sign in
+/// that left the choice to the browser (owner, 2026-10-01).
 ///
 /// ⚠️ **The SSO page cannot be embedded, and that is not a preference.**
 /// `auth.autonomous.ai`'s Google sign-in uses Google's popup-based Identity
@@ -80,102 +94,241 @@ class LoginScreen extends StatelessWidget {
         // own barely-there grey gives the card something to sit on in both
         // themes, which is the same trick the app plays everywhere else.
         backgroundColor: grid.AppPalette.panelBg,
-        body: Stack(
-          children: [
-            const Positioned.fill(child: LoginAurora()),
-            Center(
-              child: SingleChildScrollView(
-                padding: EdgeInsets.all(compact ? 16 : 24),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: _cardWidth),
-                  child: Container(
-                    // The app's raised-block recipe: fill plus a soft lift, no rim.
-                    decoration: BoxDecoration(
-                      color: grid.AppGlass.surfaceFill,
-                      borderRadius: BorderRadius.circular(14),
-                      boxShadow: grid.AppCard.shadow,
-                    ),
-                    padding: EdgeInsets.all(compact ? 20 : 24),
-                    child: Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        if (onClose != null)
-                          // Into the card's own padding, so the glyph sits in
-                          // the CORNER rather than level with the app mark —
-                          // which read as a misplaced control (owner,
-                          // 2026-09-23). Negative offsets need Clip.none above.
-                          Positioned(
-                            top: compact ? -12 : -16,
-                            right: compact ? -12 : -16,
-                            child: IconButton(
-                              key: const Key('login-close-button'),
-                              tooltip: 'Close',
-                              iconSize: 18,
-                              visualDensity: VisualDensity.compact,
-                              color: grid.AppPalette.textSecondary,
-                              icon: const Icon(Icons.close),
-                              onPressed: onClose,
-                            ),
+        body: kIsWeb
+            ? _webPage(context, waiting: waiting)
+            : Stack(
+                children: [
+                  const Positioned.fill(child: LoginAurora()),
+                  Center(
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.all(compact ? 16 : 24),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: _cardWidth),
+                        child: Container(
+                          // The app's raised-block recipe: fill plus a soft lift, no rim.
+                          decoration: BoxDecoration(
+                            color: grid.AppGlass.surfaceFill,
+                            borderRadius: BorderRadius.circular(14),
+                            boxShadow: grid.AppCard.shadow,
                           ),
-                        Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const _AppMark(),
-                            SizedBox(height: gap),
-                            Text(
-                              'Your agents, wherever they run',
-                              textAlign: TextAlign.center,
-                              style: grid.AppType.title(),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'At home, at the office, in the cloud — every machine you '
-                              'sign in to becomes part of one desk, here.',
-                              textAlign: TextAlign.center,
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                            SizedBox(height: gap),
-                            if (showFleet) ...[
-                              const LoginFleetMap(),
-                              SizedBox(height: gap),
-                            ],
-                            _Action(notifier: notifier, waiting: waiting),
-                            if (notifier.lastError != null &&
-                                !notifier.sessionExpired) ...[
-                              const SizedBox(height: 16),
-                              _ErrorTile(
-                                message: notifier.lastError!,
-                                onRetry: notifier.login,
+                          padding: EdgeInsets.all(compact ? 20 : 24),
+                          child: Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              if (onClose != null)
+                                // Into the card's own padding, so the glyph sits in
+                                // the CORNER rather than level with the app mark —
+                                // which read as a misplaced control (owner,
+                                // 2026-09-23). Negative offsets need Clip.none above.
+                                Positioned(
+                                  top: compact ? -12 : -16,
+                                  right: compact ? -12 : -16,
+                                  child: IconButton(
+                                    key: const Key('login-close-button'),
+                                    tooltip: 'Close',
+                                    iconSize: 18,
+                                    visualDensity: VisualDensity.compact,
+                                    color: grid.AppPalette.textSecondary,
+                                    icon: const Icon(AppIcons.close),
+                                    onPressed: onClose,
+                                  ),
+                                ),
+                              Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const _AppMark(),
+                                  SizedBox(height: gap),
+                                  Text(
+                                    'Your agents, wherever they run',
+                                    textAlign: TextAlign.center,
+                                    style: grid.AppType.title(),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'At home, at the office, in the cloud — every machine you '
+                                    'sign in to becomes part of one desk, here.',
+                                    textAlign: TextAlign.center,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall,
+                                  ),
+                                  SizedBox(height: gap),
+                                  if (showFleet) ...[
+                                    const LoginFleetMap(),
+                                    SizedBox(height: gap),
+                                  ],
+                                  _Action(
+                                    notifier: notifier,
+                                    waiting: waiting,
+                                    compact: compact,
+                                  ),
+                                  if (notifier.lastError != null &&
+                                      !notifier.sessionExpired) ...[
+                                    const SizedBox(height: 16),
+                                    _ErrorTile(
+                                      message: notifier.lastError!,
+                                      onRetry: notifier.retryLogin,
+                                    ),
+                                  ],
+                                  SizedBox(height: gap),
+                                  const _Seal(),
+                                ],
                               ),
                             ],
-                            SizedBox(height: gap),
-                            const _Seal(),
-                          ],
+                          ),
                         ),
-                      ],
+                      ),
                     ),
                   ),
-                ),
+                ],
+              ),
+      ),
+    );
+  }
+
+  Widget _webPage(BuildContext context, {required bool waiting}) => Stack(
+    children: [
+      const Positioned.fill(child: LoginAurora()),
+      SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 16, 12, 8),
+              child: Row(
+                children: [
+                  Image.asset('assets/app_icon.png', width: 28, height: 28),
+                  if (MediaQuery.sizeOf(context).width >= 480) ...[
+                    const SizedBox(width: 12),
+                    Text('Harness', style: grid.AppType.heading()),
+                  ],
+                  const Spacer(),
+                  const WebDownloadButton(),
+                ],
+              ),
+            ),
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final compact = constraints.maxHeight < 650;
+                  final gap = compact ? 16.0 : 24.0;
+                  return SingleChildScrollView(
+                    padding: const EdgeInsets.all(24),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minHeight: (constraints.maxHeight - 48).clamp(
+                          0,
+                          double.infinity,
+                        ),
+                      ),
+                      child: Center(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 1000),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 820,
+                                ),
+                                child: Text(
+                                  'Your agents, wherever they run',
+                                  textAlign: TextAlign.center,
+                                  style: grid.AppType.display().copyWith(
+                                    fontSize:
+                                        compact || constraints.maxWidth < 600
+                                        ? 28
+                                        : 44,
+                                    height: 1.2,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 650,
+                                ),
+                                child: Text(
+                                  'At home, at the office, in the cloud — every machine you '
+                                  'sign in to becomes part of one desk, here.',
+                                  textAlign: TextAlign.center,
+                                  style: grid.AppType.body().copyWith(
+                                    fontSize: 16,
+                                    height: 1.5,
+                                  ),
+                                ),
+                              ),
+                              SizedBox(height: gap),
+                              ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  maxWidth: compact ? 560 : 960,
+                                ),
+                                child: const LoginFleetMap(seamless: true),
+                              ),
+                              SizedBox(height: gap),
+                              ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 520,
+                                ),
+                                child: _Action(
+                                  notifier: notifier,
+                                  waiting: waiting,
+                                  compact: compact,
+                                  prominent: true,
+                                ),
+                              ),
+                              if (notifier.lastError != null &&
+                                  !notifier.sessionExpired) ...[
+                                const SizedBox(height: 16),
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 520,
+                                  ),
+                                  child: _ErrorTile(
+                                    message: notifier.lastError!,
+                                    onRetry: notifier.retryLogin,
+                                  ),
+                                ),
+                              ],
+                              SizedBox(height: gap),
+                              const _Seal(divider: false),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
               ),
             ),
           ],
         ),
       ),
-    );
-  }
+    ],
+  );
 }
 
-/// The button, and what it becomes while the browser is open.
+/// The two buttons, and what they become while the browser is open.
 ///
-/// One widget for both because they are one control in two states: the label
-/// changes, a spinner replaces the glyph, and Cancel appears beside it. Nothing
-/// moves position, so the wait reads as *this button is working* rather than as
-/// a new screen.
+/// One widget for both because they are one control in two states: the pressed
+/// button's label changes, a spinner replaces its mark, the other steps back,
+/// and Cancel appears below. Nothing moves position, so the wait reads as *this
+/// button is working* rather than as a new screen.
 class _Action extends StatefulWidget {
-  const _Action({required this.notifier, required this.waiting});
+  const _Action({
+    required this.notifier,
+    required this.waiting,
+    required this.compact,
+    this.prominent = false,
+  });
 
   final AppNotifier notifier;
   final bool waiting;
+
+  /// A short window: the ways in close up, so the line under them — which is
+  /// where an expired session and a failed sign-out are explained — stays on
+  /// screen at the minimum window.
+  final bool compact;
+  final bool prominent;
 
   @override
   State<_Action> createState() => _ActionState();
@@ -230,28 +383,60 @@ class _ActionState extends State<_Action> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    final buttonStyle = widget.prominent
+        ? FilledButton.styleFrom(
+            minimumSize: const Size(248, 56),
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
+            textStyle: grid.AppType.heading(),
+          )
+        : null;
 
     if (!widget.waiting) {
       final signingOutFailed = notifier.signOutError != null;
       return Column(
         children: [
-          FilledButton.icon(
-            focusNode: _signInFocus,
-            autofocus: true,
-            onPressed: signingOutFailed ? notifier.logout : notifier.login,
-            icon: Icon(
-              signingOutFailed ? Icons.logout : Icons.login,
-              size: grid.AppControl.iconSize,
+          if (signingOutFailed)
+            FilledButton.icon(
+              style: buttonStyle,
+              focusNode: _signInFocus,
+              autofocus: true,
+              onPressed: notifier.logout,
+              icon: const Icon(AppIcons.logOut, size: grid.AppControl.iconSize),
+              label: const Text('Retry sign out'),
+            )
+          else
+            _waysIn(
+              otherWays: [
+                // The other way in: a QR a phone already signed in scans and approves. Not on a
+                // web page at phone width — that page IS the phone.
+                if (notifier.canSignInWithPhone &&
+                    !(kIsWeb && MediaQuery.sizeOf(context).width < 720)) ...[
+                  if (!widget.compact) const OrDivider(),
+                  OutlinedButton.icon(
+                    key: const Key('login-scan-with-phone'),
+                    style: widget.compact
+                        ? null
+                        : OutlinedButton.styleFrom(
+                            minimumSize: SignInProviderButton.minimumSize(
+                              prominent: widget.prominent,
+                            ),
+                          ),
+                    onPressed: notifier.loginWithPhone,
+                    icon: const Icon(AppIcons.smartphone, size: 16),
+                    label: const Text('Scan with your phone'),
+                  ),
+                ],
+              ],
             ),
-            label: Text(signingOutFailed ? 'Retry sign out' : 'Sign in'),
-          ),
           const SizedBox(height: 12),
           Semantics(
             liveRegion: signingOutFailed || notifier.sessionExpired,
             child: Text(
               notifier.signOutError ??
                   (notifier.sessionExpired ? notifier.lastError : null) ??
-                  'Sign in through your browser to continue.',
+                  (kIsWeb
+                      ? 'Sign in to open your workspace.'
+                      : 'Sign in through your browser to continue.'),
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
             ),
@@ -260,29 +445,119 @@ class _ActionState extends State<_Action> {
       );
     }
 
+    // A phone approved this sign-in: whose account is it? Someone else's phone may have scanned
+    // the code, and nothing is signed in until the person here says yes.
+    if (notifier.pendingConfirmEmail case final email?) {
+      final previous = notifier.previousAccountEmail;
+      final changed =
+          previous != null && previous.toLowerCase() != email.toLowerCase();
+      return Column(
+        children: [
+          Text(
+            'Sign in as $email?',
+            key: const Key('login-phone-confirm'),
+            textAlign: TextAlign.center,
+            style: grid.AppType.heading(),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            changed
+                ? 'This computer was signed in as $previous. Continue only if $email is yours.'
+                : 'Your phone approved this sign-in. Continue only if this is your account.',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: changed ? grid.AppPalette.warn : null),
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            alignment: WrapAlignment.center,
+            children: [
+              FilledButton(
+                key: const Key('login-phone-continue'),
+                autofocus: true,
+                onPressed: () => notifier.confirmPhoneSignIn(true),
+                child: const Text('Continue'),
+              ),
+              TextButton(
+                key: const Key('login-phone-refuse'),
+                onPressed: () => notifier.confirmPhoneSignIn(false),
+                child: const Text('Cancel'),
+              ),
+            ],
+          ),
+        ],
+      );
+    }
+
+    // Waiting for a phone to scan the QR.
+    if (notifier.pendingQrLink case final link?) {
+      return _RevealOnShow(
+        child: Column(
+          children: [
+            QrCodeView(
+              key: const Key('login-phone-qr'),
+              data: link,
+              side: 200,
+              semanticLabel: 'QR code to sign in with your phone',
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'On your phone: Harness ▸ Settings ▸ Sign in a computer',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                // Back to the two buttons: that is where the browser's way in is chosen.
+                TextButton(
+                  onPressed: notifier.cancelLogin,
+                  style: TextButton.styleFrom(
+                    foregroundColor: grid.AppPalette.textSecondary,
+                  ),
+                  child: const Text('Cancel'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
     final url = notifier.pendingAuthorizeUrl;
     final message =
         notifier.loginBrowserError ??
+        // The CLI is waiting before it can even start: say on what.
+        notifier.loginWaitingNote ??
         (url != null && _copyFailureUrl == url
             ? 'Couldn’t copy the link. Try opening your browser again.'
             : null);
+    final working = notifier.signingOut
+        ? 'Signing out…'
+        : (url == null ? 'Signing in…' : 'Waiting for your browser');
+    // The button the person pressed. A sign-out has none, and neither has a
+    // sign-in started away from these buttons.
+    final pressed = notifier.signingOut ? null : notifier.signInProvider;
     return Column(
       children: [
-        FilledButton.icon(
-          // Disabled, not hidden: the control the user just pressed has to stay
-          // where they left it, saying what it is doing.
-          onPressed: null,
-          icon: const SizedBox(
-            width: grid.AppControl.iconSize,
-            height: grid.AppControl.iconSize,
-            child: CircularProgressIndicator(strokeWidth: 2),
+        // Disabled, not hidden: the control the user just pressed has to stay
+        // where they left it, saying what it is doing.
+        if (pressed != null)
+          _waysIn(working: (provider: pressed, label: working))
+        else
+          FilledButton.icon(
+            style: buttonStyle,
+            onPressed: null,
+            icon: const SizedBox(
+              width: grid.AppControl.iconSize,
+              height: grid.AppControl.iconSize,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            label: Text(working),
           ),
-          label: Text(
-            notifier.signingOut
-                ? 'Signing out…'
-                : (url == null ? 'Signing in…' : 'Waiting for your browser'),
-          ),
-        ),
         const SizedBox(height: 12),
         Semantics(
           liveRegion: true,
@@ -309,7 +584,7 @@ class _ActionState extends State<_Action> {
                   onPressed: notifier.openingLoginBrowser
                       ? null
                       : notifier.openLoginBrowser,
-                  icon: const Icon(Icons.open_in_new, size: 16),
+                  icon: const Icon(AppIcons.externalLink, size: 16),
                   label: Text(
                     notifier.openingLoginBrowser
                         ? 'Opening browser…'
@@ -319,7 +594,7 @@ class _ActionState extends State<_Action> {
                 TextButton.icon(
                   onPressed: _copying ? null : _copyLink,
                   icon: Icon(
-                    _copiedUrl == url ? Icons.check : Icons.content_copy,
+                    _copiedUrl == url ? AppIcons.check : AppIcons.copy,
                     size: 16,
                   ),
                   label: Semantics(
@@ -345,6 +620,35 @@ class _ActionState extends State<_Action> {
       ],
     );
   }
+
+  /// Continue with Google, Continue with Apple, then [otherWays] — all one
+  /// column of rows the same width. [working] is the account whose sign-in is
+  /// in flight and what it says meanwhile; neither can be pressed then.
+  Widget _waysIn({
+    ({SignInProvider provider, String label})? working,
+    List<Widget> otherWays = const [],
+  }) => IntrinsicWidth(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      spacing: 10,
+      children: [
+        for (final provider in SignInProvider.values)
+          SignInProviderButton(
+            provider: provider,
+            prominent: widget.prominent,
+            focusNode: provider == SignInProvider.values.first
+                ? _signInFocus
+                : null,
+            autofocus: provider == SignInProvider.values.first,
+            onPressed: working == null
+                ? () => unawaited(notifier.login(provider))
+                : null,
+            busyLabel: provider == working?.provider ? working?.label : null,
+          ),
+        ...otherWays,
+      ],
+    ),
+  );
 }
 
 /// A failure the user can act on.
@@ -383,7 +687,7 @@ class _ErrorTile extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.error_outline, size: 16, color: danger),
+              Icon(AppIcons.circleAlert, size: 16, color: danger),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -417,19 +721,22 @@ class _ErrorTile extends StatelessWidget {
 /// everyone who saw them; they belong on a security page, not on the one screen
 /// standing between someone and their work.
 class _Seal extends StatelessWidget {
-  const _Seal();
+  const _Seal({this.divider = true});
+  final bool divider;
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     return Column(
       children: [
-        Divider(height: 1, color: grid.AppPalette.divider),
-        const SizedBox(height: 16),
+        if (divider) ...[
+          Divider(height: 1, color: grid.AppPalette.divider),
+          const SizedBox(height: 16),
+        ],
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.lock_outline, size: 13, color: grid.AppPalette.teal),
+            Icon(AppIcons.lock, size: 14, color: grid.AppPalette.teal),
             const SizedBox(width: 8),
             Text(
               'End-to-end encrypted',
@@ -572,12 +879,18 @@ class _SignInSheetState extends State<_SignInSheet> {
     // ⚠️ Esc is bound OUT HERE, around the screen, so the screen's own Esc — which
     // cancels a sign-in that is in flight — wins while there is one to cancel.
     // The X itself is the SCREEN's, on its card: see LoginScreen.onClose.
+    // ⚠️ This route is built once, apart from the shell that rebuilds the
+    // full-window screen, so it follows the notifier itself: a sign-in shows
+    // what arrives mid-flight here too — the phone's QR, then whose account.
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.escape, includeRepeats: false):
             _dismiss,
       },
-      child: LoginScreen(notifier: notifier, onClose: _dismiss),
+      child: ListenableBuilder(
+        listenable: notifier,
+        builder: (_, _) => LoginScreen(notifier: notifier, onClose: _dismiss),
+      ),
     );
   }
 
@@ -585,4 +898,29 @@ class _SignInSheetState extends State<_SignInSheet> {
     if (notifier.canCancelLogin) notifier.cancelLogin();
     Navigator.of(context).pop(false);
   }
+}
+
+/// Scrolls its child into view when it first appears: the QR and its Cancel are taller than the
+/// button they replace, and on a short window they would otherwise land below the fold.
+class _RevealOnShow extends StatefulWidget {
+  const _RevealOnShow({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_RevealOnShow> createState() => _RevealOnShowState();
+}
+
+class _RevealOnShowState extends State<_RevealOnShow> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(Scrollable.ensureVisible(context, alignment: 1));
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

@@ -40,6 +40,7 @@
  */
 
 import type { PaneView, QuestionRow } from '../../lib/askQuestion.js'
+import { earlierDialogEnd } from '../../lib/dialogEnd.js'
 
 /** The row's own key hint, always the LAST parenthesis on the line. `[^()]` keeps `Shell(curl)` out. */
 const ROW_RE = /^\s*(?:[→▶>›]\s*)?(\S.*?)\s*\(([^()]{1,14})\)\s*$/
@@ -95,15 +96,17 @@ export function parseCursorPermissionPane(capture: string): PaneView {
   if (rows.length < 2) return null
   if (!rows.some((row) => APPROVE_RE.test(row.label)) || !rows.some((row) => REJECT_RE.test(row.label))) return null
 
-  // Above the rows: the prompt, then the frame's rule with the command just under it.
+  // Above the rows: the prompt, then the frame's rule with the command just under it — never from above
+  // an earlier dialog's end.
+  const floor = earlierDialogEnd(lines, start, 14)
   let prompt = -1
-  for (let i = start - 1; i >= 0 && start - i <= 6; i--) {
+  for (let i = start - 1; i > floor && start - i <= 6; i--) {
     if (PROMPT_RE.test(lines[i])) { prompt = i; break }
   }
   if (prompt < 0) return null
 
   let command = ''
-  for (let i = prompt - 1; i >= 0 && prompt - i <= 8; i--) {
+  for (let i = prompt - 1; i > floor && prompt - i <= 8; i--) {
     if (!RULE_RE.test(lines[i])) continue
     for (let j = i + 1; j < prompt; j++) {
       const line = lines[j].trim().replace(/^\$\s*/, '').replace(/\s+/g, ' ')

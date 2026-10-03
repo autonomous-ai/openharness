@@ -95,9 +95,9 @@ class LogCommand {
 /// The app's own log, as the running app still holds it: a bounded ring of the
 /// most recent entries, newest first.
 ///
-/// Fed by [StreamAppLog]/[StreamCliLog], read by Settings ▸ Debug. A singleton
-/// like `appLog` and `analytics`, and for the same reason: the things that
-/// write to it — the socket, the CLI runners, the HTTP clients — hold no `Ref`
+/// Fed by `StreamAppLog`, read by Settings ▸ Debug. A singleton
+/// like `appLog`, and for the same reason: the things that
+/// write to it — the socket and the HTTP clients — hold no `Ref`
 /// and no notifier between them.
 class LogStream extends ChangeNotifier {
   LogStream({this.maxEntries = 500, this.maxOutputLines = 300});
@@ -113,6 +113,13 @@ class LogStream extends ChangeNotifier {
   final List<LogEntry> _entries = [];
   int _seq = 0;
   bool _notifyScheduled = false;
+  bool _disposed = false;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
 
   /// Newest first — the order the Debug list reads in, so the newest line is
   /// the one on screen without scrolling.
@@ -207,7 +214,7 @@ class LogStream extends ChangeNotifier {
     _notifyScheduled = true;
     scheduleMicrotask(() {
       _notifyScheduled = false;
-      notifyListeners();
+      if (!_disposed) notifyListeners();
     });
   }
 }

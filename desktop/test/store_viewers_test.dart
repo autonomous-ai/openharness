@@ -133,7 +133,7 @@ void main() {
       expect(
         find.descendant(
           of: doc,
-          matching: find.text('No agents reported in this catalog.'),
+          matching: find.text('No harnesses reported in this catalog.'),
         ),
         findsOneWidget,
       );
@@ -163,54 +163,51 @@ void main() {
     expect(opened, ['autonomous/cad-viewer']);
   });
 
-  testWidgets(
-    'a category uses its featured app icon instead of an image',
-    (tester) async {
-      tester.view.devicePixelRatio = 1;
-      tester.view.physicalSize = const Size(1200, 1400);
-      addTearDown(tester.view.reset);
-      String? picked;
-      await _show(
-        tester,
-        StoreDiscover(
-          entries: const [
-            DshEntry(
-              id: 'autonomous/strudel',
-              name: 'Strudel',
-              engine: 'claude',
-              category: 'Music',
-            ),
-          ],
-          loaded: true,
-          ratingFor: (entry) => StoreRating.none(entry.id),
-          onOpen: (_) {},
-          onCategory: (category) => picked = category,
-          onAll: () {},
-          onEngines: () {},
-        ),
-      );
-      final play = find.byKey(const ValueKey('store-category:Music'));
-      expect(play, findsOneWidget);
-      expect(
-        find.descendant(of: play, matching: find.byType(EngineMark)),
-        findsOneWidget,
-      );
-      expect(
-        tester
-            .widget<EngineMark>(
-              find
-                  .descendant(of: play, matching: find.byType(EngineMark))
-                  .first,
-            )
-            .engine,
-        'autonomous/strudel',
-      );
-      expect(
-        find.descendant(of: play, matching: find.text('1 harness')),
-        findsOneWidget,
-      );
-      await tester.tap(play);
-      expect(picked, 'Music');
-    },
-  );
+  testWidgets('a category uses its featured app icon instead of an image', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1200, 1400);
+    addTearDown(tester.view.reset);
+    String? picked;
+    await _show(
+      tester,
+      StoreDiscover(
+        entries: const [
+          DshEntry(
+            id: 'autonomous/strudel',
+            name: 'Strudel',
+            engine: 'claude',
+            category: 'Music',
+          ),
+        ],
+        loaded: true,
+        ratingFor: (entry) => StoreRating.none(entry.id),
+        onOpen: (_) {},
+        onCategory: (category) => picked = category,
+        onAll: () {},
+        onEngines: () {},
+      ),
+    );
+    final play = find.byKey(const ValueKey('store-category:Music'));
+    expect(play, findsOneWidget);
+    expect(
+      find.descendant(of: play, matching: find.byType(EngineMark)),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<EngineMark>(
+            find.descendant(of: play, matching: find.byType(EngineMark)).first,
+          )
+          .engine,
+      'autonomous/strudel',
+    );
+    expect(
+      find.descendant(of: play, matching: find.text('1 harness')),
+      findsOneWidget,
+    );
+    await tester.tap(play);
+    expect(picked, 'Music');
+  });
 }

@@ -105,7 +105,7 @@ void main() {
   );
 
   test(
-    'reordering swarms between incoming frames preserves stream order',
+    'reordering tabs between incoming frames preserves stream order',
     () async {
       final app = createApp();
       addTearDown(app.dispose);

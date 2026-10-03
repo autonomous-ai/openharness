@@ -8,7 +8,6 @@ void ram_telemetry_init(void);
 
 // Mark LVGL ready for safe lv_mem_monitor() snapshots. The display mutex must
 // already exist and lv_init() plus all custom pools must have completed.
-void ram_telemetry_set_lvgl_ready(void);
 
 // Log internal 8-bit heap, PSRAM, LVGL, cJSON fallback, and current-task stack
 // high-water data. Safe before LVGL is initialized.

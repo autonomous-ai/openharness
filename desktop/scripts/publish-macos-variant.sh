@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Publish ONE of the two macOS builds: build -> pin its renderer -> hand the bundle to
 # scripts/upload-desktop.sh --no-build, which packages, notarizes, uploads and merges the manifest
-# exactly as it always has. upload-desktop.sh is not modified — everything reaches it through the
-# flags and env overrides it already takes. See RELEASE.md, "Two macOS builds".
+# through its flags and env overrides. --no-build accepts an existing APP_BUNDLE so
+# build-macos-variants.py can compile once and derive both renderers. See RELEASE.md.
 #
 # Usage:
 #   bash scripts/publish-macos-variant.sh intel 1.2.4                # desktop-macos       — Skia
@@ -37,15 +37,15 @@ set -euo pipefail
 set +x
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # repository root
-# Where upload-desktop.sh --no-build picks the bundle up (its APP_BUNDLE, which takes no override).
-APP_BUNDLE="$APP_DIR/build/macos/Build/Products/Release/Harness.app"
+# An override is accepted only with --no-build and passed to upload-desktop.sh.
+APP_BUNDLE="${APP_BUNDLE:-$APP_DIR/build/macos/Build/Products/Release/Harness.app}"
 PLIST="$APP_BUNDLE/Contents/Info.plist"
 SIGN_IDENTITY="${SIGN_IDENTITY:-Developer ID Application}"   # same default as upload-desktop.sh
 
 die() { echo "error: $*" >&2; exit 1; }
 
 usage() {
-  echo "usage: bash scripts/publish-macos-variant.sh <intel|apple-silicon> <X.Y.Z> [--build-only] [--no-notarize] [--dart-define=KEY=VALUE ...]" >&2
+  echo "usage: bash scripts/publish-macos-variant.sh <intel|apple-silicon> <X.Y.Z> [--build-only] [--no-build] [--no-notarize] [--dart-define=KEY=VALUE ...] [--performance-measurement-file=PATH]" >&2
   exit 1
 }
 
@@ -55,16 +55,20 @@ VARIANT="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"   # macOS bash 3.2 ha
 VER="$2"
 shift 2
 BUILD_ONLY=0
+DO_BUILD=1
 DO_NOTARIZE=1
 # Handed to `flutter build` and nowhere else — upload-desktop.sh --no-build never builds. A release
-# passes none; .github/workflows/internal-build.yml passes the flags a tester's build carries.
+# passes none; .github/workflows/desktop-internal-build.yml passes the tester's flags.
 DART_DEFINES=()
+PERFORMANCE_ARGS=()
 for arg in "$@"; do
   case "$arg" in
     --build-only)    BUILD_ONLY=1 ;;
+    --no-build)      DO_BUILD=0 ;;
     --no-notarize)   DO_NOTARIZE=0 ;;
     --dart-define=*) DART_DEFINES+=("$arg") ;;
-    *) die "unknown argument '$arg' — only --build-only, --no-notarize and --dart-define=KEY=VALUE; the version is explicit, so there is nothing to bump" ;;
+    --performance-measurement-file=*) PERFORMANCE_ARGS+=("$arg") ;;
+    *) die "unknown argument '$arg' — see usage for supported build options; the version is explicit, so there is nothing to bump" ;;
   esac
 done
 
@@ -85,20 +89,38 @@ BUILD_NUM=$(( 10#${BASH_REMATCH[1]} * 10000 + 10#${BASH_REMATCH[2]} * 100 + 10#$
 [ "$(uname -s)" = Darwin ] || die "a macOS build needs a macOS host"
 command -v flutter >/dev/null 2>&1 || die "flutter not found"
 
-# --- build ---
-echo ">> building the $VARIANT build $VER (build $BUILD_NUM), rendering on $RENDERER"
-# Names only: a define's value can be a credential (GRID_API_TOKEN is one).
-for define in ${DART_DEFINES[@]+"${DART_DEFINES[@]}"}; do
-  define="${define#--dart-define=}"
-  echo "   dart-define ${define%%=*}"
-done
-# Removed first for the reason upload-desktop.sh removes it: an incremental Xcode build can skip
-# re-stamping Info.plist and leave a previous version inside.
-rm -rf "$APP_BUNDLE"
-# `${a[@]+"${a[@]}"}`: an empty array under `set -u` is an error on the bash 3.2 macOS ships.
-( cd "$APP_DIR" && flutter build macos --release --build-name="$VER" --build-number="$BUILD_NUM" \
-    ${DART_DEFINES[@]+"${DART_DEFINES[@]}"} )
+# --- build, or derive a renderer variant from an explicitly supplied build ---
+if [ "$DO_BUILD" -eq 0 ]; then
+  [ "${#DART_DEFINES[@]}" -eq 0 ] || die "--dart-define cannot be applied with --no-build"
+  [ "${#PERFORMANCE_ARGS[@]}" -eq 0 ] || die "performance measurement requires a build"
+  echo ">> using the existing universal app for $VARIANT $VER"
+else
+  [ "$APP_BUNDLE" = "$APP_DIR/build/macos/Build/Products/Release/Harness.app" ] \
+    || die "APP_BUNDLE is only supported with --no-build"
+  echo ">> building the $VARIANT build $VER (build $BUILD_NUM), rendering on $RENDERER"
+  # Names only: a define's value can be a credential (GRID_API_TOKEN is one).
+  for define in ${DART_DEFINES[@]+"${DART_DEFINES[@]}"}; do
+    define="${define#--dart-define=}"
+    echo "   dart-define ${define%%=*}"
+  done
+  # An incremental Xcode build can skip re-stamping Info.plist and leave an old version.
+  rm -rf "$APP_BUNDLE"
+  # An empty array under set -u needs this expansion on macOS bash 3.2.
+  ( cd "$APP_DIR" && flutter build macos --release --build-name="$VER" --build-number="$BUILD_NUM" \
+      ${DART_DEFINES[@]+"${DART_DEFINES[@]}"} ${PERFORMANCE_ARGS[@]+"${PERFORMANCE_ARGS[@]}"} )
+fi
 [ -d "$APP_BUNDLE" ] || die "app bundle missing after the build: $APP_BUNDLE"
+# A copied app must be the requested build and keep both architectures. Renderer
+# selection changes Info.plist only; it must never turn an old/thin app into a release.
+[ "$(plutil -extract CFBundleShortVersionString raw "$PLIST")" = "$VER" ] \
+  || die "app version differs from $VER"
+[ "$(plutil -extract CFBundleVersion raw "$PLIST")" = "$BUILD_NUM" ] \
+  || die "app build number differs from $BUILD_NUM"
+for binary in "$APP_BUNDLE/Contents/MacOS/Harness" \
+              "$APP_BUNDLE/Contents/Frameworks/App.framework/App" \
+              "$APP_BUNDLE/Contents/Frameworks/FlutterMacOS.framework/FlutterMacOS"; do
+  lipo "$binary" -verify_arch arm64 x86_64 || die "not a universal macOS binary: $binary"
+done
 
 # --- pin the renderer ---
 renderer_key() { /usr/libexec/PlistBuddy -c "Print :FLTEnableImpeller" "$PLIST" 2>/dev/null || true; }
@@ -144,8 +166,8 @@ if [ "$BUILD_ONLY" -eq 1 ]; then
   exit 0
 fi
 
-# --- publish, through the unmodified script ---
-export OTA_KEY
+# --- publish the selected bundle ---
+export APP_BUNDLE OTA_KEY
 export DMG_KEY="$OTA_KEY-dmg"
 export GCS_PATH="harness/desktop/$VER/$ARTIFACT.zip"
 export DMG_GCS_PATH="harness/desktop/$VER/$ARTIFACT.dmg"

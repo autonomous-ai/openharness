@@ -1,0 +1,28 @@
+{
+  "started_at": "2026-10-03T01:30:42.660675+00:00",
+  "hypothesis": "Omitting only unknown or empty inference fields reduces response tokens and completion time while preserving original qualifiers. Applicability, all material fields and their evidence coverage remain mandatory.",
+  "suite": "docs/research/2026-10-02-memory-meaning-cases.json",
+  "suite_sha256": "657aae9de4f301b660cc2c57dce0f80ae801f49e71921a2365b862ba15d0023e",
+  "arms": [
+    {
+      "id": "compact512",
+      "thinking": true,
+      "reasoning_tokens": 512
+    }
+  ],
+  "model": "Qwen3.8-27B-Q4_0.gguf",
+  "runtime": "llama.cpp 9870 (2d973636e)",
+  "max_calls": 8,
+  "max_output_tokens": 4096,
+  "context_tokens": 16384,
+  "timeout_per_call_ms": 90000,
+  "temperature": 0,
+  "seed": 42,
+  "retries": 0,
+  "production_writes": false,
+  "corpus": "Same eight synthetic development cases; previously approved five private excerpts only after synthetic gate passes.",
+  "decision": "Retain the candidate only if all eight synthetic cases complete with no semantic or recall regressions, material qualifications preserved, and measurable token or latency benefit. Then test the same five authorized private excerpts offline under the unchanged deadline. A failed candidate is archived, not promoted. This small attributed adaptive test does not close release gates.",
+  "adaptive_followup_to": "docs/research/2026-10-03-memory-reasoning/comparison.json",
+  "baseline_evidence": "docs/research/2026-10-03-memory-reasoning/reasoning512.json",
+  "baseline_report_sha256": "a5cec77cfe76b84b79d34eeb529aad5da7da8ed24e2821bbad8a64714d8eb1ed"
+}

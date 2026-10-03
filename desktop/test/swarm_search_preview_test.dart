@@ -88,9 +88,9 @@ void main() {
           rootBundle.load('packages/lucide_icons_flutter/assets/lucide.ttf'),
         ))
         .load();
-    await (FontLoader('packages/lucide_icons_flutter/Lucide300')..addFont(
+    await (FontLoader('packages/lucide_icons_flutter/Lucide400')..addFont(
           rootBundle.load(
-            'packages/lucide_icons_flutter/assets/build_font/LucideVariable-w300.ttf',
+            'packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf',
           ),
         ))
         .load();
@@ -451,7 +451,13 @@ void main() {
           await page(pump: false);
           expect(
             previewPosition().pixels,
-            closeTo(terminalCellSizeOf(tester.element(field)).height, .01),
+            closeTo(
+              inline
+                  ? terminalCellSizeOf(tester.element(field)).height
+                  : MediaQuery.textScalerOf(tester.element(field)).scale(13) *
+                        1.5,
+              .01,
+            ),
           );
           expect(search.selected!.id, selected);
           expect(editor.controller.value, value);
@@ -617,7 +623,7 @@ void main() {
         'Retrying a checkout now reuses the original payment and receipt.',
       );
       expect(explanation, findsOneWidget);
-      expect(find.text('Earlier in this session'), findsOneWidget);
+      expect(find.text('Earlier in this harness'), findsOneWidget);
       final preview = tester.getRect(
         find.byKey(const ValueKey('swarm-search-preview')),
       );

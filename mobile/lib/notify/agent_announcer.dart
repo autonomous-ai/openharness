@@ -168,5 +168,10 @@ String noticeBody(String text, {int limit = 180}) {
   final last = paragraphs.isEmpty ? text : paragraphs.last;
   final line = last.replaceAll(RegExp(r'\s+'), ' ').trim();
   if (line.length <= limit) return line;
-  return '${line.substring(0, limit - 1).trimRight()}…';
+  // Back off one unit rather than cut an emoji — or any character past the
+  // BMP — in half: a lone surrogate reaches the lock screen as `�`, since the
+  // platform channel encodes the body as UTF-8.
+  var end = limit - 1;
+  if (end > 0 && (line.codeUnitAt(end - 1) & 0xFC00) == 0xD800) end--;
+  return '${line.substring(0, end).trimRight()}…';
 }

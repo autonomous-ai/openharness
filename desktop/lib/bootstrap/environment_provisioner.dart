@@ -1,11 +1,14 @@
 import '../core/host_platform.dart';
 
+import 'package:flutter/foundation.dart' show kDebugMode;
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import '../core/harness_cli_runner.dart';
+import '../update/desktop_updater.dart' show semverGt;
 
 /// The CLI-only installer contract for callers that already own host setup.
 /// Desktop verifies tmux, the active Linux clipboard helper and the rest of
@@ -26,6 +29,11 @@ const String kHarnessHostSetupCommand =
 
 const int _linuxClockSyncFailureExitCode = 31;
 const int _linuxAptUpdateFailureExitCode = 32;
+
+/// The oldest Harness CLI this app runs against: 0.2.48 is the first that
+/// starts its daemon for this computer without a sign-in, which the app's
+/// first run relies on. Raise it when the app starts needing a newer daemon.
+const kMinimumHarnessCliVersion = '0.2.48';
 const int _linuxAptInstallFailureExitCode = 33;
 const String _linuxClockRepairCommand =
     'if command -v chronyc >/dev/null 2>&1; then '
@@ -481,9 +489,14 @@ class EnvironmentProvisioner {
             : EnvironmentStepStatus.failed,
         message: probe.harnessRuns
             ? 'Harness CLI and managed Node are ready.'
+            : _harnessOutdated != null
+            ? 'Harness CLI $_harnessOutdated is out of date; this app needs '
+                  '$kMinimumHarnessCliVersion or newer.'
             : 'Harness CLI or its managed Node runtime is missing.',
         output: probe.harnessRuns
             ? '✓ managed Node >= 20 · harness version'
+            : _harnessOutdated != null
+            ? '✗ harness $_harnessOutdated < $kMinimumHarnessCliVersion'
             : '✗ managed Node >= 20 · harness version',
         plan: probe.plan,
       );
@@ -1051,8 +1064,7 @@ class EnvironmentProvisioner {
     emit(
       step: EnvironmentStep.tmux,
       status: EnvironmentStepStatus.unavailable,
-      output:
-          'tmux does not exist on Windows — terminals come from Herdr instead.',
+      output: 'tmux does not exist on Windows.',
     );
   }
 
@@ -1275,7 +1287,12 @@ fi''';
     return 'sudo apt-get install -y $names';
   }
 
+  /// The installed CLI's version when [_hasHarness] turned it down as older
+  /// than [kMinimumHarnessCliVersion]; null otherwise.
+  String? _harnessOutdated;
+
   Future<bool> _hasHarness() async {
+    _harnessOutdated = null;
     final currentNode = File('${harnessHome.path}/runtime/current-node');
     if (!await currentNode.exists()) return false;
     final nodePath = (await currentNode.readAsString()).trim();
@@ -1298,7 +1315,27 @@ fi''';
         cli.path,
         'version',
       ]);
-      return version.exitCode == 0;
+      if (version.exitCode != 0) return false;
+      // A CLI that runs is not enough: one from before the app's minimum
+      // refuses `harness start` without a sign-in, and it only self-updates
+      // from a running daemon — so it would never get past that on its own.
+      // Treated as missing, the installer lays the current one over it. An
+      // unparseable version (a local development build) is left alone.
+      final installed = '${version.stdout}'.trim().replaceFirst(
+        RegExp('^v'),
+        '',
+      );
+      // Local CLI builds intentionally use 0.0.1-dev.<revision>. A debug
+      // desktop must not mistake these for an obsolete release and offer to
+      // overwrite the developer's CLI. Release builds retain the minimum.
+      final localDevelopmentBuild =
+          kDebugMode && installed.startsWith('0.0.1-dev.');
+      _harnessOutdated =
+          !localDevelopmentBuild &&
+              semverGt(kMinimumHarnessCliVersion, installed)
+          ? installed
+          : null;
+      return _harnessOutdated == null;
     } on ProcessException {
       return false;
     } on StateError {

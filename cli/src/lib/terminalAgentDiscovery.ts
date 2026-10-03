@@ -43,8 +43,8 @@ export interface DiscoveredTerminalAgent {
    * undefined = the probe could not read the process; the registry then keeps whatever it already knew,
    * rather than downgrading a gateway agent to a vendor one on one failed read.
    *
-   * Deliberately NOT a property of the terminal: the probe reads the engine's own env and argv, so a
-   * gateway launch is recognized identically under tmux and under Herdr.
+   * Deliberately NOT a property of the terminal: the probe reads the engine's own env and argv, not
+   * anything the pane says about itself.
    */
   gateway?: 'ori' | null
   /**
@@ -104,8 +104,7 @@ function childrenByParent(rows: readonly ProcessRow[]): Map<number, ProcessRow[]
   return children
 }
 
-function daemonDescendants(rows: readonly ProcessRow[], daemonPid: number): Set<number> {
-  const children = childrenByParent(rows)
+function daemonDescendants(children: ReadonlyMap<number, readonly ProcessRow[]>, daemonPid: number): Set<number> {
   const excluded = new Set<number>()
   const queue = [daemonPid]
   while (queue.length) {
@@ -119,13 +118,12 @@ function daemonDescendants(rows: readonly ProcessRow[], daemonPid: number): Set<
 
 function rootOwner(
   root: TerminalRootObservation,
-  rows: readonly ProcessRow[],
+  byPid: ReadonlyMap<number, ProcessRow>,
+  children: ReadonlyMap<number, readonly ProcessRow[]>,
   excluded: ReadonlySet<number>,
   ownership: AgentCommandOwnershipSnapshot,
   hintedEngine?: AgentEngine,
 ): RootOwner {
-  const byPid = new Map(rows.map((row) => [row.pid, row]))
-  const children = childrenByParent(rows)
   const queue: Array<{ pid: number; depth: number }> = [{ pid: root.rootPid, depth: 0 }]
   const matches: Array<{ row: ProcessRow; engine: AgentEngine; depth: number; score: number }> = []
   let unresolvedAliasDepth = Number.POSITIVE_INFINITY
@@ -173,14 +171,9 @@ function rootOwner(
   }
 }
 
-function runtimeRank(runtime: TerminalRuntimeRef, backendOrder: readonly string[], herdrSessionOrder: readonly string[]): number[] {
+function runtimeRank(runtime: TerminalRuntimeRef, backendOrder: readonly string[]): number {
   const backend = backendOrder.indexOf(runtime.backend)
-  const session = runtime.backend === 'herdr' ? herdrSessionOrder.indexOf(runtime.sessionName) : 0
-  return [backend < 0 ? Number.MAX_SAFE_INTEGER : backend, session < 0 ? Number.MAX_SAFE_INTEGER : session]
-}
-
-function rankBefore(a: number[], b: number[]): boolean {
-  return a[0] < b[0] || (a[0] === b[0] && a[1] < b[1])
+  return backend < 0 ? Number.MAX_SAFE_INTEGER : backend
 }
 
 /** Pure process-authoritative merge used by fixtures and the live coordinator. */
@@ -189,11 +182,15 @@ export function discoverTerminalAgentsFromSnapshot(
   rows: readonly ProcessRow[],
   daemonPid: number,
   backendOrder: readonly string[],
-  herdrSessionOrder: readonly string[],
   hints: ReadonlyMap<string, AgentEngine> = new Map(),
   ownership = agentCommandOwnershipSnapshot(),
 ): { agents: DiscoveredTerminalAgent[]; ambiguousPlacements: Set<string> } {
-  const excluded = daemonDescendants(rows, daemonPid)
+  // Every pane belongs to this same snapshot. Build the process indexes once per scan, rather
+  // than copying the whole machine's process table for every persistent pane. Keep them local:
+  // the next scan must see exits, execs and PID reuse without retaining stale process identities.
+  const byPid = new Map(rows.map((row) => [row.pid, row]))
+  const children = childrenByParent(rows)
+  const excluded = daemonDescendants(children, daemonPid)
   const grouped = new Map<string, {
     agent: Omit<DiscoveredTerminalAgent, 'runtimes' | 'primaryRuntimeKey'>
     observations: Array<{ runtime: TerminalRuntimeRef; depth: number; cwd: string }>
@@ -201,7 +198,7 @@ export function discoverTerminalAgentsFromSnapshot(
   const ambiguousPlacements = new Set<string>()
 
   for (const root of roots) {
-    const owner = rootOwner(root, rows, excluded, ownership, hints.get(terminalRouteKey(root.runtime)))
+    const owner = rootOwner(root, byPid, children, excluded, ownership, hints.get(terminalRouteKey(root.runtime)))
     if (owner.ambiguous) {
       ambiguousPlacements.add(terminalPlacementKey(root.runtime))
       continue
@@ -218,10 +215,9 @@ export function discoverTerminalAgentsFromSnapshot(
     for (const observation of observations) byPlacement.set(terminalPlacementKey(observation.runtime), observation)
     const ordered = [...byPlacement.values()].sort((a, b) => {
       if (a.depth !== b.depth) return a.depth - b.depth
-      const ar = runtimeRank(a.runtime, backendOrder, herdrSessionOrder)
-      const br = runtimeRank(b.runtime, backendOrder, herdrSessionOrder)
-      if (rankBefore(ar, br)) return -1
-      if (rankBefore(br, ar)) return 1
+      const ar = runtimeRank(a.runtime, backendOrder)
+      const br = runtimeRank(b.runtime, backendOrder)
+      if (ar !== br) return ar - br
       return terminalPlacementKey(a.runtime).localeCompare(terminalPlacementKey(b.runtime))
     })
     return {
@@ -238,7 +234,6 @@ export function discoverTerminalAgentsFromSnapshot(
 export async function probeTerminalAgents(
   backends: readonly TerminalBackend[],
   backendOrder: readonly string[],
-  herdrSessionOrder: readonly string[],
   daemonPid = process.pid,
   hints: ReadonlyMap<string, AgentEngine> = new Map(),
 ): Promise<TerminalAgentProbe> {
@@ -257,7 +252,6 @@ export async function probeTerminalAgents(
     enrichedRows,
     daemonPid,
     backendOrder,
-    herdrSessionOrder,
     hints,
   )
   // Which endpoint each agent's engine talks to. Cached per live process, so this is one read per agent

@@ -6,29 +6,14 @@ import {
   terminalPlacementKey,
   terminalRouteKey,
 } from './terminalRuntime.js'
-import type { HerdrRuntimeRef, TmuxRuntimeRef } from './terminalTypes.js'
+import type { TmuxRuntimeRef } from './terminalTypes.js'
 
 const tmux: TmuxRuntimeRef = { backend: 'tmux', paneId: '%3' }
-const herdr: HerdrRuntimeRef = {
-  backend: 'herdr',
-  endpointId: 'herdr:default:abc',
-  sessionName: 'default',
-  terminalId: 'terminal-1',
-  paneId: 'w1:p1',
-}
-
 describe('terminal runtime identity', () => {
-  it('scopes duplicate Herdr pane routes to their configured endpoint', () => {
-    const other = { ...herdr, endpointId: 'herdr:work:def', sessionName: 'work' }
-    expect(terminalRouteKey(herdr)).not.toBe(terminalRouteKey(other))
-    expect(terminalPlacementKey(herdr)).not.toBe(terminalPlacementKey(other))
-  })
-
-  it('keeps Herdr placement stable while replacing a moved route', () => {
-    const moved = { ...herdr, paneId: 'w2:p4' }
-    expect(terminalPlacementKey(moved)).toBe(terminalPlacementKey(herdr))
-    expect(terminalRouteKey(moved)).not.toBe(terminalRouteKey(herdr))
-    expect(mergeTerminalRuntimes([tmux, herdr], [moved])).toEqual([moved, tmux])
+  it('merges observed runtimes without duplicating a placement', () => {
+    const other: TmuxRuntimeRef = { backend: 'tmux', paneId: '%4' }
+    expect(terminalPlacementKey(tmux)).toBe(terminalRouteKey(tmux))
+    expect(mergeTerminalRuntimes([tmux], [other, { ...tmux }])).toEqual([tmux, other])
   })
 
   it('keys process identity without treating argv-derived executable as authoritative', () => {

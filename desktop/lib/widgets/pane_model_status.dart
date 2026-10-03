@@ -6,6 +6,8 @@
 /// daemon's (`grid.note`), in the words of `resting_model_words.dart`.
 library;
 
+
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../core/models.dart';
@@ -18,12 +20,14 @@ import 'resting_model_words.dart';
 /// the room [paneStartingChipWidth] asks the header to leave it.
 const double _kChipMark = 14;
 const double _kChipGap = 6;
-const EdgeInsets _kChipPadding = EdgeInsets.symmetric(horizontal: 6, vertical: 4);
+const EdgeInsets _kChipPadding = EdgeInsets.symmetric(
+  horizontal: 6,
+  vertical: 4,
+);
 
 /// The note strip's one line: tall enough for its "Pick another" button, and the same height with
 /// or without one, so a note that loses its action does not resize the terminal again.
 const double _kNoteHeight = 30;
-
 
 /// The chip's words for [phase].
 String startingChipLabel(ModelStartPhase phase) => switch (phase) {
@@ -49,7 +53,7 @@ class PaneStartingChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final label = startingChipLabel(phase);
     final mark = Icon(
-      Icons.hourglass_top,
+      AppIcons.hourglass,
       size: _kChipMark,
       color: AppColors.textSoft,
     );
@@ -85,7 +89,12 @@ class PaneStartingChip extends StatelessWidget {
 
 /// The room [PaneStartingChip] asks for in a header, so the header can leave it that much beside
 /// the agent's name.
-double paneStartingChipWidth(ModelStartPhase phase, TextScaler scaler) {
+double paneStartingChipWidth(
+  ModelStartPhase phase,
+  TextScaler scaler, {
+  bool narrow = false,
+}) {
+  if (narrow) return _kChipMark + _kChipPadding.horizontal;
   final painter = TextPainter(
     text: TextSpan(text: startingChipLabel(phase), style: _chipStyle()),
     textDirection: TextDirection.ltr,
@@ -132,8 +141,8 @@ class PaneModelNote extends StatelessWidget {
           children: [
             Icon(
               switch (note) {
-                GridNoteOffline() => Icons.cloud_off,
-                GridNoteNotServed() => Icons.info_outline,
+                GridNoteOffline() => AppIcons.cloudOff,
+                GridNoteNotServed() => AppIcons.info,
               },
               size: _kChipMark,
               color: AppColors.warning,

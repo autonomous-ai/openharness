@@ -9,8 +9,9 @@
 /// turning `swarms` into a snapshot and a snapshot back into `swarms`.
 ///
 /// What is NOT on the desk, by decision (owner, 2026-09-21): the active tab,
-/// focus, zoom, pinned slots, presets, pane sizes, composer visibility, drafts,
-/// Recently Closed, the Store tab and orchestrator tabs. Windows differ.
+/// focus, zoom, pinned slots, composer visibility, drafts, Recently Closed,
+/// the Store tab and orchestrator tabs. Pane order, presets and divider
+/// proportions are shared; viewport dimensions and terminal metrics stay local.
 library;
 
 import 'dart:math';
@@ -48,6 +49,10 @@ class DeskPaneRef {
 /// shape's id; `sizes` is the window's arrangement keys → tiles as fractions of
 /// the canvas, which is what lets a window of any size draw them. Kept as the
 /// wire's JSON: the window turns it into `presets`/`paneSizes` and back.
+/// `sizes["N:manual"]` is the common desktop/hn geometry: ordered
+/// [left, top, right, bottom] slots corresponding to the tab's pane references.
+/// Explicit edits replace it; a viewport resize only scales it. Older render
+/// keys and presets remain readable for migration.
 class DeskLayout {
   const DeskLayout({this.presets = const {}, this.sizes = const {}});
   final Map<String, String> presets;

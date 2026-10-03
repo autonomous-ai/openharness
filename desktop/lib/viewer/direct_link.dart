@@ -5,6 +5,8 @@ import '../core/config.dart';
 import '../e2ee/keys.dart';
 import 'direct_auth.dart';
 import 'direct_auth_api.dart';
+import 'device_log_sync.dart';
+import 'group_sync.dart';
 import 'password_link.dart';
 import 'viewer_key_store.dart';
 
@@ -22,6 +24,10 @@ class DirectLink implements PeerLinkClient {
   final DirectAuth auth;
   final AppConfig config;
   final RelaySocketFactory socket;
+
+  /// The account's device key log, once the app has one: its head rides every roster swap, so a
+  /// machine shown a different log than this app is found out (`device_log_sync.dart`).
+  ViewerDeviceLog? deviceLog;
 
   @override
   Future<CliLinkConnectResult> connect(
@@ -62,6 +68,34 @@ class DirectLink implements PeerLinkClient {
           error: humanizeLinkError(code, name, retryAt: retryAt),
         );
     }
+  }
+
+  /// Swaps trust-group rosters with [machineId] ([syncTrustGroup]): the machines this device learns
+  /// of are pinned — no password for them — and the machine learns this device and whatever it
+  /// linked. [label] is this device's name for itself. Never throws.
+  Future<GroupSyncOutcome> syncGroup(
+    String machineId, {
+    required String label,
+  }) async {
+    final String token;
+    try {
+      token = await auth.accessToken();
+    } catch (_) {
+      return GroupSyncOutcome.none;
+    }
+    final log = deviceLog;
+    return syncTrustGroup(
+      machineId: machineId,
+      keys: keys,
+      accessToken: token,
+      wsBaseUrl: config.wsBaseUrl,
+      autonomousEnv: config.autonomousEnv,
+      label: label,
+      socket: socket,
+      devlog: await log?.gossip(),
+      suspended: log?.suspendedPubs,
+      onDevlog: log?.heard,
+    );
   }
 
   @override

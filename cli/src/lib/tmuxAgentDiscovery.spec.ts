@@ -41,6 +41,7 @@ describe('tmux process agent snapshot discovery', () => {
     ['opencode', 'opencode', 'opencode'],
     ['pi', 'pi', 'pi'],
     ['hermes', 'python', '/opt/hermes-agent/hermes'],
+    ['hermes', 'python3', "python3 -I -I -c import sys, runpy; sys.path.insert(0, '/opt/custom'); runpy.run_module('hermes_cli.main', run_name='__main__')"],
     ['commandcode', '⌘ Project', '⌘ Project'],
     ['devin', 'devin', 'devin'],
     ['muse', 'muse-bin-1.2.3', 'muse-bin-1.2.3'],
@@ -340,7 +341,7 @@ function registered(agent: DiscoveredTmuxAgent, agentId = 'agent-1'): Registered
     cliVersion: null,
     processIdentity: agent.processIdentity,
     registeredAt: 1,
-    updatedAt: 1,
+    touchedAt: 1,
     lastHookAt: 1,
     lastTranscriptAt: 1,
   }

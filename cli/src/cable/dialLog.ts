@@ -30,7 +30,7 @@ export interface DialLogOptions {
   now?: () => number
 }
 
-/** The firmware's liveness line — `ui_screens.c` prints one a minute from the LVGL task. */
+/** The firmware's liveness line — `ui/habitat/display_habitat.c` prints one a minute. */
 const HEARTBEAT = /\balive up=/
 
 export class DialLog {

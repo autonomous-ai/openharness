@@ -1,0 +1,160 @@
+name: Release web
+
+# Builds the Flutter web bundle from desktop/, bakes it into website/Dockerfile.k8s, and pushes the
+# result to gcr.io/autonomous-ecm/autonomous-code-website, on a pushed `v*_web` tag. ArgoCD deploys
+# that image to harness.autonomous.ai.
+#
+# ONE REPO, ONE COMMIT. The site used to be a React app in the private autonomous-ai/autonomous-code
+# repo (apps/web) that hosted this bundle, and a web release was a relay: this repo published the bundle as a GitHub Release, a PR
+# there pinned it, and that repo's own tag built the image. The site now lives in website/, so the
+# bundle and the small host around it are built from the same commit by this one job. The React app
+# itself was retired; website/ keeps only the host routes the rest of Harness links to. The image tag
+# continues above the line that repo pushed (last: v1.2.24_web) — releases from here start at
+# v1.3.1_web — because ArgoCD's image updater only rolls out a tag newer than the running one.
+#
+# Shaped after production-be-build.yaml (see its header for why this is inline rather than a call to
+# the private github-templates repo: a public repo cannot use a private repo's reusable workflows).
+#
+# The bundle is ALSO published as a GitHub Release. Nothing in the image build needs it; it is what
+# `npm run prepare:web` in website/ downloads for local development, and it keeps each release's
+# bundle and checksum downloadable on their own.
+#
+# Nothing here is reachable from a pull request: the only trigger is a tag push, which only a
+# maintainer with write access can make. A fork's PR cannot run this job and cannot see its secrets.
+
+on:
+  push:
+    tags:
+      - 'v*_web'
+
+# `contents: write` for the GitHub Release; `id-token: write` to mint the OIDC token the federated
+# auth step exchanges for a short-lived GCP credential.
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: docker_build_website_production
+  cancel-in-progress: false
+
+env:
+  REGISTRY_HOST: gcr.io
+  IMAGE_PATH: autonomous-ecm
+  IMAGE_NAME: autonomous-code-website
+  # Resolved from the WORKSPACE ROOT, not from the build context — docker/build-push-action passes
+  # this straight to `buildx --file`. The context stays `website` because the Dockerfile's COPYs are
+  # relative to it.
+  DOCKERFILE: website/Dockerfile.k8s
+  BUILD_CONTEXT: website
+  # Staged inside the build context so the Dockerfile can reach it; ignored by website/.gitignore.
+  BUNDLE_IN_CONTEXT: harness-web.tar.gz
+  FLUTTER_VERSION: '3.47.2'
+
+jobs:
+  build-autonomous-code-website-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # The `secrets` context is not readable from a step-level `if:`, so reduce it to a boolean here
+      # — job-level `env:` can see it. This holds "true"/"false", never any key material.
+      HAS_WIF: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Tag-only trigger, so GITHUB_REF_NAME is already the bare tag (e.g. v1.3.1_web) and that is
+      # the image tag ArgoCD deploys by. The X.Y.Z inside it is also the bundle's version.
+      - name: Work out the version and image tag
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          version="${version%_web}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::Tag $GITHUB_REF_NAME is not vX.Y.Z_web"
+            exit 1
+          }
+          {
+            echo "IMAGE_TAG=${GITHUB_REF_NAME}"
+            echo "WEB_VERSION=${version}"
+          } >> "$GITHUB_ENV"
+
+      - name: Fail early if no GCP credential was supplied
+        if: env.HAS_WIF != 'true'
+        run: |
+          echo "::error::Set GCP_WORKLOAD_IDENTITY_PROVIDER + GCP_SERVICE_ACCOUNT_GCR."
+          echo "::error::This workflow has no key fallback — federation is the only path."
+          exit 1
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Build the Flutter web bundle
+        working-directory: desktop
+        run: bash scripts/build-web-release.sh "$WEB_VERSION"
+
+      # The archive and the manifest that describes it go in together: the website's prebuild
+      # verifies the archive against harness-web-release.json (version, source commit, SHA-256), so
+      # the committed manifest — which pins an older release for local development — is replaced
+      # with this build's own.
+      - name: Stage the bundle in the image build context
+        run: |
+          set -euo pipefail
+          cp "desktop/build/web-dist/harness-web-${WEB_VERSION}.tar.gz" "${BUILD_CONTEXT}/${BUNDLE_IN_CONTEXT}"
+          cp desktop/build/web-dist/harness-web-release.json "${BUILD_CONTEXT}/harness-web-release.json"
+
+      # NOTE THE `_GCR` SUFFIX on the service account: the registry's project, the same one
+      # production-be-build.yaml pushes the backend image with.
+      - name: Setup google auth (workload identity federation)
+        if: env.HAS_WIF == 'true'
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_GCR }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+        with:
+          version: '>= 363.0.0'
+
+      - name: Setup docker
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Authenticate docker
+        run: gcloud auth configure-docker --quiet "$REGISTRY_HOST"
+
+      - name: Docker meta
+        id: dockerMeta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ${{ env.IMAGE_PATH }}/${{ env.IMAGE_NAME }}
+
+      - name: Build and push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ env.BUILD_CONTEXT }}
+          file: ${{ env.DOCKERFILE }}
+          push: true
+          labels: ${{ steps.dockerMeta.outputs.labels }}
+          tags: |
+            ${{ env.REGISTRY_HOST }}/${{ env.IMAGE_PATH }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY_HOST }}/${{ env.IMAGE_PATH }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          cache-from: type=gha
+          # Build args are PUBLIC to anyone who can pull the image. Only non-sensitive values here.
+          build-args: |
+            HARNESS_WEB_ARCHIVE=${{ env.BUNDLE_IN_CONTEXT }}
+
+      # Last, so a failed image build can be re-run without tripping over a release it already made.
+      - name: Publish the bundle as a GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            'Browser build of the shared desktop Flutter app.' \
+            "Served by harness.autonomous.ai from image ${IMAGE_NAME}:${IMAGE_TAG}." \
+            > "$RUNNER_TEMP/web-release-notes.md"
+          gh release create "$IMAGE_TAG" desktop/build/web-dist/* \
+            --verify-tag --latest=false --title "Harness Web $WEB_VERSION" \
+            --notes-file "$RUNNER_TEMP/web-release-notes.md"

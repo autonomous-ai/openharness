@@ -39,7 +39,7 @@ test('the page loads only files the server is willing to serve', async () => {
     assert.match(server, new RegExp(`'/${file.replace('.', '\\.')}'`), `viewer.mjs does not serve ${file}`)
   }
   for (const file of await readdir(join(PACKAGE, 'viewer'))) {
-    assert.ok(['index.html', 'app.js', 'app.css', 'scale.js'].includes(file), `unexpected file in viewer/: ${file}`)
+    assert.ok(['index.html', 'app.js', 'app.css', 'scale.js', 'table.js', 'icons'].includes(file), `unexpected file in viewer/: ${file}`)
   }
 })
 
@@ -62,11 +62,11 @@ test('the stylesheet defines dark in both the ways the app can ask for it', asyn
 
 test('the verbs the pane offers are the verbs the server accepts', async () => {
   const [js, server] = await Promise.all([read('viewer/app.js'), read('viewer.mjs')])
-  const allowed = new Set(server.match(/const VERBS = new Set\(\[([^\]]+)\]\)/)[1].match(/'[a-z]+'/g).map((word) => word.slice(1, -1)))
-  for (const match of js.matchAll(/\['(pause|resume|retire|resume|pin|unpin|clear)', '/g)) {
+  const allowed = new Set(server.match(/const VERBS = new Set\(\[([^\]]+)\]\)/)[1].match(/'[a-z-]+'/g).map((word) => word.slice(1, -1)))
+  for (const match of js.matchAll(/\bverb:\s*'([a-z-]+)'/g)) {
     if (match[1] !== 'clear') assert.ok(allowed.has(match[1]), `the server does not accept ${match[1]}`)
   }
-  for (const forbidden of ['delete', 'kill', 'remove']) assert.equal(allowed.has(forbidden), false)
+  for (const forbidden of ['kill', 'remove']) assert.equal(allowed.has(forbidden), false)
 })
 
 /**
@@ -82,14 +82,11 @@ test('every dom handle the script touches is one it looked up', async () => {
   assert.deepEqual([...used].filter((name) => !defined.has(name)), [])
 })
 
-test('every name the script imports from scale.js is one scale.js exports, and every one it uses is imported', async () => {
-  const [js, scale] = await Promise.all([read('viewer/app.js'), read('viewer/scale.js')])
-  const exported = new Set([...scale.matchAll(/export (?:const|function) (\w+)/g)].map((m) => m[1]))
-  const imported = new Set(js.match(/import \{([^}]+)\} from '\.\/scale\.js'/)[1].split(',').map((name) => name.trim()))
-  for (const name of imported) assert.ok(exported.has(name), `scale.js does not export ${name}`)
-  for (const name of exported) {
-    if (new RegExp(`\\b${name}\\b`).test(js.replace(/import \{[^}]+\} from '\.\/scale\.js'/, ''))) {
-      assert.ok(imported.has(name), `app.js uses ${name} from scale.js without importing it`)
-    }
+test('engine images reuse the desktop assets', async () => {
+  const icons = await readdir(join(PACKAGE, 'viewer/icons'))
+  for (const file of icons.filter(file => file.endsWith('.png'))) {
+    const source = file === 'claude.png' ? 'model-icons' : 'engine-icons'
+    const original = await readFile(join(PACKAGE, '../../../desktop/assets', source, file))
+    assert.deepEqual(await readFile(join(PACKAGE, 'viewer/icons', file)), original)
   }
 })

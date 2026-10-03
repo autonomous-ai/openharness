@@ -2,7 +2,7 @@
  * What a person decided, and what Harness Monitor did about it — read and written through one module so
  * the CLI and the pane can never disagree about where anything lives.
  *
- * The rules and pins are `~/.config/harness/policy.jsonc`; the resume tickets and the log are under
+ * The rules and pins are `~/.config/harness/policy.jsonc`; the open tickets and the log are under
  * `~/.harness/monitor/` (lib/config.mjs has why). The only file left in the WORKSPACE is the verdict,
  * because that is the one file Harness itself reads, and it reads it from the workspace.
  */
@@ -14,7 +14,7 @@ import { DEFAULT_POLICY, normalizePolicy } from './policy.mjs'
 
 export function verdictPath(workspace) { return join(workspace, '.harness', 'verdict.json') }
 
-export const EMPTY_STATE = { spec: 1, policy: { ...DEFAULT_POLICY }, pins: [], paused: {} }
+export const EMPTY_STATE = { spec: 1, policy: { ...DEFAULT_POLICY }, pins: [], stopped: {} }
 
 /** Write through a temp file in the same directory: a reader must never see half of it. */
 export async function atomicJson(path, value) {
@@ -29,17 +29,17 @@ export async function atomicJson(path, value) {
 export async function readState(workspace, env = process.env) {
   if (workspace) await migrateWorkspace(workspace, env).catch(() => null)
   const { path, policy, pins } = await readConfig(env)
-  const merged = { ...DEFAULT_POLICY, ...policy, protect: { ...DEFAULT_POLICY.protect, ...(policy.protect ?? {}) } }
   // A typo must fail here, at the edge, where the message can name the file — not three layers down inside
   // a rule while the fleet waits.
-  try { normalizePolicy(merged) } catch (error) { throw new Error(`${path}: ${error.message}`) }
-  return { spec: 1, policy: merged, pins, paused: await readTickets(env), configPath: path }
+  let merged
+  try { merged = normalizePolicy(policy) } catch (error) { throw new Error(`${path}: ${error.message}`) }
+  return { spec: 1, policy: merged, pins, stopped: await readTickets(env), configPath: path }
 }
 
 /** Persist what the program changed: the tickets always, the pins only when they moved. The rules are
  *  never rewritten from here — a person's file is changed key by key through `updateConfig`, or not at all. */
 export async function writeState(workspace, state, env = process.env) {
-  await writeTickets(state.paused ?? {}, env)
+  await writeTickets(state.stopped ?? {}, env)
   const { pins } = await readConfig(env)
   const next = [...new Set(state.pins ?? [])]
   if (next.length !== pins.length || next.some((id) => !pins.includes(id))) await updateConfig({ pins: next }, env)
@@ -59,20 +59,20 @@ export async function readLog(workspace, { limit = 200 } = {}, env = process.env
 /**
  * The pane header, in Harness's own words.
  *
- * `ready` means the fleet is inside its policy: nothing is waiting to be paused, nothing is
+ * `ready` means the fleet is inside its policy: nothing is waiting to be stopped, nothing is
  * over the ceiling. That makes the header a live answer to "is my machine tidy?" rather than a build
  * status, which is the only useful reading for a harness that manages other harnesses.
  */
 export async function writeVerdict(workspace, { summary, rows, plan, problems = [] }) {
   const findings = []
-  const overdue = plan.filter((entry) => entry.action === 'pause').length
-  if (overdue) findings.push({ severity: 'warn', kind: 'idle', message: `${overdue} running ${overdue === 1 ? 'harness is' : 'harnesses are'} past the pause threshold, holding ${gb(plan.filter((e) => e.action === 'pause').reduce((sum, e) => sum + (e.frees || 0), 0))}` })
+  const overdue = plan.filter((entry) => entry.action === 'stop').length
+  if (overdue) findings.push({ severity: 'warn', kind: 'idle', message: `${overdue} running ${overdue === 1 ? 'harness is' : 'harnesses are'} past the stop threshold, holding ${gb(plan.filter((e) => e.action === 'stop').reduce((sum, e) => sum + (e.frees || 0), 0))}` })
   if (summary.needsInput) findings.push({ severity: 'warn', kind: 'attention', message: `${summary.needsInput} ${summary.needsInput === 1 ? 'harness looks' : 'harnesses look'} like they are waiting on you` })
   for (const problem of problems) findings.push({ severity: 'error', kind: 'machine', message: `${problem.machine}: ${problem.error}` })
   const verdict = {
     spec: 1,
     ready: overdue === 0 && problems.length === 0,
-    summary: `${summary.total} harnesses · ${summary.running} running · ${summary.paused} paused · ${gb(summary.held)} held`,
+    summary: `${summary.total} harnesses · ${summary.running} running · ${summary.stopped} stopped · ${gb(summary.held)} held`,
     findings,
     updatedAt: new Date().toISOString(),
   }
@@ -88,22 +88,22 @@ export function gb(bytes) {
 }
 
 /**
- * The ticket back, written the moment a harness is paused.
+ * The ticket back, written the moment a harness is stopped.
  *
  * The daemon releases an engine from its row when the process leaves, and the row's session id goes with
  * it — the transcript is still on disk, but nothing would know which conversation belonged to this agent.
- * So pause's receipt is kept here, and resume reads it. This is the one piece of state Harness Monitor cannot afford
+ * So stop's receipt is kept here, and open reads it. This is the one piece of state Harness Monitor cannot afford
  * to lose, which is why it is written before the success is reported.
  */
-export function markPaused(state, row, ticket) {
+export function markStopped(state, row, ticket) {
   if (!ticket?.sessionId) return state
-  return { ...state, paused: { ...state.paused, [row.id]: { at: Date.now(), ...ticket } } }
+  return { ...state, stopped: { ...state.stopped, [row.id]: { at: Date.now(), ...ticket } } }
 }
 
-export function clearPaused(state, id) {
-  const paused = { ...state.paused }
-  delete paused[id]
-  return { ...state, paused }
+export function clearStopped(state, id) {
+  const stopped = { ...state.stopped }
+  delete stopped[id]
+  return { ...state, stopped }
 }
 
 /** Pin and unpin — the only edits a person makes to this file by hand, kept here so the CLI and
@@ -117,5 +117,5 @@ export function pin(state, id, on) {
 /** Forget is the hps's own bookkeeping and nothing else: the row leaves `monitor.json`. No transcript,
  *  no tmux session, no registry entry is touched here — those belong to the engine and the daemon. */
 export function forget(state, id) {
-  return clearPaused(pin(state, id, false), id)
+  return clearStopped(pin(state, id, false), id)
 }

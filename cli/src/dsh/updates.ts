@@ -4,7 +4,7 @@ import { HARNESS_MONOREPO, type DshRegistryEntry } from './registry.js'
 
 export const GIT_REVISION_RE = /^[a-f0-9]{40}$/i
 
-export function samePackageSource(installed: InstalledDshRecord, entry: DshRegistryEntry): boolean {
+export function samePackageSource(installed: InstalledDshRecord, entry: Pick<DshRegistryEntry, 'repo' | 'path'>): boolean {
   const normalize = (source: string): string => {
     const repo = source.replace(/\/$/, '').replace(/\.git$/, '')
     // This is the same official repository before its rename. Do not infer aliases from ids

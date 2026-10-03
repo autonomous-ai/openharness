@@ -55,12 +55,18 @@ class QuestionPaneWatcher extends ChangeNotifier {
   QueuedQuestions? get queued => _queued;
 
   /// The keys the pane's live chrome offers that a phone cannot press — see
-  /// [parseKeyHints]. Empty when there are none.
+  /// [parseKeyHints]. Codex only; empty when there are none.
   ///
   /// Debounced as [view] is: a repaint caught mid-way reads as a bare pane,
   /// and a row of buttons that blinked out on every redraw would be one
   /// nobody could hit.
   List<KeyHint> get hints => _hints;
+
+  /// The pane's own chrome says `esc to interrupt` — Claude Code's and Codex's working line. The
+  /// page offers its `esc` on this as well as on the machine's word that the agent is working,
+  /// which can lag the screen by a beat.
+  bool get interruptible => _interruptible;
+  bool _interruptible = false;
 
   /// How long the buffer must be quiet before it is read.
   ///
@@ -118,6 +124,8 @@ class QuestionPaneWatcher extends ChangeNotifier {
           ? parseQueuedQuestions(lines)
           : null,
     );
+    // Every hint offered is one of the engines' own (see `parseKeyHints`): Codex's, and Claude
+    // Code's `shift+tab to cycle`.
     final keys = _readHints(parseKeyHints(lines));
     if (dialog.again || queue.again || keys.again) {
       // ⚠️ **Ask for the next read rather than waiting for one.** Reads are
@@ -129,7 +137,24 @@ class QuestionPaneWatcher extends ChangeNotifier {
       _debounce?.cancel();
       _debounce = Timer(_settle, _read);
     }
-    _publish(dialog.view, queue.queued, keys.hints);
+    _publish(
+      dialog.view,
+      queue.queued,
+      keys.hints,
+      interruptible: _saysInterrupt(lines),
+    );
+  }
+
+  /// Whether the bottom of the pane offers `esc to interrupt`.
+  static bool _saysInterrupt(List<String> lines) {
+    var seen = 0;
+    for (var i = lines.length - 1; i >= 0 && seen < 10; i--) {
+      final line = lines[i];
+      if (line.trim().isEmpty) continue;
+      seen++;
+      if (line.toLowerCase().contains('esc to interrupt')) return true;
+    }
+    return false;
   }
 
   /// What [found] makes of the open dialog: the view to keep, and whether to
@@ -195,16 +220,19 @@ class QuestionPaneWatcher extends ChangeNotifier {
   void _publish(
     QuestionPaneView? view,
     QueuedQuestions? queued,
-    List<KeyHint> hints,
-  ) {
+    List<KeyHint> hints, {
+    bool interruptible = false,
+  }) {
     if (identical(view, _view) &&
         queued == _queued &&
-        identical(hints, _hints)) {
+        identical(hints, _hints) &&
+        interruptible == _interruptible) {
       return;
     }
     _view = view;
     _queued = queued;
     _hints = hints;
+    _interruptible = interruptible;
     notifyListeners();
   }
 

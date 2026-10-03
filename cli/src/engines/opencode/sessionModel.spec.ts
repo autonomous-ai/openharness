@@ -3,7 +3,14 @@ import { execFileSync } from 'child_process'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { opencodeModelFromArgv, setOpencodeSessionModel } from './sessionModel.js'
+import {
+  applyOpencodeSessionModel,
+  opencodeModelFromArgv,
+  parseOpencodeModelId,
+  setOpencodeSessionModel,
+  switchOpencodeSessionModel,
+  type OpencodeApiRun,
+} from './sessionModel.js'
 
 const hasSqlite = (() => {
   try { execFileSync('sqlite3', ['-version'], { stdio: 'ignore' }); return true } catch { return false }
@@ -177,5 +184,188 @@ describe('opencodeModelFromArgv', () => {
     expect(opencodeModelFromArgv(['-m', 'bare-model'])).toBeNull()
     expect(opencodeModelFromArgv(['-m', '/x'])).toBeNull()
     expect(opencodeModelFromArgv(['-m', 'x/'])).toBeNull()
+  })
+})
+
+describe('parseOpencodeModelId', () => {
+  it('splits at the first slash, the way opencode does', () => {
+    expect(parseOpencodeModelId('vibe/minimax/minimax-m3')).toEqual({ providerID: 'vibe', modelID: 'minimax/minimax-m3' })
+    expect(parseOpencodeModelId('bare')).toBeNull()
+    expect(parseOpencodeModelId('/x')).toBeNull()
+  })
+})
+
+/** A stand-in for `opencode api …`, answering the way 2.0.18 does. */
+function fakeApi(answers: { switch?: () => string; get?: () => string; list?: () => string } = {}) {
+  const calls: string[][] = []
+  const run: OpencodeApiRun = async (args) => {
+    calls.push(args)
+    if (args[1] === 'model.list') {
+      return { stdout: answers.list ? answers.list() : JSON.stringify({ data: [{ id: NEW.modelID, providerID: NEW.providerID }, { id: OLD.modelID, providerID: OLD.providerID }] }) }
+    }
+    if (args[1] === 'session.switchModel') return { stdout: answers.switch ? answers.switch() : '' }
+    if (args[1] === 'session.get') {
+      return { stdout: answers.get ? answers.get() : JSON.stringify({ data: { id: SID, model: { id: NEW.modelID, providerID: NEW.providerID, variant: 'default' } } }) }
+    }
+    throw new Error(`unexpected ${args.join(' ')}`)
+  }
+  return { run, calls }
+}
+/** What execFile rejects with when `opencode api` exits 1. */
+function exitError(stdout: string, stderr = ''): Error {
+  return Object.assign(new Error('Command failed'), { code: 1, stdout, stderr })
+}
+
+describe('switchOpencodeSessionModel (opencode v2, `opencode api`)', () => {
+  it('switches through the running service, then reads the session back to prove it', async () => {
+    const { run, calls } = fakeApi()
+    await expect(switchOpencodeSessionModel(SID, NEW, { run })).resolves.toEqual({ ok: true })
+    expect(calls).toEqual([
+      ['api', 'session.switchModel', '--param', `sessionID=${SID}`, '-d', JSON.stringify({ model: { id: NEW.modelID, providerID: NEW.providerID } })],
+      ['api', 'session.get', '--param', `sessionID=${SID}`],
+    ])
+  })
+
+  it('refuses a session the service does not know, with the code the retarget reports', async () => {
+    // 2.0.18 prints the body on stdout and the status on stderr, and exits 1.
+    const { run } = fakeApi({ switch: () => { throw exitError('{"_tag":"SessionNotFoundError","message":"Session not found: ses_testABC123"}\n', 'HTTP 404 Not Found\n') } })
+    await expect(switchOpencodeSessionModel(SID, NEW, { run }))
+      .resolves.toMatchObject({ ok: false, code: 'OPENCODE_SESSION_NOT_FOUND', detail: expect.stringContaining('Session not found') })
+  })
+
+  it('refuses when the session still reads back on another model after a second try', async () => {
+    const { run, calls } = fakeApi({ get: () => JSON.stringify({ data: { id: SID, model: { id: OLD.modelID, providerID: OLD.providerID } } }) })
+    await expect(switchOpencodeSessionModel(SID, NEW, { run, retryDelayMs: 0 }))
+      .resolves.toMatchObject({ ok: false, code: 'OPENCODE_MODEL_SWITCH_FAILED', detail: expect.stringContaining('opencode/big-pickle') })
+    expect(calls.filter((c) => c[1] === 'session.switchModel')).toHaveLength(2)
+  })
+
+  // `provider/model#variant` is opencode's own way to name an effort (`opencode run -m`): on v2 the
+  // variant goes in the switch, and the session must read back on it.
+  it('switches the variant too when the model names one, and reads it back', async () => {
+    const { run, calls } = fakeApi({ get: () => JSON.stringify({ data: { id: SID, model: { id: NEW.modelID, providerID: NEW.providerID, variant: 'high' } } }) })
+    await expect(switchOpencodeSessionModel(SID, { ...NEW, modelID: `${NEW.modelID}#high` }, { run })).resolves.toEqual({ ok: true })
+    expect(calls[0]).toEqual(['api', 'session.switchModel', '--param', `sessionID=${SID}`, '-d', JSON.stringify({ model: { id: NEW.modelID, providerID: NEW.providerID, variant: 'high' } })])
+    const low = fakeApi({ get: () => JSON.stringify({ data: { id: SID, model: { id: NEW.modelID, providerID: NEW.providerID, variant: 'default' } } }) })
+    await expect(switchOpencodeSessionModel(SID, { ...NEW, modelID: `${NEW.modelID}#high` }, { run: low.run, retryDelayMs: 0 }))
+      .resolves.toMatchObject({ ok: false, code: 'OPENCODE_MODEL_SWITCH_FAILED' })
+  })
+
+  it('tries once more when the first switch did not land, and is done when the second does', async () => {
+    let reads = 0
+    const { run, calls } = fakeApi({ get: () => {
+      reads += 1
+      const m = reads === 1 ? OLD : NEW
+      return JSON.stringify({ data: { id: SID, model: { id: m.modelID, providerID: m.providerID } } })
+    } })
+    await expect(switchOpencodeSessionModel(SID, NEW, { run, retryDelayMs: 0 })).resolves.toEqual({ ok: true })
+    expect(calls.filter((c) => c[1] === 'session.switchModel')).toHaveLength(2)
+  })
+
+  it('does not try again where a second try cannot help (no such session)', async () => {
+    const { run, calls } = fakeApi({ switch: () => { throw exitError('{"_tag":"SessionNotFoundError"}', 'HTTP 404 Not Found') } })
+    await expect(switchOpencodeSessionModel(SID, NEW, { run, retryDelayMs: 0 })).resolves.toMatchObject({ ok: false, code: 'OPENCODE_SESSION_NOT_FOUND' })
+    expect(calls.filter((c) => c[1] === 'session.switchModel')).toHaveLength(1)
+  })
+
+  // Measured on 2.0.18: the service stores any id — `opencode/does-not-exist` reads back as set —
+  // so a model of opencode's own catalogue is checked against it first.
+  it('refuses a model the service does not list, before switching, when asked to check', async () => {
+    const { run, calls } = fakeApi({ list: () => JSON.stringify({ data: [{ id: OLD.modelID, providerID: OLD.providerID }] }) })
+    await expect(switchOpencodeSessionModel(SID, NEW, { run, checkCatalog: true }))
+      .resolves.toMatchObject({ ok: false, code: 'OPENCODE_MODEL_UNKNOWN', detail: expect.stringContaining('opencode models') })
+    expect(calls.map((c) => c[1])).toEqual(['model.list'])
+  })
+
+  it('switches without the check when the catalogue cannot be read, or was not asked for (a grid declared per pane)', async () => {
+    const { run, calls } = fakeApi({ list: () => { throw exitError('', 'HTTP 500') } })
+    await expect(switchOpencodeSessionModel(SID, NEW, { run, checkCatalog: true })).resolves.toEqual({ ok: true })
+    const plain = fakeApi({ list: () => JSON.stringify({ data: [] }) })
+    await expect(switchOpencodeSessionModel(SID, NEW, { run: plain.run })).resolves.toEqual({ ok: true })
+    expect(plain.calls.map((c) => c[1])).not.toContain('model.list')
+    expect(calls.map((c) => c[1])).toContain('session.switchModel')
+  })
+
+  it('refuses when opencode is not installed, or the id is not a session id', async () => {
+    const missing: OpencodeApiRun = async () => { throw Object.assign(new Error('spawn opencode ENOENT'), { code: 'ENOENT' }) }
+    await expect(switchOpencodeSessionModel(SID, NEW, { run: missing })).resolves.toMatchObject({ ok: false, code: 'OPENCODE_MISSING' })
+    const { run, calls } = fakeApi()
+    await expect(switchOpencodeSessionModel("ses_x'; rm", NEW, { run })).resolves.toMatchObject({ ok: false, code: 'OPENCODE_SESSION_NOT_FOUND' })
+    expect(calls).toEqual([])
+  })
+})
+
+/**
+ * The store as 2.0.18 leaves it: v1's `session` / `message` tables still exist (empty for new
+ * sessions), and the sessions live in `session_v2` / `session_message`.
+ */
+function schemaV2(db: string): void {
+  schema(db)
+  run(db,
+    'CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT, model TEXT, agent TEXT);' +
+    'CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, data TEXT);')
+  run(db, `INSERT INTO session_v2 VALUES ('${SID}', '/w', '${esc({ id: OLD.modelID, providerID: OLD.providerID })}', 'build');`)
+  run(db, `INSERT INTO session_message VALUES ('m1', '${SID}', 'user', 1, '${esc({ text: 'hi' })}');`)
+}
+
+d('applyOpencodeSessionModel', () => {
+  let dir = ''
+  let db = ''
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'oc-apply-model-'))
+    db = join(dir, 'opencode.db')
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  })
+
+  it('reproduces the false success: the v1 writer finds nothing in a v2 store', async () => {
+    // What the retarget used to read as "nothing to rewrite, -m applies on launch" — on a version
+    // whose TUI rejects -m outright.
+    schemaV2(db)
+    await expect(setOpencodeSessionModel(db, SID, NEW)).resolves.toMatchObject({ ok: false, code: 'OPENCODE_SESSION_NOT_FOUND' })
+  })
+
+  it('on v2 refuses, rather than reporting success, when the model could not be switched', async () => {
+    schemaV2(db)
+    const failing: OpencodeApiRun = async () => { throw exitError('', 'connect ECONNREFUSED') }
+    await expect(applyOpencodeSessionModel({ opencodeMajor: 2, dbPath: db, sessionId: SID, model: NEW }, { run: failing }))
+      .resolves.toMatchObject({ ok: false, code: 'OPENCODE_MODEL_SWITCH_FAILED' })
+  })
+
+  it('on v2 switches through the API and leaves the store to opencode', async () => {
+    schemaV2(db)
+    const { run: api, calls } = fakeApi()
+    await expect(applyOpencodeSessionModel({ opencodeMajor: 2, dbPath: db, sessionId: SID, model: NEW, cwd: '/w' }, { run: api }))
+      .resolves.toEqual({ ok: true })
+    expect(calls.map((args) => args[1])).toEqual(['session.switchModel', 'session.get'])
+    expect(JSON.parse(run(db, `SELECT model FROM session_v2 WHERE id = '${SID}';`).trim())).toEqual({ id: OLD.modelID, providerID: OLD.providerID })
+  })
+
+  it('on v1 keeps its meaning: a session with no user message yet takes -m on launch', async () => {
+    schema(db)
+    insertSession(db, SID, null)
+    const { run: api, calls } = fakeApi()
+    await expect(applyOpencodeSessionModel({ opencodeMajor: 1, dbPath: db, sessionId: SID, model: NEW }, { run: api }))
+      .resolves.toEqual({ ok: true })
+    expect(calls).toEqual([])
+  })
+
+  it('on v1 writes a `#variant` id as it always did — no API, no variant split', async () => {
+    schema(db)
+    seed(db)
+    const { run: api, calls } = fakeApi()
+    const withVariant = { ...NEW, modelID: `${NEW.modelID}#high` }
+    await expect(applyOpencodeSessionModel({ opencodeMajor: 1, dbPath: db, sessionId: SID, model: withVariant, checkCatalog: true }, { run: api }))
+      .resolves.toEqual({ ok: true })
+    expect(calls).toEqual([])
+    expect(sessionModel(db, SID)).toEqual({ id: withVariant.modelID, providerID: NEW.providerID, variant: 'default' })
+  })
+
+  it('on v1 still refuses a write that failed', async () => {
+    await expect(applyOpencodeSessionModel({ opencodeMajor: 1, dbPath: join(dir, 'missing', 'opencode.db'), sessionId: SID, model: NEW }))
+      .resolves.toMatchObject({ ok: false, code: 'OPENCODE_DB_WRITE_FAILED' })
   })
 })

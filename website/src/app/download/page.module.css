@@ -1,0 +1,122 @@
+/* Public-page counterpart of desktop/design/terminal-workspace.md:
+   monospace, flat panes, plain text actions, and spacing in text cells. */
+.page {
+  --download-background: #181818;
+  --download-bar: #20201f;
+  --download-foreground: #ededed;
+  --download-muted: #a1a19a;
+  --download-border: #41413f;
+  --download-selection: #343433;
+  min-height: 100dvh;
+  background: var(--download-background);
+  color: var(--download-foreground);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  color-scheme: dark;
+}
+
+.page a,
+.page button {
+  color: inherit;
+  font: inherit;
+  text-decoration: none;
+}
+
+.page a:focus-visible,
+.page button:focus-visible {
+  outline: 1px solid var(--download-foreground);
+  outline-offset: 3px;
+}
+
+.bar {
+  min-height: 40px;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 2ch;
+  padding-inline: 1ch 2ch;
+  background: var(--download-bar);
+  font-size: 13px;
+}
+
+.navigation { display: flex; align-items: stretch; }
+.brand,
+.activeTab { display: flex; align-items: center; padding-inline: 2ch; }
+.page .brand { color: var(--download-muted); }
+.activeTab { background: var(--download-background); }
+.textAction { display: flex; align-items: center; justify-content: flex-end; min-width: 17ch; }
+.brand:hover,
+.textAction:hover,
+.brand:focus-visible,
+.textAction:focus-visible { font-weight: 700; }
+
+.main { max-width: 148ch; margin-inline: auto; padding: 4lh 4ch 2lh; }
+.intro { margin-bottom: 3lh; }
+.intro h1 { font-size: 28px; line-height: 1.4; font-weight: 600; margin-bottom: .5lh; }
+.intro p { color: var(--download-muted); }
+
+.workspace {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-block: 1px solid var(--download-border);
+}
+.section { min-width: 0; }
+.section + .section { border-left: 1px solid var(--download-border); }
+.sectionHeader { display: flex; align-items: baseline; gap: 2ch; padding: 1lh 2ch; border-bottom: 1px solid var(--download-border); }
+.sectionNumber { color: var(--download-muted); }
+.sectionHeader h2 { font: inherit; font-weight: 600; }
+.sectionBody { padding: 1lh 2ch 2lh; }
+.description { color: var(--download-muted); margin-bottom: 2lh; }
+.downloads { margin-inline: -1ch; margin-bottom: 2lh; }
+
+.download {
+  display: grid;
+  grid-template-columns: 14ch 1fr 12ch;
+  align-items: center;
+  gap: 1ch;
+  padding: .5lh 1ch;
+  min-height: 44px;
+}
+.download:hover,
+.download:focus-visible { background: var(--download-selection); }
+.download:hover .platform,
+.download:hover .downloadAction,
+.download:focus-visible .platform,
+.download:focus-visible .downloadAction { font-weight: 700; }
+.platformDetail { color: var(--download-muted); font-size: 12px; }
+.downloadAction { text-align: right; white-space: nowrap; }
+
+.commands { list-style: none; display: grid; gap: 1lh; margin-bottom: 1lh; }
+.command { min-width: 0; }
+.commandHeader { display: flex; justify-content: space-between; align-items: center; gap: 2ch; }
+.commandHeader > span { color: var(--download-muted); }
+.page .copy { border: 0; border-radius: 0; background: none; cursor: pointer; text-align: right; width: 11ch; min-height: 32px; flex: none; }
+.copy:hover,
+.copy:focus-visible { font-weight: 700; }
+.commandValue { display: block; font: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
+.note { color: var(--download-muted); min-height: 2lh; }
+.footer { padding-top: 2lh; color: var(--download-muted); }
+
+@media (max-width: 1000px) {
+  .workspace { grid-template-columns: 1fr; }
+  .section + .section { border-left: 0; border-top: 1px solid var(--download-border); }
+  .sectionBody { padding-bottom: 1lh; }
+  .download { grid-template-columns: 16ch 1fr 12ch; }
+}
+
+@media (max-width: 560px) {
+  .bar { padding-inline: 0 1ch; gap: 0; font-size: 12px; }
+  .brand,
+  .activeTab { padding-inline: 1ch; }
+  .textAction { min-width: 16ch; }
+  .main { padding: 2lh 2ch; }
+  .intro { margin-bottom: 2lh; }
+  .intro h1 { font-size: 24px; }
+  .sectionHeader { padding-inline: 0; }
+  .sectionBody { padding-inline: 0; }
+  .download { grid-template-columns: 1fr 12ch; padding-block: .5lh; row-gap: 0; }
+  .platformDetail { grid-column: 1; grid-row: 2; }
+  .downloadAction { grid-column: 2; grid-row: 1 / 3; align-self: center; }
+  .page .copy { min-height: 44px; }
+}

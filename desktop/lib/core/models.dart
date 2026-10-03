@@ -1,9 +1,11 @@
 /// Data models mirroring the backend/web types.
 library;
 
-import 'package:flutter/foundation.dart' show immutable;
+import 'package:flutter/foundation.dart' show immutable, listEquals;
 
+import 'agent_activity.dart';
 import 'runtime_model_name.dart';
+import 'agent_git_context.dart';
 
 enum MachineAuthMode { managed, remote, self, provider }
 
@@ -72,16 +74,19 @@ class SharedHarness {
     required this.name,
     this.engine,
     required this.expiresAt,
+    this.ownerPublicKey,
   });
   final String id, agentId, name;
   final String? engine;
   final DateTime expiresAt;
+  final String? ownerPublicKey;
   factory SharedHarness.fromJson(Map<String, dynamic> j) => SharedHarness(
     id: j['id'] as String,
     agentId: j['agentId'] as String,
     name: j['name'] as String,
     engine: j['engine'] as String?,
     expiresAt: DateTime.parse(j['expiresAt'] as String),
+    ownerPublicKey: j['ownerPublicKey'] as String?,
   );
 }
 
@@ -229,7 +234,7 @@ class ForkedFrom {
     final name = raw['name'];
     return ForkedFrom(
       agentId: agentId,
-      name: name is String && name.isNotEmpty ? name : 'an agent',
+      name: name is String && name.isNotEmpty ? name : 'a harness',
     );
   }
 }
@@ -285,6 +290,7 @@ class AgentOutputStats {
 }
 
 class Agent {
+  final AgentActivity? activity;
   final String id;
   final String? sessionId;
   final String name;
@@ -302,6 +308,9 @@ class Agent {
   /// of [gridModel], which determines subscription versus local-model routing.
   final String? modelName;
 
+  /// Effort reported with [modelName], never inferred from a model default.
+  final String? modelEffort;
+
   /// The grid model this agent is CURRENTLY running on, or null for its own vendor login.
   ///
   /// Read by the daemon off the live process on every discovery, never bookkept — so it is the
@@ -314,6 +323,10 @@ class Agent {
   /// reconnect or a restart without anything being replayed.
   final GridWebSearch? gridWebSearch;
 
+  /// Where [gridModel] is served — the endpoint the engine was handed (a grid's relay, or a saved
+  /// API such as `https://openrouter.ai/api`). Null with no [gridModel], or from an older daemon.
+  final String? gridBaseUrl;
+
   /// How the daemon's picture has the grid this agent's model is on (`grid.state`), or null when
   /// it did not say — an agent on its own login, or an older daemon. Asleep or waking is what puts
   /// the "Starting up…" chip on its pane between a message and the first answer.
@@ -323,9 +336,34 @@ class Agent {
   final GridNote? gridNote;
   final String? parentAgentId;
   final AgentProject? project;
+  final AgentGitContext? gitContext;
+  AgentProject? get displayProject =>
+      gitContext?.displayProject(project) ?? project;
 
   /// The CLI's transcript/hook activity time, not its registry refresh time.
   final DateTime? lastActivityAt;
+  final DateTime? createdAt;
+  final bool closeSupported;
+  final String? closePlanState;
+  final String? closePlanDetail;
+
+  /// When a person last opened or focused this harness in ANY client, as the
+  /// owning daemon recorded it (`lastOpenedAt`, stamped by `agent_update
+  /// {opened: true}`). Null when never opened, or from a daemon that predates
+  /// the field.
+  final DateTime? lastOpenedAt;
+
+  /// What harness lists sort by: the later of [lastActivityAt] and
+  /// [lastOpenedAt], so a harness someone just looked at rises even while it
+  /// is quiet. The order is global — every client and machine reads the same
+  /// daemon stamps.
+  DateTime? get lastUsedAt {
+    final activity = lastActivityAt;
+    final opened = lastOpenedAt;
+    if (activity == null) return opened;
+    if (opened == null) return activity;
+    return opened.isAfter(activity) ? opened : activity;
+  }
 
   /// Cached conversation usage reported by this agent's owning machine.
   final int? tokensUsed;
@@ -396,6 +434,7 @@ class Agent {
   final String? namedAgent;
 
   const Agent({
+    this.activity,
     required this.id,
     this.sessionId,
     required this.name,
@@ -405,13 +444,21 @@ class Agent {
     this.engineIconHint,
     this.codexHome,
     this.modelName,
+    this.modelEffort,
     this.gridModel,
     this.gridWebSearch,
+    this.gridBaseUrl,
     this.gridState,
     this.gridNote,
     this.parentAgentId,
     this.project,
+    this.gitContext,
     this.lastActivityAt,
+    this.createdAt,
+    this.closeSupported = false,
+    this.closePlanState,
+    this.closePlanDetail,
+    this.lastOpenedAt,
     this.tokensUsed,
     this.tokensUpdatedAt,
     this.outputStats,
@@ -522,28 +569,48 @@ class Agent {
     final usage = j['tokenUsage'];
     final total = usage is Map ? usage['totalTokens'] : null;
     final validTokens = total is int && total >= 0 && total <= 9007199254740991;
+    final model = runtimeModelDetails(
+      j['selectedModel'],
+      agentId: j['id'] as String,
+      engine: _safeEngine(j['engine']),
+    );
     return Agent(
+      activity: AgentActivity.fromJson(j['activity']),
       id: j['id'] as String,
       sessionId: _safeLabel(j['sessionId']),
-      name: j['name'] as String? ?? 'agent',
+      name: j['name'] as String? ?? 'harness',
       title: _safeLabel(j['title']),
       engine: _safeEngine(j['engine']),
       engineDisplayName: _safeLabel(j['engineDisplayName']),
       engineIconHint: _safeLabel(j['engineIconHint']),
       codexHome: j['engine'] == 'codex' ? _safeCodexHome(j['codexHome']) : null,
-      modelName: runtimeModelName(
-        j['selectedModel'],
-        agentId: j['id'] as String,
-        engine: _safeEngine(j['engine']),
-      ),
+      modelName: model?.name,
+      modelEffort: model?.effort,
       gridModel: _safeLabel(grid?['model']),
       gridWebSearch: GridWebSearch.fromWire(grid?['webSearch']),
+      gridBaseUrl: _safeUrl(grid?['baseUrl']),
       gridState: GridSectionState.parse(grid?['state']),
       gridNote: GridNote.fromWire(grid?['note']),
       parentAgentId: _safeLabel(j['parentAgentId'] ?? j['parentId']),
       project: AgentProject.fromJson(j['project']),
+      gitContext: AgentGitContext.fromJson(j['gitContext']),
       lastActivityAt: j['updatedAt'] is String
           ? DateTime.tryParse(j['updatedAt'] as String)
+          : null,
+      createdAt: j['createdAt'] is String
+          ? DateTime.tryParse(j['createdAt'] as String)
+          : null,
+      closeSupported: j['closeSupported'] == true,
+      closePlanState:
+          j['closePlan'] is Map &&
+              const {'waiting', 'failed'}.contains(j['closePlan']['state'])
+          ? j['closePlan']['state'] as String
+          : null,
+      closePlanDetail: j['closePlan'] is Map
+          ? _safeDetail(j['closePlan']['detail'])
+          : null,
+      lastOpenedAt: j['lastOpenedAt'] is String
+          ? DateTime.tryParse(j['lastOpenedAt'] as String)
           : null,
       tokensUsed: validTokens ? total : null,
       tokensUpdatedAt:
@@ -579,46 +646,61 @@ class Agent {
     );
   }
 
-  Agent copyWith({String? name, String? status, bool? terminalAvailable}) =>
-      Agent(
-        id: id,
-        sessionId: sessionId,
-        name: name ?? this.name,
-        title: title,
-        engine: engine,
-        engineDisplayName: engineDisplayName,
-        engineIconHint: engineIconHint,
-        codexHome: codexHome,
-        modelName: modelName,
-        gridModel: gridModel,
-        gridWebSearch: gridWebSearch,
-        gridState: gridState,
-        gridNote: gridNote,
-        parentAgentId: parentAgentId,
-        project: project,
-        lastActivityAt: lastActivityAt,
-        tokensUsed: tokensUsed,
-        tokensUpdatedAt: tokensUpdatedAt,
-        outputStats: outputStats,
-        status: status ?? this.status,
-        launchState: launchState,
-        launchError: launchError,
-        launchDetail: launchDetail,
-        terminalAvailable: terminalAvailable ?? this.terminalAvailable,
-        terminalUnavailableReason: terminalUnavailableReason,
-        dsh: dsh,
-        dshName: dshName,
-        viewerUrl: viewerUrl,
-        viewerError: viewerError,
-        viewerName: viewerName,
-        verdict: verdict,
-        forkedFrom: forkedFrom,
-        forkable: forkable,
-        resumeMode: resumeMode,
-        permissionMode: permissionMode,
-        bypassPermission: bypassPermission,
-        namedAgent: namedAgent,
-      );
+  Agent copyWith({
+    String? name,
+    AgentGitContext? gitContext,
+    String? status,
+    bool? terminalAvailable,
+    DateTime? lastOpenedAt,
+    bool clearClosePlan = false,
+  }) => Agent(
+    activity: activity,
+    id: id,
+    sessionId: sessionId,
+    name: name ?? this.name,
+    title: title,
+    engine: engine,
+    engineDisplayName: engineDisplayName,
+    engineIconHint: engineIconHint,
+    codexHome: codexHome,
+    modelName: modelName,
+    modelEffort: modelEffort,
+    gridModel: gridModel,
+    gridWebSearch: gridWebSearch,
+    gridBaseUrl: gridBaseUrl,
+    gridState: gridState,
+    gridNote: gridNote,
+    parentAgentId: parentAgentId,
+    project: project,
+    gitContext: gitContext ?? this.gitContext,
+    lastActivityAt: lastActivityAt,
+    createdAt: createdAt,
+    closeSupported: closeSupported,
+    closePlanState: clearClosePlan ? null : closePlanState,
+    closePlanDetail: clearClosePlan ? null : closePlanDetail,
+    lastOpenedAt: lastOpenedAt ?? this.lastOpenedAt,
+    tokensUsed: tokensUsed,
+    tokensUpdatedAt: tokensUpdatedAt,
+    outputStats: outputStats,
+    status: status ?? this.status,
+    launchState: launchState,
+    launchError: launchError,
+    launchDetail: launchDetail,
+    terminalAvailable: terminalAvailable ?? this.terminalAvailable,
+    terminalUnavailableReason: terminalUnavailableReason,
+    dsh: dsh,
+    dshName: dshName,
+    viewerUrl: viewerUrl,
+    viewerError: viewerError,
+    viewerName: viewerName,
+    verdict: verdict,
+    forkedFrom: forkedFrom,
+    forkable: forkable,
+    resumeMode: resumeMode,
+    permissionMode: permissionMode,
+    bypassPermission: bypassPermission,
+    namedAgent: namedAgent,
+  );
 
   /// A mode id as `PERMISSION_MODES` spells them (`acceptEdits`, `readOnly`):
   /// one word. Not checked against this build's own list — the daemon that
@@ -678,6 +760,14 @@ class Agent {
     return raw;
   }
 
+  static String? _safeUrl(Object? raw) {
+    if (raw is! String || raw.isEmpty || raw.length > 2048) return null;
+    final uri = Uri.tryParse(raw);
+    return uri != null && (uri.scheme == 'https' || uri.scheme == 'http')
+        ? raw
+        : null;
+  }
+
   static String? _safeLabel(Object? raw) {
     if (raw is! String || raw.isEmpty) return null;
     return raw.length <= 80 ? raw : raw.substring(0, 80);
@@ -710,6 +800,17 @@ class AgentPhase {
   final String name;
   final AgentPhaseState state;
   final String? artifact;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AgentPhase &&
+      id == other.id &&
+      name == other.name &&
+      state == other.state &&
+      artifact == other.artifact;
+
+  @override
+  int get hashCode => Object.hash(id, name, state, artifact);
 
   static AgentPhase? fromJson(Object? raw) {
     if (raw is! Map) return null;
@@ -816,11 +917,19 @@ class AgentVerdict {
       other.errors == errors &&
       other.warnings == warnings &&
       other.artifact == artifact &&
+      listEquals(other.phases, phases) &&
       other.updatedAt == updatedAt;
 
   @override
-  int get hashCode =>
-      Object.hash(ready, summary, errors, warnings, artifact, updatedAt);
+  int get hashCode => Object.hash(
+    ready,
+    summary,
+    errors,
+    warnings,
+    artifact,
+    Object.hashAll(phases),
+    updatedAt,
+  );
 }
 
 /// What the daemon answered when asked where a typed task belongs (⌘B).

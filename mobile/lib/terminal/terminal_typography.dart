@@ -1,4 +1,4 @@
-import '../core/apple_fonts.dart';
+import 'package:flutter/foundation.dart';
 
 /// The default terminal face, per platform.
 ///
@@ -63,16 +63,12 @@ const linuxTerminalFontFallback = <String>[
   'monospace',
 ];
 
-/// The default face for the platform this build is running on.
+/// The default terminal font size: 13 on a desktop, 14 on a phone.
 ///
-/// A getter, not a `const`: the answer depends on the host. The per-platform
-/// constants above stay `const` so `TerminalFontChoice` can still name them
-/// from its const constructor.
-String get terminalFontFamily =>
-    hasAppleFonts ? macTerminalFontFamily : linuxTerminalFontFamily;
-
-List<String> get terminalFontFallback =>
-    hasAppleFonts ? macTerminalFontFallback : linuxTerminalFontFallback;
-
-/// The default terminal font size — the same on every platform.
-const terminalFontSize = 13.0;
+/// Tried on an iPhone: 13 read as small print, 16 as far too big. Monospace is wider than the
+/// proportional faces reading apps use — X sets posts at about 15 — so 14 here reads about as large
+/// as those, and keeps about 43 columns on a 390pt iPhone.
+double get terminalFontSize => switch (defaultTargetPlatform) {
+  TargetPlatform.iOS || TargetPlatform.android => 14.0,
+  _ => 13.0,
+};

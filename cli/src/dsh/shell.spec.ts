@@ -77,6 +77,15 @@ describe('isShellNoise', () => {
     expect(isShellNoise("(eval):3: can't change option: zle")).toBe(true)
     expect(isShellNoise('ok   zle is a word a doctor might print')).toBe(false)
   })
+
+  it('drops what bash says without a terminal, as Linux CI saw it', () => {
+    expect(isShellNoise('bash: cannot set terminal process group (-1): Inappropriate ioctl for device')).toBe(true)
+    expect(isShellNoise('bash: no job control in this shell')).toBe(true)
+    expect(isShellNoise('/usr/bin/bash: no job control in this shell')).toBe(true)
+    expect(isShellNoise('logout')).toBe(true)
+    expect(isShellNoise('  ok   bash: no job control in this shell')).toBe(false)
+    expect(isShellNoise('logout failed')).toBe(false)
+  })
 })
 
 describe('runDshCommand', () => {

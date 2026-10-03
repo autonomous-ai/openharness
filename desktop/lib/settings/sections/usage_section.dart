@@ -22,8 +22,9 @@ library;
 
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../../core/test_run.dart';
 import '../../shared/theme/app_theme.dart';
@@ -106,18 +107,28 @@ class _UsageSectionState extends State<UsageSection> {
     // walks every transcript under a real `~/.claude`, and a test run must
     // depend on neither the machine it lands on nor whoever was working on it.
     // A test that wants figures injects a controller already holding them.
-    if (!kUnderTest) unawaited(_controller.load());
+    if (!kUnderTest && !kIsWeb) unawaited(_controller.load());
   }
 
   @override
   void dispose() {
-    if (_ownsController) _controller.dispose();
+    if (_ownsController && !kIsWeb) _controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
+    if (kIsWeb) {
+      return SectionScaffold(
+        title: 'Usage',
+        subtitle: 'Activity in this browser. Local transcript usage is available in the desktop app.',
+        child: ListenableBuilder(
+          listenable: _stats,
+          builder: (context, _) => StatsSummaryCards(summary: _stats.summary),
+        ),
+      );
+    }
     return SectionScaffold(
       title: 'Usage',
       subtitle:
@@ -261,12 +272,12 @@ class _UsageSectionState extends State<UsageSection> {
       UsageStatCard(
         label: 'Total tokens',
         value: formatTokens(overview.totals.total),
-        icon: LucideIcons.sparkles300,
+        icon: AppIcons.sparkles,
       ),
       UsageStatCard(
         label: 'Est. cost',
         value: formatCost(overview.costUsd),
-        icon: LucideIcons.coins300,
+        icon: AppIcons.coins,
         footnote: overview.hasUnpricedModel
             ? 'at least — some models unpriced'
             : null,
@@ -274,14 +285,14 @@ class _UsageSectionState extends State<UsageSection> {
       UsageStatCard(
         label: 'Active days',
         value: '${overview.activeDays}',
-        icon: LucideIcons.calendarDays300,
+        icon: AppIcons.calendarDays,
       ),
       UsageStatCard(
         label: 'Cache share',
         value: overview.cacheShare == null
             ? 'n/a'
             : '${(overview.cacheShare! * 100).round()}%',
-        icon: LucideIcons.database300,
+        icon: AppIcons.database,
       ),
     ];
     return LayoutBuilder(
@@ -387,6 +398,7 @@ class _AnalyticsHeader extends StatelessWidget {
       title: Text('Usage analytics', style: AppType.heading()),
       controls: [
         AppSelectField<_Lens>(
+          semanticLabel: 'Usage provider',
           value: lens,
           width: usageControlWidth(context, 168),
           options: [
@@ -446,7 +458,7 @@ class _OverviewHeader extends StatelessWidget {
           visualDensity: VisualDensity.compact,
           tooltip: 'Rescan the local logs',
           icon: Icon(
-            LucideIcons.refreshCw300,
+            AppIcons.refreshCw,
             color: onRefresh == null
                 ? AppPalette.textFaint
                 : AppPalette.textSecondary,
@@ -506,7 +518,7 @@ class _ProvidersHeading extends StatelessWidget {
         if (hasFigures)
           Text(
             '${overview.sessionCount} '
-            '${overview.sessionCount == 1 ? 'session' : 'sessions'}',
+            '${overview.sessionCount == 1 ? 'conversation' : 'conversations'}',
             style: AppType.caption(color: AppPalette.textFaint),
           ),
       ],

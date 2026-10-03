@@ -11,6 +11,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/notify/alert_sounds.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/notification_inbox.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'swarm_state_test.dart' show createApp;
@@ -52,12 +53,25 @@ void main() {
   });
   tearDown(() => app.dispose());
 
-  Future<void> turnEnded(String agentId, {bool? subagent}) =>
+  Future<void> readFromDial(
+    String agentId,
+    String token, {
+    String machine = 'm',
+  }) => app.handleEventForTest('m', {
+    'type': 'dial_notification_read',
+    'payload': {'machineId': machine, 'agentId': agentId, 'readToken': token},
+  });
+
+  Future<void> completed(String agentId, {bool? subagent, int turn = 0}) =>
       app.handleEventForTest('m', {
-        'type': 'turn_ended',
+        'type': 'turn_summary',
         'agentId': agentId,
-        if (subagent != null) 'subagent': subagent,
-        'payload': <String, dynamic>{},
+        'subagent': ?subagent,
+        'payload': <String, dynamic>{
+          'summary': 'A real final answer',
+          if (subagent != true)
+            'notification': {'id': 'result-$agentId-$turn', 'kind': 'done'},
+        },
       });
 
   Future<void> question(String agentId) => app.handleEventForTest('m', {
@@ -81,14 +95,57 @@ void main() {
     'payload': <String, dynamic>{'requestId': 'req-$agentId'},
   });
 
+  test('device reads clear only their exact occurrence without changing the workspace', () async {
+    await completed('a1');
+    final old = app.agentUnread.readTokenFor('m', 'a1')!;
+    await completed('a1', turn: 1);
+    final current = app.agentUnread.readTokenFor('m', 'a1')!;
+    expect(current, isNot(old));
+    final tab = app.activeSwarmId;
+    final panes = app.activeSwarm.panes.toList();
+    await readFromDial('a1', old);
+    await readFromDial('a1', current, machine: 'wrong');
+    expect(app.agentUnread.count, 1);
+    await readFromDial('a1', current);
+    await readFromDial('a1', current);
+    expect(app.agentUnread.count, 0);
+    expect(app.activeSwarmId, tab);
+    expect(app.activeSwarm.panes, panes);
+  });
+
+  test(
+    'reading a question notification does not answer the pending question',
+    () async {
+      await question('a1');
+      final pending = app.machineStates['m']!.blockedAgents['a1'];
+      expect(pending, isNotNull);
+      final token = app.agentUnread.readTokenFor('m', 'a1')!;
+      await readFromDial('a1', token);
+      expect(app.agentUnread.count, 0);
+      expect(app.machineStates['m']!.blockedAgents['a1'], same(pending));
+      expect(notificationInbox(app), isEmpty);
+      await question('a1');
+      expect(notificationInbox(app), isEmpty);
+      app.machineStates['m']!.blockedAgents.clear(); // Reconnect restores it.
+      await question('a1');
+      expect(app.agentUnread.count, 0);
+      expect(notificationInbox(app), isEmpty);
+      await answered('a1');
+      await question('a1'); // A later occurrence can ask the same words.
+      expect(app.agentUnread.count, 1);
+      expect(notificationInbox(app), hasLength(1));
+      expect(app.agentUnread.readTokenFor('m', 'a1'), isNot(token));
+    },
+  );
+
   group('a sub-agent is not news on either screen', () {
-    test('an ordinary turn end is counted', () async {
-      await turnEnded('a1');
+    test('a verified final result is counted', () async {
+      await completed('a1');
       expect(app.agentUnread.count, 1);
     });
 
     test('a sub-agent turn end is not', () async {
-      await turnEnded('a1', subagent: true);
+      await completed('a1', subagent: true);
       expect(app.agentUnread.count, 0);
       expect(app.agentUnread.kindFor('m', 'a1'), isNull);
     });
@@ -97,20 +154,40 @@ void main() {
       // Four specialists and a Director that is still busy: the dial draws ONE
       // row, for the wrap-up. This used to be five marks here.
       for (final worker in ['w1', 'w2', 'w3', 'w4']) {
-        await turnEnded(worker, subagent: true);
+        await completed(worker, subagent: true);
       }
-      await turnEnded('director', subagent: true); // still busy
+      await completed('director', subagent: true); // still busy
       expect(app.agentUnread.count, 0);
 
-      await turnEnded('director'); // the wrap-up
+      await completed('director'); // the wrap-up
       expect(app.agentUnread.count, 1);
     });
 
-    test('a daemon that does not say is a daemon that did not know', () async {
-      // Absent field, not false: every build before this one sent nothing, and
-      // reading absence as "sub-agent" would swallow every turn they report.
-      await turnEnded('a1');
-      expect(app.agentUnread.count, 1);
+    test('raw, failed, aborted and replayed turn ends are silent', () async {
+      for (final payload in <Map<String, dynamic>>[
+        {},
+        {'aborted': true},
+        {'error': 'Failed'},
+      ]) {
+        await app.handleEventForTest('m', {
+          'type': 'turn_ended',
+          'agentId': 'a1',
+          'payload': payload,
+        });
+      }
+      await app.handleEventForTest('m', {
+        'type': 'turn_summary',
+        'agentId': 'a1',
+        'payload': {'summary': 'Historical recap'},
+      });
+      expect(app.agentUnread.count, 0);
+    });
+
+    test('redelivery after acknowledgement stays silent', () async {
+      await completed('a1');
+      app.markAgentSeen('m', 'a1');
+      await completed('a1');
+      expect(app.agentUnread.count, 0);
     });
   });
 
@@ -148,7 +225,7 @@ void main() {
       // The exception is the QUESTION, not the rule: news about a pane you are
       // looking at is still noise about the pane you are looking at.
       app.watchedAgents = () => [(machineId: 'm', agentId: 'a1')];
-      await turnEnded('a1');
+      await completed('a1');
 
       expect(app.agentUnread.count, 0);
     });
@@ -162,15 +239,15 @@ void main() {
     });
 
     test('answering clears it even when the turn ended first', () async {
-      // Answering makes the turn end too, and the two frames race. `turn_ended`
-      // runs `_cancelTurnActivity`, which clears `blockedAgents` on the way
-      // past — so a close that arrives second finds no open dialog. The mark is
-      // the close's to take either way; hanging it off the dialog bookkeeping
-      // left it stranded whenever that order came up.
+      // A raw turn end can beat the question close. Only the matching close
+      // clears the question and its unread mark.
       await question('a1');
       expect(app.agentUnread.count, 1);
 
-      await turnEnded('a1'); // the turn closes first…
+      await app.handleEventForTest('m', {
+        'type': 'turn_ended',
+        'agentId': 'a1',
+      });
       await answered('a1'); // …and the close lands after
 
       expect(app.agentUnread.count, 0, reason: 'answered is answered');
@@ -195,14 +272,25 @@ void main() {
       expect(app.agentUnread.count, 1);
     });
 
+    test(
+      'redelivering an old question close cannot erase a newer result',
+      () async {
+        await question('a1');
+        await answered('a1');
+        await completed('a1');
+        await answered('a1');
+        expect(app.agentUnread.kindFor('m', 'a1'), AlertKind.done);
+      },
+    );
+
     test('the turn that ends WITH the answer is not news', () async {
-      // Measured on the real thing: answering ends the turn, and the two frames
-      // land a millisecond apart with the turn first. So `done` overwrites the
-      // question mark and the badge never goes down — while the person is
-      // standing right over that agent, having just answered it.
+      // Answering can also produce a raw stop. That stop is not fresh news.
       await question('a1');
-      await turnEnded('a1');
-      expect(app.agentUnread.kindFor('m', 'a1'), AlertKind.done);
+      await app.handleEventForTest('m', {
+        'type': 'turn_ended',
+        'agentId': 'a1',
+      });
+      expect(app.agentUnread.kindFor('m', 'a1'), AlertKind.needsYou);
 
       await answered('a1');
       expect(app.agentUnread.count, 0);
@@ -228,11 +316,14 @@ void main() {
       'looking at a marked harness is announced, so the dial drops its row',
       () async {
         await wired.handleEventForTest('m', {
-          'type': 'turn_ended',
+          'type': 'turn_summary',
           'agentId': 'a1',
-          'payload': <String, dynamic>{},
+          'payload': <String, dynamic>{
+            'notification': {'id': 'wired-result', 'kind': 'done'},
+          },
         });
         expect(wired.agentUnread.count, 1);
+        final token = wired.agentUnread.readTokenFor('m', 'a1');
 
         wired.markAgentSeen('m', 'a1');
         await Future<void>.delayed(Duration.zero);
@@ -241,7 +332,7 @@ void main() {
         expect(
           conn.sent.where((f) => f.type == 'agent_seen').map((f) => f.payload),
           [
-            {'agentId': 'a1'},
+            {'agentId': 'a1', 'readToken': token},
           ],
         );
       },

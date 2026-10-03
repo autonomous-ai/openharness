@@ -668,6 +668,34 @@ export function subscribeDeskChanged(userId: string, cb: (msg: DeskChangedMsg) =
   return addSub(deskChannel(userId), cb as Cb)
 }
 
+// Per-USER zoo invalidation: the account's daemons or eggs changed (routes/zoo.ts). The same path as
+// the desk and a separate channel, so a desk change never re-fetches the zoo and the other way round.
+export interface ZooChangedMsg { revision: number }
+
+const zooChannel = (userId: string): string => `zoo:${userId}`
+
+export function publishZooChanged(userId: string, msg: ZooChangedMsg): Promise<number> {
+  return safePublish(zooChannel(userId), JSON.stringify(msg))
+}
+
+export function subscribeZooChanged(userId: string, cb: (msg: ZooChangedMsg) => void): Promise<() => void> {
+  return addSub(zooChannel(userId), cb as Cb)
+}
+
+// Per-USER device key log invalidation: an entry was appended to the account's log (lib/deviceKeyLog.ts).
+// Every device re-reads from its own head, so the message only needs the new head to decide whether to.
+export interface DeviceKeysChangedMsg { seq: number; hash: string }
+
+const deviceKeysChannel = (userId: string): string => `devkeys:${userId}`
+
+export function publishDeviceKeysChanged(userId: string, msg: DeviceKeysChangedMsg): Promise<number> {
+  return safePublish(deviceKeysChannel(userId), JSON.stringify(msg))
+}
+
+export function subscribeDeviceKeysChanged(userId: string, cb: (msg: DeviceKeysChangedMsg) => void): Promise<() => void> {
+  return addSub(deviceKeysChannel(userId), cb as Cb)
+}
+
 export interface DeviceE2eePairMsg {
   kind: 'pending' | 'cleared'
   machineId: string

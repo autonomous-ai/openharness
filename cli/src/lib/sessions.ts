@@ -6,6 +6,8 @@
  */
 
 import { readdir, readFile, stat, open } from 'fs/promises'
+import { tailFile } from './transcriptTail.js'
+export { tailFile } from './transcriptTail.js'
 import { join } from 'path'
 import { env } from '../config/env.js'
 import { isSessionFile, isCodexPath, sessionIdFromFile } from './paths.js'
@@ -125,19 +127,6 @@ export async function resolveSessionFile(sessionId: string): Promise<string | nu
     }
   }
   return null
-}
-
-/** Return the last `n` non-empty raw lines of a specific transcript file. Prefer this over
- *  `tailLines` when the caller already holds a trusted, registered `transcriptPath` — it takes no
- *  request-controlled id, so there is no path to traverse. */
-export async function tailFile(filePath: string, n = 200): Promise<string[]> {
-  try {
-    const content = await readFile(filePath, 'utf-8')
-    const lines = content.split('\n').filter((l) => l.trim().length > 0)
-    return lines.slice(-n)
-  } catch {
-    return []
-  }
 }
 
 /** Return the last `n` raw lines of a session file, resolved from a sessionId (guarded — see

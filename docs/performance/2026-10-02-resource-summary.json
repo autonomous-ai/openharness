@@ -1,0 +1,250 @@
+{
+  "scope": "Headless Debug monitor-field construction; not whole-app CPU, energy or frame latency.",
+  "baselineCommit": "ea5afd5ad19758e4bcf7b690aafe8dba017591c9",
+  "runtime": {
+    "flutter": "3.47.2",
+    "dart": "3.13.2",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O"
+  },
+  "method": "Separate sequential headless Debug runs of exact baseline and candidate with the same final fixture, 20 warmups, seven rounds of 40 footer constructions each. Other workstation apps remained running; no other test or build from this task ran during the timed loops. No energy or frame-latency claim.",
+  "allFooterTextIdentical": true,
+  "sourceSha256": {
+    "desktop/lib/state/harness_monitor.dart": "edf9b4cee82d89c04dda68d99c20ada439e5a749b29035026189477687354359",
+    "desktop/lib/screens/swarm_screen.dart": "4206919ffb3cdfa76afb4a8b364cfe8bfd124bf1c32ca5eb3b81b6fa4cd3fc49",
+    "desktop/lib/widgets/workspace_harness_resources.dart": "7f67707f89453427919925b1161fec55a6c7009795e9916d03891496921a1b03",
+    "desktop/test/benchmarks/harness_monitor_summary_benchmark.dart": "4f723d1257f405faa1fd5f70ebf890162c54e1b2063d32784821026a73e98a44"
+  },
+  "comparisons": [
+    {
+      "live": 16,
+      "saved": 64,
+      "inventoryPassesBefore": 32,
+      "inventoryPassesAfter": 1,
+      "medianMicrosecondsBefore": 301.1,
+      "medianMicrosecondsAfter": 48.45,
+      "reductionPercent": 83.91,
+      "identicalText": true
+    },
+    {
+      "live": 25,
+      "saved": 1000,
+      "inventoryPassesBefore": 32,
+      "inventoryPassesAfter": 1,
+      "medianMicrosecondsBefore": 2650.725,
+      "medianMicrosecondsAfter": 95.225,
+      "reductionPercent": 96.41,
+      "identicalText": true
+    },
+    {
+      "live": 105,
+      "saved": 4096,
+      "inventoryPassesBefore": 32,
+      "inventoryPassesAfter": 1,
+      "medianMicrosecondsBefore": 10998.4,
+      "medianMicrosecondsAfter": 350.5,
+      "reductionPercent": 96.81,
+      "identicalText": true
+    }
+  ],
+  "baseline": {
+    "scope": "Headless Debug monitor-field construction; not whole-app CPU, energy or frame latency.",
+    "at": "2026-10-02T04:56:24.547086Z",
+    "results": [
+      {
+        "live": 16,
+        "saved": 64,
+        "legacy": true,
+        "inventoryReadsPerFooter": 32,
+        "microsecondsPerFooterByRound": [
+          397.975,
+          333.0,
+          315.375,
+          301.1,
+          267.675,
+          260.05,
+          262.05
+        ],
+        "footer": [
+          "Harnesses 16",
+          "16 open across connected machines, including idle and starting harnesses. Click to open Harness Monitor.\nRAM includes child processes and may include shared memory. CPU: 100% is one core. Unavailable readings show \u2014.\nShared Codex servers \u00b7 1.2 GB RAM, included once in the session monitor.",
+          "16 open across connected machines, including idle and starting harnesses. Click to open Harness Monitor.\nRAM includes child processes and may include shared memory. CPU: 100% is one core. Unavailable readings show \u2014.\nShared Codex servers \u00b7 1.2 GB RAM, included once in the session monitor.",
+          "Harnesses 16",
+          "CPU 30%   RAM 4 GB   GPU 0%   SSD 3 GB",
+          "16 open harnesses across connected machines. Totals cover these harnesses only.\nCPU 30%   RAM 4 GB   GPU 0%   SSD 3 GB\nCPU: 100% is one core. RAM includes child processes and shared servers counted once; shared memory pages can overlap.\nGPU: harness process GPU use on supported macOS and Linux NVIDIA drivers. First samples and unavailable counters show \u2014. Cloud model GPU usage is not reported.\nSSD: workspace disk space, shared and nested folders counted once per machine. Files remain after stopping.\nTotals include available readings and may be partial. \u2014 means unavailable. Click to open Harness Monitor.",
+          "16 open harnesses across connected machines. Totals cover these harnesses only.\nCPU 30%   RAM 4 GB   GPU 0%   SSD 3 GB\nCPU: 100% is one core. RAM includes child processes and shared servers counted once; shared memory pages can overlap.\nGPU: harness process GPU use on supported macOS and Linux NVIDIA drivers. First samples and unavailable counters show \u2014. Cloud model GPU usage is not reported.\nSSD: workspace disk space, shared and nested folders counted once per machine. Files remain after stopping.\nTotals include available readings and may be partial. \u2014 means unavailable. Click to open Harness Monitor.",
+          "CPU 30%   RAM 4 GB   GPU 0%   SSD 3 GB",
+          "CPU 30%   RAM 4 GB   GPU 0%",
+          "CPU 30%   RAM 4 GB",
+          "CPU 30%"
+        ]
+      },
+      {
+        "live": 25,
+        "saved": 1000,
+        "legacy": true,
+        "inventoryReadsPerFooter": 32,
+        "microsecondsPerFooterByRound": [
+          2635.025,
+          2697.8,
+          2694.8,
+          2650.725,
+          2638.375,
+          2640.6,
+          2692.5
+        ],
+        "footer": [
+          "Harnesses 25",
+          "25 open across connected machines, including idle and starting harnesses. Click to open Harness Monitor.\nRAM includes child processes and may include shared memory. CPU: 100% is one core. Unavailable readings show \u2014.\nShared Codex servers \u00b7 1.2 GB RAM, included once in the session monitor.",
+          "25 open across connected machines, including idle and starting harnesses. Click to open Harness Monitor.\nRAM includes child processes and may include shared memory. CPU: 100% is one core. Unavailable readings show \u2014.\nShared Codex servers \u00b7 1.2 GB RAM, included once in the session monitor.",
+          "Harnesses 25",
+          "CPU 44%   RAM 5 GB   GPU 0%   SSD 3 GB",
+          "25 open harnesses across connected machines. Totals cover these harnesses only.\nCPU 44%   RAM 5 GB   GPU 0%   SSD 3 GB\nCPU: 100% is one core. RAM includes child processes and shared servers counted once; shared memory pages can overlap.\nGPU: harness process GPU use on supported macOS and Linux NVIDIA drivers. First samples and unavailable counters show \u2014. Cloud model GPU usage is not reported.\nSSD: workspace disk space, shared and nested folders counted once per machine. Files remain after stopping.\nTotals include available readings and may be partial. \u2014 means unavailable. Click to open Harness Monitor.",
+          "25 open harnesses across connected machines. Totals cover these harnesses only.\nCPU 44%   RAM 5 GB   GPU 0%   SSD 3 GB\nCPU: 100% is one core. RAM includes child processes and shared servers counted once; shared memory pages can overlap.\nGPU: harness process GPU use on supported macOS and Linux NVIDIA drivers. First samples and unavailable counters show \u2014. Cloud model GPU usage is not reported.\nSSD: workspace disk space, shared and nested folders counted once per machine. Files remain after stopping.\nTotals include available readings and may be partial. \u2014 means unavailable. Click to open Harness Monitor.",
+          "CPU 44%   RAM 5 GB   GPU 0%   SSD 3 GB",
+          "CPU 44%   RAM 5 GB   GPU 0%",
+          "CPU 44%   RAM 5 GB",
+          "CPU 44%"
+        ]
+      },
+      {
+        "live": 105,
+        "saved": 4096,
+        "legacy": true,
+        "inventoryReadsPerFooter": 32,
+        "microsecondsPerFooterByRound": [
+          10998.4,
+          11109.925,
+          11043.2,
+          11005.4,
+          10996.05,
+          10991.675,
+          10988.175
+        ],
+        "footer": [
+          "Harnesses 105",
+          "105 open across connected machines, including idle and starting harnesses. Click to open Harness Monitor.\nRAM includes child processes and may include shared memory. CPU: 100% is one core. Unavailable readings show \u2014.\nShared Codex servers \u00b7 1.2 GB RAM, included once in the session monitor.",
+          "105 open across connected machines, including idle and starting harnesses. Click to open Harness Monitor.\nRAM includes child processes and may include shared memory. CPU: 100% is one core. Unavailable readings show \u2014.\nShared Codex servers \u00b7 1.2 GB RAM, included once in the session monitor.",
+          "Harnesses 105",
+          "CPU 164%   RAM 17 GB   GPU 0%   SSD 3 GB",
+          "105 open harnesses across connected machines. Totals cover these harnesses only.\nCPU 164%   RAM 17 GB   GPU 0%   SSD 3 GB\nCPU: 100% is one core. RAM includes child processes and shared servers counted once; shared memory pages can overlap.\nGPU: harness process GPU use on supported macOS and Linux NVIDIA drivers. First samples and unavailable counters show \u2014. Cloud model GPU usage is not reported.\nSSD: workspace disk space, shared and nested folders counted once per machine. Files remain after stopping.\nTotals include available readings and may be partial. \u2014 means unavailable. Click to open Harness Monitor.",
+          "105 open harnesses across connected machines. Totals cover these harnesses only.\nCPU 164%   RAM 17 GB   GPU 0%   SSD 3 GB\nCPU: 100% is one core. RAM includes child processes and shared servers counted once; shared memory pages can overlap.\nGPU: harness process GPU use on supported macOS and Linux NVIDIA drivers. First samples and unavailable counters show \u2014. Cloud model GPU usage is not reported.\nSSD: workspace disk space, shared and nested folders counted once per machine. Files remain after stopping.\nTotals include available readings and may be partial. \u2014 means unavailable. Click to open Harness Monitor.",
+          "CPU 164%   RAM 17 GB   GPU 0%   SSD 3 GB",
+          "CPU 164%   RAM 17 GB   GPU 0%",
+          "CPU 164%   RAM 17 GB",
+          "CPU 164%"
+        ]
+      }
+    ]
+  },
+  "candidate": {
+    "scope": "Headless Debug monitor-field construction; not whole-app CPU, energy or frame latency.",
+    "at": "2026-10-02T04:56:54.996347Z",
+    "results": [
+      {
+        "live": 16,
+        "saved": 64,
+        "legacy": false,
+        "inventoryReadsPerFooter": 1,
+        "microsecondsPerFooterByRound": [
+          91.625,
+          61.8,
+          62.15,
+          48.45,
+          39.05,
+          39.7,
+          42.325
+        ],
+        "footer": [
+          "Harnesses 16",
+          "16 open across connected machines, including idle and starting harnesses. Click to open Harness Monitor.\nRAM includes child processes and may include shared memory. CPU: 100% is one core. Unavailable readings show \u2014.\nShared Codex servers \u00b7 1.2 GB RAM, included once in the session monitor.",
+          "16 open across connected machines, including idle and starting harnesses. Click to open Harness Monitor.\nRAM includes child processes and may include shared memory. CPU: 100% is one core. Unavailable readings show \u2014.\nShared Codex servers \u00b7 1.2 GB RAM, included once in the session monitor.",
+          "Harnesses 16",
+          "CPU 30%   RAM 4 GB   GPU 0%   SSD 3 GB",
+          "16 open harnesses across connected machines. Totals cover these harnesses only.\nCPU 30%   RAM 4 GB   GPU 0%   SSD 3 GB\nCPU: 100% is one core. RAM includes child processes and shared servers counted once; shared memory pages can overlap.\nGPU: harness process GPU use on supported macOS and Linux NVIDIA drivers. First samples and unavailable counters show \u2014. Cloud model GPU usage is not reported.\nSSD: workspace disk space, shared and nested folders counted once per machine. Files remain after stopping.\nTotals include available readings and may be partial. \u2014 means unavailable. Click to open Harness Monitor.",
+          "16 open harnesses across connected machines. Totals cover these harnesses only.\nCPU 30%   RAM 4 GB   GPU 0%   SSD 3 GB\nCPU: 100% is one core. RAM includes child processes and shared servers counted once; shared memory pages can overlap.\nGPU: harness process GPU use on supported macOS and Linux NVIDIA drivers. First samples and unavailable counters show \u2014. Cloud model GPU usage is not reported.\nSSD: workspace disk space, shared and nested folders counted once per machine. Files remain after stopping.\nTotals include available readings and may be partial. \u2014 means unavailable. Click to open Harness Monitor.",
+          "CPU 30%   RAM 4 GB   GPU 0%   SSD 3 GB",
+          "CPU 30%   RAM 4 GB   GPU 0%",
+          "CPU 30%   RAM 4 GB",
+          "CPU 30%"
+        ]
+      },
+      {
+        "live": 25,
+        "saved": 1000,
+        "legacy": false,
+        "inventoryReadsPerFooter": 1,
+        "microsecondsPerFooterByRound": [
+          134.425,
+          110.95,
+          108.175,
+          94.225,
+          95.225,
+          92.05,
+          92.125
+        ],
+        "footer": [
+          "Harnesses 25",
+          "25 open across connected machines, including idle and starting harnesses. Click to open Harness Monitor.\nRAM includes child processes and may include shared memory. CPU: 100% is one core. Unavailable readings show \u2014.\nShared Codex servers \u00b7 1.2 GB RAM, included once in the session monitor.",
+          "25 open across connected machines, including idle and starting harnesses. Click to open Harness Monitor.\nRAM includes child processes and may include shared memory. CPU: 100% is one core. Unavailable readings show \u2014.\nShared Codex servers \u00b7 1.2 GB RAM, included once in the session monitor.",
+          "Harnesses 25",
+          "CPU 44%   RAM 5 GB   GPU 0%   SSD 3 GB",
+          "25 open harnesses across connected machines. Totals cover these harnesses only.\nCPU 44%   RAM 5 GB   GPU 0%   SSD 3 GB\nCPU: 100% is one core. RAM includes child processes and shared servers counted once; shared memory pages can overlap.\nGPU: harness process GPU use on supported macOS and Linux NVIDIA drivers. First samples and unavailable counters show \u2014. Cloud model GPU usage is not reported.\nSSD: workspace disk space, shared and nested folders counted once per machine. Files remain after stopping.\nTotals include available readings and may be partial. \u2014 means unavailable. Click to open Harness Monitor.",
+          "25 open harnesses across connected machines. Totals cover these harnesses only.\nCPU 44%   RAM 5 GB   GPU 0%   SSD 3 GB\nCPU: 100% is one core. RAM includes child processes and shared servers counted once; shared memory pages can overlap.\nGPU: harness process GPU use on supported macOS and Linux NVIDIA drivers. First samples and unavailable counters show \u2014. Cloud model GPU usage is not reported.\nSSD: workspace disk space, shared and nested folders counted once per machine. Files remain after stopping.\nTotals include available readings and may be partial. \u2014 means unavailable. Click to open Harness Monitor.",
+          "CPU 44%   RAM 5 GB   GPU 0%   SSD 3 GB",
+          "CPU 44%   RAM 5 GB   GPU 0%",
+          "CPU 44%   RAM 5 GB",
+          "CPU 44%"
+        ]
+      },
+      {
+        "live": 105,
+        "saved": 4096,
+        "legacy": false,
+        "inventoryReadsPerFooter": 1,
+        "microsecondsPerFooterByRound": [
+          361.725,
+          350.5,
+          349.925,
+          350.95,
+          342.275,
+          369.85,
+          344.825
+        ],
+        "footer": [
+          "Harnesses 105",
+          "105 open across connected machines, including idle and starting harnesses. Click to open Harness Monitor.\nRAM includes child processes and may include shared memory. CPU: 100% is one core. Unavailable readings show \u2014.\nShared Codex servers \u00b7 1.2 GB RAM, included once in the session monitor.",
+          "105 open across connected machines, including idle and starting harnesses. Click to open Harness Monitor.\nRAM includes child processes and may include shared memory. CPU: 100% is one core. Unavailable readings show \u2014.\nShared Codex servers \u00b7 1.2 GB RAM, included once in the session monitor.",
+          "Harnesses 105",
+          "CPU 164%   RAM 17 GB   GPU 0%   SSD 3 GB",
+          "105 open harnesses across connected machines. Totals cover these harnesses only.\nCPU 164%   RAM 17 GB   GPU 0%   SSD 3 GB\nCPU: 100% is one core. RAM includes child processes and shared servers counted once; shared memory pages can overlap.\nGPU: harness process GPU use on supported macOS and Linux NVIDIA drivers. First samples and unavailable counters show \u2014. Cloud model GPU usage is not reported.\nSSD: workspace disk space, shared and nested folders counted once per machine. Files remain after stopping.\nTotals include available readings and may be partial. \u2014 means unavailable. Click to open Harness Monitor.",
+          "105 open harnesses across connected machines. Totals cover these harnesses only.\nCPU 164%   RAM 17 GB   GPU 0%   SSD 3 GB\nCPU: 100% is one core. RAM includes child processes and shared servers counted once; shared memory pages can overlap.\nGPU: harness process GPU use on supported macOS and Linux NVIDIA drivers. First samples and unavailable counters show \u2014. Cloud model GPU usage is not reported.\nSSD: workspace disk space, shared and nested folders counted once per machine. Files remain after stopping.\nTotals include available readings and may be partial. \u2014 means unavailable. Click to open Harness Monitor.",
+          "CPU 164%   RAM 17 GB   GPU 0%   SSD 3 GB",
+          "CPU 164%   RAM 17 GB   GPU 0%",
+          "CPU 164%   RAM 17 GB",
+          "CPU 164%"
+        ]
+      }
+    ]
+  },
+  "validation": {
+    "targetedTests": 52,
+    "targetedTestsPassed": 52,
+    "coverage": {
+      "entireHarnessMonitor": {
+        "hit": 137,
+        "total": 144
+      },
+      "summaryAndFormatting": {
+        "hit": 49,
+        "total": 49
+      }
+    },
+    "analysis": {
+      "exitCode": 0,
+      "preExistingInfoFindings": 14,
+      "newChangedFileFindings": 0
+    },
+    "wholeAppEnergyImprovementMeasured": false,
+    "fullSuitePassClaimed": false
+  }
+}

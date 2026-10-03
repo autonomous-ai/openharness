@@ -153,7 +153,9 @@ void main() {
     );
     await show();
     expect(find.text('main'), findsOneWidget);
-    await show(matches: [(field: 'main', term: 'mai', title: false)]);
+    await show(
+      matches: [(field: 'main', term: 'mai', title: false, strict: false)],
+    );
     final highlighted = tester.widget<Text>(find.text('main'));
     expect(highlighted.textSpan, isNotNull);
     await show(

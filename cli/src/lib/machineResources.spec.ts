@@ -1,48 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cpus, freemem, totalmem } from 'node:os'
-import { readFile } from 'node:fs/promises'
-import { setTimeout as delay } from 'node:timers/promises'
+import { describe, expect, it, vi } from 'vitest'
 import { createMachineResourcesReader } from './machineResources.js'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
-
-vi.mock('node:os', () => ({ cpus: vi.fn(), freemem: vi.fn(), totalmem: vi.fn() }))
-vi.mock('node:fs/promises', () => ({ readFile: vi.fn() }))
-vi.mock('node:timers/promises', () => ({ setTimeout: vi.fn(async () => {}) }))
-
-describe('OS resource sampling', () => {
-  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
-  afterEach(() => {
-    Object.defineProperty(process, 'platform', platform)
-    vi.clearAllMocks()
-  })
-
-  for (const system of ['darwin', 'linux']) {
-    for (const proc of ['available', 'missing', 'denied']) {
-      it(`${system}: ${proc} available-memory information`, async () => {
-        Object.defineProperty(process, 'platform', { ...platform, value: system })
-        vi.mocked(totalmem).mockReturnValue(8 * 1024 ** 3)
-        vi.mocked(freemem).mockReturnValue(1024 ** 3)
-        vi.mocked(readFile).mockReset()
-        if (proc === 'denied') vi.mocked(readFile).mockRejectedValue(new Error('EACCES'))
-        else vi.mocked(readFile).mockResolvedValue(proc === 'available'
-          ? 'MemFree: 1048576 kB\nMemAvailable: 4194304 kB\n' : 'MemFree: 1048576 kB\n')
-        const cpu = (idle: number, user: number) => ({
-          model: 'fixture', speed: 3200, times: { user, idle, nice: 0, sys: 0, irq: 0 },
-        })
-        vi.mocked(cpus).mockReset()
-        vi.mocked(cpus).mockReturnValueOnce([cpu(100, 50), cpu(100, 50)])
-          .mockReturnValue([cpu(200, 150), cpu(200, 150)])
-        expect(await createMachineResourcesReader()()).toEqual({
-          cpuPercent: 50,
-          memoryUsedBytes: (system === 'linux' && proc === 'available' ? 4 : 7) * 1024 ** 3,
-          memoryTotalBytes: 8 * 1024 ** 3,
-        })
-        expect(delay).toHaveBeenCalledWith(200)
-        expect(readFile).toHaveBeenCalledTimes(system === 'linux' ? 1 : 0)
-      })
-    }
-  }
-})
 
 function fixture() {
   return {
@@ -115,6 +73,22 @@ describe('on-demand machine resources', () => {
     await expect(read()).rejects.toThrow('unavailable')
     await expect(read()).resolves.toMatchObject({ memoryTotalBytes: 32 * 1024 ** 3 })
     expect(deps.wait).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps CPU/RAM available when optional hardware probes fail', async () => {
+    const hardware = vi.fn().mockRejectedValue(new Error('unsupported'))
+    expect(await createMachineResourcesReader({ ...fixture(), hardware })()).toEqual({
+      cpuPercent: 25, memoryUsedBytes: 20 * 1024 ** 3, memoryTotalBytes: 32 * 1024 ** 3,
+    })
+  })
+
+  it('returns optional hardware readings without combining GPUs', async () => {
+    const gpus = [
+      { id: 'a', name: 'First', utilizationPercent: 80 },
+      { id: 'b', name: 'Second', utilizationPercent: 60 },
+    ]
+    const deps = { ...fixture(), hardware: async () => ({ gpus, diskFreeBytes: 4000 }) }
+    expect(await createMachineResourcesReader(deps)()).toMatchObject({ gpus, diskFreeBytes: 4000 })
   })
 
   it('encrypts both the request and response between machines', () => {

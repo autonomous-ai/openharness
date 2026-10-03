@@ -94,6 +94,8 @@ class HarnessStats extends ChangeNotifier {
   /// later turn into a multi-day "turn".
   final Map<String, DateTime> _live = {};
 
+  DateTime? turnStartedAt(String key) => _live[key];
+
   Timer? _writeTimer;
   bool _disposed = false;
 
@@ -219,7 +221,7 @@ class HarnessStats extends ChangeNotifier {
 
 /// The app's own counters.
 ///
-/// A singleton like `analytics` and `terminalFontStore`, for the same reason: the
+/// A singleton like `appLog` and `terminalFontStore`, for the same reason: the
 /// call sites are `AppNotifier`'s event dispatcher and one settings pane, and
 /// threading an instance from one to the other would mean handing a `Ref` to a
 /// widget that has no other use for one.

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "inferenceReceipt": ".harness/validation/20261003T042340.018624Z-35190/receipt.json",
+  "inferenceOutcome": "completed_all_69_pairs",
+  "qualityOutcome": "reject_candidate",
+  "reportSha256": "bbad843edd652864b3056692f02eb22f024b6d05792185bb23b359db7458fa20",
+  "reportTransformation": "none; exact report bytes retained",
+  "modelRevision": "6f5cf0a2b59cabb106aca4c287eed12e357e90eb",
+  "modelWeightsSha256": "06d6fd89edd4f97816831626daafbdb0b029cf63bae8edc0bccab1d64e2e7707",
+  "inputHashes": {
+    "plan.json": "2febc77c974b1a5b82b5d655b719efba3829ac5e07e47027cce4f69de4b5a932",
+    "model-files.json": "06e111f1d942d4a2dcccec6d3e04aaab6e7ab1be3acece329b543349a484f925",
+    "requirements.txt": "78d57f0e9c700d9dbf69082193466479240fd583842b0afa54422ce30cda71ea",
+    "run.py": "09f769c330a687bb07f97db13dfee9cae2f29afee0071a8b80cf3f6e933f6ccb",
+    "score.py": "f944aa01d3cf8ddb134c18404bad42b7cec2c73933b55e68e2670adbdcf9d4a6"
+  },
+  "productionChange": false,
+  "releaseOrInstallation": false
+}

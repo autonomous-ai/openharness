@@ -7,7 +7,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock('./bus.js', () => ({ pub: state }))
 
-import { consumeTx, createTx, refreshAccessToken, SsoTokenError, type SsoTx } from './sso.js'
+import { consumeTx, createTx, exchangeCode, refreshAccessToken, SsoTokenError, type SsoTx } from './sso.js'
 
 const tx: SsoTx = {
   verifier: 'verifier',
@@ -73,6 +73,34 @@ describe('SSO PKCE transaction store', () => {
     expect(body.get('grant_type')).toBe('refresh_token')
     expect(body.get('refresh_token')).toBe('old-refresh')
     expect(body.get('client_id')).toBeTruthy()
+  })
+
+  it('exchanges and refreshes as the client the sign-in named, and as the configured one when it named none', async () => {
+    // A token belongs to the client it was issued to: auth-service refuses a code or a refresh
+    // token presented under another.
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => new Response(
+      JSON.stringify({ access_token: 'access' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+    const sentClient = (call: number) => (fetchMock.mock.calls[call]![1]?.body as URLSearchParams).get('client_id')
+
+    await exchangeCode('code', 'verifier', 'http://127.0.0.1:5000/callback', 'prod', 'harness-desktop')
+    await refreshAccessToken('refresh', 'prod', 'harness-desktop')
+    expect(sentClient(0)).toBe('harness-desktop')
+    expect(sentClient(1)).toBe('harness-desktop')
+
+    await exchangeCode('code', 'verifier', 'http://127.0.0.1:5000/callback', 'prod')
+    await refreshAccessToken('refresh', 'prod')
+    expect(sentClient(2)).toBe(sentClient(3))
+    expect(sentClient(2)).not.toBe('harness-desktop')
+  })
+
+  it('keeps the named client with the transaction, and refuses one that is not ours', async () => {
+    state.eval.mockResolvedValueOnce(JSON.stringify({ ...tx, clientId: 'harness-web' }))
+    await expect(consumeTx('named')).resolves.toMatchObject({ clientId: 'harness-web' })
+    state.eval.mockResolvedValueOnce(JSON.stringify({ ...tx, clientId: 'someone-else' }))
+    await expect(consumeTx('foreign')).resolves.toBeNull()
   })
 
   it('distinguishes invalid refresh tokens from token-service outages', async () => {

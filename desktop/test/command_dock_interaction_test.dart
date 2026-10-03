@@ -9,7 +9,7 @@ import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/widgets/engine_identity.dart';
 import 'package:harness/widgets/search_result_text.dart';
-import 'package:harness/terminal/terminal_text.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 
@@ -29,6 +29,10 @@ void main() {
   ) async {
     final app = createApp();
     seedMixedAgents(app);
+    app.machineStates['m']!.localOnly = true;
+    app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+    await app.agentPreference.remember('codex');
+    await app.projectHistory.select('m', '/work/openharness');
     final map = MemoryKeymap();
     addTearDown(app.dispose);
     addTearDown(map.dispose);
@@ -72,21 +76,62 @@ void main() {
           terminalAvailable: true,
           lastActivityAt: DateTime.now().subtract(const Duration(minutes: 33)),
         ),
-        ...app.machineStates['m']!.agents.skip(1),
+        // Quiet for hours, though opened a moment ago in some client: an open
+        // is not work, so the age is the conversation's — three hours.
+        () {
+          final quiet = app.machineStates['m']!.agents[1];
+          return Agent(
+            id: quiet.id,
+            name: quiet.name,
+            engine: quiet.engine,
+            project: quiet.project,
+            terminalAvailable: true,
+            lastActivityAt: DateTime.now().subtract(const Duration(hours: 3)),
+            lastOpenedAt: DateTime.now().subtract(const Duration(minutes: 5)),
+          );
+        }(),
+        ...app.machineStates['m']!.agents.skip(2),
       ];
       await configured.mount(tester, app, map);
       await openHarnessPicker(tester);
       final row = find.byKey(ValueKey(agentDestinationId('m', 'a0')));
       expect(
         find.descendant(of: row, matching: find.byType(EngineMark)),
-        findsNothing,
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<EngineMark>(
+              find.descendant(of: row, matching: find.byType(EngineMark)),
+            )
+            .engine,
+        previous.engine,
       );
       expect(
         find.descendant(of: row, matching: find.text('33m')),
         findsOneWidget,
       );
+      final opened = find.byKey(ValueKey(agentDestinationId('m', 'a1')));
       expect(
-        find.descendant(of: row, matching: find.byType(SearchResultText)),
+        find.descendant(of: opened, matching: find.text('3h')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<Tooltip>(
+              find.descendant(of: opened, matching: find.byType(Tooltip)),
+            )
+            .message,
+        startsWith('Last active '),
+      );
+      expect(
+        find.descendant(
+          of: row,
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is SearchResultText && widget.text == previous.name,
+          ),
+        ),
         findsOneWidget,
       );
       await tester.enterText(
@@ -97,15 +142,15 @@ void main() {
       final detail = tester.widget<Text>(
         find.descendant(
           of: find.byKey(const ValueKey('swarm-search-preview')),
-          matching: find.text('M2:openharness  (feature/login-redirect)'),
+          matching: find.text('M2 · openharness · feature/login-redirect'),
         ),
       );
       for (final label in ['M2', 'openharness', 'feature/login-redirect']) {
         expect(detail.data, contains(label));
       }
-      expect(detail.style!.fontFamily, terminalFontStore.value.fontFamily);
-      expect(detail.style!.fontSize, terminalFontStore.size);
-      expect(detail.style!.height, terminalFontStore.value.height);
+      expect(detail.style!.fontFamily, grid.AppType.monoFamily);
+      expect(detail.style!.fontSize, 11);
+      expect(detail.style!.height, grid.AppType.monoMeta().height);
       final create = find.byKey(const ValueKey(kSwarmCreateRowId));
       expect(create, findsNothing);
       expect(find.text('Harness:'), findsNothing);
@@ -136,7 +181,10 @@ void main() {
         expect(tester.widget<TextField>(input).cursorWidth, 2);
         expect(find.byKey(const ValueKey('swarm-search-prompt')), findsNothing);
         expect(find.text('Harness:'), findsNothing);
-        expect(find.text('[ New Harness ]'), findsNothing);
+        expect(
+          find.byKey(const ValueKey('new-harness-field-start')),
+          findsNothing,
+        );
         expect(find.text('Select Item'), findsNothing);
         expect(find.byKey(const ValueKey('swarm-search-hints')), findsNothing);
         final search = tester
@@ -145,6 +193,11 @@ void main() {
         expect(search.selected, isNull);
         expect(search.rows.any((row) => row.isCreate), isFalse);
         await key(tester, LogicalKeyboardKey.tab);
+        expect(search.selected, isNull);
+        expect(tester.widget<TextField>(input).focusNode!.hasFocus, isFalse);
+        await key(tester, LogicalKeyboardKey.tab, shift: true);
+        expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
+        await key(tester, LogicalKeyboardKey.arrowDown);
         expect(search.selected, search.rows.first);
         expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
         await tester.enterText(input, 'nothing-like-this');

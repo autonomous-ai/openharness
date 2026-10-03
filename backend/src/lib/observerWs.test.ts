@@ -2,16 +2,18 @@ import { EventEmitter } from 'node:events'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 const m = vi.hoisted(() => ({
   auth: vi.fn(), grant: vi.fn(), up: vi.fn(), changed: vi.fn(), down: vi.fn(), live: vi.fn(),
-  upgrade: vi.fn(),
+  upgrade: vi.fn(), link: vi.fn(), profile: vi.fn(),
 }))
 vi.mock('./ssoAuth.js', () => ({ authenticateAccessToken: m.auth }))
+vi.mock('./prisma.js', () => ({ prisma: { user: { findUnique: m.profile } } }))
+vi.mock('../routes/harnessLinks.js', () => ({ recipientLink: m.link }))
 vi.mock('../routes/harnessShares.js', () => ({ recipientShare: m.grant }))
 vi.mock('./bus.js', () => ({ publishDown: m.down, subscribeUp: m.up, subscribeShareChanged: m.changed }))
 vi.mock('./hub.js', () => ({ trackSocketLiveness: m.live }))
 vi.mock('./wsServer.js', () => ({ WS_LIMITS: { web: 1 }, createWss: () => ({ handleUpgrade: m.upgrade }) }))
 import { attachObserver, handleObserverUpgrade } from './observerWs.js'
 const user = { sub: 'ken', email: ' Ken@Example.com ', autonomousEnv: 'prod' as const, role: 'user' }
-const share = { id: '11111111-1111-4111-8111-111111111111', machineId: 'm', agentId: 'a' }
+const share = { id: '11111111-1111-4111-8111-111111111111', machineId: 'm', agentId: 'a', ownerId: 'owner' }
 class Socket extends EventEmitter {
   readyState = 1; bufferedAmount = 0
   send = vi.fn()
@@ -25,7 +27,7 @@ describe('isolated observer WebSocket boundary', () => {
   beforeEach(() => {
     vi.useFakeTimers(); vi.resetAllMocks(); ws = new Socket()
     disposeUp = vi.fn(); disposeShare = vi.fn(); disposeLive = vi.fn()
-    m.auth.mockResolvedValue(user); m.grant.mockResolvedValue(share)
+    m.auth.mockResolvedValue(user); m.grant.mockResolvedValue(share); m.link.mockResolvedValue(share); m.profile.mockResolvedValue({ name: 'Ken' })
     m.down.mockResolvedValue(1); m.live.mockReturnValue(disposeLive)
     m.up.mockImplementation(async (_id, callback) => { upward = callback; return disposeUp })
     m.changed.mockImplementation(async (_id, callback) => { changed = callback; return disposeShare })
@@ -34,12 +36,38 @@ describe('isolated observer WebSocket boundary', () => {
   afterEach(() => { ws.close(); vi.useRealTimers() })
   const attach = () => attachObserver(ws as never, user, share as never)
   const hello = () => ws.message('observer_hello', { ephemeral: Buffer.alloc(32, 1).toString('base64') })
+  it('admits anonymous public links, passes only authenticated comment identity and rechecks link access', async () => {
+    const socket = { destroyed: false, destroy: vi.fn() }
+    const req = (token?: string) => ({ url: `/api/observer-ws?link=${share.id}`, headers: token ? { 'sec-websocket-protocol': token } : {} })
+    handleObserverUpgrade(req() as never, socket as never, Buffer.alloc(0)); await flush()
+    expect(m.auth).not.toHaveBeenCalled()
+    expect(m.link).toHaveBeenCalledWith(share.id, null, 'prod')
+    hello(); await flush()
+    expect(m.down.mock.calls[0][1].frame.payload).toEqual({ linkId: share.id, email: '', ephemeral: Buffer.alloc(32, 1).toString('base64') })
+    m.link.mockResolvedValueOnce(null); changed(); await flush()
+    expect(ws.close).toHaveBeenCalledWith(4403, expect.any(String))
+    ws = new Socket(); m.auth.mockResolvedValue({ ...user, sub: 'owner' }); m.profile.mockResolvedValue(null)
+    handleObserverUpgrade(req('owner-token') as never, socket as never, Buffer.alloc(0)); await flush(); hello(); await flush()
+    expect(m.down.mock.calls.at(-1)?.[1].frame.payload).toMatchObject({ linkId: share.id,
+      authorId: 'owner', authorName: 'Ken', owner: true })
+    ws.close(); ws = new Socket(); m.link.mockResolvedValueOnce(null)
+    handleObserverUpgrade(req() as never, socket as never, Buffer.alloc(0)); await flush()
+    expect(ws.close).toHaveBeenCalledWith(4403, expect.any(String))
+    handleObserverUpgrade({ url: '/api/observer-ws?link', headers: {} } as never, socket as never, Buffer.alloc(0)); await flush()
+    expect(socket.destroy).toHaveBeenCalled()
+  })
+  it('does not admit a connection that closed while resolving the commenter name', async () => {
+    let release!: (profile: unknown) => void
+    m.profile.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const pending = attach(); await flush(); ws.close(); release({ name: 'Ken' }); await pending
+    expect(ws.send).not.toHaveBeenCalled()
+  })
   it('routes only invitation-scoped traffic and only targeted observer output', async () => {
     await attach()
     expect(JSON.parse(ws.send.mock.calls[0][0] as string)).toEqual({ type: 'observer_connected' })
     hello(); await flush()
     expect(m.down).toHaveBeenCalledWith('m', { connId: expect.stringMatching(/^observer:/), frame: {
-      type: 'observer_open', payload: { shareId: share.id, email: 'ken@example.com', ephemeral: Buffer.alloc(32, 1).toString('base64') },
+      type: 'observer_open', payload: { shareId: share.id, email: 'ken@example.com', authorId: 'ken', authorName: 'Ken', owner: false, ephemeral: Buffer.alloc(32, 1).toString('base64') },
     } })
     const connId = m.down.mock.calls[0][1].connId
     for (const type of ['agents', 'message', 'e2e_welcome', 'terminal_ready']) upward({ targetConnId: connId, frame: { type } })

@@ -1,0 +1,24 @@
+{
+  "format": "zlib(RGB565BE + alpha8 + shade8 + coat8 + marks4x8)",
+  "species": [
+    "tim",
+    "gnu",
+    "lynx",
+    "mutt",
+    "yak",
+    "gopher",
+    "bug",
+    "tux",
+    "auk",
+    "beastie"
+  ],
+  "sizes": [
+    240,
+    108
+  ],
+  "source_sha256": "243e84c08b314f2b0b6da5dfa4f9065761fd1fa4a2cffcce89d043adb827bc7b",
+  "bytes": 4615346,
+  "sha256": "1a507a57c927e31f0ae17876a9a59455d3ebf8b4bf27ab0e97915945f12c5aad",
+  "cache_bytes": 835281,
+  "unique_blocks": 909
+}

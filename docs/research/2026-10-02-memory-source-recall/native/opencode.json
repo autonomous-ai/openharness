@@ -1,0 +1,216 @@
+{
+  "version": "1.18.34",
+  "requests": [
+    {
+      "phase": "on",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [
+        "user"
+      ],
+      "markers": 1,
+      "correctedMarkers": 0,
+      "sourceContext": true,
+      "derivedSummaryReceived": false,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "off",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [],
+      "markers": 0,
+      "correctedMarkers": 0,
+      "sourceContext": false,
+      "derivedSummaryReceived": false,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "source-private",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [],
+      "markers": 0,
+      "correctedMarkers": 0,
+      "sourceContext": false,
+      "derivedSummaryReceived": false,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "unavailable",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [],
+      "markers": 0,
+      "correctedMarkers": 0,
+      "sourceContext": false,
+      "derivedSummaryReceived": false,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "other-session",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [],
+      "markers": 0,
+      "correctedMarkers": 0,
+      "sourceContext": false,
+      "derivedSummaryReceived": false,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "compaction",
+      "agent": "compaction",
+      "model": "model",
+      "roles": [],
+      "markers": 0,
+      "correctedMarkers": 0,
+      "sourceContext": false,
+      "derivedSummaryReceived": false,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "auto-prime",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [
+        "user"
+      ],
+      "markers": 1,
+      "correctedMarkers": 0,
+      "sourceContext": true,
+      "derivedSummaryReceived": false,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "auto-prime",
+      "agent": "compaction",
+      "model": "model",
+      "roles": [],
+      "markers": 0,
+      "correctedMarkers": 0,
+      "sourceContext": false,
+      "derivedSummaryReceived": false,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "auto-prime",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [
+        "user"
+      ],
+      "markers": 1,
+      "correctedMarkers": 0,
+      "sourceContext": true,
+      "derivedSummaryReceived": false,
+      "hasCurrentRequest": false
+    },
+    {
+      "phase": "auto-compact",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [
+        "user"
+      ],
+      "markers": 1,
+      "correctedMarkers": 0,
+      "sourceContext": true,
+      "derivedSummaryReceived": false,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "overflow-replay",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [
+        "user"
+      ],
+      "markers": 1,
+      "correctedMarkers": 0,
+      "sourceContext": true,
+      "derivedSummaryReceived": false,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "overflow-replay",
+      "agent": "compaction",
+      "model": "model",
+      "roles": [],
+      "markers": 0,
+      "correctedMarkers": 0,
+      "sourceContext": false,
+      "derivedSummaryReceived": false,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "overflow-replay",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [
+        "user"
+      ],
+      "markers": 1,
+      "correctedMarkers": 0,
+      "sourceContext": true,
+      "derivedSummaryReceived": false,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "corrected",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [],
+      "markers": 0,
+      "correctedMarkers": 1,
+      "sourceContext": true,
+      "derivedSummaryReceived": false,
+      "hasCurrentRequest": true
+    },
+    {
+      "phase": "forgotten",
+      "agent": "memory_fixture",
+      "model": "model",
+      "roles": [],
+      "markers": 0,
+      "correctedMarkers": 0,
+      "sourceContext": false,
+      "derivedSummaryReceived": false,
+      "hasCurrentRequest": true
+    }
+  ],
+  "result": {
+    "nativeModelRequestReceivedContext": true,
+    "sourceContextFormat": "coding_memory_sources",
+    "generatedActionReceived": false,
+    "persistedMemoryParts": 0,
+    "offReceivedContext": false,
+    "unavailableBlockedPrompt": false,
+    "otherSessionReceivedContext": false,
+    "compactionReceivedContext": false,
+    "automaticContinuationReceivedContext": true,
+    "correctedReceivedLatestRevision": true,
+    "forgottenReceivedContext": false,
+    "sourcePrivacyRespected": true,
+    "overflowReplayReceivedContext": true,
+    "sourceEngine": "claude",
+    "receivingEngine": "opencode",
+    "learnOffRecallOn": true
+  },
+  "limitations": [
+    "Synthetic seeded Claude evidence/proposal; no real model extraction or semantic usefulness measurement.",
+    "Production plugin and shared runtime/store; fixture HTTP/process binding, not production ancestry resolution.",
+    "No interactive TUI or provider matrix certification."
+  ],
+  "fixtureStartup": {
+    "network": "loopback only; external networking denied by OS sandbox",
+    "npm": "offline",
+    "reason": "Native SDK install blocked local plugin loading while registry retries waited. The SDK-free fixture now fails that install immediately offline.",
+    "firstFailure": "POST /session timed out at 25 seconds before memory capture or delivery",
+    "verifiedDurationSeconds": 3.5,
+    "sources": [
+      "https://github.com/anomalyco/opencode/blob/v1.18.34/packages/opencode/src/plugin/index.ts",
+      "https://github.com/anomalyco/opencode/blob/v1.18.34/packages/core/src/npm-config.ts"
+    ]
+  }
+}

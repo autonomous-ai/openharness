@@ -14,6 +14,8 @@
 #   bash scripts/release-desktop.sh 1.1.0              # release an explicit version
 #   bash scripts/release-desktop.sh --notes-file f.md  # hand-written release notes instead of the
 #                                                      # generated commit list
+#   bash scripts/release-desktop.sh --wait             # finish when this tag is live and verified
+#   bash scripts/release-desktop.sh --prepare          # package the pushed PR head during final checks; no publication
 #
 # THE NEXT VERSION COMES FROM TWO SOURCES, AND BOTH MATTER. Git tags alone are not enough: this repo
 # had one tag (v1.0.52) while the live manifest was already serving 1.0.61, because
@@ -23,7 +25,7 @@
 # the current version is max(highest git tag, highest version in the manifest), across ALL of the
 # manifest's desktop-* keys, not just the macOS one.
 #
-# Requires: git, curl, python3, and push access to origin. No GCS credentials — the manifest is read
+# Requires: git, curl, python3, push access to origin; gh for --wait. No GCS credentials — the manifest is read
 # over public HTTPS, exactly as scripts/upload-desktop.sh reads it.
 set -euo pipefail
 
@@ -35,9 +37,11 @@ GCS_BUCKET="${GCS_BUCKET:-s3-autonomous-upgrade-3}"
 GCS_PUBLIC_BASE_URL="${GCS_PUBLIC_BASE_URL:-https://storage.googleapis.com/${GCS_BUCKET}}"
 METADATA_PATH="${METADATA_PATH:-harness/desktop/metadata.json}"
 META_URL="${META_URL:-${GCS_PUBLIC_BASE_URL%/}/${METADATA_PATH#/}}"
-BRANCH="${BRANCH:-main}"
+BRANCH="${BRANCH:-}"
 
 DRY_RUN=0
+WAIT=0
+PREPARE=0
 DO_MINOR=0
 ALLOW_NO_MANIFEST=0
 NEW_VER=""
@@ -48,6 +52,8 @@ for arg in "$@"; do
   if [ "$want_notes_file" -eq 1 ]; then NOTES_FILE="$arg"; want_notes_file=0; continue; fi
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
+    --wait) WAIT=1 ;;
+    --prepare) PREPARE=1 ;;
     --minor) DO_MINOR=1 ;;
     --allow-no-manifest) ALLOW_NO_MANIFEST=1 ;;
     --notes-file) want_notes_file=1 ;;
@@ -57,6 +63,16 @@ for arg in "$@"; do
     *) NEW_VER="$arg" ;;
   esac
 done
+if [ "$PREPARE" -eq 1 ]; then
+  [ "$WAIT" -eq 0 ] || { echo 'ERROR --prepare starts a candidate; use --wait when releasing after merge' >&2; exit 1; }
+  BRANCH="${BRANCH:-$(git branch --show-current)}"
+  [ -n "$BRANCH" ] || { echo 'ERROR --prepare needs a pushed branch' >&2; exit 1; }
+else
+  BRANCH="${BRANCH:-main}"
+fi
+if [ "$WAIT" -eq 1 ] || { [ "$PREPARE" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; }; then
+  command -v gh >/dev/null 2>&1 || { echo 'ERROR --wait and --prepare require gh' >&2; exit 1; }
+fi
 [ "$want_notes_file" -eq 0 ] || { echo "ERROR --notes-file needs a path" >&2; exit 1; }
 
 # Same rules as next_desktop_version()/bump_minor_version() in scripts/upload-desktop.sh:55-86, which
@@ -114,6 +130,10 @@ if ! git merge-base --is-ancestor "$HEAD_SHA" "origin/$BRANCH" 2>/dev/null; then
   echo "ERROR HEAD is not on origin/$BRANCH — push the commit first, or CI will build a commit nobody else has." >&2
   exit 1
 fi
+if [ "$PREPARE" -eq 1 ] && [ "$HEAD_SHA" != "$(git rev-parse "origin/$BRANCH")" ]; then
+  echo 'ERROR --prepare must run at the pushed branch tip so CI packages exactly this source' >&2
+  exit 1
+fi
 
 # --- current version, source 1: the highest release tag in git ---
 # The brace group keeps `set -e` from killing the script when grep legitimately matches nothing.
@@ -130,7 +150,7 @@ TAG_VER="${TAG_VER:-0.0.0}"
 # --- current version, source 2: the highest version actually being served ---
 # Every desktop-* key, because each publisher only ever wrote its own: a linux-only publish would be
 # invisible if we read desktop-macos alone, and stepping over it is how a downgrade gets released.
-GCS_READ="$(curl -fsSL "$META_URL" 2>/dev/null | python3 -c '
+GCS_READ="$(curl -fsSL --connect-timeout 10 --max-time 30 "$META_URL" 2>/dev/null | python3 -c '
 import json, re, sys
 try:
     data = json.load(sys.stdin)
@@ -245,11 +265,21 @@ if [ "$DRY_RUN" -eq 1 ]; then
   exit 0
 fi
 
+if [ "$PREPARE" -eq 1 ]; then
+  gh workflow run release-desktop.yml --ref "$BRANCH" -f version="$VER" -f prepare_only=true
+  echo "  Candidate $VER started on $HEAD_SHA. No tag or product manifest was published."
+  echo "  Continue validation/review, merge, then release $VER normally; matching packages are reused automatically."
+  exit 0
+fi
+
 # --- tag and push ---
 git tag -a "$TAG" --cleanup=verbatim -F "$NOTES"
 git push origin "$TAG"
 
 echo ""
 echo "  pushed $TAG → CI builds macOS + Linux, publishes to GCS, and cuts the GitHub Release."
-echo "  watch : gh run watch \$(gh run list --workflow=release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+echo "  watch (from repo root): python3 scripts/watch-desktop-release.py $TAG --sha $HEAD_SHA"
 echo ""
+if [ "$WAIT" -eq 1 ]; then
+  python3 "$ROOT/../scripts/watch-desktop-release.py" "$TAG" --sha "$HEAD_SHA"
+fi

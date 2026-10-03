@@ -181,7 +181,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
 
     expect(
-      find.textContaining('This agent is still responding'),
+      find.textContaining('This harness is still responding'),
       findsOne,
       reason:
           'the daemon refuses before it touches the pane, so the terminal '

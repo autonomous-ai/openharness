@@ -20,8 +20,17 @@ import '../core/local_key_value_store.dart';
 /// scheme later is one value here and one `const` in `terminal_theme.dart`.
 enum TerminalThemeChoice {
   /// Today's behaviour, and still the default: ground and cursor follow the
-  /// palette chosen in Customize Harness ▸ Appearance, ANSI ramp from `darkTerminalTheme`.
+  /// palette chosen in Customize Harness ▸ Appearance, and the ANSI ramp its
+  /// brightness (`darkTerminalTheme`'s or `lightTerminalTheme`'s).
   matchApp('Match app appearance', 'Matches your app palette'),
+
+  /// Harness's own dark screen whatever the app wears — a light app with a
+  /// dark terminal, the way many people keep an editor.
+  dark('Dark', 'A dark screen, whatever the app palette'),
+
+  /// Harness's own light screen whatever the app wears — the reverse, for
+  /// reading output on white inside a dark app.
+  light('Light', 'A light screen, whatever the app palette'),
 
   /// ⚠️ Named for the PALETTE, not for the distribution that popularised it.
   /// These sixteen colours are the Tango Desktop Project's, which GNOME

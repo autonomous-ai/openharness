@@ -118,8 +118,8 @@ class ProviderUsage {
   /// When these figures were read. Null until the first answer lands.
   final DateTime? fetchedAt;
 
-  /// Which account these figures belong to — `usageAccountKey`, never the id
-  /// itself — or null when the machine that read them could not say.
+  /// Which account these figures belong to — a key the machine that read them derives from the
+  /// id, never the id itself — or null when that machine could not say.
   ///
   /// It is what lets the strip show one figure per ACCOUNT rather than one per
   /// machine: a remote machine signed in to this same subscription is this
@@ -165,10 +165,17 @@ class ProviderUsage {
 /// 1e10 is the discriminator: it sits above any plausible seconds epoch (year
 /// 2286) and below any plausible milliseconds one (year 2001), so the unit can
 /// be told from the magnitude without the vendor having to label it.
+///
+/// ⚠️ A count past what a [DateTime] can hold (±8.64e15 ms — a vendor that
+/// switched to nanoseconds, say) is no reset time, not a throw:
+/// `fromMillisecondsSinceEpoch` raises a RangeError there, and this runs inside
+/// `parseUsageReadResult`, whose caller drops the machine's whole answer — every
+/// provider on it — when anything escapes.
 DateTime? parseResetTimestamp(Object? value) {
   if (value is num) {
     if (!value.isFinite) return null;
     final ms = value > 10000000000 ? value : value * 1000;
+    if (ms.abs() > _maxEpochMilliseconds) return null;
     return DateTime.fromMillisecondsSinceEpoch(ms.round());
   }
   if (value is! String || value.trim().isEmpty) return null;
@@ -176,6 +183,9 @@ DateTime? parseResetTimestamp(Object? value) {
   if (numeric != null) return parseResetTimestamp(numeric);
   return DateTime.tryParse(value);
 }
+
+/// The furthest a [DateTime] reaches either side of the epoch.
+const int _maxEpochMilliseconds = 8640000000000000;
 
 /// Reads a vendor's utilization figure, clamped to the 0–100 the UI draws.
 ///

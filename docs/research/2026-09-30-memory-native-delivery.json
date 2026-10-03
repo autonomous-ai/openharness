@@ -1,0 +1,132 @@
+{
+  "date": "2026-09-30",
+  "kind": "synthetic-native-hook-transport-check",
+  "runner": "cli/scripts/memory-native-hook-probe.mjs",
+  "claude": {
+    "engine": "claude",
+    "version": "2.1.286 (Claude Code)",
+    "code": 0,
+    "nativeContextVerified": true,
+    "hooks": [
+      {
+        "route": "/api/hook/session-start",
+        "event": "UserPromptSubmit",
+        "engine": "claude",
+        "receipt": false
+      },
+      {
+        "route": "/api/hook/memory-emitted",
+        "engine": "claude",
+        "receipt": true
+      }
+    ],
+    "requests": [
+      {
+        "route": "/v1/messages",
+        "contextReceived": true,
+        "contextRoles": [
+          "user"
+        ],
+        "promptReceived": true,
+        "tools": []
+      }
+    ],
+    "events": [
+      {
+        "type": "system",
+        "subtype": "hook_started"
+      },
+      {
+        "type": "system",
+        "subtype": "hook_response"
+      },
+      {
+        "type": "system",
+        "subtype": "init"
+      },
+      {
+        "type": "assistant"
+      },
+      {
+        "type": "system",
+        "subtype": "informational"
+      },
+      {
+        "type": "result",
+        "subtype": "success"
+      }
+    ],
+    "diagnostics": {
+      "hookTrustNeeded": false,
+      "stderrPresent": false
+    }
+  },
+  "codex": {
+    "version": "0.159.0",
+    "execProbe": {
+      "exitCode": 0,
+      "hookRequests": 0,
+      "syntheticPromptReceived": true,
+      "memoryContextReceived": false
+    },
+    "interactiveProbe": {
+      "engine": "codex",
+      "version": "codex-cli 0.159.0",
+      "code": 0,
+      "nativeContextVerified": true,
+      "hooks": [
+        {
+          "route": "/api/hook/session-start",
+          "event": "UserPromptSubmit",
+          "engine": "codex",
+          "receipt": false
+        },
+        {
+          "route": "/api/hook/memory-emitted",
+          "engine": "codex",
+          "receipt": true
+        }
+      ],
+      "requests": [
+        {
+          "route": "/v1/responses",
+          "contextReceived": true,
+          "contextRoles": [
+            "developer"
+          ],
+          "promptReceived": true,
+          "tools": [
+            "request_user_input"
+          ]
+        },
+        {
+          "route": "/v1/responses",
+          "contextReceived": false,
+          "contextRoles": [],
+          "promptReceived": true,
+          "tools": []
+        }
+      ],
+      "events": [],
+      "diagnostics": {
+        "hookTrustNeeded": false,
+        "stderrPresent": false,
+        "note": "Interactive stdio was inherited rather than captured; the two false flags in this original output cannot establish an absence of trust prompts or stderr. Native folder and hook prompts were manually reviewed and accepted. The runner now emits null for these uncaptured observations."
+      }
+    },
+    "approval": "User explicitly approved disposable-folder trust. Native folder and exact synthetic hook trust were accepted through the temporary Codex UI; existing user configuration was unchanged and fixtures removed.",
+    "automaticMemoryDeliveryEnabled": true
+  },
+  "limitations": [
+    "The provider is a localhost mock with fake credentials; no model reasoned about the memory.",
+    "The adapter endpoint is a synthetic fixture. Host process ownership and receipt binding are separately covered by tests.",
+    "The Claude check demonstrates one UserPromptSubmit path in print mode with explicit temporary settings, not all TUI, resume or compaction behavior.",
+    "The Codex check covers one trusted interactive UserPromptSubmit path in 0.159.0. Fresh untrusted exec emitted no hook. A second outgoing request carried the original prompt without the hook marker; this check does not identify or certify that request, resume, or compaction.",
+    "Production receipts remain delivery-unverified; the fixture request observation is not a native acknowledgement for real sessions.",
+    "Original conversations, provider history and earlier native context cannot be erased by deleting the Harness record."
+  ],
+  "references": [
+    "https://code.claude.com/docs/en/hooks",
+    "https://learn.chatgpt.com/docs/hooks"
+  ]
+}

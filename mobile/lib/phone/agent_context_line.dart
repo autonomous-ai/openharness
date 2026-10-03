@@ -7,9 +7,8 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 /// Where an agent IS: the folder it was started in, the branch that folder is on, and the machine
 /// running it — `autonomous-harness · ⑂ main · MacBookPro2021.local`.
 ///
-/// The same three facts, in the same order, as the desktop's pane header
-/// (`widgets/terminal_pane_header.dart`), so an agent recognised on one screen is recognised on the
-/// other. A name alone stops identifying anything the moment somebody has two `main` agents, which
+/// The same three facts, in the same order, as the desktop's pane header, so an agent recognised
+/// on one screen is recognised on the other. A name alone stops identifying anything the moment somebody has two `main` agents, which
 /// on a phone — where the Agents tab mixes every machine into one list — happens immediately.
 ///
 /// ⚠️ **Two flexible halves, not one line of text.** A phone row leaves this about 240pt, and the
@@ -40,7 +39,8 @@ class AgentContextLine extends StatelessWidget {
     final machineName = this.machineName;
     final place = <InlineSpan>[
       if (project != null) TextSpan(text: project!.label),
-      if (project != null && branch != null) _separator,
+      // No `·` before the branch: its icon is the separator, as everywhere.
+      if (project != null && branch != null) const TextSpan(text: '  '),
       if (branch != null) ...[_branchMark, TextSpan(text: branch)],
     ];
     return Row(

@@ -8,10 +8,13 @@ import 'package:flutter/services.dart';
 import '../core/harness_file_store.dart';
 import '../core/local_key_value_store.dart';
 
-/// What an alert is FOR. The two moments worth interrupting someone over.
+/// What happened on a harness while the person was looking elsewhere.
 enum AlertKind {
   /// An agent finished its turn. The work you were waiting on is on screen.
   done('Glass'),
+
+  /// A turn ended with an error. Keep the existing turn-end sound.
+  failed('Glass'),
 
   /// An agent stopped and is waiting on a person — a question, a permission.
   /// Nothing moves until somebody answers, which is why it is the more
@@ -104,15 +107,15 @@ class AlertSounds {
   final MethodChannel _channel;
   final DateTime Function() now;
 
-  /// The least time between two sounds of the same kind.
+  /// The least time between two plays of the same sound.
   ///
   /// A swarm is many agents, and a batch of them finishing together is the
   /// ordinary case rather than the rare one — without this it is a burst of
-  /// beeps that says nothing more than one beep would. Per KIND, so an agent
+  /// beeps that says nothing more than one beep would. Per sound, so an agent
   /// finishing never swallows the more urgent "somebody is waiting on you".
   final Duration gap;
 
-  final _lastPlayed = <AlertKind, DateTime>{};
+  final _lastPlayed = <String, DateTime>{};
 
   /// Ask for a sound. Silent when the feature is off, and when the same kind
   /// played within [gap].
@@ -123,9 +126,9 @@ class AlertSounds {
   void play(AlertKind kind) {
     if (!store.value) return;
     final at = now();
-    final last = _lastPlayed[kind];
+    final last = _lastPlayed[kind.sound];
     if (last != null && at.difference(last) < gap) return;
-    _lastPlayed[kind] = at;
+    _lastPlayed[kind.sound] = at;
     unawaited(
       _channel
           .invokeMethod<void>('playAlert', {'sound': kind.sound})

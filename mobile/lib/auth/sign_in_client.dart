@@ -1,16 +1,13 @@
 import 'cli_login.dart';
 
-/// Whether the app is signed in, and how it signs in — the seam between the two kinds of build.
+/// Whether the app is signed in, and signing it out — the seam the notifier reads the session
+/// through.
 ///
-/// [CliLogin] asks the local harness CLI, which holds the session. A viewer build has no CLI and
-/// holds its own (`viewer/direct_login.dart`).
+/// The phone holds its own session (`viewer/direct_login.dart`); a desktop build asks the local
+/// harness CLI instead, which holds it there. How a phone signs IN is not here: an emailed code or
+/// a scanned one (`viewer/email_code_login.dart`), which no CLI build has.
 abstract interface class SignInClient {
   Future<CliAuthStatus> checkStatus();
-
-  /// Resolves once signed in; throws on failure or [cancel]. [onAuthorizeUrl] gets the SSO page.
-  Future<void> login({required void Function(String url) onAuthorizeUrl});
-
-  void cancel();
 
   Future<void> logout();
 }

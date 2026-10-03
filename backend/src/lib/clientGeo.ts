@@ -28,6 +28,18 @@ export function countryCodeFromHeaders(headers: IncomingHttpHeaders): string | u
   return v
 }
 
+/**
+ * The caller's address as Cloudflare saw it (`cf-connecting-ip`), else the socket's. Only a hint —
+ * shown to a person approving a sign-in, compared to tell "same network" — never an identity.
+ */
+export function clientIpFromHeaders(headers: IncomingHttpHeaders, socketAddress?: string): string | undefined {
+  const raw = headers['cf-connecting-ip']
+  const v = (Array.isArray(raw) ? raw[0] : raw)?.trim()
+  const ip = v || socketAddress
+  if (!ip || ip.length > 64 || !/^[0-9a-fA-F:.]+$/.test(ip)) return undefined
+  return ip.startsWith('::ffff:') ? ip.slice(7) : ip
+}
+
 /** Minimum age of the last stamp before the same country is written again for one user. */
 export const USER_COUNTRY_WRITE_MS = 60 * 60 * 1000
 /** Cache entries older than this are evicted on the next sweep; sweeps run only past `USER_COUNTRY_CACHE_MAX`. */

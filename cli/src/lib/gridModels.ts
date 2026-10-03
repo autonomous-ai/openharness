@@ -27,7 +27,7 @@ import { gridCredentialsPath } from './gridCredentials.js'
 import { signedInGridEmail } from './gridDerive.js'
 import { gridJson } from './gridExec.js'
 import {
-  emptyPicture, mergeAwake, idKey, parsePicture, provenStopped, sectionView, servedKey, servesAModel, unspelled, withAsleep,
+  advertisedNow, emptyPicture, mergeAwake, idKey, parsePicture, provenStopped, sectionView, servedKey, servesAModel, unspelled, withAsleep,
   withSpellings, withUnknown, withWindows, type GridPicture, type LocalRecord, type PictureState, type RowUnavailable,
   type SectionView, type ServedHere,
 } from './gridPicture.js'
@@ -438,11 +438,12 @@ export class GridModelsService {
     const isMine = (node: ReadNode): boolean => !!email && node.providerEmail?.trim().toLowerCase() === email
     const previous = tracked.picture
     let picture = mergeAwake(previous, read.nodes, now, isMine, (name, key) => provenStopped(previous, here, name, key))
-    picture = withWindows({ ...picture, caseMap: withSpellings(picture.caseMap, [...read.curatedIds, ...here.records.flatMap((r) => r.ids)]) }, read.windows)
+    const spelled = withSpellings(picture.caseMap, [...read.curatedIds, ...here.records.flatMap((r) => r.ids)])
+    picture = withWindows({ ...picture, caseMap: withSpellings(spelled, advertisedNow(here.records), true) }, read.windows)
     const unknownIds = unspelled(picture, read.nodes).filter((key) => !tracked.spelled.has(key))
     if (unknownIds.length && base) {
       unknownIds.forEach((key) => tracked.spelled.add(key))
-      picture = { ...picture, caseMap: withSpellings(picture.caseMap, await readDiscoveryIds(base)) }
+      picture = { ...picture, caseMap: withSpellings(picture.caseMap, await readDiscoveryIds(base), true) }
     }
     tracked.picture = picture
     tracked.rawNodes = read.rawNodes

@@ -1,4 +1,7 @@
+import 'dart:convert';
 import 'dart:typed_data';
+
+import '../core/wire_counter.dart';
 
 const terminalLocalVersion = 1;
 const terminalLocalHeaderBytes = 12;
@@ -82,6 +85,7 @@ class TerminalBinaryFrame {
   final bool compressed;
   final int? cols;
   final int? rows;
+  final String? tabId;
 
   const TerminalBinaryFrame({
     required this.kind,
@@ -91,11 +95,17 @@ class TerminalBinaryFrame {
     required this.compressed,
     this.cols,
     this.rows,
+    this.tabId,
   });
 }
 
 final _localMagic = Uint8List.fromList(const [0x48, 0x54, 0x52, 0x4c]);
 const _flagZlib = 1;
+const _flagSwarm = 2;
+bool _canCarrySwarm(TerminalBinaryKind kind) =>
+    kind == TerminalBinaryKind.input || kind == TerminalBinaryKind.paste;
+int terminalFrameFlags(TerminalBinaryFrame frame) =>
+    (frame.compressed ? _flagZlib : 0) | (frame.tabId == null ? 0 : _flagSwarm);
 
 Uint8List? _uuidBytes(String id) {
   final hex = id.replaceAll('-', '');
@@ -115,7 +125,7 @@ String _uuidString(Uint8List bytes) {
 
 Uint8List? encodeTerminalPlain(TerminalBinaryFrame frame) {
   final id = _uuidBytes(frame.streamId);
-  if (id == null || frame.seq < 0) return null;
+  if (id == null || frame.seq < 0 || frame.seq > maxSafeInteger) return null;
   if ((frame.kind == TerminalBinaryKind.input ||
           frame.kind == TerminalBinaryKind.sync ||
           frame.kind == TerminalBinaryKind.paste ||
@@ -127,10 +137,18 @@ Uint8List? encodeTerminalPlain(TerminalBinaryFrame frame) {
   if (frame.kind == TerminalBinaryKind.sync && frame.bytes.isNotEmpty) {
     return null;
   }
-  final metaBytes = frame.kind == TerminalBinaryKind.keyframe ? 28 : 24;
+  final scope = frame.tabId == null ? null : utf8.encode(frame.tabId!);
+  if (scope != null &&
+      (!_canCarrySwarm(frame.kind) ||
+          !RegExp(r'^[A-Za-z0-9_-]{1,128}$').hasMatch(frame.tabId!))) {
+    return null;
+  }
+  final metaBytes = frame.kind == TerminalBinaryKind.keyframe
+      ? 28
+      : 24 + (scope == null ? 0 : 1 + scope.length);
   final output = Uint8List(metaBytes + frame.bytes.length)..setRange(0, 16, id);
-  final view = ByteData.sublistView(output)
-    ..setUint64(16, frame.seq, Endian.big);
+  final view = ByteData.sublistView(output);
+  writeWireCounter(view, 16, frame.seq);
   if (frame.kind == TerminalBinaryKind.keyframe) {
     final cols = frame.cols;
     final rows = frame.rows;
@@ -145,6 +163,10 @@ Uint8List? encodeTerminalPlain(TerminalBinaryFrame frame) {
     view.setUint16(24, cols, Endian.big);
     view.setUint16(26, rows, Endian.big);
   }
+  if (scope != null) {
+    output[24] = scope.length;
+    output.setRange(25, 25 + scope.length, scope);
+  }
   output.setRange(metaBytes, output.length, frame.bytes);
   return output;
 }
@@ -154,27 +176,42 @@ TerminalBinaryFrame? decodeTerminalPlain(
   int flags,
   Uint8List plaintext,
 ) {
-  if ((flags & ~_flagZlib) != 0 ||
+  if ((flags & ~(_flagZlib | _flagSwarm)) != 0 ||
+      ((flags & _flagSwarm) != 0 && !_canCarrySwarm(kind)) ||
       ((kind == TerminalBinaryKind.input ||
               kind == TerminalBinaryKind.sync ||
               kind == TerminalBinaryKind.paste ||
               kind == TerminalBinaryKind.imagePaste ||
               kind == TerminalBinaryKind.pasteFile) &&
-          flags != 0)) {
+          (flags & _flagZlib) != 0)) {
     return null;
   }
-  final metaBytes = kind == TerminalBinaryKind.keyframe ? 28 : 24;
+  var metaBytes = kind == TerminalBinaryKind.keyframe ? 28 : 24;
+  String? tabId;
+  if ((flags & _flagSwarm) != 0) {
+    if (plaintext.length < 25) return null;
+    final length = plaintext[24];
+    if (length == 0 || length > 128 || plaintext.length < 25 + length) {
+      return null;
+    }
+    tabId = String.fromCharCodes(plaintext.sublist(25, 25 + length));
+    if (!RegExp(r'^[A-Za-z0-9_-]{1,128}$').hasMatch(tabId)) return null;
+    metaBytes = 25 + length;
+  }
   if (plaintext.length < metaBytes ||
       (kind == TerminalBinaryKind.sync && plaintext.length != metaBytes)) {
     return null;
   }
   final view = ByteData.sublistView(plaintext);
+  final seq = readWireCounter(view, 16);
+  if (seq == null) return null;
   return TerminalBinaryFrame(
     kind: kind,
     streamId: _uuidString(Uint8List.sublistView(plaintext, 0, 16)),
-    seq: view.getUint64(16, Endian.big),
+    seq: seq,
     bytes: Uint8List.fromList(plaintext.sublist(metaBytes)),
     compressed: (flags & _flagZlib) != 0,
+    tabId: tabId,
     cols: kind == TerminalBinaryKind.keyframe
         ? view.getUint16(24, Endian.big)
         : null,
@@ -197,7 +234,7 @@ Uint8List? encodeTerminalLocal(TerminalBinaryFrame frame) {
     ..setRange(0, 4, _localMagic);
   header[4] = terminalLocalVersion;
   header[5] = frame.kind.code;
-  header[6] = frame.compressed ? _flagZlib : 0;
+  header[6] = terminalFrameFlags(frame);
   ByteData.sublistView(header).setUint32(8, payload.length, Endian.big);
   return Uint8List.fromList([...header, ...payload]);
 }

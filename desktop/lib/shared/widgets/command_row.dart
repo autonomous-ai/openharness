@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
@@ -43,7 +44,7 @@ class CommandRow extends StatelessWidget {
               ),
             ),
             Icon(
-              copied ? Icons.check : Icons.copy,
+              copied ? AppIcons.check : AppIcons.copy,
               size: 16,
               color: copied ? AppColors.success : AppColors.mutedStrong,
             ),

@@ -1,9 +1,10 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/terminal/terminal_text.dart';
+import 'package:xterm/xterm.dart' show TerminalTheme;
 
 import '../core/models.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -11,12 +12,17 @@ import '../shared/theme/app_type.dart';
 import '../shared/theme/status_line_style.dart';
 import '../state/app_state.dart';
 import '../state/harness_sessions.dart';
+import '../state/session_content_search.dart';
+import '../state/session_tail.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import 'box_chrome.dart';
+import 'desktop_chrome.dart';
 import 'engine_identity.dart';
+import 'search_result_text.dart' show SessionSnippetText;
+import 'session_tail_view.dart';
 import 'swarm_preview_scroll.dart';
 
 typedef _PreviewAgent = ({MachineState machine, Agent agent});
@@ -65,9 +71,31 @@ class SwarmSearchPreview extends StatefulWidget {
   State<SwarmSearchPreview> createState() => _SwarmSearchPreviewState();
 }
 
+/// The conversation an external row previews: its own, on its machine.
+SessionTailKey? _externalKey(SwarmDestination row) =>
+    switch ((row.external, row.machineId)) {
+      (final external?, final machineId?) => (
+        machineId: machineId,
+        sessionId: external.sessionId,
+      ),
+      _ => null,
+    };
+
+/// The session a single-agent row previews the end of: the agent's current
+/// one, which is what opening the row shows.
+SessionTailKey? _tailKey(_PreviewAgent item) => switch (item.agent.sessionId) {
+  final sessionId? => (
+    machineId: item.machine.machine.machineId,
+    sessionId: sessionId,
+  ),
+  null => null,
+};
+
 class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
   Timer? _warm;
+  Timer? _tail;
   String? _selectedId;
+  SessionContentHit? _found;
   late SwarmPreviewScrollController _scroll;
   AppNotifier get app => widget.search.app;
 
@@ -75,6 +103,8 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
   void initState() {
     super.initState();
     _scroll = _scrollController();
+    // Each opening shows the sessions as they are now.
+    app.sessionTails.opened();
     widget.search.addListener(_changed);
     _changed();
   }
@@ -82,7 +112,9 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
   SwarmPreviewScrollController _scrollController() =>
       SwarmPreviewScrollController(
         search: widget.search,
-        lineHeight: () => terminalCellSizeOf(context).height,
+        lineHeight: () => DesktopChrome.of(context)
+            ? MediaQuery.textScalerOf(context).scale(13) * 1.5
+            : terminalCellSizeOf(context).height,
       );
 
   @override
@@ -100,10 +132,20 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
 
   void _changed() {
     final row = widget.search.selected;
+    // A machine's answer can land after the selection: show where it found it.
+    final found = row == null ? null : widget.search.contentHitFor(row.id);
+    if (!identical(found, _found)) setState(() => _found = found);
     if (_selectedId == row?.id) return;
     _selectedId = row?.id;
     setState(() {});
     _warm?.cancel();
+    _tail?.cancel();
+    if (row?.isCommand == true || row?.pickerQuery != null) return;
+    // A row passed over while arrowing is not asked for; one that stays
+    // selected is, once per Cmd-P opening. Nothing refreshes it after that.
+    _tail = Timer(const Duration(milliseconds: 60), () {
+      if (mounted && row != null) _wantTail(row);
+    });
     _warm = Timer(const Duration(milliseconds: 140), () {
       if (!mounted || row == null) return;
       final selected = _agents(app, row);
@@ -117,12 +159,282 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
           for (final item in _agents(app, neighbor).take(2))
             app.previewKey(item.machine.machine.machineId, item.agent),
       ], prioritize: true);
+      // The next rows' latest turns, so arrowing down finds them ready.
+      for (final neighbor in neighbors) {
+        if (_externalKey(neighbor) case final key?) {
+          app.sessionTails.want(key);
+          continue;
+        }
+        final items = _agents(app, neighbor);
+        if (neighbor.isGroup || items.length != 1) continue;
+        if (_tailKey(items.single) case final key?) app.sessionTails.want(key);
+      }
     });
   }
+
+  void _wantTail(SwarmDestination row) {
+    if (_externalKey(row) case final key?) {
+      app.sessionTails.want(key);
+      return;
+    }
+    final items = _agents(app, row);
+    if (row.isGroup || items.length != 1) return;
+    final item = items.single;
+    if (_tailKey(item) case final key?) app.sessionTails.want(key);
+  }
+
+  /// A conversation Harness did not start: what it is and where it ran, then
+  /// its latest turns from the bottom up, as any session's.
+  Widget _external(
+    SwarmDestination row,
+    ExternalSessionRef external,
+    EdgeInsets padding,
+    Size cell,
+    TerminalTheme theme,
+  ) {
+    final desktop = DesktopChrome.of(context);
+    final terminal = widget.terminal && !desktop;
+    final muted = desktop
+        ? DesktopChrome.text(size: 12, color: DesktopChrome.muted)
+        : terminal
+        ? terminalContentStyle(color: theme.muted)
+        : _muted;
+    final body = desktop
+        ? _desktopBody
+        : terminal
+        ? terminalContentStyle(color: theme.foreground)
+        : _body;
+    final warning = desktop
+        ? grid.AppPalette.warn
+        : terminal
+        ? theme.yellow
+        : _waitingInk;
+    final gap = terminal ? cell.height : 12.0;
+    final key = _externalKey(row)!;
+    final tail = app.sessionTails.read(key);
+    final open = tail?.openElsewhere ?? external.open;
+    final header = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          row.title,
+          style: desktop
+              ? DesktopChrome.text(size: 15, medium: true)
+              : terminal
+              ? body
+              : AppType.monoLabel(fontWeight: FontWeight.w600, height: 1.25),
+        ),
+        Text(row.detail, style: muted),
+        Text(
+          [
+            external.cwd,
+            if (row.machineLabel.isNotEmpty) row.machineLabel,
+          ].join(' · '),
+          style: muted,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        if (open)
+          Padding(
+            padding: EdgeInsets.only(top: gap * .5),
+            child: Text(switch (widget.search.sessionUnavailable(row)) {
+              null => 'Open in a terminal. Opening it here moves it.',
+              final where => '$where. Close it there to open it here.',
+            }, style: muted.copyWith(color: warning)),
+          ),
+      ],
+    );
+    if (tail == null || tail.rows.isEmpty) {
+      _scroll.reversed = false;
+      final found = widget.search.contentHitFor(row.id);
+      return SingleChildScrollView(
+        key: ValueKey('preview-content:${row.id}'),
+        controller: _scroll,
+        padding: padding,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            header,
+            if (found != null) ...[
+              SizedBox(height: gap),
+              SessionSnippetText(found, style: body, maxLines: null),
+            ],
+          ],
+        ),
+      );
+    }
+    _scroll.reversed = true;
+    return _tailLayout(
+      key: ValueKey('preview-content:${row.id}'),
+      header: Padding(
+        padding: padding.copyWith(bottom: gap),
+        child: header,
+      ),
+      content: SessionTailView(
+        tail: tail,
+        tails: app.sessionTails,
+        tailKey: key,
+        controller: _scroll,
+        words: [
+          for (final word in widget.search.wordsQuery.split(RegExp(r'\s+')))
+            if (word.length > 1) word,
+        ],
+        body: body,
+        muted: muted,
+        gap: gap,
+        padding: padding.copyWith(top: 0),
+      ),
+    );
+  }
+
+  /// One agent's preview: its session's latest turns from the bottom up when
+  /// its machine can say them, else the excerpts the live agent keeps.
+  Widget _single(
+    SwarmDestination row,
+    _PreviewAgent item,
+    EdgeInsets padding,
+    Size cell,
+    TerminalTheme theme,
+  ) {
+    final found = widget.search.contentHitFor(row.id);
+    final key = _tailKey(item);
+    final tail = key == null ? null : app.sessionTails.read(key);
+    if (key == null || tail == null || tail.rows.isEmpty) {
+      _scroll.reversed = false;
+      return SingleChildScrollView(
+        key: ValueKey('preview-content:${row.id}'),
+        controller: _scroll,
+        padding: padding,
+        child: _AgentPreview(
+          app: app,
+          item: item,
+          dense: widget.compactHeader,
+          terminal: widget.terminal,
+          found: found,
+        ),
+      );
+    }
+    _scroll.reversed = true;
+    final desktop = DesktopChrome.of(context);
+    final terminal = widget.terminal && !desktop;
+    final muted = desktop
+        ? DesktopChrome.text(size: 12, color: DesktopChrome.muted)
+        : terminal
+        ? terminalContentStyle(color: theme.muted)
+        : _muted;
+    final body = desktop
+        ? _desktopBody
+        : terminal
+        ? terminalContentStyle(color: theme.foreground)
+        : _body;
+    final gap = terminal ? cell.height : 12.0;
+    final (:machine, :agent) = item;
+    final live =
+        harnessSessionUnavailable(machine, agent) == null &&
+        (machine.blockedAgents.containsKey(agent.id) ||
+            machine.processingAgentIds.contains(agent.id));
+    // A match older than the turns shown says where it was, above them.
+    final earlier =
+        found != null &&
+            found.field != 'name' &&
+            (found.sessionId != key.sessionId ||
+                found.turn < tail.rows.first.turn)
+        ? found
+        : null;
+    return _tailLayout(
+      key: ValueKey('preview-content:${row.id}'),
+      header: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: padding.copyWith(bottom: gap),
+            child: _AgentPreview(
+              app: app,
+              item: item,
+              dense: widget.compactHeader,
+              terminal: terminal,
+              part: _Part.header,
+            ),
+          ),
+          if (earlier != null)
+            Padding(
+              padding: EdgeInsets.fromLTRB(padding.left, 0, padding.right, gap),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    [
+                      'Matched earlier',
+                      if (earlier.at case final at?)
+                        sessionPreviewAge(at, DateTime.now()),
+                    ].join(' · '),
+                    style: muted,
+                  ),
+                  SessionSnippetText(
+                    earlier,
+                    key: ValueKey('preview-found:${earlier.destinationId}'),
+                    style: body,
+                    maxLines: 2,
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+      content: SessionTailView(
+        tail: tail,
+        tails: app.sessionTails,
+        tailKey: key,
+        controller: _scroll,
+        words: [
+          for (final word in widget.search.wordsQuery.split(RegExp(r'\s+')))
+            if (word.length > 1) word,
+        ],
+        body: body,
+        muted: muted,
+        gap: gap,
+        padding: padding.copyWith(top: 0),
+        footer: live
+            ? _AgentPreview(
+                app: app,
+                item: item,
+                terminal: terminal,
+                part: _Part.footer,
+              )
+            : null,
+      ),
+    );
+  }
+
+  Widget _tailLayout({
+    required Key key,
+    required Widget header,
+    required Widget content,
+  }) => LayoutBuilder(
+    key: key,
+    builder: (context, constraints) => Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (DesktopChrome.of(context))
+          ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: constraints.maxHeight * .42),
+            child: ScrollConfiguration(
+              behavior: ScrollConfiguration.of(context)
+                  .copyWith(scrollbars: false),
+              child: SingleChildScrollView(primary: false, child: header),
+            ),
+          )
+        else
+          header,
+        Expanded(child: content),
+      ],
+    ),
+  );
 
   @override
   void dispose() {
     _warm?.cancel();
+    _tail?.cancel();
     widget.search.removeListener(_changed);
     _scroll.dispose();
     super.dispose();
@@ -131,8 +443,11 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    final desktop = DesktopChrome.of(context);
     final cell = widget.terminal ? terminalCellSizeOf(context) : Size.zero;
-    final padding = widget.terminal
+    final padding = desktop
+        ? const EdgeInsets.all(18)
+        : widget.terminal
         ? EdgeInsets.symmetric(
             horizontal: cell.width * 2,
             vertical: cell.height,
@@ -143,122 +458,203 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
       terminalThemeStore.value,
     );
     return AnimatedBuilder(
-      animation: Listenable.merge([app, app.sessionPreviews]),
+      animation: Listenable.merge([app, app.sessionPreviews, app.sessionTails]),
       builder: (context, _) {
         final row = widget.search.selected;
         if (row == null) return const SizedBox.shrink();
+        if (row.isCommand || row.pickerQuery != null) {
+          return Semantics(
+            container: true,
+            label: 'Command preview',
+            child: ListView(
+              key: ValueKey('preview-content:${row.id}'),
+              controller: _scroll,
+              padding: padding,
+              children: [
+                Text(
+                  row.title,
+                  style: desktop
+                      ? DesktopChrome.text(size: 15, medium: true)
+                      : terminalContentStyle(color: theme.foreground),
+                ),
+                if (row.detail.isNotEmpty)
+                  Text(
+                    row.detail,
+                    style: desktop
+                        ? DesktopChrome.text(
+                            size: 12,
+                            color: DesktopChrome.muted,
+                          )
+                        : terminalContentStyle(color: theme.muted),
+                  ),
+                if (row.shortcut case final shortcut?) ...[
+                  SizedBox(height: desktop ? 12 : cell.height),
+                  Text(
+                    shortcut,
+                    style: desktop
+                        ? grid.AppType.monoMeta(color: DesktopChrome.muted)
+                              .copyWith(fontSize: 12)
+                        : terminalContentStyle(color: theme.muted),
+                  ),
+                ],
+              ],
+            ),
+          );
+        }
+        if (row.external case final external?) {
+          final content = _external(row, external, padding, cell, theme);
+          return Semantics(
+            container: true,
+            label: 'Conversation preview',
+            child: _scroll.reversed
+                ? content
+                : Scrollbar(controller: _scroll, child: content),
+          );
+        }
         final agents = _agents(app, row);
-        return Semantics(
-          container: true,
-          label: 'Agent preview',
-          child: Scrollbar(
-            controller: _scroll,
-            child: row.isGroup || agents.length != 1
-                ? ListView.builder(
-                    key: ValueKey('preview-content:${row.id}'),
-                    controller: _scroll,
-                    padding: padding,
-                    scrollCacheExtent: const ScrollCacheExtent.pixels(120),
-                    itemCount: agents.length + 1,
-                    itemBuilder: (context, index) => index == 0
-                        ? Padding(
-                            padding: EdgeInsets.only(
-                              bottom: widget.terminal ? cell.height : 24,
+        if (row.isGroup || agents.length != 1) _scroll.reversed = false;
+        final content = row.isGroup || agents.length != 1
+            ? ListView.builder(
+                key: ValueKey('preview-content:${row.id}'),
+                controller: _scroll,
+                padding: padding,
+                scrollCacheExtent: const ScrollCacheExtent.pixels(120),
+                itemCount: agents.length + 1,
+                itemBuilder: (context, index) => index == 0
+                    ? Padding(
+                        padding: EdgeInsets.only(
+                          bottom: desktop
+                              ? 16
+                              : widget.terminal
+                              ? cell.height
+                              : 24,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              row.title,
+                              // The list leads the eye; this confirms it.
+                              style: desktop
+                                  ? DesktopChrome.text(size: 15, medium: true)
+                                  : widget.terminal
+                                  ? terminalContentStyle(
+                                      color: theme.foreground,
+                                    )
+                                  : AppType.monoLabel(
+                                      fontWeight: FontWeight.w600,
+                                    ),
                             ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  row.title,
-                                  // The list leads the eye; this confirms it.
-                                  style: widget.terminal
-                                      ? terminalContentStyle(
-                                          color: theme.foreground,
-                                        )
-                                      : AppType.monoLabel(
-                                          fontWeight: FontWeight.w600,
-                                        ),
+                            if (desktop || !widget.terminal)
+                              const SizedBox(height: 6),
+                            Text(
+                              row.detail,
+                              style: desktop
+                                  ? DesktopChrome.text(
+                                      size: 12,
+                                      color: DesktopChrome.muted,
+                                    )
+                                  : widget.terminal
+                                  ? terminalContentStyle(color: theme.muted)
+                                  : _muted,
+                            ),
+                            // Nothing exists yet behind the create row, so
+                            // there is no session to be missing text from.
+                            if (agents.isEmpty && !row.isCreate)
+                              Padding(
+                                padding: EdgeInsets.only(
+                                  top: desktop
+                                      ? 16
+                                      : widget.terminal
+                                      ? cell.height
+                                      : 24,
                                 ),
-                                if (!widget.terminal) const SizedBox(height: 6),
-                                Text(
-                                  row.detail,
-                                  style: widget.terminal
-                                      ? terminalContentStyle(
-                                          color: theme.foreground.withValues(
-                                            alpha: .54,
-                                          ),
+                                child: Text(
+                                  'No recent harness text available.',
+                                  style: desktop
+                                      ? DesktopChrome.text(
+                                          size: 12,
+                                          color: DesktopChrome.muted,
                                         )
+                                      : widget.terminal
+                                      ? terminalContentStyle(color: theme.muted)
                                       : _muted,
                                 ),
-                                // Nothing exists yet behind the create row, so
-                                // there is no session to be missing text from.
-                                if (agents.isEmpty && !row.isCreate)
-                                  Padding(
-                                    padding: EdgeInsets.only(
-                                      top: widget.terminal ? cell.height : 24,
-                                    ),
-                                    child: Text(
-                                      'No recent session text available.',
-                                      style: widget.terminal
-                                          ? terminalContentStyle(
-                                              color: theme.foreground
-                                                  .withValues(alpha: .54),
-                                            )
-                                          : _muted,
-                                    ),
-                                  ),
-                              ],
+                              ),
+                          ],
+                        ),
+                      )
+                    : Padding(
+                        padding: EdgeInsets.only(
+                          top: index > 1
+                              ? widget.terminal
+                                    ? cell.height
+                                    : 20
+                              : 0,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _AgentPreview(
+                              app: app,
+                              item: agents[index - 1],
+                              compact: true,
+                              terminal: widget.terminal,
                             ),
-                          )
-                        : Padding(
-                            padding: EdgeInsets.only(
-                              top: index > 1
-                                  ? widget.terminal
-                                        ? cell.height
-                                        : 20
-                                  : 0,
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                _AgentPreview(
-                                  app: app,
-                                  item: agents[index - 1],
-                                  compact: true,
-                                  terminal: widget.terminal,
-                                ),
-                                if (index < agents.length)
-                                  SizedBox(
-                                    height: widget.terminal ? cell.height : 20,
-                                  ),
-                              ],
-                            ),
-                          ),
-                  )
-                : SingleChildScrollView(
-                    key: ValueKey('preview-content:${row.id}'),
-                    controller: _scroll,
-                    padding: padding,
-                    child: _AgentPreview(
-                      app: app,
-                      item: agents.single,
-                      dense: widget.compactHeader,
-                      terminal: widget.terminal,
-                    ),
-                  ),
-          ),
+                            if (index < agents.length)
+                              SizedBox(
+                                height: widget.terminal ? cell.height : 20,
+                              ),
+                          ],
+                        ),
+                      ),
+              )
+            : _single(row, agents.single, padding, cell, theme);
+        return Semantics(
+          container: true,
+          label: 'Harness preview',
+          // A session's latest turns carry their list's own scrollbar, on the
+          // turns alone: one around the whole preview, header included, drew
+          // a second thumb beside it.
+          child: _scroll.reversed
+              ? content
+              : Scrollbar(controller: _scroll, child: content),
         );
       },
     );
   }
 }
 
-TextStyle get _muted => AppType.monoMeta(height: 1.5, color: Colors.white54);
+TextStyle get _muted => AppType.monoMeta(height: 1.5, color: kBoxFaint);
+// Dark palettes keep the soft ink this preview was tuned in; a light one
+// takes its primary text, since #e1e1e4 vanishes on a light surface.
 TextStyle get _body => AppType.monoLabel(
   fontWeight: FontWeight.w400,
   height: 1.6,
-  color: Color(0xffe1e1e4),
+  color: grid.AppTheme.pick(
+    grid.AppPalette.textPrimary,
+    const Color(0xffe1e1e4),
+  ),
 );
+TextStyle get _desktopBody => grid.AppType.mono(
+  color: DesktopChrome.foreground,
+  height: 1.5,
+).copyWith(fontSize: 12);
+
+// The non-terminal preview's state colours. The dark ones are pale tints that
+// vanish on a light ground, where the matching status tokens take over.
+Color get _waitingInk =>
+    grid.AppTheme.pick(grid.AppPalette.warn, const Color(0xffe9bf79));
+Color get _workingInk => grid.AppTheme.pick(
+  grid.AppPalette.accentOnSurface,
+  const Color(0xffadc5eb),
+);
+Color get _idleInk =>
+    grid.AppTheme.pick(grid.AppPalette.online, const Color(0xff9abea5));
+
+/// Which part of an agent's preview to draw: all of it, or the header and the
+/// footer that frame a session's latest turns ([SessionTailView]).
+enum _Part { all, header, footer }
 
 class _AgentPreview extends StatelessWidget {
   const _AgentPreview({
@@ -267,25 +663,38 @@ class _AgentPreview extends StatelessWidget {
     this.compact = false,
     this.dense = false,
     this.terminal = false,
+    this.found,
+    this.part = _Part.all,
   });
   final AppNotifier app;
   final _PreviewAgent item;
   final bool compact;
   final bool dense;
   final bool terminal;
+  final _Part part;
+
+  /// Where the machine's session index found the searched words in this
+  /// conversation, when that is how it matched.
+  final SessionContentHit? found;
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    final desktop = DesktopChrome.of(context);
+    final terminal = this.terminal && !desktop;
     final cell = terminal ? terminalCellSizeOf(context) : Size.zero;
     final theme = terminalThemeFor(
       grid.AppTheme.palette.value,
       terminalThemeStore.value,
     );
-    final muted = terminal
-        ? terminalContentStyle(color: theme.foreground.withValues(alpha: .54))
+    final muted = desktop
+        ? DesktopChrome.text(size: 12, color: DesktopChrome.muted)
+        : terminal
+        ? terminalContentStyle(color: theme.muted)
         : _muted;
-    final body = terminal
+    final body = desktop
+        ? _desktopBody
+        : terminal
         ? terminalContentStyle(color: theme.foreground)
         : _body;
     Widget section(String label, String text, {int? maxLines}) =>
@@ -307,17 +716,23 @@ class _AgentPreview extends StatelessWidget {
             : 'Idle');
     final color = offline
         ? muted.color!
+        : desktop
+        ? waiting != null
+              ? grid.AppPalette.warn
+              : working
+              ? DesktopChrome.accent
+              : grid.AppPalette.online
         : waiting != null
         ? terminal
               ? theme.yellow
-              : const Color(0xffe9bf79)
+              : _waitingInk
         : working
         ? terminal
               ? theme.blue
-              : const Color(0xffadc5eb)
+              : _workingInk
         : terminal
         ? theme.green
-        : const Color(0xff9abea5);
+        : _idleInk;
     final project = machine.projectOf(agent);
     final request =
         working && record?.turnOpen == true && record?.currentRequest != null
@@ -335,10 +750,87 @@ class _AgentPreview extends StatelessWidget {
             ? request ?? activity ?? response
             : record?.contextResponse ?? response ?? request);
 
+    final waitingBox = waiting == null
+        ? null
+        : Container(
+            width: double.infinity,
+            padding: terminal ? EdgeInsets.zero : const EdgeInsets.all(16),
+            decoration: terminal
+                ? null
+                : BoxDecoration(
+                    color: color.withValues(alpha: .06),
+                    border: Border.all(color: color.withValues(alpha: .24)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Needs your input',
+                  style: desktop
+                      ? DesktopChrome.text(size: 12, medium: true, color: color)
+                      : terminal
+                      ? terminalContentStyle(color: color)
+                      : AppType.monoLabel(
+                          fontWeight: FontWeight.w600,
+                          color: color,
+                        ),
+                ),
+                if (!terminal) const SizedBox(height: 8),
+                Text(_displayText(waiting.prompt), style: body),
+                if (waiting.options.isNotEmpty) ...[
+                  SizedBox(height: terminal ? cell.height : 12),
+                  Text(waiting.options.take(6).join('  ·  '), style: muted),
+                ],
+              ],
+            ),
+          );
+    if (part == _Part.footer) {
+      // Below the latest turn: the question waiting on the person, or that
+      // the agent is still at work on this turn.
+      if (waitingBox != null) return waitingBox;
+      if (!working) return const SizedBox.shrink();
+      return Text('Working', style: muted.copyWith(color: color));
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (terminal) ...[
+        if (desktop) ...[
+          Tooltip(
+            message: agent.displayName,
+            child: Text(
+              agent.displayName,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.text(size: 15, medium: true),
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            [
+              machine.machine.displayName,
+              if (project?.label case final name? when name.isNotEmpty) name,
+              ?project?.shownBranch,
+            ].join(' · '),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: grid.AppType.monoMeta(color: DesktopChrome.muted)
+                .copyWith(fontSize: 11),
+          ),
+          const SizedBox(height: 6),
+          Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(
+                  text: state,
+                  style: TextStyle(color: color),
+                ),
+                TextSpan(text: ' · ${agentIdentity(agent).label}'),
+              ],
+            ),
+            style: muted,
+          ),
+        ] else if (terminal) ...[
           Text(agent.displayName, style: body),
           Text(
             statusLineParts(
@@ -390,7 +882,7 @@ class _AgentPreview extends StatelessWidget {
               ],
             ],
           ),
-        if (!dense && !terminal) ...[
+        if (!desktop && !dense && !terminal) ...[
           const SizedBox(height: 10),
           Wrap(
             spacing: 8,
@@ -407,9 +899,7 @@ class _AgentPreview extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
-                      waiting != null
-                          ? LucideIcons.hand300
-                          : LucideIcons.circle300,
+                      waiting != null ? AppIcons.hand : AppIcons.circle,
                       size: 10,
                       color: color,
                     ),
@@ -430,15 +920,32 @@ class _AgentPreview extends StatelessWidget {
             ],
           ),
         ],
-        if (compact) ...[
+        if (part == _Part.header) ...[
+          if (!desktop &&
+              !terminal &&
+              (project?.label.isNotEmpty == true || project?.branch != null))
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                [
+                  if (project?.label case final label? when label.isNotEmpty)
+                    label,
+                  ?project?.branch,
+                ].join(' · '),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: muted,
+              ),
+            ),
+        ] else if (compact) ...[
           SizedBox(height: terminal ? cell.height : 10),
           Text(
-            _displayText(excerpt ?? 'No recent session text available.'),
+            _displayText(excerpt ?? 'No recent harness text available.'),
             maxLines: 4,
             overflow: TextOverflow.ellipsis,
             style: excerpt == null ? muted : body,
           ),
-          if (project != null && !terminal)
+          if (project != null && !terminal && !desktop)
             Padding(
               padding: EdgeInsets.only(top: terminal ? cell.height : 8),
               child: Text(
@@ -450,42 +957,38 @@ class _AgentPreview extends StatelessWidget {
           SizedBox(
             height: terminal
                 ? cell.height
+                : desktop
+                ? 16
                 : dense
                 ? 16
                 : 26,
           ),
-          if (waiting != null) ...[
-            Container(
-              width: double.infinity,
-              padding: terminal ? EdgeInsets.zero : const EdgeInsets.all(16),
-              decoration: terminal
-                  ? null
-                  : BoxDecoration(
-                      color: color.withValues(alpha: .06),
-                      border: Border.all(color: color.withValues(alpha: .24)),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Needs your input',
-                    style: terminal
-                        ? terminalContentStyle(color: color)
-                        : AppType.monoLabel(
-                            fontWeight: FontWeight.w600,
-                            color: color,
-                          ),
-                  ),
-                  if (!terminal) const SizedBox(height: 8),
-                  Text(_displayText(waiting.prompt), style: body),
-                  if (waiting.options.isNotEmpty) ...[
-                    SizedBox(height: terminal ? cell.height : 12),
-                    Text(waiting.options.take(6).join('  ·  '), style: muted),
-                  ],
-                ],
-              ),
+          if (found case final found? when found.field != 'name') ...[
+            Text(
+              [
+                switch (found.field) {
+                  'answer' => 'Found in an answer',
+                  'tools' => 'Found in a command or file',
+                  _ => 'Found in what you asked',
+                },
+                if (found.at case final at?)
+                  sessionPreviewAge(at, DateTime.now()),
+              ].join(' · '),
+              style: terminal
+                  ? muted
+                  : muted.copyWith(fontWeight: FontWeight.w500),
             ),
+            if (!terminal) const SizedBox(height: 7),
+            SessionSnippetText(
+              found,
+              key: ValueKey('preview-found:${found.destinationId}'),
+              style: body,
+              maxLines: null,
+            ),
+            SizedBox(height: terminal ? cell.height : 24),
+          ],
+          if (waitingBox != null) ...[
+            waitingBox,
             SizedBox(height: terminal ? cell.height : 24),
           ],
           if (working) ...[
@@ -514,7 +1017,7 @@ class _AgentPreview extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Earlier in this session',
+                      'Earlier in this harness',
                       style: terminal
                           ? muted
                           : muted.copyWith(fontWeight: FontWeight.w500),
@@ -541,21 +1044,17 @@ class _AgentPreview extends StatelessWidget {
           if (record?.hasContent != true && waiting == null)
             Padding(
               padding: EdgeInsets.only(bottom: terminal ? cell.height : 24),
-              child: Text('No recent session text available.', style: muted),
+              child: Text('No recent harness text available.', style: muted),
             ),
           if (!terminal) const SizedBox(height: 8),
           if (project?.cwd case final cwd?) Text(cwd, style: muted),
-          if (!terminal)
+          if (!terminal && !desktop)
             if (project?.branch case final branch?)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Row(
                   children: [
-                    Icon(
-                      LucideIcons.gitBranch300,
-                      size: 12,
-                      color: muted.color,
-                    ),
+                    Icon(AppIcons.gitBranch, size: 12, color: muted.color),
                     const SizedBox(width: 6),
                     Expanded(child: Text(branch, style: muted)),
                   ],
@@ -583,29 +1082,40 @@ class _Section extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    final desktop = DesktopChrome.of(context);
     final theme = terminalThemeFor(
       grid.AppTheme.palette.value,
       terminalThemeStore.value,
     );
     return Padding(
       padding: EdgeInsets.only(
-        bottom: terminal ? terminalCellSizeOf(context).height : 24,
+        bottom: desktop
+            ? 16
+            : terminal
+            ? terminalCellSizeOf(context).height
+            : 24,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             label,
-            style: terminal
-                ? terminalContentStyle(
-                    color: theme.foreground.withValues(alpha: .54),
+            style: desktop
+                ? DesktopChrome.text(
+                    size: 12,
+                    medium: true,
+                    color: DesktopChrome.muted,
                   )
+                : terminal
+                ? terminalContentStyle(color: theme.muted)
                 : _muted.copyWith(fontWeight: FontWeight.w500),
           ),
-          if (!terminal) const SizedBox(height: 7),
+          if (desktop || !terminal) const SizedBox(height: 6),
           Text(
             _displayText(text),
-            style: terminal
+            style: desktop
+                ? _desktopBody
+                : terminal
                 ? terminalContentStyle(color: theme.foreground)
                 : _body,
             maxLines: maxLines,

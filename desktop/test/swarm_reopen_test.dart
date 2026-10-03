@@ -24,7 +24,7 @@ class _NoopLogin extends CliLogin {
 }
 
 void main() {
-  test('recently closed agents and swarms do not survive sign-out', () async {
+  test('recently closed agents and tabs do not survive sign-out', () async {
     final login = _NoopLogin();
     final app = AppNotifier(
       config: AppConfig.dev,
@@ -34,6 +34,7 @@ void main() {
     );
     addTearDown(app.dispose);
     app.renameSwarm(app.activeSwarmId, 'Private work');
+    app.adoptSessionForTest(terminal('other-private', []));
     final pane = app.adoptSessionForTest(terminal('private', []));
     await app.closePane(pane.id);
     await app.closeSwarm(app.activeSwarmId);

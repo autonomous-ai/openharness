@@ -9,8 +9,8 @@ import 'direct_auth_api.dart';
 /// the app.
 ///
 /// Why a phone signs in this way and not through the browser: the SSO flow redirects back to a
-/// loopback listener inside the app (`direct_login.dart`), and a phone is not obliged to keep that
-/// listener alive while a browser is in front of it. Google Play's review saw exactly that —
+/// loopback listener inside the app (the desktop CLI's `loginCommand`), and a phone is not obliged
+/// to keep that listener alive while a browser is in front of it. Google Play's review saw exactly that —
 /// "127.0.0.1 took too long to respond" — and rejected the build for a sign-in that could not
 /// finish. A code typed into the app never leaves it.
 ///
@@ -89,10 +89,18 @@ class EmailCodeApi {
     } on DioException {
       throw const DirectAuthException(_unreachable);
     }
-    if ((res.statusCode ?? 500) >= 500) {
+    // Neither is being told to slow down or to come back later (429, 408): that says nothing
+    // about the token. It is exactly what a phone hammering a refresh after a wake gets told.
+    final status = res.statusCode ?? 500;
+    if (status >= 500 || status == 429 || status == 408) {
       throw const DirectAuthException(_unreachable);
     }
-    final body = res.data is Map ? res.data as Map : const {};
+    // Nor is a page that is not this API's envelope at all: a gateway's error page, a captive
+    // portal's login. Only the service itself can say the token is no good.
+    final body = res.data;
+    if (body is! Map || !body.containsKey('status')) {
+      throw const DirectAuthException(_unreachable);
+    }
     final tokens = body['status'] == 1 ? _tokens(body['data']) : null;
     return tokens ??
         (throw const DirectAuthException(

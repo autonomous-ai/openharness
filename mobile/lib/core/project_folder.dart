@@ -18,7 +18,21 @@ class ProjectFolderRequest {
       branchName = null,
       existingBranch = false,
       placeholder = false,
-      createsWorktree = false;
+      createsWorktree = false,
+      suggestedName = null;
+
+  /// A fresh project named after its first [task] (openharness#94): the machine makes
+  /// `~/harnesses/robot-noi-chuyen-voi-gemini`, and numbers it past one that exists. A task with
+  /// no words to name it by leaves the name to the machine, as [ProjectFolderRequest.newProject].
+  ProjectFolderRequest.forTask(String task)
+    : repository = null,
+      gitSource = null,
+      branchRef = null,
+      branchName = null,
+      existingBranch = false,
+      placeholder = false,
+      createsWorktree = false,
+      suggestedName = taskProjectSlug(task);
 
   /// Let the machine clone [value] and work in the checkout.
   const ProjectFolderRequest.remote(GitHubRepository value)
@@ -28,7 +42,8 @@ class ProjectFolderRequest {
       branchName = null,
       existingBranch = false,
       placeholder = false,
-      createsWorktree = false;
+      createsWorktree = false,
+      suggestedName = null;
 
   /// A new worktree of the repository at [source], on [branchName]: created
   /// from [branchRef], or with [existingBranch] that local branch checked out
@@ -45,7 +60,8 @@ class ProjectFolderRequest {
     this.placeholder = false,
   }) : gitSource = source,
        createsWorktree = true,
-       repository = null;
+       repository = null,
+       suggestedName = null;
 
   /// The folder at [source] itself on [ref], or with [newBranch] on that new
   /// branch, made where the folder is now.
@@ -63,9 +79,14 @@ class ProjectFolderRequest {
        existingBranch = false,
        placeholder = false,
        createsWorktree = false,
-       repository = null;
+       repository = null,
+       suggestedName = null;
 
   final GitHubRepository? repository;
+
+  /// The folder a fresh project is named after its first task, or null to leave the name to the
+  /// machine (engine and time).
+  final String? suggestedName;
 
   /// The existing checkout a branch or worktree is taken from. Null for the two
   /// sources that have no repository yet.
@@ -95,8 +116,87 @@ class ProjectFolderRequest {
     if (existingBranch) 'branchMode': 'existing',
     if (placeholder) 'branchMode': 'placeholder',
     if (repository != null) 'repositoryUrl': repository!.url,
+    // A made-up name: the machine numbers it past a folder that exists rather than refusing it. A
+    // daemon that predates `projectNameMode` refuses a taken name instead; one that predates
+    // `projectName` names the folder itself.
+    'projectName': ?suggestedName,
+    if (suggestedName != null) 'projectNameMode': 'suggested',
   };
 }
+
+/// How many of a first task's words name the project and the agent. The desktop's
+/// `core/project_folder.dart` holds the same rule; the two apps name the same task the same way.
+const _taskNameWords = 6;
+
+/// The first line of [task], cut to its first few words — what a project named after its task, and
+/// the agent in it, are called ("Robot nói chuyện với Gemini"). Null when the task has no letters or
+/// digits to name anything by.
+String? taskProjectTitle(String task) {
+  final line = task
+      .trim()
+      .split('\n')
+      .first
+      .split(RegExp(r'\s+'))
+      .where((word) => word.isNotEmpty)
+      .take(_taskNameWords)
+      .join(' ');
+  if (!RegExp(r'[\p{L}\p{N}]', unicode: true).hasMatch(line)) return null;
+  return line.length > 60 ? line.substring(0, 60).trimRight() : line;
+}
+
+/// The folder a project named after [task] gets: lowercase words joined by dashes, accents folded
+/// (`robot-noi-chuyen-voi-gemini`). Null when nothing usable is left.
+String? taskProjectSlug(String task) {
+  final title = taskProjectTitle(task);
+  if (title == null) return null;
+  final slug = foldDiacritics(title)
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
+  if (slug.isEmpty) return null;
+  return slug.length > 48
+      ? slug.substring(0, 48).replaceAll(RegExp(r'-+$'), '')
+      : slug;
+}
+
+/// [text] with Latin letters' accents removed: Vietnamese (`đ` included), French, German,
+/// Spanish, Portuguese and the like. Other scripts pass through untouched.
+String foldDiacritics(String text) {
+  final out = StringBuffer();
+  for (final rune in text.runes) {
+    final char = String.fromCharCode(rune);
+    out.write(_folds[char] ?? char);
+  }
+  return out.toString();
+}
+
+final Map<String, String> _folds = () {
+  const groups = {
+    'a': 'àáảãạăằắẳẵặâầấẩẫậäåā',
+    'A': 'ÀÁẢÃẠĂẰẮẲẴẶÂẦẤẨẪẬÄÅĀ',
+    'e': 'èéẻẽẹêềếểễệëē',
+    'E': 'ÈÉẺẼẸÊỀẾỂỄỆËĒ',
+    'i': 'ìíỉĩịïī',
+    'I': 'ÌÍỈĨỊÏĪ',
+    'o': 'òóỏõọôồốổỗộơờớởỡợöøō',
+    'O': 'ÒÓỎÕỌÔỒỐỔỖỘƠỜỚỞỠỢÖØŌ',
+    'u': 'ùúủũụưừứửữựüū',
+    'U': 'ÙÚỦŨỤƯỪỨỬỮỰÜŪ',
+    'y': 'ỳýỷỹỵÿ',
+    'Y': 'ỲÝỶỸỴŸ',
+    'd': 'đ',
+    'D': 'Đ',
+    'c': 'ç',
+    'C': 'Ç',
+    'n': 'ñ',
+    'N': 'Ñ',
+    'ss': 'ß',
+  };
+  return {
+    for (final MapEntry(key: base, value: letters) in groups.entries)
+      for (final letter in letters.runes) String.fromCharCode(letter): base,
+  };
+}();
 
 /// A GitHub repository named by URL — `owner/repo`, an https link, or an ssh remote.
 ///

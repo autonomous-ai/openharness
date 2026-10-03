@@ -19,6 +19,20 @@ const key = Uint8Array.from({ length: 32 }, (_, index) => index)
 const streamId = '00112233-4455-6677-8899-aabbccddeeff'
 
 describe('terminal binary protocol v3', () => {
+  it('authenticates the prompt origin with its input bytes on local and encrypted transports', () => {
+    const frame = { kind: TerminalBinaryKind.input, streamId, seq: 3, bytes: Buffer.from('xin chào\r'), compressed: false, tabId: 'swarm-a' }
+    const local = encodeTerminalLocal(frame)!
+    expect(Buffer.from(local).toString('hex')).toBe('4854524c010102000000002a00112233445566778899aabbccddeeff000000000000000307737761726d2d6178696e206368c3a06f0d')
+    expect(decodeTerminalLocal(local)).toEqual({ ...frame, bytes: new Uint8Array(frame.bytes) })
+    const sealed = sealTerminalBinary(key, 12, frame)!
+    expect(openTerminalBinary(key, sealed)?.frame).toEqual({ ...frame, bytes: new Uint8Array(frame.bytes) })
+    sealed[6] = 0
+    expect(openTerminalBinary(key, sealed)).toBeNull()
+    local[36] = 129 // Scope length must be bounded and fully present.
+    expect(decodeTerminalLocal(local)).toBeNull()
+    expect(encodeTerminalLocal({ ...frame, kind: TerminalBinaryKind.output })).toBeNull()
+    expect(encodeTerminalLocal({ ...frame, tabId: 'bad\ntab' })).toBeNull()
+  })
   it('derives the cross-platform terminal key in its own nonce domain', () => {
     expect(Buffer.from(deriveTerminalBinaryKey(key)).toString('hex')).toBe(
       'f15a4e3a9c616916c38980baf864db0c65e282ebe7cd64a18aa0f723a6e254f5',

@@ -108,16 +108,14 @@ class _AgentsListPageState extends State<AgentsListPage> {
               // magnifier would have pushed a second screen over this one to answer a question
               // this one is already showing.
               //
-              // ⚠️ No autofocus and no back chevron in the bar — both belong to [PhoneSearchPage],
-              // where the field IS the header. Here the list is worth reading before anything is
-              // typed, and the header above already carries the way out.
+              // ⚠️ No autofocus and no back chevron in the bar. Here the list is worth reading
+              // before anything is typed, and the header above already carries the way out.
               if (all.isNotEmpty)
                 PhoneSearchField(
                   controller: _controller,
                   focus: _focus,
-                  autofocus: false,
                   // This field filters the list below it; it is not the door to
-                  // the modes, which [PhoneSearchPage] carries.
+                  // the modes, which Find carries.
                   hintText: 'Search harnesses',
                   onChanged: (value) => setState(() => _query = value),
                   onClear: () {
@@ -144,11 +142,7 @@ class _AgentsListPageState extends State<AgentsListPage> {
 }
 
 class _Body extends StatefulWidget {
-  const _Body({
-    required this.notifier,
-    required this.all,
-    required this.query,
-  });
+  const _Body({required this.notifier, required this.all, required this.query});
 
   final AppNotifier notifier;
 
@@ -176,8 +170,8 @@ class _BodyState extends State<_Body> {
     final all = widget.all;
     final query = widget.query;
     if (all.isEmpty) return _empty();
-    // The same ranking [PhoneSearchPage] applies, so an agent found by a word here is the agent
-    // that word finds there. Grouping happens after: ranking decides the order the rows arrive in,
+    // The same ranking Find applies, so an agent found by a word here is the agent that word
+    // finds there. Grouping happens after: ranking decides the order the rows arrive in,
     // and [phoneMachineGroups] preserves it — so the best match still heads the first group.
     final rows = query.isEmpty
         ? all
@@ -235,7 +229,9 @@ class _BodyState extends State<_Body> {
     icon: notifier.machines.isEmpty
         ? LucideIcons.laptopMinimal300
         : LucideIcons.squareTerminal300,
-    title: notifier.machines.isEmpty ? 'No machines yet' : 'No harnesses to show',
+    title: notifier.machines.isEmpty
+        ? 'No machines yet'
+        : 'No harnesses to show',
     message: notifier.machines.isEmpty
         ? 'Link a machine and its harnesses will be listed here.'
         : 'Harnesses appear here once a machine is linked and answering. '
@@ -245,10 +241,7 @@ class _BodyState extends State<_Body> {
   /// Opens the agent as a pager over the other rows on screen, resuming stopped
   /// work first — the same [resumeAgentForOpen] the search uses, so tapping the
   /// same agent on either screen does the same thing.
-  Future<void> _open(
-    List<PhoneDestination> drawn,
-    PhoneDestination row,
-  ) async {
+  Future<void> _open(List<PhoneDestination> drawn, PhoneDestination row) async {
     // The keyboard goes away with the screen rather than a frame after it, so the push does not
     // animate over a collapsing inset. [PhoneSearchRow] does this for its own tap; a row opened
     // by any other path still has to.
@@ -261,9 +254,8 @@ class _BodyState extends State<_Body> {
       if (!mounted) return;
       setState(() => _resuming = null);
       if (error != null) {
-        ScaffoldMessenger.maybeOf(
-          context,
-        )?.showSnackBar(SnackBar(content: Text(error)));
+        ScaffoldMessenger.maybeOf(context)
+            ?.showSnackBar(SnackBar(content: Text(error)));
         return;
       }
     } else if (!entry.agent.terminalAvailable) {

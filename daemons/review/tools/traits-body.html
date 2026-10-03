@@ -1,0 +1,47 @@
+<section aria-labelledby="s-traits">
+  <h2 id="s-traits">One species. Many individuals.</h2>
+  <p class="lede">Ten species, six examples each. Same seed, same daemon.</p>
+  <p>
+    These samples were chosen to show the range, including rare extras. They are
+    not a typical run of hatches. Each uses the current species model, trait
+    catalogue, and status-line sprite.
+  </p>
+  <details>
+    <summary>What “1 in N” means</summary>
+    <p>
+      The chance of this colour, markings, extra, and eye combination within the
+      species, rounded to the nearest whole number. Shape, temperament, species
+      rarity, and the separate shiny roll are not included. It is a description
+      of the look, not a promise about the next hatch.
+    </p>
+  </details>
+  <nav class="review-toc" id="speciesLinks" aria-label="Jump to species"></nav>
+  <div class="traits-filter">
+    <label
+      >Species<select id="speciesFilter">
+        <option value="">All ten species</option>
+      </select></label
+    >
+    <label
+      >Show<select id="traitFilter">
+        <option value="">All traits</option>
+        <option value="extra">Rare extras</option>
+        <option value="oddEye">Odd eye</option>
+        <option value="fidgety">Fidgety</option>
+      </select></label
+    >
+    <label
+      >Find a trait<input
+        id="traitSearch"
+        type="search"
+        placeholder="beanie, coral, spots…"
+        autocomplete="off"
+    /></label>
+    <button id="clearFilters" type="button">Clear filters</button>
+    <span class="note" id="traitCount" role="status" aria-live="polite"></span>
+  </div>
+  <div id="all"></div>
+  <p class="review-empty" id="traitEmpty" hidden>
+    No samples match. Try a different trait or clear the filters.
+  </p>
+</section>

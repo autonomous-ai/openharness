@@ -160,22 +160,33 @@ is consistently fast.
 
 ## Desktop process resources
 
+**CPU correction, October 1:** the original sampler treated Mach CPU ticks as
+nanoseconds. A controlled workload on the current Apple Silicon host showed
+0.072 seconds reported for 2.998 seconds of CPU work (a 125/3 clock scale).
+The CPU figures previously in this table are withdrawn. Those older files did
+not record their timebase, so no retrospective CPU estimates are substituted.
+Raw artifacts remain intact; memory, wakeup, disk and interaction-timing
+measurements use independent counters and are unaffected. The corrected sampler
+records its clock and has an independent native calibration test; the
+[calibration evidence](2026-10-01-resource-sampler-calibration.json) includes the
+original failure and corrected results.
+
 Each row is one 30-second sample after the timing sweep. Memory is the median
-physical footprint; CPU 100% means one core. Foreground fixtures were activated
+physical footprint. Foreground fixtures were activated
 through application controls; background fixtures were explicitly hidden. These
 are snapshots, not a memory-leak study. The one-terminal process remained idle
 longer before sampling than the other fixtures.
 
-| Fixture / state | CPU, one core | Footprint median / peak | Interrupt wakeups/s |
-|---|---:|---:|---:|
-| core-1-background-idle | 0.08% | 217.3 / 223.7 MiB | 12.1 |
-| core-1-foreground-idle | 0.08% | 212.8 / 223.5 MiB | 11.5 |
-| core-16-background-idle | 0.10% | 306.1 / 311.5 MiB | 13.8 |
-| core-16-foreground-idle | 0.09% | 304.4 / 311.4 MiB | 12.9 |
-| core-16-full-background-output | 1.79% | 960.3 / 970.2 MiB | 180.1 |
-| core-16-full-foreground-output | 1.28% | 956.7 / 968.0 MiB | 140.6 |
-| core-48-background-idle | 0.08% | 558.5 / 564.0 MiB | 13.5 |
-| core-48-foreground-idle | 0.10% | 559.2 / 596.1 MiB | 16.0 |
+| Fixture / state | Footprint median / peak | Interrupt wakeups/s |
+|---|---:|---:|
+| core-1-background-idle | 217.3 / 223.7 MiB | 12.1 |
+| core-1-foreground-idle | 212.8 / 223.5 MiB | 11.5 |
+| core-16-background-idle | 306.1 / 311.5 MiB | 13.8 |
+| core-16-foreground-idle | 304.4 / 311.4 MiB | 12.9 |
+| core-16-full-background-output | 960.3 / 970.2 MiB | 180.1 |
+| core-16-full-foreground-output | 956.7 / 968.0 MiB | 140.6 |
+| core-48-background-idle | 558.5 / 564.0 MiB | 13.5 |
+| core-48-foreground-idle | 559.2 / 596.1 MiB | 16.0 |
 
 The **212.8 MiB** one-terminal foreground result is entirely the desktop fixture
 process. It includes the app, terminal parsing/rendering, scrollback, and benchmark
@@ -365,8 +376,8 @@ them, but its 30 samples per action are insufficient for a stable p99.
 The full-scrollback streaming resource sample includes the 20 Hz producer and a
 ten-second diagnostic counter write. Its [load counters](2026-09-23-data/full-scrollback-resource-load.json)
 record actual decoded bytes and elapsed time. The idle fixtures have neither
-producer nor diagnostic timer. Comparing their CPU percentages therefore
-compares different workloads; it is not a before/after optimization result.
+producer nor diagnostic timer. Even with a corrected CPU sampler, comparing
+these states compares different workloads; it is not a before/after optimization result.
 
 Remote typing depends on the route. A reported `p2p` mode is the daemon's label;
 we did not collect the ICE candidate pair and cannot infer that it was a direct

@@ -1,0 +1,40 @@
+/* The same tokens and card shape as /connect and /desktop, so a page reached from a scanned code
+   looks like the rest of Harness. */
+
+.wrap {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg-base);
+  color: var(--text-primary);
+}
+
+.card {
+  width: min(440px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 40px;
+  border: 1px solid var(--border-default);
+  border-radius: 20px;
+  background: var(--bg-surface);
+}
+
+.badge {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 4px;
+  border-radius: 13px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+
+.title { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -0.01em; }
+.sub { margin: 0; color: var(--text-secondary); line-height: 1.55; }
+.sub strong { color: var(--text-primary); font-weight: 600; }
+.note { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-muted); }

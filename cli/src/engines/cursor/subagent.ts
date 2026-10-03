@@ -199,12 +199,13 @@ async function childCompletion(
 }
 
 export async function loadCursorReplayTaskLinks(
-  cursorHome: string,
+  configDir: string,
   parentId: string,
+  dataDir: string = configDir,
 ): Promise<CursorReplayTaskLink[]> {
   const links: CursorReplayTaskLink[] = []
-  for (const meta of await childMetas(cursorHome, parentId)) {
-    const completion = await childCompletion(cursorHome, meta)
+  for (const meta of await childMetas(configDir, parentId)) {
+    const completion = await childCompletion(dataDir, meta)
     if (!completion) continue
     links.push({
       ...completion,
@@ -219,8 +220,9 @@ export class CursorSubagentManager {
   private readonly pending = new Map<string, PendingTask>()
 
   constructor(
-    private readonly cursorHome: string,
+    private readonly configDir: string,
     private readonly emit: (parentId: string, events: LiveEvent[]) => void,
+    private readonly dataDir: string = configDir,
   ) {}
 
   register(parentId: string, hook: CursorTaskHook, normalizer: CursorNormalizer): void {
@@ -265,10 +267,10 @@ export class CursorSubagentManager {
     if (this.pending.get(task.hook.toolUseId) !== task) return
     task.attempts++
     try {
-      const meta = (await childMetas(this.cursorHome, task.parentId))
+      const meta = (await childMetas(this.configDir, task.parentId))
         .find((candidate) => candidate.subagentInfo.toolCallId === task.hook.toolUseId)
       if (meta) {
-        const completion = await childCompletion(this.cursorHome, meta, Date.now() - task.startedAt)
+        const completion = await childCompletion(this.dataDir, meta, Date.now() - task.startedAt)
         if (completion) {
           this.clear(task)
           this.emit(task.parentId, task.normalizer.completeTask(task.launcherId, completion))

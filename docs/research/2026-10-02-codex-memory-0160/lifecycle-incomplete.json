@@ -1,0 +1,678 @@
+{
+  "engine": "codex",
+  "version": "codex-cli 0.160.0",
+  "model": "gpt-5.5",
+  "changedModel": "gpt-6-astra",
+  "contextHash": "2c873249e1a88de798f235852549eaef02b6ee3129049016b6d2c7fb125a8877",
+  "launch": "profile_change",
+  "passed": false,
+  "checks": {
+    "launchesCompleted": false,
+    "freshContextOnEverySubmittedPrompt": false,
+    "contextAfterCompaction": false,
+    "resumedPrompt": true,
+    "changedModelPrompt": true,
+    "configProfilePrompt": true
+  },
+  "runs": [
+    {
+      "step": "first",
+      "code": 0,
+      "signal": null,
+      "timedOut": true
+    },
+    {
+      "step": "resume",
+      "code": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "step": "model_change",
+      "code": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "step": "profile_change",
+      "code": 0,
+      "signal": null,
+      "timedOut": false
+    }
+  ],
+  "hooks": [
+    {
+      "launch": "first",
+      "promptNumber": 0,
+      "route": "/api/hook/session-start",
+      "event": "SessionStart",
+      "source": "startup",
+      "engine": "codex",
+      "receipt": false
+    },
+    {
+      "launch": "first",
+      "promptNumber": 1,
+      "route": "/api/hook/session-start",
+      "event": "UserPromptSubmit",
+      "engine": "codex",
+      "receipt": false
+    },
+    {
+      "launch": "first",
+      "promptNumber": 1,
+      "route": "/api/hook/memory-emitted",
+      "engine": "codex",
+      "receipt": true
+    },
+    {
+      "launch": "first",
+      "promptNumber": 1,
+      "route": "/api/hook/session-start",
+      "event": "PreCompact",
+      "engine": "codex",
+      "receipt": false
+    },
+    {
+      "launch": "first",
+      "promptNumber": 1,
+      "route": "/api/hook/session-start",
+      "event": "PostCompact",
+      "engine": "codex",
+      "receipt": false
+    },
+    {
+      "launch": "resume",
+      "promptNumber": 1,
+      "route": "/api/hook/session-start",
+      "event": "SessionStart",
+      "source": "resume",
+      "engine": "codex",
+      "receipt": false
+    },
+    {
+      "launch": "resume",
+      "promptNumber": 2,
+      "route": "/api/hook/session-start",
+      "event": "UserPromptSubmit",
+      "engine": "codex",
+      "receipt": false
+    },
+    {
+      "launch": "resume",
+      "promptNumber": 2,
+      "route": "/api/hook/memory-emitted",
+      "engine": "codex",
+      "receipt": true
+    },
+    {
+      "launch": "model_change",
+      "promptNumber": 2,
+      "route": "/api/hook/session-start",
+      "event": "PreCompact",
+      "engine": "codex",
+      "receipt": false
+    },
+    {
+      "launch": "model_change",
+      "promptNumber": 2,
+      "route": "/api/hook/session-start",
+      "event": "PostCompact",
+      "engine": "codex",
+      "receipt": false
+    },
+    {
+      "launch": "model_change",
+      "promptNumber": 2,
+      "route": "/api/hook/session-start",
+      "event": "SessionStart",
+      "source": "resume",
+      "engine": "codex",
+      "receipt": false
+    },
+    {
+      "launch": "model_change",
+      "promptNumber": 2,
+      "route": "/api/hook/session-start",
+      "event": "SessionStart",
+      "source": "compact",
+      "engine": "codex",
+      "receipt": false
+    },
+    {
+      "launch": "model_change",
+      "promptNumber": 3,
+      "route": "/api/hook/session-start",
+      "event": "UserPromptSubmit",
+      "engine": "codex",
+      "receipt": false
+    },
+    {
+      "launch": "model_change",
+      "promptNumber": 3,
+      "route": "/api/hook/memory-emitted",
+      "engine": "codex",
+      "receipt": true
+    },
+    {
+      "launch": "profile_change",
+      "promptNumber": 3,
+      "route": "/api/hook/session-start",
+      "event": "PreCompact",
+      "engine": "codex",
+      "receipt": false
+    },
+    {
+      "launch": "profile_change",
+      "promptNumber": 3,
+      "route": "/api/hook/session-start",
+      "event": "PostCompact",
+      "engine": "codex",
+      "receipt": false
+    },
+    {
+      "launch": "profile_change",
+      "promptNumber": 3,
+      "route": "/api/hook/session-start",
+      "event": "SessionStart",
+      "source": "resume",
+      "engine": "codex",
+      "receipt": false
+    },
+    {
+      "launch": "profile_change",
+      "promptNumber": 3,
+      "route": "/api/hook/session-start",
+      "event": "SessionStart",
+      "source": "compact",
+      "engine": "codex",
+      "receipt": false
+    },
+    {
+      "launch": "profile_change",
+      "promptNumber": 4,
+      "route": "/api/hook/session-start",
+      "event": "UserPromptSubmit",
+      "engine": "codex",
+      "receipt": false
+    },
+    {
+      "launch": "profile_change",
+      "promptNumber": 4,
+      "route": "/api/hook/memory-emitted",
+      "engine": "codex",
+      "receipt": true
+    }
+  ],
+  "requests": [
+    {
+      "launch": "first",
+      "model": "gpt-5.5",
+      "route": "/v1/responses",
+      "promptNumber": 1,
+      "markers": [
+        1
+      ],
+      "inputTypes": [
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        }
+      ],
+      "contextReceived": true,
+      "exactCurrentContextReceived": true,
+      "contextRoles": [
+        "developer"
+      ],
+      "promptReceived": true,
+      "tools": [
+        "request_user_input",
+        "apply_patch"
+      ]
+    },
+    {
+      "launch": "first",
+      "model": "gpt-5.5",
+      "route": "/v1/responses",
+      "promptNumber": 1,
+      "markers": [],
+      "inputTypes": [
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        }
+      ],
+      "contextReceived": false,
+      "exactCurrentContextReceived": false,
+      "contextRoles": [],
+      "promptReceived": true,
+      "tools": []
+    },
+    {
+      "launch": "first",
+      "model": "gpt-5.5",
+      "route": "/v1/responses",
+      "promptNumber": 1,
+      "markers": [
+        1
+      ],
+      "inputTypes": [
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "assistant"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        }
+      ],
+      "contextReceived": true,
+      "exactCurrentContextReceived": true,
+      "contextRoles": [
+        "developer"
+      ],
+      "promptReceived": true,
+      "tools": []
+    },
+    {
+      "launch": "resume",
+      "model": "gpt-5.5",
+      "route": "/v1/responses",
+      "promptNumber": 2,
+      "markers": [
+        2
+      ],
+      "inputTypes": [
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        }
+      ],
+      "contextReceived": true,
+      "exactCurrentContextReceived": true,
+      "contextRoles": [
+        "developer"
+      ],
+      "promptReceived": true,
+      "tools": [
+        "request_user_input",
+        "apply_patch"
+      ]
+    },
+    {
+      "launch": "resume",
+      "model": "gpt-5.5",
+      "route": "/v1/responses",
+      "promptNumber": 2,
+      "markers": [],
+      "inputTypes": [
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        }
+      ],
+      "contextReceived": false,
+      "exactCurrentContextReceived": false,
+      "contextRoles": [],
+      "promptReceived": true,
+      "tools": []
+    },
+    {
+      "launch": "model_change",
+      "model": "gpt-5.5",
+      "route": "/v1/responses",
+      "promptNumber": 2,
+      "markers": [
+        2
+      ],
+      "inputTypes": [
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "assistant"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        }
+      ],
+      "contextReceived": true,
+      "exactCurrentContextReceived": true,
+      "contextRoles": [
+        "developer"
+      ],
+      "promptReceived": true,
+      "tools": []
+    },
+    {
+      "launch": "model_change",
+      "model": "gpt-6-astra",
+      "route": "/v1/responses",
+      "promptNumber": 3,
+      "markers": [
+        3
+      ],
+      "inputTypes": [
+        {
+          "type": "additional_tools",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        }
+      ],
+      "contextReceived": true,
+      "exactCurrentContextReceived": true,
+      "contextRoles": [
+        "developer"
+      ],
+      "promptReceived": true,
+      "tools": []
+    },
+    {
+      "launch": "model_change",
+      "model": "gpt-6-astra",
+      "route": "/v1/responses",
+      "promptNumber": 3,
+      "markers": [],
+      "inputTypes": [
+        {
+          "type": "additional_tools",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        }
+      ],
+      "contextReceived": false,
+      "exactCurrentContextReceived": false,
+      "contextRoles": [],
+      "promptReceived": true,
+      "tools": []
+    },
+    {
+      "launch": "profile_change",
+      "model": "gpt-6-astra",
+      "route": "/v1/responses",
+      "promptNumber": 3,
+      "markers": [
+        3
+      ],
+      "inputTypes": [
+        {
+          "type": "additional_tools",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "assistant"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        }
+      ],
+      "contextReceived": true,
+      "exactCurrentContextReceived": true,
+      "contextRoles": [
+        "developer"
+      ],
+      "promptReceived": true,
+      "tools": []
+    },
+    {
+      "launch": "profile_change",
+      "model": "gpt-5.5",
+      "route": "/v1/responses",
+      "promptNumber": 4,
+      "markers": [
+        4
+      ],
+      "inputTypes": [
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "developer"
+        }
+      ],
+      "contextReceived": true,
+      "exactCurrentContextReceived": true,
+      "contextRoles": [
+        "developer"
+      ],
+      "promptReceived": true,
+      "tools": [
+        "request_user_input",
+        "apply_patch"
+      ]
+    },
+    {
+      "launch": "profile_change",
+      "model": "gpt-5.5",
+      "route": "/v1/responses",
+      "promptNumber": 4,
+      "markers": [],
+      "inputTypes": [
+        {
+          "type": "message",
+          "role": "developer"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        },
+        {
+          "type": "message",
+          "role": "user"
+        }
+      ],
+      "contextReceived": false,
+      "exactCurrentContextReceived": false,
+      "contextRoles": [],
+      "promptReceived": true,
+      "tools": []
+    }
+  ],
+  "limitations": [
+    "Synthetic localhost replies and disposable homes; no real inference or task usefulness.",
+    "An exact packet on a user turn does not prove every native request includes memory.",
+    "Config profile selection is tested; authentication/account changes and Harness owner changes are not.",
+    "Execution stays disabled. Startup model/Code Mode errors can occur; delivery observations do not certify background extraction."
+  ]
+}

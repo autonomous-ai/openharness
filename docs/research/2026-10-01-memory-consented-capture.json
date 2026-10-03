@@ -1,0 +1,40 @@
+{
+  "at": "2026-10-01T16:15:13.885Z",
+  "mode": "fixed-window capture replay; isolated private stores; no inference or production writes",
+  "sourceWindow": {
+    "from": "2026-09-30T15:32:12.771Z",
+    "to": "2026-10-01T15:32:12.771Z"
+  },
+  "privateCorpusCommitted": false,
+  "sessions": 2,
+  "userEvents": 26,
+  "nativeModelResponses": 0,
+  "before": {
+    "captured": 26,
+    "queued": 6,
+    "sourceIncomplete": 20
+  },
+  "after": {
+    "captured": 26,
+    "queuedCompleteContext": 6,
+    "queuedBoundedContext": 20,
+    "sourceIncomplete": 0
+  },
+  "sourceExpectations": {
+    "count": 6,
+    "availableForLearning": 6,
+    "modelExtracted": null
+  },
+  "limitations": [
+    "Owner-authorized sample of two sessions; not a held-out quality benchmark.",
+    "Only capture availability was measured. No native extraction, recall usefulness or task benefit score.",
+    "Incomplete non-user records remain isolated; some ongoing assistant work stays open.",
+    "Fixed transcript cutoff used for both implementations; raw copies were removed after replay.",
+    "Production memory store, provider settings and installed app were unchanged."
+  ],
+  "oldReaderProbe": {
+    "revision": "1e9352c802209b4bade25b6f9e729af9748c464c",
+    "upgradedSchema": 2,
+    "result": "schema_unsupported"
+  }
+}

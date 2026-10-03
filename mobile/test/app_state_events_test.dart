@@ -37,25 +37,17 @@ void main() {
   });
 
   test('a phone tells no machine which agent it is looking at', () async {
-    for (final viewer in [false, true]) {
-      final app = pagerApp(PagerConn(), viewer: viewer);
-      addTearDown(app.dispose);
-      final announced = <String?>[];
-      app.focusFrameSenderForTest = (_, agentId) async {
-        announced.add(agentId);
-        return true;
-      };
-      await liveAgent(app, 'b');
+    final conn = PagerConn();
+    final app = pagerApp(conn);
+    addTearDown(app.dispose);
+    await liveAgent(app, 'b');
 
-      app.focusPane(app.paneOfAgent('m', 'b')!.id);
+    app.focusPane(app.paneOfAgent('m', 'b')!.id);
 
-      expect(
-        announced,
-        viewer ? isEmpty : ['b'],
-        reason: viewer
-            ? 'only the CLI\'s loopback reads app_focus; the relay carries it in the clear'
-            : 'a desktop still drives the dial',
-      );
-    }
+    expect(
+      [for (final (type, _) in conn.frames) type],
+      isNot(anyOf(contains('app_focus'), contains('app_panes'))),
+      reason: 'only the CLI\'s loopback reads these; the relay carries them in the clear',
+    );
   });
 }

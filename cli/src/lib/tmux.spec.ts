@@ -13,6 +13,7 @@ import {
   LSTART_MARKER_RE,
   liveProcessRows,
   parseProcessRow,
+  pasteRawIntoTmux,
   resumeSessionId,
   sendLiteralToTmux,
   sendToTmux,
@@ -154,6 +155,33 @@ describe('tmux process primitives', () => {
   })
 
   it.each([
+    'codex --help',
+    '/opt/bin/codex -h',
+    'codex --version',
+    'codex -V',
+    'node /opt/node_modules/@openai/codex/bin/codex.js --help',
+    'node --require setup.js /opt/node_modules/@openai/codex/bin/codex.js --help',
+    'env CODEX_HOME=/tmp/profile codex --help',
+    'ori --log-level debug codex --help',
+  ])('does not adopt a capability probe as the restarted engine: %s', args => {
+    const commands: AgentCommandOwnershipSnapshot = {
+      ...ownership(), engineFileKeys: new Map([['codex', new Set(['codex-file'])]]),
+    }
+    // A known binary is still only a probe. File ownership must not override argv.
+    expect(engineProcessMatchScore({ executable: 'codex', args, imageFileKey: 'codex-file' }, 'codex', commands)).toBe(0)
+  })
+
+  it.each([
+    'codex resume 01234567-89ab-cdef-0123-456789abcdef',
+    'codex --no-daemon resume 01234567-89ab-cdef-0123-456789abcdef',
+    'codex "explain --help"',
+    'codex -- "--help"',
+    'codex --model --help',
+  ])('keeps interactive launches and prompt text: %s', args => {
+    expect(engineProcessMatchScore({ executable: 'codex', args }, 'codex')).toBeGreaterThan(0)
+  })
+
+  it.each([
     ['codex', 'codex-aarch64-apple-darwin'],
     ['codex', 'codex-x86_64-unknown-linux-musl'],
     ['kilo', 'kilo-darwin-arm64'],
@@ -218,6 +246,56 @@ describe('tmux process primitives', () => {
     expect(engineProcessMatchScore({ executable: '2.1.246', args: '2.1.246' }, 'claude')).toBe(0)
   })
 
+  it('reads Hermes out of the inline source it runs as', () => {
+    // 0.21.5+2144.g7b761da, copied off `ps` on this machine. The `sh` stub in
+    // `~/.hermes/hermes-agent/.hermes/bin/hermes` execs Hermes' own interpreter with the whole
+    // launcher as `-c` text, so argv names no script and `comm` is a python. Nothing here carried
+    // the engine's name anywhere the matcher looked, and a running Hermes read as absent: its pane
+    // was retained six seconds after New Harness, then failed RESUME_UNCONFIRMED ten minutes later.
+    const python = '/Users/demo/.hermes/tools/python-3.14.7+20260901-darwin-arm64/bin/python3'
+    const launcher = (entry: string) => `${python} -I -c import os, re, sys`
+      + ` sys.path.insert(0, '/Users/demo/.hermes/hermes-agent')`
+      + ` import hermes_bootstrap from ${entry} import main sys.exit(main())`
+    // macOS prints `comm` through a 16-column field beside lstart, so every absolute path arrives
+    // truncated. The interpreter has to be read from argv[0] or this row scores on a home directory.
+    const comm = '/Users/demo'
+    expect(engineProcessMatchScore({ executable: comm, args: launcher('hermes_cli.main') }, 'hermes')).toBe(2)
+    // `hermes-acp` is the other stub in that bin, identical but for its entry module. An ACP adapter
+    // is not the harness's engine, and the sys.path root alone would have claimed it.
+    expect(engineProcessMatchScore({ executable: comm, args: launcher('acp_adapter.entry') }, 'hermes')).toBe(0)
+    // Inline source stays unreadable as an entrypoint for everyone else: a prompt may say anything.
+    expect(engineProcessMatchScore({
+      executable: comm,
+      args: `${python} -I -c print('x') compare hermes_cli and codex`,
+    }, 'hermes')).toBe(0)
+    expect(engineProcessMatchScore({
+      executable: 'python3',
+      args: `python3 worker.py from hermes_cli.main import main /Users/demo/.hermes/hermes-agent'`,
+    }, 'hermes')).toBe(0)
+    // And the shapes that already worked keep working.
+    expect(engineProcessMatchScore({ executable: 'hermes', args: 'hermes --resume 20260728_115628_f2c86a' }, 'hermes')).toBe(3)
+    expect(engineProcessMatchScore({ executable: comm, args: `${python} -m hermes_cli.main` }, 'hermes')).toBe(2)
+  })
+
+  it('recognizes managed Hermes runpy launchers without relying on their install directory', () => {
+    const bootstrap = "import os, sys, runpy; os.environ.pop('PYTHONHOME', None); os.environ.pop('PYTHONPATH', None); os.environ.pop('VIRTUAL_ENV', None); sys.path.insert(0, '/opt/custom install'); os.environ['HERMES_HOME'] = os.environ.get('HERMES_HOME') or str(__import__('hermes_constants').get_default_hermes_root()); import hermes_bootstrap; runpy.run_module('hermes_cli.main', run_name='__main__', alter_sys=True)"
+    const old = "import sys, runpy; sys.path.insert(0, '/opt/hermes-agent'); runpy.run_module('hermes_cli.main', run_name='__main__')"
+    for (const code of [bootstrap, old]) {
+      for (const source of [code, `\"${code}\"`]) {
+        expect(engineProcessMatchScore({ executable: '/home/demo/.her', args: `/opt/python3.14 -I -I -c ${source} --resume 20260927_101500_ab12cd` }, 'hermes')).toBe(2)
+      }
+    }
+    for (const args of [
+      `python3 worker.py -c ${bootstrap}`,
+      `node -c ${bootstrap}`,
+      `python3 -c print(\"${bootstrap}\")`,
+      `python3 -c ${bootstrap.replace('hermes_cli.main', 'acp_adapter.entry')}`,
+      "python3 -c import sys; sys.path.insert(0, '/opt/hermes-agent'); print('from hermes_cli.main import main')",
+    ]) {
+      expect(engineProcessMatchScore({ executable: 'python3', args }, 'hermes')).toBe(0)
+    }
+  })
+
   it('reads an engine through the ori launcher, before and after its exec', () => {
     // `ori claude` computes an environment and then execve's the vendor binary away, so for all but the
     // first ~100ms the pane row IS `claude` — that case must keep scoring exactly as a bare launch does.
@@ -280,7 +358,13 @@ describe('tmux process primitives', () => {
     expect(resumeSessionId('grok', 'grok -r 53d3843c-724e-47ff-ae3a-9fedfa328bba'))
       .toBe('53d3843c-724e-47ff-ae3a-9fedfa328bba')
     expect(resumeSessionId('commandcode', 'cmd -r Greeting')).toBeNull()
-    expect(resumeSessionId('devin', 'devin --resume 53d3843c-724e-47ff-ae3a-9fedfa328bba')).toBeNull()
+    // Devin's ids are word slugs; a bare word is not one.
+    expect(resumeSessionId('devin', 'devin --resume brisk-otter')).toBe('brisk-otter')
+    expect(resumeSessionId('devin', 'devin -r blue-agustinia --model x')).toBe('blue-agustinia')
+    expect(resumeSessionId('devin', 'devin -r latest')).toBeNull()
+    // Hermes takes -r too; opencode's --fork names the parent, never the session.
+    expect(resumeSessionId('hermes', 'hermes -r 20260927_101500_ab12cd')).toBe('20260927_101500_ab12cd')
+    expect(resumeSessionId('opencode', 'opencode -s ses_abc --fork')).toBeNull()
   })
 
   it('reads a claude/codex resume id from argv, but never the parent of a fork', () => {
@@ -425,6 +509,61 @@ fi
       else process.env.TMUX_INPUT_STDIN = previous.stdin
       if (previous.fail === undefined) delete process.env.TMUX_INPUT_FAIL_PASTE
       else process.env.TMUX_INPUT_FAIL_PASTE = previous.fail
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('brackets every submitted message and sends one separate Enter only after a successful paste', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'harness-tmux-submit-'))
+    const argsFile = join(dir, 'args')
+    const fakeTmux = join(dir, 'tmux')
+    writeFileSync(fakeTmux, `#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_SUBMIT_ARGS"
+if [ "$1" = "load-buffer" ]; then cat > /dev/null; fi
+if [ "$1" = "paste-buffer" ] && [ "$TMUX_SUBMIT_FAIL" = "1" ]; then exit 2; fi
+`)
+    chmodSync(fakeTmux, 0o700)
+    const previous = { path: process.env.PATH, args: process.env.TMUX_SUBMIT_ARGS, fail: process.env.TMUX_SUBMIT_FAIL }
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const commands = () => readFileSync(argsFile, 'utf8').trim().split('\n')
+      .map(line => line.replace(/machinemsg-\d+-\d+/g, 'buffer'))
+    try {
+      process.env.PATH = `${dir}:${previous.path ?? ''}`
+      process.env.TMUX_SUBMIT_ARGS = argsFile
+      delete process.env.TMUX_SUBMIT_FAIL
+      for (const message of ['Testing voice.', 'Résumé 日本語.', 'first\nsecond', 'x'.repeat(501)]) {
+        writeFileSync(argsFile, '')
+        expect(await sendToTmux('%7', message)).toBe(true)
+        expect(commands()).toEqual([
+          'load-buffer -b buffer -',
+          'paste-buffer -t %7 -b buffer -p -d',
+          'send-keys -t %7 Enter',
+        ])
+      }
+
+      // A clipboard paste and a live filter edit must remain unsubmitted.
+      writeFileSync(argsFile, '')
+      expect(await pasteRawIntoTmux('%7', 'clipboard')).toBe(true)
+      expect(await sendLiteralToTmux('%7', 'filter')).toBe(true)
+      expect(commands()).toEqual([
+        'load-buffer -b buffer -', 'paste-buffer -t %7 -b buffer -p -d',
+        'load-buffer -b buffer -', 'paste-buffer -t %7 -b buffer -d',
+      ])
+
+      writeFileSync(argsFile, '')
+      process.env.TMUX_SUBMIT_FAIL = '1'
+      expect(await sendToTmux('%7', 'must not send')).toBe(false)
+      expect(commands()).toEqual([
+        'load-buffer -b buffer -', 'paste-buffer -t %7 -b buffer -p -d', 'delete-buffer -b buffer',
+      ])
+    } finally {
+      error.mockRestore()
+      if (previous.path === undefined) delete process.env.PATH
+      else process.env.PATH = previous.path
+      if (previous.args === undefined) delete process.env.TMUX_SUBMIT_ARGS
+      else process.env.TMUX_SUBMIT_ARGS = previous.args
+      if (previous.fail === undefined) delete process.env.TMUX_SUBMIT_FAIL
+      else process.env.TMUX_SUBMIT_FAIL = previous.fail
       rmSync(dir, { recursive: true, force: true })
     }
   })

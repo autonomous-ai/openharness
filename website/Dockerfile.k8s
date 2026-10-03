@@ -1,0 +1,65 @@
+# harness.autonomous.ai — Kubernetes image: the Flutter web app, served by a small Next.js host that
+# adds the install/download pages and redirects. Built by .github/workflows/release-web.yml.
+#
+# One process per container: no pm2 cluster inside the pod — the Deployment's replica count does the
+# scaling. (pm2 'max' reads os.cpus(), which under a cgroup CPU limit reports the NODE's cores, not
+# the pod's, so it over-subscribes.)
+#
+# Multi-stage: deps (npm ci) → builder (next build, standalone output) → runner (non-root, minimal).
+
+# --- deps: install node_modules from the lockfile ---------------------------------
+FROM node:22-bookworm-slim AS deps
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm install
+
+# --- builder: compile with sentinel NEXT_PUBLIC_* values --------------------------
+FROM node:22-bookworm-slim AS builder
+WORKDIR /app
+
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# The Flutter bundle to serve under /harness-web/, as a path INSIDE the build context. The release
+# workflow builds it from desktop/ and stages it here with a matching harness-web-release.json, so
+# the image carries the bundle from its own commit. Left empty, the prebuild step downloads the
+# release that harness-web-release.json pins, which is what a local `docker build` does.
+ARG HARNESS_WEB_ARCHIVE=
+
+ARG NODE_ENV=production
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+RUN HARNESS_WEB_ARCHIVE="${HARNESS_WEB_ARCHIVE:+/app/$HARNESS_WEB_ARCHIVE}" npm run build
+
+# --- runner: minimal standalone runtime, non-root ---------------------------------
+FROM node:22-bookworm-slim AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+
+# Non-root runtime user (matches runAsUser/runAsGroup 1001 if the manifest pins them).
+RUN groupadd --system --gid 1001 nodejs \
+    && useradd --system --uid 1001 --gid nodejs nextjs
+
+# Standalone output: server.js + pruned node_modules; static + public copied alongside. `npm run
+# build` already folds static/ and public/ into .next/standalone, so the flattened copy is complete
+# (the two explicit COPYs below are belt-and-braces).
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+
+COPY --chown=nextjs:nodejs docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
+RUN chown nextjs:nodejs /app
+
+USER nextjs
+EXPOSE 3000
+
+# A pass-through today (see docker-entrypoint.sh), kept so a Deployment naming it still works.
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["node", "server.js"]

@@ -21,4 +21,12 @@ class EmailCodeLogin {
     final tokens = await _api.signIn(email: email, code: code);
     await auth.signIn(tokens, issuer: SessionIssuer.emailCode);
   }
+
+  /// The other way in, with no email at all: the one-time code a signed-in
+  /// computer's Add Phone QR carries, redeemed at the Harness backend for a
+  /// session of its own.
+  Future<void> signInWithScan(String code, {required String label}) async {
+    final tokens = await auth.api.redeemHandoff(code, label: label);
+    await auth.signIn(tokens, issuer: SessionIssuer.harness);
+  }
 }

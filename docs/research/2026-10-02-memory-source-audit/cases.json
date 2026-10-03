@@ -1,0 +1,1122 @@
+{
+  "schemaVersion": 1,
+  "suite": "memory-proposal-source-audit-development-v1",
+  "createdAt": "2026-10-02T19:35:29.255945+00:00",
+  "purpose": "Frozen development diagnostic, not held-out user data. Original implementing-agent labels remain judgments. Model input contains only each case input, never origin or expected labels.",
+  "cases": [
+    {
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "recordId": "35b7d8f2-349c-4143-8d6a-5b18b4807236"
+      },
+      "input": {
+        "authorizedScope": {
+          "profileId": "synthetic-owner",
+          "projectIds": [
+            "network-client"
+          ]
+        },
+        "episodes": [
+          {
+            "id": "episode-0",
+            "context": "bounded",
+            "sources": [
+              {
+                "id": "quoted-plan-and-user-correction-0",
+                "role": "user",
+                "text": "An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement."
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "kind": "project_decision",
+          "facet": "network-client-retry-delay",
+          "assertionType": "accepted_decision",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "network-client"
+          },
+          "claim": "The retry delay for the network-client project has not been set to 2 seconds; the user stated that the retry delay still needs measurement.",
+          "rationale": null,
+          "futureAction": "Do not hardcode the retry delay to 2 seconds in network-client; the value remains unresolved pending measurement.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "network-client",
+            "retry delay",
+            "retry configuration",
+            "unresolved parameter"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "quoted-plan-and-user-correction-0",
+              "quote": "An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability"
+              ]
+            }
+          ],
+          "conflictKey": "network-client-retry-delay-value",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          }
+        }
+      },
+      "expected": {
+        "verdict": "unsupported",
+        "note": "The source withholds approval and says measurement is pending; it does not verify an unset implementation or permanently rule out a two-second value. The claim/action leave these distinctions insufficiently explicit. Review conservatively rejects the record rather than treating unresolved approval as a prohibition or observed state."
+      },
+      "id": "audit-01f634831f20"
+    },
+    {
+      "origin": {
+        "authored": "minimal-pair",
+        "theme": "override"
+      },
+      "input": {
+        "authorizedScope": {
+          "profileId": "synthetic-owner",
+          "projectIds": [
+            "sample-project"
+          ]
+        },
+        "episodes": [
+          {
+            "id": "episode-0",
+            "context": "bounded",
+            "sources": [
+              {
+                "id": "source-0",
+                "role": "user",
+                "text": "In this project, use a condensed file tree by default. If I expand a folder manually, leave it expanded for the current session."
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "kind": "project_decision",
+          "facet": "override",
+          "assertionType": "project_constraint",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "sample-project"
+          },
+          "claim": "Use a condensed file tree by default and preserve manually expanded folders for the session.",
+          "rationale": null,
+          "futureAction": "Collapse all folders after every navigation to enforce the condensed default.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "override"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "source-0",
+              "quote": "In this project, use a condensed file tree by default. If I expand a folder manually, leave it expanded for the current session.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability",
+                "/rationale"
+              ]
+            }
+          ],
+          "conflictKey": "sample-override",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          }
+        }
+      },
+      "expected": {
+        "verdict": "unsupported",
+        "note": "The claim preserves the exception, but the future action overrides the explicit manual expansion permission."
+      },
+      "id": "audit-07e16b26a94a"
+    },
+    {
+      "origin": {
+        "authored": "minimal-pair",
+        "theme": "scope"
+      },
+      "input": {
+        "authorizedScope": {
+          "profileId": "synthetic-owner",
+          "projectIds": [
+            "sample-project"
+          ]
+        },
+        "episodes": [
+          {
+            "id": "episode-0",
+            "context": "bounded",
+            "sources": [
+              {
+                "id": "source-0",
+                "role": "user",
+                "text": "For this project, prefer SQLite for the local cache."
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "kind": "project_decision",
+          "facet": "scope",
+          "assertionType": "project_constraint",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "sample-project"
+          },
+          "claim": "This project should prefer SQLite for its local cache.",
+          "rationale": null,
+          "futureAction": "Prefer SQLite when choosing this project’s local cache.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "scope"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "source-0",
+              "quote": "For this project, prefer SQLite for the local cache.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability",
+                "/rationale"
+              ]
+            }
+          ],
+          "conflictKey": "sample-scope",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          }
+        }
+      },
+      "expected": {
+        "verdict": "supported",
+        "note": "Faithful project-scoped requested behavior; no unstated reason or implementation claim."
+      },
+      "id": "audit-1f43fab87514"
+    },
+    {
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "recordId": "7641e7ae-23fa-424f-92b2-39d973c702d0"
+      },
+      "input": {
+        "authorizedScope": {
+          "profileId": "synthetic-owner",
+          "projectIds": [
+            "network-client"
+          ]
+        },
+        "episodes": [
+          {
+            "id": "episode-0",
+            "context": "bounded",
+            "sources": [
+              {
+                "id": "quoted-plan-and-user-correction-0",
+                "role": "user",
+                "text": "An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement."
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "kind": "project_decision",
+          "facet": "network-client-error-handling",
+          "assertionType": "accepted_decision",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "network-client"
+          },
+          "claim": "For the network-client project, failures must be shown to users; the assistant's suggestion to hide failures was explicitly not approved.",
+          "rationale": null,
+          "futureAction": "When implementing or modifying error handling in network-client, ensure that failures are displayed to users rather than hidden.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "network-client",
+            "error handling",
+            "failure visibility",
+            "user-facing errors"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "quoted-plan-and-user-correction-0",
+              "quote": "An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability"
+              ]
+            }
+          ],
+          "conflictKey": "network-client-error-visibility",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          }
+        }
+      },
+      "expected": {
+        "verdict": "supported",
+        "note": "The explicit request to keep showing failures supports this visibility requirement. No particular retry value is adopted in this record."
+      },
+      "id": "audit-3cba24a110f0"
+    },
+    {
+      "origin": {
+        "authored": "minimal-pair",
+        "theme": "outcome"
+      },
+      "input": {
+        "authorizedScope": {
+          "profileId": "synthetic-owner",
+          "projectIds": [
+            "sample-project"
+          ]
+        },
+        "episodes": [
+          {
+            "id": "episode-0",
+            "context": "bounded",
+            "sources": [
+              {
+                "id": "source-0",
+                "role": "user",
+                "text": "Please show a retry button after an upload fails in this project."
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "kind": "project_decision",
+          "facet": "outcome",
+          "assertionType": "project_constraint",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "sample-project"
+          },
+          "claim": "Failed uploads already show a working retry button in this project.",
+          "rationale": null,
+          "futureAction": "Rely on the existing retry button after upload failures.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "outcome"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "source-0",
+              "quote": "Please show a retry button after an upload fails in this project.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability",
+                "/rationale"
+              ]
+            }
+          ],
+          "conflictKey": "sample-outcome",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          }
+        }
+      },
+      "expected": {
+        "verdict": "unsupported",
+        "note": "A request does not establish implemented or working behavior."
+      },
+      "id": "audit-4d25c6f7134d"
+    },
+    {
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "recordId": "3355baf2-4d07-4d5b-8f70-3bf06417f2fe"
+      },
+      "input": {
+        "authorizedScope": {
+          "profileId": "synthetic-owner",
+          "projectIds": [
+            "editor"
+          ]
+        },
+        "episodes": [
+          {
+            "id": "episode-0",
+            "context": "bounded",
+            "sources": [
+              {
+                "id": "default-with-user-override-0",
+                "role": "user",
+                "text": "In our editor, compact navigation is the default. Do not replace that default. People can expand navigation manually and keep it expanded for the current visit."
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "kind": "project_decision",
+          "facet": "navigation-default",
+          "assertionType": "project_constraint",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "editor"
+          },
+          "claim": "In the editor project, compact navigation is the default state. This default must not be replaced, though users can manually expand navigation and keep it expanded for the current visit.",
+          "rationale": null,
+          "futureAction": "Preserve compact navigation as the default state in the editor. Do not implement changes that replace this default, while ensuring the manual expansion feature remains available for the current visit.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "editor",
+            "navigation",
+            "compact",
+            "default",
+            "UI"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "default-with-user-override-0",
+              "quote": "In our editor, compact navigation is the default. Do not replace that default. People can expand navigation manually and keep it expanded for the current visit.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability"
+              ]
+            }
+          ],
+          "conflictKey": "editor-navigation-default",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          }
+        }
+      },
+      "expected": {
+        "verdict": "supported",
+        "note": "Preserves the compact-navigation default together with the explicit manual expansion/current-visit allowance, without converting application state into a coding-task filter."
+      },
+      "id": "audit-50d82bed0606"
+    },
+    {
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "recordId": "ee68d515-6fe4-4394-a928-a37223d94cbf"
+      },
+      "input": {
+        "authorizedScope": {
+          "profileId": "synthetic-owner",
+          "projectIds": [
+            "build-monitor"
+          ]
+        },
+        "episodes": [
+          {
+            "id": "episode-0",
+            "context": "bounded",
+            "sources": [
+              {
+                "id": "firm-request-with-unresolved-placement-0",
+                "role": "user",
+                "text": "Preserve the last successful build log when another build starts. Maybe the history chooser belongs in the footer, or beside Run? Let us settle its placement later."
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "kind": "project_decision",
+          "facet": "build-log-preservation",
+          "assertionType": "project_constraint",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "build-monitor"
+          },
+          "claim": "The build-monitor project must preserve the last successful build log when another build starts.",
+          "rationale": null,
+          "futureAction": "Implement or verify that the system retains the last successful build log during the start of a new build.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "build log",
+            "preserve",
+            "successful build",
+            "build-monitor"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "firm-request-with-unresolved-placement-0",
+              "quote": "Preserve the last successful build log when another build starts. Maybe the history chooser belongs in the footer, or beside Run? Let us settle its placement later.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability"
+              ]
+            }
+          ],
+          "conflictKey": "build-log-preservation",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          }
+        }
+      },
+      "expected": {
+        "verdict": "supported",
+        "note": "Retains the explicit log-preservation request and leaves placement undecided rather than choosing the footer or Run location."
+      },
+      "id": "audit-567845832990"
+    },
+    {
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "recordId": "2c41d8af-2d46-46c6-818d-974211f37f20"
+      },
+      "input": {
+        "authorizedScope": {
+          "profileId": "synthetic-owner",
+          "projectIds": [
+            "exporter"
+          ]
+        },
+        "episodes": [
+          {
+            "id": "episode-0",
+            "context": "bounded",
+            "sources": [
+              {
+                "id": "limited-control-set-0",
+                "role": "user",
+                "text": "For the export dialog's conflict prompt, remove Replace and Skip. Keep Cancel and Save copy. This change is only about that prompt; do not remove any other export actions."
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "kind": "project_decision",
+          "facet": "export-dialog-conflict-prompt-actions",
+          "assertionType": "accepted_decision",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "exporter"
+          },
+          "claim": "The export dialog's conflict prompt should include only Cancel and Save copy, with Replace and Skip removed. This decision is limited to the conflict prompt and does not apply to other export actions.",
+          "rationale": null,
+          "futureAction": "When modifying the export dialog's conflict prompt, ensure it presents only Cancel and Save copy options. Do not remove Replace or Skip from other export actions or dialogs.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "export dialog",
+            "conflict prompt",
+            "Replace",
+            "Skip",
+            "Cancel",
+            "Save copy"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "limited-control-set-0",
+              "quote": "For the export dialog's conflict prompt, remove Replace and Skip. Keep Cancel and Save copy. This change is only about that prompt; do not remove any other export actions.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability"
+              ]
+            }
+          ],
+          "conflictKey": "export-dialog-conflict-prompt-actions",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          }
+        }
+      },
+      "expected": {
+        "verdict": "unsupported",
+        "note": "The component boundary is preserved, but the record adds only Cancel and Save copy. Naming two retained options and two removals does not establish an exhaustive inventory in a bounded excerpt. The original only qualifies the scope of the change, not the allowed options."
+      },
+      "id": "audit-776a00824696"
+    },
+    {
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "recordId": "79efa99a-7151-4502-8d9a-a2e2f53f790c"
+      },
+      "input": {
+        "authorizedScope": {
+          "profileId": "synthetic-owner",
+          "projectIds": [
+            "build-monitor"
+          ]
+        },
+        "episodes": [
+          {
+            "id": "episode-0",
+            "context": "bounded",
+            "sources": [
+              {
+                "id": "accepted-number-0",
+                "role": "user",
+                "text": "For this build monitor, retain completed logs for 14 days. This is the policy we agreed to; keep it."
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "kind": "project_decision",
+          "facet": "log-retention-policy",
+          "assertionType": "accepted_decision",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "build-monitor"
+          },
+          "claim": "The build monitor project retains completed logs for 14 days.",
+          "rationale": null,
+          "futureAction": "Implement or maintain log retention logic to delete completed logs after 14 days.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "log retention",
+            "14 days",
+            "completed logs",
+            "build monitor"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "accepted-number-0",
+              "quote": "For this build monitor, retain completed logs for 14 days. This is the policy we agreed to; keep it.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability"
+              ]
+            }
+          ],
+          "conflictKey": "build-monitor-log-retention",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          }
+        }
+      },
+      "expected": {
+        "verdict": "supported",
+        "note": "Preserves the adopted completed-log retention policy and exact 14-day duration. Treat the present-tense claim as the labelled policy, not a verified implementation observation."
+      },
+      "id": "audit-8625fb25e3b1"
+    },
+    {
+      "origin": {
+        "authored": "minimal-pair",
+        "theme": "outcome"
+      },
+      "input": {
+        "authorizedScope": {
+          "profileId": "synthetic-owner",
+          "projectIds": [
+            "sample-project"
+          ]
+        },
+        "episodes": [
+          {
+            "id": "episode-0",
+            "context": "bounded",
+            "sources": [
+              {
+                "id": "source-0",
+                "role": "user",
+                "text": "Please show a retry button after an upload fails in this project."
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "kind": "project_decision",
+          "facet": "outcome",
+          "assertionType": "project_constraint",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "sample-project"
+          },
+          "claim": "The user requests a retry button after failed uploads.",
+          "rationale": null,
+          "futureAction": "Show a retry button after an upload fails.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "outcome"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "source-0",
+              "quote": "Please show a retry button after an upload fails in this project.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability",
+                "/rationale"
+              ]
+            }
+          ],
+          "conflictKey": "sample-outcome",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          }
+        }
+      },
+      "expected": {
+        "verdict": "supported",
+        "note": "Faithful project-scoped requested behavior; no unstated reason or implementation claim."
+      },
+      "id": "audit-989f8e0009a9"
+    },
+    {
+      "origin": {
+        "authored": "minimal-pair",
+        "theme": "reason"
+      },
+      "input": {
+        "authorizedScope": {
+          "profileId": "synthetic-owner",
+          "projectIds": [
+            "sample-project"
+          ]
+        },
+        "episodes": [
+          {
+            "id": "episode-0",
+            "context": "bounded",
+            "sources": [
+              {
+                "id": "source-0",
+                "role": "user",
+                "text": "For this project, keep error details visible until I dismiss them."
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "kind": "project_decision",
+          "facet": "reason",
+          "assertionType": "project_constraint",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "sample-project"
+          },
+          "claim": "Error details should remain visible until the user dismisses them.",
+          "rationale": null,
+          "futureAction": "Keep error details visible until the user dismisses them.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "reason"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "source-0",
+              "quote": "For this project, keep error details visible until I dismiss them.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability",
+                "/rationale"
+              ]
+            }
+          ],
+          "conflictKey": "sample-reason",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          }
+        }
+      },
+      "expected": {
+        "verdict": "supported",
+        "note": "Faithful project-scoped requested behavior; no unstated reason or implementation claim."
+      },
+      "id": "audit-9a0077092e24"
+    },
+    {
+      "origin": {
+        "authored": "minimal-pair",
+        "theme": "reason"
+      },
+      "input": {
+        "authorizedScope": {
+          "profileId": "synthetic-owner",
+          "projectIds": [
+            "sample-project"
+          ]
+        },
+        "episodes": [
+          {
+            "id": "episode-0",
+            "context": "bounded",
+            "sources": [
+              {
+                "id": "source-0",
+                "role": "user",
+                "text": "For this project, keep error details visible until I dismiss them."
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "kind": "project_decision",
+          "facet": "reason",
+          "assertionType": "project_constraint",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "sample-project"
+          },
+          "claim": "Error details should remain visible until the user dismisses them.",
+          "rationale": "The user relies on a screen reader and needs extra reading time.",
+          "futureAction": "Keep error details visible until the user dismisses them.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "reason"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "source-0",
+              "quote": "For this project, keep error details visible until I dismiss them.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability",
+                "/rationale"
+              ]
+            }
+          ],
+          "conflictKey": "sample-reason",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          }
+        }
+      },
+      "expected": {
+        "verdict": "unsupported",
+        "note": "The request gives no accessibility diagnosis, tool use or reason."
+      },
+      "id": "audit-9cec6f971b07"
+    },
+    {
+      "origin": {
+        "authored": "minimal-pair",
+        "theme": "override"
+      },
+      "input": {
+        "authorizedScope": {
+          "profileId": "synthetic-owner",
+          "projectIds": [
+            "sample-project"
+          ]
+        },
+        "episodes": [
+          {
+            "id": "episode-0",
+            "context": "bounded",
+            "sources": [
+              {
+                "id": "source-0",
+                "role": "user",
+                "text": "In this project, use a condensed file tree by default. If I expand a folder manually, leave it expanded for the current session."
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "kind": "project_decision",
+          "facet": "override",
+          "assertionType": "project_constraint",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "sample-project"
+          },
+          "claim": "Use a condensed file tree by default and preserve manually expanded folders for the session.",
+          "rationale": null,
+          "futureAction": "Start with a condensed tree and keep manually expanded folders open for the current session.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "override"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "source-0",
+              "quote": "In this project, use a condensed file tree by default. If I expand a folder manually, leave it expanded for the current session.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability",
+                "/rationale"
+              ]
+            }
+          ],
+          "conflictKey": "sample-override",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          }
+        }
+      },
+      "expected": {
+        "verdict": "supported",
+        "note": "Faithful project-scoped requested behavior; no unstated reason or implementation claim."
+      },
+      "id": "audit-9efa67f8c22f"
+    },
+    {
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/baseline.json",
+        "reportSha256": "fa9e66381b99f052017c952aeb6f143567b5abda9f37984f55f6f6ee7cc18543",
+        "recordId": "4a88d46c-ebc0-42e4-9942-d0b8c1794d43"
+      },
+      "input": {
+        "authorizedScope": {
+          "profileId": "synthetic-owner",
+          "projectIds": [
+            "editor"
+          ]
+        },
+        "episodes": [
+          {
+            "id": "episode-0",
+            "context": "bounded",
+            "sources": [
+              {
+                "id": "default-with-user-override-0",
+                "role": "user",
+                "text": "In our editor, compact navigation is the default. Do not replace that default. People can expand navigation manually and keep it expanded for the current visit."
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "kind": "project_decision",
+          "facet": "navigation-default",
+          "assertionType": "project_constraint",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "editor"
+          },
+          "claim": "In the editor project, compact navigation is the default and must not be replaced.",
+          "rationale": null,
+          "futureAction": "Preserve compact navigation as the default state in the editor; do not implement changes that replace this default.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "editor",
+            "navigation",
+            "compact",
+            "default"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "default-with-user-override-0",
+              "quote": "In our editor, compact navigation is the default. Do not replace that default. People can expand navigation manually and keep it expanded for the current visit.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability"
+              ]
+            }
+          ],
+          "conflictKey": "editor-navigation-default",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          }
+        }
+      },
+      "expected": {
+        "verdict": "supported",
+        "note": "The stated compact-navigation default is supported and scoped correctly. It does not itself forbid an override, but the separately required manual-expansion/current-visit behavior is absent from the retained record and recall."
+      },
+      "id": "audit-a65781ef836b"
+    },
+    {
+      "origin": {
+        "authored": "minimal-pair",
+        "theme": "scope"
+      },
+      "input": {
+        "authorizedScope": {
+          "profileId": "synthetic-owner",
+          "projectIds": [
+            "sample-project"
+          ]
+        },
+        "episodes": [
+          {
+            "id": "episode-0",
+            "context": "bounded",
+            "sources": [
+              {
+                "id": "source-0",
+                "role": "user",
+                "text": "For this project, prefer SQLite for the local cache."
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "kind": "project_decision",
+          "facet": "scope",
+          "assertionType": "project_constraint",
+          "scope": {
+            "profileId": "synthetic-owner"
+          },
+          "claim": "The user prefers SQLite for all local caches across projects.",
+          "rationale": null,
+          "futureAction": "Always choose SQLite for the user’s local caches.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "scope"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "source-0",
+              "quote": "For this project, prefer SQLite for the local cache.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability",
+                "/rationale"
+              ]
+            }
+          ],
+          "conflictKey": "sample-scope",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          }
+        }
+      },
+      "expected": {
+        "verdict": "unsupported",
+        "note": "A project-specific preference is promoted to a personal default and made unconditional."
+      },
+      "id": "audit-bb84d91e6745"
+    },
+    {
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "recordId": "9e3a3fdc-d882-46d8-b57d-40a358475a4c"
+      },
+      "input": {
+        "authorizedScope": {
+          "profileId": "synthetic-owner",
+          "projectIds": [
+            "review-tool"
+          ]
+        },
+        "episodes": [
+          {
+            "id": "episode-0",
+            "context": "bounded",
+            "sources": [
+              {
+                "id": "polite-request-0",
+                "role": "user",
+                "text": "Could you please keep keyboard focus in the search box after running a search in this review tool?"
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "kind": "working_preference",
+          "facet": "search-focus-retention",
+          "assertionType": "stated_preference",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "review-tool"
+          },
+          "claim": "The user prefers that keyboard focus remains in the search box after a search is executed in the review tool.",
+          "rationale": null,
+          "futureAction": "Ensure that the search box retains keyboard focus after search operations are performed in the review tool.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "search box",
+            "keyboard focus",
+            "review tool",
+            "search execution"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "polite-request-0",
+              "quote": "Could you please keep keyboard focus in the search box after running a search in this review tool?",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability"
+              ]
+            }
+          ],
+          "conflictKey": "review-tool-search-focus",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          }
+        }
+      },
+      "expected": {
+        "verdict": "supported",
+        "note": "Retains the concrete behavior requested in a polite question. It stays scoped to the review tool and supplies no invented reason or implementation verification."
+      },
+      "id": "audit-dfb13cf95cfc"
+    }
+  ]
+}

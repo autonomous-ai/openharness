@@ -400,6 +400,51 @@ void main() {
     },
   );
 
+  test(
+    'cursor visibility notifications ignore local blinks and ordinary output',
+    () async {
+      await ready();
+      await session.handleBinary(
+        output(
+          0,
+          utf8.encode('prompt\x1b[?25h'),
+          keyframe: true,
+          cols: 100,
+          rows: 30,
+        ),
+      );
+      final visibility = <bool>[];
+      var sessionChanges = 0;
+      session.remoteCursorVisibility.addListener(() {
+        visibility.add(session.remoteCursorVisibility.value);
+      });
+      session.addListener(() => sessionChanges++);
+
+      expect(session.setCursorBlinkPhase(false), isTrue);
+      expect(session.setCursorBlinkPhase(false), isFalse);
+      expect(session.remoteCursorVisibility.value, isTrue);
+      await session.handleBinary(output(1, utf8.encode('output')));
+      expect(session.terminal.cursorVisibleMode, isFalse);
+      expect(visibility, isEmpty);
+      expect(session.setCursorBlinkPhase(true), isTrue);
+
+      await session.handleBinary(output(2, utf8.encode('\x1b[?25l')));
+      expect(visibility, [false]);
+      expect(session.setCursorBlinkPhase(false), isFalse);
+      expect(session.setCursorBlinkPhase(true), isFalse);
+      // Transient hide/show within one packet does not change the final state.
+      await session.handleBinary(output(3, utf8.encode('\x1b[?25h\x1b[?25l')));
+      expect(visibility, [false]);
+      await session.handleBinary(output(4, utf8.encode('\x1b[?25h')));
+      expect(visibility, [false, true]);
+      expect(
+        sessionChanges,
+        0,
+        reason: 'cursor changes must not rebuild the workspace',
+      );
+    },
+  );
+
   test('remote history keyframe survives viewport resize without circular-buffer reflow', () async {
     await ready();
     final oldStyleHistory = List.generate(
@@ -1115,6 +1160,197 @@ void main() {
     },
   );
 
+  group('stream liveness', () {
+    setUp(() => controlledNow = DateTime.utc(2026));
+
+    Future<void> tick(WidgetTester tester, Duration elapsed) async {
+      controlledNow = controlledNow!.add(elapsed);
+      await tester.pump(elapsed);
+    }
+
+    Future<void> live() async {
+      await ready();
+      await session.handleBinary(
+        output(
+          0,
+          utf8.encode('retained screen'),
+          keyframe: true,
+          cols: 100,
+          rows: 30,
+        ),
+      );
+    }
+
+    TerminalBinaryFrame sync(int seq, {String id = streamId}) =>
+        TerminalBinaryFrame(
+          kind: TerminalBinaryKind.sync,
+          streamId: id,
+          seq: seq,
+          bytes: Uint8List(0),
+          compressed: false,
+        );
+
+    for (final watching in [false, true]) {
+      testWidgets(
+        'a silently replaced stream recovers without replaying input (watching=$watching)',
+        (tester) async {
+          await live();
+          final retained = session.terminal;
+          session.terminal.textInput('sent before disconnect');
+          await tester.pump(const Duration(milliseconds: 5));
+          binarySent.clear();
+
+          for (var i = 0; i < 3; i++) {
+            await tick(tester, const Duration(seconds: 5));
+          }
+          expect(session.status, TerminalSessionStatus.resyncing);
+          expect(session.errorCode, 'TERMINAL_STREAM_TIMEOUT');
+          expect(session.acceptsInput, isFalse);
+          expect(session.terminal, same(retained));
+          // Nothing answers for the vanished stream. Use the existing bounded ladder.
+          for (var i = 0; i < 3; i++) {
+            await tick(tester, const Duration(seconds: 4));
+          }
+          final opens = sent
+              .where((frame) => frame.type == 'terminal_open')
+              .toList();
+          expect(opens, hasLength(2));
+          expect(opens.last.payload['takeover'], isFalse);
+          expect(session.status, TerminalSessionStatus.opening);
+          expect(session.terminal, same(retained));
+
+          // The daemon now reports replacement explicitly. A late close for the old
+          // stream must not kill the reopen this view already asked for.
+          await session.handleFrame('terminal_closed', {
+            'streamId': streamId,
+            'code': 'TERMINAL_TAKEN_OVER',
+            'reason': 'terminal reopened in another view',
+          });
+          expect(session.status, TerminalSessionStatus.opening);
+          const replacementId = '11112233-4455-6677-8899-aabbccddeeff';
+          await session.handleFrame('terminal_ready', {
+            'requestId': opens.last.payload['requestId'],
+            'protocolVersion': 3,
+            'streamId': replacementId,
+            'agentId': 'agent-1',
+            'readOnly': watching,
+          });
+          expect(session.acceptsInput, isFalse);
+          await session.handleBinary(
+            TerminalBinaryFrame(
+              kind: TerminalBinaryKind.keyframe,
+              streamId: replacementId,
+              seq: 0,
+              bytes: Uint8List.fromList(utf8.encode('reconnected screen')),
+              compressed: false,
+              cols: 100,
+              rows: 30,
+            ),
+          );
+          expect(session.acceptsInput, !watching);
+          expect(
+            binarySent,
+            isEmpty,
+            reason: 'Input on the retired stream is never replayed',
+          );
+          session.terminal.textInput('new input');
+          await tester.pump(const Duration(milliseconds: 5));
+          if (watching) {
+            expect(binarySent, isEmpty);
+          } else {
+            expect(binarySent.single.streamId, replacementId);
+            expect(utf8.decode(binarySent.single.bytes), 'new input');
+          }
+          await session.close();
+        },
+      );
+    }
+
+    testWidgets('a live stream that answers resync keeps its lease', (
+      tester,
+    ) async {
+      await live();
+      await tick(tester, const Duration(seconds: 15));
+      expect(session.status, TerminalSessionStatus.resyncing);
+      await session.handleBinary(
+        output(
+          5,
+          utf8.encode('fresh snapshot'),
+          keyframe: true,
+          cols: 100,
+          rows: 30,
+        ),
+      );
+      expect(session.acceptsInput, isTrue);
+      expect(session.errorCode, isNull);
+      await tick(tester, const Duration(seconds: 5));
+      await session.handleBinary(sync(6));
+      expect(session.acceptsInput, isTrue);
+      expect(
+        sent.where((frame) => frame.type == 'terminal_open'),
+        hasLength(1),
+      );
+      await session.close();
+    });
+
+    for (final kind in ['sync', 'output']) {
+      testWidgets('$kind frames keep a live terminal healthy', (tester) async {
+        await live();
+        for (var seq = 1; seq <= 8; seq++) {
+          await tick(tester, const Duration(seconds: 5));
+          await session.handleBinary(
+            kind == 'sync' ? sync(seq) : output(seq, utf8.encode('text')),
+          );
+        }
+        expect(session.acceptsInput, isTrue);
+        expect(sent.where((frame) => frame.type == 'terminal_resync'), isEmpty);
+        expect(
+          sent.where((frame) => frame.type == 'terminal_open'),
+          hasLength(1),
+        );
+        await session.close();
+      });
+    }
+
+    testWidgets('traffic for other panes cannot hide a stale terminal', (
+      tester,
+    ) async {
+      await live();
+      for (var seq = 1; seq <= 3; seq++) {
+        await session.handleBinary(sync(seq, id: 'another-pane'));
+        await session.handleFrame('terminal_link_mode', {
+          'streamId': streamId,
+          'mode': 'turn',
+        });
+        await tick(tester, const Duration(seconds: 5));
+      }
+      expect(session.status, TerminalSessionStatus.resyncing);
+      expect(session.errorCode, 'TERMINAL_STREAM_TIMEOUT');
+      await session.close();
+    });
+
+    testWidgets(
+      'a reported takeover waits for the user instead of reconnecting',
+      (tester) async {
+        await live();
+        await session.handleFrame('terminal_closed', {
+          'streamId': streamId,
+          'code': 'TERMINAL_TAKEN_OVER',
+          'reason': 'terminal reopened in another view',
+        });
+        await tick(tester, const Duration(seconds: 60));
+        expect(session.status, TerminalSessionStatus.takenOver);
+        expect(session.acceptsInput, isFalse);
+        expect(
+          sent.where((frame) => frame.type == 'terminal_open'),
+          hasLength(1),
+        );
+        expect(sent.where((frame) => frame.type == 'terminal_resync'), isEmpty);
+        await session.close();
+      },
+    );
+  });
+
   testWidgets('resync retries three times, reopens once, then fails closed', (
     tester,
   ) async {
@@ -1337,7 +1573,13 @@ void main() {
 
     Future<void> acceptBegin() async {
       await pump();
-      expect(sent.single.type, 'terminal_chunked_upload_begin');
+      expect(
+        sent
+            .where((frame) => frame.type == 'terminal_chunked_upload_begin')
+            .single
+            .type,
+        'terminal_chunked_upload_begin',
+      );
       await session.handleFrame('terminal_chunked_upload_begin_result', {
         'streamId': streamId,
         'accepted': true,
@@ -1362,9 +1604,27 @@ void main() {
 
         final future = session.pasteImage(png);
         await acceptBegin();
-        expect(sent.single.payload, containsPair('uploadKind', 'image'));
-        expect(sent.single.payload, containsPair('totalBytes', png.length));
-        expect(sent.single.payload, isNot(contains('filename')));
+        expect(
+          sent
+              .where((frame) => frame.type == 'terminal_chunked_upload_begin')
+              .single
+              .payload,
+          containsPair('uploadKind', 'image'),
+        );
+        expect(
+          sent
+              .where((frame) => frame.type == 'terminal_chunked_upload_begin')
+              .single
+              .payload,
+          containsPair('totalBytes', png.length),
+        );
+        expect(
+          sent
+              .where((frame) => frame.type == 'terminal_chunked_upload_begin')
+              .single
+              .payload,
+          isNot(contains('filename')),
+        );
 
         await pump();
         expect(imagePastes(), hasLength(1));
@@ -1406,8 +1666,20 @@ void main() {
 
         final future = session.pasteFile('report.pdf', content);
         await acceptBegin();
-        expect(sent.single.payload, containsPair('uploadKind', 'file'));
-        expect(sent.single.payload, containsPair('filename', 'report.pdf'));
+        expect(
+          sent
+              .where((frame) => frame.type == 'terminal_chunked_upload_begin')
+              .single
+              .payload,
+          containsPair('uploadKind', 'file'),
+        );
+        expect(
+          sent
+              .where((frame) => frame.type == 'terminal_chunked_upload_begin')
+              .single
+              .payload,
+          containsPair('filename', 'report.pdf'),
+        );
 
         await pump();
         expect(filePastes(), hasLength(1));
@@ -1463,8 +1735,48 @@ void main() {
         expect(await future, isFalse);
         expect(imagePastes(), isEmpty);
         expect(session.uploadProgress, isNull);
+        expect(session.acceptsInput, isTrue);
+        expect(sent.where((frame) => frame.type == 'terminal_open'), isEmpty);
       },
     );
+
+    for (final coded in [true, false]) {
+      test(
+        'a missing-stream upload rejection reopens once without replay (coded=$coded)',
+        () async {
+          await live();
+          final retained = session.terminal;
+          final uploading = session.pasteImage(Uint8List.fromList([1, 2, 3]));
+          await pump();
+          final rejection = <String, dynamic>{
+            'streamId': streamId,
+            'accepted': false,
+            if (coded) 'code': 'TERMINAL_STREAM_NOT_FOUND',
+            'reason': coded ? 'stream unavailable' : 'no live terminal stream for this pane (reopen it and try again)',
+          };
+          await session.handleFrame(
+            'terminal_chunked_upload_begin_result',
+            rejection,
+          );
+          expect(await uploading, isFalse);
+          expect(session.status, TerminalSessionStatus.opening);
+          expect(session.terminal, same(retained));
+          expect(session.uploadProgress, isNull);
+          expect(imagePastes(), isEmpty);
+          final opens = sent.where((frame) => frame.type == 'terminal_open');
+          expect(opens, hasLength(1));
+          expect(opens.single.payload['takeover'], isFalse);
+          await session.handleFrame(
+            'terminal_chunked_upload_begin_result',
+            rejection,
+          );
+          expect(
+            sent.where((frame) => frame.type == 'terminal_open'),
+            hasLength(1),
+          );
+        },
+      );
+    }
 
     test(
       'a malformed-chunk error clears the upload without freezing the session',

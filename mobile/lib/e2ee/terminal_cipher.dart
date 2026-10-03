@@ -17,7 +17,6 @@ const int terminalBinaryVersion = 3;
 const int terminalBinaryHeaderBytes = 20;
 const int _aadBytes = 16;
 const int _tagBytes = 16;
-const int _flagZlib = 1;
 final Uint8List _magic = Uint8List.fromList(const [0x48, 0x54, 0x52, 0x4d]);
 
 /// Binary frames get their own key, so their nonces never collide with the JSON frames'.
@@ -38,7 +37,7 @@ Uint8List? sealTerminalBinary(
   final header = Uint8List(terminalBinaryHeaderBytes)..setRange(0, 4, _magic);
   header[4] = terminalBinaryVersion;
   header[5] = frame.kind.code;
-  header[6] = frame.compressed ? _flagZlib : 0;
+  header[6] = terminalFrameFlags(frame);
   final view = ByteData.sublistView(header)..setUint64(8, counter);
   final ciphertext = aeadSeal(
     key,

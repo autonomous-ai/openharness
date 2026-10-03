@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ENGINES } from '../engines/types.js'
 import type { RegisteredSession } from './registry.js'
 import { TerminalStreamManager } from './terminalStreamManager.js'
@@ -15,7 +15,7 @@ const run = process.env.RUN_REAL_TMUX_STREAM === '1' ? describe : describe.skip
 
 function tmux(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile('tmux', args, { timeout: 3_000 }, (error, stdout) => error ? reject(error) : resolve(stdout.trim()))
+    execFile('tmux', ['-f', '/dev/null', ...args], { timeout: 3_000 }, (error, stdout) => error ? reject(error) : resolve(stdout.trim()))
   })
 }
 
@@ -28,12 +28,27 @@ async function eventually(predicate: () => boolean | Promise<boolean>, timeoutMs
 run('TmuxControlStream real tmux', () => {
   const session = `harness-stream-${randomUUID().slice(0, 8)}`
   let paneId = ''
+  let socketRoot = ''
 
   beforeAll(async () => {
-    paneId = await tmux(['new-session', '-d', '-P', '-F', '#{pane_id}', '-s', session, 'bash', '--noprofile', '--norc'])
+    // A managed client must not attach to a developer's existing server of another tmux version.
+    socketRoot = await mkdtemp(join(tmpdir(), 'harness-stream-server-'))
+    vi.stubEnv('TMUX_TMPDIR', socketRoot)
+    vi.stubEnv('TMUX', undefined)
+    vi.stubEnv('TMUX_PANE', undefined)
   })
 
   afterAll(async () => {
+    await tmux(['kill-server']).catch(() => {})
+    vi.unstubAllEnvs()
+    await rm(socketRoot, { recursive: true, force: true })
+  })
+
+  beforeEach(async () => {
+    paneId = await tmux(['new-session', '-d', '-P', '-F', '#{pane_id}', '-s', session, 'bash', '--noprofile', '--norc'])
+  })
+
+  afterEach(async () => {
     await tmux(['kill-session', '-t', session]).catch(() => { /* exact disposable session only */ })
   })
 
@@ -80,11 +95,62 @@ run('TmuxControlStream real tmux', () => {
     }
     expect(Buffer.concat(chunks).includes(Buffer.from('HARNESS_STREAM_OK'))).toBe(true)
 
+    expect((await opened.value.scroll('up', 5)).state).toBe('succeeded')
+    expect(await tmux(['display-message', '-p', '-t', paneId, '#{pane_in_mode}'])).toBe('0')
+    expect((await opened.value.scroll('down', 1)).state).toBe('succeeded')
+    expect(await tmux(['display-message', '-p', '-t', paneId, '#{pane_in_mode}'])).toBe('0')
+
     expect((await opened.value.resize({ cols: 110, rows: 35 })).state).toBe('succeeded')
     expect(await tmux(['display-message', '-p', '-t', paneId, '#{pane_width}x#{pane_height}'])).toBe('110x35')
     await opened.value.close()
     expect(await tmux(['display-message', '-p', '-t', paneId, '#{pane_width}x#{pane_height}'])).toBe('110x35')
     expect(closedReason === '' || closedReason === 'closed').toBe(true)
+  })
+
+  it('opens and resizes narrow and short panes without flooring them to desktop dimensions', async () => {
+    const opened = await TmuxControlStream.open(paneId, { cols: 30, rows: 8 }, {
+      onData: () => {}, onClose: () => {},
+    })
+    expect(opened.state).toBe('succeeded')
+    try {
+      if (opened.state !== 'succeeded') return
+      expect(await tmux(['display-message', '-p', '-t', paneId, '#{pane_width}x#{pane_height}'])).toBe('30x8')
+      for (const size of [{ cols: 1, rows: 1 }, { cols: 39, rows: 11 }, { cols: 120, rows: 40 }]) {
+        expect((await opened.value.resize(size)).state).toBe('succeeded')
+        expect(await tmux(['display-message', '-p', '-t', paneId, '#{pane_width}x#{pane_height}'])).toBe(`${size.cols}x${size.rows}`)
+        opened.value.beginSnapshot()
+        const snapshot = await opened.value.snapshot()
+        expect(snapshot.state).toBe('succeeded')
+        if (snapshot.state === 'succeeded') expect(snapshot.value).toMatchObject(size)
+        opened.value.endSnapshot()
+      }
+    } finally {
+      if (opened.state === 'succeeded') await opened.value.close()
+    }
+  })
+
+  it('streams large styled Unicode and control-byte output without losing or changing bytes', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'harness-stream-bytes-'))
+    const path = join(directory, 'payload.bin')
+    const payload = Buffer.from(`BEGIN_STREAM_BYTES\n${'\x1b[38;5;112m─世界🚀\\\0\x1b[0m\r\n'.repeat(4_000)}END_STREAM_BYTES\n`)
+    await writeFile(path, payload)
+    const chunks: Buffer[] = []
+    const opened = await TmuxControlStream.open(paneId, { cols: 96, rows: 28 }, {
+      onData: bytes => chunks.push(Buffer.from(bytes)), onClose: () => {},
+    })
+    try {
+      expect(opened.state).toBe('succeeded')
+      if (opened.state !== 'succeeded') return
+      // The payload is a file, so a shell echo cannot make the assertion pass.
+      // Disable tty newline rewriting before cat sends the exact binary bytes.
+      const quotedPath = `'${path.replace(/'/g, `'\\''`)}'`
+      expect((await opened.value.writeRaw(Buffer.from(`stty -echo -opost; cat ${quotedPath}\r`))).state).toBe('succeeded')
+      await eventually(() => Buffer.concat(chunks).includes(Buffer.from('END_STREAM_BYTES\n')))
+      expect(Buffer.concat(chunks).includes(payload)).toBe(true)
+    } finally {
+      if (opened.state === 'succeeded') await opened.value.close()
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 
   it('delivers a multi-chunk paste to the pane whole and in order', async () => {
@@ -172,7 +238,7 @@ run('TmuxControlStream real tmux', () => {
         engine,
         active: true,
         registeredAt: Date.now(),
-        updatedAt: Date.now(),
+        touchedAt: Date.now(),
         runtimes: [{ backend: 'tmux', paneId }],
         primaryRuntimeKey: `tmux:default:${paneId}`,
       } as unknown as RegisteredSession

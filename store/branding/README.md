@@ -85,6 +85,11 @@ The wrapper repositories below had no dedicated logo assets when checked on
 - [JUCE Agent Toolkit](https://github.com/danielraffel/juce-agent-toolkit/tree/9089b719f7378eba28dd078cdfb8b6e1c062bf13).
 - [SimSkill](https://github.com/qiliuchn/SimSkill-V1/tree/43d65a6fe3858af682ac99f6695310ec59dd2f52).
 
+Trail of Bits Skills (2026-09-29) wears an original package mark — a shield with code under a
+lens, MIT. [trailofbits/skills](https://github.com/trailofbits/skills/tree/82fe8226252622fa807643bdca1710901198553a)
+ships no logo of its own, and Trail of Bits' company logo is theirs; the wrapper loads their plugins
+without wearing their brand, and the mark is not presented as a Trail of Bits mark.
+
 ## Regenerate and check
 
 From the repository root, using Node and an installed Playwright Chromium:

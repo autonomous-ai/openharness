@@ -26,7 +26,7 @@ function session(engine: RegisteredSession['engine']): RegisteredSession {
     tmuxPane: '%1', source: null, title: null, model: null,
     runtimes: [{ backend: 'tmux', paneId: '%1' }], primaryRuntimeKey: 'tmux\u0000%1',
     cliVersion: engine === 'codex' ? '0.144.5' : engine === 'cursor' ? '2026.07.20-8cc9c0b' : '2.1.212', processIdentity: null,
-    registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
   }
 }
 
@@ -289,6 +289,20 @@ describe('RuntimeProfileManager', () => {
     expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({
       model: 'opus', effort: 'high',
     })
+  })
+
+  it('ignores Claude synthetic error models without losing the observed model', () => {
+    const manager = new RuntimeProfileManager()
+    const value = session('claude')
+    const error = JSON.stringify({ type: 'assistant', message: { model: '<synthetic>', content: 'Quota exceeded' } })
+    manager.hydrate(value, [error])
+    expect(manager.selectedModel(value)).toBeNull()
+
+    manager.ingestPane(value, 'Opus 4.8 with high effort\n❯ ')
+    const observed = manager.selectedModel(value)
+    expect(observed).not.toBeNull()
+    manager.ingest(value, error)
+    expect(manager.selectedModel(value)).toBe(observed)
   })
 
   it('hydrates Claude effort from effective settings and backfills the transcript CLI version', async () => {

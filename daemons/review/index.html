@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="daemon-review-source" content="32d0bbbaed8d2a0c3e16d316883ec34009117921e8a35e262e89963470f0ec6d">
+<title>Overview · Daemons review</title>
+<style>
+
+/* Shared by the standalone pages; build.mjs embeds this file. */
+:root {
+  color-scheme: dark;
+  --bg: #1c1c1c;
+  --panel: #262626;
+  --deep: #0c0c0c;
+  --line: #424242;
+  --faint: #a0a0a0;
+  --dim: #aaa;
+  --ink: #d0d0d0;
+  --bright: #eee;
+  --green: #87af87;
+  --yellow: #d7af5f;
+  --blue: #9bbddd;
+  --mono: Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --vt: var(--mono);
+}
+* {
+  box-sizing: border-box;
+}
+html {
+  scroll-padding-top: 20px;
+}
+body {
+  margin: 0;
+  padding: 24px 24px 64px;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.65 var(--sans);
+}
+[hidden] {
+  display: none !important;
+}
+a {
+  color: var(--blue);
+  text-underline-offset: 4px;
+}
+a:hover {
+  color: var(--bright);
+}
+button,
+input,
+select {
+  font: inherit;
+}
+button,
+select {
+  cursor: pointer;
+}
+button {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 7px 12px;
+  color: var(--ink);
+  font: 13px/1.5 var(--mono);
+}
+button:hover {
+  background: var(--panel);
+  color: var(--bright);
+}
+button[aria-pressed="true"] {
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+:focus-visible {
+  outline: 2px solid var(--yellow);
+  outline-offset: 4px;
+}
+pre,
+code,
+kbd {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
+}
+pre {
+  margin: 0;
+}
+code {
+  color: var(--bright);
+}
+p {
+  max-width: 72ch;
+}
+h1,
+h2,
+h3 {
+  color: var(--bright);
+}
+h2 {
+  margin-top: 40px;
+  font: 600 19px/1.5 var(--mono);
+  letter-spacing: 0;
+}
+h3 {
+  font: 600 16px/1.5 var(--mono);
+}
+.wrap,
+.review-header,
+.review-footer {
+  max-width: 1080px;
+  margin-inline: auto;
+  min-width: 0;
+}
+.review-header {
+  padding-bottom: 24px;
+  margin-bottom: 28px;
+  border-bottom: 1px solid var(--line);
+}
+.review-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  margin: 0 0 26px;
+  font: 13px/1.5 var(--mono);
+}
+.review-nav a {
+  padding-block: 8px;
+  text-decoration: none;
+}
+.review-nav [aria-current="page"] {
+  color: var(--yellow);
+  text-decoration: underline;
+}
+.review-nav button {
+  margin-left: auto;
+}
+.review-kicker {
+  font: 12px/1.5 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  color: var(--yellow);
+}
+.review-header h1 {
+  font: 600 clamp(28px, 5vw, 44px) / 1.2 var(--sans);
+  letter-spacing: -0.03em;
+  margin: 10px 0 12px;
+}
+.review-header p {
+  margin: 0;
+  color: var(--dim);
+  max-width: 75ch;
+}
+.review-footer {
+  margin-top: 48px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  color: var(--dim);
+  font: 12px/1.7 var(--mono);
+}
+.review-footer a {
+  display: inline-block;
+  margin-right: 18px;
+}
+.review-skip {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 100;
+  padding: 10px;
+  background: var(--deep);
+  transform: translateY(-150%);
+}
+.review-skip:focus {
+  transform: none;
+}
+.review-notice {
+  border-left: 2px solid var(--yellow);
+  padding: 10px 16px;
+  margin: 18px 0;
+  background: var(--panel);
+  color: var(--ink);
+  font: 14px/1.7 var(--sans);
+}
+.review-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 20px 0;
+  font: 13px/1.5 var(--mono);
+}
+.review-empty {
+  padding: 32px 0;
+  color: var(--dim);
+}
+.review-index {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr));
+  gap: 16px;
+}
+.review-destination {
+  padding: 28px;
+  border: 1px solid var(--line);
+  text-decoration: none;
+  color: var(--ink);
+  background: var(--deep);
+}
+.review-destination:hover {
+  border-color: var(--yellow);
+}
+.review-destination h2 {
+  margin: 14px 0;
+  font: 600 24px/1.3 var(--sans);
+}
+.review-destination p {
+  font-size: 14px;
+  color: var(--dim);
+}
+.review-destination > span:last-child {
+  font: 13px var(--mono);
+  color: var(--blue);
+}
+.review-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+.lbl,
+.note {
+  font: 13px/1.6 var(--mono);
+  color: var(--dim);
+}
+.lbl {
+  min-width: 6ch;
+}
+.lede {
+  font-size: 18px;
+  color: var(--bright);
+}
+.ind {
+  padding-left: 0;
+}
+.states,
+.grid6,
+.tims-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
+  gap: 12px;
+}
+.states figure,
+.sample-card {
+  margin: 0;
+  min-width: 0;
+  background: var(--deep);
+  border: 1px solid var(--line);
+  padding: 18px 12px;
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  align-content: start;
+}
+.states pre {
+  min-height: 190px;
+  display: flex;
+  align-items: center;
+  font: 7.6px/1.2 var(--mono);
+}
+.states figcaption {
+  text-align: center;
+  font: 13px/1.6 var(--mono);
+  color: var(--dim);
+}
+.states figcaption b {
+  color: var(--bright);
+}
+.sample-card pre {
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  font: 8.5px/1.2 var(--mono);
+}
+.sample-card .flags {
+  text-align: center;
+  font: 12px/1.6 var(--mono);
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}
+.sample-card .flags b {
+  color: var(--yellow);
+}
+.sample-card .seed {
+  font: 11px/1.5 var(--mono);
+  color: var(--dim);
+}
+.sample-card .rare {
+  font: 600 13px/1.5 var(--mono);
+  color: var(--bright);
+}
+.one {
+  white-space: pre;
+  font: 13px/1.5 var(--mono);
+  background: #5faf5f;
+  color: #080808;
+  padding: 2px 8px;
+}
+.sp {
+  margin: 36px 0;
+}
+.sp h3 small {
+  color: var(--dim);
+  font: 12px var(--mono);
+  margin-left: 12px;
+}
+.cat {
+  color: var(--dim);
+  font: 12px/1.8 var(--mono);
+  margin: 10px 0 18px;
+}
+.cat b {
+  color: var(--ink);
+}
+.traits-filter {
+  display: flex;
+  align-items: end;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 16px 0;
+  border-block: 1px solid var(--line);
+}
+.traits-filter label {
+  display: grid;
+  min-width: 0;
+  max-width: 100%;
+  gap: 4px;
+  font: 12px/1.5 var(--mono);
+  color: var(--dim);
+}
+.traits-filter select,
+.traits-filter input {
+  background: var(--deep);
+  color: var(--bright);
+  border: 1px solid var(--line);
+  padding: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+.eggs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 145px), 1fr));
+  gap: 10px;
+  margin: 18px 0;
+}
+.eggs-grid button {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 14px 8px;
+  background: var(--deep);
+}
+.eggs-grid pre {
+  display: flex;
+  align-items: center;
+  min-height: 120px;
+  font: 6.4px/1.2 var(--mono);
+}
+.eggs-grid .nm {
+  color: var(--bright);
+}
+.eggs-grid .how {
+  color: var(--dim);
+  font: 11px/1.5 var(--mono);
+}
+.egg-player {
+  border: 1px solid var(--line);
+  background: var(--deep);
+  padding: clamp(12px, 3vw, 24px);
+}
+.egg-stage {
+  min-height: 370px;
+  display: grid;
+  place-items: center;
+  padding: 12px 0;
+  background: var(--deep);
+}
+.egg-stage.dark {
+  background: #000;
+}
+.egg-stage pre {
+  font: 11px/1.2 var(--mono);
+  white-space: pre;
+}
+.egg-stage pre > span {
+  display: block;
+}
+.egg-caption {
+  min-height: 3.3em;
+  font: 13px/1.6 var(--mono);
+  color: var(--dim);
+}
+.egg-scrub {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0;
+  font: 12px/1.5 var(--mono);
+}
+.egg-scrub input {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--yellow);
+}
+.egg-controls {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+.egg-status {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.egg-status .note {
+  flex: 1;
+}
+.tbl {
+  max-width: 100%;
+  overflow-x: auto;
+}
+table {
+  border-collapse: collapse;
+}
+th,
+td {
+  padding: 10px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+img {
+  max-width: 100%;
+  height: auto;
+}
+section {
+  min-width: 0;
+}
+.states,
+.grid6,
+.tims-grid,
+.g2 {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
+}
+@media (max-width: 600px) {
+  body {
+    padding: 16px 14px 48px;
+  }
+  .review-nav {
+    gap: 4px 15px;
+  }
+  .review-nav button {
+    margin-left: 0;
+  }
+  .review-header {
+    padding-bottom: 20px;
+  }
+  .egg-stage {
+    min-height: 300px;
+  }
+  .egg-scrub {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 12px;
+  }
+  .egg-scrub > span {
+    grid-column: 1 / -1;
+  }
+  .show-stage,
+  .hatch {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .plate-box {
+    min-width: 0;
+  }
+}
+@media (pointer: coarse) {
+  button,
+  select,
+  .review-nav a {
+    min-height: 44px;
+  }
+  input[type="range"] {
+    min-height: 32px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition: none !important;
+    animation: none !important;
+  }
+}
+@media print {
+  body {
+    background: white;
+    color: black;
+  }
+  .review-nav button,
+  .egg-controls,
+  .traits-filter {
+    display: none;
+  }
+  .review-header h1,
+  h2,
+  h3 {
+    color: black;
+  }
+  .sample-card,
+  figure {
+    break-inside: avoid;
+  }
+}
+
+</style>
+
+</head>
+<body>
+<a class="review-skip" href="#review-main">Skip to content</a><header class="review-header"><nav class="review-nav" aria-label="Review pages"><a href="index.html" aria-current="page">Overview</a><a href="eggs.html">Eggs</a><a href="traits.html">Traits</a><a href="lookbook.html">Lookbook</a><a href="overnight/index.html">Build report</a></nav><div class="review-kicker">Local review / drop init</div><h1>A field guide to daemons.</h1><p>The art, the little differences, and the moment an egg opens. Every preview lives here in the repository.</p></header>
+<main class="wrap" id="review-main" tabindex="-1"><div class="review-index"><a class="review-destination" href="eggs.html"><span class="review-kicker">01 / Eggs</span><h2>A little life, earned.</h2><p>Eight egg kinds, nine shell stages, and a hatch player you can pause and inspect frame by frame.</p><span>Open eggs →</span></a><a class="review-destination" href="traits.html"><span class="review-kicker">02 / Traits</span><h2>Same species. Entirely yours.</h2><p>Sixty samples from the ten species in drop init. Explore the colours, shapes, markings, and rare extras that make each hatch its own.</p><span>Open traits →</span></a><a class="review-destination" href="lookbook.html"><span class="review-kicker">03 / Lookbook</span><h2>Meet the daemons.</h2><p>The reviewed terminal world, refreshed with current art: drop init, moods, growth, twelve tims, and eggs.</p><span>Open lookbook →</span></a><a class="review-destination" href="overnight/index.html"><span class="review-kicker">04 / Build report</span><h2>One night of building.</h2><p>The original overnight report, preserved with its screenshots. A historical snapshot, with a link to the later handoff.</p><span>Open build report →</span></a></div><aside class="review-notice">The first three pages use the current roster and models. The build report preserves the earlier implementation. Motion follows your system preference and can be paused on every animated page.</aside></main>
+<noscript><p class="review-notice">Enable JavaScript to use the interactive previews. All data is included in this file; no network connection is needed.</p></noscript>
+<footer class="review-footer"><a href="index.html">All reviews</a><a href="../../docs/research/2026-09-27-daemons-handoff.md">Build handoff</a><span>Local files · no account, server, or external assets required</span></footer>
+</body>
+</html>

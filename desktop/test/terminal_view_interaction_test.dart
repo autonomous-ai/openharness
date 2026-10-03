@@ -1,3 +1,5 @@
+import 'dart:ui' show SemanticsAction;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +9,186 @@ import 'package:xterm/xterm.dart';
 import 'package:xterm/src/ui/custom_text_edit.dart';
 
 void main() {
+  testWidgets(
+    'native accessibility can insert text once into a writable terminal',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      final terminal = Terminal(maxLines: 20)..resize(80, 4);
+      final output = <String>[];
+      terminal.onOutput = output.add;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SizedBox(
+            width: 800,
+            height: 200,
+            child: TerminalView(terminal, autofocus: true),
+          ),
+        ),
+      );
+      await tester.pump();
+      final input = find.bySemanticsLabel('Terminal input');
+      expect(input, findsOneWidget);
+      final node = tester.getSemantics(input);
+      expect(
+        node.getSemanticsData().hasAction(SemanticsAction.setText),
+        isTrue,
+      );
+      tester
+          .renderObject(input)
+          .owner!
+          .semanticsOwner!
+          .performAction(node.id, SemanticsAction.setText, 'Dictated text');
+      await tester.pump();
+      expect(output.join(), 'Dictated text');
+      // The platform echo and subsequent typing must not repeat the dictated phrase.
+      tester.testTextInput.updateEditingValue(
+        const TextEditingValue(
+          text: 'Dictated text',
+          selection: TextSelection.collapsed(offset: 13),
+        ),
+      );
+      tester.testTextInput.updateEditingValue(
+        const TextEditingValue(
+          text: 'Dictated text!',
+          selection: TextSelection.collapsed(offset: 14),
+        ),
+      );
+      await tester.pump();
+      expect(output.join(), 'Dictated text!');
+      await tester.pumpWidget(const SizedBox());
+      semantics.dispose();
+    },
+    variant: TargetPlatformVariant({
+      TargetPlatform.macOS,
+      TargetPlatform.linux,
+    }),
+  );
+
+  group('macOS "Add period with double-space"', () {
+    Future<List<String>> mount(WidgetTester tester) async {
+      final terminal = Terminal(maxLines: 20)..resize(80, 4);
+      final output = <String>[];
+      terminal.onOutput = output.add;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SizedBox(
+            width: 800,
+            height: 200,
+            child: TerminalView(terminal, autofocus: true),
+          ),
+        ),
+      );
+      await tester.pump();
+      return output;
+    }
+
+    void native(WidgetTester tester, String text, {TextRange? composing}) {
+      tester.testTextInput.updateEditingValue(
+        TextEditingValue(
+          text: text,
+          selection: TextSelection.collapsed(offset: text.length),
+          composing: composing ?? TextRange.empty,
+        ),
+      );
+    }
+
+    // The second press never arrives as a space: macOS asks the input client to replace the
+    // first one with ". ", which reached the pty as a Backspace and ". ". So the space bar is
+    // typed straight into the terminal and never reaches the input method.
+    testWidgets(
+      'the space bar is typed directly, so two presses stay two spaces',
+      (tester) async {
+        final output = await mount(tester);
+        native(tester, 'a');
+        await tester.pump();
+        for (var press = 0; press < 2; press++) {
+          expect(
+            await tester.sendKeyEvent(
+              LogicalKeyboardKey.space,
+              character: ' ',
+              platform: 'macos',
+            ),
+            isTrue,
+          );
+        }
+        // The native buffer follows, so the next letter the input method inserts diffs cleanly.
+        expect(tester.testTextInput.editingState?['text'], 'a  ');
+        native(tester, 'a  b');
+        await tester.pump();
+        expect(output.join(), 'a  b');
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+
+    testWidgets(
+      'a space that commits a composition still goes to the input method',
+      (tester) async {
+        final output = await mount(tester);
+        native(tester, 'ni', composing: const TextRange(start: 0, end: 2));
+        await tester.pump();
+        expect(
+          await tester.sendKeyEvent(
+            LogicalKeyboardKey.space,
+            character: ' ',
+            platform: 'macos',
+          ),
+          isFalse,
+        );
+        expect(output, isEmpty);
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+
+    testWidgets(
+      'other platforms leave the space bar to the input method',
+      (tester) async {
+        final output = await mount(tester);
+        expect(
+          await tester.sendKeyEvent(
+            LogicalKeyboardKey.space,
+            character: ' ',
+            platform: 'linux',
+          ),
+          isFalse,
+        );
+        expect(output, isEmpty);
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.linux),
+    );
+  });
+
+  testWidgets(
+    'an observed terminal exposes no accessibility editing action',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      final terminal = Terminal(maxLines: 20)..resize(80, 4);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SizedBox(
+            width: 800,
+            height: 200,
+            child: TerminalView(terminal, readOnly: true),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.bySemanticsLabel('Terminal input'), findsNothing);
+      final node = tester.getSemantics(
+        find.bySemanticsLabel('Terminal output'),
+      );
+      expect(
+        node.getSemanticsData().hasAction(SemanticsAction.setText),
+        isFalse,
+      );
+      await tester.pumpWidget(const SizedBox());
+      semantics.dispose();
+    },
+    variant: TargetPlatformVariant({
+      TargetPlatform.macOS,
+      TargetPlatform.linux,
+    }),
+  );
+
   test('does not turn an xterm keyboard command into text styling', () {
     final terminal = Terminal(maxLines: 20, reflowEnabled: false)
       ..resize(80, 4);

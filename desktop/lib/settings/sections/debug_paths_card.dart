@@ -1,5 +1,5 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../core/harness_cli_runner.dart';
 import '../../logging/log_file.dart';
@@ -72,11 +72,7 @@ class _DebugPathsCardState extends State<DebugPathsCard> {
         children: [
           Row(
             children: [
-              Icon(
-                LucideIcons.terminal300,
-                size: 15,
-                color: AppPalette.textFaint,
-              ),
+              Icon(AppIcons.terminal, size: 16, color: AppPalette.textFaint),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -85,7 +81,7 @@ class _DebugPathsCardState extends State<DebugPathsCard> {
                 ),
               ),
               AppIconButton(
-                icon: LucideIcons.refreshCw,
+                icon: AppIcons.refreshCw,
                 tooltip: 'Re-check',
                 onPressed: _recheck,
               ),

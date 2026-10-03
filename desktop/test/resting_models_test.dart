@@ -142,11 +142,11 @@ void main() {
     test('a list age reads in minutes, hours and days, rounded down', () {
       expect(listAge(0), 'just now');
       expect(listAge(59), 'just now');
-      expect(listAge(60), '1 min ago');
-      expect(listAge(3599), '59 min ago');
-      expect(listAge(9 * 3600 + 1800), '9 h ago');
-      expect(listAge(86399), '23 h ago');
-      expect(listAge(3 * 86400), '3 d ago');
+      expect(listAge(60), '1min ago');
+      expect(listAge(3599), '59min ago');
+      expect(listAge(9 * 3600 + 1800), '9h ago');
+      expect(listAge(86399), '23h ago');
+      expect(listAge(3 * 86400), '3d ago');
     });
 
     test('each state of the contract table reads as the table says', () {
@@ -163,7 +163,7 @@ void main() {
       );
       expect(
         asleep.subtitle,
-        'Asleep · starts when you send a message (about 10–30 s) · list from 9 h ago',
+        'Asleep 9h ago',
       );
       expect(
         asleep.tooltip,

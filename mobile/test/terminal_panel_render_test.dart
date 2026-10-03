@@ -58,7 +58,6 @@ void main() {
                 focused: false,
                 visible: visible,
                 settling: settling,
-                showHeader: false,
               ),
             ),
           ),

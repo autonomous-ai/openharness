@@ -29,11 +29,9 @@ const row = (pid: number, parentPid: number, executable: string, args = executab
   ({ pid, parentPid, executable, startMarker: START, args })
 
 const TMUX_RUNTIME: TerminalRuntimeRef = { backend: 'tmux', paneId: '%1' }
-const HERDR_RUNTIME: TerminalRuntimeRef = {
-  backend: 'herdr', endpointId: 'endpoint-a', sessionName: 'default', terminalId: 'terminal-a', paneId: 'w1:p1',
-}
+const SECOND_RUNTIME: TerminalRuntimeRef = { backend: 'tmux', paneId: '%2' }
 
-function backendWith(name: 'tmux' | 'herdr', instanceId: string, roots: TerminalRootObservation[]): TerminalBackend {
+function backendWith(name: 'tmux', instanceId: string, roots: TerminalRootObservation[]): TerminalBackend {
   return {
     name,
     instanceId,
@@ -47,26 +45,27 @@ beforeEach(() => {
 })
 
 describe('gateway detection on the live terminal discovery path', () => {
-  it('marks an ori-launched engine under EITHER backend, from the process rather than the pane', async () => {
+  it('marks an ori-launched engine in every pane, from the process rather than the pane', async () => {
     processRows.mockResolvedValue([
       row(10, 1, 'bash'), row(30, 10, 'claude'),      // tmux pane %1
-      row(20, 1, 'bash'), row(40, 20, 'codex'),       // herdr pane w1:p1
+      row(20, 1, 'bash'), row(40, 20, 'codex'),       // tmux pane %2
     ])
     probeGatewayRuntime.mockResolvedValue({ kind: 'ori', apiKey: 'sk-or-v1-test' })
 
     const probe = await probeTerminalAgents(
       [
-        backendWith('tmux', 'tmux', [{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }]),
-        backendWith('herdr', 'herdr:endpoint-a', [{ runtime: HERDR_RUNTIME, rootPid: 20, cwd: '/work' }]),
+        backendWith('tmux', 'tmux', [
+          { runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' },
+          { runtime: SECOND_RUNTIME, rootPid: 20, cwd: '/work' },
+        ]),
       ],
-      ['tmux', 'herdr'],
-      ['default'],
+      ['tmux'],
       999,
     )
 
     expect(probe.agents.map((agent) => agent.engine).sort()).toEqual(['claude', 'codex'])
     expect(probe.agents.every((agent) => agent.gateway === 'ori')).toBe(true)
-    // Probed by process identity + argv — never by which multiplexer owns the pane.
+    // Probed by process identity + argv — never by which pane it is in.
     expect(probeGatewayRuntime).toHaveBeenCalledTimes(2)
     for (const [identity, args] of probeGatewayRuntime.mock.calls) {
       expect(identity).toMatchObject({ startMarker: START })
@@ -79,13 +78,13 @@ describe('gateway detection on the live terminal discovery path', () => {
     const backends = [backendWith('tmux', 'tmux', [{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }])]
 
     probeGatewayRuntime.mockResolvedValue({ kind: null })
-    const vendor = await probeTerminalAgents(backends, ['tmux'], [], 999)
+    const vendor = await probeTerminalAgents(backends, ['tmux'], 999)
     expect(vendor.agents[0].gateway).toBeNull()
 
     // `{ kind: null }` from a FAILED read is the same shape, so the reconciler's contract is what keeps
     // an agent from being downgraded: registry.updateProcessIdentity only writes a defined value.
     probeGatewayRuntime.mockResolvedValue({ kind: null })
-    const unreadable = await probeTerminalAgents(backends, ['tmux'], [], 999)
+    const unreadable = await probeTerminalAgents(backends, ['tmux'], 999)
     expect(unreadable.agents[0].gateway).not.toBe('ori')
   })
 
@@ -94,7 +93,6 @@ describe('gateway detection on the live terminal discovery path', () => {
     const probe = await probeTerminalAgents(
       [backendWith('tmux', 'tmux', [{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }])],
       ['tmux'],
-      [],
       999,
     )
     expect(probe.processTableAvailable).toBe(false)

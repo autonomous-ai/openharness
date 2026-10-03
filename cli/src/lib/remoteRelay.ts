@@ -12,8 +12,9 @@
  * every machine, relayed or not. A machine with no pinned peer fails the relay with `NO_PEER_LINK`
  * instead of ever reaching pipe mode.
  */
+import { randomUUID } from 'node:crypto'
 import { WebSocket, type RawData } from 'ws'
-import { watchSocketLiveness, type LivenessWatch } from './wsLiveness.js'
+import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } from './wsLiveness.js'
 import type { Frame, LocalClientSink } from '../backendSocket.js'
 import type { AuthSessionManager } from './authSession.js'
 import { b64d, type Identity } from './e2ee/core.js'
@@ -34,6 +35,7 @@ import { warmStunUrls } from './stunSelect.js'
 import { RemoteViewerProxy } from './remoteViewerProxy.js'
 import { VIEWER_UP_TYPES } from './viewerWire.js'
 import { isWrapped } from './e2ee/core.js'
+import { admitRelayedPairFrame, isPairFrameType } from './e2ee/applicationFrames.js'
 
 const CONNECT_TIMEOUT_MS = 15_000
 const LINGER_MS = 30_000
@@ -104,6 +106,14 @@ function binaryBytes(raw: RawData): Uint8Array {
   return new Uint8Array()
 }
 
+/**
+ * Frames only THIS machine's own daemon says to its own windows (the device key log's notices). A
+ * remote machine is not that daemon: if its frame reached the local app as-is, the app would show a
+ * "new device" / "removed by" band as though this machine had verified it. Dropped on the way in,
+ * sealed or not.
+ */
+export const DAEMON_LOCAL_ONLY_TYPES: ReadonlySet<string> = new Set(['device_key_added', 'device_key_removed', 'device_conflict', 'device_keys_changed'])
+
 /** One local client attached to a pooled upstream: where its frames go, and what to tell it on close. */
 interface AttachedClient {
   sink: LocalClientSink
@@ -120,6 +130,8 @@ function bindAttached(entry: Entry): void {
   if (clients.size === 0) { entry.sink = null; entry.onClosed = null; return }
   entry.sink = {
     sendFrame: (frame) => {
+      // Not delivered, and not a refusal either: nobody is dropped for a frame that never goes out.
+      if (typeof frame.type === 'string' && DAEMON_LOCAL_ONLY_TYPES.has(frame.type)) return true
       let delivered = false
       for (const client of [...clients]) {
         if (client.sink.sendFrame(frame)) delivered = true
@@ -238,7 +250,20 @@ export interface RemoteRelayPoolOptions {
   dialCooldownMs?: number
   /** Share one failure record between pools (the background pools all draw on the parent's). */
   dialFailures?: Map<string, { at: number; error: unknown }>
+  /** A fresh E2EE session to `machineId` is up (the trust group compares rosters then). Not passed on
+   *  to the background pools — the group's own exchange runs on one of those. */
+  onSessionReady?: (machineId: string) => void
+  /** Whether a machine that just answered `e2e_denied` is one the account's device key log names, under
+   *  the key pinned for it: then it most likely has not read the log yet, and the pin is kept for a few
+   *  tries (DENIED_TRIES within DENIED_WINDOW_MS) instead of being dropped at once. Shared with the
+   *  background pools. */
+  expectsTrust?: (machineId: string, pub: string) => boolean
+  /** Shared record of recent denials per machine, for the above. */
+  denials?: Map<string, number[]>
 }
+
+const DENIED_TRIES = 3
+const DENIED_WINDOW_MS = 60_000
 
 export class RemoteRelayPool {
   private entries = new Map<string, Entry>()
@@ -248,6 +273,9 @@ export class RemoteRelayPool {
   private readonly p2pEnabled: boolean
   private readonly lingerMs: number
   private readonly dialCooldownMs: number
+  private readonly onSessionReady: ((machineId: string) => void) | null
+  private readonly expectsTrust: ((machineId: string, pub: string) => boolean) | null
+  private readonly denials: Map<string, number[]>
   /** Warm background pools per machine, each holding one lingering session nobody is attached to —
    *  see acquireIsolated(). A pool is either here (idle) or in a client's hands, never both. */
   private readonly idleIsolated = new Map<string, RemoteRelayPool[]>()
@@ -262,7 +290,25 @@ export class RemoteRelayPool {
     this.p2pEnabled = opts.p2p !== false
     this.lingerMs = opts.lingerMs ?? LINGER_MS
     this.dialCooldownMs = opts.dialCooldownMs ?? 0
+    this.onSessionReady = opts.onSessionReady ?? null
     this.lastDialFailure = opts.dialFailures ?? new Map()
+    this.expectsTrust = opts.expectsTrust ?? null
+    this.denials = opts.denials ?? new Map()
+  }
+
+  /** `machineId` denied this machine's key. Drop the pin — unless the device key log says it should
+   *  trust us, and it has not denied us DENIED_TRIES times within DENIED_WINDOW_MS yet. */
+  private denied(machineId: string): void {
+    const pub = this.peers.get(machineId)?.pub
+    if (pub && this.expectsTrust?.(machineId, pub)) {
+      const now = Date.now()
+      const recent = (this.denials.get(machineId) ?? []).filter((at) => now - at < DENIED_WINDOW_MS)
+      recent.push(now)
+      this.denials.set(machineId, recent)
+      if (recent.length < DENIED_TRIES) return
+    }
+    this.denials.delete(machineId)
+    this.peers.unlink(machineId)
   }
 
   /** Background CLI jobs (a monitor pane polling `agents_list`, a script) must not replace the
@@ -281,7 +327,8 @@ export class RemoteRelayPool {
   ): Promise<RelaySession> {
     const shelf = this.idleIsolated.get(machineId) ?? []
     const pool = shelf.pop() ?? new RemoteRelayPool(this.auth, this.backendWsBase, this.selfIdentity, this.peers,
-      { p2p: false, lingerMs: ISOLATED_LINGER_MS, dialCooldownMs: ISOLATED_DIAL_COOLDOWN_MS, dialFailures: this.lastDialFailure })
+      { p2p: false, lingerMs: ISOLATED_LINGER_MS, dialCooldownMs: ISOLATED_DIAL_COOLDOWN_MS, dialFailures: this.lastDialFailure,
+        ...(this.expectsTrust ? { expectsTrust: this.expectsTrust } : {}), denials: this.denials })
     const session = await pool.acquire(machineId, autonomousEnv, selectFrame, {
       ...sink,
       sendFrame: frame => sink.sendFrame(frame.type === 'connected'
@@ -461,7 +508,14 @@ export class RemoteRelayPool {
           if (isBinary) return
           let frame: Frame
           try { frame = JSON.parse(raw.toString()) as Frame } catch { return }
-          const payload = frame.payload as { machineId?: unknown; error?: unknown; p2p?: unknown } | undefined
+          const payload = frame.payload as { machineId?: unknown; error?: unknown; p2p?: unknown; online?: unknown } | undefined
+          if (frame.type === 'node_status' && payload?.online === false) {
+            if (!settled) {
+              settled = true; clearTimeout(timeout)
+              reject(new RelayConnectError('MACHINE_OFFLINE', 1013))
+            }
+            return
+          }
           if (!selected) {
             // The socket's very first frame, before any select, is {type:'connected',payload:{userId}} —
             // pure backend bookkeeping with no machineId. Swallow it; it answers nothing this relay asked.
@@ -500,6 +554,7 @@ export class RemoteRelayPool {
           if (frame.type === 'e2e_welcome') {
             const ok = crypto.handleWelcome((frame.payload ?? {}) as Record<string, unknown>)
             if (!ok) { if (!settled) { settled = true; clearTimeout(timeout); reject(new RelayConnectError('E2EE_WELCOME_INVALID')) } ; return }
+            try { this.onSessionReady?.(machineId) } catch { /* an observer must not break the session */ }
             // Three ways p2p never even starts, and until now all three looked identical from outside —
             // the terminal just quietly stayed on the ws relay. The peer-version case is the important
             // one: a machine whose CLI predates p2p answers no offer, so NO amount of STUN or TURN can
@@ -526,7 +581,7 @@ export class RemoteRelayPool {
               // repeating a handshake that will only be denied again. The handshake never got as far
               // as being usable, so there is nothing more to read from this socket — close it rather
               // than leaving it dangling open.
-              this.peers.unlink(machineId)
+              this.denied(machineId)
               try { ws.close(1000, 'peer denied') } catch { ws.terminate() }
               reject(new RelayConnectError('NO_PEER_LINK'))
             }
@@ -555,6 +610,16 @@ export class RemoteRelayPool {
         }
         let frame: Frame
         try { frame = JSON.parse(raw.toString()) as Frame } catch { return }
+        if (frame.type === 'node_status' && framePayload(frame).online === false) {
+          // The backend socket outlives the remote daemon. Its next incarnation has no knowledge of
+          // this session's keys, even when it runs the identical CLI version. Retire the session as
+          // soon as presence goes offline so the next select does a fresh authenticated handshake.
+          // Keep the identity pin: going offline is not a revocation or a reason to pair again.
+          entry.sink?.sendFrame(frame)
+          if (this.entries.get(machineId) === entry) this.entries.delete(machineId)
+          try { ws.close(1012, 'remote machine disconnected') } catch { ws.terminate() }
+          return
+        }
         if (frame.type === 'e2e_rekey') { crypto.handleRekey((frame.payload ?? {}) as Record<string, unknown>); return }
         if (frame.type === 'e2e_denied') {
           // Mid-session revoke (e.g. `harness unpair` run on the peer while this relay was already
@@ -562,13 +627,15 @@ export class RemoteRelayPool {
           // trust and close with the same 4404 the app already knows how to turn into "needs to be
           // linked": the `ws.on('close', ...)` handler below forwards this code verbatim to
           // `entry.onClosed`, which `localWsServer.ts` wires straight to the local client's own close.
-          this.peers.unlink(machineId)
+          this.denied(machineId)
           try { ws.close(4404, 'peer revoked trust') } catch { ws.terminate() }
           return
         }
         // The relay cannot inject response bytes/headers into a local browser in plaintext.
         if (typeof frame.type === 'string' && VIEWER_UP_TYPES.has(frame.type)
           && (!isWrapped(frame.payload) || frame.payload.__e2e?.k !== 'p')) return
+        // Nor a question, a recap or an answer's result for the pair brain (applicationFrames.ts).
+        if (typeof frame.type === 'string' && isPairFrameType(frame.type) && !admitRelayedPairFrame(frame)) return
         const plain = crypto.unwrapIncoming(frame)
         if (!plain) return
         const type = typeof plain.type === 'string' ? plain.type : ''
@@ -634,17 +701,22 @@ export class RemoteRelayPool {
     ws.on('close', (code, reasonBuf) => {
       entry.viewers?.close()
       entry.heartbeat?.stop()
+      if (entry.lingerTimer) clearTimeout(entry.lingerTimer)
+      entry.lingerTimer = null
       if (entry.p2pRetryTimer) clearTimeout(entry.p2pRetryTimer)
       if (entry.upgradeTimer) clearTimeout(entry.upgradeTimer)
       void entry.upgradeShadow?.stop('relay_closed', false)
       void entry.upgradeOrphan?.stop('relay_closed', false)
       void entry.p2p?.stop('relay_closed', false)
       entry.p2p = null
-      this.entries.delete(machineId)
+      // An invalidated/retired socket can finish closing after its replacement has already dialed.
+      if (this.entries.get(machineId) === entry) this.entries.delete(machineId)
       entry.onClosed?.(code, reasonBuf?.toString() ?? '')
     })
     entry.heartbeat = watchSocketLiveness(ws, {
       onIdle: (idleMs) => console.log(`[relay] ${machineId.slice(0, 8)} no traffic for ${Math.round(idleMs / 1000)}s — terminating`),
+      // The relay socket ends at the backend, which hung up on it while we slept.
+      peerGivesUpAfterMs: BACKEND_IDLE_DEADLINE_MS,
       // Piggybacked sweep for a migration that never completed (pane closed mid-flight, responder never
       // answered, etc.) — no dedicated timer needed, this tick is frequent enough (20s) against the 30s TTL.
       onTick: () => {
@@ -660,8 +732,15 @@ export class RemoteRelayPool {
   }
 
   private sessionFor(machineId: string, entry: Entry, client: AttachedClient | null = null): RelaySession {
+    // Several local views share this upstream connection. Keep each view's terminal lease
+    // distinct, but stable across its opens (and across relay/P2P transport changes).
+    const viewId = randomUUID()
+    let detached = false
     return {
       send: async (frame) => {
+        if (frame.type === 'terminal_open') {
+          frame = { ...frame, payload: { ...framePayload(frame), viewId } }
+        }
         const payload = framePayload(frame)
         let useP2p = typeof payload.streamId === 'string' && entry.p2pStreams.has(payload.streamId)
         if (frame.type === 'terminal_open' && typeof payload.requestId === 'string' && entry.p2p) {
@@ -710,11 +789,14 @@ export class RemoteRelayPool {
         if (p2pFailed) this.demoteP2p(machineId, entry, 'send_failed')
       },
       detach: () => {
+        if (detached) return
+        detached = true
         // This client only; the upstream stays for whoever else is on it, and lingers a while for
         // the next select once nobody is.
         if (client) entry.attached.delete(client)
         bindAttached(entry)
         if (entry.attached.size > 0) return
+        if (this.entries.get(machineId) !== entry) return
         entry.viewers?.reset()
         entry.lingerTimer = setTimeout(() => {
           if (!entry.sink) {
@@ -725,7 +807,7 @@ export class RemoteRelayPool {
             void entry.p2p?.stop('idle', false)
             entry.p2p = null
             try { entry.ws.close(1000, 'idle') } catch { /* ignore */ }
-            this.entries.delete(machineId)
+            if (this.entries.get(machineId) === entry) this.entries.delete(machineId)
           }
         }, this.lingerMs)
         entry.lingerTimer.unref?.()

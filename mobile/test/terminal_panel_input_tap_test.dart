@@ -42,7 +42,6 @@ void main() {
               notifier: notifier,
               session: session,
               focused: false,
-              showHeader: false,
               onInputTap: onInputTap,
             ),
           ),

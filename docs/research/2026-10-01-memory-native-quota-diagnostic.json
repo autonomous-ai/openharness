@@ -1,0 +1,56 @@
+{
+  "durationMs": 5510,
+  "nativeCalls": 1,
+  "exitCode": 1,
+  "rows": [
+    {
+      "type": "init",
+      "tools": 0
+    },
+    {
+      "status": "rejected",
+      "rateLimitType": "seven_day",
+      "type": "rate_limit_event"
+    },
+    {
+      "type": "assistant",
+      "error": true,
+      "errorCode": "rate_limit",
+      "diagnosis": {
+        "categories": [
+          "rate_limit"
+        ],
+        "codes": [],
+        "statuses": []
+      }
+    },
+    {
+      "type": "result",
+      "success": true,
+      "isError": true,
+      "diagnosis": {
+        "categories": [
+          "rate_limit"
+        ],
+        "codes": [],
+        "statuses": []
+      },
+      "ready": false
+    }
+  ],
+  "stderr": {
+    "categories": [],
+    "codes": [],
+    "statuses": []
+  },
+  "sameAccount": true,
+  "provenance": {
+    "engine": "claude",
+    "nativeVersion": "2.1.286",
+    "requestedModel": "opus",
+    "effort": "high",
+    "input": "synthetic READY diagnostic; no personal history or tools",
+    "sanitization": "Only recognized error categories/status values were recorded. Rate-event type field normalized to separate event kind from rateLimitType. No credentials, account/session IDs, raw messages or stderr retained.",
+    "qualityCredit": false
+  }
+}

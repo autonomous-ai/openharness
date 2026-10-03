@@ -20,6 +20,18 @@ export function shouldSkipAuth(url: string): boolean {
     path === '/api/auth/authorize-native' ||
     path === '/api/auth/exchange' ||
     path === '/api/auth/refresh' ||
+    // Scan to sign in: the phone has no token yet, and the one-time code it carries IS the credential
+    // (lib/harnessSession.ts). Revoke takes the refresh token, the same authority /refresh does.
+    // `/api/auth/handoff` itself is NOT listed: minting a code needs the computer's sign-in.
+    path === '/api/auth/handoff/redeem' ||
+    // A computer signing in by QR (routes/qrSignIn.ts) has no token yet: its poll token is the
+    // credential for what it may learn and claim. The phone's half (lookup/approve/deny) is NOT here.
+    path === '/api/auth/qr/start' ||
+    path === '/api/auth/qr/poll' ||
+    path === '/api/auth/qr/extend' ||
+    path === '/api/auth/qr/claim' ||
+    path === '/api/auth/qr/cancel' ||
+    path === '/api/auth/revoke' ||
     path === '/api/auth/logout-url' ||
     // Public app-deploy registration — agent-key gated (x-api-key), self-validated in its
     // own preHandler (agentAuth). Called by the agent-node's domain MCP, not the web SSO token.
@@ -59,6 +71,9 @@ export function registerAuthMiddleware(
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
     if (shouldSkipAuth(request.url)) return
     const token = bearerToken(request.headers['authorization'])
+    // Anonymous public-link discovery only. With a token, authenticate normally so private links
+    // and commenting use the real account. Never exempt a mutation or the invitation inventory.
+    if (!token && request.method === 'GET' && /^\/api\/shared-agents\/[a-f0-9-]{36}$/.test(request.url.split('?')[0])) return
     if (!token) {
       return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } })
     }

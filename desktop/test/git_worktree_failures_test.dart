@@ -15,8 +15,13 @@ class _DiscardInput implements StreamConsumer<List<int>> {
 }
 
 class _GitProcess implements Process {
-  _GitProcess({String output = '', int? code = 0, List<int>? bytes})
-    : stdout = Stream.value(bytes ?? utf8.encode(output)) {
+  _GitProcess({
+    String output = '',
+    String error = '',
+    int? code = 0,
+    List<int>? bytes,
+  }) : stdout = Stream.value(bytes ?? utf8.encode(output)),
+       stderr = Stream.value(utf8.encode(error)) {
     if (code != null) ended.complete(code);
   }
   final ended = Completer<int>();
@@ -24,7 +29,7 @@ class _GitProcess implements Process {
   @override
   final Stream<List<int>> stdout;
   @override
-  Stream<List<int>> get stderr => const Stream.empty();
+  final Stream<List<int>> stderr;
   @override
   final stdin = IOSink(_DiscardInput());
   @override
@@ -39,21 +44,24 @@ class _GitProcess implements Process {
   }
 }
 
-GitProcessStarter _commands({String? fail, String prefix = ''}) =>
-    (arguments, environment) async {
-      final command = arguments.skip(3).join(' ');
-      if (fail != null && command.startsWith(fail)) {
-        return _GitProcess(code: 1);
-      }
-      return _GitProcess(
-        output: switch (command) {
-          'rev-parse --show-toplevel' => '/repo\n',
-          'rev-parse --show-prefix' => prefix,
-          'symbolic-ref --quiet HEAD' => 'refs/heads/main\n',
-          _ => '0123456789\n',
-        },
-      );
-    };
+GitProcessStarter _commands({
+  String? fail,
+  String prefix = '',
+  String error = '',
+}) => (arguments, environment) async {
+  final command = arguments.skip(3).join(' ');
+  if (fail != null && command.startsWith(fail)) {
+    return _GitProcess(code: 1, error: error);
+  }
+  return _GitProcess(
+    output: switch (command) {
+      'rev-parse --show-toplevel' => '/repo\n',
+      'rev-parse --show-prefix' => prefix,
+      'symbolic-ref --quiet HEAD' => 'refs/heads/main\n',
+      _ => '0123456789\n',
+    },
+  );
+};
 
 void main() {
   test('Git command failures stay distinct from folders without Git', () async {
@@ -193,6 +201,34 @@ void main() {
       );
     },
   );
+
+  for (final message in ['No space left on device', 'Disk quota exceeded']) {
+    test(
+      'worktree failure explains $message without exposing Git output',
+      () async {
+        final root = await Directory.systemTemp.createTemp('git-space-test-');
+        addTearDown(() => root.delete(recursive: true));
+        await expectLater(
+          prepareGitProject(
+            '/repo',
+            root.path,
+            worktree: true,
+            startProcess: _commands(
+              fail: 'worktree add',
+              error: '${'progress ' * 2000}\nfatal: private-file: $message\n',
+            ),
+          ),
+          throwsA(
+            isA<RepositoryCloneException>().having(
+              (error) => error.message,
+              'message',
+              'Not enough disk space to create the worktree. Free space on this machine, then retry.',
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   test('preparation rejects invalid sources, stale refs and unreadable project paths', () async {
     for (final (source, ref, failure) in [

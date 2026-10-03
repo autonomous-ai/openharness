@@ -48,9 +48,20 @@ class BearerAuthInterceptor extends Interceptor {
       );
       options.extra[_retriedKey] = true;
       handler.resolve(await _dio.fetch<dynamic>(options));
-    } catch (_) {
-      // The refresh itself failed, so the 401 is the honest answer to hand back.
-      handler.next(response);
+    } catch (error) {
+      // The old access token's 401 does not mean a refresh service outage revoked the session.
+      // Preserve the refresh failure so a browser can retry without deleting valid credentials.
+      final expired = error is AccessTokenFailure && error.signedOut;
+      handler.reject(
+        DioException(
+          requestOptions: options,
+          response: expired ? response : null,
+          error: error,
+          type: expired
+              ? DioExceptionType.badResponse
+              : DioExceptionType.connectionError,
+        ),
+      );
     }
   }
 }

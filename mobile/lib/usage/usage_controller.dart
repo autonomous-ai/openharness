@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'package:harness_mobile/core/test_run.dart';
+
 import 'usage_accounts.dart';
 import 'usage_source.dart';
 import 'usage_window.dart';
@@ -18,13 +19,14 @@ import 'usage_window.dart';
 /// quietly went [stale].
 ///
 /// ⚠️ **Deliberately different from the desktop's controller in ONE way: this
-/// one reads no LOCAL sources.** The desktop constructs
-/// `[ClaudeUsageSource(), CodexUsageSource()]` by default, because the machine
+/// one reads no LOCAL sources.** The desktop constructs its
+/// `[ClaudeUsageSource(), CodexUsageSource()]` by default (neither has a copy
+/// here), because the machine
 /// it runs on is also the machine `claude login` and `codex login` wrote their
 /// tokens on — the macOS Keychain item `Claude Code-credentials`,
 /// `~/.claude/.credentials.json`, `~/.codex/auth.json`. **A phone has none of
 /// those**, and never will: no agent CLI ever signs in here, and the sandbox
-/// has no `~` in the sense those paths mean. `UsageCredentials` would answer
+/// has no `~` in the sense those paths mean. The desktop's `UsageCredentials` would answer
 /// null for every one of them — safely, since it only ever `existsSync`s a file
 /// and skips the Keychain off macOS — but the readings it produced would all be
 /// [UsageStatus.signedOut], which is the exact wrong sentence: it invites the
@@ -188,10 +190,56 @@ class UsageController extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    _remote = answers;
+    final kept = _keepLastGood(answers);
+    _remote = kept.machines;
     _landed = true;
-    stale = false;
+    stale = kept.carried;
     notifyListeners();
+  }
+
+  /// [answers], with the figures a PARTIAL cycle failed to renew kept from the
+  /// last one — the rule above, one machine and one account at a time.
+  ///
+  /// Two silences are carried over: a machine that answered but could not reach
+  /// a vendor this time ([UsageStatus.failed] — Claude's endpoint answers 429 as
+  /// a matter of course), and a machine that did not answer at all while others
+  /// did. Neither has said anything new about the account, and replacing its
+  /// figure with nothing blanked that card until the next minute brought it
+  /// back. A figure carried over keeps its own `fetchedAt`, so the page still
+  /// says how old it is, and the cycle is [stale].
+  ///
+  /// Signed out is NOT a silence: the session really ended, and the figure
+  /// goes. Machines are matched by name, the only handle [MachineUsage] has.
+  ({List<MachineUsage> machines, bool carried}) _keepLastGood(
+    List<MachineUsage> answers,
+  ) {
+    var carried = false;
+    final machines = <MachineUsage>[];
+    for (final answer in answers) {
+      final before = _remote
+          .where((m) => m.machineName == answer.machineName)
+          .firstOrNull;
+      final readings = <ProviderUsage>[];
+      for (final reading in answer.readings) {
+        final last = reading.status == UsageStatus.failed
+            ? before?.readings
+                  .where((r) => r.provider == reading.provider && r.hasFigures)
+                  .firstOrNull
+            : null;
+        if (last != null) carried = true;
+        readings.add(last ?? reading);
+      }
+      machines.add(
+        MachineUsage(machineName: answer.machineName, readings: readings),
+      );
+    }
+    for (final machine in _remote) {
+      if (answers.any((a) => a.machineName == machine.machineName)) continue;
+      if (!machine.readings.any((r) => r.hasFigures)) continue;
+      machines.add(machine);
+      carried = true;
+    }
+    return (machines: machines, carried: carried);
   }
 
   Future<void> _refreshLocal() async {

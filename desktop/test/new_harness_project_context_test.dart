@@ -327,8 +327,7 @@ void main() {
       box.focusField(NewHarnessField.projectMenu);
       await mount(tester, box);
       await tester.pump(const Duration(milliseconds: 200));
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pump();
+      await openLaunchRow(tester, 'project');
       final selected = box.selected?.id;
       final machine = app.machineStates['m']!;
       machine.agents = [
@@ -355,7 +354,6 @@ void main() {
           '/work/openharness',
         ],
       );
-      expect(find.text('M2:product-video'), findsOneWidget);
       expect(box.selected?.id, selected);
       var changes = 0;
       box.addListener(() => changes++);
@@ -364,6 +362,7 @@ void main() {
       expect(changes, 0);
       await typeHarnessQuery(tester, 'product video');
       await tester.pump();
+      expect(find.text('M2:product-video'), findsOneWidget);
       expect(box.selected!.project!.folder, '/work/product-video');
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();

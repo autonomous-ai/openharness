@@ -182,6 +182,7 @@ class TerminalPromptKeys extends StatelessWidget {
     final focused = Focus(
       focusNode: focusNode,
       autofocus: true,
+      skipTraversal: true,
       onKeyEvent: (_, event) => _key(context, event),
       child: child,
     );
@@ -250,7 +251,7 @@ Widget terminalPromptButton(
   focusNode: focusNode,
   onPressed: onPressed,
   style: TextButton.styleFrom(
-    foregroundColor: danger ? Colors.orangeAccent : Colors.white70,
+    foregroundColor: danger ? boxErrorText : boxText(.70),
     textStyle: AppType.label(),
     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
     minimumSize: const Size(0, 30),

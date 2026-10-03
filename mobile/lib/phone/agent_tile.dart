@@ -75,7 +75,7 @@ class AgentTile extends StatelessWidget {
                 StatusPill(summary: phoneAgentSummary(machine, agent)),
                 const SizedBox(height: 3),
                 AgentContextLine(
-                  project: machine.projectOf(agent),
+                  project: agent.project,
                   machineName: machine.machine.displayName,
                 ),
               ],

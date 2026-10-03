@@ -1,0 +1,2179 @@
+### copy
+C-b [       Enter copy mode
+C-b PPage   Enter copy mode and scroll up
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+-T prefix [ copy-mode
+-T prefix PPage copy-mode -u
+copy-mode  Enter copy mode
+-T prefix / command-prompt -k -p key { list-keys -1N "%%" }
+-T prefix x confirm-before -p "kill-pane #P? (y/n)" kill-pane
+-T prefix & confirm-before -p "kill-window #W? (y/n)" kill-window
+C-b ;       Move to the previously active pane
+C-b M-Down  Resize the pane down by 5
+### split
+C-b "       Split window vertically
+C-b %       Split window horizontally
+-T prefix \" split-window
+-T prefix \% split-window -h
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+split-window  Split the window
+C-b (       Switch to previous client
+-r -T prefix S-Up refresh-client -U 10
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+C-b =       Choose a paste buffer from a list
+C-b i       Display window information
+-T prefix C-z suspend-client
+C-b C-z     Suspend the current client
+Fix flaky login test  webapp · fix/login-flake  studio  23m
+### kill
+C-b &       Kill current window
+C-b x       Kill the active pane
+-T prefix & confirm-before -p "kill-window #W? (y/n)" kill-window
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+-T prefix x confirm-before -p "kill-pane #P? (y/n)" kill-pane
+kill-pane  Kill the pane
+kill-window  Kill the window
+Fix flaky login test  webapp · fix/login-flake  studio  23m
+Train tokenizer on the new corpus  ml-lab · exp/tokenizer-v3  gpu-box  2h
+### rename
+C-b $       Rename current session
+C-b ,       Rename current window
+-T prefix \$ command-prompt -I "#S" { rename-session "%%" }
+-T prefix , command-prompt -I "#W" { rename-window "%%" }
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+rename-window  Rename the window
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+-T prefix . command-prompt -T target { move-window -t "%%" }
+-T prefix M-7 select-layout main-vertical-mirrored
+-T prefix M-6 select-layout main-horizontal-mirrored
+### buf
+C-b #       List all paste buffers
+C-b -       Delete the most recent paste buffer
+C-b =       Choose a paste buffer from a list
+C-b ]       Paste the most recent paste buffer
+-T prefix \# list-buffers
+-T prefix - delete-buffer
+-T prefix = choose-buffer -Z
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+-T prefix ] paste-buffer -p
+C-b S-Up    Move the visible part of the window up
+### e
+C-b E       Spread panes out evenly
+C-b [       Enter copy mode
+C-b PPage   Enter copy mode and scroll up
+C-b M-1     Set the even-horizontal layout
+C-b M-2     Set the even-vertical layout
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+-T prefix E select-layout -E
+-T prefix M-1 select-layout even-horizontal
+-T prefix M-2 select-layout even-vertical
+Train tokenizer on the new corpus  ml-lab · exp/tokenizer-v3  gpu-box  2h
+copy-mode  Enter copy mode
+C-b Space   Select next layout
+C-b !       Break pane to a new window
+C-b "       Split window vertically
+C-b #       List all paste buffers
+C-b $       Rename current session
+C-b &       Kill current window
+C-b '       Prompt for window index to select
+C-b (       Switch to previous client
+C-b )       Switch to next client
+C-b ,       Rename current window
+C-b -       Delete the most recent paste buffer
+C-b .       Move the current window
+C-b /       Describe key binding
+C-b 0       Select window 0
+C-b 1       Select window 1
+C-b 2       Select window 2
+C-b 3       Select window 3
+C-b 4       Select window 4
+C-b 5       Select window 5
+C-b 6       Select window 6
+C-b 7       Select window 7
+C-b 8       Select window 8
+C-b 9       Select window 9
+C-b ;       Move to the previously active pane
+C-b =       Choose a paste buffer from a list
+C-b ?       List key bindings
+C-b C       Customize options
+C-b D       Choose and detach a client from a list
+C-b L       Switch to the last client
+C-b M       Clear the marked pane
+C-b ]       Paste the most recent paste buffer
+C-b c       Create a new window
+C-b d       Detach the current client
+C-b f       Search for a pane
+C-b l       Select the previously current window
+C-b m       Toggle the marked pane
+C-b n       Select the next window
+C-b o       Select the next pane
+C-b p       Select the previous window
+C-b q       Display pane numbers
+C-b r       Redraw the current client
+C-b s       Choose a session from a list
+C-b w       Choose a window from a list
+C-b x       Kill the active pane
+C-b z       Zoom the active pane
+C-b {       Swap the active pane with the pane above
+C-b }       Swap the active pane with the pane below
+C-b ~       Show messages
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b Up      Select the pane above the active pane
+C-b Down    Select the pane below the active pane
+C-b Left    Select the pane to the left of the active pane
+C-b Right   Select the pane to the right of the active pane
+C-b M-3     Set the main-horizontal layout
+C-b M-4     Set the main-vertical layout
+C-b M-5     Select the tiled layout
+C-b M-6     Set the main-horizontal-mirrored layout
+C-b M-7     Set the main-vertical-mirrored layout
+C-b M-n     Select the next window with an alert
+C-b M-o     Rotate through the panes in reverse
+C-b M-p     Select the previous window with an alert
+C-b M-Up    Resize the pane up by 5
+C-b M-Down  Resize the pane down by 5
+C-b M-Left  Resize the pane left by 5
+C-b M-Right Resize the pane right by 5
+C-b C-b     Send the prefix key
+C-b C-o     Rotate through the panes
+C-b C-z     Suspend the current client
+C-b C-Up    Resize the pane up
+C-b C-Down  Resize the pane down
+C-b C-Left  Resize the pane left
+C-b C-Right Resize the pane right
+C-b S-Up    Move the visible part of the window up
+C-b S-Down  Move the visible part of the window down
+C-b S-Left  Move the visible part of the window left
+C-b S-Right Move the visible part of the window right
+-T prefix Space next-layout
+-T prefix ! break-pane
+-T prefix \" split-window
+-T prefix \# list-buffers
+-T prefix \$ command-prompt -I "#S" { rename-session "%%" }
+-T prefix \% split-window -h
+-T prefix & confirm-before -p "kill-window #W? (y/n)" kill-window
+-T prefix \' command-prompt -T window-target -p index { select-window -t ":%%" }
+-T prefix ( switch-client -p
+-T prefix ) switch-client -n
+-T prefix , command-prompt -I "#W" { rename-window "%%" }
+-T prefix - delete-buffer
+-T prefix . command-prompt -T target { move-window -t "%%" }
+-T prefix / command-prompt -k -p key { list-keys -1N "%%" }
+-T prefix 0 select-window -t :=0
+-T prefix 1 select-window -t :=1
+-T prefix 2 select-window -t :=2
+-T prefix 3 select-window -t :=3
+-T prefix 4 select-window -t :=4
+-T prefix 5 select-window -t :=5
+-T prefix 6 select-window -t :=6
+-T prefix 7 select-window -t :=7
+-T prefix 8 select-window -t :=8
+-T prefix 9 select-window -t :=9
+-T prefix : command-prompt
+-T prefix \; last-pane
+-T prefix = choose-buffer -Z
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+-T prefix ? list-keys -N
+-T prefix C customize-mode -Z
+-T prefix D choose-client -Z
+-T prefix L switch-client -l
+-T prefix M select-pane -M
+-T prefix [ copy-mode
+-T prefix ] paste-buffer -p
+-T prefix c new-window
+-T prefix d detach-client
+-T prefix f command-prompt { find-window -Z "%%" }
+-T prefix i display-message
+-T prefix l last-window
+-T prefix m select-pane -m
+-T prefix n next-window
+-T prefix o select-pane -t :.+
+-T prefix p previous-window
+-T prefix q display-panes
+-T prefix r refresh-client
+-T prefix s choose-tree -Zs
+-T prefix t clock-mode
+-T prefix w choose-tree -Zw
+-T prefix x confirm-before -p "kill-pane #P? (y/n)" kill-pane
+-T prefix z resize-pane -Z
+-T prefix \{ swap-pane -U
+-T prefix \} swap-pane -D
+-T prefix \~ show-messages
+-r -T prefix DC refresh-client -c
+-T prefix PPage copy-mode -u
+-r -T prefix Up select-pane -U
+-r -T prefix Down select-pane -D
+-r -T prefix Left select-pane -L
+-r -T prefix Right select-pane -R
+-T prefix M-3 select-layout main-horizontal
+-T prefix M-4 select-layout main-vertical
+-T prefix M-5 select-layout tiled
+-T prefix M-6 select-layout main-horizontal-mirrored
+-T prefix M-7 select-layout main-vertical-mirrored
+-T prefix M-n next-window -a
+-T prefix M-o rotate-window -D
+-T prefix M-p previous-window -a
+-r -T prefix M-Up resize-pane -U 5
+-r -T prefix M-Down resize-pane -D 5
+-r -T prefix M-Left resize-pane -L 5
+-r -T prefix M-Right resize-pane -R 5
+-T prefix C-b send-prefix
+-T prefix C-o rotate-window
+-T prefix C-z suspend-client
+-r -T prefix C-Up resize-pane -U
+-r -T prefix C-Down resize-pane -D
+-r -T prefix C-Left resize-pane -L
+-r -T prefix C-Right resize-pane -R
+-r -T prefix S-Up refresh-client -U 10
+-r -T prefix S-Down refresh-client -D 10
+-r -T prefix S-Left refresh-client -L 10
+-r -T prefix S-Right refresh-client -R 10
+gpu-box shell  ml-lab · main  gpu-box  5m
+Fix flaky login test  webapp · fix/login-flake  studio  23m
+Add rate limiting to the API  api · feat/rate-limit  studio  1h
+Refactor billing service  billing · refactor/invoices  studio  3d
+Release notes 2.4  webapp · main  studio  9d
+Café crème  menu · café  bistro  1m
+split-window  Split the window
+select-window  Select a window
+select-pane  Select a pane
+kill-pane  Kill the pane
+kill-window  Kill the window
+rename-window  Rename the window
+### sel
+C-b Space   Select next layout
+C-b '       Prompt for window index to select
+C-b 0       Select window 0
+C-b 1       Select window 1
+C-b 2       Select window 2
+C-b 3       Select window 3
+C-b 4       Select window 4
+C-b 5       Select window 5
+C-b 6       Select window 6
+C-b 7       Select window 7
+C-b 8       Select window 8
+C-b 9       Select window 9
+C-b l       Select the previously current window
+C-b n       Select the next window
+C-b o       Select the next pane
+C-b p       Select the previous window
+C-b Up      Select the pane above the active pane
+C-b Down    Select the pane below the active pane
+C-b Left    Select the pane to the left of the active pane
+C-b Right   Select the pane to the right of the active pane
+C-b M-5     Select the tiled layout
+C-b M-n     Select the next window with an alert
+C-b M-p     Select the previous window with an alert
+-T prefix \' command-prompt -T window-target -p index { select-window -t ":%%" }
+-T prefix 0 select-window -t :=0
+-T prefix 1 select-window -t :=1
+-T prefix 2 select-window -t :=2
+-T prefix 3 select-window -t :=3
+-T prefix 4 select-window -t :=4
+-T prefix 5 select-window -t :=5
+-T prefix 6 select-window -t :=6
+-T prefix 7 select-window -t :=7
+-T prefix 8 select-window -t :=8
+-T prefix 9 select-window -t :=9
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+-T prefix E select-layout -E
+-T prefix M select-pane -M
+-T prefix m select-pane -m
+-T prefix o select-pane -t :.+
+-r -T prefix Up select-pane -U
+-r -T prefix Down select-pane -D
+-r -T prefix Left select-pane -L
+-r -T prefix Right select-pane -R
+-T prefix M-1 select-layout even-horizontal
+-T prefix M-2 select-layout even-vertical
+-T prefix M-3 select-layout main-horizontal
+-T prefix M-4 select-layout main-vertical
+-T prefix M-5 select-layout tiled
+-T prefix M-6 select-layout main-horizontal-mirrored
+-T prefix M-7 select-layout main-vertical-mirrored
+select-window  Select a window
+select-pane  Select a pane
+C-b s       Choose a session from a list
+gpu-box shell  ml-lab · main  gpu-box  5m
+Refactor billing service  billing · refactor/invoices  studio  3d
+C-b M-4     Set the main-vertical layout
+C-b M-2     Set the even-vertical layout
+C-b M-3     Set the main-horizontal layout
+-T prefix Space next-layout
+C-b L       Switch to the last client
+C-b M-1     Set the even-horizontal layout
+-T prefix L switch-client -l
+C-b M-7     Set the main-vertical-mirrored layout
+C-b M-6     Set the main-horizontal-mirrored layout
+C-b DC      Reset so the visible part of the window follows the cursor
+-r -T prefix S-Up refresh-client -U 10
+-r -T prefix S-Left refresh-client -L 10
+C-b )       Switch to next client
+-r -T prefix S-Down refresh-client -D 10
+-r -T prefix S-Right refresh-client -R 10
+-T prefix D choose-client -Z
+C-b "       Split window vertically
+C-b (       Switch to previous client
+C-b E       Spread panes out evenly
+C-b S-Up    Move the visible part of the window up
+C-b S-Down  Move the visible part of the window down
+C-b S-Left  Move the visible part of the window left
+C-b S-Right Move the visible part of the window right
+C-b w       Choose a window from a list
+-r -T prefix M-Left resize-pane -L 5
+-r -T prefix C-Left resize-pane -L
+C-b M-Left  Resize the pane left by 5
+C-b C-Left  Resize the pane left
+-T prefix C-z suspend-client
+C-b =       Choose a paste buffer from a list
+Fix flaky login test  webapp · fix/login-flake  studio  23m
+C-b }       Swap the active pane with the pane below
+C-b D       Choose and detach a client from a list
+C-b C-z     Suspend the current client
+### win
+C-b !       Break pane to a new window
+C-b "       Split window vertically
+C-b %       Split window horizontally
+C-b &       Kill current window
+C-b '       Prompt for window index to select
+C-b ,       Rename current window
+C-b .       Move the current window
+C-b 0       Select window 0
+C-b 1       Select window 1
+C-b 2       Select window 2
+C-b 3       Select window 3
+C-b 4       Select window 4
+C-b 5       Select window 5
+C-b 6       Select window 6
+C-b 7       Select window 7
+C-b 8       Select window 8
+C-b 9       Select window 9
+C-b c       Create a new window
+C-b i       Display window information
+C-b l       Select the previously current window
+C-b n       Select the next window
+C-b p       Select the previous window
+C-b w       Choose a window from a list
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b M-n     Select the next window with an alert
+C-b M-p     Select the previous window with an alert
+C-b S-Up    Move the visible part of the window up
+C-b S-Down  Move the visible part of the window down
+C-b S-Left  Move the visible part of the window left
+C-b S-Right Move the visible part of the window right
+-T prefix \' command-prompt -T window-target -p index { select-window -t ":%%" }
+split-window  Split the window
+select-window  Select a window
+kill-window  Kill the window
+rename-window  Rename the window
+-T prefix \" split-window
+-T prefix \% split-window -h
+-T prefix & confirm-before -p "kill-window #W? (y/n)" kill-window
+-T prefix , command-prompt -I "#W" { rename-window "%%" }
+-T prefix . command-prompt -T target { move-window -t "%%" }
+-T prefix 0 select-window -t :=0
+-T prefix 1 select-window -t :=1
+-T prefix 2 select-window -t :=2
+-T prefix 3 select-window -t :=3
+-T prefix 4 select-window -t :=4
+-T prefix 5 select-window -t :=5
+-T prefix 6 select-window -t :=6
+-T prefix 7 select-window -t :=7
+-T prefix 8 select-window -t :=8
+-T prefix 9 select-window -t :=9
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+-T prefix c new-window
+-T prefix f command-prompt { find-window -Z "%%" }
+-T prefix l last-window
+-T prefix n next-window
+-T prefix p previous-window
+-T prefix M-n next-window -a
+-T prefix M-o rotate-window -D
+-T prefix M-p previous-window -a
+-T prefix C-o rotate-window
+C-b {       Swap the active pane with the pane above
+C-b }       Swap the active pane with the pane below
+Release notes 2.4  webapp · main  studio  9d
+Fix flaky login test  webapp · fix/login-flake  studio  23m
+C-b )       Switch to next client
+-T prefix ) switch-client -n
+-T prefix ( switch-client -p
+-T prefix L switch-client -l
+-r -T prefix M-Down resize-pane -D 5
+-r -T prefix C-Down resize-pane -D
+C-b Down    Select the pane below the active pane
+-r -T prefix S-Down refresh-client -D 10
+C-b (       Switch to previous client
+C-b L       Switch to the last client
+C-b r       Redraw the current client
+C-b M-Down  Resize the pane down by 5
+C-b C-Down  Resize the pane down
+### pane
+C-b !       Break pane to a new window
+C-b ;       Move to the previously active pane
+C-b E       Spread panes out evenly
+C-b M       Clear the marked pane
+C-b f       Search for a pane
+C-b m       Toggle the marked pane
+C-b o       Select the next pane
+C-b q       Display pane numbers
+C-b x       Kill the active pane
+C-b z       Zoom the active pane
+C-b {       Swap the active pane with the pane above
+C-b }       Swap the active pane with the pane below
+C-b Up      Select the pane above the active pane
+C-b Down    Select the pane below the active pane
+C-b Left    Select the pane to the left of the active pane
+C-b Right   Select the pane to the right of the active pane
+C-b M-o     Rotate through the panes in reverse
+C-b M-Up    Resize the pane up by 5
+C-b M-Down  Resize the pane down by 5
+C-b M-Left  Resize the pane left by 5
+C-b M-Right Resize the pane right by 5
+C-b C-o     Rotate through the panes
+C-b C-Up    Resize the pane up
+C-b C-Down  Resize the pane down
+C-b C-Left  Resize the pane left
+C-b C-Right Resize the pane right
+select-pane  Select a pane
+kill-pane  Kill the pane
+-T prefix ! break-pane
+-T prefix \; last-pane
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+-T prefix M select-pane -M
+-T prefix m select-pane -m
+-T prefix o select-pane -t :.+
+-T prefix q display-panes
+-T prefix x confirm-before -p "kill-pane #P? (y/n)" kill-pane
+-T prefix z resize-pane -Z
+-T prefix \{ swap-pane -U
+-T prefix \} swap-pane -D
+-r -T prefix Up select-pane -U
+-r -T prefix Down select-pane -D
+-r -T prefix Left select-pane -L
+-r -T prefix Right select-pane -R
+-r -T prefix M-Up resize-pane -U 5
+-r -T prefix M-Down resize-pane -D 5
+-r -T prefix M-Left resize-pane -L 5
+-r -T prefix M-Right resize-pane -R 5
+-r -T prefix C-Up resize-pane -U
+-r -T prefix C-Down resize-pane -D
+-r -T prefix C-Left resize-pane -L
+-r -T prefix C-Right resize-pane -R
+-T prefix Space next-layout
+C-b M-p     Select the previous window with an alert
+C-b Space   Select next layout
+C-b S-Left  Move the visible part of the window left
+C-b ]       Paste the most recent paste buffer
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b PPage   Enter copy mode and scroll up
+-T prefix . command-prompt -T target { move-window -t "%%" }
+-T prefix / command-prompt -k -p key { list-keys -1N "%%" }
+-T prefix , command-prompt -I "#W" { rename-window "%%" }
+-T prefix \$ command-prompt -I "#S" { rename-session "%%" }
+-T prefix M-2 select-layout even-vertical
+-T prefix M-4 select-layout main-vertical
+-T prefix M-7 select-layout main-vertical-mirrored
+-T prefix \' command-prompt -T window-target -p index { select-window -t ":%%" }
+Train tokenizer on the new corpus  ml-lab · exp/tokenizer-v3  gpu-box  2h
+-T prefix M-6 select-layout main-horizontal-mirrored
+### zoom
+C-b z       Zoom the active pane
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+Train tokenizer on the new corpus  ml-lab · exp/tokenizer-v3  gpu-box  2h
+### layout
+C-b Space   Select next layout
+C-b M-1     Set the even-horizontal layout
+C-b M-2     Set the even-vertical layout
+C-b M-3     Set the main-horizontal layout
+C-b M-4     Set the main-vertical layout
+C-b M-5     Select the tiled layout
+C-b M-6     Set the main-horizontal-mirrored layout
+C-b M-7     Set the main-vertical-mirrored layout
+-T prefix Space next-layout
+-T prefix E select-layout -E
+-T prefix M-1 select-layout even-horizontal
+-T prefix M-2 select-layout even-vertical
+-T prefix M-3 select-layout main-horizontal
+-T prefix M-4 select-layout main-vertical
+-T prefix M-5 select-layout tiled
+-T prefix M-6 select-layout main-horizontal-mirrored
+-T prefix M-7 select-layout main-vertical-mirrored
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+### sel win
+C-b '       Prompt for window index to select
+C-b 0       Select window 0
+C-b 1       Select window 1
+C-b 2       Select window 2
+C-b 3       Select window 3
+C-b 4       Select window 4
+C-b 5       Select window 5
+C-b 6       Select window 6
+C-b 7       Select window 7
+C-b 8       Select window 8
+C-b 9       Select window 9
+C-b l       Select the previously current window
+C-b n       Select the next window
+C-b p       Select the previous window
+C-b M-n     Select the next window with an alert
+C-b M-p     Select the previous window with an alert
+-T prefix \' command-prompt -T window-target -p index { select-window -t ":%%" }
+select-window  Select a window
+-T prefix 0 select-window -t :=0
+-T prefix 1 select-window -t :=1
+-T prefix 2 select-window -t :=2
+-T prefix 3 select-window -t :=3
+-T prefix 4 select-window -t :=4
+-T prefix 5 select-window -t :=5
+-T prefix 6 select-window -t :=6
+-T prefix 7 select-window -t :=7
+-T prefix 8 select-window -t :=8
+-T prefix 9 select-window -t :=9
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b "       Split window vertically
+C-b S-Up    Move the visible part of the window up
+C-b S-Down  Move the visible part of the window down
+C-b S-Left  Move the visible part of the window left
+C-b S-Right Move the visible part of the window right
+C-b w       Choose a window from a list
+C-b Down    Select the pane below the active pane
+C-b )       Switch to next client
+C-b }       Swap the active pane with the pane below
+-T prefix L switch-client -l
+Fix flaky login test  webapp · fix/login-flake  studio  23m
+C-b L       Switch to the last client
+-r -T prefix S-Down refresh-client -D 10
+C-b (       Switch to previous client
+### 'copy
+C-b [       Enter copy mode
+C-b PPage   Enter copy mode and scroll up
+-T prefix [ copy-mode
+-T prefix PPage copy-mode -u
+copy-mode  Enter copy mode
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+### ^C-b
+C-b Space   Select next layout
+C-b !       Break pane to a new window
+C-b "       Split window vertically
+C-b #       List all paste buffers
+C-b $       Rename current session
+C-b %       Split window horizontally
+C-b &       Kill current window
+C-b '       Prompt for window index to select
+C-b (       Switch to previous client
+C-b )       Switch to next client
+C-b ,       Rename current window
+C-b -       Delete the most recent paste buffer
+C-b .       Move the current window
+C-b /       Describe key binding
+C-b 0       Select window 0
+C-b 1       Select window 1
+C-b 2       Select window 2
+C-b 3       Select window 3
+C-b 4       Select window 4
+C-b 5       Select window 5
+C-b 6       Select window 6
+C-b 7       Select window 7
+C-b 8       Select window 8
+C-b 9       Select window 9
+C-b :       Prompt for a command
+C-b ;       Move to the previously active pane
+C-b =       Choose a paste buffer from a list
+C-b ?       List key bindings
+C-b C       Customize options
+C-b D       Choose and detach a client from a list
+C-b E       Spread panes out evenly
+C-b L       Switch to the last client
+C-b M       Clear the marked pane
+C-b [       Enter copy mode
+C-b ]       Paste the most recent paste buffer
+C-b c       Create a new window
+C-b d       Detach the current client
+C-b f       Search for a pane
+C-b i       Display window information
+C-b l       Select the previously current window
+C-b m       Toggle the marked pane
+C-b n       Select the next window
+C-b o       Select the next pane
+C-b p       Select the previous window
+C-b q       Display pane numbers
+C-b r       Redraw the current client
+C-b s       Choose a session from a list
+C-b t       Show a clock
+C-b w       Choose a window from a list
+C-b x       Kill the active pane
+C-b z       Zoom the active pane
+C-b {       Swap the active pane with the pane above
+C-b }       Swap the active pane with the pane below
+C-b ~       Show messages
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b PPage   Enter copy mode and scroll up
+C-b Up      Select the pane above the active pane
+C-b Down    Select the pane below the active pane
+C-b Left    Select the pane to the left of the active pane
+C-b Right   Select the pane to the right of the active pane
+C-b M-1     Set the even-horizontal layout
+C-b M-2     Set the even-vertical layout
+C-b M-3     Set the main-horizontal layout
+C-b M-4     Set the main-vertical layout
+C-b M-5     Select the tiled layout
+C-b M-6     Set the main-horizontal-mirrored layout
+C-b M-7     Set the main-vertical-mirrored layout
+C-b M-n     Select the next window with an alert
+C-b M-o     Rotate through the panes in reverse
+C-b M-p     Select the previous window with an alert
+C-b M-Up    Resize the pane up by 5
+C-b M-Down  Resize the pane down by 5
+C-b M-Left  Resize the pane left by 5
+C-b M-Right Resize the pane right by 5
+C-b C-b     Send the prefix key
+C-b C-o     Rotate through the panes
+C-b C-z     Suspend the current client
+C-b C-Up    Resize the pane up
+C-b C-Down  Resize the pane down
+C-b C-Left  Resize the pane left
+C-b C-Right Resize the pane right
+C-b S-Up    Move the visible part of the window up
+C-b S-Down  Move the visible part of the window down
+C-b S-Left  Move the visible part of the window left
+C-b S-Right Move the visible part of the window right
+### mode$
+C-b [       Enter copy mode
+copy-mode  Enter copy mode
+-T prefix [ copy-mode
+-T prefix t clock-mode
+### !kill split
+C-b "       Split window vertically
+C-b %       Split window horizontally
+-T prefix \" split-window
+-T prefix \% split-window -h
+split-window  Split the window
+C-b (       Switch to previous client
+-r -T prefix S-Up refresh-client -U 10
+C-b =       Choose a paste buffer from a list
+C-b i       Display window information
+-T prefix C-z suspend-client
+C-b C-z     Suspend the current client
+Fix flaky login test  webapp · fix/login-flake  studio  23m
+### sp | zo
+C-b Space   Select next layout
+C-b "       Split window vertically
+C-b %       Split window horizontally
+C-b E       Spread panes out evenly
+C-b z       Zoom the active pane
+-T prefix Space next-layout
+-T prefix \" split-window
+-T prefix \% split-window -h
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+split-window  Split the window
+-T prefix \{ swap-pane -U
+-T prefix \} swap-pane -D
+-T prefix C-b send-prefix
+C-b C-b     Send the prefix key
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+-T prefix M select-pane -M
+-T prefix m select-pane -m
+-T prefix o select-pane -t :.+
+-r -T prefix Up select-pane -U
+-r -T prefix Down select-pane -D
+-r -T prefix Left select-pane -L
+-r -T prefix Right select-pane -R
+select-pane  Select a pane
+C-b (       Switch to previous client
+C-b l       Select the previously current window
+C-b p       Select the previous window
+C-b Up      Select the pane above the active pane
+C-b Down    Select the pane below the active pane
+C-b Left    Select the pane to the left of the active pane
+C-b Right   Select the pane to the right of the active pane
+C-b M-p     Select the previous window with an alert
+C-b f       Search for a pane
+C-b {       Swap the active pane with the pane above
+C-b }       Swap the active pane with the pane below
+C-b S-Up    Move the visible part of the window up
+-r -T prefix S-Up refresh-client -U 10
+C-b o       Select the next pane
+-T prefix ( switch-client -p
+C-b PPage   Enter copy mode and scroll up
+C-b =       Choose a paste buffer from a list
+C-b i       Display window information
+C-b q       Display pane numbers
+C-b M-1     Set the even-horizontal layout
+C-b M-3     Set the main-horizontal layout
+C-b M-6     Set the main-horizontal-mirrored layout
+C-b C-z     Suspend the current client
+-T prefix \; last-pane
+-T prefix i display-message
+-T prefix q display-panes
+-T prefix M-1 select-layout even-horizontal
+-T prefix M-3 select-layout main-horizontal
+-T prefix M-6 select-layout main-horizontal-mirrored
+-T prefix C-z suspend-client
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b S-Down  Move the visible part of the window down
+C-b S-Left  Move the visible part of the window left
+C-b S-Right Move the visible part of the window right
+C-b #       List all paste buffers
+-T prefix z resize-pane -Z
+-r -T prefix M-Up resize-pane -U 5
+-r -T prefix M-Down resize-pane -D 5
+-r -T prefix M-Left resize-pane -L 5
+-r -T prefix M-Right resize-pane -R 5
+-r -T prefix C-Up resize-pane -U
+-r -T prefix C-Down resize-pane -D
+-r -T prefix C-Left resize-pane -L
+-r -T prefix C-Right resize-pane -R
+C-b M-Up    Resize the pane up by 5
+C-b M-Down  Resize the pane down by 5
+C-b M-Left  Resize the pane left by 5
+C-b M-Right Resize the pane right by 5
+C-b C-Up    Resize the pane up
+C-b C-Down  Resize the pane down
+C-b C-Left  Resize the pane left
+C-b C-Right Resize the pane right
+C-b -       Delete the most recent paste buffer
+C-b ]       Paste the most recent paste buffer
+C-b ;       Move to the previously active pane
+gpu-box shell  ml-lab · main  gpu-box  5m
+-T prefix C customize-mode -Z
+-T prefix ] paste-buffer -p
+Fix flaky login test  webapp · fix/login-flake  studio  23m
+C-b C       Customize options
+Release notes 2.4  webapp · main  studio  9d
+Train tokenizer on the new corpus  ml-lab · exp/tokenizer-v3  gpu-box  2h
+### Win
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+-T prefix , command-prompt -I "#W" { rename-window "%%" }
+-T prefix & confirm-before -p "kill-window #W? (y/n)" kill-window
+### cafe
+Café crème  menu · café  bistro  1m
+C-b =       Choose a paste buffer from a list
+C-b #       List all paste buffers
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+C-b f       Search for a pane
+C-b -       Delete the most recent paste buffer
+C-b ]       Paste the most recent paste buffer
+C-b S-Up    Move the visible part of the window up
+C-b S-Down  Move the visible part of the window down
+C-b S-Left  Move the visible part of the window left
+C-b S-Right Move the visible part of the window right
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b Left    Select the pane to the left of the active pane
+C-b Right   Select the pane to the right of the active pane
+### gpu
+Train tokenizer on the new corpus  ml-lab · exp/tokenizer-v3  gpu-box  2h
+gpu-box shell  ml-lab · main  gpu-box  5m
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+-T prefix PPage copy-mode -u
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+C-b PPage   Enter copy mode and scroll up
+Fix flaky login test  webapp · fix/login-flake  studio  23m
+Add rate limiting to the API  api · feat/rate-limit  studio  1h
+### tok
+Train tokenizer on the new corpus  ml-lab · exp/tokenizer-v3  gpu-box  2h
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+C-b m       Toggle the marked pane
+-T prefix t clock-mode
+C-b t       Show a clock
+-T prefix / command-prompt -k -p key { list-keys -1N "%%" }
+-T prefix & confirm-before -p "kill-window #W? (y/n)" kill-window
+-T prefix x confirm-before -p "kill-pane #P? (y/n)" kill-pane
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+Fix flaky login test  webapp · fix/login-flake  studio  23m
+### C-b
+C-b Space   Select next layout
+C-b !       Break pane to a new window
+C-b "       Split window vertically
+C-b #       List all paste buffers
+C-b $       Rename current session
+C-b %       Split window horizontally
+C-b &       Kill current window
+C-b '       Prompt for window index to select
+C-b (       Switch to previous client
+C-b )       Switch to next client
+C-b ,       Rename current window
+C-b -       Delete the most recent paste buffer
+C-b .       Move the current window
+C-b /       Describe key binding
+C-b 0       Select window 0
+C-b 1       Select window 1
+C-b 2       Select window 2
+C-b 3       Select window 3
+C-b 4       Select window 4
+C-b 5       Select window 5
+C-b 6       Select window 6
+C-b 7       Select window 7
+C-b 8       Select window 8
+C-b 9       Select window 9
+C-b :       Prompt for a command
+C-b ;       Move to the previously active pane
+C-b =       Choose a paste buffer from a list
+C-b ?       List key bindings
+C-b C       Customize options
+C-b D       Choose and detach a client from a list
+C-b E       Spread panes out evenly
+C-b L       Switch to the last client
+C-b M       Clear the marked pane
+C-b [       Enter copy mode
+C-b ]       Paste the most recent paste buffer
+C-b c       Create a new window
+C-b d       Detach the current client
+C-b f       Search for a pane
+C-b i       Display window information
+C-b l       Select the previously current window
+C-b m       Toggle the marked pane
+C-b n       Select the next window
+C-b o       Select the next pane
+C-b p       Select the previous window
+C-b q       Display pane numbers
+C-b r       Redraw the current client
+C-b s       Choose a session from a list
+C-b t       Show a clock
+C-b w       Choose a window from a list
+C-b x       Kill the active pane
+C-b z       Zoom the active pane
+C-b {       Swap the active pane with the pane above
+C-b }       Swap the active pane with the pane below
+C-b ~       Show messages
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b PPage   Enter copy mode and scroll up
+C-b Up      Select the pane above the active pane
+C-b Down    Select the pane below the active pane
+C-b Left    Select the pane to the left of the active pane
+C-b Right   Select the pane to the right of the active pane
+C-b M-1     Set the even-horizontal layout
+C-b M-2     Set the even-vertical layout
+C-b M-3     Set the main-horizontal layout
+C-b M-4     Set the main-vertical layout
+C-b M-5     Select the tiled layout
+C-b M-6     Set the main-horizontal-mirrored layout
+C-b M-7     Set the main-vertical-mirrored layout
+C-b M-n     Select the next window with an alert
+C-b M-o     Rotate through the panes in reverse
+C-b M-p     Select the previous window with an alert
+C-b M-Up    Resize the pane up by 5
+C-b M-Down  Resize the pane down by 5
+C-b M-Left  Resize the pane left by 5
+C-b M-Right Resize the pane right by 5
+C-b C-b     Send the prefix key
+C-b C-o     Rotate through the panes
+C-b C-z     Suspend the current client
+C-b C-Up    Resize the pane up
+C-b C-Down  Resize the pane down
+C-b C-Left  Resize the pane left
+C-b C-Right Resize the pane right
+C-b S-Up    Move the visible part of the window up
+C-b S-Down  Move the visible part of the window down
+C-b S-Left  Move the visible part of the window left
+C-b S-Right Move the visible part of the window right
+-T prefix C-b send-prefix
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+### r
+C-b $       Rename current session
+C-b ,       Rename current window
+C-b -       Delete the most recent paste buffer
+C-b ]       Paste the most recent paste buffer
+C-b r       Redraw the current client
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b Right   Select the pane to the right of the active pane
+C-b M-o     Rotate through the panes in reverse
+C-b M-Up    Resize the pane up by 5
+C-b M-Down  Resize the pane down by 5
+C-b M-Left  Resize the pane left by 5
+C-b C-o     Rotate through the panes
+C-b C-Up    Resize the pane up
+C-b C-Down  Resize the pane down
+C-b C-Left  Resize the pane left
+-T prefix \$ command-prompt -I "#S" { rename-session "%%" }
+-T prefix , command-prompt -I "#W" { rename-window "%%" }
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+-T prefix r refresh-client
+-T prefix z resize-pane -Z
+-T prefix M-o rotate-window -D
+-T prefix C-o rotate-window
+Add rate limiting to the API  api · feat/rate-limit  studio  1h
+Refactor billing service  billing · refactor/invoices  studio  3d
+Release notes 2.4  webapp · main  studio  9d
+rename-window  Rename the window
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+C-b M-Right Resize the pane right by 5
+C-b C-Right Resize the pane right
+C-b S-Right Move the visible part of the window right
+-r -T prefix DC refresh-client -c
+-r -T prefix Up select-pane -U
+-r -T prefix Down select-pane -D
+-r -T prefix Left select-pane -L
+-r -T prefix Right select-pane -R
+-r -T prefix M-Up resize-pane -U 5
+-r -T prefix M-Down resize-pane -D 5
+-r -T prefix M-Left resize-pane -L 5
+-r -T prefix M-Right resize-pane -R 5
+-r -T prefix C-Up resize-pane -U
+-r -T prefix C-Down resize-pane -D
+-r -T prefix C-Left resize-pane -L
+-r -T prefix C-Right resize-pane -R
+-r -T prefix S-Up refresh-client -U 10
+-r -T prefix S-Down refresh-client -D 10
+-r -T prefix S-Left refresh-client -L 10
+-r -T prefix S-Right refresh-client -R 10
+C-b !       Break pane to a new window
+C-b "       Split window vertically
+C-b #       List all paste buffers
+C-b %       Split window horizontally
+C-b &       Kill current window
+C-b '       Prompt for window index to select
+C-b (       Switch to previous client
+C-b .       Move the current window
+C-b /       Describe key binding
+C-b :       Prompt for a command
+C-b ;       Move to the previously active pane
+C-b =       Choose a paste buffer from a list
+C-b D       Choose and detach a client from a list
+C-b E       Spread panes out evenly
+C-b M       Clear the marked pane
+C-b [       Enter copy mode
+C-b c       Create a new window
+C-b d       Detach the current client
+C-b f       Search for a pane
+C-b i       Display window information
+C-b l       Select the previously current window
+C-b m       Toggle the marked pane
+C-b p       Select the previous window
+C-b q       Display pane numbers
+C-b s       Choose a session from a list
+C-b w       Choose a window from a list
+C-b PPage   Enter copy mode and scroll up
+C-b M-1     Set the even-horizontal layout
+C-b M-2     Set the even-vertical layout
+C-b M-3     Set the main-horizontal layout
+C-b M-4     Set the main-vertical layout
+C-b M-6     Set the main-horizontal-mirrored layout
+C-b M-7     Set the main-vertical-mirrored layout
+C-b M-n     Select the next window with an alert
+C-b M-p     Select the previous window with an alert
+C-b C-b     Send the prefix key
+C-b C-z     Suspend the current client
+C-b S-Up    Move the visible part of the window up
+C-b S-Down  Move the visible part of the window down
+C-b S-Left  Move the visible part of the window left
+-T prefix Space next-layout
+-T prefix ! break-pane
+-T prefix \" split-window
+-T prefix \# list-buffers
+-T prefix \% split-window -h
+-T prefix & confirm-before -p "kill-window #W? (y/n)" kill-window
+-T prefix \' command-prompt -T window-target -p index { select-window -t ":%%" }
+-T prefix ( switch-client -p
+-T prefix ) switch-client -n
+-T prefix - delete-buffer
+-T prefix . command-prompt -T target { move-window -t "%%" }
+-T prefix / command-prompt -k -p key { list-keys -1N "%%" }
+-T prefix 0 select-window -t :=0
+-T prefix 1 select-window -t :=1
+-T prefix 2 select-window -t :=2
+-T prefix 3 select-window -t :=3
+-T prefix 4 select-window -t :=4
+-T prefix 5 select-window -t :=5
+-T prefix 6 select-window -t :=6
+-T prefix 7 select-window -t :=7
+-T prefix 8 select-window -t :=8
+-T prefix 9 select-window -t :=9
+-T prefix : command-prompt
+-T prefix \; last-pane
+-T prefix = choose-buffer -Z
+-T prefix ? list-keys -N
+-T prefix C customize-mode -Z
+-T prefix D choose-client -Z
+-T prefix E select-layout -E
+-T prefix L switch-client -l
+-T prefix M select-pane -M
+-T prefix [ copy-mode
+-T prefix ] paste-buffer -p
+-T prefix c new-window
+-T prefix d detach-client
+-T prefix f command-prompt { find-window -Z "%%" }
+-T prefix i display-message
+-T prefix l last-window
+-T prefix m select-pane -m
+-T prefix n next-window
+-T prefix o select-pane -t :.+
+-T prefix p previous-window
+-T prefix q display-panes
+-T prefix s choose-tree -Zs
+-T prefix t clock-mode
+-T prefix w choose-tree -Zw
+-T prefix x confirm-before -p "kill-pane #P? (y/n)" kill-pane
+-T prefix \{ swap-pane -U
+-T prefix \} swap-pane -D
+-T prefix \~ show-messages
+-T prefix PPage copy-mode -u
+-T prefix M-1 select-layout even-horizontal
+-T prefix M-2 select-layout even-vertical
+-T prefix M-3 select-layout main-horizontal
+-T prefix M-4 select-layout main-vertical
+-T prefix M-5 select-layout tiled
+-T prefix M-6 select-layout main-horizontal-mirrored
+-T prefix M-7 select-layout main-vertical-mirrored
+-T prefix M-n next-window -a
+-T prefix M-p previous-window -a
+-T prefix C-b send-prefix
+-T prefix C-z suspend-client
+Train tokenizer on the new corpus  ml-lab · exp/tokenizer-v3  gpu-box  2h
+Café crème  menu · café  bistro  1m
+copy-mode  Enter copy mode
+### -t
+-T prefix Space next-layout
+-T prefix ! break-pane
+-T prefix \" split-window
+-T prefix \# list-buffers
+-T prefix \$ command-prompt -I "#S" { rename-session "%%" }
+-T prefix \% split-window -h
+-T prefix & confirm-before -p "kill-window #W? (y/n)" kill-window
+-T prefix \' command-prompt -T window-target -p index { select-window -t ":%%" }
+-T prefix ( switch-client -p
+-T prefix ) switch-client -n
+-T prefix , command-prompt -I "#W" { rename-window "%%" }
+-T prefix - delete-buffer
+-T prefix . command-prompt -T target { move-window -t "%%" }
+-T prefix / command-prompt -k -p key { list-keys -1N "%%" }
+-T prefix 0 select-window -t :=0
+-T prefix 1 select-window -t :=1
+-T prefix 2 select-window -t :=2
+-T prefix 3 select-window -t :=3
+-T prefix 4 select-window -t :=4
+-T prefix 5 select-window -t :=5
+-T prefix 6 select-window -t :=6
+-T prefix 7 select-window -t :=7
+-T prefix 8 select-window -t :=8
+-T prefix 9 select-window -t :=9
+-T prefix : command-prompt
+-T prefix \; last-pane
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+-T prefix = choose-buffer -Z
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+-T prefix ? list-keys -N
+-T prefix C customize-mode -Z
+-T prefix D choose-client -Z
+-T prefix E select-layout -E
+-T prefix L switch-client -l
+-T prefix M select-pane -M
+-T prefix [ copy-mode
+-T prefix ] paste-buffer -p
+-T prefix c new-window
+-T prefix d detach-client
+-T prefix f command-prompt { find-window -Z "%%" }
+-T prefix i display-message
+-T prefix l last-window
+-T prefix m select-pane -m
+-T prefix n next-window
+-T prefix o select-pane -t :.+
+-T prefix p previous-window
+-T prefix q display-panes
+-T prefix r refresh-client
+-T prefix s choose-tree -Zs
+-T prefix t clock-mode
+-T prefix w choose-tree -Zw
+-T prefix x confirm-before -p "kill-pane #P? (y/n)" kill-pane
+-T prefix z resize-pane -Z
+-T prefix \{ swap-pane -U
+-T prefix \} swap-pane -D
+-T prefix \~ show-messages
+-r -T prefix DC refresh-client -c
+-T prefix PPage copy-mode -u
+-r -T prefix Up select-pane -U
+-r -T prefix Down select-pane -D
+-r -T prefix Left select-pane -L
+-r -T prefix Right select-pane -R
+-T prefix M-1 select-layout even-horizontal
+-T prefix M-2 select-layout even-vertical
+-T prefix M-3 select-layout main-horizontal
+-T prefix M-4 select-layout main-vertical
+-T prefix M-5 select-layout tiled
+-T prefix M-6 select-layout main-horizontal-mirrored
+-T prefix M-7 select-layout main-vertical-mirrored
+-T prefix M-n next-window -a
+-T prefix M-o rotate-window -D
+-T prefix M-p previous-window -a
+-r -T prefix M-Up resize-pane -U 5
+-r -T prefix M-Down resize-pane -D 5
+-r -T prefix M-Left resize-pane -L 5
+-r -T prefix M-Right resize-pane -R 5
+-T prefix C-b send-prefix
+-T prefix C-o rotate-window
+-T prefix C-z suspend-client
+-r -T prefix C-Up resize-pane -U
+-r -T prefix C-Down resize-pane -D
+-r -T prefix C-Left resize-pane -L
+-r -T prefix C-Right resize-pane -R
+-r -T prefix S-Up refresh-client -U 10
+-r -T prefix S-Down refresh-client -D 10
+-r -T prefix S-Left refresh-client -L 10
+-r -T prefix S-Right refresh-client -R 10
+C-b t       Show a clock
+C-b m       Toggle the marked pane
+C-b M-1     Set the even-horizontal layout
+C-b M-2     Set the even-vertical layout
+C-b M-3     Set the main-horizontal layout
+C-b M-4     Set the main-vertical layout
+C-b M-6     Set the main-horizontal-mirrored layout
+C-b M-7     Set the main-vertical-mirrored layout
+C-b C-b     Send the prefix key
+C-b S-Up    Move the visible part of the window up
+C-b S-Down  Move the visible part of the window down
+C-b S-Left  Move the visible part of the window left
+C-b S-Right Move the visible part of the window right
+Train tokenizer on the new corpus  ml-lab · exp/tokenizer-v3  gpu-box  2h
+kill-pane  Kill the pane
+C-b M-5     Select the tiled layout
+C-b M-n     Select the next window with an alert
+C-b M-o     Rotate through the panes in reverse
+C-b M-p     Select the previous window with an alert
+C-b M-Up    Resize the pane up by 5
+C-b M-Down  Resize the pane down by 5
+C-b M-Left  Resize the pane left by 5
+C-b M-Right Resize the pane right by 5
+C-b C-o     Rotate through the panes
+C-b C-Up    Resize the pane up
+C-b C-Down  Resize the pane down
+C-b C-Left  Resize the pane left
+C-b C-Right Resize the pane right
+kill-window  Kill the window
+C-b -       Delete the most recent paste buffer
+C-b C-z     Suspend the current client
+Add rate limiting to the API  api · feat/rate-limit  studio  1h
+split-window  Split the window
+C-b .       Move the current window
+C-b ;       Move to the previously active pane
+C-b x       Kill the active pane
+C-b z       Zoom the active pane
+C-b {       Swap the active pane with the pane above
+C-b }       Swap the active pane with the pane below
+C-b Left    Select the pane to the left of the active pane
+rename-window  Rename the window
+C-b M       Clear the marked pane
+C-b ]       Paste the most recent paste buffer
+C-b Right   Select the pane to the right of the active pane
+C-b (       Switch to previous client
+C-b )       Switch to next client
+C-b L       Switch to the last client
+C-b d       Detach the current client
+C-b l       Select the previously current window
+C-b n       Select the next window
+C-b o       Select the next pane
+C-b p       Select the previous window
+C-b r       Redraw the current client
+C-b Up      Select the pane above the active pane
+C-b Down    Select the pane below the active pane
+Fix flaky login test  webapp · fix/login-flake  studio  23m
+copy-mode  Enter copy mode
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b !       Break pane to a new window
+select-pane  Select a pane
+C-b [       Enter copy mode
+C-b PPage   Enter copy mode and scroll up
+C-b #       List all paste buffers
+C-b ?       List key bindings
+C-b C       Customize options
+select-window  Select a window
+C-b "       Split window vertically
+C-b %       Split window horizontally
+C-b c       Create a new window
+C-b Space   Select next layout
+C-b '       Prompt for window index to select
+C-b 0       Select window 0
+C-b 1       Select window 1
+C-b 2       Select window 2
+C-b 3       Select window 3
+C-b 4       Select window 4
+C-b 5       Select window 5
+C-b 6       Select window 6
+C-b 7       Select window 7
+C-b 8       Select window 8
+C-b 9       Select window 9
+C-b :       Prompt for a command
+C-b &       Kill current window
+C-b =       Choose a paste buffer from a list
+C-b $       Rename current session
+C-b ,       Rename current window
+C-b D       Choose and detach a client from a list
+C-b E       Spread panes out evenly
+C-b i       Display window information
+C-b s       Choose a session from a list
+C-b w       Choose a window from a list
+### 'window'
+C-b !       Break pane to a new window
+C-b "       Split window vertically
+C-b %       Split window horizontally
+C-b &       Kill current window
+C-b '       Prompt for window index to select
+C-b ,       Rename current window
+C-b .       Move the current window
+C-b 0       Select window 0
+C-b 1       Select window 1
+C-b 2       Select window 2
+C-b 3       Select window 3
+C-b 4       Select window 4
+C-b 5       Select window 5
+C-b 6       Select window 6
+C-b 7       Select window 7
+C-b 8       Select window 8
+C-b 9       Select window 9
+C-b c       Create a new window
+C-b i       Display window information
+C-b l       Select the previously current window
+C-b n       Select the next window
+C-b p       Select the previous window
+C-b w       Choose a window from a list
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b M-n     Select the next window with an alert
+C-b M-p     Select the previous window with an alert
+C-b S-Up    Move the visible part of the window up
+C-b S-Down  Move the visible part of the window down
+C-b S-Left  Move the visible part of the window left
+C-b S-Right Move the visible part of the window right
+-T prefix \' command-prompt -T window-target -p index { select-window -t ":%%" }
+-T prefix \" split-window
+-T prefix \% split-window -h
+-T prefix & confirm-before -p "kill-window #W? (y/n)" kill-window
+-T prefix , command-prompt -I "#W" { rename-window "%%" }
+-T prefix . command-prompt -T target { move-window -t "%%" }
+-T prefix 0 select-window -t :=0
+-T prefix 1 select-window -t :=1
+-T prefix 2 select-window -t :=2
+-T prefix 3 select-window -t :=3
+-T prefix 4 select-window -t :=4
+-T prefix 5 select-window -t :=5
+-T prefix 6 select-window -t :=6
+-T prefix 7 select-window -t :=7
+-T prefix 8 select-window -t :=8
+-T prefix 9 select-window -t :=9
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+-T prefix c new-window
+-T prefix f command-prompt { find-window -Z "%%" }
+-T prefix l last-window
+-T prefix n next-window
+-T prefix p previous-window
+-T prefix M-n next-window -a
+-T prefix M-o rotate-window -D
+-T prefix M-p previous-window -a
+-T prefix C-o rotate-window
+split-window  Split the window
+select-window  Select a window
+kill-window  Kill the window
+rename-window  Rename the window
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+### ^split
+split-window  Split the window
+### window$
+C-b !       Break pane to a new window
+C-b &       Kill current window
+C-b ,       Rename current window
+C-b .       Move the current window
+C-b c       Create a new window
+C-b l       Select the previously current window
+C-b n       Select the next window
+C-b p       Select the previous window
+split-window  Split the window
+select-window  Select a window
+kill-window  Kill the window
+rename-window  Rename the window
+-T prefix \" split-window
+-T prefix & confirm-before -p "kill-window #W? (y/n)" kill-window
+-T prefix c new-window
+-T prefix l last-window
+-T prefix n next-window
+-T prefix p previous-window
+-T prefix C-o rotate-window
+### ^kill-pane$
+### ml lab
+Train tokenizer on the new corpus  ml-lab · exp/tokenizer-v3  gpu-box  2h
+gpu-box shell  ml-lab · main  gpu-box  5m
+C-b M-Left  Resize the pane left by 5
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+### b s
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+Refactor billing service  billing · refactor/invoices  studio  3d
+C-b Space   Select next layout
+C-b "       Split window vertically
+C-b $       Rename current session
+C-b %       Split window horizontally
+C-b '       Prompt for window index to select
+C-b (       Switch to previous client
+C-b )       Switch to next client
+C-b 0       Select window 0
+C-b 1       Select window 1
+C-b 2       Select window 2
+C-b 3       Select window 3
+C-b 4       Select window 4
+C-b 5       Select window 5
+C-b 6       Select window 6
+C-b 7       Select window 7
+C-b 8       Select window 8
+C-b 9       Select window 9
+C-b E       Spread panes out evenly
+C-b L       Switch to the last client
+C-b f       Search for a pane
+C-b l       Select the previously current window
+C-b n       Select the next window
+C-b o       Select the next pane
+C-b p       Select the previous window
+C-b s       Choose a session from a list
+C-b t       Show a clock
+C-b {       Swap the active pane with the pane above
+C-b }       Swap the active pane with the pane below
+C-b ~       Show messages
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b PPage   Enter copy mode and scroll up
+C-b Up      Select the pane above the active pane
+C-b Down    Select the pane below the active pane
+C-b Left    Select the pane to the left of the active pane
+C-b Right   Select the pane to the right of the active pane
+C-b M-1     Set the even-horizontal layout
+C-b M-2     Set the even-vertical layout
+C-b M-3     Set the main-horizontal layout
+C-b M-4     Set the main-vertical layout
+C-b M-5     Select the tiled layout
+C-b M-6     Set the main-horizontal-mirrored layout
+C-b M-7     Set the main-vertical-mirrored layout
+C-b M-n     Select the next window with an alert
+C-b M-p     Select the previous window with an alert
+C-b C-b     Send the prefix key
+C-b C-z     Suspend the current client
+C-b S-Up    Move the visible part of the window up
+C-b S-Down  Move the visible part of the window down
+C-b S-Left  Move the visible part of the window left
+C-b S-Right Move the visible part of the window right
+-T prefix C-b send-prefix
+gpu-box shell  ml-lab · main  gpu-box  5m
+Fix flaky login test  webapp · fix/login-flake  studio  23m
+Release notes 2.4  webapp · main  studio  9d
+Café crème  menu · café  bistro  1m
+C-b #       List all paste buffers
+C-b -       Delete the most recent paste buffer
+C-b /       Describe key binding
+C-b ;       Move to the previously active pane
+C-b =       Choose a paste buffer from a list
+C-b ?       List key bindings
+C-b C       Customize options
+C-b D       Choose and detach a client from a list
+C-b ]       Paste the most recent paste buffer
+C-b i       Display window information
+C-b q       Display pane numbers
+C-b w       Choose a window from a list
+C-b M-o     Rotate through the panes in reverse
+C-b M-Up    Resize the pane up by 5
+C-b M-Down  Resize the pane down by 5
+C-b M-Left  Resize the pane left by 5
+C-b M-Right Resize the pane right by 5
+C-b C-o     Rotate through the panes
+C-b C-Up    Resize the pane up
+C-b C-Down  Resize the pane down
+C-b C-Left  Resize the pane left
+C-b C-Right Resize the pane right
+-T prefix \# list-buffers
+-T prefix = choose-buffer -Z
+-T prefix ] paste-buffer -p
+Train tokenizer on the new corpus  ml-lab · exp/tokenizer-v3  gpu-box  2h
+### ce
+C-b E       Spread panes out evenly
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+copy-mode  Enter copy mode
+C-b M       Clear the marked pane
+C-b [       Enter copy mode
+C-b c       Create a new window
+C-b PPage   Enter copy mode and scroll up
+Café crème  menu · café  bistro  1m
+C-b (       Switch to previous client
+C-b )       Switch to next client
+C-b D       Choose and detach a client from a list
+C-b L       Switch to the last client
+C-b d       Detach the current client
+C-b r       Redraw the current client
+C-b C-z     Suspend the current client
+C-b C-Left  Resize the pane left
+-T prefix c new-window
+-r -T prefix C-Left resize-pane -L
+C-b $       Rename current session
+C-b &       Kill current window
+C-b ,       Rename current window
+C-b .       Move the current window
+C-b l       Select the previously current window
+C-b =       Choose a paste buffer from a list
+C-b s       Choose a session from a list
+C-b w       Choose a window from a list
+C-b Left    Select the pane to the left of the active pane
+-T prefix = choose-buffer -Z
+-T prefix D choose-client -Z
+-T prefix s choose-tree -Zs
+-T prefix w choose-tree -Zw
+-T prefix C-b send-prefix
+-r -T prefix C-Up resize-pane -U
+C-b M-Left  Resize the pane left by 5
+C-b S-Left  Move the visible part of the window left
+-T prefix ( switch-client -p
+-T prefix ) switch-client -n
+-T prefix L switch-client -l
+-T prefix d detach-client
+-T prefix r refresh-client
+-r -T prefix DC refresh-client -c
+-T prefix C-z suspend-client
+-r -T prefix S-Up refresh-client -U 10
+-r -T prefix S-Down refresh-client -D 10
+-r -T prefix S-Left refresh-client -L 10
+-r -T prefix S-Right refresh-client -R 10
+Train tokenizer on the new corpus  ml-lab · exp/tokenizer-v3  gpu-box  2h
+C-b C       Customize options
+-T prefix C customize-mode -Z
+-T prefix [ copy-mode
+-T prefix PPage copy-mode -u
+-r -T prefix C-Down resize-pane -D
+C-b C-b     Send the prefix key
+C-b C-Up    Resize the pane up
+C-b C-Down  Resize the pane down
+C-b C-Right Resize the pane right
+-T prefix & confirm-before -p "kill-window #W? (y/n)" kill-window
+-T prefix x confirm-before -p "kill-pane #P? (y/n)" kill-pane
+-T prefix C-o rotate-window
+-r -T prefix C-Right resize-pane -R
+C-b M-1     Set the even-horizontal layout
+C-b M-2     Set the even-vertical layout
+C-b -       Delete the most recent paste buffer
+C-b /       Describe key binding
+C-b 0       Select window 0
+C-b 1       Select window 1
+C-b 2       Select window 2
+C-b 3       Select window 3
+C-b 4       Select window 4
+C-b 5       Select window 5
+C-b 6       Select window 6
+C-b 7       Select window 7
+C-b 8       Select window 8
+C-b 9       Select window 9
+C-b f       Search for a pane
+C-b n       Select the next window
+C-b o       Select the next pane
+C-b p       Select the previous window
+C-b Up      Select the pane above the active pane
+C-b Down    Select the pane below the active pane
+C-b Right   Select the pane to the right of the active pane
+C-b M-3     Set the main-horizontal layout
+C-b M-4     Set the main-vertical layout
+C-b M-5     Select the tiled layout
+C-b M-6     Set the main-horizontal-mirrored layout
+C-b M-7     Set the main-vertical-mirrored layout
+C-b M-n     Select the next window with an alert
+C-b M-p     Select the previous window with an alert
+C-b M-Up    Resize the pane up by 5
+C-b M-Down  Resize the pane down by 5
+C-b M-Right Resize the pane right by 5
+C-b C-o     Rotate through the panes
+C-b !       Break pane to a new window
+C-b Space   Select next layout
+C-b ;       Move to the previously active pane
+C-b ]       Paste the most recent paste buffer
+C-b S-Up    Move the visible part of the window up
+C-b S-Down  Move the visible part of the window down
+C-b S-Right Move the visible part of the window right
+-T prefix Space next-layout
+Refactor billing service  billing · refactor/invoices  studio  3d
+C-b m       Toggle the marked pane
+C-b M-o     Rotate through the panes in reverse
+C-b ?       List key bindings
+C-b ~       Show messages
+C-b x       Kill the active pane
+C-b z       Zoom the active pane
+C-b {       Swap the active pane with the pane above
+C-b }       Swap the active pane with the pane below
+-T prefix M-1 select-layout even-horizontal
+-T prefix M-2 select-layout even-vertical
+-T prefix . command-prompt -T target { move-window -t "%%" }
+-T prefix / command-prompt -k -p key { list-keys -1N "%%" }
+C-b q       Display pane numbers
+-T prefix E select-layout -E
+C-b #       List all paste buffers
+C-b "       Split window vertically
+-T prefix \$ command-prompt -I "#S" { rename-session "%%" }
+-T prefix , command-prompt -I "#W" { rename-window "%%" }
+-T prefix M select-pane -M
+-T prefix m select-pane -m
+-T prefix o select-pane -t :.+
+-T prefix t clock-mode
+-r -T prefix Up select-pane -U
+-r -T prefix Down select-pane -D
+-r -T prefix Left select-pane -L
+-r -T prefix Right select-pane -R
+select-pane  Select a pane
+C-b DC      Reset so the visible part of the window follows the cursor
+-T prefix \' command-prompt -T window-target -p index { select-window -t ":%%" }
+-T prefix M-7 select-layout main-vertical-mirrored
+select-window  Select a window
+C-b '       Prompt for window index to select
+-T prefix M-5 select-layout tiled
+-T prefix M-4 select-layout main-vertical
+-T prefix M-6 select-layout main-horizontal-mirrored
+### pa
+C-b !       Break pane to a new window
+C-b #       List all paste buffers
+C-b -       Delete the most recent paste buffer
+C-b ;       Move to the previously active pane
+C-b =       Choose a paste buffer from a list
+C-b E       Spread panes out evenly
+C-b M       Clear the marked pane
+C-b ]       Paste the most recent paste buffer
+C-b f       Search for a pane
+C-b m       Toggle the marked pane
+C-b o       Select the next pane
+C-b q       Display pane numbers
+C-b x       Kill the active pane
+C-b z       Zoom the active pane
+C-b {       Swap the active pane with the pane above
+C-b }       Swap the active pane with the pane below
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b Up      Select the pane above the active pane
+C-b Down    Select the pane below the active pane
+C-b Left    Select the pane to the left of the active pane
+C-b Right   Select the pane to the right of the active pane
+C-b M-o     Rotate through the panes in reverse
+C-b M-Up    Resize the pane up by 5
+C-b M-Down  Resize the pane down by 5
+C-b M-Left  Resize the pane left by 5
+C-b M-Right Resize the pane right by 5
+C-b C-o     Rotate through the panes
+C-b C-Up    Resize the pane up
+C-b C-Down  Resize the pane down
+C-b C-Left  Resize the pane left
+C-b C-Right Resize the pane right
+C-b S-Up    Move the visible part of the window up
+C-b S-Down  Move the visible part of the window down
+C-b S-Left  Move the visible part of the window left
+C-b S-Right Move the visible part of the window right
+-T prefix ] paste-buffer -p
+select-pane  Select a pane
+kill-pane  Kill the pane
+-T prefix ! break-pane
+-T prefix \; last-pane
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+-T prefix M select-pane -M
+-T prefix m select-pane -m
+-T prefix o select-pane -t :.+
+-T prefix q display-panes
+-T prefix x confirm-before -p "kill-pane #P? (y/n)" kill-pane
+-T prefix z resize-pane -Z
+-T prefix \{ swap-pane -U
+-T prefix \} swap-pane -D
+-r -T prefix Up select-pane -U
+-r -T prefix Down select-pane -D
+-r -T prefix Left select-pane -L
+-r -T prefix Right select-pane -R
+-r -T prefix M-Up resize-pane -U 5
+-r -T prefix M-Down resize-pane -D 5
+-r -T prefix M-Left resize-pane -L 5
+-r -T prefix M-Right resize-pane -R 5
+-r -T prefix C-Up resize-pane -U
+-r -T prefix C-Down resize-pane -D
+-r -T prefix C-Left resize-pane -L
+-r -T prefix C-Right resize-pane -R
+-T prefix M-p previous-window -a
+-T prefix l last-window
+C-b M-p     Select the previous window with an alert
+-T prefix d detach-client
+-T prefix , command-prompt -I "#W" { rename-window "%%" }
+-T prefix . command-prompt -T target { move-window -t "%%" }
+-T prefix / command-prompt -k -p key { list-keys -1N "%%" }
+-T prefix : command-prompt
+-T prefix f command-prompt { find-window -Z "%%" }
+-T prefix \$ command-prompt -I "#S" { rename-session "%%" }
+-T prefix \' command-prompt -T window-target -p index { select-window -t ":%%" }
+-T prefix M-o rotate-window -D
+-T prefix C-o rotate-window
+Add rate limiting to the API  api · feat/rate-limit  studio  1h
+C-b Space   Select next layout
+C-b PPage   Enter copy mode and scroll up
+-T prefix Space next-layout
+-T prefix PPage copy-mode -u
+-T prefix M-n next-window -a
+C-b :       Prompt for a command
+-T prefix E select-layout -E
+-T prefix \~ show-messages
+-T prefix M-1 select-layout even-horizontal
+-T prefix M-2 select-layout even-vertical
+-T prefix M-3 select-layout main-horizontal
+-T prefix M-4 select-layout main-vertical
+-T prefix M-5 select-layout tiled
+-T prefix M-6 select-layout main-horizontal-mirrored
+-T prefix M-7 select-layout main-vertical-mirrored
+C-b i       Display window information
+-T prefix i display-message
+Release notes 2.4  webapp · main  studio  9d
+Train tokenizer on the new corpus  ml-lab · exp/tokenizer-v3  gpu-box  2h
+C-b "       Split window vertically
+C-b %       Split window horizontally
+gpu-box shell  ml-lab · main  gpu-box  5m
+Fix flaky login test  webapp · fix/login-flake  studio  23m
+### evenly
+C-b E       Spread panes out evenly
+C-b M-2     Set the even-vertical layout
+C-b M-1     Set the even-horizontal layout
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+### sp e
+C-b E       Spread panes out evenly
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+C-b PPage   Enter copy mode and scroll up
+C-b Space   Select next layout
+C-b "       Split window vertically
+-T prefix Space next-layout
+-T prefix \" split-window
+-T prefix \% split-window -h
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+split-window  Split the window
+-T prefix \{ swap-pane -U
+-T prefix \} swap-pane -D
+-T prefix C-b send-prefix
+C-b C-b     Send the prefix key
+-T prefix M select-pane -M
+-T prefix m select-pane -m
+-T prefix o select-pane -t :.+
+-r -T prefix Up select-pane -U
+-r -T prefix Down select-pane -D
+-r -T prefix Left select-pane -L
+-r -T prefix Right select-pane -R
+select-pane  Select a pane
+C-b (       Switch to previous client
+C-b l       Select the previously current window
+C-b p       Select the previous window
+C-b Up      Select the pane above the active pane
+C-b Down    Select the pane below the active pane
+C-b Left    Select the pane to the left of the active pane
+C-b Right   Select the pane to the right of the active pane
+C-b M-p     Select the previous window with an alert
+C-b f       Search for a pane
+C-b {       Swap the active pane with the pane above
+C-b }       Swap the active pane with the pane below
+C-b S-Up    Move the visible part of the window up
+-r -T prefix S-Up refresh-client -U 10
+C-b o       Select the next pane
+-T prefix ( switch-client -p
+Train tokenizer on the new corpus  ml-lab · exp/tokenizer-v3  gpu-box  2h
+C-b =       Choose a paste buffer from a list
+C-b q       Display pane numbers
+C-b C-z     Suspend the current client
+-T prefix \; last-pane
+-T prefix i display-message
+-T prefix q display-panes
+-T prefix C-z suspend-client
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b S-Down  Move the visible part of the window down
+C-b S-Left  Move the visible part of the window left
+C-b S-Right Move the visible part of the window right
+C-b #       List all paste buffers
+-T prefix z resize-pane -Z
+-r -T prefix M-Up resize-pane -U 5
+-r -T prefix M-Down resize-pane -D 5
+-r -T prefix M-Left resize-pane -L 5
+-r -T prefix M-Right resize-pane -R 5
+-r -T prefix C-Up resize-pane -U
+-r -T prefix C-Down resize-pane -D
+-r -T prefix C-Left resize-pane -L
+-r -T prefix C-Right resize-pane -R
+C-b M-Up    Resize the pane up by 5
+C-b M-Down  Resize the pane down by 5
+C-b M-Left  Resize the pane left by 5
+C-b M-Right Resize the pane right by 5
+C-b C-Up    Resize the pane up
+C-b C-Down  Resize the pane down
+C-b C-Left  Resize the pane left
+C-b C-Right Resize the pane right
+C-b -       Delete the most recent paste buffer
+C-b ]       Paste the most recent paste buffer
+C-b ;       Move to the previously active pane
+gpu-box shell  ml-lab · main  gpu-box  5m
+-T prefix ] paste-buffer -p
+Fix flaky login test  webapp · fix/login-flake  studio  23m
+C-b C       Customize options
+Release notes 2.4  webapp · main  studio  9d
+### !z
+C-b Space   Select next layout
+C-b !       Break pane to a new window
+C-b "       Split window vertically
+C-b #       List all paste buffers
+C-b $       Rename current session
+C-b &       Kill current window
+C-b '       Prompt for window index to select
+C-b (       Switch to previous client
+C-b )       Switch to next client
+C-b ,       Rename current window
+C-b -       Delete the most recent paste buffer
+C-b .       Move the current window
+C-b /       Describe key binding
+C-b 0       Select window 0
+C-b 1       Select window 1
+C-b 2       Select window 2
+C-b 3       Select window 3
+C-b 4       Select window 4
+C-b 5       Select window 5
+C-b 6       Select window 6
+C-b 7       Select window 7
+C-b 8       Select window 8
+C-b 9       Select window 9
+C-b :       Prompt for a command
+C-b ;       Move to the previously active pane
+C-b =       Choose a paste buffer from a list
+C-b ?       List key bindings
+C-b D       Choose and detach a client from a list
+C-b E       Spread panes out evenly
+C-b L       Switch to the last client
+C-b M       Clear the marked pane
+C-b [       Enter copy mode
+C-b ]       Paste the most recent paste buffer
+C-b c       Create a new window
+C-b d       Detach the current client
+C-b f       Search for a pane
+C-b i       Display window information
+C-b l       Select the previously current window
+C-b m       Toggle the marked pane
+C-b n       Select the next window
+C-b o       Select the next pane
+C-b p       Select the previous window
+C-b q       Display pane numbers
+C-b r       Redraw the current client
+C-b s       Choose a session from a list
+C-b t       Show a clock
+C-b w       Choose a window from a list
+C-b x       Kill the active pane
+C-b {       Swap the active pane with the pane above
+C-b }       Swap the active pane with the pane below
+C-b ~       Show messages
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b PPage   Enter copy mode and scroll up
+C-b Up      Select the pane above the active pane
+C-b Down    Select the pane below the active pane
+C-b Left    Select the pane to the left of the active pane
+C-b Right   Select the pane to the right of the active pane
+C-b M-2     Set the even-vertical layout
+C-b M-4     Set the main-vertical layout
+C-b M-5     Select the tiled layout
+C-b M-7     Set the main-vertical-mirrored layout
+C-b M-n     Select the next window with an alert
+C-b M-o     Rotate through the panes in reverse
+C-b M-p     Select the previous window with an alert
+C-b C-b     Send the prefix key
+C-b C-o     Rotate through the panes
+C-b S-Up    Move the visible part of the window up
+C-b S-Down  Move the visible part of the window down
+C-b S-Left  Move the visible part of the window left
+C-b S-Right Move the visible part of the window right
+-T prefix Space next-layout
+-T prefix ! break-pane
+-T prefix \" split-window
+-T prefix \# list-buffers
+-T prefix \$ command-prompt -I "#S" { rename-session "%%" }
+-T prefix \% split-window -h
+-T prefix & confirm-before -p "kill-window #W? (y/n)" kill-window
+-T prefix \' command-prompt -T window-target -p index { select-window -t ":%%" }
+-T prefix ( switch-client -p
+-T prefix ) switch-client -n
+-T prefix , command-prompt -I "#W" { rename-window "%%" }
+-T prefix - delete-buffer
+-T prefix . command-prompt -T target { move-window -t "%%" }
+-T prefix / command-prompt -k -p key { list-keys -1N "%%" }
+-T prefix 0 select-window -t :=0
+-T prefix 1 select-window -t :=1
+-T prefix 2 select-window -t :=2
+-T prefix 3 select-window -t :=3
+-T prefix 4 select-window -t :=4
+-T prefix 5 select-window -t :=5
+-T prefix 6 select-window -t :=6
+-T prefix 7 select-window -t :=7
+-T prefix 8 select-window -t :=8
+-T prefix 9 select-window -t :=9
+-T prefix : command-prompt
+-T prefix \; last-pane
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+-T prefix ? list-keys -N
+-T prefix E select-layout -E
+-T prefix L switch-client -l
+-T prefix M select-pane -M
+-T prefix [ copy-mode
+-T prefix ] paste-buffer -p
+-T prefix c new-window
+-T prefix d detach-client
+-T prefix i display-message
+-T prefix l last-window
+-T prefix m select-pane -m
+-T prefix n next-window
+-T prefix o select-pane -t :.+
+-T prefix p previous-window
+-T prefix q display-panes
+-T prefix r refresh-client
+-T prefix t clock-mode
+-T prefix x confirm-before -p "kill-pane #P? (y/n)" kill-pane
+-T prefix \{ swap-pane -U
+-T prefix \} swap-pane -D
+-T prefix \~ show-messages
+-r -T prefix DC refresh-client -c
+-T prefix PPage copy-mode -u
+-r -T prefix Up select-pane -U
+-r -T prefix Down select-pane -D
+-r -T prefix Left select-pane -L
+-r -T prefix Right select-pane -R
+-T prefix M-2 select-layout even-vertical
+-T prefix M-4 select-layout main-vertical
+-T prefix M-5 select-layout tiled
+-T prefix M-7 select-layout main-vertical-mirrored
+-T prefix M-n next-window -a
+-T prefix M-o rotate-window -D
+-T prefix M-p previous-window -a
+-T prefix C-b send-prefix
+-T prefix C-o rotate-window
+-r -T prefix S-Up refresh-client -U 10
+-r -T prefix S-Down refresh-client -D 10
+-r -T prefix S-Left refresh-client -L 10
+-r -T prefix S-Right refresh-client -R 10
+gpu-box shell  ml-lab · main  gpu-box  5m
+Fix flaky login test  webapp · fix/login-flake  studio  23m
+Add rate limiting to the API  api · feat/rate-limit  studio  1h
+Refactor billing service  billing · refactor/invoices  studio  3d
+Release notes 2.4  webapp · main  studio  9d
+Café crème  menu · café  bistro  1m
+split-window  Split the window
+select-window  Select a window
+select-pane  Select a pane
+kill-pane  Kill the pane
+kill-window  Kill the window
+rename-window  Rename the window
+copy-mode  Enter copy mode
+### 'ki
+C-b &       Kill current window
+C-b x       Kill the active pane
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+kill-pane  Kill the pane
+kill-window  Kill the window
+-T prefix & confirm-before -p "kill-window #W? (y/n)" kill-window
+-T prefix x confirm-before -p "kill-pane #P? (y/n)" kill-pane
+### p$
+-T prefix ( switch-client -p
+-T prefix ] paste-buffer -p
+C-b PPage   Enter copy mode and scroll up
+C-b C-Up    Resize the pane up
+C-b S-Up    Move the visible part of the window up
+### le
+C-b Left    Select the pane to the left of the active pane
+C-b M-Left  Resize the pane left by 5
+C-b C-Left  Resize the pane left
+C-b S-Left  Move the visible part of the window left
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+-r -T prefix Left select-pane -L
+-r -T prefix M-Left resize-pane -L 5
+-r -T prefix C-Left resize-pane -L
+-r -T prefix S-Left refresh-client -L 10
+Train tokenizer on the new corpus  ml-lab · exp/tokenizer-v3  gpu-box  2h
+-T prefix M-1 select-layout even-horizontal
+-T prefix M-2 select-layout even-vertical
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+-T prefix E select-layout -E
+C-b ?       List key bindings
+-T prefix / command-prompt -k -p key { list-keys -1N "%%" }
+-T prefix ? list-keys -N
+Fix flaky login test  webapp · fix/login-flake  studio  23m
+-T prefix \; last-pane
+C-b l       Select the previously current window
+-T prefix \# list-buffers
+Add rate limiting to the API  api · feat/rate-limit  studio  1h
+C-b Space   Select next layout
+C-b '       Prompt for window index to select
+C-b -       Delete the most recent paste buffer
+C-b 0       Select window 0
+C-b 1       Select window 1
+C-b 2       Select window 2
+C-b 3       Select window 3
+C-b 4       Select window 4
+C-b 5       Select window 5
+C-b 6       Select window 6
+C-b 7       Select window 7
+C-b 8       Select window 8
+C-b 9       Select window 9
+C-b M       Clear the marked pane
+C-b m       Toggle the marked pane
+C-b n       Select the next window
+C-b o       Select the next pane
+C-b p       Select the previous window
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b Up      Select the pane above the active pane
+C-b Down    Select the pane below the active pane
+C-b Right   Select the pane to the right of the active pane
+C-b M-5     Select the tiled layout
+C-b M-n     Select the next window with an alert
+C-b M-p     Select the previous window with an alert
+C-b S-Up    Move the visible part of the window up
+C-b S-Down  Move the visible part of the window down
+C-b S-Right Move the visible part of the window right
+-T prefix \' command-prompt -T window-target -p index { select-window -t ":%%" }
+-T prefix - delete-buffer
+-T prefix 0 select-window -t :=0
+-T prefix 1 select-window -t :=1
+-T prefix 2 select-window -t :=2
+-T prefix 3 select-window -t :=3
+-T prefix 4 select-window -t :=4
+-T prefix 5 select-window -t :=5
+-T prefix 6 select-window -t :=6
+-T prefix 7 select-window -t :=7
+-T prefix 8 select-window -t :=8
+-T prefix 9 select-window -t :=9
+-T prefix M select-pane -M
+-T prefix m select-pane -m
+-T prefix o select-pane -t :.+
+-r -T prefix Up select-pane -U
+-r -T prefix Down select-pane -D
+-r -T prefix Right select-pane -R
+-T prefix M-3 select-layout main-horizontal
+-T prefix M-4 select-layout main-vertical
+-T prefix M-5 select-layout tiled
+-T prefix M-6 select-layout main-horizontal-mirrored
+-T prefix M-7 select-layout main-vertical-mirrored
+Release notes 2.4  webapp · main  studio  9d
+select-window  Select a window
+select-pane  Select a pane
+C-b L       Switch to the last client
+C-b (       Switch to previous client
+C-b )       Switch to next client
+C-b D       Choose and detach a client from a list
+C-b d       Detach the current client
+C-b r       Redraw the current client
+C-b C-z     Suspend the current client
+-T prefix ( switch-client -p
+-T prefix ) switch-client -n
+-T prefix D choose-client -Z
+-T prefix L switch-client -l
+-T prefix d detach-client
+-T prefix r refresh-client
+-r -T prefix DC refresh-client -c
+-T prefix C-z suspend-client
+-r -T prefix S-Up refresh-client -U 10
+-r -T prefix S-Down refresh-client -D 10
+-r -T prefix S-Right refresh-client -R 10
+C-b x       Kill the active pane
+kill-pane  Kill the pane
+kill-window  Kill the window
+-T prefix i display-message
+-T prefix x confirm-before -p "kill-pane #P? (y/n)" kill-pane
+C-b #       List all paste buffers
+C-b &       Kill current window
+Refactor billing service  billing · refactor/invoices  studio  3d
+split-window  Split the window
+C-b q       Display pane numbers
+-T prefix q display-panes
+C-b ;       Move to the previously active pane
+C-b M-6     Set the main-horizontal-mirrored layout
+C-b M-7     Set the main-vertical-mirrored layout
+-T prefix t clock-mode
+C-b "       Split window vertically
+### o
+C-b C       Customize options
+C-b E       Spread panes out evenly
+C-b o       Select the next pane
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b Left    Select the pane to the left of the active pane
+C-b Right   Select the pane to the right of the active pane
+C-b S-Up    Move the visible part of the window up
+C-b S-Down  Move the visible part of the window down
+C-b S-Left  Move the visible part of the window left
+C-b S-Right Move the visible part of the window right
+-T prefix o select-pane -t :.+
+Train tokenizer on the new corpus  ml-lab · exp/tokenizer-v3  gpu-box  2h
+C-b M-o     Rotate through the panes in reverse
+C-b C-o     Rotate through the panes
+-T prefix M-o rotate-window -D
+-T prefix C-o rotate-window
+C-b Space   Select next layout
+C-b !       Break pane to a new window
+C-b "       Split window vertically
+C-b $       Rename current session
+C-b %       Split window horizontally
+C-b &       Kill current window
+C-b '       Prompt for window index to select
+C-b (       Switch to previous client
+C-b )       Switch to next client
+C-b ,       Rename current window
+C-b -       Delete the most recent paste buffer
+C-b .       Move the current window
+C-b 0       Select window 0
+C-b 1       Select window 1
+C-b 2       Select window 2
+C-b 3       Select window 3
+C-b 4       Select window 4
+C-b 5       Select window 5
+C-b 6       Select window 6
+C-b 7       Select window 7
+C-b 8       Select window 8
+C-b 9       Select window 9
+C-b :       Prompt for a command
+C-b ;       Move to the previously active pane
+C-b =       Choose a paste buffer from a list
+C-b D       Choose and detach a client from a list
+C-b L       Switch to the last client
+C-b [       Enter copy mode
+C-b ]       Paste the most recent paste buffer
+C-b c       Create a new window
+C-b f       Search for a pane
+C-b i       Display window information
+C-b l       Select the previously current window
+C-b m       Toggle the marked pane
+C-b n       Select the next window
+C-b p       Select the previous window
+C-b s       Choose a session from a list
+C-b t       Show a clock
+C-b w       Choose a window from a list
+C-b z       Zoom the active pane
+C-b {       Swap the active pane with the pane above
+C-b }       Swap the active pane with the pane below
+C-b ~       Show messages
+C-b PPage   Enter copy mode and scroll up
+C-b Up      Select the pane above the active pane
+C-b Down    Select the pane below the active pane
+C-b M-1     Set the even-horizontal layout
+C-b M-2     Set the even-vertical layout
+C-b M-3     Set the main-horizontal layout
+C-b M-4     Set the main-vertical layout
+C-b M-5     Select the tiled layout
+C-b M-6     Set the main-horizontal-mirrored layout
+C-b M-7     Set the main-vertical-mirrored layout
+C-b M-n     Select the next window with an alert
+C-b M-p     Select the previous window with an alert
+C-b M-Down  Resize the pane down by 5
+C-b C-Down  Resize the pane down
+-T prefix Space next-layout
+-T prefix \" split-window
+-T prefix \$ command-prompt -I "#S" { rename-session "%%" }
+-T prefix \% split-window -h
+-T prefix & confirm-before -p "kill-window #W? (y/n)" kill-window
+-T prefix \' command-prompt -T window-target -p index { select-window -t ":%%" }
+-T prefix , command-prompt -I "#W" { rename-window "%%" }
+-T prefix . command-prompt -T target { move-window -t "%%" }
+-T prefix / command-prompt -k -p key { list-keys -1N "%%" }
+-T prefix 0 select-window -t :=0
+-T prefix 1 select-window -t :=1
+-T prefix 2 select-window -t :=2
+-T prefix 3 select-window -t :=3
+-T prefix 4 select-window -t :=4
+-T prefix 5 select-window -t :=5
+-T prefix 6 select-window -t :=6
+-T prefix 7 select-window -t :=7
+-T prefix 8 select-window -t :=8
+-T prefix 9 select-window -t :=9
+-T prefix : command-prompt
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+-T prefix = choose-buffer -Z
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+-T prefix C customize-mode -Z
+-T prefix D choose-client -Z
+-T prefix E select-layout -E
+-T prefix [ copy-mode
+-T prefix c new-window
+-T prefix f command-prompt { find-window -Z "%%" }
+-T prefix l last-window
+-T prefix n next-window
+-T prefix p previous-window
+-T prefix s choose-tree -Zs
+-T prefix t clock-mode
+-T prefix w choose-tree -Zw
+-T prefix x confirm-before -p "kill-pane #P? (y/n)" kill-pane
+-T prefix \~ show-messages
+-T prefix PPage copy-mode -u
+-r -T prefix Down select-pane -D
+-T prefix M-1 select-layout even-horizontal
+-T prefix M-2 select-layout even-vertical
+-T prefix M-3 select-layout main-horizontal
+-T prefix M-4 select-layout main-vertical
+-T prefix M-5 select-layout tiled
+-T prefix M-6 select-layout main-horizontal-mirrored
+-T prefix M-7 select-layout main-vertical-mirrored
+-T prefix M-n next-window -a
+-T prefix M-p previous-window -a
+-r -T prefix M-Down resize-pane -D 5
+-r -T prefix C-Down resize-pane -D
+-r -T prefix S-Down refresh-client -D 10
+gpu-box shell  ml-lab · main  gpu-box  5m
+Fix flaky login test  webapp · fix/login-flake  studio  23m
+Add rate limiting to the API  api · feat/rate-limit  studio  1h
+Refactor billing service  billing · refactor/invoices  studio  3d
+Release notes 2.4  webapp · main  studio  9d
+Café crème  menu · café  bistro  1m
+split-window  Split the window
+select-window  Select a window
+kill-window  Kill the window
+rename-window  Rename the window
+copy-mode  Enter copy mode
+### layout -E
+-T prefix E select-layout -E
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+### pane s
+C-b E       Spread panes out evenly
+C-b f       Search for a pane
+C-b o       Select the next pane
+C-b {       Swap the active pane with the pane above
+C-b }       Swap the active pane with the pane below
+C-b Up      Select the pane above the active pane
+C-b Down    Select the pane below the active pane
+C-b Left    Select the pane to the left of the active pane
+C-b Right   Select the pane to the right of the active pane
+select-pane  Select a pane
+-T prefix > display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "#{?mouse_word,Search For #[underscore]#{=/9/...:mouse_word},}" C-r { if-shell -F "#{?#{m/r:(copy|view)-mode,#{pane_mode}},0,1}" "copy-mode -t=" ; send-keys -X -t = search-backward "#{q:mouse_word}" } "#{?mouse_word,Type #[underscore]#{=/9/...:mouse_word},}" C-y { copy-mode -q ; send-keys -l "#{q:mouse_word}" } "#{?mouse_word,Copy #[underscore]#{=/9/...:mouse_word},}" c { copy-mode -q ; set-buffer "#{q:mouse_word}" } "#{?mouse_line,Copy Line,}" l { copy-mode -q ; set-buffer "#{q:mouse_line}" } '' "#{?mouse_hyperlink,Type #[underscore]#{=/9/...:mouse_hyperlink},}" C-h { copy-mode -q ; send-keys -l "#{q:mouse_hyperlink}" } "#{?mouse_hyperlink,Copy #[underscore]#{=/9/...:mouse_hyperlink},}" h { copy-mode -q ; set-buffer "#{q:mouse_hyperlink}" } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }
+-T prefix M select-pane -M
+-T prefix m select-pane -m
+-T prefix o select-pane -t :.+
+-T prefix \{ swap-pane -U
+-T prefix \} swap-pane -D
+-r -T prefix Up select-pane -U
+-r -T prefix Down select-pane -D
+-r -T prefix Left select-pane -L
+-r -T prefix Right select-pane -R
+-T prefix < display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }
+C-b ;       Move to the previously active pane
+C-b q       Display pane numbers
+C-b M-o     Rotate through the panes in reverse
+C-b M-Up    Resize the pane up by 5
+C-b M-Down  Resize the pane down by 5
+C-b M-Left  Resize the pane left by 5
+C-b M-Right Resize the pane right by 5
+C-b C-o     Rotate through the panes
+C-b C-Up    Resize the pane up
+C-b C-Down  Resize the pane down
+C-b C-Left  Resize the pane left
+C-b C-Right Resize the pane right
+-T prefix \; last-pane
+-T prefix q display-panes
+-T prefix z resize-pane -Z
+-r -T prefix M-Up resize-pane -U 5
+-r -T prefix M-Down resize-pane -D 5
+-r -T prefix M-Left resize-pane -L 5
+-r -T prefix M-Right resize-pane -R 5
+-r -T prefix C-Up resize-pane -U
+-r -T prefix C-Down resize-pane -D
+-r -T prefix C-Left resize-pane -L
+-r -T prefix C-Right resize-pane -R
+-T prefix Space next-layout
+C-b M-p     Select the previous window with an alert
+C-b Space   Select next layout
+C-b S-Left  Move the visible part of the window left
+C-b DC      Reset so the visible part of the window follows the cursor
+C-b PPage   Enter copy mode and scroll up
+-T prefix M-2 select-layout even-vertical
+-T prefix M-4 select-layout main-vertical
+-T prefix M-7 select-layout main-vertical-mirrored
+-T prefix \' command-prompt -T window-target -p index { select-window -t ":%%" }
+C-b ]       Paste the most recent paste buffer
+-T prefix \$ command-prompt -I "#S" { rename-session "%%" }
+-T prefix / command-prompt -k -p key { list-keys -1N "%%" }
+-T prefix M-6 select-layout main-horizontal-mirrored
+Train tokenizer on the new corpus  ml-lab · exp/tokenizer-v3  gpu-box  2h

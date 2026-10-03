@@ -266,3 +266,15 @@ describe('owning-machine token cache', () => {
     expect(await read()).toMatchObject({ totalTokens: null, output: { linesAdded: 1, linesRemoved: 0, pullRequestsCreated: null } })
   })
 })
+
+it('exports normalized input, output and cached input without double-counting', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'harness-usage-breakdown-'))
+  const path = join(dir, 'session.jsonl')
+  const store = new AgentTokenUsageCache(join(dir, 'cache'))
+  const target = { agentId: 'a', sessionId: 'conversation', engine: 'claude' as const, transcriptPath: path, registeredAt: 1 }
+  try {
+    await writeFile(path, claude('one') + claude('one') + claude('two'))
+    store.get(target); await store.settled()
+    expect(store.get(target)).toMatchObject({ totalTokens: 420, inputTokens: 380, outputTokens: 40, cachedTokens: 160 })
+  } finally { store.dispose(); await store.settled(); await rm(dir, { recursive: true, force: true }) }
+})

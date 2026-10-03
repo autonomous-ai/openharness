@@ -1,0 +1,12 @@
+{
+  "name": "daemon-review-checks",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test.mjs"
+  },
+  "devDependencies": {
+    "linkedom": "0.18.12"
+  },
+  "version": "0.0.0"
+}

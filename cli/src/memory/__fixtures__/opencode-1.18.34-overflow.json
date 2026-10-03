@@ -1,0 +1,476 @@
+{
+  "version": "1.18.34",
+  "synthetic": true,
+  "validationKind": "native OpenCode with synthetic localhost model responses",
+  "schema": [
+    {
+      "name": "message",
+      "sql": "CREATE TABLE `message` (\n          `id` text PRIMARY KEY,\n          `session_id` text NOT NULL,\n          `time_created` integer NOT NULL,\n          `time_updated` integer NOT NULL,\n          `data` text NOT NULL,\n          CONSTRAINT `fk_message_session_id_session_id_fk` FOREIGN KEY (`session_id`) REFERENCES `session`(`id`) ON DELETE CASCADE\n        )"
+    },
+    {
+      "name": "message_session_time_created_id_idx",
+      "sql": "CREATE INDEX `message_session_time_created_id_idx` ON `message` (`session_id`,`time_created`,`id`)"
+    },
+    {
+      "name": "part",
+      "sql": "CREATE TABLE `part` (\n          `id` text PRIMARY KEY,\n          `message_id` text NOT NULL,\n          `session_id` text NOT NULL,\n          `time_created` integer NOT NULL,\n          `time_updated` integer NOT NULL,\n          `data` text NOT NULL,\n          CONSTRAINT `fk_part_message_id_message_id_fk` FOREIGN KEY (`message_id`) REFERENCES `message`(`id`) ON DELETE CASCADE\n        )"
+    },
+    {
+      "name": "part_message_id_id_idx",
+      "sql": "CREATE INDEX `part_message_id_id_idx` ON `part` (`message_id`,`id`)"
+    },
+    {
+      "name": "part_session_idx",
+      "sql": "CREATE INDEX `part_session_idx` ON `part` (`session_id`)"
+    },
+    {
+      "name": "session",
+      "sql": "CREATE TABLE `session` (\n          `id` text PRIMARY KEY,\n          `project_id` text NOT NULL,\n          `workspace_id` text,\n          `parent_id` text,\n          `slug` text NOT NULL,\n          `directory` text NOT NULL,\n          `path` text,\n          `title` text NOT NULL,\n          `version` text NOT NULL,\n          `share_url` text,\n          `summary_additions` integer,\n          `summary_deletions` integer,\n          `summary_files` integer,\n          `summary_diffs` text,\n          `metadata` text,\n          `cost` real DEFAULT 0 NOT NULL,\n          `tokens_input` integer DEFAULT 0 NOT NULL,\n          `tokens_output` integer DEFAULT 0 NOT NULL,\n          `tokens_reasoning` integer DEFAULT 0 NOT NULL,\n          `tokens_cache_read` integer DEFAULT 0 NOT NULL,\n          `tokens_cache_write` integer DEFAULT 0 NOT NULL,\n          `revert` text,\n          `permission` text,\n          `agent` text,\n          `model` text,\n          `time_created` integer NOT NULL,\n          `time_updated` integer NOT NULL,\n          `time_compacting` integer,\n          `time_archived` integer,\n          CONSTRAINT `fk_session_project_id_project_id_fk` FOREIGN KEY (`project_id`) REFERENCES `project`(`id`) ON DELETE CASCADE\n        )"
+    },
+    {
+      "name": "session_parent_idx",
+      "sql": "CREATE INDEX `session_parent_idx` ON `session` (`parent_id`)"
+    },
+    {
+      "name": "session_project_idx",
+      "sql": "CREATE INDEX `session_project_idx` ON `session` (`project_id`)"
+    },
+    {
+      "name": "session_workspace_idx",
+      "sql": "CREATE INDEX `session_workspace_idx` ON `session` (`workspace_id`)"
+    }
+  ],
+  "unmarked": {
+    "sessions": [
+      {
+        "id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "parent_id": null,
+        "directory": "/fixture/work",
+        "version": "1.18.34",
+        "revert": null,
+        "time_created": 1790913503395,
+        "time_updated": 1790913507240
+      }
+    ],
+    "messages": [
+      {
+        "id": "msg_0fac3611b001aeNzPLFp1NemAO",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913503515,
+        "time_updated": 1790913503520,
+        "data": "{\"role\":\"user\",\"time\":{\"created\":1790913503515},\"agent\":\"source_fixture\",\"model\":{\"providerID\":\"fixture\",\"modelID\":\"model\"}}"
+      },
+      {
+        "id": "msg_0fac362320012MOcP4fCHOMfQ2",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913503794,
+        "time_updated": 1790913507141,
+        "data": "{\"parentID\":\"msg_0fac3611b001aeNzPLFp1NemAO\",\"role\":\"assistant\",\"mode\":\"source_fixture\",\"agent\":\"source_fixture\",\"path\":{\"cwd\":\"/fixture/work\",\"root\":\"/fixture/work\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"modelID\":\"model\",\"providerID\":\"fixture\",\"time\":{\"created\":1790913503794,\"completed\":1790913507141},\"finish\":\"tool-calls\"}"
+      },
+      {
+        "id": "msg_0fac36f46001dJSgUzRuM0kfxJ",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507142,
+        "time_updated": 1790913507177,
+        "data": "{\"parentID\":\"msg_0fac3611b001aeNzPLFp1NemAO\",\"role\":\"assistant\",\"mode\":\"source_fixture\",\"agent\":\"source_fixture\",\"path\":{\"cwd\":\"/fixture/work\",\"root\":\"/fixture/work\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"modelID\":\"model\",\"providerID\":\"fixture\",\"time\":{\"created\":1790913507142,\"completed\":1790913507177},\"finish\":\"stop\"}"
+      },
+      {
+        "id": "msg_0fac36f85001bYYi77aQe4KNwi",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507205,
+        "time_updated": 1790913507206,
+        "data": "{\"role\":\"user\",\"time\":{\"created\":1790913507205},\"agent\":\"source_fixture\",\"model\":{\"providerID\":\"fixture\",\"modelID\":\"model\"}}"
+      },
+      {
+        "id": "msg_0fac36f8a001bfQzH6m67ncfft",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507210,
+        "time_updated": 1790913507218,
+        "data": "{\"parentID\":\"msg_0fac36f85001bYYi77aQe4KNwi\",\"role\":\"assistant\",\"mode\":\"source_fixture\",\"agent\":\"source_fixture\",\"path\":{\"cwd\":\"/fixture/work\",\"root\":\"/fixture/work\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"modelID\":\"model\",\"providerID\":\"fixture\",\"time\":{\"created\":1790913507210,\"completed\":1790913507218}}"
+      },
+      {
+        "id": "msg_0fac36f92001eD8IKku1xxMDQo",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507218,
+        "time_updated": 1790913507219,
+        "data": "{\"role\":\"user\",\"model\":{\"providerID\":\"fixture\",\"modelID\":\"model\"},\"agent\":\"source_fixture\",\"time\":{\"created\":1790913507218}}"
+      },
+      {
+        "id": "msg_0fac36f96001I6dGOD5CyQuE6f",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507222,
+        "time_updated": 1790913507237,
+        "data": "{\"role\":\"assistant\",\"parentID\":\"msg_0fac36f92001eD8IKku1xxMDQo\",\"mode\":\"compaction\",\"agent\":\"compaction\",\"summary\":true,\"path\":{\"cwd\":\"/fixture/work\",\"root\":\"/fixture/work\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"modelID\":\"model\",\"providerID\":\"fixture\",\"time\":{\"created\":1790913507222,\"completed\":1790913507237},\"finish\":\"stop\"}"
+      },
+      {
+        "id": "msg_0fac36fa5001pS2CwQDwaaLzli",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507237,
+        "time_updated": 1790913507237,
+        "data": "{\"role\":\"user\",\"time\":{\"created\":1790913507237},\"agent\":\"source_fixture\",\"model\":{\"providerID\":\"fixture\",\"modelID\":\"model\"}}"
+      },
+      {
+        "id": "msg_0fac36fa7001g6blPyHSGZxrt3",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507239,
+        "time_updated": 1790913507258,
+        "data": "{\"parentID\":\"msg_0fac36fa5001pS2CwQDwaaLzli\",\"role\":\"assistant\",\"mode\":\"source_fixture\",\"agent\":\"source_fixture\",\"path\":{\"cwd\":\"/fixture/work\",\"root\":\"/fixture/work\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"modelID\":\"model\",\"providerID\":\"fixture\",\"time\":{\"created\":1790913507239,\"completed\":1790913507257},\"finish\":\"stop\"}"
+      }
+    ],
+    "parts": [
+      {
+        "id": "prt_0fac3611f001nKRLqR1hI1QpRw",
+        "message_id": "msg_0fac3611b001aeNzPLFp1NemAO",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913503787,
+        "time_updated": 1790913503788,
+        "data": "{\"type\":\"text\",\"text\":\"Keep the viewer on the left.\\n\\n> A quote: put the viewer on the right.\\n\\nRead fixture.txt once.\"}"
+      },
+      {
+        "id": "prt_0fac36f34001I66AaxHB1IpsY4",
+        "message_id": "msg_0fac362320012MOcP4fCHOMfQ2",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507124,
+        "time_updated": 1790913507125,
+        "data": "{\"type\":\"step-start\"}"
+      },
+      {
+        "id": "prt_0fac36f360012irjIBqGPXSVTJ",
+        "message_id": "msg_0fac362320012MOcP4fCHOMfQ2",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507126,
+        "time_updated": 1790913507136,
+        "data": "{\"type\":\"tool\",\"tool\":\"read\",\"callID\":\"call_source\",\"state\":{\"status\":\"completed\",\"input\":{\"filePath\":\"/fixture/work/fixture.txt\"},\"output\":\"<path>/fixture/work/fixture.txt</path>\\n<type>file</type>\\n<content>\\n1: Synthetic fixture data.\\n\\n(End of file - total 1 lines)\\n</content>\",\"metadata\":{\"preview\":\"Synthetic fixture data.\",\"truncated\":false,\"loaded\":[],\"display\":{\"type\":\"file\",\"path\":\"/fixture/work/fixture.txt\",\"text\":\"Synthetic fixture data.\",\"lineStart\":1,\"lineEnd\":1,\"totalLines\":1,\"truncated\":false}},\"title\":\"fixture.txt\",\"time\":{\"start\":1790913507130,\"end\":1790913507135}}}"
+      },
+      {
+        "id": "prt_0fac36f420014LC0oqdhRbNs5P",
+        "message_id": "msg_0fac362320012MOcP4fCHOMfQ2",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507138,
+        "time_updated": 1790913507138,
+        "data": "{\"reason\":\"tool-calls\",\"type\":\"step-finish\",\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"cost\":0}"
+      },
+      {
+        "id": "prt_0fac36f4e001NWzkfT4UKKb8hp",
+        "message_id": "msg_0fac36f46001dJSgUzRuM0kfxJ",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507150,
+        "time_updated": 1790913507150,
+        "data": "{\"type\":\"step-start\"}"
+      },
+      {
+        "id": "prt_0fac36f4f0010Q9ZACBw1zJU7V",
+        "message_id": "msg_0fac36f46001dJSgUzRuM0kfxJ",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507151,
+        "time_updated": 1790913507153,
+        "data": "{\"type\":\"text\",\"text\":\"I will keep the viewer on the left.\",\"time\":{\"start\":1790913507151,\"end\":1790913507152}}"
+      },
+      {
+        "id": "prt_0fac36f66001sPu3qnRoUBD9LO",
+        "message_id": "msg_0fac36f46001dJSgUzRuM0kfxJ",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507174,
+        "time_updated": 1790913507175,
+        "data": "{\"reason\":\"stop\",\"type\":\"step-finish\",\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"cost\":0}"
+      },
+      {
+        "id": "prt_0fac36f86001Z4hKpKJYpZYOny",
+        "message_id": "msg_0fac36f85001bYYi77aQe4KNwi",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507207,
+        "time_updated": 1790913507207,
+        "data": "{\"type\":\"text\",\"text\":\"When changing parser code, keep a regression test for the original failure.\"}"
+      },
+      {
+        "id": "prt_0fac36f930012K8Lv3z708CzHF",
+        "message_id": "msg_0fac36f92001eD8IKku1xxMDQo",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507219,
+        "time_updated": 1790913507219,
+        "data": "{\"type\":\"compaction\",\"auto\":true,\"overflow\":true}"
+      },
+      {
+        "id": "prt_0fac36fa0001Tjee8YvDLfzf0F",
+        "message_id": "msg_0fac36f96001I6dGOD5CyQuE6f",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507232,
+        "time_updated": 1790913507233,
+        "data": "{\"type\":\"step-start\"}"
+      },
+      {
+        "id": "prt_0fac36fa1001oNDTitNNy9kJmw",
+        "message_id": "msg_0fac36f96001I6dGOD5CyQuE6f",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507233,
+        "time_updated": 1790913507234,
+        "data": "{\"type\":\"text\",\"text\":\"I will keep the viewer on the left.\",\"time\":{\"start\":1790913507233,\"end\":1790913507234}}"
+      },
+      {
+        "id": "prt_0fac36fa3001fz0RtEINyfflVi",
+        "message_id": "msg_0fac36f96001I6dGOD5CyQuE6f",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507235,
+        "time_updated": 1790913507235,
+        "data": "{\"reason\":\"stop\",\"type\":\"step-finish\",\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"cost\":0}"
+      },
+      {
+        "id": "prt_0fac36fa5002FhE9ffAEIKrhhN",
+        "message_id": "msg_0fac36fa5001pS2CwQDwaaLzli",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507237,
+        "time_updated": 1790913507238,
+        "data": "{\"type\":\"text\",\"text\":\"When changing parser code, keep a regression test for the original failure.\"}"
+      },
+      {
+        "id": "prt_0fac36fb6001a6wtcojIeUkfsK",
+        "message_id": "msg_0fac36fa7001g6blPyHSGZxrt3",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507254,
+        "time_updated": 1790913507254,
+        "data": "{\"type\":\"step-start\"}"
+      },
+      {
+        "id": "prt_0fac36fb7001TQU6bCAgNVB2dj",
+        "message_id": "msg_0fac36fa7001g6blPyHSGZxrt3",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507255,
+        "time_updated": 1790913507256,
+        "data": "{\"type\":\"text\",\"text\":\"I will keep the viewer on the left.\",\"time\":{\"start\":1790913507255,\"end\":1790913507255}}"
+      },
+      {
+        "id": "prt_0fac36fb8001dzbqDjBPmoffRe",
+        "message_id": "msg_0fac36fa7001g6blPyHSGZxrt3",
+        "session_id": "ses_f053c9f5cffeHNlVqN2c0E7Vju",
+        "time_created": 1790913507256,
+        "time_updated": 1790913507256,
+        "data": "{\"reason\":\"stop\",\"type\":\"step-finish\",\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"cost\":0}"
+      }
+    ]
+  },
+  "stamped": {
+    "sessions": [
+      {
+        "id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "parent_id": null,
+        "directory": "/fixture/work",
+        "version": "1.18.34",
+        "revert": null,
+        "time_created": 1790913413298,
+        "time_updated": 1790913416012
+      }
+    ],
+    "messages": [
+      {
+        "id": "msg_0fac200c7001QYmMTg86hu3Sn1",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913413319,
+        "time_updated": 1790913413325,
+        "data": "{\"role\":\"user\",\"time\":{\"created\":1790913413319},\"agent\":\"source_fixture\",\"model\":{\"providerID\":\"fixture\",\"modelID\":\"model\"}}"
+      },
+      {
+        "id": "msg_0fac201df001PE2aqkA1cYVgHZ",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913413599,
+        "time_updated": 1790913415944,
+        "data": "{\"parentID\":\"msg_0fac200c7001QYmMTg86hu3Sn1\",\"role\":\"assistant\",\"mode\":\"source_fixture\",\"agent\":\"source_fixture\",\"path\":{\"cwd\":\"/fixture/work\",\"root\":\"/fixture/work\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"modelID\":\"model\",\"providerID\":\"fixture\",\"time\":{\"created\":1790913413599,\"completed\":1790913415944},\"finish\":\"tool-calls\"}"
+      },
+      {
+        "id": "msg_0fac20b09001Rp6KKj6ELKGFHV",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913415945,
+        "time_updated": 1790913415957,
+        "data": "{\"parentID\":\"msg_0fac200c7001QYmMTg86hu3Sn1\",\"role\":\"assistant\",\"mode\":\"source_fixture\",\"agent\":\"source_fixture\",\"path\":{\"cwd\":\"/fixture/work\",\"root\":\"/fixture/work\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"modelID\":\"model\",\"providerID\":\"fixture\",\"time\":{\"created\":1790913415945,\"completed\":1790913415956},\"finish\":\"stop\"}"
+      },
+      {
+        "id": "msg_0fac20b2f001obcbtEvwP70gYw",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913415983,
+        "time_updated": 1790913415984,
+        "data": "{\"role\":\"user\",\"time\":{\"created\":1790913415983},\"agent\":\"source_fixture\",\"model\":{\"providerID\":\"fixture\",\"modelID\":\"model\"}}"
+      },
+      {
+        "id": "msg_0fac20b33001wFOtgP8dZAkxm6",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913415987,
+        "time_updated": 1790913415994,
+        "data": "{\"parentID\":\"msg_0fac20b2f001obcbtEvwP70gYw\",\"role\":\"assistant\",\"mode\":\"source_fixture\",\"agent\":\"source_fixture\",\"path\":{\"cwd\":\"/fixture/work\",\"root\":\"/fixture/work\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"modelID\":\"model\",\"providerID\":\"fixture\",\"time\":{\"created\":1790913415987,\"completed\":1790913415994}}"
+      },
+      {
+        "id": "msg_0fac20b3a001gAWcAOL3C53AG9",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913415994,
+        "time_updated": 1790913415995,
+        "data": "{\"role\":\"user\",\"model\":{\"providerID\":\"fixture\",\"modelID\":\"model\"},\"agent\":\"source_fixture\",\"time\":{\"created\":1790913415994}}"
+      },
+      {
+        "id": "msg_0fac20b3d001CwuRBKy9XKvmaw",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913415997,
+        "time_updated": 1790913416009,
+        "data": "{\"role\":\"assistant\",\"parentID\":\"msg_0fac20b3a001gAWcAOL3C53AG9\",\"mode\":\"compaction\",\"agent\":\"compaction\",\"summary\":true,\"path\":{\"cwd\":\"/fixture/work\",\"root\":\"/fixture/work\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"modelID\":\"model\",\"providerID\":\"fixture\",\"time\":{\"created\":1790913415997,\"completed\":1790913416009},\"finish\":\"stop\"}"
+      },
+      {
+        "id": "msg_0fac20b4a001nBfhlHbRBjTKim",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913416010,
+        "time_updated": 1790913416010,
+        "data": "{\"role\":\"user\",\"time\":{\"created\":1790913416010},\"agent\":\"source_fixture\",\"model\":{\"providerID\":\"fixture\",\"modelID\":\"model\"}}"
+      },
+      {
+        "id": "msg_0fac20b4b001Rhn7VNY8n9dl6d",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913416011,
+        "time_updated": 1790913416019,
+        "data": "{\"parentID\":\"msg_0fac20b4a001nBfhlHbRBjTKim\",\"role\":\"assistant\",\"mode\":\"source_fixture\",\"agent\":\"source_fixture\",\"path\":{\"cwd\":\"/fixture/work\",\"root\":\"/fixture/work\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"modelID\":\"model\",\"providerID\":\"fixture\",\"time\":{\"created\":1790913416011,\"completed\":1790913416019},\"finish\":\"stop\"}"
+      }
+    ],
+    "parts": [
+      {
+        "id": "prt_0fac200cb001MsoBOiSJl8j55p",
+        "message_id": "msg_0fac200c7001QYmMTg86hu3Sn1",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913413593,
+        "time_updated": 1790913413594,
+        "data": "{\"type\":\"text\",\"text\":\"Keep the viewer on the left.\\n\\n> A quote: put the viewer on the right.\\n\\nRead fixture.txt once.\",\"metadata\":{\"harness_submission\":{\"v\":1,\"sessionID\":\"ses_f053dff4dffeeKBz7J1FU41GF6\",\"messageID\":\"msg_0fac200c7001QYmMTg86hu3Sn1\"}}}"
+      },
+      {
+        "id": "prt_0fac20af4001v4CICtVcpiR6EN",
+        "message_id": "msg_0fac201df001PE2aqkA1cYVgHZ",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913415924,
+        "time_updated": 1790913415925,
+        "data": "{\"type\":\"step-start\"}"
+      },
+      {
+        "id": "prt_0fac20af6001RSzsfUkkr6JFb0",
+        "message_id": "msg_0fac201df001PE2aqkA1cYVgHZ",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913415926,
+        "time_updated": 1790913415939,
+        "data": "{\"type\":\"tool\",\"tool\":\"read\",\"callID\":\"call_source\",\"state\":{\"status\":\"completed\",\"input\":{\"filePath\":\"/fixture/work/fixture.txt\"},\"output\":\"<path>/fixture/work/fixture.txt</path>\\n<type>file</type>\\n<content>\\n1: Synthetic fixture data.\\n\\n(End of file - total 1 lines)\\n</content>\",\"metadata\":{\"preview\":\"Synthetic fixture data.\",\"truncated\":false,\"loaded\":[],\"display\":{\"type\":\"file\",\"path\":\"/fixture/work/fixture.txt\",\"text\":\"Synthetic fixture data.\",\"lineStart\":1,\"lineEnd\":1,\"totalLines\":1,\"truncated\":false}},\"title\":\"fixture.txt\",\"time\":{\"start\":1790913415930,\"end\":1790913415939}}}"
+      },
+      {
+        "id": "prt_0fac20b0500196UAyMOlmhzA3o",
+        "message_id": "msg_0fac201df001PE2aqkA1cYVgHZ",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913415941,
+        "time_updated": 1790913415942,
+        "data": "{\"reason\":\"tool-calls\",\"type\":\"step-finish\",\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"cost\":0}"
+      },
+      {
+        "id": "prt_0fac20b10001BjIYN2pEmXy6Wp",
+        "message_id": "msg_0fac20b09001Rp6KKj6ELKGFHV",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913415952,
+        "time_updated": 1790913415953,
+        "data": "{\"type\":\"step-start\"}"
+      },
+      {
+        "id": "prt_0fac20b11001pOFAs4FizcDNzi",
+        "message_id": "msg_0fac20b09001Rp6KKj6ELKGFHV",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913415953,
+        "time_updated": 1790913415954,
+        "data": "{\"type\":\"text\",\"text\":\"I will keep the viewer on the left.\",\"time\":{\"start\":1790913415953,\"end\":1790913415954}}"
+      },
+      {
+        "id": "prt_0fac20b13001E7GiCXUo0Gy3sI",
+        "message_id": "msg_0fac20b09001Rp6KKj6ELKGFHV",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913415955,
+        "time_updated": 1790913415955,
+        "data": "{\"reason\":\"stop\",\"type\":\"step-finish\",\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"cost\":0}"
+      },
+      {
+        "id": "prt_0fac20b2f00206NdtPOOAMu7rO",
+        "message_id": "msg_0fac20b2f001obcbtEvwP70gYw",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913415984,
+        "time_updated": 1790913415984,
+        "data": "{\"type\":\"text\",\"text\":\"When changing parser code, keep a regression test for the original failure.\",\"metadata\":{\"harness_submission\":{\"v\":1,\"sessionID\":\"ses_f053dff4dffeeKBz7J1FU41GF6\",\"messageID\":\"msg_0fac20b2f001obcbtEvwP70gYw\"}}}"
+      },
+      {
+        "id": "prt_0fac20b3b001K6LQdlzmnn5Wjb",
+        "message_id": "msg_0fac20b3a001gAWcAOL3C53AG9",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913415995,
+        "time_updated": 1790913415995,
+        "data": "{\"type\":\"compaction\",\"auto\":true,\"overflow\":true}"
+      },
+      {
+        "id": "prt_0fac20b45001SEqdApcPv512l0",
+        "message_id": "msg_0fac20b3d001CwuRBKy9XKvmaw",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913416005,
+        "time_updated": 1790913416006,
+        "data": "{\"type\":\"step-start\"}"
+      },
+      {
+        "id": "prt_0fac20b46001g1QMojYd1whwJ5",
+        "message_id": "msg_0fac20b3d001CwuRBKy9XKvmaw",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913416006,
+        "time_updated": 1790913416007,
+        "data": "{\"type\":\"text\",\"text\":\"I will keep the viewer on the left.\",\"time\":{\"start\":1790913416006,\"end\":1790913416007}}"
+      },
+      {
+        "id": "prt_0fac20b48001PEFS9DcdLMtbh0",
+        "message_id": "msg_0fac20b3d001CwuRBKy9XKvmaw",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913416008,
+        "time_updated": 1790913416008,
+        "data": "{\"reason\":\"stop\",\"type\":\"step-finish\",\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"cost\":0}"
+      },
+      {
+        "id": "prt_0fac20b4a002Y2PK42c0RSo6gT",
+        "message_id": "msg_0fac20b4a001nBfhlHbRBjTKim",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913416010,
+        "time_updated": 1790913416010,
+        "data": "{\"type\":\"text\",\"text\":\"When changing parser code, keep a regression test for the original failure.\",\"metadata\":{\"harness_submission\":{\"v\":1,\"sessionID\":\"ses_f053dff4dffeeKBz7J1FU41GF6\",\"messageID\":\"msg_0fac20b2f001obcbtEvwP70gYw\"}}}"
+      },
+      {
+        "id": "prt_0fac20b50001wpMPLhPHoH6xPO",
+        "message_id": "msg_0fac20b4b001Rhn7VNY8n9dl6d",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913416016,
+        "time_updated": 1790913416016,
+        "data": "{\"type\":\"step-start\"}"
+      },
+      {
+        "id": "prt_0fac20b50002FUxHkB2uXVynLs",
+        "message_id": "msg_0fac20b4b001Rhn7VNY8n9dl6d",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913416016,
+        "time_updated": 1790913416017,
+        "data": "{\"type\":\"text\",\"text\":\"I will keep the viewer on the left.\",\"time\":{\"start\":1790913416016,\"end\":1790913416017}}"
+      },
+      {
+        "id": "prt_0fac20b52001k2cJSSR29yqlnv",
+        "message_id": "msg_0fac20b4b001Rhn7VNY8n9dl6d",
+        "session_id": "ses_f053dff4dffeeKBz7J1FU41GF6",
+        "time_created": 1790913416018,
+        "time_updated": 1790913416018,
+        "data": "{\"reason\":\"stop\",\"type\":\"step-finish\",\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"cost\":0}"
+      }
+    ]
+  },
+  "result": {
+    "unmarkedUserEvidence": 1,
+    "stampedUserEvidence": 1,
+    "originMetadataForwarded": false
+  },
+  "sourceDigests": {
+    "cli/src/lib/opencodeMemoryPlugin.ts": "949764a7018e42470262b03bb227f8290147b41cc8ece6b4ae941d7eeddffca1",
+    "cli/src/memory/opencodeRead.ts": "d45f09537cc49919e11eacda81493d47cde8c439603d31b8dac11829ba7b875d",
+    "cli/src/memory/opencodeSource.ts": "80109d49ed9380d2da14251ac44f23ba61e0e23813c4349f961a5786ef823865",
+    "cli/src/memory/opencodeCapture.ts": "cf670c7d04ba58b21901679635101dd0f3fbe4a16facd8309c86ea93915594ec",
+    "cli/scripts/memory-native-opencode-source-probe.mjs": "9b2c3e00a282092958b777cae8e09549ec940ac5df1c252b880e892314c8c1ad"
+  },
+  "limitations": [
+    "Synthetic requests and mock responses, not personal memory-quality measurement.",
+    "Legacy unmarked requests immediately after overflow compaction remain ambiguous after a crash; capture withholds them.",
+    "This recording does not validate repairs to previously saved duplicate evidence."
+  ]
+}

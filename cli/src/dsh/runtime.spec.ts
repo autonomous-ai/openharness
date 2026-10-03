@@ -7,7 +7,7 @@ import { PROCESS_ENGINES } from '../engines/types.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv } from '../lib/engineLaunch.js'
 import { buildLaunchOverrides } from '../lib/launchOverrides.js'
 import type { InstalledDsh } from './installed.js'
-import { HARNESS_ADAPTERS, HARNESS_BOOTSTRAP, harnessAdapter } from './adapters.js'
+import { HARNESS_ADAPTERS, HARNESS_BOOTSTRAP, codexEnvArgs, harnessAdapter } from './adapters.js'
 import { compatibleHarnessEngines } from './compatibility.js'
 import { forkRuntimeKey, harnessLaunchOrRefusal, harnessRuntimeDir, incompatibleHarnessEngine, migrateHarnessInstructions, prepareHarnessLaunch } from './runtime.js'
 
@@ -103,6 +103,19 @@ describe('session isolation and lifecycle', () => {
     expect(seen).toBe(result.overrides.env.HARNESS_CONTEXT_FILE)
   })
 
+  it('hands Codex every harness variable as a flag, since its commands run outside the launched process', () => {
+    pkg.manifest.agent!.env = { ...pkg.manifest.agent!.env, QUOTED: 'say "hi" \\ bye', 'NOT-A-KEY': 'x' }
+    const launch = prepareHarnessLaunch(pkg, ws, 'codex', 'env-flags')
+    const set = (name: string) => `shell_environment_policy.set.${name}=${JSON.stringify(launch.env[name])}`
+    for (const name of ['HARNESS_CONTEXT_FILE', 'HARNESS_SKILLS_DIR', 'HARNESS_WORKSPACE', 'HARNESS_DSH', 'TOOLCHAIN']) {
+      expect(launch.args[launch.args.indexOf(set(name)) - 1]).toBe('-c')
+    }
+    expect(launch.args).toContain('shell_environment_policy.set.QUOTED="say \\"hi\\" \\\\ bye"')
+    expect(launch.args.some(arg => arg.includes('NOT-A-KEY'))).toBe(false)
+    // Every other engine runs its commands under the process Harness launched, which already has them.
+    expect(prepareHarnessLaunch(pkg, ws, 'claude', 'env-flags-claude').args.some(arg => arg.startsWith('shell_environment_policy'))).toBe(false)
+  })
+
   it('keeps two harnesses in one project separate, leaving no harness content in project rules', () => {
     write(join(ws, 'AGENTS.md'), '# My project rules\n')
     const a = prepareHarnessLaunch(pkg, ws, 'codex', 'a')
@@ -136,7 +149,7 @@ describe('session isolation and lifecycle', () => {
     expect(fork.env.HARNESS_PRIVATE_GRID).toBeUndefined()
     const fresh = prepareHarnessLaunch(pkg, ws, 'codex', 'fresh')
     expect(readFileSync(fresh.env.HARNESS_CONTEXT_FILE!, 'utf8')).toContain('# Updated instructions')
-    expect(fresh.args).toEqual(['--new-flag'])
+    expect(fresh.args).toEqual(['--new-flag', ...codexEnvArgs(fresh.env)])
   })
 
   it('keeps older rows stable using their agent id and supports package renames', async () => {

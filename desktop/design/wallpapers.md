@@ -1,6 +1,6 @@
-# New-tab wallpapers
+# Backgrounds
 
-Blank remains the default and uses the selected tab's workspace color. Choose artwork under Customize Harness → Wallpaper. It appears only on empty welcome/new-tab pages. The welcome text and wallpaper stay mounted at their original position while the New Harness and Open Harness panels overlay the page.
+Blank remains the default and uses the selected tab's workspace color. Choose artwork under Customize Harness → Background. Any background but Blank shows behind the panes of a running harness tab, seen through them; there is no separate switch. **Pane opacity** (0–100%, default 50%) sets how solid the panes stay over it. Settings shows the slider only while a background other than Blank is chosen. Older builds saved a Behind harnesses on/off flag beside the opacity; it is ignored. Empty welcome and new-tab pages are plain.
 
 The four images below were created with the built-in image generation tool. The PNG outputs were copied into the app without retouching. They are bundled locally; changing wallpaper does not make a network request. The center is deliberately quiet so the terminal-font welcome message remains readable.
 
@@ -38,6 +38,12 @@ Use case: stylized-concept. Asset type: minimal full-bleed 16:9 desktop wallpape
 ```
 
 ## Review
+
+## Custom background
+
+The last card in the picker takes the user's own image: click it to choose a file, or drop one on it. PNG, JPEG and WebP up to 20 MB are accepted. Harness keeps its own copy in `~/.harness/desktop-app-v2/backgrounds/`, scaled so the longest side is at most 3840px and flattened to one frame, so moving or deleting the original changes nothing. There is one slot: a new image replaces the copy, and Remove deletes it. Choosing a built-in background keeps the copy for a one-click return.
+
+While the custom background is selected, **Dim** (0–80%, default 40%) darkens it so the panes in front of it stay readable, and **Fit** chooses fill (default), fit, center or tile. Center and tile show the image at real size, one image pixel per device pixel. A new image keeps both settings. If the copy goes missing, the page shows Blank and the card says "Image missing, choose again". The browser build has no folder to keep a copy in, so it hides the card. `test/custom_background_test.dart` covers import, persistence and the card.
 
 Rendered app previews: [welcome with terminal wallpaper](review/welcome-terminal-wallpaper.png) and [keyboard shortcut popup](review/keyboard-shortcuts-browser.png).
 

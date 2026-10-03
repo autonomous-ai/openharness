@@ -38,7 +38,7 @@ import {
 import { randomUUID } from 'crypto'
 import { join } from 'path'
 import { env } from '../config/env.js'
-import { lockOwnerAlive, processStartMarker } from './processLiveness.js'
+import { lockOwnerAlive, lockStartMarker, processLockIdentity } from './processLiveness.js'
 import { secureStateDirectory } from './secureState.js'
 
 /** `login` is a forced sign-in: the daemon is stopped and the session on disk is about to change
@@ -48,6 +48,7 @@ export type SpawnLockPurpose = 'start' | 'update' | 'handoff' | 'stop' | 'login'
 export interface SpawnLockOwner {
   pid: number
   startMarker: string
+  generationMarker?: string
   token: string
   purpose: SpawnLockPurpose
   since: number
@@ -93,6 +94,15 @@ export function describeSpawnLockOwner(owner: SpawnLockOwner): string {
   return `${verb[owner.purpose]} by pid ${owner.pid} for ${secs}s`
 }
 
+/** What Harness is still doing on this computer, by whoever holds the lock — in a person's words. */
+const STILL: Record<SpawnLockPurpose, string> = {
+  start: 'Harness is still starting on this computer',
+  update: 'Harness is still updating on this computer',
+  handoff: 'Harness is still restarting on this computer',
+  stop: 'Harness is still shutting down on this computer',
+  login: 'Another sign-in is already in progress on this computer',
+}
+
 /**
  * The same failure for a person who is not debugging anything — the desktop's sign-in screen shows
  * this verbatim. No pid, no lock, no seconds: what Harness is still doing on this computer, so that
@@ -102,14 +112,12 @@ export function describeSpawnLockOwner(owner: SpawnLockOwner): string {
  */
 export function describeSpawnLockBusyPlainly(error: SpawnLockBusyError): string {
   if (error.reason) return 'Harness cannot sign in on this computer right now. Run `harness login --force` in a terminal to see why.'
-  const still: Record<SpawnLockPurpose, string> = {
-    start: 'Harness is still starting on this computer',
-    update: 'Harness is still updating on this computer',
-    handoff: 'Harness is still restarting on this computer',
-    stop: 'Harness is still shutting down on this computer',
-    login: 'Another sign-in is already in progress on this computer',
-  }
-  return `${error.owner ? still[error.owner.purpose] : 'Harness is busy on this computer'}. Try again in a moment.`
+  return `${error.owner ? STILL[error.owner.purpose] : 'Harness is busy on this computer'}. Try again in a moment.`
+}
+
+/** For a sign-in waiting on the lock — the desktop shows it verbatim, so no pid. */
+export function describeSpawnLockWaitPlainly(owner: SpawnLockOwner): string {
+  return `${STILL[owner.purpose]} — waiting for it to finish…`
 }
 
 let held: { token: string; purpose: SpawnLockPurpose; depth: number } | null = null
@@ -143,6 +151,7 @@ export function readSpawnLockOwner(): SpawnLockOwner | null {
     return {
       pid,
       startMarker: typeof raw.startMarker === 'string' ? raw.startMarker : '',
+      generationMarker: typeof raw.generationMarker === 'string' ? raw.generationMarker : undefined,
       token: raw.token,
       purpose: isPurpose(raw.purpose) ? raw.purpose : 'start',
       since: Number.isFinite(Number(raw.since)) ? Number(raw.since) : 0,
@@ -168,7 +177,7 @@ function tryCreate(purpose: SpawnLockPurpose): string | null {
     const fd = openSync(ownerPath(), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
     try {
       const owner: SpawnLockOwner = {
-        pid: process.pid, startMarker: processStartMarker(process.pid) ?? '', token, purpose, since: Date.now(),
+        pid: process.pid, ...processLockIdentity(process.pid), token, purpose, since: Date.now(),
       }
       writeFileSync(fd, JSON.stringify(owner))
       fsyncSync(fd)
@@ -198,11 +207,11 @@ function releaseOwnedBy(token: string): void {
 
 /** Remove a lock whose owner is gone — re-read first so a lock that changed hands meanwhile survives. */
 function reclaimIfStale(owner: SpawnLockOwner): boolean {
-  if (lockOwnerAlive(owner.pid, owner.startMarker)) return false
+  if (lockOwnerAlive(owner.pid, lockStartMarker(owner))) return false
   try {
     const current = readSpawnLockOwner()
-    if (current && current.pid === owner.pid && current.startMarker === owner.startMarker
-      && current.token === owner.token && !lockOwnerAlive(owner.pid, owner.startMarker)) {
+    if (current && current.pid === owner.pid && lockStartMarker(current) === lockStartMarker(owner)
+      && current.token === owner.token && !lockOwnerAlive(owner.pid, lockStartMarker(owner))) {
       rmSync(SPAWN_LOCK_DIR, { recursive: true, force: true })
       return true
     }

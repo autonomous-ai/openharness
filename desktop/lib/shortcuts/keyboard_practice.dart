@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:harness/terminal/terminal_text.dart';
@@ -8,8 +9,10 @@ import 'package:harness/terminal/terminal_text.dart';
 import '../core/harness_file_store.dart';
 import '../core/local_key_value_store.dart';
 import '../core/test_run.dart';
+import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/app_type.dart';
 import '../widgets/box_chrome.dart';
+import '../widgets/desktop_chrome.dart';
 import '../widgets/terminal_prompt.dart';
 import 'app_keymap.dart';
 import 'app_shortcuts.dart';
@@ -36,14 +39,12 @@ class KeyboardLesson {
       .join(' / ');
   String get result => switch (command) {
     'swarm.new' => '[work]  [new tab]\nFind a harness, or create one',
-    'agent.open' ||
-    'agent.add' => '[agent 1] │ [agent 2]\nBoth agents share this tab.',
-    'agent.new' => 'agent    Claude Code\nmachine  dev\nproject  ~/work/payments\ntask     (optional)\nCreate is selected. Up/Down + Enter edits an argument. Permissions and profiles are inside Agent.',
-    'pane.zoom' => '[agent 2 — full workspace]\nPress the same key to restore the other panes.',
-    'pane.close' =>
-      '[agent 1]\nThe second view closes. Its agent keeps running.',
-    'swarm.close' =>
-      '[previous tab]\nThe view closes. Its agents keep running.',
+    'agent.open' => '# Projects\nChoose a project to see its harnesses.',
+    'agent.add' => '[harness 1] │ [harness 2]\nBoth harnesses share this tab.',
+    'agent.new' => 'Codex · This Mac · payments\nHarness anything (optional)\nNew harness is selected. Return starts with these settings; Tab reaches each control. Model, approvals, and Codex profile are below the message.',
+    'pane.zoom' => '[harness 2 — full workspace]\nPress the same key to restore the other panes.',
+    'pane.close' => '[harness 1]\nClosing the last view saves idle work to disk. Working sessions ask when to stop.',
+    'swarm.close' => '[previous tab]\nIdle sessions are saved and closed. Working sessions ask when to stop.',
     'navigation.commands' => '>rename\nRename Harness\nRename Tab',
     'terminal.find' => 'find > timeout\n1/3 matches in this terminal’s output',
     'picker.complete' => 'project  ~/work/payments\nTab completes the current argument; Enter accepts it.',
@@ -51,12 +52,12 @@ class KeyboardLesson {
       'project  ~/work/\nShift-Tab walks path candidates backward.',
     'picker.cancel' => '> ready\nEscape steps back from a nested chooser, then returns to the terminal.',
     'creation.agent' => 'agent    Claude Code\nFilter the agents, then Enter to choose. Escape returns to the launch menu.',
-    'creation.project' => 'project on This Mac\nresearch    website    payments\nNew project / Open folder / Clone GitHub repository\nType to filter projects. Up/Down selects; Enter chooses; Escape goes back.',
+    'creation.project' => 'repo on This Mac\nresearch    website    payments\nNew project / Open folder / Clone GitHub repository\nType to filter repos. Up/Down selects; Enter chooses; Escape goes back.',
     'creation.project_new' => 'name     payments processing\nCreate payments-processing\nThis Mac:~/harnesses/payments-processing',
-    'creation.project_existing' => 'folder   ~/work/payments\nEnter a folder path, or press Enter to browse on the selected machine.',
+    'creation.project_existing' => 'Open folder\nChoose a folder on the selected machine. Cancelling returns to the Repo list.',
     'creation.project_repository' => 'repo     https://github.com/openai/codex\nChoose the repository, then launch to clone it and start the agent.',
     'creation.project_machine' => 'machine  Office\nChoose where the project lives. Folders are scoped to that machine.',
-    'creation.project_browse' => 'Browse folders\nChoose a folder on the selected machine; cancelling returns to the folder prompt.',
+    'creation.project_browse' => 'Browse folders\nChoose a folder on the selected machine; cancelling returns to the previous chooser.',
     'creation.project_recent_1' ||
     'creation.project_recent_2' ||
     'creation.project_recent_3' ||
@@ -65,14 +66,14 @@ class KeyboardLesson {
     'creation.project_recent_6' ||
     'creation.project_recent_7' ||
     'creation.project_recent_8' ||
-    'creation.project_recent_9' => 'Recent project selected\nThe launch summary now uses this folder on the selected machine.',
-    'creation.task' => 'task     fix the tests\nEnter starts the agent with this first task. Escape keeps the draft.',
-    'creation.options' => 'options\nChange permissions or the Codex profile.',
-    'picker.more_options' =>
-      'more options\nPermissions · Codex profile · repository',
+    'creation.project_recent_9' => 'Repo selected\nThe composer now uses this folder on the selected machine.',
+    'creation.task' => 'Harness anything\nEnter starts the harness. Shift-Enter adds a line; Escape keeps the draft.',
+    'creation.options' =>
+      'Model\nChoose a model for this harness. For Terminal, choose a repo.',
+    'picker.more_options' => 'New harness\nOpen the composer from search. In the composer, choose a model; Terminal opens the Repo list.',
     'picker.toggle_preview' =>
       'results │ preview\nToggle again to hide the preview.',
-    'agent.stop' => 'Stop Harness?\n> Cancel    Stop\nStopping ends the running harness; its saved conversation is kept. Closing a pane only closes a view.',
+    'agent.stop' => 'Stop Harness?\n> Cancel    Stop\nStopping ends the running harness; its saved conversation is kept. Switching tabs keeps work running.',
     'agent.restart' => 'Restart Harness\nRestarts the harness in the same pane and tries to resume its conversation.',
     'agent.fork' =>
       'Fork Harness\nChoose a name and first task. The source stays open.',
@@ -121,7 +122,11 @@ List<KeyboardLesson> keyboardLessons(AppKeymap keymap) {
   };
   final result = <KeyboardLesson>[];
   for (final command in harnessCommands) {
-    if (command.hidden || excluded.contains(command.id)) continue;
+    if (command.hidden ||
+        excluded.contains(command.id) ||
+        !harnessCommandActive(command.id)) {
+      continue;
+    }
     final context = command.context;
     final bindings = keymap.bindings(command.id, context: context).toList();
     if (command.id.startsWith('pane.focus_') &&
@@ -506,236 +511,376 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
     super.dispose();
   }
 
+  InputDecoration _fieldDecoration(String hint, {bool search = false}) =>
+      InputDecoration(
+        hintText: hint,
+        hintStyle: DesktopChrome.control(color: DesktopChrome.muted),
+        prefixIcon: search
+            ? Icon(AppIcons.search, size: 18, color: DesktopChrome.muted)
+            : null,
+        filled: true,
+        fillColor: DesktopChrome.field,
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 10,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
+          borderSide: BorderSide(
+            color: MediaQuery.highContrastOf(context)
+                ? DesktopChrome.muted
+                : DesktopChrome.rim,
+            width: 1.5,
+          ),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
+          borderSide: BorderSide(color: DesktopChrome.accent, width: 1.5),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
     TerminalFontScope.watch(context);
     final lesson = _lesson;
     final rows = filtered;
-    final body = TerminalBox(
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              spacing: 16,
-              runSpacing: 6,
-              children: [
-                Text('keyboard practice', style: boxMonoStyle()),
+    final completedCount = lessons.where((l) => _done.contains(l.id)).length;
+    final lessonCount = lessons.length;
+    final body = DesktopChrome(
+      child: DesktopDialogSurface(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              LayoutBuilder(
+                builder: (context, constraints) => Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  spacing: 16,
+                  runSpacing: 4,
+                  children: [
+                    Semantics(
+                      header: true,
+                      child: Text(
+                        'Keyboard practice',
+                        style: DesktopChrome.heading(),
+                      ),
+                    ),
+                    Semantics(
+                      label:
+                          '$completedCount of $lessonCount shortcuts practiced',
+                      excludeSemantics: true,
+                      child: Text(
+                        constraints.maxWidth < 560 * appTextScaleOf(context)
+                            ? '$completedCount of $lessonCount'
+                            : '$completedCount/$lessonCount practiced',
+                        style: DesktopChrome.metadata(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (lesson == null) ...[
+                const SizedBox(height: 8),
                 Text(
-                  '${lessons.where((l) => _done.contains(l.id)).length}/${lessons.length} practiced',
-                  style: boxMonoStyle(color: kBoxFaint),
+                  'Try shortcuts in a scratch workspace. Your agents stay as they are.',
+                  style: DesktopChrome.metadata(),
                 ),
               ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Practice only · your running agents stay untouched',
-              style: boxMonoStyle(color: kBoxFaint),
-            ),
-            const SizedBox(height: 18),
-            if (lesson == null) ...[
-              Row(
-                children: [
-                  Text('practice > ', style: boxMonoStyle()),
-                  Expanded(
-                    child: TextField(
-                      key: const ValueKey('practice-filter'),
-                      controller: _filter,
-                      focusNode: _filterFocus,
-                      autofocus: true,
-                      style: boxMonoStyle(),
-                      decoration: const InputDecoration(
-                        hintText: 'Find a shortcut or a group',
-                        border: InputBorder.none,
-                        isDense: true,
-                      ),
-                      onChanged: (_) => setState(() => _cursor = 0),
-                    ),
+              const SizedBox(height: 16),
+              if (lesson == null) ...[
+                TextField(
+                  key: const ValueKey('practice-filter'),
+                  controller: _filter,
+                  focusNode: _filterFocus,
+                  autofocus: true,
+                  style: DesktopChrome.control(),
+                  decoration: _fieldDecoration(
+                    'Find a shortcut or a group',
+                    search: true,
                   ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Flexible(
-                child: rows.isEmpty
-                    ? Text('No matching shortcuts.', style: boxMonoStyle())
-                    : ListView.builder(
-                        controller: _scroll,
-                        shrinkWrap: true,
-                        itemExtent: 54.0 * appTextScaleOf(context),
-                        itemCount: rows.length,
-                        itemBuilder: (context, i) {
-                          final row = rows[i];
-                          return InkWell(
-                            key: ValueKey(
-                              'practice-${row.context.name}-${row.command}',
+                  onChanged: (_) => setState(() => _cursor = 0),
+                ),
+                const SizedBox(height: 12),
+                Flexible(
+                  child: rows.isEmpty
+                      ? Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          child: Text(
+                            'No matching shortcuts.',
+                            style: DesktopChrome.text(
+                              color: DesktopChrome.muted,
                             ),
-                            onTap: () => _open(row),
-                            child: ColoredBox(
-                              color: i == _cursor.clamp(0, rows.length - 1)
-                                  ? Colors.white.withValues(alpha: .09)
-                                  : Colors.transparent,
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 5,
+                          ),
+                        )
+                      : ListView.builder(
+                          controller: _scroll,
+                          shrinkWrap: true,
+                          itemExtent: 54.0 * appTextScaleOf(context),
+                          itemCount: rows.length,
+                          itemBuilder: (context, i) {
+                            final row = rows[i];
+                            final selected =
+                                i == _cursor.clamp(0, rows.length - 1);
+                            final practiced = _done.contains(row.id);
+                            return MergeSemantics(
+                              child: Semantics(
+                                key: ValueKey(
+                                  'practice-${row.context.name}-${row.command}',
                                 ),
-                                child: Row(
-                                  children: [
-                                    Text(
-                                      _done.contains(row.id) ? '[x] ' : '[ ] ',
-                                      style: boxMonoStyle(color: kBoxFaint),
-                                    ),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        children: [
-                                          Text(
-                                            row.label,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: boxMonoStyle(),
+                                button: true,
+                                selected: selected,
+                                label:
+                                    '${row.label}, ${row.bindings.isEmpty ? 'command search' : row.keys}',
+                                value: practiced
+                                    ? 'Practiced'
+                                    : 'Not practiced',
+                                child: TextButton(
+                                  onPressed: () => _open(row),
+                                  style:
+                                      TextButton.styleFrom(
+                                        alignment: Alignment.centerLeft,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 5,
+                                        ),
+                                        backgroundColor: selected
+                                            ? DesktopChrome.selection
+                                            : Colors.transparent,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            DesktopChrome.controlRadius,
                                           ),
-                                          Text(
-                                            '${row.group} · ${row.bindings.isEmpty ? 'command search' : row.keys}',
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: boxMonoStyle(
-                                              color: kBoxFaint,
+                                        ),
+                                        tapTargetSize:
+                                            MaterialTapTargetSize.shrinkWrap,
+                                        splashFactory: NoSplash.splashFactory,
+                                      ).copyWith(
+                                        side: WidgetStateProperty.resolveWith(
+                                          (states) => BorderSide(
+                                            width: 1.5,
+                                            color:
+                                                states.contains(
+                                                  WidgetState.focused,
+                                                )
+                                                ? DesktopChrome.accent
+                                                : Colors.transparent,
+                                          ),
+                                        ),
+                                        overlayColor:
+                                            WidgetStateProperty.resolveWith(
+                                              (states) => DesktopChrome
+                                                  .foreground
+                                                  .withValues(
+                                                    alpha:
+                                                        states.contains(
+                                                          WidgetState.pressed,
+                                                        )
+                                                        ? .12
+                                                        : states.contains(
+                                                            WidgetState.hovered,
+                                                          )
+                                                        ? .05
+                                                        : 0,
+                                                  ),
                                             ),
+                                      ),
+                                  child: ExcludeSemantics(
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          practiced
+                                              ? AppIcons.circleCheck
+                                              : AppIcons.circle,
+                                          size: 18,
+                                          color: practiced
+                                              ? DesktopChrome.accent
+                                              : DesktopChrome.muted,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              Text(
+                                                row.label,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: DesktopChrome.control(),
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                '${row.group} · ${row.bindings.isEmpty ? 'command search' : row.keys}',
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: DesktopChrome.metadata(),
+                                              ),
+                                            ],
                                           ),
-                                        ],
-                                      ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Icon(
+                                          AppIcons.chevronRight,
+                                          size: 18,
+                                          color: DesktopChrome.muted,
+                                        ),
+                                      ],
                                     ),
-                                    if (i == _cursor)
-                                      Text(
-                                        '<',
-                                        style: boxMonoStyle(color: kBoxFaint),
-                                      ),
-                                  ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ] else
+                Flexible(
+                  child: Scrollbar(
+                    controller: _detailScroll,
+                    thumbVisibility: true,
+                    child: SingleChildScrollView(
+                      controller: _detailScroll,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(lesson.group, style: DesktopChrome.metadata()),
+                          const SizedBox(height: 4),
+                          Semantics(
+                            header: true,
+                            child: Text(
+                              lesson.label,
+                              style: AppType.title(
+                                color: DesktopChrome.foreground,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          if (_matched)
+                            Row(
+                              children: [
+                                Icon(
+                                  AppIcons.circleCheck,
+                                  color: DesktopChrome.accent,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Shortcut practiced',
+                                    key: const ValueKey('practice-completed'),
+                                    style: DesktopChrome.control(medium: true),
+                                  ),
+                                ),
+                              ],
+                            )
+                          else
+                            Text(
+                              lesson.bindings.isEmpty
+                                  ? 'No shortcut assigned. Find it by name in command search.'
+                                  : 'Press ${lesson.keys}',
+                              style: DesktopChrome.text(),
+                            ),
+                          if (!_matched && lesson.bindings.length > 1)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 6),
+                              child: Text(
+                                'Try any of these bindings.',
+                                style: DesktopChrome.metadata(),
+                              ),
+                            ),
+                          if (!_matched && lesson.bindings.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 12),
+                              child: TextField(
+                                key: const ValueKey('practice-command'),
+                                controller: _answer,
+                                focusNode: _answerFocus,
+                                style: DesktopChrome.control(),
+                                decoration: _fieldDecoration(lesson.label),
+                              ),
+                            ),
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.all(14),
+                            // This is terminal content, with its existing mono
+                            // type and scratch output, inside desktop chrome.
+                            decoration: BoxDecoration(
+                              color: grid.AppPalette.swarmField,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              _matched ? lesson.result : 'scratch workspace\n\n[agent 1] │ [agent 2]\n\n> ready',
+                              key: const ValueKey('practice-preview'),
+                              style: boxMonoStyle(),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'A scratch workspace. Your agents stay as they are.',
+                            style: DesktopChrome.metadata(),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Page Up / Page Down to scroll',
+                            style: DesktopChrome.metadata(),
+                          ),
+                          if (_feedback != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 12),
+                              child: Text(
+                                _feedback!,
+                                style: DesktopChrome.metadata(),
+                              ),
+                            ),
+                          if (_matched)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 12),
+                              child: Semantics(
+                                liveRegion: true,
+                                child: Text(
+                                  'Shortcut practiced. Enter continues.',
+                                  style: DesktopChrome.metadata(),
                                 ),
                               ),
                             ),
-                          );
-                        },
+                        ],
                       ),
-              ),
-            ] else
-              Flexible(
-                child: Scrollbar(
-                  controller: _detailScroll,
-                  thumbVisibility: true,
-                  child: SingleChildScrollView(
-                    controller: _detailScroll,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          '${lesson.group} / ${lesson.label}',
-                          style: boxMonoStyle(),
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          _matched
-                              ? '[x] ${lesson.label}'
-                              : lesson.bindings.isEmpty
-                              ? 'No shortcut assigned. Find it by name in command search.'
-                              : 'Press ${lesson.keys}',
-                          style: boxMonoStyle(),
-                        ),
-                        if (!_matched && lesson.bindings.length > 1)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: Text(
-                              'Try any of these bindings.',
-                              style: boxMonoStyle(color: kBoxFaint),
-                            ),
-                          ),
-                        if (!_matched && lesson.bindings.isEmpty)
-                          TextField(
-                            key: const ValueKey('practice-command'),
-                            controller: _answer,
-                            focusNode: _answerFocus,
-                            style: boxMonoStyle(),
-                            decoration: InputDecoration(
-                              prefixText: ': ',
-                              hintText: lesson.label,
-                              border: InputBorder.none,
-                            ),
-                          ),
-                        const SizedBox(height: 16),
-                        Container(
-                          padding: const EdgeInsets.all(14),
-                          color: Colors.black26,
-                          child: Text(
-                            _matched ? lesson.result : 'scratch workspace\n\n[agent 1] │ [agent 2]\n\n> ready',
-                            key: const ValueKey('practice-preview'),
-                            style: boxMonoStyle(),
-                          ),
-                        ),
-                        if (_feedback != null)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 12),
-                            child: Text(
-                              _feedback!,
-                              style: boxMonoStyle(color: kBoxFaint),
-                            ),
-                          ),
-                        if (_matched)
-                          Semantics(
-                            liveRegion: true,
-                            child: Text(
-                              'Shortcut practiced. Enter continues.',
-                              style: boxMonoStyle(color: kBoxFaint),
-                            ),
-                          ),
-                      ],
                     ),
                   ),
                 ),
-              ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 16,
-              runSpacing: 4,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                if (lesson == null)
-                  Text(
-                    '${_hint('picker.accept')}  practice    ${_hint('picker.previous')}/${_hint('picker.next')}  choose',
-                    style: boxMonoStyle(color: kBoxFaint),
-                  ),
-                if (lesson != null)
-                  TextButton(
-                    onPressed: _next,
-                    child: Text(
-                      _matched ? 'Enter  Next' : 'Skip',
-                      style: boxMonoStyle(),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 16,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  if (lesson == null)
+                    Text(
+                      '${_hint('picker.accept')} Practice · ${_hint('picker.previous')}/${_hint('picker.next')} Browse',
+                      style: DesktopChrome.metadata(),
                     ),
+                  if (lesson != null)
+                    DesktopPill(
+                      onPressed: _next,
+                      label: _matched ? 'Next shortcut' : 'Skip',
+                    ),
+                  DesktopPill(
+                    key: const ValueKey('practice-back'),
+                    onPressed: _back,
+                    label: lesson == null ? 'Close' : 'All shortcuts',
+                    tooltip: lesson == null ? _hint('picker.cancel') : 'Esc',
+                    quiet: true,
                   ),
-                if (lesson != null)
-                  Text(
-                    'pgup/pgdn  read',
-                    style: boxMonoStyle(color: kBoxFaint),
-                  ),
-                TextButton(
-                  key: const ValueKey('practice-back'),
-                  onPressed: _back,
-                  child: Text(
-                    lesson == null
-                        ? '${_hint('picker.cancel')}  Close'
-                        : 'esc  All shortcuts',
-                    style: boxMonoStyle(),
-                  ),
-                ),
-              ],
-            ),
-          ],
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

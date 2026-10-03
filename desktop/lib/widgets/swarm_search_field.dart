@@ -1,8 +1,8 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
-import '../shared/theme/app_type.dart';
+import '../shared/theme/app_theme.dart';
 
 class SwarmSearchField extends StatefulWidget {
   const SwarmSearchField({
@@ -53,7 +53,7 @@ class _SwarmSearchFieldState extends State<SwarmSearchField> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
+    AppTheme.watch(context);
     final onMove = widget.onMove;
     final onSubmitted = widget.onSubmitted;
     return CallbackShortcuts(
@@ -87,24 +87,16 @@ class _SwarmSearchFieldState extends State<SwarmSearchField> {
         autofocus: widget.autofocus,
         onChanged: widget.onChanged,
         onSubmitted: (_) => onSubmitted?.call(),
-        style: AppType.mono(),
+        style: AppType.body(),
         decoration: InputDecoration(
           hintText: widget.hintText,
-          hintStyle: AppType.mono(color: Colors.white60),
-          prefixIcon: const Icon(Icons.search, size: 18),
+          hintStyle: AppType.body(color: AppPalette.textSecondary),
+          prefixIcon: const Icon(AppIcons.search, size: 18),
           filled: true,
-          fillColor: const Color(0xa6111521),
+          fillColor: AppDesktop.field,
           contentPadding: const EdgeInsets.symmetric(
             horizontal: 14,
             vertical: 14,
-          ),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(color: Colors.white24),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(color: Colors.white24),
           ),
         ),
       ),

@@ -1,6 +1,6 @@
 import type { AgentEngine } from '../engines/types.js'
 
-export type TerminalBackendName = 'tmux' | 'herdr'
+export type TerminalBackendName = 'tmux'
 
 /** PID reuse-safe identity for the process that owns a Harness agent. */
 export interface ProcessIdentity {
@@ -14,23 +14,10 @@ export interface TmuxRuntimeRef {
   paneId: string
 }
 
-export interface HerdrRuntimeRef {
-  backend: 'herdr'
-  /** Stable configured-target identifier. Never contains the socket path. */
-  endpointId: string
-  sessionName: string
-  /** Stable within one Herdr endpoint, including across pane moves. */
-  terminalId: string
-  /** Mutable public route, scoped to endpointId. */
-  paneId: string
-}
+export type TerminalRuntimeRef = TmuxRuntimeRef
 
-export type TerminalRuntimeRef = TmuxRuntimeRef | HerdrRuntimeRef
-
-/** Untrusted route hints from hooks. Herdr socket paths are lookup hints, never connection authority. */
-export type HookTerminalHint =
-  | { backend: 'tmux'; paneId: string }
-  | { backend: 'herdr'; paneId: string; sessionName?: string; socketPath?: string }
+/** Untrusted route hints from hooks. */
+export type HookTerminalHint = { backend: 'tmux'; paneId: string }
 
 export interface TerminalRootObservation {
   runtime: TerminalRuntimeRef
@@ -162,8 +149,13 @@ export interface TerminalStreamHandle<Ref extends TerminalRuntimeRef = TerminalR
   beginSnapshot(): void
   /** Capture only the authoritative visible viewport. Terminal scrollback can
    * contain prior full-screen TUI repaint frames and must never be replayed as
-   * part of a keyframe. */
-  snapshot(): Promise<TerminalReadResult<TerminalStreamSnapshot>>
+   * part of a keyframe.
+   *
+   * `tuiOwnsScrollback` is for a full-screen TUI that paints in tmux's *normal*
+   * buffer (Grok). Its tmux history is prior repaint frames, not a shell
+   * transcript, and must not be seeded; the snapshot is labelled as the
+   * alternate screen so the receiver routes the wheel to the program. */
+  snapshot(options?: { tuiOwnsScrollback?: boolean }): Promise<TerminalReadResult<TerminalStreamSnapshot>>
   /** Release output produced strictly after the snapshot cut. */
   endSnapshot(): void
   writeRaw(bytes: Uint8Array): Promise<TerminalActionResult>
@@ -171,11 +163,12 @@ export interface TerminalStreamHandle<Ref extends TerminalRuntimeRef = TerminalR
    *  `pasteRawIntoTmux` for why a paste needs its own path instead of reusing the keystroke one. */
   pasteRaw(text: string): Promise<TerminalActionResult>
   resize(size: TerminalStreamSize): Promise<TerminalActionResult>
-  /** Scroll via the backend's own history mechanism (tmux copy-mode for `TmuxControlStream`) rather
-   *  than writing bytes into the pty — a program that owns terminal mouse-tracking but doesn't
-   *  itself understand SGR wheel reports (confirmed live for Grok: it echoes the raw escape bytes
-   *  into its own prompt instead of scrolling) would otherwise treat wheel input as garbage
-   *  keystrokes. Backends with no such concept (anything not tmux-backed) may no-op. */
+  /** Scroll a full-screen TUI that owns mouse-tracking but mishandles SGR wheel
+   *  reports (confirmed live for Grok: it echoes the raw escape bytes into its
+   *  own prompt). The tmux backend sends PageUp/PageDown into the pty — Grok
+   *  scrolls its conversation with those keys even while the prompt is focused.
+   *  Do not use tmux copy-mode: alt-screen history is prior TUI repaint frames.
+   *  Backends with no such concept (anything not tmux-backed) may no-op. */
   scroll(direction: 'up' | 'down', lines: number): Promise<TerminalActionResult>
   pauseOutput(): Promise<TerminalActionResult>
   resumeOutput(): Promise<TerminalActionResult>

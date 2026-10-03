@@ -1,3 +1,4 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart';
@@ -45,7 +46,7 @@ class OnboardingCard extends StatelessWidget {
                 tooltip: 'Dismiss suggestion',
                 onPressed: onDismiss,
                 visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.close, size: 14),
+                icon: const Icon(AppIcons.close, size: 14),
               ),
             ],
           ),

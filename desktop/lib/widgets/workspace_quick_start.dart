@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:harness/terminal/terminal_text.dart';
 
+import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
 import '../state/workspace_learning.dart';
-import 'box_chrome.dart';
+import 'desktop_chrome.dart';
 
 /// A temporary guide beside real work. It never requests terminal focus.
 class WorkspaceQuickStart extends StatelessWidget {
@@ -19,11 +19,14 @@ class WorkspaceQuickStart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
+    grid.AppTheme.watch(context);
     final next = learning.next;
     final (command, label) = switch (next) {
-      WorkspaceLesson.agent => ('swarm.new', 'Open your first agent'),
-      WorkspaceLesson.pane => ('agent.open', 'Add a second agent to this tab'),
+      WorkspaceLesson.agent => ('swarm.new', 'Open your first harness'),
+      WorkspaceLesson.pane => (
+        'agent.open',
+        'Add a second harness to this tab',
+      ),
       WorkspaceLesson.zoom => ('pane.zoom', 'Zoom the focused pane'),
       WorkspaceLesson.commands => (
         'navigation.commands',
@@ -34,44 +37,44 @@ class WorkspaceQuickStart extends StatelessWidget {
         'Workspace ready. Keep learning at your own pace.',
       ),
     };
-    final keys = KeymapTheme.of(context)?.hint(command);
-    final hint = keys == null ? null : boxKeyLabel(keys);
-    return TerminalBox(
-      docked: true,
+    final hint = KeymapTheme.of(context)?.hint(command);
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: grid.AppSurface.recess,
+        border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
+      ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         child: Wrap(
-          spacing: 14,
-          runSpacing: 2,
+          spacing: 16,
+          runSpacing: 8,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             Text(
               next == null
-                  ? 'quick start  [done]'
-                  : 'quick start  ${next.index + 1}/4',
-              style: boxMonoStyle(color: kBoxFaint),
+                  ? 'Quick start · Complete'
+                  : 'Quick start · ${next.index + 1} of 4',
+              style: DesktopChrome.metadata(),
             ),
             Semantics(
               liveRegion: true,
-              child: Text(label, style: boxMonoStyle()),
+              child: Text(label, style: DesktopChrome.control()),
             ),
-            TextButton(
+            DesktopPill(
               key: const ValueKey('quick-start-action'),
               onPressed: next == null ? onPractice : () => onCommand(command),
-              child: Text(
-                next == null
-                    ? 'Keyboard practice'
-                    : '${hint == null ? '' : '$hint  '}${next == WorkspaceLesson.commands ? 'Search commands' : 'Try it'}',
-                style: boxMonoStyle(),
-              ),
+              compact: true,
+              label: next == null
+                  ? 'Keyboard practice'
+                  : '${hint == null ? '' : '$hint  '}${next == WorkspaceLesson.commands ? 'Search commands' : 'Try it'}',
             ),
-            TextButton(
+            DesktopPill(
               key: const ValueKey('quick-start-pause'),
               onPressed: learning.pause,
-              child: Text(
-                next == null ? 'Done' : 'Pause guide',
-                style: boxMonoStyle(color: kBoxFaint),
-              ),
+              compact: true,
+              quiet: true,
+              label: next == null ? 'Done' : 'Pause guide',
             ),
           ],
         ),

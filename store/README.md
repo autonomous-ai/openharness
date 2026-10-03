@@ -18,6 +18,8 @@ store/
   PLAN.md          the first build plan, kept for its reasoning
 ```
 
+Both a reusable Store package and its running sessions are called **harnesses**.
+A **swarm** groups running harnesses. See [product terminology](../docs/terminology.md).
 In code and on the wire a package is still a **DSH**, a domain-specific harness: `harness dsh …`,
 `dsh_list`, `cli/src/dsh/`. Those names are the CLI's public contract and stay.
 
@@ -48,6 +50,14 @@ what lets hundreds of packages exist without any of them touching the app or the
 | `.harness/verdict.json` | the one file the domain writes and Harness reads: ready or not, findings, phases |
 
 ## Build one
+
+**Workspace layout is required:** every DSH with a viewer opens with the viewer
+on the left at **70%** and the real agent chat on the right at **30%**. Keep both
+slots during loading and failed setup; show chat recovery in the chat slot.
+Use the shared canvas and preserve user resizing. Follow the
+[DSH workspace contract](../desktop/design/dsh-workspace.md), including its
+failure, reconnect, and release checks. This applies equally to native utility
+dashboards and web viewers.
 
 **First time?** Follow [Hello World](../CONTRIBUTING.md#your-first-harness): copy a tiny package,
 install it locally, and change a greeting in a live HTML preview. It includes the viewer in
@@ -148,7 +158,7 @@ made from it, and a line naming the result. The page types the prompt out, revea
 `store/showcase/<name>/`, 1600×1000 JPEG under 350 KB, and are real output — never a mock-up.
 
 An example may also carry an HTTPS `video` URL (≤ 2048 characters), with `image` as its poster.
-“Watch real session” opens the existing native web player on supported platforms, with a browser
+“Watch recorded run” opens the existing native web player on supported platforms, with a browser
 fallback. Browsing a detail page loads only its pictures; the video loads after a click, fits the
 whole native pane, and stops when the recording closes. Older clients keep showing the prompt
 and picture. The eight hands-on recordings reuse their original PNG/MP4 assets in `docs/images/`
@@ -158,7 +168,7 @@ Recordings appear in the desktop Store's **Featured** tab. **Discover** keeps it
 illustrated editorial features.
 To join that collection, publish an example with both an HTTPS `image` poster and an HTTPS
 `video`. The first complete recording per harness is used; the card shows the harness's
-`tagline` and the recording's `caption`, with Watch session and Explore harness actions.
+`tagline` and the recording's `caption`, with Watch run and Explore harness actions.
 Use the caption to identify the actual result and any demo limitations. The Featured tab
 mixes disciplines and shows the full collection; new catalog recordings join automatically
 on clients with this discovery UI. No per-harness desktop artwork or ID list is needed.
@@ -236,7 +246,7 @@ releases. Changes to the runtime or package protocol can still require a client 
 
 ## Worked examples
 
-| Harness | Base | What it shows |
+| Harness | Base agent | What it shows |
 |---|---|---|
 | [Hello World](examples/hello-world/) | Codex | a greeting in plain HTML, with a shared viewer declared in the manifest; no build step |
 | [Marp](https://github.com/autonomous-ai/openharness/tree/main/store/agents/marp) (Slides) | Claude Code | the smallest complete tier 2: a 110-line viewer with live reload and a present mode, two themes, an offline art generator, a check that writes the verdict, node tests. Start here. |
@@ -313,7 +323,7 @@ mark, who made it (`author`), its category and description, where it lives (`rep
 (`examples`), pictures (`screenshots`), ratings and
 reviews, and installation actions for this computer: Get, Update, Open and Remove. Installing is still what it always was — a
 clone (for a built-in package, of its one folder) under `~/.harness/dsh` on one machine, its toolchain
-set up beside it — so the page is honest about that: a harness is on a machine, not on an account.
+set up beside it — so the page is honest about that: harnesses are installed on a machine.
 Ratings and reviews are the signed-in person's, one per package, kept in the control plane, never in
 this repository.
 
@@ -321,7 +331,21 @@ The sidebar starts with Search, followed by Discover and six broad sections: Des
 Media, Science, Games and Code. Cards show Get, Update or Open for each harness; its page manages installation
 on this computer. Package manifests keep their precise domain labels, grouped only for browsing.
 
-Updates are explicit. The Store shows **Update** when a matching catalog source publishes a different
+Core app harnesses are part of each CLI release: Harness Monitor, Devices and Model Manager are
+installed or refreshed automatically before their viewers are restored. Existing official Store
+copies of these packages move onto this release-managed path on the next CLI update; their previous
+files, workspaces and conversations are retained. Companions refresh their generated package when
+the saved collection's identity is restored, without sending a prompt or replacing its conversation.
+Linked developer checkouts and custom forks remain owner-managed. Core resources are versioned
+beside the CLI, so a CLI rollback restores its corresponding core package revision as well.
+
+Devices and Companions appear in the desktop Store and its search only while the current account's
+**Devices tab** and **Focus-bar creature** experiments, respectively, are enabled. Switching either
+off hides its listing immediately. Their **Open** action reuses the app workspace; these bundled
+resources have no Store Get, Update or Remove action. They remain absent from the public daemon
+catalog, so an account opt-in never publishes them to other users.
+
+Other Store applications, such as Blender, keep explicit updates. The Store shows **Update** when a matching catalog source publishes a different
 commit with changed package content. Built-in catalog entries carry their package folder's Git tree
 revision, so a change elsewhere in the monorepo does not flag every installed harness. Hover over the
 short installed version on a package page to see the installed and available commits.
@@ -334,7 +358,7 @@ directly by their owner.
 The updater fetches and validates a replacement, retains the previous package, and runs setup and
 doctor at the permanent installation path. A failed check restores the old files and installed
 record. Workspaces, copied instructions, output files and session identities are preserved; existing
-skill links resolve to the updated package. Running sessions are not restarted. Setup scripts may
+skill links resolve to the updated package. Running harnesses are not restarted. Setup scripts may
 change external tools, and those external side effects cannot be rolled back. Shared viewer updates
 are independent: open their page from **Viewers**, then choose **Update**.
 
@@ -342,7 +366,7 @@ Viewer packages are shared dependencies, not Store listings. Installing a harnes
 on that machine when needed; another harness using the same viewer reuses the installed copy. Viewers
 stay out of Discover, search and categories. Authors can still inspect and manage them with
 `harness dsh list`, `update`, `doctor` and `remove`. A small **Viewers** icon at the bottom of the Store
-sidebar opens the viewer inventory, where each viewer shows its installed machines and the agents
+sidebar opens the viewer inventory, where each viewer shows its installed machines and the harnesses
 that depend on it. Dependency names come from the machines' catalogs, including community packages;
 an older daemon may not report that information yet.
 

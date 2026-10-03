@@ -3,18 +3,13 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
 
 import '../clipboard/native_clipboard.dart';
 import '../state/app_state.dart';
 
-import 'agent_drag.dart';
-import 'terminal_composer.dart';
-import '../shortcuts/app_keymap.dart';
-import '../shortcuts/keymap.dart';
-import 'terminal_find_bar.dart';
-import '../terminal/terminal_search.dart';
 import '../terminal/terminal_snapshot.dart';
 import '../terminal/terminal_binary.dart';
 import '../terminal/terminal_font_store.dart';
@@ -22,39 +17,29 @@ import '../terminal/terminal_link_opener.dart';
 import '../terminal/remote_media_download.dart';
 import '../terminal/terminal_links.dart';
 import '../terminal/terminal_prompt_zone.dart';
+import '../phone/tty.dart';
 import '../terminal/terminal_session.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../terminal/terminal_viewport.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../theme/app_theme.dart';
 import 'terminal_pane_badges.dart';
-import 'terminal_pane_header.dart';
 
-// The header strip, its drag ghost and the small badges are presentation that
-// only changes when its inputs do; they live in `terminal_pane_header.dart` and
-// `terminal_pane_badges.dart`. Re-exported so this file stays the one import a
-// pane needs.
-export 'terminal_pane_header.dart' show TerminalNotice, TerminalPaneHeader;
-
+/// One agent's terminal: xterm, its input, its scrollback and its links.
+///
+/// ⚠️ **No tile chrome.** The desktop's copy of this widget also draws a pane's header strip —
+/// engine, title, status, pin, close, drag handle — with a Find bar in it, and a composer box under
+/// the terminal. None of that has a copy here: the phone names the agent in its own title over the
+/// page (`phone/terminal_title.dart`), has no tile to close, zoom or drag, and types into the
+/// terminal itself.
 class TerminalPanel extends StatefulWidget {
   final AppNotifier notifier;
   final TerminalSession session;
 
-  /// Takes this tile off the grid. Null when the terminal is the whole window,
-  /// where there is nothing to close it back to.
-  final VoidCallback? onClose;
-  final VoidCallback? onDelete;
-
-  final VoidCallback? onToggleZoom;
-  final bool zoomed;
-
-  /// This native terminal took the keyboard, so its grid tile becomes focused.
-  final VoidCallback? onRendererFocus;
-
-  /// Only the focused grid tile may claim keyboard focus on mount/rebuild.
+  /// Only the focused page may claim keyboard focus on mount/rebuild.
   final bool focused;
   final bool visible;
+  final String? tabId;
 
   /// True while the software keyboard is mid-animation and the pane's height is
   /// still a moving target.
@@ -76,22 +61,15 @@ class TerminalPanel extends StatefulWidget {
   /// closed the same loop but froze the output for the whole slide as well —
   /// see [_TerminalPanelState._live].
   final bool settling;
-  final Size? viewportSize;
-
-  /// A shared terminal can move to another harness without being remounted.
-  final (String, int)? paneLocation;
-  final (int, int, int?)? layoutRequest;
-  final bool compactHeader;
-
-  /// The tile's own header strip — engine, title, status, pin, close — and
-  /// whether it is built at all. False on the phone, where [PhoneHeader] already
-  /// names the agent above this panel, there is no tile to pin, close or drag,
-  /// and the pane takes the full remaining height (`phone/terminal_page.dart`
-  /// in the mobile package). Find has no way in there — every
-  /// [TerminalFindAction] caller lives in the desktop screens — so the row's
-  /// Find overlay goes with it.
-  final bool showHeader;
   final int focusRequest;
+
+  /// Where the reader is while scrolled up in the history — tmux's copy-mode position,
+  /// `[above/total]`: lines between the view and the end, and lines of history in all — or null at
+  /// the end, following the stream. Null for a host that draws no position.
+  final ValueNotifier<({int above, int total})?>? scrollback;
+
+  /// Bumped by the host to go back to the end and follow the stream again — the position's tap.
+  final int jumpToEndRequest;
 
   /// Takes over the tap that would raise the software keyboard. Null leaves it
   /// to xterm, which is what every desktop tile does.
@@ -108,17 +86,9 @@ class TerminalPanel extends StatefulWidget {
   /// jumping up would cover half of what they were reading.
   final VoidCallback? onInputTap;
 
-  /// Whether this tile's composer textbox is showing. Only consulted for a remote machine.
-  final bool composerVisible;
-  final bool readOnly;
-  final TerminalNotice? notice;
-
-  /// Flips [composerVisible]. Null where there is no composer to toggle.
-  final VoidCallback? onToggleComposer;
-
-  /// Lets the header be dragged to trade places with another tile. Null when
-  /// this is the only tile — see [TerminalPaneHeader.paneDrag].
-  final PaneDragHandle? paneDrag;
+  /// A tap on a row of output, with that row's text — before [onInputTap] is considered. True
+  /// when the host took it: on the phone, an answer's own line while a question is open.
+  final bool Function(String line)? onLineTap;
 
   /// Test seam for OS actions; normal panes use the platform launcher.
   final TerminalLinkOpener? linkOpener;
@@ -130,24 +100,13 @@ class TerminalPanel extends StatefulWidget {
     required this.session,
     required this.focused,
     this.visible = true,
+    this.tabId,
     this.settling = false,
-    this.viewportSize,
-    this.paneLocation,
-    this.layoutRequest,
-    this.compactHeader = false,
-    this.showHeader = true,
     this.focusRequest = 0,
+    this.scrollback,
+    this.jumpToEndRequest = 0,
     this.onInputTap,
-    this.composerVisible = false,
-    this.readOnly = false,
-    this.notice,
-    this.onToggleComposer,
-    this.onClose,
-    this.onDelete,
-    this.onToggleZoom,
-    this.zoomed = false,
-    this.onRendererFocus,
-    this.paneDrag,
+    this.onLineTap,
     this.linkOpener,
     this.mediaDownloader,
   });
@@ -168,21 +127,6 @@ class _TerminalPanelState extends State<TerminalPanel>
     keepScrollOffset: false,
   );
   final FocusNode _focusNode = FocusNode();
-  final FocusNode _composerFocus = FocusNode();
-  final _findBarKey = GlobalKey<TerminalFindBarState>();
-  TerminalSearch? _find;
-  String _lastFindQuery = '';
-  bool _lastFindCaseSensitive = false;
-  CellAnchor? _lastFindAnchor;
-  Buffer? _lastFindBuffer;
-  TerminalHighlight? _findHighlight;
-  Buffer? _findPaintedBuffer;
-  BufferRangeLine? _findPaintedRange;
-  Buffer? _findOriginBuffer;
-  CellAnchor? _findOriginLine;
-  double _findOriginFraction = 0;
-  bool _findOriginAtEnd = false;
-  bool _findRevealPending = false;
   late Terminal _viewTerminal;
   late GlobalKey<TerminalViewState> _terminalViewKey;
   Timer? _dialInertiaTimer;
@@ -223,8 +167,6 @@ class _TerminalPanelState extends State<TerminalPanel>
   bool _observingLinkModifiers = false;
   late final RemoteMediaDownloader _mediaDownloader;
   MediaDownloadCancellation? _previewCancellation;
-  Object? _headerPresentation;
-  Widget? _header;
 
   @override
   void initState() {
@@ -236,10 +178,10 @@ class _TerminalPanelState extends State<TerminalPanel>
     _linkOpener = widget.linkOpener ?? TerminalLinkOpener();
     _mediaDownloader = widget.mediaDownloader ?? RemoteMediaDownloader();
     _focusNode.addListener(_handleFocusChange);
-    _composerFocus.addListener(_handleComposerFocusChange);
     WidgetsBinding.instance.addObserver(this);
     widget.session.attachViewport(this);
     widget.session.addListener(_onSessionChanged);
+    widget.session.outputTicks.addListener(_onOutput);
     terminalFontStore.addListener(_onFontChanged);
     // Colours repaint the view in place — no relayout, no resize frame — but
     // they still need a rebuild to reach it, and this widget reads the store
@@ -282,18 +224,27 @@ class _TerminalPanelState extends State<TerminalPanel>
   @override
   void didUpdateWidget(TerminalPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.visible && _focusNode.hasFocus) {
+      widget.session.inputTabId = widget.tabId;
+    }
+    if (oldWidget.jumpToEndRequest != widget.jumpToEndRequest) _jumpToEnd();
     if (!identical(oldWidget.session, widget.session)) {
-      _closeFind(restore: false, focus: false, rebuild: false);
-      _clearLastFind();
-      _lastFindQuery = '';
       _previewCancellation?.cancel();
       _previewProgress.value = null;
       oldWidget.session.setCursorBlinkPhase(true);
       oldWidget.session.removeListener(_onSessionChanged);
+      oldWidget.session.outputTicks.removeListener(_onOutput);
       oldWidget.session.detachViewport(this);
       widget.session.attachViewport(this);
       widget.session.addListener(_onSessionChanged);
-      _composerFocusPending = false;
+      widget.session.outputTicks.addListener(_onOutput);
+      // A new agent starts at its end. Cleared after the frame: this is build.
+      final scrollback = widget.scrollback;
+      if (scrollback != null) {
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => scrollback.value = null,
+        );
+      }
       _cancelDialInertia();
       _controller.clearSelection();
       _viewTerminal.removeListener(_scheduleLinkRefresh);
@@ -311,50 +262,32 @@ class _TerminalPanelState extends State<TerminalPanel>
     if (oldWidget.visible && !widget.visible) {
       _rememberFollowTail();
       _focusNode.unfocus();
-      _composerFocus.unfocus();
       _cancelDialInertia();
       _linkPointerPosition = null;
       _hoveredLink.value = null;
       _pressedLink = null;
       _observeLinkModifiers(false);
     }
-    if (widget.visible &&
-        (!oldWidget.visible || oldWidget.paneLocation != widget.paneLocation)) {
-      _afterTerminalMounted();
-    }
+    if (widget.visible && !oldWidget.visible) _afterTerminalMounted();
     // The keyboard has finished moving and the pane's height is final. Measure
     // it once and ask the shell for that size — the single SIGWINCH this whole
     // gate exists to reduce the animation to.
     //
     // `claimFocus: false` on purpose: the keyboard is already up, or already
     // gone, and whoever owns the caret decided that. Re-claiming here would
-    // pull it back from the composer, or summon the keyboard again just as the
-    // user finished dismissing it.
+    // summon the keyboard again just as the user finished dismissing it.
     if (oldWidget.settling && !widget.settling && widget.visible) {
-      _afterTerminalMounted(claimFocus: false);
-    }
-    if (oldWidget.viewportSize != widget.viewportSize ||
-        oldWidget.layoutRequest != widget.layoutRequest) {
-      // Geometry can change while a resize handle or another control owns
-      // the keyboard. Refresh the viewport without claiming input ownership.
       _afterTerminalMounted(claimFocus: false);
     }
     if (widget.focused &&
         (!oldWidget.focused || oldWidget.focusRequest != widget.focusRequest)) {
       _claimFocusAfterFrame();
     }
-    // Showing or hiding the box changes how many rows the terminal has. Re-measure so the remote
-    // grid is resized to what is actually on screen.
-    if (oldWidget.composerVisible != widget.composerVisible) {
-      _afterTerminalMounted();
-    }
     _syncCursorBlink();
   }
 
   @override
   void dispose() {
-    _closeFind(restore: false, focus: false, rebuild: false);
-    _clearLastFind();
     WidgetsBinding.instance.removeObserver(this);
     _tickerMode?.removeListener(_syncCursorBlink);
     _previewCancellation?.cancel();
@@ -363,33 +296,22 @@ class _TerminalPanelState extends State<TerminalPanel>
     _observeLinkModifiers(false);
     widget.session.setCursorBlinkPhase(true);
     widget.session.removeListener(_onSessionChanged);
+    widget.session.outputTicks.removeListener(_onOutput);
     widget.session.detachViewport(this);
     terminalFontStore.removeListener(_onFontChanged);
     terminalThemeStore.removeListener(_onFontChanged);
     _cancelDialInertia();
     _cursorBlinkTimer?.cancel();
     _focusNode.removeListener(_handleFocusChange);
-    _composerFocus.removeListener(_handleComposerFocusChange);
     _controller.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
-    _composerFocus.dispose();
     _hoveredLink.dispose();
     _linkModifierDown.dispose();
     _previewProgress.dispose();
     super.dispose();
   }
 
-  /// Whether this pane shows the composer.
-  ///
-  /// Only a machine reached over the network charges a round trip per keystroke, so only it gets
-  /// the box — typing into a local pane already costs well under a millisecond and it would be
-  /// dead weight across the bottom.
-  ///
-  /// The test is `isLocalMachine`, NOT `isRemote`: the app only ever lists machines whose authMode
-  /// is `remote` (see the filter in `_loadMachines`), so `isRemote` is true for every pane,
-  /// including this very computer. What separates them is whether the machine's computerId is this
-  /// one, which is what puts it on the loopback transport.
   /// Whether the renderer may resize the remote shell to this view's height,
   /// and run the cursor clock.
   ///
@@ -406,18 +328,26 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// stopped the output dead for the whole keyboard slide.
   bool get _live => widget.visible && !widget.settling;
 
-  bool get _showsComposer {
-    final machineState = widget.notifier.stateOf(widget.session.machineId);
-    return machineState?.isLocalMachine != true && widget.composerVisible;
-  }
-
-  /// The composer refuses focus while it is disabled, which it is until the stream goes live. When
-  /// a selection lands on a still-attaching agent, the claim is parked here and made again from
-  /// [_onSessionChanged] the moment it starts accepting input.
-  bool _composerFocusPending = false;
-
   void _onSessionChanged() {
     if (!mounted) return;
+    // ⚠️ **A keyframe replaces the emulator itself, and nothing above this pane rebuilds for it.**
+    // The daemon answers every resize with one — so every keyboard the phone raises or lowers ends
+    // in one — and the page redraws only for what IT shows (the status, the first frame, the
+    // agent), all of which read the same after the swap. The view then stayed on the OLD
+    // [Terminal], frozen at its pre-resize screen, while every byte after went into the new one.
+    // [build] is what moves the view across ([_syncTerminal]); this is what asks for a build.
+    //
+    // After the frame when the swap lands mid-frame, as [setState] may not be called then.
+    if (!identical(widget.session.terminal, _viewTerminal)) {
+      if (SchedulerBinding.instance.schedulerPhase ==
+          SchedulerPhase.persistentCallbacks) {
+        SchedulerBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() {});
+        });
+      } else {
+        setState(() {});
+      }
+    }
     _syncCursorBlink();
     // A pane can open BEFORE its screen exists: over the relay it mounts empty
     // and the retained scrollback is replayed a moment later, so the jump in
@@ -446,22 +376,6 @@ class _TerminalPanelState extends State<TerminalPanel>
         }
       });
     }
-    if (!_composerFocusPending) return;
-    if (!widget.focused || !_showsComposer) {
-      _composerFocusPending = false;
-      return;
-    }
-    if (widget.readOnly || !widget.session.acceptsInput) return;
-    _composerFocusPending = false;
-    // Deferred a frame on purpose. This panel registers its session listener before the composer
-    // registers its own (a parent's initState runs first), so at this instant the field is still
-    // built as disabled — and a disabled field REFUSES focus. Claiming after the frame the
-    // composer rebuilds in is what makes the claim actually land.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_canClaimInput || !widget.focused || !_showsComposer) return;
-      if (widget.readOnly || !widget.session.acceptsInput) return;
-      _composerFocus.requestFocus();
-    });
   }
 
   /// The vendored renderer already treats a changed `textStyle` as a full re-layout — see
@@ -493,29 +407,16 @@ class _TerminalPanelState extends State<TerminalPanel>
         ? position.pixels / lineHeight - viewportRow!
         : 0.0;
     final atEnd = _followTail || position == null;
-    final originRow = _findOriginLine?.attached == true
-        ? _findOriginLine!.y
-        : null;
-    final originFraction = _findOriginFraction;
-    final originAtEnd = _findOriginAtEnd;
-    final match =
-        _find?.match?.begin ??
-        (_lastFindAnchor?.attached == true ? _lastFindAnchor!.offset : null);
     final selection = _controller.selection;
     final selectedText = selection == null ? null : previous.getText(selection);
     final locations = remapTerminalRows(previous, next, [
       if (!atEnd) ?viewportRow,
-      ?originRow,
-      ?match?.y,
       ?selection?.begin.y,
       ?selection?.end.y,
     ]);
     int row(int old) => locations[old] ?? old.clamp(0, next.lines.length - 1);
     CellOffset location(CellOffset old) =>
         CellOffset(old.x.clamp(0, terminal.viewWidth - 1), row(old.y));
-    final wasFinding = _find != null;
-    _closeFind(restore: false, focus: false, rebuild: false);
-    _clearLastFind();
     // Selection anchors belong to a specific circular buffer. Detach them
     // before the TerminalView starts laying out the replacement terminal.
     _controller.clearSelection();
@@ -539,10 +440,6 @@ class _TerminalPanelState extends State<TerminalPanel>
         (row(viewportRow) + viewportFraction) * lineHeight,
       );
     }
-    if (match != null) {
-      _lastFindBuffer = next;
-      _lastFindAnchor = next.createAnchorFromOffset(location(match));
-    }
     if (selection != null &&
         locations.containsKey(selection.begin.y) &&
         locations.containsKey(selection.end.y)) {
@@ -556,34 +453,13 @@ class _TerminalPanelState extends State<TerminalPanel>
         );
       }
     }
-    if (wasFinding) {
-      _findOriginBuffer = next;
-      _findOriginAtEnd = originAtEnd;
-      _findOriginFraction = originFraction;
-      if (originRow != null) {
-        _findOriginLine = next.createAnchor(0, row(originRow));
-      }
-      _findRevealPending = true;
-      _find = TerminalSearch(
-        terminal,
-        origin: match == null ? null : location(match),
-      )..addListener(_onFindChanged);
-      _find!.setQuery(_lastFindQuery, caseSensitive: _lastFindCaseSensitive);
-    }
     _followTail = atEnd;
     _afterTerminalMounted(scrollToEnd: atEnd);
   }
 
-  /// Typing in the composer focuses the tile, exactly like clicking into the terminal does.
-  void _handleComposerFocusChange() {
-    if (_composerFocus.hasFocus) widget.onRendererFocus?.call();
-  }
-
   void _handleFocusChange() {
+    if (_focusNode.hasFocus) widget.session.inputTabId = widget.tabId;
     _syncCursorBlink();
-    if (_focusNode.hasFocus) {
-      widget.onRendererFocus?.call();
-    }
   }
 
   /// Re-establishes the native text-input connection on pane activation.
@@ -597,23 +473,6 @@ class _TerminalPanelState extends State<TerminalPanel>
   bool _claimFocus(TerminalViewState view, {bool navigating = false}) {
     if (!_canClaimInput ||
         (!navigating && (!widget.focused || !widget.visible))) {
-      return false;
-    }
-    if (_find != null) {
-      final bar = _findBarKey.currentState;
-      if (bar == null) return false;
-      bar.focusSearch(selectAll: false);
-      return true;
-    }
-    if (_composerFocus.hasFocus) return true;
-    // On a remote pane the box gets the caret, not the terminal. Landing in the terminal would
-    // hand the user the per-keystroke path by default — the exact cost the box exists to avoid.
-    if (_showsComposer && !widget.readOnly) {
-      if (widget.session.acceptsInput && _composerFocus.canRequestFocus) {
-        _composerFocus.requestFocus();
-        return true;
-      }
-      _composerFocusPending = true;
       return false;
     }
     view.requestKeyboard();
@@ -654,19 +513,11 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// ticker mode without rebuilding the subtree when a route covers it.
   void _syncCursorBlink() {
     final lifecycle = WidgetsBinding.instance.lifecycleState;
-    final findEnabled =
-        mounted &&
-        widget.visible &&
-        (_tickerMode?.value.enabled ?? false) &&
-        (lifecycle == null || lifecycle == AppLifecycleState.resumed);
-    _find?.setEnabled(findEnabled);
-    if (!findEnabled) _clearFindHighlight();
     final enabled =
         mounted &&
         // `_live`, not `visible`: a cursor phase is a markNeedsPaint on the
         // terminal, and nothing should repaint it while the keyboard slides.
         _live &&
-        !widget.readOnly &&
         _focusNode.hasFocus &&
         widget.session.acceptsInput &&
         (_tickerMode?.value.enabled ?? false) &&
@@ -760,8 +611,8 @@ class _TerminalPanelState extends State<TerminalPanel>
     int retries = 2,
   }) {
     // Request alignment before this frame's layout, so even a retained pane's
-    // first visible paint uses its new size. Keep Find's explicit location.
-    if (scrollToEnd && _find == null) {
+    // first visible paint uses its new size.
+    if (scrollToEnd) {
       _cancelDialInertia();
       _followTail = true;
       _laidOutTerminalView()?.scrollToBottom();
@@ -804,177 +655,10 @@ class _TerminalPanelState extends State<TerminalPanel>
           renderSize.height ~/ cellSize.height,
         );
       }
-      if (scrollToEnd && _followTail && _find == null) {
-        view.scrollToBottom();
-      }
-      // Never over the composer: a rebuild that re-focuses this tile while someone is typing into
-      // the box would pull the caret out from under them mid-sentence.
+      if (scrollToEnd && _followTail) view.scrollToBottom();
       if (claimFocus) _claimFocus(view);
-      if (_find != null) _onFindChanged();
       if (_linkPointerPosition != null) _hoverLink(_linkPointerPosition);
     });
-  }
-
-  @override
-  void find(TerminalFindAction action) {
-    if (!mounted || !widget.visible || !widget.focused) return;
-    final wasClosed = _find == null;
-    if (wasClosed) {
-      final view = _laidOutTerminalView();
-      if (view == null || !_scrollController.hasClients) return;
-      final position = _scrollController.position;
-      final height = view.renderTerminal.lineHeight;
-      final row = (position.pixels / height).floor().clamp(
-        0,
-        _viewTerminal.buffer.lines.length - 1,
-      );
-      _findOriginBuffer = _viewTerminal.buffer;
-      _findOriginLine = _findOriginBuffer!.createAnchor(0, row);
-      _findOriginFraction = position.pixels / height - row;
-      _findOriginAtEnd = position.maxScrollExtent - position.pixels < 1;
-      var origin = CellOffset(0, row);
-      if (action != TerminalFindAction.open &&
-          _lastFindAnchor?.attached == true &&
-          identical(_lastFindBuffer, _viewTerminal.buffer)) {
-        final last = _lastFindAnchor!.offset;
-        origin = CellOffset(
-          last.x + (action == TerminalFindAction.next ? 1 : 0),
-          last.y,
-        );
-      }
-      _find = TerminalSearch(_viewTerminal, origin: origin)
-        ..addListener(_onFindChanged);
-      _findRevealPending = true;
-      _find!.setQuery(_lastFindQuery, caseSensitive: _lastFindCaseSensitive);
-      _findBarKey.currentState?.focusSearch(search: _find);
-      setState(() {});
-    } else if (action == TerminalFindAction.open) {
-      _findBarKey.currentState?.focusSearch();
-    }
-    if (action != TerminalFindAction.open &&
-        !(wasClosed && action == TerminalFindAction.next)) {
-      _stepFind(action == TerminalFindAction.next ? 1 : -1);
-    }
-  }
-
-  void _queryFind(String query, bool caseSensitive) {
-    _lastFindQuery = query;
-    _lastFindCaseSensitive = caseSensitive;
-    _findRevealPending = true;
-    _find?.setQuery(query, caseSensitive: caseSensitive);
-  }
-
-  void _stepFind(int delta) {
-    _findRevealPending = true;
-    _find?.step(delta);
-  }
-
-  void _onFindChanged() {
-    final search = _find;
-    if (!mounted || search == null || !widget.visible) return;
-    final range = search.match;
-    if (range != _findPaintedRange ||
-        !identical(_findPaintedBuffer, _viewTerminal.buffer)) {
-      _clearFindHighlight();
-      if (range != null) {
-        _findPaintedBuffer = _viewTerminal.buffer;
-        _findPaintedRange = range;
-        _findHighlight = _controller.highlight(
-          p1: _viewTerminal.buffer.createAnchorFromOffset(range.begin),
-          p2: _viewTerminal.buffer.createAnchorFromOffset(range.end),
-          color: const Color(0x99cf8e25),
-        );
-      }
-    }
-    if (_findRevealPending && search.hasSnapshot && range != null) {
-      final render = _laidOutTerminalView()?.renderTerminal;
-      if (render == null || !_scrollController.hasClients) return;
-      _findRevealPending = false;
-      final position = _scrollController.position;
-      final top = range.begin.y * render.lineHeight + 10;
-      final bottom = (range.end.y + 1) * render.lineHeight + 10;
-      final safeTop = position.pixels + 10;
-      final safeBottom = position.pixels + position.viewportDimension - 10;
-      final offset = top < safeTop
-          ? top - 10
-          : bottom > safeBottom
-          ? bottom - position.viewportDimension + 10
-          : position.pixels;
-      final target = offset.clamp(
-        position.minScrollExtent,
-        position.maxScrollExtent,
-      );
-      if (target != position.pixels) position.jumpTo(target);
-    }
-  }
-
-  void _clearFindHighlight() {
-    final highlight = _findHighlight;
-    _findHighlight = null;
-    _findPaintedBuffer = null;
-    _findPaintedRange = null;
-    if (highlight == null) return;
-    highlight.dispose();
-    highlight.p1.dispose();
-    highlight.p2.dispose();
-  }
-
-  void _clearLastFind() {
-    _lastFindAnchor?.dispose();
-    _lastFindAnchor = null;
-    _lastFindBuffer = null;
-  }
-
-  void _closeFind({
-    bool restore = true,
-    bool focus = true,
-    bool rebuild = true,
-  }) {
-    final search = _find;
-    if (search == null) return;
-    final match = search.match;
-    if (match != null) {
-      _clearLastFind();
-      _lastFindAnchor = _viewTerminal.buffer.createAnchorFromOffset(
-        match.begin,
-      );
-      _lastFindBuffer = _viewTerminal.buffer;
-    }
-    _find = null;
-    _findBarKey.currentState?.releaseSearchFocus();
-    search.removeListener(_onFindChanged);
-    search.dispose();
-    _clearFindHighlight();
-    if (restore &&
-        identical(_findOriginBuffer, _viewTerminal.buffer) &&
-        _scrollController.hasClients) {
-      final height = _laidOutTerminalView()?.renderTerminal.lineHeight;
-      final position = _scrollController.position;
-      if (height != null) {
-        final offset = _findOriginAtEnd
-            ? position.maxScrollExtent
-            : _findOriginLine?.attached == true
-            ? (_findOriginLine!.y + _findOriginFraction) * height
-            : 0.0;
-        position.jumpTo(
-          offset.clamp(position.minScrollExtent, position.maxScrollExtent),
-        );
-      }
-    }
-    _findOriginLine?.dispose();
-    _findOriginLine = null;
-    _findOriginBuffer = null;
-    if (rebuild && mounted) setState(() {});
-    if (focus) {
-      // The retained terminal is already mounted. Return its input connection
-      // now: the next key can arrive before Find's removal is painted.
-      final view = _laidOutTerminalView();
-      if (view != null) {
-        _claimFocus(view);
-      } else {
-        _claimFocusAfterFrame();
-      }
-    }
   }
 
   @override
@@ -1044,6 +728,16 @@ class _TerminalPanelState extends State<TerminalPanel>
     _lastInertiaMicros = null;
   }
 
+  /// Copies what is selected and lets it go — the phone's Copy: a long press, then this.
+  Future<void> _copySelection() async {
+    final selection = _controller.selection;
+    if (selection == null) return;
+    final text = widget.session.terminal.buffer.getText(selection);
+    _controller.clearSelection();
+    await Clipboard.setData(ClipboardData(text: text));
+    HapticFeedback.lightImpact();
+  }
+
   Future<void> _copyOrPaste() async {
     final terminal = widget.session.terminal;
     final selection = _controller.selection;
@@ -1071,7 +765,7 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// app share the exact same OS clipboard. The wire-based `pasteImage` (chunked
   /// upload, daemon writes the far side's OS clipboard, daemon replays Ctrl+V) is
   /// reserved for a genuinely REMOTE pane, whose engine reads a DIFFERENT
-  /// clipboard than this one — see `MachineState.isLocalMachine`.
+  /// clipboard than this one — which, on a phone, is every pane.
   /// An image handed over by the software keyboard's own clipboard.
   ///
   /// This is the phone's ONLY way to get an image into a pane: Flutter's
@@ -1085,7 +779,7 @@ class _TerminalPanelState extends State<TerminalPanel>
   void _onContentInserted(KeyboardInsertedContent content) {
     final bytes = content.data;
     if (bytes == null || bytes.isEmpty) return;
-    if (widget.readOnly || !widget.session.acceptsInput) return;
+    if (!widget.session.acceptsInput) return;
     if (bytes.length > terminalLocalImagePasteMaxPayloadBytes) return;
     final machine = widget.notifier.stateOf(widget.session.machineId);
     if (machine == null || !machine.terminalImagePasteAvailable) return;
@@ -1093,7 +787,7 @@ class _TerminalPanelState extends State<TerminalPanel>
   }
 
   Future<void> _paste() async {
-    if (widget.readOnly || !widget.session.acceptsInput) return;
+    if (!widget.session.acceptsInput) return;
     final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
     if (text != null && text.isNotEmpty) {
       // A binary TerminalBinaryKind.paste frame rides the same AEAD channel as every other terminal
@@ -1108,9 +802,7 @@ class _TerminalPanelState extends State<TerminalPanel>
       return;
     }
     final machine = widget.notifier.stateOf(widget.session.machineId);
-    if (machine != null &&
-        !machine.isLocalMachine &&
-        machine.terminalImagePasteAvailable) {
+    if (machine != null && machine.terminalImagePasteAvailable) {
       final imageBytes = await NativeClipboard.readImagePng();
       if (imageBytes != null &&
           imageBytes.isNotEmpty &&
@@ -1128,6 +820,7 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// is the one hook that runs BEFORE its shortcut map (terminal_view.dart), so
   /// this is where the binding has to be replaced rather than added.
   KeyEventResult _onTerminalKey(FocusNode node, KeyEvent event) {
+    widget.session.inputTabId = widget.tabId;
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     if (event.logicalKey != LogicalKeyboardKey.keyV) {
       return KeyEventResult.ignored;
@@ -1210,6 +903,59 @@ class _TerminalPanelState extends State<TerminalPanel>
     if (!_scrollController.hasClients) return;
     final position = _scrollController.position;
     _followTail = position.maxScrollExtent - position.pixels < 1;
+    _publishScrollback(position);
+  }
+
+  /// Tells the host where the reader is — see [TerminalPanel.scrollback].
+  void _publishScrollback(ScrollPosition position) {
+    final scrollback = widget.scrollback;
+    if (scrollback == null) return;
+    if (_followTail) {
+      scrollback.value = null;
+      return;
+    }
+    final line = _laidOutTerminalView()?.renderTerminal.lineHeight ?? 0;
+    if (line <= 0) return;
+    final terminal = widget.session.terminal;
+    final next = (
+      above: ((position.maxScrollExtent - position.pixels) / line).round(),
+      total: math.max(0, terminal.buffer.lines.length - terminal.viewHeight),
+    );
+    if (scrollback.value != next) scrollback.value = next;
+  }
+
+  bool _scrollbackPending = false;
+
+  /// Output arrived. Below a reader scrolled up in the history the view holds still, and the
+  /// position counts the new lines — once per frame, after the layout that placed them.
+  void _onOutput() {
+    if (_followTail || !widget.visible || widget.scrollback == null) return;
+    if (_scrollbackPending) return;
+    _scrollbackPending = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollbackPending = false;
+      if (!mounted || !_scrollController.hasClients) return;
+      _publishScrollback(_scrollController.position);
+    });
+  }
+
+  /// Back to the end, following the stream again — the host's position tap.
+  ///
+  /// Runs from `didUpdateWidget`, inside a build, so [scrollback] is left to the host that asked —
+  /// it clears it with the tap — and to the scroll that follows.
+  void _jumpToEnd() {
+    _cancelDialInertia();
+    // A fling still coasting up through the history would carry on past the tap and take the view
+    // straight back off the end: stopped where it is, first.
+    //
+    // Jumped to the laid-out end, so the scroll it reports reads as "at the end"; the layout the
+    // render asks for below then settles it against any output since.
+    if (_scrollController.hasClients) {
+      final position = _scrollController.position;
+      position.jumpTo(position.maxScrollExtent);
+    }
+    _followTail = true;
+    _laidOutTerminalView()?.scrollToBottom();
   }
 
   void _onScrollChanged() {
@@ -1250,12 +996,25 @@ class _TerminalPanelState extends State<TerminalPanel>
       return;
     }
     _inputTapClaimed = false;
-    if (!isPromptTap(_viewTerminal.buffer, cell.y)) return;
+    final buffer = _viewTerminal.buffer;
+    if (cell.y >= 0 &&
+        cell.y < buffer.lines.length &&
+        (widget.onLineTap?.call(buffer.lines[cell.y].getText()) ?? false)) {
+      return;
+    }
+    if (!isPromptTap(buffer, cell.y)) return;
     widget.onInputTap?.call();
   }
 
+  /// Whether a tap on a link opens it. On a phone, always: there is no ⌘ or ctrl to hold, and a
+  /// URL or `file:line` you cannot open by touching it is a dead word. Elsewhere, with the modifier.
+  bool get _linkTapOpens =>
+      defaultTargetPlatform == TargetPlatform.iOS ||
+      defaultTargetPlatform == TargetPlatform.android ||
+      _linkModifierPressed;
+
   bool _onLinkTapDown(TapDownDetails details, CellOffset cell) {
-    _pressedLink = _linkModifierPressed
+    _pressedLink = _linkTapOpens
         ? _linkAtPointer(details.globalPosition)
         : null;
     return _pressedLink != null;
@@ -1267,7 +1026,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     // Read the current buffer again: streamed output may have replaced the
     // text between press and release, or this pane may now show another agent.
     if (target == null ||
-        !_linkModifierPressed ||
+        !_linkTapOpens ||
         target != _linkAtPointer(details.globalPosition)) {
       return;
     }
@@ -1284,8 +1043,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     try {
       final message = await _linkOpener.open(
         target,
-        isLocalMachine:
-            notifier.stateOf(session.machineId)?.isLocalMachine == true,
+        // The agent runs on another machine: a file it names is there, not here.
         isCancelled: () =>
             cancellation.isCancelled ||
             !mounted ||
@@ -1333,280 +1091,140 @@ class _TerminalPanelState extends State<TerminalPanel>
     grid.AppTheme.watch(context);
     final session = widget.session;
     _syncTerminal(session.terminal);
-    final machineState = widget.notifier.stateOf(session.machineId);
-    final remote = machineState != null && !machineState.isLocalMachine;
-    final showComposer = _showsComposer;
-    return KeymapRegion(
-      contextKind: KeymapContext.terminal,
-      composing: () =>
-          _focusNode.hasFocus &&
-          _terminalViewKey.currentState?.isComposing == true,
-      child: ColoredBox(
-        color: grid.AppPalette.windowBg,
-        child: Column(
-          children: [
-            if (widget.showHeader)
-              Stack(
-                children: [
-                  Visibility(
-                    visible: _find == null,
-                    maintainSize: true,
-                    maintainAnimation: true,
-                    maintainState: true,
-                    child: _buildHeader(context),
-                  ),
-                  // Attach the focused pane's input before Find is requested.
-                  // Hidden/unfocused panes need no dormant editor or index.
-                  if (_find != null || (widget.visible && widget.focused))
-                    Positioned.fill(
-                      child: Offstage(
-                        offstage: _find == null,
-                        child: LayoutBuilder(
-                          builder: (context, constraints) => Row(
-                            children: [
-                              if (constraints.maxWidth > 520)
-                                Expanded(
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: stripPadding,
-                                    ),
-                                    child: Text(
-                                      session.agentName,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        fontSize: 13,
-                                        color: Colors.white70,
-                                      ),
-                                    ),
-                                  ),
-                                )
-                              else
-                                const Spacer(),
-                              SizedBox(
-                                width: math.min(constraints.maxWidth, 380),
-
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 6,
-                                    vertical: 4,
-                                  ),
-                                  child: TerminalFindBar(
-                                    key: _findBarKey,
-                                    search: _find,
-                                    initialQuery: _lastFindQuery,
-                                    initialCaseSensitive:
-                                        _lastFindCaseSensitive,
-                                    readOnly:
-                                        widget.readOnly ||
-                                        !session.acceptsInput,
-                                    onQuery: _queryFind,
-                                    onStep: _stepFind,
-                                    onClose: _closeFind,
-                                    onFocus: () =>
-                                        widget.onRendererFocus?.call(),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
+    return ColoredBox(
+      color: grid.AppPalette.windowBg,
+      child: Column(
+        children: [
+          Expanded(
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: MouseRegion(
+                    onEnter: (event) => _hoverLink(event.position),
+                    onHover: (event) => _hoverLink(event.position),
+                    onExit: (_) => _hoverLink(null),
+                    child: _LinkTooltip(
+                      link: _hoveredLink,
+                      modifierDown: _linkModifierDown,
+                      child: TerminalView(
+                        session.terminal,
+                        key: _terminalViewKey,
+                        controller: _controller,
+                        autoResize: _live,
+                        resizeBuffer: false,
+                        scrollController: _scrollController,
+                        focusNode: _focusNode,
+                        autofocus: widget.focused,
+                        readOnly: !session.acceptsInput,
+                        // iOS answers Backspace over an empty native buffer
+                        // with nothing at all (`deleteBackward` in
+                        // FlutterTextInputPlugin.mm), so a line the keyboard
+                        // did not type — text typed on the desktop, a voice
+                        // transcript, a recalled command — could not be
+                        // rubbed out. xterm keeps a padding for Backspace to
+                        // eat instead — see test/terminal_ime_input_test.dart.
+                        //
+                        // Unconditional: this package builds for iOS and
+                        // Android only. ⚠️ Lost once already in a merge
+                        // (cb47ba35 → TestFlight build 11), which is why
+                        // test/terminal_panel_backspace_test.dart pins it.
+                        deleteDetection: true,
+                        theme: terminalScreenThemeFor(
+                          grid.AppTheme.palette.value,
+                          terminalThemeStore.value,
                         ),
-                      ),
-                    ),
-                ],
-              ),
-
-            // Goes with the row above it: the phone draws its own rule under
-            // [PhoneHeader], and keeping this one would stack two.
-            if (widget.showHeader) Divider(height: 1, color: AppColors.border),
-            Expanded(
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: MouseRegion(
-                      onEnter: (event) => _hoverLink(event.position),
-                      onHover: (event) => _hoverLink(event.position),
-                      onExit: (_) => _hoverLink(null),
-                      child: _LinkTooltip(
-                        link: _hoveredLink,
-                        modifierDown: _linkModifierDown,
-                        child: TerminalView(
-                          session.terminal,
-                          key: _terminalViewKey,
-                          controller: _controller,
-                          autoResize: _live,
-                          resizeBuffer: false,
-                          scrollController: _scrollController,
-                          focusNode: _focusNode,
-                          autofocus: widget.focused && !showComposer,
-                          readOnly: widget.readOnly || !session.acceptsInput,
-                          // iOS answers Backspace over an empty native buffer
-                          // with nothing at all (`deleteBackward` in
-                          // FlutterTextInputPlugin.mm), so a line the keyboard
-                          // did not type — text typed on the desktop, a voice
-                          // transcript, a recalled command — could not be
-                          // rubbed out. xterm keeps a padding for Backspace to
-                          // eat instead — see test/terminal_ime_input_test.dart.
-                          //
-                          // Unconditional: this package builds for iOS and
-                          // Android only. ⚠️ Lost once already in a merge
-                          // (cb47ba35 → TestFlight build 11), which is why
-                          // test/terminal_panel_backspace_test.dart pins it.
-                          deleteDetection: true,
-                          theme: terminalThemeFor(
-                            grid.AppTheme.palette.value,
-                            terminalThemeStore.value,
-                          ),
-                          // ⚠️ **Nothing top or bottom, and that is the whole
-                          // point of writing it out rather than `all(10)`.**
-                          // This padding is laid OUTSIDE the scroll view (see
-                          // xterm's `TerminalView.build`: a `Container` wraps
-                          // the `Scrollable`), so a vertical inset is a strip
-                          // the terminal can never draw into — scrolled to
-                          // either end, the last line stopped 10px short of the
-                          // edge and the gap travelled with the content rather
-                          // than staying put like a margin. The sides are
-                          // margins beside chrome, not under it, and stay.
-                          padding: const EdgeInsets.symmetric(horizontal: 10),
-                          textStyle: terminalFontStore.value,
-                          // ⚠️ The terminal is NOT app chrome, and the user said so:
-                          // it carries its own font settings (Settings ▸ Terminal,
-                          // [terminalFontStore]) precisely because its type is a grid
-                          // a remote program is drawing into, not a label.
-                          //
-                          // Without this, `TerminalView` falls back to
-                          // `MediaQuery.textScalerOf(context)` (xterm's
-                          // terminal_view.dart:257), so the app-wide UI size would
-                          // change the cell size — and a changed cell size is not
-                          // cosmetic here: it re-derives `rows`, which fires
-                          // `Terminal.resize` → `session.resize` → a `terminal_resize`
-                          // frame on the wire and a real SIGWINCH at the far end.
-                          //
-                          // Read in `createRenderObject`, not only on update, so this
-                          // holds from the very first frame — no scaled first paint
-                          // and no startup resize.
-                          textScaler: TextScaler.noScaling,
-                          // ⚠️ PNG alone, and not because other types are rare.
-                          // The daemon writes what it receives to a file it names
-                          // `<uuid>.png` outright (`cli/src/lib/pasteDropFiles.ts`),
-                          // so a JPEG would arrive on the far machine under a name
-                          // that lies about it. Widening this means teaching the
-                          // CLI the real type first — and an older CLI, which
-                          // `terminalImagePasteAvailable` already gates on, would
-                          // still not know it.
-                          allowedMimeTypes: const ['image/png'],
-                          onContentInserted: _onContentInserted,
-                          onKeyEvent: _onTerminalKey,
-                          onTapDown: _onTerminalTapDown,
-                          onTapUp: _onTerminalTapUp,
-                          // Constant on purpose. The click cursor is applied by
-                          // [_LinkTooltip]'s own MouseRegion, which repaints
-                          // without rebuilding this view.
-                          mouseCursor: SystemMouseCursors.text,
-                          onSecondaryTapDown: (_, _) => _copyOrPaste(),
-
-                          onAltBufferScroll: session.scrollViaTmuxCopyMode
-                              ? (up) => session.sendScrollCommand(up, 1)
-                              : null,
+                        // ⚠️ **Nothing top or bottom, and that is the whole
+                        // point of writing it out rather than `all(10)`.**
+                        // This padding is laid OUTSIDE the scroll view (see
+                        // xterm's `TerminalView.build`: a `Container` wraps
+                        // the `Scrollable`), so a vertical inset is a strip
+                        // the terminal can never draw into — scrolled to
+                        // either end, the last line stopped 10px short of the
+                        // edge and the gap travelled with the content rather
+                        // than staying put like a margin. The sides are
+                        // margins beside chrome, not under it, and stay.
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: Tty.origin,
                         ),
+                        textStyle: terminalFontStore.value,
+                        // ⚠️ The terminal is NOT app chrome, and the user said so:
+                        // it carries its own font settings (Settings ▸ Terminal,
+                        // [terminalFontStore]) precisely because its type is a grid
+                        // a remote program is drawing into, not a label.
+                        //
+                        // Without this, `TerminalView` falls back to
+                        // `MediaQuery.textScalerOf(context)` (xterm's
+                        // terminal_view.dart:257), so the app-wide UI size would
+                        // change the cell size — and a changed cell size is not
+                        // cosmetic here: it re-derives `rows`, which fires
+                        // `Terminal.resize` → `session.resize` → a `terminal_resize`
+                        // frame on the wire and a real SIGWINCH at the far end.
+                        //
+                        // Read in `createRenderObject`, not only on update, so this
+                        // holds from the very first frame — no scaled first paint
+                        // and no startup resize.
+                        textScaler: TextScaler.noScaling,
+                        // ⚠️ PNG alone, and not because other types are rare.
+                        // The daemon writes what it receives to a file it names
+                        // `<uuid>.png` outright (`cli/src/lib/pasteDropFiles.ts`),
+                        // so a JPEG would arrive on the far machine under a name
+                        // that lies about it. Widening this means teaching the
+                        // CLI the real type first — and an older CLI, which
+                        // `terminalImagePasteAvailable` already gates on, would
+                        // still not know it.
+                        allowedMimeTypes: const ['image/png'],
+                        onContentInserted: _onContentInserted,
+                        onKeyEvent: _onTerminalKey,
+                        onTapDown: _onTerminalTapDown,
+                        onTapUp: _onTerminalTapUp,
+                        // Constant on purpose. The click cursor is applied by
+                        // [_LinkTooltip]'s own MouseRegion, which repaints
+                        // without rebuilding this view.
+                        mouseCursor: SystemMouseCursors.text,
+                        onSecondaryTapDown: (_, _) => _copyOrPaste(),
+
+                        onAltBufferScroll: session.scrollViaTmuxCopyMode
+                            ? (up) => session.sendScrollCommand(up, 1)
+                            : null,
                       ),
                     ),
                   ),
-                  // Both bars tick once per transferred chunk. Listening here
-                  // keeps that traffic off the pane's own element, so a paste
-                  // or a preview download cannot stutter the live terminal.
-                  Positioned(
-                    left: 14,
-                    right: 14,
-                    bottom: 12,
-                    child: _TransferOverlay(
-                      session: session,
-                      preview: _previewProgress,
-                      onCancelPreview: () => _previewCancellation?.cancel(),
-                    ),
+                ),
+                // Both bars tick once per transferred chunk. Listening here
+                // keeps that traffic off the pane's own element, so a paste
+                // or a preview download cannot stutter the live terminal.
+                Positioned(
+                  left: 14,
+                  right: 14,
+                  bottom: 12,
+                  child: _TransferOverlay(
+                    session: session,
+                    preview: _previewProgress,
+                    onCancelPreview: () => _previewCancellation?.cancel(),
                   ),
-                ],
-              ),
+                ),
+                // A long press selects on a phone, and nothing else offered to copy what it
+                // selected: `Copy` rides the selection, top right, until used or cleared.
+                // Under the phone's title (three rows, laid over the pane's top), not behind it.
+                Positioned(
+                  top: 60,
+                  right: 8,
+                  child: ListenableBuilder(
+                    listenable: _controller,
+                    builder: (context, _) => _controller.selection == null
+                        ? const SizedBox.shrink()
+                        : _SelectionActions(
+                            onCopy: () => unawaited(_copySelection()),
+                            onClear: _controller.clearSelection,
+                          ),
+                  ),
+                ),
+              ],
             ),
-            // The grip is shown whether or not the box is: collapsed, it is the only way back.
-            if (!widget.compactHeader &&
-                remote &&
-                widget.onToggleComposer != null)
-              ComposerGrip(
-                expanded: widget.composerVisible,
-                onPressed: widget.onToggleComposer!,
-              ),
-            if (showComposer)
-              TerminalComposer(
-                session: session,
-                focusNode: _composerFocus,
-                inputEnabled: !widget.readOnly,
-              ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
-  }
-
-  /// Visibility and focus affect the renderer, not its title and controls.
-  /// Retain that subtree until its presentation changes. Callback wrappers
-  /// resolve the current widget so cached controls never retain an old action.
-  Widget _buildHeader(BuildContext context) {
-    final session = widget.session;
-    final machine = widget.notifier.stateOf(session.machineId);
-    final agent = machine?.agents
-        .where((a) => a.id == session.agentId)
-        .firstOrNull;
-    final presentation = (
-      theme: Theme.of(context),
-      brightness: grid.AppTheme.brightness.value,
-      fontFamily: AppFonts.sans,
-      notifier: widget.notifier,
-      session: session,
-      name: session.agentName,
-      status: session.status,
-      notice: widget.notice,
-      readOnly: widget.readOnly,
-      error: session.errorMessage ?? session.errorCode,
-      link: session.linkMode,
-      machine: machine?.machine,
-      local: machine?.isLocalMachine,
-      agent: agent,
-      project: agent == null ? null : machine?.projectOf(agent),
-      compact: widget.compactHeader,
-      close: widget.onClose != null,
-      delete: widget.onDelete != null,
-      composer: widget.composerVisible,
-      toggleComposer: widget.onToggleComposer != null,
-      zoomed: widget.zoomed,
-      zoom: widget.onToggleZoom != null,
-      dragId: widget.paneDrag?.ref.paneId,
-      dragSize: widget.paneDrag?.size,
-    );
-    if (_headerPresentation != presentation) {
-      _headerPresentation = presentation;
-      _header = TerminalPaneHeader(
-        notifier: widget.notifier,
-        session: session,
-        notice: widget.notice,
-        readOnly: widget.readOnly,
-        compact: widget.compactHeader,
-        zoomed: widget.zoomed,
-        onToggleZoom: widget.onToggleZoom == null
-            ? null
-            : () => widget.onToggleZoom?.call(),
-        onClose: widget.onClose == null ? null : () => widget.onClose?.call(),
-        onDelete: widget.onDelete == null
-            ? null
-            : () => widget.onDelete?.call(),
-        composerVisible: widget.composerVisible,
-        onToggleComposer: widget.onToggleComposer == null
-            ? null
-            : () => widget.onToggleComposer?.call(),
-        paneDrag: widget.paneDrag,
-      );
-    }
-    return _header!;
   }
 }
 
@@ -1704,6 +1322,54 @@ class _TransferOverlay extends StatelessWidget {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+/// `Copy  ×` over a selection — the phone has no right click and no ⌘C.
+class _SelectionActions extends StatelessWidget {
+  const _SelectionActions({required this.onCopy, required this.onClear});
+
+  final VoidCallback onCopy;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    Widget action(String label, VoidCallback onTap, {bool bold = false}) =>
+        Semantics(
+          button: true,
+          label: label == '×' ? 'Clear selection' : label,
+          excludeSemantics: true,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 44, minHeight: 40),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Center(
+                  widthFactor: 1,
+                  child: Text(
+                    label,
+                    style: tty.style(
+                      size: 15,
+                      weight: bold ? FontWeight.w700 : FontWeight.w400,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+    return Material(
+      color: Color.alphaBlend(tty.text.withValues(alpha: 0.12), tty.ground),
+      elevation: 2,
+      borderRadius: BorderRadius.circular(6),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [action('Copy', onCopy, bold: true), action('×', onClear)],
       ),
     );
   }

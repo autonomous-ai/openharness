@@ -47,14 +47,14 @@ void main() {
             ),
           );
           await tester.pump();
-          expect(find.text('Sign in'), findsOneWidget);
+          expect(find.text('Continue with Google'), findsOneWidget);
           expect(find.text('Could not sign in'), findsNothing);
           expect(find.text('Try again'), findsNothing);
           final notice = find.textContaining('You were signed out');
           expect(notice, findsOneWidget);
           expect(tester.getRect(notice).bottom, lessThanOrEqualTo(544));
           expect(
-            tester.getRect(find.text('Sign in')).top,
+            tester.getRect(find.text('Continue with Google')).top,
             greaterThanOrEqualTo(16),
           );
           final directory = Platform.environment['HARNESS_AUTH_CAPTURE_DIR'];

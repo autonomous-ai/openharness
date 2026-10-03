@@ -66,7 +66,7 @@ void main() {
         Agent.fromJson(_agentJson('g', forkedFrom: {'agentId': 'a0'}))
             .forkedFrom
             ?.name,
-        'an agent',
+        'a harness',
       );
     },
   );

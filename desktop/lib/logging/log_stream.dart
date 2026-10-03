@@ -96,7 +96,7 @@ class LogCommand {
 /// most recent entries, newest first.
 ///
 /// Fed by [StreamAppLog]/[StreamCliLog], read by Settings ▸ Debug. A singleton
-/// like `appLog` and `analytics`, and for the same reason: the things that
+/// like `appLog`, and for the same reason: the things that
 /// write to it — the socket, the CLI runners, the HTTP clients — hold no `Ref`
 /// and no notifier between them.
 class LogStream extends ChangeNotifier {

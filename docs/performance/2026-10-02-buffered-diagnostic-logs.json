@@ -1,0 +1,214 @@
+{
+  "scope": "Real-file component benchmark. Work time includes synchronous append and timer/explicit flush execution; excludes intentional waits. No whole-app improvement claim.",
+  "at": "2026-10-02T04:11:53.275377Z",
+  "allFinalBytesIdentical": true,
+  "results": [
+    {
+      "scenario": "2000-record burst",
+      "trial": 0,
+      "buffered": false,
+      "records": 2000,
+      "warnings": 62,
+      "durableAppends": 2062,
+      "synchronousLogMs": 133.402,
+      "elapsedMs": 146.032,
+      "fileBytes": 237920
+    },
+    {
+      "scenario": "2000-record burst",
+      "trial": 0,
+      "buffered": true,
+      "records": 2000,
+      "warnings": 62,
+      "durableAppends": 63,
+      "synchronousLogMs": 11.496,
+      "elapsedMs": 16.55,
+      "fileBytes": 237920
+    },
+    {
+      "scenario": "2000-record burst",
+      "trial": 1,
+      "buffered": true,
+      "records": 2000,
+      "warnings": 62,
+      "durableAppends": 63,
+      "synchronousLogMs": 6.987,
+      "elapsedMs": 10.396,
+      "fileBytes": 237920
+    },
+    {
+      "scenario": "2000-record burst",
+      "trial": 1,
+      "buffered": false,
+      "records": 2000,
+      "warnings": 62,
+      "durableAppends": 2062,
+      "synchronousLogMs": 114.625,
+      "elapsedMs": 118.735,
+      "fileBytes": 237920
+    },
+    {
+      "scenario": "2000-record burst",
+      "trial": 2,
+      "buffered": false,
+      "records": 2000,
+      "warnings": 62,
+      "durableAppends": 2062,
+      "synchronousLogMs": 112.062,
+      "elapsedMs": 115.558,
+      "fileBytes": 237920
+    },
+    {
+      "scenario": "2000-record burst",
+      "trial": 2,
+      "buffered": true,
+      "records": 2000,
+      "warnings": 62,
+      "durableAppends": 63,
+      "synchronousLogMs": 5.724,
+      "elapsedMs": 8.45,
+      "fileBytes": 237920
+    },
+    {
+      "scenario": "2000-record burst",
+      "trial": 3,
+      "buffered": true,
+      "records": 2000,
+      "warnings": 62,
+      "durableAppends": 63,
+      "synchronousLogMs": 5.86,
+      "elapsedMs": 8.533,
+      "fileBytes": 237920
+    },
+    {
+      "scenario": "2000-record burst",
+      "trial": 3,
+      "buffered": false,
+      "records": 2000,
+      "warnings": 62,
+      "durableAppends": 2062,
+      "synchronousLogMs": 109.731,
+      "elapsedMs": 113.268,
+      "fileBytes": 237920
+    },
+    {
+      "scenario": "2000-record burst",
+      "trial": 4,
+      "buffered": false,
+      "records": 2000,
+      "warnings": 62,
+      "durableAppends": 2062,
+      "synchronousLogMs": 109.459,
+      "elapsedMs": 113.101,
+      "fileBytes": 237920
+    },
+    {
+      "scenario": "2000-record burst",
+      "trial": 4,
+      "buffered": true,
+      "records": 2000,
+      "warnings": 62,
+      "durableAppends": 63,
+      "synchronousLogMs": 5.382,
+      "elapsedMs": 8.079,
+      "fileBytes": 237920
+    },
+    {
+      "scenario": "8 debug records per second",
+      "trial": 0,
+      "buffered": false,
+      "records": 64,
+      "warnings": 2,
+      "durableAppends": 66,
+      "synchronousLogMs": 36.555,
+      "elapsedMs": 8221.973,
+      "fileBytes": 7512
+    },
+    {
+      "scenario": "8 debug records per second",
+      "trial": 0,
+      "buffered": true,
+      "records": 64,
+      "warnings": 2,
+      "durableAppends": 8,
+      "synchronousLogMs": 10.528,
+      "elapsedMs": 8213.482,
+      "fileBytes": 7512
+    },
+    {
+      "scenario": "8 debug records per second",
+      "trial": 1,
+      "buffered": true,
+      "records": 64,
+      "warnings": 2,
+      "durableAppends": 8,
+      "synchronousLogMs": 6.213,
+      "elapsedMs": 8202.014,
+      "fileBytes": 7512
+    },
+    {
+      "scenario": "8 debug records per second",
+      "trial": 1,
+      "buffered": false,
+      "records": 64,
+      "warnings": 2,
+      "durableAppends": 66,
+      "synchronousLogMs": 67.139,
+      "elapsedMs": 8278.376,
+      "fileBytes": 7512
+    },
+    {
+      "scenario": "8 debug records per second",
+      "trial": 2,
+      "buffered": false,
+      "records": 64,
+      "warnings": 2,
+      "durableAppends": 66,
+      "synchronousLogMs": 43.444,
+      "elapsedMs": 8238.22,
+      "fileBytes": 7512
+    },
+    {
+      "scenario": "8 debug records per second",
+      "trial": 2,
+      "buffered": true,
+      "records": 64,
+      "warnings": 2,
+      "durableAppends": 8,
+      "synchronousLogMs": 15.669,
+      "elapsedMs": 8217.25,
+      "fileBytes": 7512
+    }
+  ],
+  "baseCommit": "922c9dc9c63a5825e8f71b68b043f89578b6cf23",
+  "runtime": "Flutter 3.47.2 / Dart 3.13.2; macOS 26.6.2 arm64; headless Flutter test runner",
+  "comparison": "Legacy immediate File.writeAsStringSync(flush:true) versus bounded batches using native O_APPEND and fsync. Successful durable append operations counted; actual filesystem IO in both modes.",
+  "sourceSha256": {
+    "desktop/lib/logging/app_log.dart": "00b91e3b4e8b429453773b4e558020b40ce78960999d391015900fb4ece9957e",
+    "desktop/lib/logging/log_file.dart": "f962f08e6ad3373109924fc87c861b23d62be0d3833e0f6e5d7ae2703b95f438",
+    "desktop/lib/logging/log_append_native.dart": "cd205c906bca1ef59d3596a04e2fce0f51cbf83e6d3514658f3dcec73ce0e252",
+    "desktop/test/benchmarks/diagnostic_log_benchmark.dart": "c7de9d9d378748c2197f85b6addbcce1aaee71a7518d9b67256ecf9080fa432f"
+  },
+  "summary": [
+    {
+      "scenario": "2000-record burst",
+      "pairs": 5,
+      "durableAppendsBefore": 2062,
+      "durableAppendsAfter": 63,
+      "appendReductionPercent": 96.94471387002909,
+      "medianSyncMsBefore": 112.062,
+      "medianSyncMsAfter": 5.86,
+      "timeReductionPercent": 94.77075190519534
+    },
+    {
+      "scenario": "8 debug records per second",
+      "pairs": 3,
+      "durableAppendsBefore": 66,
+      "durableAppendsAfter": 8,
+      "appendReductionPercent": 87.87878787878788,
+      "medianSyncMsBefore": 43.444,
+      "medianSyncMsAfter": 10.528,
+      "timeReductionPercent": 75.76650400515607
+    }
+  ]
+}

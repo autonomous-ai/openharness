@@ -11,7 +11,6 @@ import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/ws/ws_conn.dart';
-import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/notify/agent_alerts.dart';
@@ -211,10 +210,9 @@ void main() {
       expect(n.questionFor('m1', 'a1')!.prompt, 'Which font?');
     });
 
-    test('the turn ending clears it even with no close frame', () async {
-      // A question cannot outlive its own turn — the daemon's watcher is torn
-      // down at turn_ended and says the same thing from its end. This side does
-      // not depend on that frame surviving the trip.
+    test('only the shared question-close event clears a pending question', () async {
+      // A raw end can precede the actionable dialog being answered. Match the
+      // device and wait for the daemon's authoritative request-specific close.
       final n = notifierWithMachine();
       await n.handleMachineEventForTest('m1', asked());
       await n.handleMachineEventForTest('m1', {
@@ -222,6 +220,8 @@ void main() {
         'agentId': 'a1',
         'payload': <String, dynamic>{},
       });
+      expect(n.questionFor('m1', 'a1'), isNotNull);
+      await n.handleMachineEventForTest('m1', closed());
       expect(n.questionFor('m1', 'a1'), isNull);
     });
 
@@ -342,9 +342,12 @@ void main() {
       final app = wired();
       addTearDown(app.dispose);
       await app.handleMachineEventForTest('m1', {
-        'type': 'turn_ended',
+        'type': 'turn_summary',
         'agentId': 'a1',
-        'payload': {'agentId': 'a1'},
+        'payload': {
+          'agentId': 'a1',
+          'notification': {'id': 'result-a1', 'kind': 'done'},
+        },
       });
       await Future<void>.delayed(Duration.zero);
       expect(played, [AlertKind.done.sound]);
@@ -359,9 +362,12 @@ void main() {
           const Agent(id: 'a1', name: 'Respond to greeting', engine: 'codex'),
         ];
         await app.handleMachineEventForTest('m1', {
-          'type': 'turn_ended',
+          'type': 'turn_summary',
           'agentId': 'a1',
-          'payload': {'agentId': 'a1'},
+          'payload': {
+            'agentId': 'a1',
+            'notification': {'id': 'result-a1', 'kind': 'done'},
+          },
         });
         final raised = app.agentAlerts.alerts;
         expect(raised, hasLength(1));
@@ -400,9 +406,12 @@ void main() {
       app.machineStates['m1'] = MachineState(_machine);
 
       await app.handleMachineEventForTest('m1', {
-        'type': 'turn_ended',
+        'type': 'turn_summary',
         'agentId': 'a1',
-        'payload': {'agentId': 'a1'},
+        'payload': {
+          'agentId': 'a1',
+          'notification': {'id': 'result-a1', 'kind': 'done'},
+        },
       });
       expect(app.agentUnread.kindFor('m1', 'a1'), AlertKind.done);
       expect(app.agentAlerts.alerts, isEmpty, reason: 'banners were off');
@@ -448,9 +457,12 @@ void main() {
       app.machineStates['m1'] = MachineState(_machine);
       await app.handleMachineEventForTest('m1', asked());
       await app.handleMachineEventForTest('m1', {
-        'type': 'turn_ended',
+        'type': 'turn_summary',
         'agentId': 'a1',
-        'payload': {'agentId': 'a1'},
+        'payload': {
+          'agentId': 'a1',
+          'notification': {'id': 'result-a1', 'kind': 'done'},
+        },
       });
       await Future<void>.delayed(Duration.zero);
       expect(played, isEmpty);
@@ -536,14 +548,18 @@ void main() {
       return (app: app, x: x, y: y);
     }
 
+    var resultSequence = 0;
     Future<void> finish(
       AppNotifier a,
       String agentId, {
       String machineId = 'm1',
     }) => a.handleMachineEventForTest(machineId, {
-      'type': 'turn_ended',
+      'type': 'turn_summary',
       'agentId': agentId,
-      'payload': {'agentId': agentId},
+      'payload': {
+        'agentId': agentId,
+        'notification': {'id': 'result-${resultSequence++}', 'kind': 'done'},
+      },
     });
 
     test('harnesses on the tab in front of you finish silently; one on another tab does not', () async {

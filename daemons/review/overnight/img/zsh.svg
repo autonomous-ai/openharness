@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="389" height="312" viewBox="0 0 389 312" role="img" aria-label="zsh, a rare daemon">
+  <rect x="0.5" y="0.5" width="388" height="311" rx="6" fill="#121212" stroke="#3a3a3a"/>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" font-variant-ligatures="none">
+  <text x="18" y="34" fill="#d0d0d0" xml:space="preserve">.----------------------------------------.</text>
+  <text x="18" y="51" fill="#5fafaf" xml:space="preserve">| #06/09  DROP 1: UNIX              RARE |</text>
+  <text x="18" y="68" fill="#d0d0d0" xml:space="preserve">|                                        |</text>
+  <text x="18" y="85" fill="#d7875f" xml:space="preserve">|         (\/)    _.---._    (\/)        |</text>
+  <text x="18" y="102" fill="#d7875f" xml:space="preserve">|          \ \  .'  .-.  '.  / /         |</text>
+  <text x="18" y="119" fill="#d7875f" xml:space="preserve">|           \ \/   ( @ )   \/ /          |</text>
+  <text x="18" y="136" fill="#d7875f" xml:space="preserve">|            \ |    '-'    | /           |</text>
+  <text x="18" y="153" fill="#d7875f" xml:space="preserve">|             '.(o  ,,,  o).'            |</text>
+  <text x="18" y="170" fill="#d7875f" xml:space="preserve">|               /\/\/   \/\/\            |</text>
+  <text x="18" y="187" fill="#d0d0d0" xml:space="preserve">|                                        |</text>
+  <text x="18" y="204" fill="#d0d0d0" xml:space="preserve">|   zsh 2.0                              |</text>
+  <text x="18" y="221" fill="#d0d0d0" xml:space="preserve">|   sh -&gt; ksh -&gt; zsh                     |</text>
+  <text x="18" y="238" fill="#d0d0d0" xml:space="preserve">|                                        |</text>
+  <text x="18" y="255" fill="#d0d0d0" xml:space="preserve">|   "the default interactive shell is    |</text>
+  <text x="18" y="272" fill="#d0d0d0" xml:space="preserve">|   now zsh. hi."                        |</text>
+  <text x="18" y="289" fill="#d0d0d0" xml:space="preserve">'----------------------------------------'</text>
+  </g>
+</svg>

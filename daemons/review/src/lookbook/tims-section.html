@@ -1,0 +1,88 @@
+  <!-- tims:start -->
+  <style>
+    .tims-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+    .tim-card { background: var(--deep); border: 1px solid var(--line); border-radius: 6px; padding: 12px 10px 10px; display: grid; gap: 6px; justify-items: center; }
+    .tim-card pre { font: 400 clamp(6px, 2.3vw, 9.4px)/1.2 var(--mono); white-space: pre; min-height: 250px; display: grid; align-items: center; filter: drop-shadow(0 0 3px var(--glow, transparent)); }
+    .tim-card .nm { font: 600 13px var(--mono); color: var(--bright); white-space: pre; }
+    .tim-card .flags { font: 11.5px/1.45 var(--mono); color: var(--dim); text-align: center; }
+    .tim-card .flags b { color: var(--yellow); font-weight: 500; }
+  </style>
+  <section aria-labelledby="s-tims">
+    <h2 id="s-tims">TWELVE TIMS (TRY)</h2>
+    <div class="ind">
+      <p class="lede">tim is a species. Every hatch is its own octopus, with traits the server rolls and a name you give it at the hatch.</p>
+      <p>Traits are flags, the way a daemon is started with them: colour (<code>-c</code>, six per species), markings (<code>--spots</code>, <code>--stripes</code>, <code>--freckles</code>, <code>--patches</code>), proportions (<code>--big-head</code>, <code>--long-arms</code>, <code>--curly</code>, <code>--wide-eyes</code>), temperament (<code>--fidgety</code> sways twice as fast) and rare extras: <b>--glasses</b> 1 in 20, <b>--beanie</b> 1 in 25, <b>--headset</b> 1 in 33, <b>--odd-eye</b> 1 in 50. Colour and markings are painted by every app; proportions and extras are drawn once, at the hatch, by harnessd on your computer with the same model. This dozen was picked to show the range; twelve random hatches would rarely show an extra. Under each: its serial, and how rare its traits are together.</p>
+      <div class="tims-grid" id="timsGrid"></div>
+    </div>
+  </section>
+  <script type="application/json" id="tims-data">__TIMS__</script>
+  <script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const TIMS = JSON.parse(document.getElementById('tims-data').textContent);
+    const R = JSON.parse(document.getElementById('roster-data').textContent);
+    const INK = R.rules.plate.ink;
+    const FAMILY = { magenta: ['#ff87ff', '#af5fd7'], lilac: ['#d7afff', '#8787d7'], coral: ['#ffafaf', '#d75f87'], violet: ['#d787ff', '#5f00af'], dusk: ['#afafff', '#5f5f87'], sunset: ['#ffd7af', '#d7875f'] };
+    const ACCENTS = ['#ffffd7', '#afffff', '#ffd75f', '#d7ffaf', '#ffafd7'];
+    const KNIT = ['#ffd75f', '#5fd7ff', '#ff5f5f', '#87ff87'];
+    const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+    const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
+    const css = (c) => 'rgb(' + c.join(',') + ')';
+    const BG = [12, 12, 12], WHITE = [255, 255, 255];
+    function paint(frame, tr) {
+      const rows = frame.rows.split('\n'), mats = frame.mats.split('\n');
+      const [top, bottom] = FAMILY[tr.colour].map(rgb);
+      const accent = rgb(ACCENTS[tr.seed % ACCENTS.length]);
+      const extra = rgb(tr.extra === 'glasses' ? '#e4e4e4' : tr.extra === 'headset' ? '#87afd7' : KNIT[tr.seed % KNIT.length]);
+      const odd = rgb('#5fffd7');
+      const n = Math.max(1, rows.length - 1);
+      return rows.map((row, r) => {
+        const base = mix(top, bottom, r / n);
+        let html = '', run = '', key = null;
+        const flush = () => { if (run) html += key === null ? run : '<span style="color:' + key + '">' + run + '</span>'; run = ''; };
+        [...row].forEach((ch, c) => {
+          const l = INK[ch];
+          const m = mats[r][c];
+          const col = m === 'm' ? accent : m === 'a' ? extra : m === 'e' ? odd : base;
+          const k = l === undefined ? null : css(l > 1 ? mix(col, WHITE, l - 1) : mix(BG, col, l));
+          if (k !== key) { flush(); key = k; }
+          run += ch;
+        });
+        flush();
+        return html;
+      }).join('\n');
+    }
+    // How rare a tim's traits are together: the product of each rolled trait's odds.
+    const ODDS = {
+      colour: { magenta: 30, lilac: 20, coral: 18, violet: 14, dusk: 12, sunset: 6 },
+      marks: { null: 35, spots: 22, stripes: 18, freckles: 17, patches: 8 },
+      extra: { glasses: 5, beanie: 4, headset: 3, null: 88 },
+    };
+    const oneIn = (tr) => {
+      const p = (ODDS.colour[tr.colour] / 100) * (ODDS.marks[String(tr.marks)] / 100) * (ODDS.extra[String(tr.extra)] / 100) * (tr.oddEye ? 0.02 : 0.98);
+      const n = Math.round(1 / p);
+      return n < 1000 ? n : n < 100000 ? Math.round(n / 10) * 10 : Math.round(n / 1000) * 1000;
+    };
+    const pres = [];
+    TIMS.forEach((t, i) => { t.serial = '#' + String(1000 + ((t.traits.seed * 7919) % 9000)).padStart(4, '0'); t.oneIn = oneIn(t.traits); });
+    for (const t of TIMS) {
+      const card = document.createElement('div'); card.className = 'tim-card';
+      const pre = document.createElement('pre'); pre.setAttribute('role', 'img'); pre.setAttribute('aria-label', 'tim ' + t.serial + ', ' + t.flags);
+      const [r, g, b] = rgb(FAMILY[t.traits.colour][1]); pre.style.setProperty('--glow', 'rgba(' + r + ',' + g + ',' + b + ',.45)');
+      const nm = document.createElement('div'); nm.className = 'nm'; nm.textContent = 'tim ' + t.serial + '  \u00b7  1 in ' + t.oneIn.toLocaleString('en-US');
+      const flags = document.createElement('div'); flags.className = 'flags';
+      // one flag never breaks across lines; `-c colour` stays together
+      const parts = t.flags.replace(/^tim /, '').replace('-c ', '-c\u00a0').split(' ');
+      flags.innerHTML = parts.map((f) => '<span style="white-space:nowrap">' + (/--(glasses|beanie|headset|odd-eye)/.test(f) ? '<b>' + f + '</b>' : f) + '</span>').join(' ');
+      card.append(pre, nm, flags);
+      document.getElementById('timsGrid').appendChild(card);
+      pres.push([pre, t]);
+    }
+    let tick = 0;
+    const draw = () => { for (const [pre, t] of pres) pre.innerHTML = '<span>' + paint(t.frames[still ? 0 : tick % 8], t.traits) + '</span>'; };
+    draw();
+    // a calm tim takes its loop at a stroll; a fidgety one's frames already move twice as far
+    if (!still) setInterval(() => { tick++; draw(); }, 180);
+  });
+  </script>
+  <!-- tims:end -->

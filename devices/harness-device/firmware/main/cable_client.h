@@ -24,16 +24,19 @@
 #include <stdint.h>
 
 #include "cJSON.h"
+#include "cable_features.h"
+
+bool cable_client_supports(uint32_t features);
 
 // ── the shapes the UI's tile list is built from ─────────────────────────────────────────────────────
 // These lived in http_api.h, which existed for the REST calls this firmware no longer makes. They are
 // the protocol's own vocabulary now, so they live with it.
 #define ID_MAX   48   // agentId (uuid or 32-hex) + nul
-#define NAME_MAX 40
+#define CABLE_NAME_MAX 40
 
 typedef struct {
     char id[ID_MAX];
-    char name[NAME_MAX];
+    char name[CABLE_NAME_MAX];
     char engine[12];            // claude|codex|cursor|opencode|… ; empty when the daemon did not say
     char selected_model[192];   // opaque runtime-v1:<sid>:<engine>:<model>@<effort>; "" if none
     // WHERE THIS AGENT LIVES. The carousel holds every machine's agents at once, so an agent that does
@@ -42,7 +45,7 @@ typedef struct {
     // Both are empty against a daemon that predates the fields, and every reader falls back rather than
     // showing an empty line.
     char machine_id[ID_MAX];
-    char machine[NAME_MAX];
+    char machine[CABLE_NAME_MAX];
 } project_t;
 
 
@@ -111,7 +114,18 @@ const char *cable_client_machine_name(void);
 // The list is whatever the daemon last pushed; there is no request/response to wait on, which is the
 // point — a spoken turn must never block on a round trip. app_main's refresh reads this the way it used
 // to read the backend's RPC answer.
+typedef struct {
+    char tab[ID_MAX];
+    uint32_t generation;
+    int total;
+    bool window;
+} cable_agent_snapshot_t;
+// A complete roster and its workspace identity are copied under the same lock.
+// Returns -1 while a new roster is being assembled, leaving the UI intact.
+int cable_client_list_agents_snapshot(project_t *out, int max, cable_agent_snapshot_t *snapshot);
 int cable_client_list_agents(project_t *out, int max);
+uint32_t cable_client_agent_generation(void);
+bool cable_client_request_agents(void);
 
 // How many agents the account has across every machine (`agents.end.total`) — the overview's number. The
 // list above is the active tab; this is the fleet it was cut from.
@@ -152,7 +166,7 @@ const char *cable_client_machine_id(void);
 #define SWARMS_MAX   24   // the window's own ceiling (AppNotifier.maxSwarms)
 typedef struct {
     char id[SWARM_ID_MAX];
-    char name[NAME_MAX];
+    char name[CABLE_NAME_MAX];
     int  agents;          // how many agents it holds — drawn as a count, never as members
     // How many TILES it holds, of any kind: agents, shells, viewers. A tab with a terminal and no
     // agent has agents=0 and panes=1, and the difference is what keeps it in the switcher — see
@@ -161,15 +175,44 @@ typedef struct {
     int  panes;
 } cable_swarm_t;
 
-// One row of the window's unread list, as `notif.replace` carries it. `summary` is the last recap for
-// a finished turn and empty for a question — the dial kept that question's own text from when it asked.
+/*
+ * ONE TILE OF THE SELECTED TAB'S GRID, exactly where the window put it.
+ *
+ * Unit rectangle in THOUSANDTHS of the grid — integers on the wire, scaled to whatever face reads
+ * them. `agent_id` is empty for a tile this device cannot drive (a shell, a viewer); it still holds
+ * its place, because a shape with a tile missing is not that shape.
+ *
+ * RELAYED, NEVER DERIVED. The device used to guess the shape from the agent count via the app's
+ * `PanePreset.defaultFor`, which is right until somebody picks a different preset — and it could never
+ * express `auto` (whose column count the window MEASURES against its own width) or a hand-dragged
+ * resize at all. An empty list means a daemon or a window too old to send one, and the guess is still
+ * there behind it.
+ */
+#define SWARM_TILES_MAX 24   // the window's own ceiling, same as the rows above
+typedef struct {
+    int16_t x1, y1, x2, y2;   // 0..1000
+    char    agent_id[ID_MAX];
+} cable_tile_t;
+
+// One row of the window's unread list, as `notif.replace` carries it. `summary` is
+// the finished turn's recap or the question's own words. Match the home preview's
+// byte capacity so an 80-character recap with UTF-8 punctuation arrives intact.
+// Opaque desktop notification identity, including terminator.
+#define CABLE_READ_TOKEN_MAX 64
 typedef struct {
     char agent_id[ID_MAX];
-    char name[NAME_MAX];
-    char machine[NAME_MAX];
-    char summary[100];
+    char name[CABLE_NAME_MAX];
+    char machine[CABLE_NAME_MAX];
+    char summary[240];
+    char read_token[CABLE_READ_TOKEN_MAX];
     bool question;
+    bool failed; // Optional explicit host metadata; never inferred from prose.
+    // Local display bookkeeping. Incoming snapshots never supply these values.
+    bool read_on_dial;
+    uint32_t display_revision;
 } cable_notif_t;
+
+bool cable_client_notification_read(const char *agent_id, const char *read_token);
 
 // The user tapped a swarm. Not answered — see above.
 void cable_client_select_swarm(const char *swarm_id);
@@ -216,6 +259,14 @@ typedef enum {
 // `velocity` is device px/s, signed like `dy`, and is only read on CABLE_SCROLL_UP — it becomes the fling.
 void cable_client_send_scroll(cable_scroll_phase_t phase, int dy, int velocity);
 
+// Local desktop text selection; never sends keys into a terminal.
+void cable_client_form(const char *id, uint32_t request, const char *op, uint32_t revision, int delta);
+void cable_client_carry(const char *id, const char *agent, const char *selection,
+                        uint32_t request, uint32_t revision, bool cancel);
+void cable_client_visit(const char *id, uint32_t request, const char *op, const char *agent);
+void cable_client_select_text(const char *agent_id, const char *selection_id, uint32_t request,
+                             uint32_t revision, const char *op, int delta, bool extend);
+
 // Answer a `question`. `request_id` is the DAEMON'S, opaque here, and is echoed back byte for byte.
 // `answers` is the UI's own object, one entry per question asked, and travels verbatim — re-deriving it
 // from what is on screen is how a rename at the far end becomes an answer nobody gave. Not owned here.
@@ -244,7 +295,8 @@ int cable_client_models_list(const char *agent_id, const char *picker_mode, cons
 //
 // `sample_rate` travels because the daemon has to state it to the transcriber, and a rate assumed on that
 // side is a rate that silently doubles or halves the speech when this side changes.
-void cable_client_voice_begin(const char *agent_id, const char *cmd, const char *lang, int sample_rate);
+// False means no valid begin frame was sent; do not send uncorrelated PCM.
+bool cable_client_voice_begin(const char *agent_id, const char *cmd, const char *lang, int sample_rate);
 
 // One PCM frame's worth of bytes. Raw, not base64 — the framing carries a length, so there is no reason to
 // spend a third of the wire escaping binary into text the way a line-delimited protocol had to.
@@ -255,6 +307,7 @@ bool cable_client_voice_pcm(const uint8_t *pcm, size_t len);
 
 void cable_client_voice_end(void);
 void cable_client_voice_abort(const char *why);
+void cable_client_voice_cancel(const char *upload_id);
 
 // Answer a `voice.transcript` that arrived with `needsConfirm`.
 void cable_client_voice_confirm(const char *route_id, const char *agent_id);
@@ -274,3 +327,17 @@ void cable_client_fw_error(const char *message);
 // separate because they mean opposite things: `bad` is corruption or a bug, `unknown` is a daemon running
 // ahead of this firmware — a version mismatch someone can act on rather than a fault.
 void cable_client_counters(uint32_t *bad, uint32_t *unknown);
+
+// Read one host-owned question; review selections are exact option bitmasks.
+void cable_client_question_read(const char *agent_id, const char *request_id);
+bool cable_client_answer_reviewed(const char *agent_id, const char *request_id, const char *token,
+                                  const uint8_t *choices, const char drafts[][48], int count);
+
+void cable_client_draft(const char *id, const char *op, uint32_t request, uint32_t revision, int delta);
+
+// ── SETTINGS ────────────────────────────────────────────────────────────────────────────────────────
+// The device's preferences live on the desktop, because a 466 circle has no room for a settings tree.
+// The device still owns them: it reports what it holds with every `hello` and again whenever they
+// change here, and answers a `settings.set` with `settings.state` — on refusal too, carrying the values
+// read back, so a rejected change corrects the app instead of leaving it hopeful.
+void cable_client_report_settings(void);

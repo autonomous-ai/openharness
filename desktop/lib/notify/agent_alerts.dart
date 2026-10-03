@@ -1,6 +1,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -34,6 +35,7 @@ class AgentAlert {
   /// What the banner says under the agent's name.
   String get sentence => switch (kind) {
     AlertKind.done => 'Finished',
+    AlertKind.failed => 'Failed',
     AlertKind.needsYou => 'Waiting on you',
   };
 }
@@ -151,15 +153,31 @@ class AgentAlerts extends ChangeNotifier {
 /// until somebody goes looking. Somebody who turned the noisy halves off still
 /// wants the window to be able to say which agent moved while they were away.
 class AgentUnread extends ChangeNotifier {
-  /// As many agents as the dial's drawer holds rows (`NOTIF_MAX`), and dropped
-  /// the same way: oldest first.
-  ///
-  /// A window with no ceiling and a dial with one are two different numbers the
-  /// moment a ninth agent has news, whatever else agrees. Dart's map keeps
-  /// insertion order, and [mark] re-inserts, so the first key is the oldest.
-  static const capacity = 8;
+  /// Bound the desktop inbox independently of the dial's eight visible rows.
+  /// A ninth notification must not silently replace the first on desktop.
+  /// Entries remain per harness and in memory, with oldest-first eviction.
+  static const capacity = 256;
 
   final _unread = <String, AlertKind>{};
+  final _tokens = <String, String>{};
+  final _messages = <String, String>{};
+  final _receivedAt = <String, DateTime>{};
+  final _epoch = List.generate(
+    12,
+    (_) => Random.secure().nextInt(256),
+  ).map((n) => n.toRadixString(16).padLeft(2, '0')).join();
+  int _sequence = 0;
+
+  /// Identity of the notification, not its text. Two turns can say the same thing.
+  String? readTokenFor(String machineId, String agentId) =>
+      _tokens[keyFor(machineId, agentId)];
+
+  /// The message belongs to this unread receipt, never the session's latest
+  /// transcript (which may already describe a different turn).
+  String? messageFor(String machineId, String agentId) =>
+      _messages[keyFor(machineId, agentId)];
+  DateTime? receivedAtFor(String machineId, String agentId) =>
+      _receivedAt[keyFor(machineId, agentId)];
 
   static String keyFor(String machineId, String agentId) =>
       '$machineId/$agentId';
@@ -194,9 +212,24 @@ class AgentUnread extends ChangeNotifier {
   /// Record that an agent did something. The NEWEST kind wins: an agent that
   /// finished and then asked a question is waiting on a person, and that is the
   /// mark worth showing.
-  void mark(String machineId, String agentId, AlertKind kind) {
+  void mark(
+    String machineId,
+    String agentId,
+    AlertKind kind, {
+    bool fresh = false,
+    String? message,
+    DateTime? at,
+  }) {
     final key = keyFor(machineId, agentId);
-    if (_unread[key] == kind) return;
+    if (!fresh && _unread[key] == kind) return;
+    _tokens[key] = '$_epoch-${(++_sequence).toRadixString(36)}';
+    _receivedAt[key] = at ?? DateTime.now();
+    _messages.remove(key);
+    if (message != null && message.trim().isNotEmpty) {
+      _messages[key] = message.length > 600
+          ? message.substring(0, 600)
+          : message;
+    }
     // Re-inserted, not updated in place: an agent that moved is the newest
     // again, which is what makes the first key the oldest for the eviction
     // below. `notif_push` on the dial does exactly this — it lifts an existing
@@ -205,6 +238,9 @@ class AgentUnread extends ChangeNotifier {
       ..remove(key)
       ..[key] = kind;
     while (_unread.length > capacity) {
+      _tokens.remove(_unread.keys.first);
+      _messages.remove(_unread.keys.first);
+      _receivedAt.remove(_unread.keys.first);
       _unread.remove(_unread.keys.first);
     }
     notifyListeners();
@@ -213,7 +249,11 @@ class AgentUnread extends ChangeNotifier {
   /// The person went and looked. Silent when there was nothing to clear, so a
   /// pane being focused for any other reason does not rebuild the window.
   void clear(String machineId, String agentId) {
-    if (_unread.remove(keyFor(machineId, agentId)) == null) return;
+    final key = keyFor(machineId, agentId);
+    if (_unread.remove(key) == null) return;
+    _tokens.remove(key);
+    _messages.remove(key);
+    _receivedAt.remove(key);
     notifyListeners();
   }
 
@@ -224,6 +264,9 @@ class AgentUnread extends ChangeNotifier {
   void clearAll() {
     if (_unread.isEmpty) return;
     _unread.clear();
+    _tokens.clear();
+    _messages.clear();
+    _receivedAt.clear();
     notifyListeners();
   }
 }

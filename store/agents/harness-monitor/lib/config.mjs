@@ -3,11 +3,11 @@
  *
  *   ~/.config/harness/policy.jsonc   the rules, and `pins`. Written for a person: commented, hand-edited,
  *                                    next to `keybindings.jsonc`. $XDG_CONFIG_HOME is respected.
- *   ~/.harness/monitor/paused.json   the resume tickets. Written by the program, never by a person.
- *   ~/.harness/monitor/log.jsonl     one line per pause and resume, with the rule that caused it.
+ *   ~/.harness/monitor/paused.json (legacy filename)   the open tickets. Written by the program, never by a person.
+ *   ~/.harness/monitor/log.jsonl     one line per stop and open, with the rule that caused it.
  *
  * Machine-wide on purpose. The first version kept all three inside the Harness Monitor workspace, which
- * meant a second workspace got a second policy, and a harness paused from one could not be resumed from
+ * meant a second workspace got a second policy, and a harness stopped from one could not be reopened from
  * the other because its ticket was in the wrong folder. There is one fleet per machine; there is one
  * policy and one ticket book per machine.
  */
@@ -55,35 +55,35 @@ export function stripJsonc(text) {
 export function template(policy = DEFAULT_POLICY) {
   return `// Harness Monitor — the rules for this machine's harnesses.
 //
-// Edit this file, or drag the two lines in the Harness Monitor pane. It is read on every refresh, so a
-// save takes effect within seconds. Preview any change without moving anything:  hps pause --policy
+// Edit this file and review Cleanup in the Harness Monitor table. It is read on every refresh, so a
+// save takes effect within seconds. Preview any change without moving anything:  hps stop --policy
 //
-// The only thing the rules ever do is PAUSE a harness: its engine exits, and its pane, scrollback and
-// conversation stay. \`hps resume\` brings it back where it left off. Nothing here deletes anything.
+// Rules only propose stopping sessions. Apply a reviewed plan explicitly; nothing runs automatically.
+// The daemon retains history and launch settings. Open behavior depends on the engine's resumeMode.
 {
-  // Most engines running at once on this machine — a backstop. Past it, the least recently used are paused.
+  // Most engines running at once on each machine. Cleanup proposes stopping the least recently active.
   // Lower it on a machine that swaps: free memory divided by ~300 MB per harness.
   "runningCeiling": ${policy.runningCeiling},
 
-  // Untouched this long (time since the last real turn) and a harness is paused.
-  "pauseAfterIdle": "${policy.pauseAfterIdle}",
+  // Untouched this long (time since the last real turn) and a harness is stopped.
+  "stopAfterIdle": "${policy.stopAfterIdle}",
 
-  // Untouched this long and it drops out of the default list. Still there under --all; nothing is paused
+  // Untouched this long and it drops out of the default list. Still there under --all; nothing is stopped
   // or removed by this — it only decides what you see.
   "hideAfterIdle": "${policy.hideAfterIdle}",
 
-  // A harness whose folder no longer exists is paused, whatever its idle time.
-  "pauseWhenWorkspaceGone": ${policy.pauseWhenWorkspaceGone},
+  // A harness whose folder no longer exists is stopped, whatever its idle time.
+  "stopWhenWorkspaceGone": ${policy.stopWhenWorkspaceGone},
 
-  // What is never paused, by any rule.
+  // What is never stopped, by any rule.
   "protect": {
-    "needsInput": ${policy.protect.needsInput},   // it looks like it is waiting on you
-    "working": ${policy.protect.working},      // mid-turn: CPU, or output in the last minute
-    "attached": ${policy.protect.attached},     // someone is looking at that pane right now
+    "needsInput": ${policy.protect.needsInput},   // daemon reports a pending question
+    "working": ${policy.protect.working},      // daemon reports an open turn
+    "attached": ${policy.protect.attached},     // reserved; current daemon inventory does not report attachment
     "pinned": ${policy.protect.pinned}        // listed in "pins" below
   },
 
-  // Agent ids the rules must never pause. \`hps --json\` shows each harness's id; the pane has a pin button.
+  // Composite machine/agent ids the rules must never stop. \`hps --json --all --machines\` shows each id.
   "pins": []
 }
 `
@@ -161,7 +161,7 @@ export async function readLogFile({ limit = 200 } = {}, env = process.env) {
 /**
  * Carry the old per-workspace file forward, once.
  *
- * Tickets and pins are DATA — a harness paused under the old layout must still be resumable — so they are
+ * Tickets and pins are DATA — a harness stopped under the old layout must still be openable — so they are
  * merged into the machine files. The old POLICY is not carried over: it was the stricter default, and a
  * machine-wide file starting from it would undo the reason the file moved.
  */
@@ -173,7 +173,7 @@ export async function migrateWorkspace(workspace, env = process.env) {
   if (parsed?.migrated) return null
   const tickets = await readTickets(env)
   let moved = 0
-  for (const [id, ticket] of Object.entries(parsed?.paused ?? {})) {
+  for (const [id, ticket] of Object.entries(parsed?.stopped ?? parsed?.paused ?? {})) {
     if (!tickets[id]) { tickets[id] = ticket; moved += 1 }
   }
   if (moved) await writeTickets(tickets, env)

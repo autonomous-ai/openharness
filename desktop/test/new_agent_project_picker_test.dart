@@ -335,7 +335,7 @@ void main() {
     },
   );
 
-  testWidgets('keyboard focus never looks like a second project selection', (
+  testWidgets('keyboard focus preserves the single project selection', (
     tester,
   ) async {
     await mount(tester);
@@ -372,7 +372,16 @@ void main() {
     );
     expect(
       ((container.decoration! as BoxDecoration).border! as Border).top.color,
-      Colors.transparent,
+      isNot(Colors.transparent),
+    );
+    expect(tester.widget<AppChoiceTile>(newTile).selected, isTrue);
+    expect(tester.widget<AppSelectField<String>>(recentTile).selected, isFalse);
+    expect(
+      ((container.decoration! as BoxDecoration).border! as Border).top.color,
+      isNot(
+        tester.widget<TextButton>(newButton).style!.side!.resolve({})!.color,
+      ),
+      reason: 'Keyboard focus has its own rim, separate from the saved choice',
     );
   });
 

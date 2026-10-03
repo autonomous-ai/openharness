@@ -5,8 +5,9 @@ import 'package:flutter/material.dart';
 import 'color_palette.dart';
 
 /// The app's live brightness — the single source of truth the color tokens below
-/// resolve against. Harness Desktop is dark-only: `_GridTokenScope` (in
-/// `main.dart`) pins this to [Brightness.dark] once, at the top of the tree.
+/// resolve against. The palette decides it: `_GridTokenScope` (in
+/// `app_shell.dart`) sets this from [palette]'s own brightness, so a light
+/// palette ([HarnessPalette.paper], [HarnessPalette.mist]) is a light app.
 ///
 /// Every `AppPalette`/`AppSurface`/`AppGlass`/`AppCard` member is a getter that
 /// switches on this, so a call site like `color: AppPalette.windowBg` follows the
@@ -202,20 +203,20 @@ abstract final class AppPalette {
   // (#141414) is now *darker* than the page it sits on. Depth in dark is
   // therefore carried by the rim and the shadow, not by the fill — §2's stack
   // still holds, it just has less room to say it in.
-  static Color get windowBg =>
-      AppTheme.pick(const Color(0xFFFFFFFF), AppTheme.palette.value.background);
+  //
+  // These four come from the palette in both themes: a light palette carries
+  // its own light surfaces (color_palette.dart), and it is the palette that
+  // decides the brightness in the first place.
+  static Color get windowBg => AppTheme.palette.value.background;
 
   // sidebar column — a barely-there cool grey (Codex keeps the rail almost white,
   // set apart by a hairline, not a tone) / charcoal panel in dark.
-  static Color get panelBg =>
-      AppTheme.pick(const Color(0xFFF9F9F8), AppTheme.palette.value.panel);
+  static Color get panelBg => AppTheme.palette.value.panel;
 
   // input fills, quiet cards
-  static Color get cardBg =>
-      AppTheme.pick(const Color(0xFFF3F3F2), AppTheme.palette.value.card);
+  static Color get cardBg => AppTheme.palette.value.card;
 
-  static Color get cardBgHover =>
-      AppTheme.pick(const Color(0xFFECECEA), AppTheme.palette.value.hover);
+  static Color get cardBgHover => AppTheme.palette.value.hover;
 
   // A hairline separator. Light: a faint cool black; dark: a faint white — a
   // black divider would vanish on charcoal.
@@ -273,8 +274,7 @@ abstract final class AppPalette {
   /// row, still plainly the same indigo. [accent] can't simply take this value:
   /// it is the fill under white text in ~100 places, and lightening it there
   /// would drop that text to ~3.1:1 — fixing the icon by breaking the buttons.
-  static Color get accentOnSurface =>
-      AppTheme.pick(const Color(0xFF2F5BEA), AppTheme.palette.value.accent);
+  static Color get accentOnSurface => AppTheme.palette.value.accent;
 
   // avatar fill (white text on it); a touch brighter in dark for contrast.
   static Color get accentMuted =>
@@ -337,25 +337,32 @@ abstract final class AppPalette {
   static Color get accentHover =>
       AppTheme.pick(const Color(0xFF2850D8), const Color(0xFF4166F2));
 
+  // These three are drawn as TEXT as often as dots (status labels, ledger
+  // rows), so their light values clear 4.5:1 on the deepest light-palette
+  // ground they meet — Paper's search #E2E2DF / Mist's #DCE4EE — not only on
+  // white: teal 4.90, online 5.02, warn 4.93 there (6.4–6.5 on white).
+
   // "Owner" badge — a teal that stays legible on either surface.
   static Color get teal =>
-      AppTheme.pick(const Color(0xFF0F766E), const Color(0xFF2DD4BF));
+      AppTheme.pick(const Color(0xFF0D6B63), const Color(0xFF2DD4BF));
 
   // green "connected" dot
   static Color get online =>
-      AppTheme.pick(const Color(0xFF15803D), const Color(0xFF3FB950));
+      AppTheme.pick(const Color(0xFF146C34), const Color(0xFF3FB950));
 
   // expiring soon
   static Color get warn =>
-      AppTheme.pick(const Color(0xFFB45309), const Color(0xFFFFB020));
+      AppTheme.pick(const Color(0xFF9A4708), const Color(0xFFFFB020));
 
-  // grey dot
+  // grey dot — a state mark, so ≥3:1 in light (3.14 on Paper's search ground).
   static Color get offline =>
-      AppTheme.pick(const Color(0xFFA3A29C), const Color(0xFF6E6E6E));
+      AppTheme.pick(const Color(0xFF7F7E78), const Color(0xFF6E6E6E));
 
   // Grid brand lightning gold — the live/active ⚡ mark, matching the tray bolt.
+  // Light is a deeper gold than the tray's: #C98A00 was 2.27–2.95:1 on the
+  // light grounds, this is 3.93 at worst.
   static Color get brandBolt =>
-      AppTheme.pick(const Color(0xFFC98A00), const Color(0xFFE0A93B));
+      AppTheme.pick(const Color(0xFF946500), const Color(0xFFE0A93B));
 
   static Color get textPrimary =>
       AppTheme.pick(const Color(0xFF1A1A18), const Color(0xFFF5F5F5));
@@ -363,8 +370,13 @@ abstract final class AppPalette {
   static Color get textSecondary =>
       AppTheme.pick(const Color(0xFF62615B), const Color(0xFFA8A8A2));
 
+  /// Meta text and hints. Light is #7A7973, not the #8E8D86 it was: that one
+  /// was tuned for a white page and fell to 2.57:1 on Paper's search ground
+  /// (#E2E2DF) and 2.60 on Mist's (#DCE4EE). This holds 3.36 / 3.40 there and
+  /// 3.49 / 3.51 on the two workspaces, and stays 1.42:1 apart from
+  /// [textSecondary] so the three steps still read as three.
   static Color get textFaint =>
-      AppTheme.pick(const Color(0xFF8E8D86), const Color(0xFF6E6E68));
+      AppTheme.pick(const Color(0xFF7A7973), const Color(0xFF6E6E68));
 
   /// The page a document is drawn on, and the ink on it.
   ///
@@ -434,9 +446,9 @@ abstract final class AppPalette {
 /// [buildAppTheme] needs the values *before* the global brightness is the one
 /// being built for — see the note at its `scrollbarTheme`. The getters below read
 /// these same four, so there is one set of numbers rather than two that can drift.
-const Color _scrollThumbLight = Color(0xFF8C8C8C);
+const Color _scrollThumbLight = Color(0xFF787878);
 const Color _scrollThumbDark = Color(0xFF686868);
-const Color _scrollThumbHoverLight = Color(0xFF6E6E6E);
+const Color _scrollThumbHoverLight = Color(0xFF5E5E5E);
 const Color _scrollThumbHoverDark = Color(0xFF8A8A8A);
 
 /// Surface tokens for the app's chrome — the sidebar's rows, the composer card,
@@ -504,6 +516,9 @@ abstract final class AppSurface {
   /// barely dents a white one, so reaching 3:1 needs 0.40 in dark and 0.50 in
   /// light. These are those two values resolved — 3.55:1 dark, 3.36:1 light —
   /// stated as colours so a list on the panel measures the same as one on the page.
+  /// Light was since deepened (#8C8C8C → #787878) for the light palettes'
+  /// tinted grounds: the old thumb fell to 2.69:1 on Paper's workspace; this
+  /// one holds 3.53 there and 3.55 on Mist's.
   static Color get scrollThumb =>
       AppTheme.pick(_scrollThumbLight, _scrollThumbDark);
 
@@ -918,20 +933,22 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
           outlineVariant: const Color(0x14FFFFFF),
           error: const Color(0xFFF2544B),
         )
-      : const ColorScheme.light(
+      : ColorScheme.light(
           primary: AppPalette.accent,
           onPrimary: Colors.white,
           secondary: AppPalette.accent,
-          // Pure white — matches AppPalette.windowBg so the chat pane (which
-          // paints scheme.surface) reads as clean white, letting the composer's
-          // rim and shadow stand out instead of blending into an off-white wash.
-          surface: Color(0xFFFFFFFF),
-          onSurface: Color(0xFF1A1A18),
-          onSurfaceVariant: Color(0xFF62615B),
-          surfaceContainerHighest: Color(0xFFF3F3F2),
-          outline: Color(0x0F000000),
-          outlineVariant: Color(0x0F000000),
-          error: Color(0xFFB3261E),
+          // The light palette's own ground — matches AppPalette.windowBg, as
+          // the dark scheme's does.
+          surface: AppTheme.palette.value.background,
+          onSurface: AppTheme.palette.value.foreground,
+          onSurfaceVariant: const Color(0xFF62615B),
+          // The field fill. Not the card, which is pure white on both light
+          // palettes: a white field in a white dialog has no edge at all. The
+          // panel tone is the step the old light theme's #F3F3F2 was.
+          surfaceContainerHighest: AppTheme.palette.value.panel,
+          outline: const Color(0x0F000000),
+          outlineVariant: const Color(0x0F000000),
+          error: const Color(0xFFB3261E),
         );
 
   // The chrome fills used by menus, dialogs and toasts. A getter-backed token
@@ -945,9 +962,7 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
   // both were `#1E1E1E`, which is [AppCard.base] — a content card's colour, one
   // step *below* the block it was supposed to be.
   final panelFill = isDark ? AppMenu.fillDark : AppMenu.fillLight;
-  final dialogFill = isDark
-      ? AppTheme.palette.value.card
-      : const Color(0xFFFFFFFF);
+  final dialogFill = AppTheme.palette.value.card;
   final textTheme = _appTextTheme(scheme.onSurface, scheme.onSurfaceVariant);
 
   return ThemeData(
@@ -1085,7 +1100,9 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       trackColor: WidgetStateProperty.resolveWith(
         (s) => s.contains(WidgetState.selected)
             ? AppPalette.accent
-            : (isDark ? const Color(0xFF3A3A3A) : const Color(0xFFA3A29C)),
+            // Light's off track is a UI mark (3:1): #A3A29C was 2.56 on a
+            // white dialog; #858480 is 3.74 there, 3.37 on the panel.
+            : (isDark ? const Color(0xFF3A3A3A) : const Color(0xFF858480)),
       ),
       trackOutlineColor: WidgetStateProperty.all(Colors.transparent),
     ),
@@ -1102,8 +1119,10 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       // same as the button beside it. (The typed text is set on the field via
       // [kFieldTextStyle]; `InputDecorationTheme` has no `style` of its own, so
       // a field's own text can't be themed globally here.)
+      // 75% in light: at 70% the hint sat at 2.999:1 on Mist's panel-toned
+      // fill; this is 3.29 (Mist) / 3.29 (Paper). Dark keeps 70% (3.99:1).
       hintStyle: _fieldTextStyle(
-        scheme.onSurfaceVariant.withValues(alpha: 0.7),
+        scheme.onSurfaceVariant.withValues(alpha: isDark ? 0.7 : 0.75),
       ),
       // Material builds a field for a phone: its default padding, plus the 48px
       // touch target it gives a prefixIcon, rendered this 48 tall next to a 32px

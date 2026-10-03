@@ -1,5 +1,5 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shared/theme/app_theme.dart';
 import '../shared/widgets/app_dialog.dart';
@@ -100,8 +100,9 @@ class _HarnessHelpDialogState extends State<_HarnessHelpDialog> {
     final (title, intro) = switch (widget.topic) {
       HarnessHelpTopic.agent => (
         'What would you like to make?',
-        'Choose an agent for the kind of work you have in mind. '
-            'You’ll work with it inside your new harness.',
+        'Choose an agent such as Codex or Claude Code, or a specialized harness '
+            'with tools for your craft. Starting either creates a harness '
+            'with its own conversation. Group harnesses in a tab.',
       ),
       HarnessHelpTopic.machine => (
         'Where would you like to work?',
@@ -115,11 +116,8 @@ class _HarnessHelpDialogState extends State<_HarnessHelpDialog> {
     };
     return Dialog(
       key: ValueKey('harness-help-guide-${widget.topic.name}'),
-      backgroundColor: AppPalette.swarmField,
-      surfaceTintColor: Colors.transparent,
       insetPadding: EdgeInsets.all(compact ? 16 : 24),
       constraints: const BoxConstraints(maxWidth: 800, maxHeight: 920),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
       clipBehavior: Clip.antiAlias,
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -140,7 +138,7 @@ class _HarnessHelpDialogState extends State<_HarnessHelpDialog> {
                   minimumSize: const Size(40, 40),
                   shape: const CircleBorder(),
                 ),
-                icon: const Icon(LucideIcons.x, size: 22),
+                icon: const Icon(AppIcons.close, size: 22),
               ),
             ),
           ),
@@ -222,14 +220,14 @@ class _HarnessHelpDialogState extends State<_HarnessHelpDialog> {
     ],
     HarnessHelpTopic.machine => const [
       _HelpOption(
-        leading: Icon(LucideIcons.laptop, size: 28),
+        leading: Icon(AppIcons.laptop, size: 28),
         title: 'This computer',
         description:
             'A good place to start. Work with the files and tools on the computer '
             'you’re using, without setting up another machine.',
       ),
       _HelpOption(
-        leading: Icon(LucideIcons.monitor, size: 28),
+        leading: Icon(AppIcons.monitor, size: 28),
         title: 'Remote machine',
         description:
             'Choose another linked computer when your project or tools are there. '
@@ -240,26 +238,26 @@ class _HarnessHelpDialogState extends State<_HarnessHelpDialog> {
     ],
     HarnessHelpTopic.project => const [
       _HelpOption(
-        leading: Icon(LucideIcons.folderPlus, size: 28),
+        leading: Icon(AppIcons.folderPlus, size: 28),
         title: 'New project',
         description: 'Start fresh. Harness creates a new folder on your selected machine for your work.',
       ),
       _HelpOption(
-        leading: Icon(LucideIcons.folderOpen, size: 28),
+        leading: Icon(AppIcons.folderOpen, size: 28),
         title: 'Existing folder',
         description:
             'Choose a folder that’s already on your selected machine. '
             'Your new harness will work with the files in that folder.',
       ),
       _HelpOption(
-        leading: Icon(LucideIcons.gitBranch, size: 28),
+        leading: Icon(AppIcons.gitBranch, size: 28),
         title: 'Git',
         description:
             'Bring a project from GitHub. Paste a repository link and Harness '
             'clones it onto your selected machine before starting.',
       ),
       _HelpOption(
-        leading: Icon(LucideIcons.history, size: 28),
+        leading: Icon(AppIcons.history, size: 28),
         title: 'Recent',
         description:
             'Quickly choose a project folder you’ve used on this machine before. '

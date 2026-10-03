@@ -13,7 +13,7 @@ function session(grid: RegisteredSession['grid'], codexHome: RegisteredSession['
     projectDir: 'tmp', cwd: '/tmp', tmuxPane: '%1', source: null, title: null, model: null,
     runtimes: [{ backend: 'tmux', paneId: '%1' }], primaryRuntimeKey: 'tmux/%1',
     cliVersion: '2.1.212', processIdentity: null, gateway: null, grid, codexHome,
-    registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
   }
 }
 
@@ -96,6 +96,19 @@ describe('agentFrame', () => {
     expect(frame).not.toHaveProperty('agent')
   })
 
+  // The global "last used" order. Null — never an absent key — until an app opens the agent: a push
+  // without the key would erase an open an earlier frame reported, and a client reads "absent" as a
+  // daemon too old to keep the stamp.
+  it('always carries lastOpenedAt: null until an app opens the agent, then the stamp', async () => {
+    const context = { selectedModel: null, terminalAvailable: true }
+    expect(await agentFrame(session(null), context)).toHaveProperty('lastOpenedAt', null)
+    const opened = { ...session(null), lastOpenedAt: Date.UTC(2026, 8, 26, 9, 30) }
+    const frame = await agentFrame(opened, context)
+    expect(frame.lastOpenedAt).toBe('2026-09-26T09:30:00.000Z')
+    // Its own field: opening an agent is not activity, and activity is not an open.
+    expect(frame.updatedAt).toBe(new Date(1).toISOString())
+  })
+
   it('reports launch state and defaults legacy agents to ready', async () => {
     const legacy = session(null)
     expect(await agentFrame(legacy, { selectedModel: null, terminalAvailable: true }))
@@ -110,15 +123,15 @@ describe('agentFrame updatedAt', () => {
   const context = { selectedModel: null, terminalAvailable: true }
   const lastHook = Date.UTC(2026, 8, 17, 7)
 
-  // The regression: discovery rewrites the registry's `updatedAt` on every pass, so an agent with no
+  // The regression: discovery rewrites the registry row's `touchedAt` on every pass, so an agent with no
   // readable transcript was stamped "now" forever and a phone sorting by recency put it on top.
   it('follows the last hook without a transcript, never the bookkeeping clock', async () => {
-    const row = { ...session(null), updatedAt: Date.now(), lastHookAt: lastHook }
+    const row = { ...session(null), touchedAt: Date.now(), lastHookAt: lastHook }
     expect((await agentFrame(row, context)).updatedAt).toBe('2026-09-17T07:00:00.000Z')
   })
 
   it('an unreadable transcript falls back to the last hook too', async () => {
-    const row = { ...session(null), transcriptPath: '/nonexistent/agent-frame.jsonl', updatedAt: Date.now(), lastHookAt: lastHook }
+    const row = { ...session(null), transcriptPath: '/nonexistent/agent-frame.jsonl', touchedAt: Date.now(), lastHookAt: lastHook }
     expect((await agentFrame(row, context)).updatedAt).toBe('2026-09-17T07:00:00.000Z')
   })
 
@@ -128,7 +141,7 @@ describe('agentFrame updatedAt', () => {
   it('falls back to when the agent came into being, never to the epoch', async () => {
     const bound = Date.UTC(2026, 8, 20, 9)
     const created = Date.UTC(2026, 8, 19, 8)
-    const never = { ...session(null), updatedAt: Date.now(), lastHookAt: 0 }
+    const never = { ...session(null), touchedAt: Date.now(), lastHookAt: 0 }
     expect((await agentFrame({ ...never, boundAt: bound, registeredAt: created }, context)).updatedAt)
       .toBe('2026-09-20T09:00:00.000Z')
     expect((await agentFrame({ ...never, boundAt: null, registeredAt: created }, context)).updatedAt)

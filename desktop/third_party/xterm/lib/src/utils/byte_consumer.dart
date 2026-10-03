@@ -1,6 +1,8 @@
 import 'dart:collection';
 
 class ByteConsumer {
+  static final _wideCharacter = RegExp(r'[\u0100-\uffff]');
+
   final _queue = ListQueue<List<int>>();
 
   final _consumed = ListQueue<List<int>>();
@@ -13,7 +15,13 @@ class ByteConsumer {
 
   void add(String data) {
     if (data.isEmpty) return;
-    final runes = data.runes.toList(growable: false);
+    // On native runtimes, Latin-1 code units avoid copying complete runes into
+    // an int list. Wider text keeps the original decoder. JavaScript also
+    // keeps it: mixing code-unit views and rune lists slows its Unicode path.
+    final runes = const bool.fromEnvironment('dart.library.io') &&
+            !_wideCharacter.hasMatch(data)
+        ? data.codeUnits
+        : data.runes.toList(growable: false);
     _queue.addLast(runes);
     _length += runes.length;
   }

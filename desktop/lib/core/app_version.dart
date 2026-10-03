@@ -1,6 +1,10 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+
+import 'runtime_platform.dart';
+import 'web_release.dart';
 
 /// The version of the build currently running.
 ///
@@ -12,12 +16,19 @@ import 'package:package_info_plus/package_info_plus.dart';
 /// `version.txt` next to the built executable; this reads that back when it
 /// exists and falls through to [PackageInfo] everywhere else — macOS,
 /// Windows, or a Linux dev build with no packaged `version.txt`.
+///
+/// A browser reads its host's `release.json` instead, the version a deploy is
+/// checked against; `flutter run` serves none and falls through as well.
 Future<String> runningAppVersion({
   String? executablePath,
   Future<String> Function()? packageInfoVersion,
 }) async {
-  if (Platform.isLinux) {
-    final exe = File(executablePath ?? Platform.resolvedExecutable);
+  if (kIsWeb) {
+    final released = await webReleaseVersion();
+    if (released != null) return released;
+  }
+  if (RuntimePlatform.isLinux) {
+    final exe = File(executablePath ?? RuntimePlatform.resolvedExecutable);
     final versionFile = File('${exe.parent.path}/version.txt');
     try {
       // Read synchronously. It is a dozen bytes sitting next to the executable,

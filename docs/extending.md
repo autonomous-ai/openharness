@@ -42,9 +42,8 @@ with a stable, multiplexer-namespaced id, and your tool's presence is detectable
 so a machine that lacks it pays nothing. Then implement: list panes with PID and working directory,
 send literal text and keys, capture a pane, display a message, create and kill sessions. Carry the new
 pane identity through process discovery, registry persistence and hooks, and scrub it from recap
-workers so they cannot register as phantom agents. The retired Herdr backend is still in the tree
-(`cli/src/lib/herdrBackend.ts`) as the worked example of the contract; see
-[Adding a multiplexer](CONTRIBUTING.md#adding-a-multiplexer).
+workers so they cannot register as phantom agents. `cli/src/lib/tmuxBackend.ts` is the worked example
+of the contract; see [Adding a multiplexer](CONTRIBUTING.md#adding-a-multiplexer).
 
 ```bash
 cd cli && npm run test:tmux-real       # the real multiplexer discovery suite

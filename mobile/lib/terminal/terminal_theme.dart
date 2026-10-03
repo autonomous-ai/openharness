@@ -4,62 +4,126 @@ import 'package:xterm/xterm.dart';
 import '../shared/theme/color_palette.dart';
 import 'terminal_theme_store.dart';
 
-/// The colours a terminal pane draws itself in.
+/// The colours a terminal pane's SCREEN draws itself in — the scheme the person
+/// chose, exactly. Only what paints the terminal itself reads this (the
+/// `TerminalView`, and the skeleton laid where it is about to be).
 ///
 /// ⚠️ Returns a CACHED (or `const`) instance, never a fresh one. The vendored
 /// renderer short-circuits on identity before repainting, so a new
 /// [TerminalTheme] built per rebuild reads as "the colours changed" every
 /// frame — the same trap [TerminalFontStore] documents for [TerminalStyle].
-TerminalTheme terminalThemeFor(
+TerminalTheme terminalScreenThemeFor(
   HarnessPalette palette,
   TerminalThemeChoice choice,
 ) => switch (choice) {
   // A whole scheme of its own: the app palette is not consulted at all, which
   // is the entire point of offering it.
   TerminalThemeChoice.tango => tangoTerminalTheme,
+  TerminalThemeChoice.dark => darkTerminalTheme,
+  TerminalThemeChoice.light => lightTerminalTheme,
   TerminalThemeChoice.matchApp => _matchApp(palette),
 };
 
+/// The terminal-styled CHROME's colours — every [Tty] screen, sheet and
+/// picker — which are drawn on the app palette's grounds or on a ground they
+/// take from this same theme.
+///
+/// The chosen scheme while it agrees with the palette about light and dark;
+/// the palette's own match-app theme when it does not. Tango and Dark are dark
+/// schemes: under a light palette their white ink would land on the app's
+/// light grounds at about 1:1 — every header and picker unreadable — and Light
+/// under a dark palette is the same trap the other way round. The terminal
+/// screen itself still wears the chosen scheme ([terminalScreenThemeFor]).
+///
+/// Cached, like [terminalScreenThemeFor]: both return the same instances.
+TerminalTheme terminalThemeFor(
+  HarnessPalette palette,
+  TerminalThemeChoice choice,
+) {
+  final screen = terminalScreenThemeFor(palette, choice);
+  final screenDark = screen.background.computeLuminance() <= .5;
+  return screenDark == palette.isDark ? screen : _matchApp(palette);
+}
+
 /// Cached per palette. Switching colors repaints the existing terminal view;
 /// it does not replace its controller, buffer, input connection or font.
-TerminalTheme _matchApp(HarnessPalette palette) => _palettes.putIfAbsent(
-  palette,
-  () => TerminalTheme(
-    cursor: palette.accent,
-    selection: palette.accent.withValues(alpha: 0.3),
-    foreground: palette.foreground,
-    background: palette.background,
-    black: darkTerminalTheme.black,
-    red: darkTerminalTheme.red,
-    green: darkTerminalTheme.green,
-    yellow: darkTerminalTheme.yellow,
-    blue: darkTerminalTheme.blue,
-    magenta: darkTerminalTheme.magenta,
-    cyan: darkTerminalTheme.cyan,
-    white: darkTerminalTheme.white,
-    brightBlack: darkTerminalTheme.brightBlack,
-    brightRed: darkTerminalTheme.brightRed,
-    brightGreen: darkTerminalTheme.brightGreen,
-    brightYellow: darkTerminalTheme.brightYellow,
-    brightBlue: darkTerminalTheme.brightBlue,
-    brightMagenta: darkTerminalTheme.brightMagenta,
-    brightCyan: darkTerminalTheme.brightCyan,
-    brightWhite: darkTerminalTheme.brightWhite,
-    searchHitBackground: darkTerminalTheme.searchHitBackground,
-    searchHitBackgroundCurrent: darkTerminalTheme.searchHitBackgroundCurrent,
-    searchHitForeground: darkTerminalTheme.searchHitForeground,
-  ),
-);
+///
+/// The ANSI ramp follows the palette's brightness: the dark ramp's pale yellow
+/// and white are unreadable on a light ground, and the light ramp's deep ones
+/// vanish on a dark one.
+TerminalTheme _matchApp(HarnessPalette palette) =>
+    _palettes.putIfAbsent(palette, () {
+      final ramp = palette.isDark ? darkTerminalTheme : lightTerminalTheme;
+      return TerminalTheme(
+        cursor: palette.accent,
+        selection: palette.accent.withValues(alpha: 0.3),
+        foreground: palette.foreground,
+        background: palette.background,
+        black: ramp.black,
+        red: ramp.red,
+        green: ramp.green,
+        yellow: ramp.yellow,
+        blue: ramp.blue,
+        magenta: ramp.magenta,
+        cyan: ramp.cyan,
+        white: ramp.white,
+        brightBlack: ramp.brightBlack,
+        brightRed: ramp.brightRed,
+        brightGreen: ramp.brightGreen,
+        brightYellow: ramp.brightYellow,
+        brightBlue: ramp.brightBlue,
+        brightMagenta: ramp.brightMagenta,
+        brightCyan: ramp.brightCyan,
+        brightWhite: ramp.brightWhite,
+        searchHitBackground: ramp.searchHitBackground,
+        searchHitBackgroundCurrent: ramp.searchHitBackgroundCurrent,
+        searchHitForeground: ramp.searchHitForeground,
+      );
+    });
 
 final _palettes = <HarnessPalette, TerminalTheme>{};
+
+/// The ANSI ramp a light palette's terminal uses: GitHub Light's, with the five
+/// slots it leaves under text contrast on a near-white ground darkened (same
+/// hue) until every one of the sixteen reads at ≥4.6:1 on both light palettes'
+/// grounds — white, brightBlue, brightMagenta, brightCyan and brightWhite, the
+/// last of which was 2.9:1. Any of them can be a line of an agent's output.
+/// Ground and ink come from the palette; [_matchApp] takes only the ramp and
+/// search colours.
+const lightTerminalTheme = TerminalTheme(
+  cursor: Color(0xff0969da),
+  selection: Color(0x4d0969da),
+  foreground: Color(0xff1f2328),
+  background: Color(0xffffffff),
+  black: Color(0xff24292f),
+  red: Color(0xffcf222e),
+  green: Color(0xff116329),
+  yellow: Color(0xff4d2d00),
+  blue: Color(0xff0969da),
+  magenta: Color(0xff8250df),
+  cyan: Color(0xff1b7c83),
+  white: Color(0xff5c6570),
+  brightBlack: Color(0xff57606a),
+  brightRed: Color(0xffa40e26),
+  brightGreen: Color(0xff1a7f37),
+  brightYellow: Color(0xff633c01),
+  brightBlue: Color(0xff006ce3),
+  brightMagenta: Color(0xff8749f7),
+  brightCyan: Color(0xff297a8e),
+  brightWhite: Color(0xff69737d),
+  searchHitBackground: Color(0xffffff2b),
+  searchHitBackgroundCurrent: Color(0xff31ff26),
+  searchHitForeground: Color(0xff000000),
+);
 
 /// Harness owns the terminal's *default* appearance.
 ///
 /// Terminal streams provide ANSI attributes, not the source application's
 /// complete colour scheme.  The default foreground, background, and ANSI ramp
-/// must therefore follow Harness's own (dark-only) appearance.  Explicit ANSI
-/// and true-colour cells remain untouched by xterm, so a TUI keeps the colours
-/// it deliberately emits.
+/// must therefore follow Harness's own appearance — this ramp for a dark
+/// palette, [lightTerminalTheme]'s for a light one.  Explicit ANSI and
+/// true-colour cells remain untouched by xterm, so a TUI keeps the colours it
+/// deliberately emits.
 const darkTerminalTheme = TerminalTheme(
   cursor: Color(0xffaeafad),
   // Translucent, not opaque: this is painted over the glyphs after they're drawn (see

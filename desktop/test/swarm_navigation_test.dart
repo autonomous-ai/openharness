@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/state/session_preview.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/terminal/terminal_session.dart';
 
@@ -77,6 +78,122 @@ void main() {
       'title-fuzzy',
       'metadata-fuzzy',
     ]);
+  });
+
+  test('the finder ranks how well a harness matched before how recently', () {
+    SwarmDestination row(
+      String id,
+      String title, {
+      String? cwd,
+      required int hour,
+    }) => SwarmDestination(
+      id: id,
+      title: title,
+      detail: '',
+      swarmId: null,
+      current: false,
+      agentId: id,
+      machineId: 'm',
+      lastActivityAt: DateTime.utc(2026, 9, 26, hour),
+      searchFields: [cwd],
+    );
+    final catalog = [
+      row('named', 'hn', hour: 1),
+      row('scattered', 'Harness monitor', hour: 9),
+      row(
+        'folder',
+        'Mobile build',
+        cwd: '/users/me/harnesses/worktrees/autonomous-harness/rustic-birch',
+        hour: 12,
+      ),
+      row('word', 'Build the hn tui', hour: 3),
+      row('newer word', 'Fix hn keys', hour: 4),
+    ];
+    expect(
+      rankSwarmDestinationsByActivity(catalog, 'hn').map((row) => row.id),
+      // Two letters scattered through "harness…" names and folders are noise.
+      ['named', 'newer word', 'word'],
+    );
+    // Two letters still work as initials. (A command keeps abbreviations like
+    // "kb": the strict rule is for the hundreds of harness names.)
+    expect(
+      rankSwarmDestinationsByActivity([
+        row('split', 'New Split', hour: 2),
+        row('other', 'Networks', hour: 3),
+      ], 'ns').map((row) => row.id),
+      ['split'],
+    );
+    // Scattered letters that wander across a folder path are no match at all.
+    expect(rankSwarmDestinationsByActivity(catalog, 'auth'), isEmpty);
+    expect(
+      rankSwarmDestinationsByActivity(catalog, 'rustic').single.id,
+      'folder',
+    );
+
+    final words = [
+      row('fragment', 'Support tickets', hour: 12),
+      row('word', 'Windows port', hour: 1),
+    ];
+    expect(
+      rankSwarmDestinationsByActivity(words, 'port').map((row) => row.id),
+      ['word', 'fragment'],
+    );
+    expect(rankSwarmDestinationsByActivity(words, '').map((row) => row.id), [
+      'fragment',
+      'word',
+    ]);
+  });
+
+  test('what was asked finds a session only at the start of a word', () async {
+    const SessionPreviewKey asked = (
+      machineId: 'm',
+      agentId: 'asked',
+      sessionId: null,
+    );
+    const SessionPreviewKey other = (
+      machineId: 'm',
+      agentId: 'other',
+      sessionId: null,
+    );
+    final previews = SessionPreviewStore(
+      canFetch: (_) => true,
+      fetchRecent: (key) async => {
+        'agentId': key.agentId,
+        'asks': [
+          key == asked ? 'Port the daemon to Windows' : 'Add support for tabs',
+        ],
+      },
+    );
+    addTearDown(previews.dispose);
+    previews.warm([asked, other]);
+    await Future<void>.delayed(Duration.zero);
+    SwarmDestination row(SessionPreviewKey key) => SwarmDestination(
+      id: key.agentId,
+      title: 'Claude harness 9-26 13:41',
+      detail: '',
+      swarmId: null,
+      current: false,
+      agentId: key.agentId,
+      machineId: key.machineId,
+      previewKey: key,
+    );
+    final catalog = [row(asked), row(other)];
+    expect(
+      rankSwarmDestinationsByActivity(
+        catalog,
+        'port windows',
+        previews: previews,
+      ).map((row) => row.id),
+      ['asked'],
+    );
+    expect(
+      rankSwarmDestinationsByActivity(
+        catalog,
+        'support',
+        previews: previews,
+      ).map((row) => row.id),
+      ['other'],
+    );
   });
 
   test('search keeps Unicode subsequences and separate field boundaries', () {
@@ -221,7 +338,7 @@ void main() {
     );
   }
 
-  test('opening a swarm restores its saved focus and zoom', () async {
+  test('opening a tab restores its saved focus and zoom', () async {
     final app = createApp();
     addTearDown(app.dispose);
     app.adoptSessionForTest(terminal('a0', []));

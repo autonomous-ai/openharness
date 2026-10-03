@@ -1,260 +1,174 @@
-/**
- * One row per harness, from every source that knows something about it.
- *
- * The daemon knows who the agents are, where their panes are and when their transcripts last moved.
- * tmux knows whether a pane is alive, dead or attached. The process table knows what the engine is
- * holding. This package's own state file knows what a person decided (pinned, paused). This module is
- * where those four become the single row shape that the policy, the table and the hps all read, and
- * it is the only place that decides what `state` means.
- *
- * Every machine's agents are listed — the local bridge relays `machine_select` to any machine the user
- * has linked — but pane and memory facts, and every action, are local to this computer. A remote row is
- * marked `local: false` and reads as what it is: seen, not managed from here.
- */
-
-import { existsSync } from 'node:fs'
+/** One row per machine/agent. Daemon facts are authoritative; missing readings stay unknown. */
 import { homedir } from 'node:os'
 import { basename, dirname } from 'node:path'
-import { lastTurns } from './activity.mjs'
-import { listAgents, machinesReport } from './bridge.mjs'
-import { engineProcess, panes, processTable } from './panes.mjs'
+import { existsSync } from 'node:fs'
+import { listInventory, machinesReport } from './bridge.mjs'
 import { humanIdle } from './policy.mjs'
-import { readRegistry, registryAsFrames } from './registry.mjs'
 
-/** `runtime-v1:<agentId>:<engine>:<model>@<effort>` — the runtime profile's answer, as the daemon
- *  sends it. A plain model name (older daemons) is passed through untouched. */
 export function parseModel(selected) {
   if (typeof selected !== 'string' || !selected) return { model: null, effort: null }
   const body = selected.startsWith('runtime-v1:') ? selected.split(':').slice(3).join(':') : selected
   const at = body.lastIndexOf('@')
-  if (at <= 0) return { model: body || null, effort: null }
-  return { model: body.slice(0, at) || null, effort: body.slice(at + 1) || null }
+  return at <= 0 ? { model: body || null, effort: null } : { model: body.slice(0, at), effort: body.slice(at + 1) || null }
 }
-
-/** Working directories are shown relative to `~`: a fleet list is read by the person whose home it is,
- *  and the absolute prefix is the same eleven characters on every row. */
 export function tilde(path, home = homedir()) {
   if (typeof path !== 'string' || !path) return ''
-  return home && path.startsWith(home) ? `~${path.slice(home.length)}` : path
+  return path === home || path.startsWith(home + '/') ? '~' + path.slice(home.length) : path
 }
-
-/** The project a row belongs to: the git root's name when there is one, else the folder's. Two agents
- *  in two worktrees of one repo are two projects, on purpose — that is how they are worked on. */
 export function projectOf(agent) {
-  const project = agent.project
-  if (!project) return { project: 'unknown', cwd: '', branch: null, remote: null }
-  const cwd = project.cwd || ''
-  return {
-    project: project.name || basename(project.root || cwd) || basename(dirname(cwd)) || 'unknown',
-    cwd,
-    branch: project.branch || null,
-    remote: project.remote || null,
-  }
+  const project = agent.project, cwd = project?.cwd || ''
+  return { project: project?.name || basename(project?.root || cwd) || (cwd ? basename(dirname(cwd)) : '') || '—',
+    cwd, branch: project?.branch || null, remote: project?.remote || null }
 }
-
-/** The first of these that is a real moment in time. `Date.parse` answers NaN rather than null, which is
- *  exactly the value that must not reach an idle column, so it is filtered here and not by `??`. */
-function firstTime(candidates, fallback) {
-  for (const value of candidates) {
-    const time = typeof value === 'string' ? Date.parse(value) : Number(value)
-    if (Number.isFinite(time) && time > 0) return time
-  }
-  return fallback
+const time = value => {
+  const n = typeof value === 'number' ? value : Date.parse(value)
+  return Number.isFinite(n) && n > 0 ? n : null
 }
+const reading = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+export const rowId = (machineId, agentId) => JSON.stringify([machineId, agentId])
 
-/**
- * Merge one machine's agent frames with local pane and process facts.
- *
- * `state` is decided here and nowhere else:
- *   the pane is gone from tmux             → gone      (nothing to resume; history only)
- *   the pane is there and an engine is up   → running
- *   the pane is there, no engine, a ticket  → paused    (conversation intact, waiting to be resumed)
- *   the pane is there, no engine, no ticket → terminal  (a shell somebody opened; nothing to pause)
- * and that is the whole state machine. There is deliberately no fourth state: an earlier version had
- * `retired` as paused-plus-a-decision, and every consumer paid for it — a glyph, a filter, a verb, a
- * grace window — to express something a sorted list already expresses.
- *
- * ## Why a paused row needs the ticket to describe itself
- *
- * When an engine leaves, the daemon does not merely mark the row: it REWRITES it as a terminal. Measured
- * on a real pause, the row kept its `cwd` and lost everything else — `engine` became `terminal`,
- * `sessionId` became empty, `transcriptPath` and `title` became null. So a paused harness would appear in
- * Harness Monitor's own list as a nameless shell, and nothing would know which conversation to resume. The ticket
- * `pause()` wrote into `monitor.json` is the only record, and it is overlaid here.
- */
-export function mergeRows(agents, { paneRows = new Map(), table = { byPid: new Map(), children: new Map() }, state = {}, machine = null, local = true, now = Date.now(), home = homedir(), turns = new Map(), registry = new Map() } = {}) {
-  const pauseTickets = state.paused ?? {}
-  const pins = new Set(state.pins ?? [])
-  return agents.map((agent) => {
-    const pane = agent.tmuxPane && local ? paneRows.get(agent.tmuxPane) ?? null : null
-    const ticket = pauseTickets[agent.id] ?? null
-    // A paused row describes itself from its ticket: the daemon has already forgotten what it was.
-    const engine = agent.engine === 'terminal' && ticket?.engine ? ticket.engine : agent.engine
-    const sessionId = agent.sessionId || ticket?.sessionId || null
-    const proc = local ? engineProcess(pane, table, engine) : { pid: null, rss: 0, cpu: 0, procs: 0, engineAlive: agent.status === 'active' }
-    // The one number every rule depends on. `agent.updatedAt` is deliberately NOT in this list: it is
-    // the transcript's mtime, which a live engine bumps with bookkeeping between turns (see
-    // activity.mjs). Last turn, else the daemon's last hook, else when the agent was registered.
-    const reg = registry.get(agent.id)
-    const lastActivity = firstTime([turns.get(agent.id), reg?.lastHookAt, Date.parse(agent.createdAt)], now)
-    const idleMs = Math.max(0, now - lastActivity)
+export function mergeRows(agents, { state = {}, machine = null, local = true, now = Date.now(), home = homedir(), online = true } = {}) {
+  return agents.map(agent => {
+    const id = rowId(machine?.machineId ?? null, agent.id)
+    const stopped = agent.status === 'stopped'
+    const terminalAvailable = agent.terminal?.available === true && !stopped
     const { project, cwd, branch, remote } = projectOf(agent)
-    // A remote row cannot be looked up in this machine's tmux, so its liveness is the daemon's word for
-    // it. A local row's liveness is the process table — which is the stricter of the two and the one a
-    // person can verify, so it wins whenever it is available.
-    const present = local ? Boolean(pane) : agent.status !== 'gone'
-    let stateName = !present ? 'gone' : proc.engineAlive ? 'running' : 'paused'
-    // A shell somebody opened is not a paused agent: it has no conversation and nothing to resume, so it
-    // is shown as what it is and left out of every rule.
-    if (stateName === 'paused' && engine === 'terminal' && !ticket) stateName = 'terminal'
-    const { model, effort } = parseModel(agent.selectedModel)
+    // updatedAt is real conversation activity, not registry touchedAt or transcript mtime.
+    const lastActivity = time(agent.updatedAt) ?? time(agent.createdAt)
+    const idleMs = lastActivity == null ? null : Math.max(0, now - lastActivity)
+    const monitor = agent.monitor
+    let activity = !online ? 'offline' : stopped ? 'stopped'
+      : agent.launch?.state === 'starting' ? 'starting'
+      : agent.launch?.state === 'failed' ? (agent.launch.error === 'RESUME_UNCONFIRMED' ? 'needsInput' : 'failed')
+      : monitor?.activityKnown ? monitor.activity : 'unknown'
+    if (!['working', 'needsInput', 'done', 'idle', 'starting', 'failed', 'stopped', 'offline', 'unknown'].includes(activity)) activity = 'idle'
+    const self = agent.dsh === 'autonomous/harness-monitor'
+    const canControl = online && !self && agent.resumeMode != null && agent.launch?.state !== 'starting'
     return {
-      id: agent.id,
-      sessionId,
-      name: agent.name || ticket?.title || 'agent',
-      title: agent.title || ticket?.title || null,
-      engine,
-      model, effort,
-      state: stateName,
-      stateSince: stateName === 'paused' && ticket ? (ticket.at ?? lastActivity) : lastActivity,
-      pausedAt: ticket?.at ?? null,
-      pane: agent.tmuxPane || null,
-      paneTarget: pane?.target ?? null,
-      project, cwd, home: tilde(cwd, home), branch, remote,
-      lastActivity, idleMs, idle: humanIdle(idleMs),
-      createdAt: firstTime([agent.createdAt], null),
-      attached: Boolean(pane?.attached),
-      // Mid-turn, as far as anything outside the daemon can tell: the engine is burning CPU, or its
-      // transcript moved in the last minute and a half. Both are proxies, and both are only ever used
-      // to REFUSE to pause something — never to claim an agent is busy in the interface.
-      working: local
-        ? proc.cpu > 5 || idleMs < 90_000 || (pane?.lastOutput ? now - pane.lastOutput < 60_000 : false)
-        : idleMs < 90_000,
-      lastOutput: pane?.lastOutput ?? null,
-      transcript: reg?.transcriptPath ?? null,
-      needsInput: false,
-      pinned: pins.has(agent.id),
-      workspaceGone: Boolean(cwd) && local && !existsSync(cwd),
-      rssBytes: proc.rss,
-      procs: proc.procs,
-      cpu: proc.cpu,
-      enginePid: proc.pid,
-      cwdWas: ticket?.cwd ?? null,
-      dsh: agent.dsh ?? null,
-      dshName: agent.dshName ?? null,
-      verdict: agent.verdict?.ready === undefined ? null : Boolean(agent.verdict.ready),
-      machine: machine?.name ?? 'this machine',
-      machineId: machine?.machineId ?? null,
-      local,
-      dead: Boolean(pane?.dead),
+      id, agentId: agent.id, sessionId: agent.sessionId || null,
+      name: agent.name || agent.title || 'Untitled harness', title: agent.title || null,
+      engine: agent.engine, ...parseModel(agent.selectedModel),
+      state: !online ? 'offline' : stopped ? 'stopped' : terminalAvailable ? (agent.engine === 'terminal' ? 'terminal' : 'running') : agent.launch?.state === 'starting' ? 'starting' : 'gone',
+      activity, activityKnown: monitor?.activityKnown === true,
+      stateSince: lastActivity, stoppedAt: stopped ? lastActivity : null,
+      pane: agent.tmuxPane || null, paneTarget: null,
+      project, cwd, home: local ? tilde(cwd, home) : cwd, branch, remote,
+      lastActivity, idleMs, idle: idleMs == null ? '—' : humanIdle(idleMs), createdAt: time(agent.createdAt),
+      attached: false, working: activity === 'working', needsInput: activity === 'needsInput',
+      pinned: self || (state.pins ?? []).includes(id) || (local && (state.pins ?? []).includes(agent.id)),
+      workspaceGone: local && Boolean(cwd) && !existsSync(cwd),
+      rssBytes: online ? stopped ? 0 : reading(monitor?.rssBytes) : null,
+      cpu: online ? stopped ? 0 : reading(monitor?.cpu) : null,
+      enginePid: online && !stopped ? reading(monitor?.pid) : null,
+      live: !stopped && (terminalAvailable || agent.launch?.state === 'starting'),
+      sampledAt: time(monitor?.sampledAt),
+      processCount: online && !stopped ? reading(monitor?.processCount) : null,
+      gpuMemoryBytes: online && !stopped ? reading(monitor?.gpuMemoryBytes) : null,
+      gpuPercent: online && !stopped ? reading(monitor?.gpuPercent) : null,
+      diskReadBytesPerSecond: online && !stopped ? reading(monitor?.diskReadBytesPerSecond) : null,
+      diskWriteBytesPerSecond: online && !stopped ? reading(monitor?.diskWriteBytesPerSecond) : null,
+      workspaceBytes: reading(monitor?.workspaceBytes), workspacePath: monitor?.workspacePath ?? cwd, workspaceSampledAt: time(monitor?.workspaceSampledAt),
+      sessionBytes: reading(monitor?.sessionBytes), transcriptBytes: reading(monitor?.transcriptBytes),
+      processes: online && !stopped && Array.isArray(monitor?.processes) ? monitor.processes : [],
+      tokenUpdatedAt: time(agent.tokenUsage?.updatedAt),
+      inputTokens: reading(agent.tokenUsage?.inputTokens), outputTokens: reading(agent.tokenUsage?.outputTokens),
+      cachedTokens: reading(agent.tokenUsage?.cachedTokens),
+      linesAdded: reading(agent.outputStats?.linesAdded), linesRemoved: reading(agent.outputStats?.linesRemoved),
+      parentAgentId: agent.parentAgentId ?? null,
+      tokens: reading(agent.tokenUsage?.totalTokens), dsh: agent.dsh ?? null, dshName: agent.dshName ?? null,
+      verdict: agent.verdict?.ready ?? null,
+      machine: machine?.name ?? 'This machine', machineId: machine?.machineId ?? null,
+      local, online, self, canStop: canControl && terminalAvailable,
+      canDelete: canControl && time(agent.createdAt) != null && (terminalAvailable || stopped),
+      canOpen: online && (terminalAvailable || (stopped && agent.resumeMode != null)), resumeMode: agent.resumeMode ?? null,
+      unavailable: !online ? 'Reconnect this machine.' : self ? 'Manage this assistant from its monitor tab.' : agent.launch?.detail ?? null,
     }
   })
 }
 
-/**
- * The whole fleet, from every machine that answers.
- *
- * Failures are per machine and reported, never fatal: a fleet view that refuses to draw because one
- * linked laptop is asleep is worse than one that says which machine it could not reach.
- */
+/** Cache is scoped to this viewer, never an account-global singleton. Offline machines retain rows. */
 export async function collect({
-  state = {}, now = Date.now(), includeRemote = true, timeoutMs = 8000, home = homedir(), cache = new Map(),
-  // Remote machines are asked at most this often; between asks their last answer is re-merged against
-  // the current clock. A pane ticks every few seconds for the machine it is on — that is local reads —
-  // but every remote ask crosses the relay to another computer, so it gets its own, slower clock.
-  // `remote` is the holder for that answer, owned by the caller so it survives across ticks.
-  remoteIntervalMs = 60_000, remote = null,
+  state = {}, now = Date.now(), includeRemote = true, timeoutMs = 8000, home = homedir(),
+  remoteIntervalMs = 15_000, remote = { at: 0, answers: new Map() },
+  reportMachines = machinesReport, agentsFor = null, inventoryFor = listInventory,
 } = {}) {
-  const [paneRows, table, report, registry] = await Promise.all([panes(), processTable(), machinesReport(), readRegistry()])
-  const machineList = report.machines
-  const turns = await lastTurns(registry.rows.map((row) => ({ id: row.agentId, transcriptPath: row.transcriptPath })), { cache })
-  const current = machineList.find((m) => m.current) ?? null
-  const remoteMachines = includeRemote ? machineList.filter((m) => !m.current && m.online) : []
-  const remoteDue = !remote || remoteIntervalMs <= 0 || now - (remote.at ?? 0) >= remoteIntervalMs
-  const targets = [current, ...(remoteDue ? remoteMachines : [])].filter(Boolean)
-  const problems = []
-  let rows = []
-
-  // No daemon, no `harness` on PATH: fall back to the registry file this machine already has. Seeing
-  // the fleet must not depend on the app running, and pausing is pure tmux either way. Say which of
-  // the two it was: a CLI that failed to run is a different repair from a daemon that is not there.
-  if (!targets.length) {
-    if (report.error) problems.push({ machine: 'this machine', error: `Read from the registry file — ${report.error}, so models, branches and remote machines are missing.` })
-    else if (!registry.rows.length) problems.push({ machine: 'this machine', error: 'No Harness daemon on the local bridge and no registry to read.' })
-    else problems.push({ machine: 'this machine', error: 'Read from the registry file — the Harness daemon is not answering, so models, branches and remote machines are missing.' })
-    const rowsOffline = mergeRows(registryAsFrames(registry.rows), { paneRows, table, state, machine: null, local: true, now, home, turns, registry: registry.byId })
-    rowsOffline.sort((a, b) => a.idleMs - b.idleMs || a.name.localeCompare(b.name))
-    return { rows: rowsOffline, machines: machineList, problems, observedAt: now, degraded: true }
-  }
-
-  // What each remote machine last answered, raw, so an off-tick merge still gets a fresh clock.
-  const answers = remoteDue ? new Map() : new Map(remote?.answers ?? [])
-  const remoteProblems = remoteDue ? [] : [...(remote?.problems ?? [])]
-  await Promise.all(targets.map(async (machine) => {
+  const report = await reportMachines()
+  const machines = report.machines.filter(m => includeRemote || m.current)
+  const problems = report.error ? [{ machine: 'This machine', error: report.error }] : []
+  const answers = remote.answers ??= new Map()
+  const failed = remote.failed ??= new Set()
+  const previouslyOnline = remote.online ??= new Set()
+  const due = remoteIntervalMs <= 0 || !remote.at || now - remote.at >= remoteIntervalMs
+  await Promise.all(machines.filter(m => m.online && (m.current || due || !answers.has(m.machineId) || !previouslyOnline.has(m.machineId) || failed.has(m.machineId))).map(async machine => {
     try {
-      const agents = await listAgents(machine.machineId, { timeoutMs })
-      if (machine.current) rows = rows.concat(mergeRows(agents, { paneRows, table, state, machine, local: true, now, home, turns, registry: registry.byId }))
-      else answers.set(machine.machineId, agents)
-    } catch (error) {
-      const problem = { machine: machine.name, error: error instanceof Error ? error.message : String(error) }
-      if (machine.current) problems.push(problem)
-      else remoteProblems.push(problem)
+      const answer = agentsFor ? { agents: await agentsFor(machine.machineId, { timeoutMs }), shared: [] }
+        : await inventoryFor(machine.machineId, { timeoutMs })
+      answers.set(machine.machineId, { ...answer, receivedAt: now }); failed.delete(machine.machineId)
     }
+    catch (error) { failed.add(machine.machineId); problems.push({ machine: machine.name, error: error.message }) }
   }))
-  for (const machine of remoteMachines) {
-    const agents = answers.get(machine.machineId)
-    if (agents) rows = rows.concat(mergeRows(agents, { paneRows, table, state, machine, local: false, now, home, turns, registry: registry.byId }))
+  if (due) remote.at = now
+  remote.online = new Set(machines.filter(m => !report.error && m.online).map(m => m.machineId))
+  if (!report.error) {
+    const known = new Set(machines.map(m => m.machineId))
+    for (const id of answers.keys()) if (!known.has(id)) { answers.delete(id); failed.delete(id) }
+    remote.machines = machines
   }
-  problems.push(...remoteProblems)
-  if (remote && remoteDue) { remote.at = now; remote.answers = answers; remote.problems = remoteProblems }
-
-  rows.sort((a, b) => a.idleMs - b.idleMs || a.name.localeCompare(b.name))
-  return { rows, machines: machineList, problems, observedAt: now }
+  const visibleMachines = report.error ? (remote.machines ?? []) : machines
+  const rows = visibleMachines.flatMap(machine => mergeRows(answers.get(machine.machineId)?.agents ?? answers.get(machine.machineId) ?? [], {
+    state, machine, local: machine.current, online: !report.error && machine.online && !remote.failed.has(machine.machineId), now, home,
+  }))
+  const shared = visibleMachines.flatMap(machine => {
+    const answer = answers.get(machine.machineId)
+    const online = !report.error && machine.online && !failed.has(machine.machineId)
+    return (answer?.shared ?? []).map((resource, index) => ({
+      id: rowId(machine.machineId, `shared-${resource.kind}-${index}`), machine: machine.name, machineId: machine.machineId,
+      name: `Shared ${resource.kind === 'codex' ? 'Codex' : resource.kind} server`, agentIds: resource.agentIds ?? [], online,
+      rssBytes: online ? reading(resource.memoryBytes) : null, cpu: online ? reading(resource.cpuPercent) : null,
+      gpuMemoryBytes: online ? reading(resource.gpuMemoryBytes) : null, processCount: online ? reading(resource.processCount) : null,
+      gpuPercent: online ? reading(resource.gpuPercent) : null,
+      processes: online ? resource.processes ?? [] : [], sampledAt: time(answer.sampledAt),
+    }))
+  })
+  // Token velocity uses distinct ledger updates over the last minute, never the
+  // viewer's polling frequency. Conversation changes and counter resets start anew.
+  const history = remote.tokens ??= new Map()
+  for (const row of rows) {
+    const samples = history.get(row.id) ?? []
+    const last = samples.at(-1)
+    if (!row.online || !row.live || row.tokens == null || !row.tokenUpdatedAt) { row.tokensPerMinute = null; history.delete(row.id); continue }
+    if (last && (last.session !== row.sessionId || last.tokens > row.tokens || row.tokenUpdatedAt < last.sourceAt || now - last.at > 60_000)) samples.length = 0
+    // Measure elapsed time on this viewer, not by comparing clocks on two machines.
+    if (samples.at(-1)?.sourceAt !== row.tokenUpdatedAt) samples.push({ at: now, sourceAt: row.tokenUpdatedAt, tokens: row.tokens, session: row.sessionId })
+    while (samples.length > 2 && samples[1].at < now - 60_000) samples.shift()
+    const first = samples[0], latest = samples.at(-1)
+    row.tokensPerMinute = first && latest.at > first.at && now - latest.at <= 60_000
+      ? (latest.tokens - first.tokens) * 60_000 / (latest.at - first.at) : null
+    history.set(row.id, samples)
+  }
+  for (const id of history.keys()) if (!rows.some(row => row.id === id)) history.delete(id)
+  for (const machine of visibleMachines.filter(m => !m.online)) problems.push({ machine: machine.name, error: 'Offline — showing the last known sessions.' })
+  rows.sort((a, b) => (a.idleMs ?? Infinity) - (b.idleMs ?? Infinity) || a.id.localeCompare(b.id))
+  return { rows, shared, machines: visibleMachines, problems, observedAt: now, degraded: problems.length > 0 }
 }
 
-/** Totals a person reads before deciding anything: the gauge in the header and the CLI's last line. */
 export function summarize(rows) {
-  const by = (state) => rows.filter((row) => row.state === state).length
-  return {
-    total: rows.length,
-    running: by('running'),
-    paused: by('paused'),
-    gone: by('gone'),
-    terminals: by('terminal'),
-    needsInput: rows.filter((row) => row.needsInput).length,
-    working: rows.filter((row) => row.working && row.state === 'running').length,
-    held: rows.reduce((sum, row) => sum + (row.rssBytes || 0), 0),
-    projects: new Set(rows.map((row) => row.project)).size,
-    machines: new Set(rows.map((row) => row.machine)).size,
-  }
+  const by = state => rows.filter(row => row.state === state).length
+  return { total: rows.length, running: by('running'), stopped: by('stopped'), gone: by('gone'), terminals: by('terminal'),
+    needsInput: rows.filter(row => row.needsInput).length, working: rows.filter(row => row.working).length,
+    held: rows.reduce((sum, row) => sum + (row.rssBytes ?? 0), 0),
+    projects: new Set(rows.map(row => row.project)).size, machines: new Set(rows.map(row => row.machineId)).size }
 }
 
-/**
- * Resolve what a person typed to exactly one row, or say why it is ambiguous.
- *
- * Accepted, in order: a row number from the last `ls`, a tmux pane id (`%42`), an agent-id prefix, an
- * exact name, then a unique case-insensitive substring of the name or title. The same grammar the shell
- * gave everyone for job control — `%3` is a pane here and a job there — so it needs no learning.
- */
 export function resolveRef(ref, rows) {
   const text = String(ref ?? '').trim()
   if (!text) return { error: 'Name a harness: a row number, a %pane, an id, or part of its name.' }
-  if (/^\d+$/.test(text)) {
-    const row = rows[Number(text) - 1]
-    return row ? { row } : { error: `There is no row ${text} — the list has ${rows.length}.` }
-  }
-  if (/^%\d+$/.test(text)) {
-    const matches = rows.filter((row) => row.pane === text)
-    return matches.length === 1 ? { row: matches[0] } : { error: `No harness is on pane ${text}.` }
-  }
-  const exactId = rows.filter((row) => row.id === text || row.id.startsWith(text))
-  if (exactId.length === 1) return { row: exactId[0] }
-  if (exactId.length > 1) return { error: `${text} matches ${exactId.length} agent ids. Use a longer prefix.` }
-  const exactName = rows.filter((row) => row.name.toLowerCase() === text.toLowerCase())
-  if (exactName.length === 1) return { row: exactName[0] }
-  const needle = text.toLowerCase()
-  const loose = rows.filter((row) => row.name.toLowerCase().includes(needle) || (row.title ?? '').toLowerCase().includes(needle))
-  if (loose.length === 1) return { row: loose[0] }
-  if (loose.length > 1) return { error: `${text} matches ${loose.length} harnesses: ${loose.slice(0, 5).map((row) => row.name).join(', ')}${loose.length > 5 ? '…' : ''}` }
-  return { error: `No harness matches ${text}.` }
+  if (/^\d+$/.test(text)) return rows[Number(text) - 1] ? { row: rows[Number(text) - 1] } : { error: 'There is no row ' + text + '.' }
+  const exact = rows.filter(row => row.id === text || row.agentId === text || row.id.startsWith(text) || row.agentId?.startsWith(text) || row.pane === text)
+  if (exact.length === 1) return { row: exact[0] }
+  if (exact.length > 1) return { error: text + ' matches ' + exact.length + ' harnesses. Use the full machine/agent id.' }
+  const names = rows.filter(row => row.name.toLowerCase() === text.toLowerCase())
+  if (names.length === 1) return { row: names[0] }
+  const loose = rows.filter(row => (row.name + ' ' + (row.title ?? '')).toLowerCase().includes(text.toLowerCase()))
+  return loose.length === 1 ? { row: loose[0] } : { error: loose.length ? text + ' matches ' + loose.length + ' harnesses.' : 'No harness matches ' + text + '.' }
 }

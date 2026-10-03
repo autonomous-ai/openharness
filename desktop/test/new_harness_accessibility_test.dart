@@ -22,6 +22,10 @@ void main() {
     addTearDown(() => newHarnessOpensInBox = false);
     final app = createApp();
     seedMixedAgents(app);
+    app.machineStates['m']!.localOnly = true;
+    app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+    await app.agentPreference.remember('codex');
+    await app.projectHistory.select('m', '/work/openharness');
     final map = MemoryKeymap();
     final input = <TerminalBinaryFrame>[];
     app.adoptSessionForTest(terminal('a0', input));
@@ -45,6 +49,7 @@ void main() {
     );
     expect(input, isEmpty);
     // Pointer users can open the same choices and return to field navigation.
+    await key(tester, LogicalKeyboardKey.escape);
     await tester.tap(find.byKey(const ValueKey('new-harness-field-agent')));
     await tester.pump();
     expect(harnessChoicesActive(tester), isTrue);
@@ -55,7 +60,13 @@ void main() {
         .controller;
     expect(box.engine, 'claude');
     expect(harnessChoicesActive(tester), isFalse);
-    await key(tester, LogicalKeyboardKey.arrowDown);
+    // A choice returns to its originating accessible control.
+    final agentButton = find.descendant(
+      of: find.byKey(const ValueKey('new-harness-field-agent')),
+      matching: find.byType(TextButton),
+    );
+    expect(tester.widget<TextButton>(agentButton).focusNode!.hasFocus, isTrue);
+    await tester.tap(find.byKey(const ValueKey('new-harness-field-project')));
     expect(box.field, NewHarnessField.projectMenu);
     expect(input, isEmpty);
     semantics.dispose();

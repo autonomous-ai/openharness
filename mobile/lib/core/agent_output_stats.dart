@@ -50,11 +50,3 @@ class AgentOutputStats {
 /// A count off the wire, or null for anything that is not a JavaScript-safe non-negative integer.
 int? wireCount(Object? n) =>
     n is int && n >= 0 && n <= 9007199254740991 ? n : null;
-
-/// `4.5M`, `12.3k`, `980` — the desktop's `formatTokens`, used for every count a row draws.
-String formatCount(int count) {
-  if (count >= 1000000000) return '${(count / 1000000000).toStringAsFixed(1)}B';
-  if (count >= 1000000) return '${(count / 1000000).toStringAsFixed(1)}M';
-  if (count >= 1000) return '${(count / 1000).toStringAsFixed(1)}k';
-  return '$count';
-}

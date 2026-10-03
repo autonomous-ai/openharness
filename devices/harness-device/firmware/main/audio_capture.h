@@ -32,6 +32,9 @@ int audio_capture_read(uint8_t *buf, int len);
 // Close the mic stream.
 void audio_capture_stop(void);
 
+// DMA queue overflows since the current capture opened; a count above zero means lost samples.
+uint32_t audio_capture_overruns(void);
+
 // --- Notification beep (ES8311 speaker output) ---
 // One-time init of the ES8311 OUT path + a worker task that plays a short tone on request.
 // Call once at boot (after the I2C bus is up). Safe no-op if the speaker codec isn't present.
@@ -40,3 +43,7 @@ void audio_notify_init(void);
 // Play a short "beep beep" (non-blocking; queues to the beep task). Debounced ~1s.
 // Safe to call from any task (e.g. the commander WS event task on a "done" event).
 void audio_notify_done(void);
+
+// Applies immediately, including queued notifications, and persists to NVS.
+bool audio_notify_set_muted(bool muted);
+bool audio_notify_is_muted(void);

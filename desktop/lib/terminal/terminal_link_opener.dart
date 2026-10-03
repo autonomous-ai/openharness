@@ -1,9 +1,12 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:url_launcher/url_launcher.dart';
 
 import 'terminal_links.dart';
 import 'remote_media_download.dart';
+
+import '../core/runtime_platform.dart';
 
 /// Uses the existing OS launcher, never a shell command built from agent text.
 class TerminalLinkOpener {
@@ -16,9 +19,9 @@ class TerminalLinkOpener {
        _fileExists = fileExists ?? _exists,
        _homeDirectory =
            homeDirectory ??
-           Platform.environment['HOME'] ??
-           Platform.environment['USERPROFILE'],
-       _windows = windows ?? Platform.isWindows;
+           RuntimePlatform.environment['HOME'] ??
+           RuntimePlatform.environment['USERPROFILE'],
+       _windows = windows ?? RuntimePlatform.isWindows;
 
   final Future<bool> Function(Uri) _launch;
   final Future<bool> Function(String) _fileExists;
@@ -42,6 +45,9 @@ class TerminalLinkOpener {
     try {
       final parsed = Uri.tryParse(target);
       if (parsed == null) return 'This link is not supported.';
+      if (kIsWeb && parsed.scheme != 'https' && parsed.scheme != 'http') {
+        return 'File previews are available in the desktop app.';
+      }
       Uri uri;
       if (parsed.scheme == 'https' || parsed.scheme == 'http') {
         if (parsed.host.isEmpty) return 'This link is not supported.';

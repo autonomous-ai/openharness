@@ -31,11 +31,13 @@ class FakeStream implements TerminalStreamHandle {
   resumes = 0
   snapshotBegins = 0
   snapshotEnds = 0
+  snapshotOptions: Array<{ tuiOwnsScrollback?: boolean } | undefined> = []
   onEndSnapshot: (() => void) | null = null
 
   beginSnapshot() { this.snapshotBegins++ }
-  async snapshot(): Promise<{ state: 'succeeded'; value: { bytes: Uint8Array; cols: number; rows: number } }> {
+  async snapshot(options?: { tuiOwnsScrollback?: boolean }): Promise<{ state: 'succeeded'; value: { bytes: Uint8Array; cols: number; rows: number } }> {
     this.snapshots++
+    this.snapshotOptions.push(options)
     this.onSnapshot?.(this.snapshots)
     return { state: 'succeeded', value: { bytes: this.snapshotBytes, cols: 120, rows: 40 } }
   }
@@ -59,7 +61,7 @@ class FakeStream implements TerminalStreamHandle {
 function session(engine: string = 'codex', agentId = 'agent-1'): RegisteredSession {
   return {
     agentId, sessionId: `session-${agentId}`, engine, active: true,
-    registeredAt: Date.now(), updatedAt: Date.now(), runtimes: [{ backend: 'tmux', paneId: '%1' }],
+    registeredAt: Date.now(), touchedAt: Date.now(), runtimes: [{ backend: 'tmux', paneId: '%1' }],
     primaryRuntimeKey: 'tmux:default:%1',
   } as unknown as RegisteredSession
 }
@@ -118,6 +120,28 @@ describe('TerminalStreamManager', () => {
     expect((result.payload.engines as Array<{ id: string }>).map((row) => row.id)).toEqual([...ENGINES])
   })
 
+  it('records the origin only for accepted input from the owning stream, before writing bytes', async () => {
+    const onScopedInput = vi.fn(() => expect(stream.writes).toHaveLength(0))
+    await manager.stop()
+    manager = newManager({ onScopedInput })
+    await manager.handleFrame('web-1', 'terminal_open', {
+      requestId: 'scoped', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+    })
+    const ready = sent.findLast(f => f.type === 'terminal_ready')!.payload
+    expect(ready.swarmInput).toBe(true)
+    const frame = { kind: TerminalBinaryKind.input, streamId: String(ready.streamId), seq: 0,
+      bytes: Buffer.from('hello\r'), compressed: false, tabId: 'swarm-a' }
+    await manager.handleBinary('wrong-owner', frame)
+    expect(onScopedInput).not.toHaveBeenCalled()
+    await manager.handleBinary('web-1', { ...frame, seq: 2 })
+    expect(onScopedInput).not.toHaveBeenCalled()
+    await manager.handleBinary('web-1', frame)
+    expect(onScopedInput).toHaveBeenCalledWith('agent-1', frame.bytes, 'swarm-a', false)
+    expect(stream.writes).toEqual([frame.bytes])
+    await manager.handleBinary('web-1', frame)
+    expect(onScopedInput).toHaveBeenCalledOnce()
+  })
+
   it('uses the same generic path for every current engine', async () => {
     for (const [index, engine] of ENGINES.entries()) {
       const agentId = `agent-generic-${index}`
@@ -151,6 +175,19 @@ describe('TerminalStreamManager', () => {
       requestId: 'missing', protocolVersion: 3, agentId: 'does-not-exist', cols: 100, rows: 30,
     })
     expect(sent.at(-1)?.payload.code).toBe('TERMINAL_AGENT_NOT_FOUND')
+  })
+
+  it('tells a Grok snapshot not to seed tmux history, and leaves other engines alone', async () => {
+    await manager.handleFrame('web-1', 'terminal_open', {
+      requestId: 'open-codex', protocolVersion: 3, agentId: 'agent-1', cols: 120, rows: 40,
+    })
+    expect(stream.snapshotOptions.at(-1)).toBeUndefined()
+
+    agents.set('grok-1', session('grok', 'grok-1'))
+    await manager.handleFrame('web-1', 'terminal_open', {
+      requestId: 'open-grok', protocolVersion: 3, agentId: 'grok-1', cols: 120, rows: 40,
+    })
+    expect(stream.snapshotOptions.at(-1)).toEqual({ tuiOwnsScrollback: true })
   })
 
   it('tells the daemon an agent took input from its controller — never from a watcher, never for input it refused', async () => {
@@ -226,6 +263,43 @@ describe('TerminalStreamManager', () => {
     })
     expect(stream.sizes.at(-1)).toEqual({ cols: 140, rows: 50 })
   })
+
+  it.each([[1, 1], [30, 30], [80, 8], [300, 120]])(
+    'opens and resizes a terminal at its actual %i×%i pane size', async (cols, rows) => {
+      const open = vi.spyOn(terminals, 'openStream')
+      await manager.handleFrame('web-1', 'terminal_open', {
+        requestId: 'small', protocolVersion: 3, agentId: 'agent-1', cols, rows,
+      })
+      expect(sent[0].type).toBe('terminal_ready')
+      expect(open.mock.calls[0][1]).toEqual({ cols, rows })
+      const streamId = sent[0].payload.streamId
+      await manager.handleFrame('web-1', 'terminal_resize', {
+        streamId, resizeSeq: 0, cols: 120, rows: 40,
+      })
+      await manager.handleFrame('web-1', 'terminal_resize', {
+        streamId, resizeSeq: 1, cols, rows,
+      })
+      expect(stream.sizes).toEqual([{ cols: 120, rows: 40 }, { cols, rows }])
+    },
+  )
+
+  it.each([[0, 20], [80, 0], [-1, 20], [80, -1], [1.5, 20], [80, 1.5], [301, 20], [80, 121]])(
+    'rejects invalid %i×%i dimensions on open and resize', async (cols, rows) => {
+      await manager.handleFrame('web-1', 'terminal_open', {
+        requestId: 'invalid', protocolVersion: 3, agentId: 'agent-1', cols, rows,
+      })
+      expect(sent.at(-1)?.payload.code).toBe('TERMINAL_OPEN_INVALID')
+      await manager.handleFrame('web-1', 'terminal_open', {
+        requestId: 'valid', protocolVersion: 3, agentId: 'agent-1', cols: 80, rows: 24,
+      })
+      const streamId = sent.at(-1)!.payload.streamId
+      await manager.handleFrame('web-1', 'terminal_resize', { streamId, resizeSeq: 0, cols, rows })
+      expect(stream.sizes).toEqual([])
+      // A bad size must not consume the sequence number or prevent a later valid resize.
+      await manager.handleFrame('web-1', 'terminal_resize', { streamId, resizeSeq: 0, cols: 80, rows: 24 })
+      expect(stream.sizes).toEqual([{ cols: 80, rows: 24 }])
+    },
+  )
 
   it('routes terminal_scroll to the stream handle, and rejects a malformed one', async () => {
     await manager.handleFrame('web-1', 'terminal_open', {
@@ -475,7 +549,7 @@ describe('TerminalStreamManager', () => {
       })
       expect(lastResult()).toMatchObject({
         type: 'terminal_chunked_upload_begin_result',
-        payload: { streamId: 'stream-does-not-exist', accepted: false },
+        payload: { streamId: 'stream-does-not-exist', accepted: false, code: 'TERMINAL_STREAM_NOT_FOUND' },
       })
     })
 
@@ -619,6 +693,29 @@ describe('TerminalStreamManager', () => {
       && frame.payload.reason === 'heartbeat timeout')).toBe(true)
   })
 
+  // Node's clock keeps running while a Mac sleeps, so a lid closed for forty minutes reached the next
+  // sweep as forty minutes without `terminal_alive` and closed every stream at the wake — measured
+  // 2026-09-28 as `[terminal-stream] closed` on every local terminal the moment the lid opened.
+  it('carries a lease over the time the computer slept, and still expires it on awake silence', async () => {
+    let asleepMs = 0
+    await manager.stop()
+    manager = newManager({ now: () => Date.now() + asleepMs })
+    await manager.handleFrame('web-1', 'terminal_open', {
+      requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+    })
+    await vi.advanceTimersByTimeAsync(20_000)
+    asleepMs += 2_280_000 // the lid closes; no timer runs until it opens again
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(stream.closed).toBe(false)
+    expect(sent.some((frame) => frame.type === 'terminal_closed')).toBe(false)
+
+    // Awake and still silent: the lease runs out on awake time, as before.
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(stream.closed).toBe(true)
+    expect(sent.some((frame) => frame.type === 'terminal_closed'
+      && frame.payload.reason === 'heartbeat timeout')).toBe(true)
+  })
+
   // The incumbent's banner says WHO took over, so the close it gets carries what the winner
   // declared on open — verbatim through a relay, since the daemon never learns a peer's name.
   it('names the taker on the close when the winner introduced itself', async () => {
@@ -736,8 +833,8 @@ describe('TerminalStreamManager', () => {
       requestId: 'open-2', protocolVersion: 3, agentId: 'agent-2', cols: 100, rows: 30,
     })
 
-    // Observed through a resize rather than a close frame: replacing a stream is deliberately
-    // silent, so the only way to tell a live stream from a dead one is whether it still acts.
+    expect(sent.some((frame) => frame.type === 'terminal_closed')).toBe(false)
+    // The other pane still accepts operations on its original stream.
     const before = stream.sizes.length
     await manager.handleFrame('app-1', 'terminal_resize', {
       streamId: first, resizeSeq: 1, cols: 90, rows: 25,
@@ -745,7 +842,7 @@ describe('TerminalStreamManager', () => {
     expect(stream.sizes.length).toBe(before + 1)
   })
 
-  it('still replaces its own stream when the same terminal is reopened', async () => {
+  it('notifies legacy views when a shared connection reopens the same terminal', async () => {
     await manager.handleFrame('app-1', 'terminal_open', {
       requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
     })
@@ -753,7 +850,26 @@ describe('TerminalStreamManager', () => {
 
     await manager.handleFrame('app-1', 'terminal_open', {
       requestId: 'open-2', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+      client: { kind: 'desktop', name: 'Other window' },
     })
+
+    expect(sent.filter((frame) => frame.type === 'terminal_closed')).toEqual([{
+      connId: 'app-1',
+      type: 'terminal_closed',
+      payload: {
+        protocolVersion: 3,
+        streamId: first,
+        reason: 'terminal reopened in another view',
+        code: 'TERMINAL_TAKEN_OVER',
+      },
+    }])
+    expect(sent.at(-1)).toMatchObject({ type: 'terminal_ready', payload: { requestId: 'open-2' } })
+    const replacement = sent.at(-1)!.payload.streamId as string
+    expect(replacement).not.toBe(first)
+    await manager.handleBinary('app-1', {
+      kind: TerminalBinaryKind.input, streamId: replacement, seq: 0, compressed: false, bytes: Buffer.from('new input'),
+    })
+    expect(Buffer.from(stream.writes.at(-1)!).toString()).toBe('new input')
 
     // Two tmux clients on one window is the thing this must never allow.
     const before = stream.sizes.length
@@ -761,6 +877,75 @@ describe('TerminalStreamManager', () => {
       streamId: first, resizeSeq: 1, cols: 90, rows: 25,
     })
     expect(stream.sizes.length).toBe(before)
+  })
+
+  it.each(['agent-1', 'agent-alias'])('keeps relay views independent when watching and taking over %s', async (secondAgent) => {
+    agents.set('agent-alias', session('codex', 'agent-alias'))
+    const handles: FakeStream[] = []
+    terminals.openStream = vi.fn(async () => {
+      const handle = new FakeStream()
+      handles.push(handle)
+      return { state: 'succeeded' as const, value: handle }
+    })
+    const open = async (viewId: string, takeover: boolean, agentId = 'agent-1') => {
+      await manager.handleFrame('shared-relay', 'terminal_open', {
+        requestId: `${viewId}-${handles.length}`, protocolVersion: 3, agentId,
+        cols: 100, rows: 30, viewId, takeover, client: { kind: 'desktop', name: viewId },
+      })
+      return sent.findLast((frame) => frame.type === 'terminal_ready')!.payload
+    }
+    const type = (streamId: unknown, text: string, seq = 0) => manager.handleBinary('shared-relay', {
+      kind: TerminalBinaryKind.input, streamId: streamId as string, seq,
+      compressed: false, bytes: Buffer.from(text),
+    })
+
+    const controller = await open('view-a', true)
+    const watcher = await open('view-b', false, secondAgent)
+    expect(watcher).toMatchObject({ readOnly: true, heldBy: { name: 'view-a' } })
+    expect(handles[0].closed).toBe(false)
+    expect(sent.filter((frame) => frame.type === 'terminal_closed')).toEqual([])
+    await type(controller.streamId, 'still typing')
+    await type(watcher.streamId, 'ignored')
+    expect(Buffer.from(handles[0].writes[0]).toString()).toBe('still typing')
+    expect(handles[1].writes).toEqual([])
+
+    // Reopening the watcher only replaces that view's own stream.
+    const watchingAgain = await open('view-b', false, secondAgent)
+    expect(watchingAgain.readOnly).toBe(true)
+    expect(handles[0].closed).toBe(false)
+    expect(handles[1].closed).toBe(true)
+    expect(sent.filter((frame) => frame.type === 'terminal_closed').map((frame) => frame.payload.streamId))
+      .toEqual([watcher.streamId])
+
+    const nextController = await open('view-b', true, secondAgent)
+    expect(nextController.readOnly).toBe(false)
+    expect(sent.find((frame) => frame.type === 'terminal_closed' && frame.payload.streamId === controller.streamId)?.payload)
+      .toMatchObject({ code: 'TERMINAL_TAKEN_OVER', takenBy: { name: 'view-b' } })
+    expect(handles[0].closed).toBe(true)
+
+    // A displaced client (including the TUI's automatic watch) must never take control back.
+    const displacedWatcher = await open('view-a', false)
+    expect(displacedWatcher).toMatchObject({ readOnly: true, heldBy: { name: 'view-b' } })
+    expect(handles[3].closed).toBe(false)
+    await type(nextController.streamId, 'new owner')
+    await type(displacedWatcher.streamId, 'ignored')
+    expect(Buffer.from(handles[3].writes[0]).toString()).toBe('new owner')
+    expect(handles[4].writes).toEqual([])
+    await manager.handleFrame('shared-relay', 'terminal_close', { streamId: displacedWatcher.streamId })
+    expect((await open('view-c', false)).heldBy).toEqual({ kind: 'desktop', name: 'view-b' })
+    expect(handles[3].closed).toBe(false)
+  })
+
+  it('scopes identical view IDs to their authenticated connection', async () => {
+    for (const connId of ['first', 'second']) {
+      await manager.handleFrame(connId, 'terminal_open', {
+        requestId: connId, protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+        viewId: 'same-view-id', takeover: false,
+      })
+    }
+    expect(sent.filter((frame) => frame.type === 'terminal_ready').map((frame) => frame.payload.readOnly))
+      .toEqual([false, true])
+    expect(sent.filter((frame) => frame.type === 'terminal_closed')).toEqual([])
   })
 
   it('uses frequent ACKs rather than the five-second heartbeat for output backpressure', async () => {

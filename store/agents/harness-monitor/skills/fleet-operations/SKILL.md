@@ -1,70 +1,53 @@
 ---
 name: fleet-operations
-description: Run a fleet of long-lived coding-agent sessions — list them, pause idle ones without losing their conversations, resume them where they left off, and tune the policy that decides. Use when someone has many Harness harnesses, wants to know which are actually running, wants memory back from idle agents, asks what to clean up, or asks whether a pause threshold is any good.
+description: Inspect Harness sessions, explain activity and resource readings, preview cleanup, and stop or open explicitly selected sessions through their owning daemons.
 ---
 
 # Fleet operations
 
-A fleet of long-lived agent sessions goes wrong in one specific way: nothing ever ends. Sessions are
-never killed — that is the point of them — so they accumulate until the list is useless and the machine
-is full. This skill is how to fix that without breaking the promise that made people keep them.
+The table is the primary interface. Use this skill when the person asks the assistant to investigate
+sessions or review cleanup. Do not start work simply because the monitor opened.
 
-## The one idea
+Start with `"$HPS_CLI" ls --json --all --machines`. Read [references/signals.md](references/signals.md)
+before explaining activity or resource readings. Use composite machine/agent IDs when names or IDs
+are ambiguous. Missing measurements are unknown; an offline machine is not a stopped session.
 
-**Separate the conversation from the process.** A conversation lives in a transcript and can be resumed;
-a process holds memory and can be stopped. Pausing stops the process and keeps everything else. Once
-pausing is free and resuming is reliable, an idle harness costs nothing, and "should I kill this?" stops
-being a question anybody has to answer.
+## Actions
 
-Everything else follows from that:
+- `hps show <ref> --machines --json` reads one session.
+- `hps stop <ref> --machines --json` asks its owning daemon to stop the process and retain history.
+- `hps open <ref> --machines --json` restores saved launch settings. Check `resumeMode`: conversation,
+  fresh conversation, or shell. Do not promise every engine resumes the same conversation.
+- `hps stop --policy --machines --json` previews cleanup; `--apply` applies the current plan.
+- `hps cleanup --machines --json` previews harnesses outside all open tabs; `--apply` closes them.
+  Background tabs and local utility tabs such as Companions stay open.
+- `hps open --stopped --machines --json` previews reopening stopped sessions; `--apply` executes it.
 
-- **A ceiling, not a cleanup.** `runningCeiling` caps how many engines are running at once; the least
-  recently active get paused when a new one passes the cap. This is the rule that bounds the steady state
-  no matter how many harnesses get created — the one worth defending in an argument.
-- **Idle thresholds, not idle shaming.** `pauseAfterIdle` (default 1d — survives an overnight break) and
-  `hideAfterIdle` (default 14d, a list rule) are both reversible, so they can be aggressive.
-- **A grace window, not a delete.** Retired rows are forgotten from the hps after
-  `forgetAfterRetired` (30d), and forgetting is bookkeeping: transcripts belong to the engines.
-- **Pins beat rules.** A pinned harness is never paused by policy, whatever the numbers say.
+For more than two sessions, show the dry run with reasons and obtain approval before applying it, unless those targets are already authorized.
+Recheck the plan after approval; if the targets changed, present the new targets. Named actions must
+still correspond to the person's request. Never use `--force` unless explicitly requested for those
+sessions. The row's × button is an explicit single-session stop and may interrupt work in progress.
 
-## Reading the fleet
+The daemon owns process identity, stopping and open configuration on local and linked machines.
+Do not signal PIDs, reconstruct engine flags, respawn a tmux pane, or edit the registry. After a timeout,
+read the original open receipt; do not invent a new operation to compensate. Explain refusals and
+uncertain outcomes. Receipts are recorded in `~/.harness/monitor/log.jsonl`.
 
-Always start from data: `"$HPS_CLI" ls --json`. The fields that matter and their traps are in
-[references/signals.md](references/signals.md) — read it before you explain an `idle` number to anyone,
-because the three obvious sources for it are all wrong and one of them is wrong by days.
+## Close harnesses outside tabs
 
-A good first report is four numbers and one sentence: how many harnesses, how many running, how much memory
-held, how many idle past the pause threshold — then what you propose. Not a table of eighty rows.
+Use `hps cleanup` only when the person asks to close harnesses outside their tabs. Review the names
+and activity first: it includes working and unknown activity and can end unfinished work. The owning
+daemon rechecks open tabs and session identity and saves history before closing. Never bypass those
+guards. Report offline machines, unsupported versions, save failures and unconfirmed closes.
 
-## Acting
+## Cleanup rules
 
-| Situation | Do this |
-|---|---|
-| One or two named harnesses | act, then show the receipt line |
-| More than two | dry run → show the plan with a reason per row → ask → `--apply` |
-| "Pause everything but X" | add X's id to `pins` in `~/.config/harness/policy.jsonc`, then `hps pause --policy --apply` |
-| A guard refused | name the guard, leave it, offer `--force` as their choice, never yours |
-| They want a threshold judged | set it in `~/.config/harness/policy.jsonc`, run `hps pause --policy`, report what it would do to *their* fleet |
-| They want it gone for good | Harness Monitor does not delete. Point at the app's Stop Harness, which asks first |
+[references/policy.md](references/policy.md) explains the proposal rules. They never run automatically.
+Working sessions, questions, pins, unavailable controls and unknown activity are protected by default.
+These policy rules do not use the open-tab guard of the separate `hps cleanup` command.
 
-Receipts are not decoration. Every action is appended to `.harness/monitor-log.jsonl` with its reason, and
-"why is this paused?" must always have an answer that is not a guess.
+Rules and pins live in `~/.config/harness/policy.jsonc`. Preserve comments and simulate a proposed
+change before applying it. Do not change thresholds to make a refused cleanup succeed.
 
-## Tuning the policy
-
-The rules live in `~/.config/harness/policy.jsonc` as data, so they can be simulated before they are believed —
-[references/policy.md](references/policy.md) has each rule, its default, the argument for that default,
-and what makes it wrong for someone. Two habits:
-
-1. **Never change a threshold without simulating it.** Edit `pauseAfterIdle` in `~/.config/harness/policy.jsonc`, then
-   `hps pause --policy` reads back exactly which harnesses would move, and why, without moving any.
-2. **Change one rule at a time.** Two thresholds moving at once makes the result unattributable, and the
-   person is trying to build an intuition, not just a config.
-
-## The boundary, and why it holds
-
-Harness Monitor can pause and resume. It cannot delete an agent, kill a tmux session or
-touch a transcript. That is what makes it safe to point at eighty live sessions and act on all of them in
-one command — the worst outcome of a wrong decision is a few seconds of cold start. Do not work around
-it, and do not build a workaround for someone who asks: the app already has the irreversible verbs,
-behind their own confirmation, which is where they belong.
+Never delete transcripts or project folders. Stopping a process can interrupt unfinished work, even
+though its history is retained. Report what the tools actually confirmed.

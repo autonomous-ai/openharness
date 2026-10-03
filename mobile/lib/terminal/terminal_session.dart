@@ -141,6 +141,11 @@ class TerminalSession extends ChangeNotifier {
   final String? engineId;
   final TerminalFrameSender send;
   final TerminalBinarySender sendBinary;
+
+  /// Set by the view receiving input. Capture it with the bytes, before any async send.
+  String? inputTabId;
+  String? _bufferedInputTabId;
+  bool _swarmInput = false;
   final Duration resyncTimeout;
 
   /// Forces a fresh transport dial (see `WsConn.forceReconnect`) — called once when the very first
@@ -262,6 +267,33 @@ class TerminalSession extends ChangeNotifier {
   /// cleared by every reopen (see `_armInitialKeyframeWatchdog`, which treats
   /// the same null as "no keyframe arrived").
   bool get hasRenderedFrame => _expectedSeq != null;
+
+  /// Whether [terminal] is a screen KEPT from the last time this agent was open on this phone,
+  /// standing in until this attach's first keyframe replaces it. See [seedScreen].
+  bool get showingKeptScreen => _showingKeptScreen;
+  bool _showingKeptScreen = false;
+
+  /// Something to show: this attach's first frame, or a kept screen standing in for it.
+  bool get hasScreen => hasRenderedFrame || _showingKeptScreen;
+
+  /// Shows [kept] — the screen this agent had when the phone last left it — until the live stream's
+  /// first keyframe lands and replaces it.
+  ///
+  /// ⚠️ **What makes switching back to an agent instant.** An attach waits a network round trip for
+  /// its keyframe; until then the page showed a skeleton. The kept screen is what the reader last
+  /// saw of this agent — seconds or minutes stale, which the header's "Attaching…" says — and the
+  /// keyframe that follows replaces it whole.
+  ///
+  /// Rebound to this session: the kept terminal's callbacks still named the session it came from,
+  /// which is gone.
+  void seedScreen(Terminal kept) {
+    if (hasRenderedFrame || _disposed) return;
+    _bindTerminal(kept);
+    terminal = kept;
+    _showingKeptScreen = true;
+    notifyListeners();
+  }
+
   int _lastRenderedSeq = -1;
   int _framesSinceAck = 0;
   int _renderedSinceAckBytes = 0;
@@ -412,7 +444,13 @@ class TerminalSession extends ChangeNotifier {
     }
     cols = _clampCols(initialCols);
     rows = _clampRows(initialRows);
-    if (!preserveTerminal) terminal = _newTerminal()..resize(cols, rows);
+    // ⚠️ A kept screen ([seedScreen]) is kept through the open, which is the
+    // whole of its job: it is seeded just before the first open, and a fresh
+    // terminal here threw it away in the same breath — the page then drew a
+    // blank terminal where the reader's last screen should have been, with
+    // [hasScreen] telling it not to show the skeleton either.
+    final keep = preserveTerminal || _showingKeptScreen;
+    if (!keep) terminal = _newTerminal()..resize(cols, rows);
     status = TerminalSessionStatus.opening;
     _openRequestId =
         'term_${DateTime.now().microsecondsSinceEpoch}_${Random.secure().nextInt(1 << 31)}';
@@ -429,7 +467,7 @@ class TerminalSession extends ChangeNotifier {
         }
         cols = _clampCols(measured.cols);
         rows = _clampRows(measured.rows);
-        if (!preserveTerminal) terminal.resize(cols, rows);
+        if (!keep) terminal.resize(cols, rows);
         notifyListeners();
       } on TimeoutException {
         // Keep the conservative fallback when the terminal viewport cannot be
@@ -578,6 +616,7 @@ class TerminalSession extends ChangeNotifier {
         // The daemon's answer to a polite open on a terminal somebody else holds: it opened, it
         // renders, and it may not type. See [watching].
         watching = payload['readOnly'] == true;
+        _swarmInput = payload['swarmInput'] == true;
         heldBy = watching
             ? TerminalClientDescriptor.fromJson(payload['heldBy'])
             : null;
@@ -596,6 +635,13 @@ class TerminalSession extends ChangeNotifier {
         if (!watching) takeover = false;
         _resyncTimer?.cancel();
         _resyncTimer = null;
+        // ⚠️ Cancelled first: a second `terminal_ready` for this same open is
+        // real — the open-timeout path resends the SAME request, so a reply
+        // that was only slow and the reply to the resend both match while no
+        // screen has landed yet. Overwritten, the first timer ran on unowned
+        // for the life of the process, beating twice as often and still
+        // beating after [dispose].
+        _heartbeat?.cancel();
         _heartbeat = Timer.periodic(
           const Duration(seconds: 5),
           (_) => unawaited(_sendHeartbeat()),
@@ -794,6 +840,7 @@ class TerminalSession extends ChangeNotifier {
               ..write(decoded.text);
             _bindTerminal(replacement);
             terminal = replacement;
+            _showingKeptScreen = false;
             cols = _clampCols(nextCols);
             rows = _clampRows(nextRows);
             _utf8Tail = decoded.tail;
@@ -938,7 +985,13 @@ class TerminalSession extends ChangeNotifier {
     _applyCursorVisibility();
   }
 
+  /// Bumped once per chunk of output written — what a reader scrolled up in the history watches to
+  /// know there is something newer below. Its own notifier, not this session's: output is the most
+  /// frequent event there is, and nothing else here should rebuild for it.
+  final ValueNotifier<int> outputTicks = ValueNotifier(0);
+
   void _writeTerminalText(String text) {
+    outputTicks.value++;
     terminal.setCursorVisibleMode(_remoteCursorVisible);
     terminal.write(text);
     _remoteCursorVisible = terminal.cursorVisibleMode;
@@ -1042,12 +1095,18 @@ class TerminalSession extends ChangeNotifier {
   /// the injection from there: it adapts slash commands to the pane's engine and retries the
   /// submit Enter. A client typing bytes can do neither — which is exactly how Codex ended up
   /// holding a composed line unsent, its Enter arriving in the same read as the text.
-  Future<bool> sendComposerText(String text) async {
+  /// Where a finished voice take goes instead of [sendComposerText], while the page has a reason
+  /// to route it — an agent's question dialog is open, and a paste-and-Return would answer it
+  /// blind. Set and cleared by the page; null the rest of the time.
+  Future<bool> Function(String text)? voiceDeliver;
+
+  Future<bool> sendComposerText(String text, {String? tabId}) async {
     if (!acceptsInput) return false;
     final content = text.trimRight();
     if (content.trim().isEmpty) return false;
     return send('message', {
       'content': content,
+      'tabId': ?(tabId ?? inputTabId),
       'agentId': agentId,
       'mode': 'auto',
     });
@@ -1070,7 +1129,7 @@ class TerminalSession extends ChangeNotifier {
   ///
   /// The caller must check [MachineState.terminalPasteRawAvailable] first: an older CLI does not know
   /// this binary kind at all, so sending it there would silently go nowhere.
-  Future<bool> pasteText(String text) async {
+  Future<bool> pasteText(String text, {String? tabId}) async {
     if (!acceptsInput) return false;
     // Forwarded verbatim, including a stray 0x03 — same as _onTerminalOutput/sendComposerText.
     if (text.isEmpty) return false;
@@ -1079,6 +1138,7 @@ class TerminalSession extends ChangeNotifier {
     final generation = _generation;
     final frame = TerminalBinaryFrame(
       kind: TerminalBinaryKind.paste,
+      tabId: _swarmInput ? (tabId ?? inputTabId) : null,
       streamId: currentStreamId,
       // Unused server-side (a paste is one self-contained unit, not part of the ordered keystroke
       // stream `input`'s seq guards) — kept at 0 rather than threading a second counter for a field
@@ -1116,7 +1176,7 @@ class TerminalSession extends ChangeNotifier {
   /// write it to disk on its own (REMOTE) machine and paste that path as text. Only meaningful for
   /// a genuinely remote pane: a LOCAL file already has a valid path on this same machine, so
   /// callers should paste that path directly via [pasteText] instead and never reach this method
-  /// at all — see [MachineState.isLocalMachine].
+  /// at all. A phone has no local pane.
   ///
   /// The caller must check [MachineState.terminalPasteFileAvailable] first, same reason
   /// [pasteImage] checks `terminalImagePasteAvailable`: an older CLI does not know this binary kind
@@ -1245,6 +1305,11 @@ class TerminalSession extends ChangeNotifier {
   void _onTerminalOutput(String data) {
     if (!acceptsInput || data.isEmpty) return;
     data = _spendArmedControl(data);
+    final origin = _swarmInput ? inputTabId : null;
+    if (_inputBytes.isNotEmpty && _bufferedInputTabId != origin) {
+      unawaited(_flushInput());
+    }
+    _bufferedInputTabId = origin;
     final bytes = utf8.encode(data);
     final isBoundary =
         data.contains('\r') ||
@@ -1289,6 +1354,7 @@ class TerminalSession extends ChangeNotifier {
       return;
     }
     final bytes = List<int>.from(_inputBytes);
+    final origin = _bufferedInputTabId;
     _inputBytes.clear();
     _lastInputFlushAt = DateTime.now();
     final currentStreamId = streamId;
@@ -1323,6 +1389,7 @@ class TerminalSession extends ChangeNotifier {
         final end = min(offset + kInputFrameMaxBytes, bytes.length);
         final frame = TerminalBinaryFrame(
           kind: TerminalBinaryKind.input,
+          tabId: origin,
           streamId: currentStreamId,
           seq: _inputSeq++,
           bytes: Uint8List.fromList(bytes.sublist(offset, end)),
@@ -1350,8 +1417,6 @@ class TerminalSession extends ChangeNotifier {
   void scroll(int phase, int dy, int velocity) {
     _viewport?.scroll(phase, dy, velocity);
   }
-
-  void find(TerminalFindAction action) => _viewport?.find(action);
 
   bool focusInput() => _viewport?.focusInput() ?? false;
 
@@ -1695,6 +1760,7 @@ class TerminalSession extends ChangeNotifier {
     _disposed = true;
     _generation++;
     _cancelTimers();
+    outputTicks.dispose();
     super.dispose();
   }
 }

@@ -86,9 +86,12 @@ export function assemble(config, reads, previous = null, observedAt = now(), hol
   const scope = JSON.stringify([config.mode, config.grid, config.controller]);
   if (previous?.scope !== scope) previous = null;
   const sources = Object.fromEntries(Object.entries(reads).map(([name, result]) => [name, { ok: result.ok, error: result.ok ? null : result.error, observedAt }]));
-  // Asleep is an answer, not a failed read: a member learns it from engines' refusal, and reporting
-  // that as a broken source would put an error finding in the agent's verdict for a grid at rest.
-  if (hold === 'asleep' && sources.engines) sources.engines = { ok: true, error: null, observedAt };
+  // Asleep is an answer, not a failed read: a member learns it from the refusal of a grid read, and
+  // reporting that as a broken source would put an error finding in the agent's verdict for a grid at rest.
+  if (hold === 'asleep') for (const [name, result] of Object.entries(reads)) if (result.refusal === ASLEEP_CODE) sources[name] = { ok: true, error: null, observedAt };
+  // Too old to read without waking: the one refused read stands for the whole reading, under the
+  // `engines` source the notice goes on below — not beside it as a raw usage line.
+  if (hold === 'updating') for (const [name, result] of Object.entries(reads)) if (result.outdated) delete sources[name];
   const info = reads.info?.ok && reads.info.value && typeof reads.info.value === 'object' ? reads.info.value : {};
   const stats = reads.stats?.ok && reads.stats.value && typeof reads.stats.value === 'object' ? reads.stats.value : {};
   const modelNames = new Map(objects(reads.models?.value).map(m => [text(m.model).toLowerCase(), text(m.model)]).filter(([a,b]) => a && b));
@@ -148,23 +151,33 @@ export function assemble(config, reads, previous = null, observedAt = now(), hol
 }
 
 /**
- * A remote grid's reads, in the order that lets a sleeping grid be SEEN without being started.
+ * A remote grid's reads, in the order that lets a sleeping grid be SEEN without being started — and
+ * read ONCE per poll.
  *
  * `info` first: it asks the control plane, never the grid, and for the grid's owner its status says
- * `asleep` outright — then nothing else is read. A member is shown no status, so `engines` goes next,
- * alone, with NO_WAKE: a sleeping grid refuses it with ASLEEP_CODE, and models and stats would only be
- * refused the same way. A `grid` too old for NO_WAKE refuses engines outright (exit 2); the others would
- * be refused too, and running them WITHOUT the flag is exactly the wake this exists to stop — so the
- * poll ends there and the last reading stays up. Only an engines answer earns models and stats.
+ * `asleep` outright — then nothing else is read. A member is shown no status, so `stats` goes next,
+ * alone, with NO_WAKE: a sleeping grid refuses it with ASLEEP_CODE. A `grid` too old for NO_WAKE refuses
+ * it outright (exit 2); the others would be refused too, and running them WITHOUT the flag is exactly the
+ * wake this exists to stop — so the poll ends there and the last reading stays up.
+ *
+ * `stats --json` carries `grid engines --json` and `grid models --json` under `listings`, out of the one
+ * overview read it made (autonomous-grid `cli/remote_stats.py`; ⚠️ a cross-repo contract, pinned by that
+ * repository's `tests/test_grid_reads_lockstep.py`). A `grid` older than the listings is read the old
+ * way: engines alone, and only an engines answer earns models.
  */
 async function readRemote(read) {
   const reads = { info: await read('info') };
   if (reads.info.ok && reads.info.value?.status === ASLEEP_STATE) return { reads, hold: 'asleep' };
+  reads.stats = await read('stats', [NO_WAKE]);
+  if (reads.stats.refusal === ASLEEP_CODE) return { reads, hold: 'asleep' };
+  if (reads.stats.outdated) return { reads, hold: 'updating' };
+  const listings = reads.stats.ok ? reads.stats.value?.listings : null;
+  if (Array.isArray(listings?.engines) && Array.isArray(listings?.models)) {
+    return { reads: { ...reads, engines: { ok: true, value: listings.engines }, models: { ok: true, value: listings.models } }, hold: null };
+  }
   reads.engines = await read('engines', [NO_WAKE]);
   if (reads.engines.refusal === ASLEEP_CODE) return { reads, hold: 'asleep' };
-  if (reads.engines.outdated) return { reads, hold: 'updating' };
-  const [models, stats] = await Promise.all([read('models', [NO_WAKE]), read('stats', [NO_WAKE])]);
-  return { reads: { ...reads, models, stats }, hold: null };
+  return { reads: { ...reads, models: await read('models', [NO_WAKE]) }, hold: null };
 }
 
 /** A LAN grid has no proxy and nothing to wake, so its reads are asked together as they always were —

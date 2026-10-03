@@ -12,5 +12,5 @@ esac
 if [ -x "$here/.venv/bin/grid" ]; then exec "$here/.venv/bin/grid" "$@"; fi
 if command -v grid >/dev/null 2>&1; then exec grid "$@"; fi
 if [ -x "${HOME}/.local/bin/grid" ]; then exec "${HOME}/.local/bin/grid" "$@"; fi
-echo 'Grid is missing. Run this harness’s toolchain/setup.sh.' >&2
+echo 'Grid is not installed on this computer. Run `harness grid setup`.' >&2
 exit 127

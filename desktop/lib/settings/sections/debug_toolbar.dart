@@ -1,7 +1,8 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../../core/reveal_folder.dart';
 import '../../widgets/export_logs_dialog.dart';
@@ -31,17 +32,19 @@ class DebugToolbar extends StatelessWidget {
             style: AppType.body(color: AppPalette.textSecondary),
           ),
         ),
-        const _ExportLogsPill(),
-        const SizedBox(width: 6),
-        const _OpenLogsPill(),
-        const SizedBox(width: 6),
+        if (!kIsWeb) ...[
+          const _ExportLogsPill(),
+          const SizedBox(width: 6),
+          const _OpenLogsPill(),
+          const SizedBox(width: 6),
+        ],
         ToolbarPill(
           // Visible and dead when there is nothing to clear, rather than gone:
           // a control that disappears takes its own explanation with it.
           onTap: total == 0 ? null : onClear,
           rimmed: true,
           child: DebugPillLabel(
-            icon: LucideIcons.trash2,
+            icon: AppIcons.trash2,
             label: 'Clear',
             enabled: total != 0,
           ),
@@ -68,7 +71,7 @@ class _ExportLogsPill extends StatelessWidget {
       onTap: () => unawaited(showExportLogsDialog(context)),
       rimmed: true,
       child: const DebugPillLabel(
-        icon: LucideIcons.packageOpen,
+        icon: AppIcons.packageOpen,
         label: 'Export logs',
         enabled: true,
       ),
@@ -102,7 +105,7 @@ class _OpenLogsPill extends StatelessWidget {
       onTap: () => unawaited(_open(context)),
       rimmed: true,
       child: const DebugPillLabel(
-        icon: LucideIcons.folderOpen,
+        icon: AppIcons.folderOpen,
         label: 'Open logs',
         enabled: true,
       ),
@@ -131,7 +134,7 @@ class DebugPillLabel extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 13, color: ink),
+        Icon(icon, size: 14, color: ink),
         const SizedBox(width: 6),
         Text(label, style: AppType.label(color: ink)),
       ],

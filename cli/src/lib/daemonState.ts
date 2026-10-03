@@ -1,6 +1,6 @@
 /**
  * On-disk daemon state that BOTH the daemon (`cli.ts`) and short-lived CLI commands need to read —
- * the pid file, the saved credential, and the fixed loopback control port.
+ * the pid file, the saved credential, and this user's recorded loopback control port.
  *
  * Kept in its own module so management commands can inspect daemon state without importing `cli.ts`,
  * which would execute the command dispatcher.
@@ -10,13 +10,13 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { env } from '../config/env.js'
 import { hasAuthSession } from './authSession.js'
+import { savedDaemonPort } from './daemonEndpoint.js'
 
 export const PID_FILE = join(env.ADAPTER_DATA_DIR, 'adapter.pid')
 
-/** The daemon's localhost control port — FIXED at env.PORT (no fallback), so pair/status/stop always
- *  reach it and a leftover is findable with `lsof :<PORT>`. */
+/** This user's recorded TCP port; the configured port still names its private Unix socket. */
 export function daemonPort(): number {
-  return env.PORT
+  return savedDaemonPort(env.ADAPTER_DATA_DIR, env.PORT)
 }
 
 export function readPid(): number | null {

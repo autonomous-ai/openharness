@@ -25,6 +25,11 @@ describe('Codex hook installation', () => {
   beforeEach(() => {
     codexHome = mkdtempSync(join(tmpdir(), 'adapter-codex-hooks-'))
     cursorHome = mkdtempSync(join(tmpdir(), 'adapter-cursor-hooks-'))
+    // Cursor's config overrides outrank CURSOR_HOME. Isolate this fallback fixture
+    // from the runner's XDG settings and any installed Cursor profile.
+    vi.stubEnv('CURSOR_CONFIG_DIR', '')
+    vi.stubEnv('CURSOR_DATA_DIR', '')
+    vi.stubEnv('XDG_CONFIG_HOME', '')
   })
 
   afterEach(() => {
@@ -32,6 +37,7 @@ describe('Codex hook installation', () => {
     rmSync(cursorHome, { recursive: true, force: true })
     delete process.env.CODEX_HOME
     delete process.env.CURSOR_HOME
+    vi.unstubAllEnvs()
   })
 
   it('merges foreign hooks and installs the canonical catch hooks idempotently', async () => {
@@ -116,6 +122,20 @@ describe('Codex hook installation', () => {
 
     installCursorHooks(19473)
     expect(readFileSync(file, 'utf8')).toBe(first)
+  })
+
+  it('installs Cursor hooks in config with the separate transcript root baked in', async () => {
+    const config = join(cursorHome, 'config')
+    const data = join(cursorHome, 'data')
+    vi.stubEnv('CURSOR_CONFIG_DIR', config)
+    vi.stubEnv('CURSOR_DATA_DIR', data)
+    try {
+      const { installCursorHooks } = await loadHooks()
+      installCursorHooks(19473)
+      const hooks = JSON.parse(readFileSync(join(config, 'hooks.json'), 'utf8'))
+      expect(hooks.hooks.sessionStart[0].command).toContain(`--cursor-home '${data}'`)
+      expect(existsSync(join(data, 'hooks.json'))).toBe(false)
+    } finally { vi.unstubAllEnvs() }
   })
 })
 
@@ -582,4 +602,3 @@ describe('Hermes hook allowlist', () => {
     expect(new Set(ours.map((a) => a.event)).size).toBe(ours.length)
   })
 })
-

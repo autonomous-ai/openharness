@@ -42,6 +42,28 @@ Widget _host({double textScale = 1.0}) => MaterialApp(
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets('terminal selectors announce purpose independently of value', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      await tester.pumpWidget(_host());
+      await tester.pumpAndSettle();
+      final colors = tester
+          .getSemantics(find.bySemanticsLabel('Terminal colors'))
+          .getSemanticsData();
+      final font = tester
+          .getSemantics(find.bySemanticsLabel('Terminal font'))
+          .getSemanticsData();
+      expect(colors.label, 'Terminal colors');
+      expect(colors.value, terminalThemeStore.value.label);
+      expect(font.label, 'Terminal font');
+      expect(font.value, terminalFontStore.family.label);
+    } finally {
+      semantics.dispose();
+    }
+  });
+
   testWidgets('the pane lays out with no overflow at the window minimum', (
     tester,
   ) async {

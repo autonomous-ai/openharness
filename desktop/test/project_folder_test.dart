@@ -48,6 +48,47 @@ void main() {
       matches(RegExp(r'^harness-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$')),
     );
   });
+  test('a project named after its task keeps accented letters and numbers a taken name', () {
+    expect(
+      foldDiacritics('Đèn bàn nói chuyện, façade, Straße'),
+      'Den ban noi chuyen, facade, Strasse',
+    );
+    expect(projectFolderSlug('Robot nói chuyện'), 'Robot-noi-chuyen');
+    expect(
+      taskProjectTitle('  Robot nói chuyện với Gemini qua loa\nsecond line'),
+      'Robot nói chuyện với Gemini qua',
+    );
+    expect(
+      taskProjectSlug('Robot nói chuyện với Gemini'),
+      'robot-noi-chuyen-voi-gemini',
+    );
+    expect(taskProjectSlug('!!! ???'), isNull);
+    expect(taskProjectSlug('机器人'), isNull);
+
+    final at = DateTime(2026, 9, 3, 9, 5, 7);
+    final named = ProjectFolderRequest.generated(
+      label: 'Codex',
+      at: at,
+      task: 'Đèn bàn',
+    );
+    expect(named.name, 'den-ban');
+    expect(named.agentName, 'Đèn bàn');
+    expect(named.availableGeneratedName(['den-ban', 'DEN-BAN-2']), 'den-ban-3');
+    expect(named.withGeneratedName('den-ban-3').agentName, 'Đèn bàn');
+
+    final clock = ProjectFolderRequest.generated(
+      label: 'Codex',
+      at: at,
+      task: '   ',
+    );
+    expect(clock.name, 'codex-2026-09-03-09-05');
+    expect(clock.agentName, isNull);
+    expect(
+      const ProjectFolderRequest.newProject(name: 'Robot board').agentName,
+      'Robot board',
+    );
+  });
+
   test('folder names pad every part and fall back to harness', () {
     final at = DateTime(2026, 12, 25, 0, 0, 9);
     expect(projectFolderName('Blender', at), 'blender-2026-12-25-00-00');

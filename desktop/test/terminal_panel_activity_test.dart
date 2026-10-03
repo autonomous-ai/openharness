@@ -9,7 +9,7 @@ import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show createApp;
 
 void main() {
-  testWidgets('retained Swarms run only the focused terminal cursor clock', (
+  testWidgets('retained Tabs run only the focused terminal cursor clock', (
     tester,
   ) async {
     final probe = PeriodicTimerProbe();

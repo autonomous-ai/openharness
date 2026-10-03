@@ -23,6 +23,7 @@ import 'package:harness/terminal/terminal_font_store.dart';
 import 'package:harness/terminal/terminal_theme.dart';
 import 'package:harness/terminal/terminal_theme_store.dart';
 import 'package:harness/widgets/harness_customize_pane.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:xterm/xterm.dart';
 
 import 'support/real_fonts.dart';
@@ -67,7 +68,30 @@ Future<void> _capture(WidgetTester tester, GlobalKey key, String name) async {
 
 void main() {
   setUpAll(() async {
-    await loadRealFonts();
+    if (Platform.isMacOS) {
+      final sans = ByteData.sublistView(
+        await File('/System/Library/Fonts/SFNS.ttf').readAsBytes(),
+      );
+      for (final family in [grid.AppType.sansFamily, 'SF Pro Text', 'Roboto']) {
+        await (FontLoader(family)..addFont(Future.value(sans))).load();
+      }
+      final bytes = ByteData.sublistView(
+        await File('/System/Library/Fonts/SFNSMono.ttf').readAsBytes(),
+      );
+      for (final family in ['SF Mono', '.AppleSystemUIFontMonospaced']) {
+        await (FontLoader(family)..addFont(Future.value(bytes))).load();
+      }
+      await (FontLoader('Menlo')..addFont(
+            Future.value(
+              ByteData.sublistView(
+                await File('/System/Library/Fonts/Menlo.ttc').readAsBytes(),
+              ),
+            ),
+          ))
+          .load();
+    } else {
+      await loadRealFonts();
+    }
     await (FontLoader(
       'MaterialIcons',
     )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
@@ -117,13 +141,19 @@ void main() {
       final storage = _Storage();
       final store = AppearancePrefsStore(storage: storage);
       addTearDown(store.dispose);
+      final boundary = GlobalKey();
       await tester.pumpWidget(
         MaterialApp(
+          debugShowCheckedModeBanner: false,
           theme: grid.buildAppTheme(brightness: Brightness.dark),
+          builder: (context, child) => grid.BrightnessScope(child: child!),
           home: Scaffold(
             body: SizedBox(
               width: 440,
-              child: HarnessCustomizePane(store: store, onClose: () {}),
+              child: RepaintBoundary(
+                key: boundary,
+                child: HarnessCustomizePane(store: store, onClose: () {}),
+              ),
             ),
           ),
         ),
@@ -151,6 +181,27 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       expect(store.value.prompt.statusStyle, StatusLineStyle.robbyrussell);
+      await _capture(tester, boundary, 'status-minimal');
+      for (final format in StatusLineStyle.values.skip(2)) {
+        await focus('prompt-style-${format.name}');
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(store.value.prompt.statusStyle, format);
+        final target = find.byKey(ValueKey('prompt-style-${format.name}'));
+        expect(
+          target.hitTestable(),
+          findsOneWidget,
+          reason: 'Keyboard focus scrolls ${format.label} into view',
+        );
+        expect(
+          tester
+              .widget<StatusLine>(find.byKey(const ValueKey('prompt-preview')))
+              .parts
+              .style,
+          format,
+        );
+      }
+      await _capture(tester, boundary, 'status-powerline');
       await focus('prompt-branch');
       await tester.sendKeyEvent(LogicalKeyboardKey.space);
       await tester.pumpAndSettle();
@@ -169,6 +220,222 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  for (final (name, brightness, scheme, size, scale) in [
+    (
+      'dark',
+      Brightness.dark,
+      TerminalThemeChoice.matchApp,
+      const Size(440, 760),
+      1.0,
+    ),
+    (
+      'light',
+      Brightness.light,
+      TerminalThemeChoice.matchApp,
+      const Size(440, 760),
+      1.0,
+    ),
+    (
+      'light-tango',
+      Brightness.light,
+      TerminalThemeChoice.tango,
+      const Size(440, 760),
+      1.0,
+    ),
+    (
+      'dark-scaled',
+      Brightness.dark,
+      TerminalThemeChoice.tango,
+      const Size(360, 560),
+      1.7,
+    ),
+    (
+      'light-scaled',
+      Brightness.light,
+      TerminalThemeChoice.tango,
+      const Size(360, 560),
+      1.7,
+    ),
+  ]) {
+    testWidgets('desktop status choices and previews stay usable: $name', (
+      tester,
+    ) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final oldBrightness = grid.AppTheme.brightness.value;
+      final oldPalette = grid.AppTheme.palette.value;
+      final oldScheme = terminalThemeStore.value;
+      final oldFont = terminalFontStore.value;
+      addTearDown(() {
+        grid.AppTheme.brightness.value = oldBrightness;
+        grid.AppTheme.palette.value = oldPalette;
+        terminalThemeStore.value = oldScheme;
+        terminalFontStore.value = oldFont;
+      });
+      grid.AppTheme.brightness.value = brightness;
+      grid.AppTheme.palette.value = HarnessPalette.graphite;
+      terminalThemeStore.value = scheme;
+      terminalFontStore.value = const TerminalStyle(
+        fontFamily: 'Menlo',
+        fontSize: 14,
+      );
+      final store = AppearancePrefsStore(storage: _Storage());
+      addTearDown(store.dispose);
+      final boundary = GlobalKey();
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: grid.buildAppTheme(brightness: brightness),
+          builder: (context, child) => grid.BrightnessScope(
+            child: MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                textScaler: TextScaler.linear(scale),
+                highContrast: scale > 1,
+                disableAnimations: scale > 1,
+              ),
+              child: child!,
+            ),
+          ),
+          home: Scaffold(
+            body: RepaintBoundary(
+              key: boundary,
+              child: HarnessCustomizePane(store: store, onClose: () {}),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final selected = find.byKey(const ValueKey('prompt-style-standard'));
+      final other = find.byKey(const ValueKey('prompt-style-robbyrussell'));
+      final otherLabel = find.descendant(
+        of: other,
+        matching: find.text('Robbyrussell'),
+      );
+      final beforeStyle = tester.widget<Text>(otherLabel).style!;
+      final beforeHeader = tester.getSize(find.text('Customize Harness'));
+      expect(beforeStyle.fontFamily, grid.AppType.sansFamily);
+      expect(
+        beforeStyle.color,
+        grid.AppPalette.textPrimary,
+        reason: 'App labels follow the app appearance with any terminal theme',
+      );
+      await _capture(tester, boundary, 'desktop-$name-catalog');
+
+      // Terminal zoom changes its samples, without resizing the UI typography.
+      terminalFontStore.value = terminalFontStore.value.copyWith(fontSize: 24);
+      await tester.pumpAndSettle();
+      expect(tester.widget<Text>(otherLabel).style, beforeStyle);
+      expect(tester.getSize(find.text('Customize Harness')), beforeHeader);
+      final sample = find.byKey(const ValueKey('prompt-example-standard'));
+      final sampleText = tester.widget<Text>(
+        find.descendant(of: sample, matching: find.byType(Text)),
+      );
+      expect(sampleText.style!.fontFamily, 'Menlo');
+      expect(sampleText.style!.fontSize, 24);
+      expect(
+        tester
+            .widget<RichText>(
+              find.descendant(of: sample, matching: find.byType(RichText)),
+            )
+            .text
+            .style!
+            .fontWeight,
+        FontWeight.normal,
+        reason: 'A selected button must not make terminal output semibold',
+      );
+      expect(
+        MediaQuery.textScalerOf(tester.element(sample)),
+        TextScaler.noScaling,
+      );
+      final well = find.descendant(
+        of: find.byKey(const ValueKey('prompt-example-well-standard')),
+        matching: find.byType(DecoratedBox),
+      );
+      expect(
+        (tester.widget<DecoratedBox>(well).decoration as BoxDecoration).color,
+        terminalThemeFor(HarnessPalette.graphite, scheme).background,
+      );
+
+      await tester.ensureVisible(other);
+      Focus.of(tester.element(otherLabel)).requestFocus();
+      await tester.pumpAndSettle();
+      expect(store.value.prompt.statusStyle, StatusLineStyle.standard);
+      final semantics = tester.ensureSemantics();
+      try {
+        await tester.pump();
+        final chosen = tester.getSemantics(selected).getSemanticsData();
+        final focused = tester.getSemantics(other).getSemanticsData();
+        expect(chosen.flagsCollection.isSelected, ui.Tristate.isTrue);
+        expect(focused.flagsCollection.isSelected, ui.Tristate.isFalse);
+        expect(focused.label, 'Robbyrussell');
+        expect(focused.hasAction(ui.SemanticsAction.tap), isTrue);
+      } finally {
+        semantics.dispose();
+      }
+      final button = tester.widget<TextButton>(
+        find.descendant(of: other, matching: find.byType(TextButton)),
+      );
+      expect(
+        button.style!.side!.resolve({WidgetState.focused})!.color,
+        DesktopChrome.accent,
+      );
+      await _capture(tester, boundary, 'desktop-$name-focus-large-terminal');
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(store.value.prompt.statusStyle, StatusLineStyle.robbyrussell);
+
+      final powerline = find.byKey(const ValueKey('prompt-style-agnoster'));
+      await tester.ensureVisible(powerline);
+      await tester.tap(powerline);
+      await tester.pumpAndSettle();
+      expect(store.value.prompt.statusStyle, StatusLineStyle.agnoster);
+      await _capture(tester, boundary, 'desktop-$name-powerline');
+
+      final reset = find.byKey(const ValueKey('prompt-reset'));
+      await tester.ensureVisible(reset);
+      await tester.pumpAndSettle();
+      final branchLabel = find.descendant(
+        of: find.byKey(const ValueKey('prompt-branch')),
+        matching: find.text('Branch'),
+      );
+      Focus.of(tester.element(branchLabel)).requestFocus();
+      await tester.pumpAndSettle();
+      await _capture(tester, boundary, 'desktop-$name-fields');
+      final toggleSemantics = tester.ensureSemantics();
+      try {
+        for (final field in ['machine', 'project', 'branch', 'color']) {
+          final toggle = find.byKey(ValueKey('prompt-$field'));
+          await tester.ensureVisible(toggle);
+          await tester.tap(toggle);
+          await tester.pumpAndSettle();
+          final node = tester.getSemantics(toggle).getSemanticsData();
+          expect(node.flagsCollection.isChecked, ui.CheckedState.isFalse);
+          expect(node.hasAction(ui.SemanticsAction.tap), isTrue);
+        }
+      } finally {
+        toggleSemantics.dispose();
+      }
+      expect(store.value.prompt.machine, isFalse);
+      expect(store.value.prompt.project, isFalse);
+      expect(store.value.prompt.branch, isFalse);
+      expect(store.value.prompt.color, isFalse);
+      expect(
+        tester
+            .widget<StatusLine>(find.byKey(const ValueKey('prompt-preview')))
+            .parts
+            .segments,
+        isEmpty,
+      );
+      await tester.ensureVisible(reset);
+      await tester.tap(reset);
+      await tester.pumpAndSettle();
+      expect(store.value.prompt, const PromptPrefs());
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
 
   for (final entry in ['command search', 'native menu', 'Settings']) {
     testWidgets(

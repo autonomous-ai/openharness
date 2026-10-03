@@ -7,6 +7,7 @@ import 'direct_auth_api.dart';
 import 'direct_link.dart';
 import 'direct_login.dart';
 import 'e2ee_relay_codec.dart';
+import 'platform_auth.dart';
 import 'viewer_key_store.dart';
 
 /// The second wire a viewer build offers its relay connections — the phone's WebRTC
@@ -37,7 +38,7 @@ class ViewerServices {
     TerminalTransportPluginFactory? transportPlugins,
   }) {
     final store = keys ?? ViewerKeyStore();
-    final auth = DirectAuth(
+    final auth = createViewerAuth(
       session: session,
       api: DirectAuthApi(config: config),
     );

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -16,6 +16,10 @@ const exec = promisify(execFile)
 describe('launch Git preparation', { timeout: 30_000 }, () => {
   let root: string, repo: string
   const git = async (...args: string[]) => (await exec('git', ['-C', repo, ...args])).stdout.trim()
+  /** The fixture builds its repos in the temp directory, outside the browsable home, so each read
+   *  names that root — exactly as the daemon names the workspaces its agents are running in. */
+  const read = (path: string, options: { refresh?: boolean } = {}) =>
+    readGitProject(path, { ...options, knownRoots: [root] })
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'harness-git-test-'))
     repo = join(root, 'project with spaces')
@@ -48,16 +52,44 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     expect(encryptRpcResult('git_project_info_result')).toBe(true)
   })
 
+  it('never runs a program the repository names as its fsmonitor', async () => {
+    const marker = join(root, 'fsmonitor-ran')
+    const hook = join(root, 'fsmonitor.sh')
+    await writeFile(hook, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 })
+    await git('config', 'core.fsmonitor', hook)
+    await read(repo)
+    await prepare('branch', 'refs/heads/feature')
+    await expect(readFile(marker)).rejects.toThrow()
+  })
+
   it('reads local and remote branches without switching or creating anything', async () => {
-    expect(await readGitProject(repo)).toMatchObject({ isGit: true, branch: 'main', branches: [
+    expect(await read(repo)).toMatchObject({ isGit: true, branch: 'main', branches: [
       { ref: 'refs/heads/feature', name: 'feature', remote: false },
       { ref: 'refs/heads/main', name: 'main', remote: false },
       { ref: 'refs/remotes/origin/feature', name: 'origin/feature', remote: true },
     ] })
     expect(await git('branch', '--show-current')).toBe('main')
     expect(await git('worktree', 'list', '--porcelain')).not.toContain('harness/')
-    expect(await readGitProject(root)).toMatchObject({ isGit: false })
-    expect(await readGitProject('relative/path')).toEqual({ error: 'INVALID_PATH' })
+    expect(await read(root)).toMatchObject({ isGit: false })
+    expect(await read('relative/path')).toEqual({ error: 'INVALID_PATH' })
+  })
+
+  it('runs git only inside the browsable home and the workspaces it was given', async () => {
+    // No known roots: the fixture's repo is in the temp directory, outside the home folder.
+    expect(await readGitProject(repo)).toEqual({ error: 'FORBIDDEN' })
+    expect(await readGitProject(repo, { knownRoots: [root] })).toMatchObject({ isGit: true })
+    // Named inside an allowed root, pointing outside it: the real path is what decides.
+    const outside = await mkdtemp(join(tmpdir(), 'harness-git-outside-'))
+    const allowed = await mkdtemp(join(tmpdir(), 'harness-git-allowed-'))
+    try {
+      await symlink(repo, join(allowed, 'link'))
+      expect(await readGitProject(join(allowed, 'link'), { knownRoots: [allowed] })).toEqual({ error: 'FORBIDDEN' })
+      // Gone, not refused: a deleted folder answers the way running git in it always did.
+      expect(await readGitProject(join(outside, 'gone'), { knownRoots: [outside] })).toEqual({ isGit: false, branches: [] })
+    } finally {
+      await rm(outside, { recursive: true, force: true })
+      await rm(allowed, { recursive: true, force: true })
+    }
   })
 
   it('discovers a newly pushed branch without fetching objects, then fetches only on Start', async () => {
@@ -73,8 +105,8 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     await git('push', 'origin', 'feat/toolbar-onboarding')
     await writeFile(join(clone, 'src', 'value'), 'unsaved local work')
     const refs = await there('show-ref')
-    expect((await readGitProject(clone) as any).branches.map((b: any) => b.name)).not.toContain('origin/feat/toolbar-onboarding')
-    const info = await readGitProject(clone, { refresh: true })
+    expect((await read(clone) as any).branches.map((b: any) => b.name)).not.toContain('origin/feat/toolbar-onboarding')
+    const info = await read(clone, { refresh: true })
     expect(info).toMatchObject({ refreshed: true, branch: 'main', branches: expect.arrayContaining([
       { ref: 'refs/remotes/origin/feat/toolbar-onboarding', name: 'origin/feat/toolbar-onboarding', remote: true },
     ]) })
@@ -91,7 +123,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     await git('clone', '--bare', repo, remote)
     await git('remote', 'add', 'origin', join(root, 'missing.git'))
     await git('remote', 'add', 'upstream', remote)
-    const info = await readGitProject(repo, { refresh: true })
+    const info = await read(repo, { refresh: true })
     expect(info).toMatchObject({ refreshed: false, branches: expect.arrayContaining([
       { ref: 'refs/remotes/origin/feature', name: 'origin/feature', remote: true },
       { ref: 'refs/remotes/upstream/main', name: 'upstream/main', remote: true },
@@ -104,7 +136,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     await git('clone', '--bare', repo, remote)
     await git('remote', 'add', 'origin', remote)
     await exec('git', ['-C', remote, 'branch', '-D', 'feature'])
-    const info = await readGitProject(repo, { refresh: true }) as { branches: Array<{ name: string }> }
+    const info = await read(repo, { refresh: true }) as { branches: Array<{ name: string }> }
     expect(info.branches.map(b => b.name)).toContain('feature')
     expect(info.branches.map(b => b.name)).not.toContain('origin/feature')
     expect(await git('show-ref', '--verify', 'refs/remotes/origin/feature')).toBeTruthy()
@@ -200,7 +232,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     const made = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-owl', branchMode: 'placeholder' })
     expect(await current(made)).toBe('quiet-owl')
     expect(await git('config', '--get', 'branch.quiet-owl.harness')).toBe('placeholder')
-    const info = await readGitProject(repo) as { branches: Array<{ name: string; harness?: true }> }
+    const info = await read(repo) as { branches: Array<{ name: string; harness?: true }> }
     expect(info.branches.filter(b => b.harness).map(b => b.name).sort()).toEqual(['fix/login', 'quiet-owl'])
     await expect(prepare('worktree', 'refs/heads/feature', repo, { branchName: 'fix/login' })).rejects.toMatchObject({ code: 'BRANCH_EXISTS' })
     await expect(prepare('worktree', 'refs/heads/feature', repo, { branchName: 'bad..name' })).rejects.toMatchObject({ code: 'INVALID_BRANCH' })
@@ -302,7 +334,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     await git('remote', 'add', 'origin', origin)
     await git('fetch', '--quiet', 'origin')
     await git('remote', 'set-head', 'origin', 'main')
-    expect(await readGitProject(repo)).toMatchObject({ defaultRef: 'refs/remotes/origin/main' })
+    expect(await read(repo)).toMatchObject({ defaultRef: 'refs/remotes/origin/main' })
     await exec('git', ['clone', '--quiet', origin, upstream])
     const up = (...args: string[]) => exec('git', ['-C', upstream, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args])
     await writeFile(join(upstream, 'src', 'value'), 'pushed')
@@ -340,13 +372,13 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
 
   it('reads a linked worktree as its repository, and a worktree started from one joins the same repository', async () => {
     const linked = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'harness/linked' })
-    const info = await readGitProject(join(linked, 'src'))
+    const info = await read(join(linked, 'src'))
     expect(info).toMatchObject({ isGit: true, branch: 'harness/linked', mainBranch: 'main' })
     expect(await realpath((info as { mainFolder: string }).mainFolder)).toBe(await realpath(join(repo, 'src')))
     const branches = (info as { branches: Array<{ name: string; worktree?: string }> }).branches
     expect(await realpath(branches.find(branch => branch.name === 'harness/linked')!.worktree!)).toBe(await realpath(linked))
     expect(await realpath(branches.find(branch => branch.name === 'main')!.worktree!)).toBe(await realpath(repo))
-    expect(await readGitProject(repo)).not.toHaveProperty('mainFolder')
+    expect(await read(repo)).not.toHaveProperty('mainFolder')
     expect(await prepare('worktree', 'refs/heads/main', linked, { branchName: 'harness/second' })).toBe(join(worktrees(), 'second'))
   })
 
@@ -389,7 +421,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     const empty = join(root, 'empty')
     await mkdir(empty)
     await exec('git', ['-C', empty, 'init', '-b', 'main'])
-    expect(await readGitProject(empty)).toMatchObject({ isGit: true, branch: 'main', branches: [] })
+    expect(await read(empty)).toMatchObject({ isGit: true, branch: 'main', branches: [] })
     await expect(prepareProjectFolder({ source: 'worktree', gitSource: empty }, options()))
       .rejects.toMatchObject({ code: 'GIT_PROJECT_UNAVAILABLE' })
   })
@@ -417,7 +449,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
 
   it('supports detached HEAD, default worktree names, and switching back to a local branch', async () => {
     await git('checkout', '--detach', 'HEAD')
-    expect(await readGitProject(repo)).toMatchObject({ isGit: true, branch: null })
+    expect(await read(repo)).toMatchObject({ isGit: true, branch: null })
     const path = await prepareGitProject(repo, { root, worktree: true })
     expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
     expect(path).toMatch(/\/worktrees\/project with spaces\/[a-z]+-[a-z]+(-\d+)?$/)
@@ -427,12 +459,12 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
 
   it('distinguishes an unavailable Git executable from a non-Git folder', async () => {
     vi.stubEnv('PATH', join(root, 'missing-binaries'))
-    expect(await readGitProject(repo)).toEqual({ error: 'GIT_UNAVAILABLE' })
+    expect(await read(repo)).toEqual({ error: 'GIT_UNAVAILABLE' })
   })
 
   it('reports unreadable refs instead of silently treating the repository as non-Git', async () => {
     await writeFile(join(repo, '.git', 'packed-refs'), 'invalid packed refs\n')
-    expect(await readGitProject(repo)).toEqual({ error: 'GIT_UNAVAILABLE' })
+    expect(await read(repo)).toEqual({ error: 'GIT_UNAVAILABLE' })
   })
 
   it('rejects a subfolder that became a file on the selected branch', async () => {
@@ -456,5 +488,16 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       .find(line => line.startsWith('worktree ') && line.includes('/worktrees/'))!.slice(9)
     expect(await readFile(join(linked, 'src', 'value'), 'utf8')).toBe('feature')
     expect(await git('branch', '--show-current')).toBe('main')
+  })
+
+  it.each(['No space left on device', 'Disk quota exceeded'])('explains worktree disk exhaustion: %s', async (message) => {
+    const hooks = join(root, 'hooks')
+    await mkdir(hooks)
+    await writeFile(join(hooks, 'post-checkout'), `#!/bin/sh\necho 'private-file: ${message}' >&2\nexit 1\n`, { mode: 0o755 })
+    await git('config', 'core.hooksPath', hooks)
+    await expect(prepare('worktree')).rejects.toMatchObject({
+      code: 'WORKTREE_FAILED',
+      message: 'Not enough disk space to create the worktree. Free space on this machine, then retry.',
+    })
   })
 })

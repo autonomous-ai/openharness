@@ -3,14 +3,21 @@ import cors from '@fastify/cors'
 import Fastify from 'fastify'
 import http from 'http'
 import net from 'net'
-import { env } from './config/env.js'
+import { DAEMONS, env } from './config/env.js'
 import { registerJsonBodyParser } from './lib/jsonBodyParser.js'
 import { errorHandler } from './middlewares/errorHandler.js'
 import { registerAuthMiddleware } from './middlewares/authMiddleware.js'
 import { cursorRoutes } from './routes/cursor.js'
 import { voiceRoutes } from './routes/voice.js'
 import { harnessShareRoutes } from './routes/harnessShares.js'
+import { harnessLinkRoutes } from './routes/harnessLinks.js'
+import { deviceKeyRoutes } from './routes/deviceKeys.js'
+import { qrSignInRoutes } from './routes/qrSignIn.js'
 import { deskRoutes } from './routes/desk.js'
+import { tabChannelRoutes } from './routes/tabChannels.js'
+import { zooRoutes } from './routes/zoo.js'
+import { experimentalSettingsRoutes } from './routes/experimentalSettings.js'
+import { describeDaemonsSwitch } from './lib/daemonsSwitch.js'
 import { handleObserverUpgrade } from './lib/observerWs.js'
 import { deviceAuthRoutes } from './routes/deviceAuth.js'
 import { healthRoutes, authRoutes, userRoutes, machineRoutes, planRoutes, gridRoutes, deviceRoutes, mobileRoutes, appRoutes, analyticsRoutes, agentRouteRoutes, storeRoutes } from './routes/index.js'
@@ -164,7 +171,15 @@ async function start(): Promise<void> {
   await app.register(deviceAuthRoutes) // device-authorization grant: how the desktop app gets a machine key
   await app.register(storeRoutes)      // the Harness Store's ratings and reviews; the catalogue is the CLI's registry
   await app.register(harnessShareRoutes)
+  await app.register(harnessLinkRoutes)
+  await app.register(qrSignInRoutes)       // sign a computer in by scanning its QR with a signed-in phone
+  await app.register(deviceKeyRoutes)     // the account's device key log: signing in is what trusts a device
   await app.register(deskRoutes)          // the account's tabs, the same on every computer (lib/desk.ts)
+  if (env.HARNESS_CHANNELS) await app.register(tabChannelRoutes)
+  await app.register(experimentalSettingsRoutes, { daemons: DAEMONS })
+  // Availability is separate from opt-in: every account starts off, and its collection is retained.
+  await app.register(zooRoutes, { daemons: DAEMONS, requireAccountOptIn: true })
+  logger.info(describeDaemonsSwitch(DAEMONS))
 
   // Dedicated public subdomain app-proxy on its own port (Host-header routed → tunnelled to the node app).
   const appProxyServer = startSubdomainProxy()

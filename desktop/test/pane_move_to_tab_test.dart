@@ -149,9 +149,8 @@ void main() {
 
   test('the tab left behind re-tiles instead of keeping a lopsided split', () {
     // Panes opened with Split Right/Down save a manual layout, so a tab that
-    // never had a divider dragged still has one. Carrying it down a tile — what
-    // a close does — leaves the rest at proportions drawn for a tile that is no
-    // longer there.
+    // never had a divider dragged still has one. Removing a pane resets the
+    // remaining count to its default layout.
     final (app, source, target) = twoTabs(count: 3);
     addTearDown(app.dispose);
     app.activeSwarm.savePaneSizes(
@@ -171,7 +170,7 @@ void main() {
     expect(left.arranged, isNull);
   });
 
-  test('a layout chosen outright still stands after a move', () {
+  test('the tab left behind resets a remembered preset after a move', () {
     final (app, source, target) = twoTabs(count: 3);
     addTearDown(app.dispose);
     app.setPreset(2, PanePreset.rows);
@@ -179,7 +178,8 @@ void main() {
     app.movePaneToSwarm(1, target, follow: false);
 
     final left = app.swarms.firstWhere((swarm) => swarm.id == source);
-    expect(left.presets[2], PanePreset.rows);
+    expect(left.presets[2], isNull);
+    expect(app.presetFor(2), PanePreset.defaultFor(2));
   });
 
   test('the destination forgets a shape it remembered for this count', () {

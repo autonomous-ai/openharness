@@ -11,15 +11,20 @@
 //   1. the theme declares a hover overlay for each button kind;
 //   2. a `styleFrom` at a call site restates it, because `styleFrom` REPLACES
 //      the theme's style rather than merging with it.
+
 import 'dart:math' as math;
 import 'dart:ui' show PointerDeviceKind;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:harness/shared/theme/app_theme.dart';
+import 'package:harness/shared/theme/color_palette.dart';
 import 'package:harness/shared/widgets/app_icon_button.dart';
+
+import 'support/real_fonts.dart';
 
 const _hovered = {WidgetState.hovered};
 
@@ -47,6 +52,8 @@ double _contrast(Color a, Color b) {
 }
 
 void main() {
+  setUpAll(loadRealFonts);
+
   for (final brightness in [Brightness.dark, Brightness.light]) {
     group('on ${brightness.name}', () {
       late ThemeData theme;
@@ -57,6 +64,74 @@ void main() {
       });
 
       tearDown(() => AppTheme.brightness.value = Brightness.light);
+
+      testWidgets('capsules keep space around enlarged system text', (
+        tester,
+      ) async {
+        for (final scale in [1.0, 1.7, 2.0]) {
+          await tester.pumpWidget(
+            MaterialApp(
+              theme: theme,
+              builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(context)
+                    .copyWith(textScaler: TextScaler.linear(scale)),
+                child: child!,
+              ),
+              home: Scaffold(
+                body: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    spacing: 16,
+                    children: [
+                      TextButton(
+                        key: const Key('text-button'),
+                        onPressed: () {},
+                        child: const Text('Close', key: Key('text-label')),
+                      ),
+                      OutlinedButton(
+                        key: const Key('outlined-button'),
+                        onPressed: () {},
+                        child: const Text(
+                          'Troubleshooting details',
+                          key: Key('outlined-label'),
+                        ),
+                      ),
+                      FilledButton(
+                        key: const Key('filled-button'),
+                        onPressed: () {},
+                        child: const Text(
+                          'Link machine',
+                          key: Key('filled-label'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+          for (final kind in ['text', 'outlined', 'filled']) {
+            final button = tester.getRect(find.byKey(Key('$kind-button')));
+            final label = tester.getRect(find.byKey(Key('$kind-label')));
+            expect(
+              label.top - button.top,
+              greaterThanOrEqualTo(6),
+              reason: '$kind at $scale needs space above its label',
+            );
+            expect(
+              button.bottom - label.bottom,
+              greaterThanOrEqualTo(6),
+              reason: '$kind at $scale needs space below its label',
+            );
+            if (scale == 1) {
+              expect(button.height, 32);
+            } else {
+              expect(button.height, greaterThan(32));
+            }
+          }
+          expect(tester.takeException(), isNull);
+        }
+      });
 
       test('every button kind declares a hover overlay', () {
         final kinds = {
@@ -87,6 +162,56 @@ void main() {
           overlay.resolve({WidgetState.disabled, WidgetState.hovered})!.a,
           0,
         );
+      });
+
+      test('error text stays readable on ordinary desktop surfaces', () {
+        final originalPalette = AppTheme.palette.value;
+        addTearDown(() => AppTheme.palette.value = originalPalette);
+        for (final palette in HarnessPalette.values) {
+          AppTheme.palette.value = palette;
+          final error = buildAppTheme(brightness: brightness).colorScheme.error;
+          for (final surface in {
+            'page': AppPalette.windowBg,
+            'card': AppPalette.cardBg,
+            'content card': AppCard.base,
+            'menu': AppMenu.fill,
+            'field': AppDesktop.field,
+          }.entries) {
+            expect(
+              _contrast(error, surface.value),
+              greaterThanOrEqualTo(4.5),
+              reason: '${palette.name} ${surface.key} must carry error text',
+            );
+          }
+        }
+      });
+
+      test('Increase Contrast strengthens neutral controls and focus', () {
+        final accessible = buildAppTheme(
+          brightness: brightness,
+          highContrast: true,
+        );
+        final surface = accessible.colorScheme.surface;
+        for (final control in [
+          accessible.textButtonTheme.style!,
+          accessible.outlinedButtonTheme.style!,
+        ]) {
+          final rest = control.side!.resolve({})!;
+          final focused = control.side!.resolve({WidgetState.focused})!;
+          expect(rest.width, focused.width);
+          expect(
+            _contrast(_over(surface, rest.color), surface),
+            greaterThanOrEqualTo(3),
+          );
+          expect(
+            _contrast(_over(surface, focused.color), surface),
+            greaterThanOrEqualTo(3),
+          );
+          expect(
+            control.side!.resolve({WidgetState.disabled})!.color.a,
+            lessThan(rest.color.a),
+          );
+        }
       });
 
       // An overlay that exists but cannot be seen is the same bug wearing a
@@ -120,31 +245,43 @@ void main() {
         theme: buildAppTheme(brightness: Brightness.dark),
         home: Scaffold(
           body: Center(
-            child: AppIconButton(icon: Icons.add, onPressed: () => presses++),
+            child: AppIconButton(
+              icon: AppIcons.plus,
+              onPressed: () => presses++,
+            ),
           ),
         ),
       ),
     );
     final button = find.byType(AppIconButton);
-    final fill = find.descendant(
+    final material = find.descendant(
       of: button,
-      matching: find.byType(AnimatedContainer),
+      matching: find.byType(Material),
     );
-    Color background() =>
-        (tester.widget<AnimatedContainer>(fill).decoration! as BoxDecoration)
-            .color!;
-    expect(background().a, 0);
+    BorderSide rim() =>
+        (tester.widget<Material>(material).shape! as OutlinedBorder).side;
+    Color? ink() => IconTheme.of(tester.element(find.byType(Icon))).color;
+    final restingInk = ink();
+    final bounds = tester.getRect(button);
+    expect(bounds.size, const Size(32, 32));
+    expect(rim().color.a, 0);
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
     await mouse.moveTo(tester.getCenter(button));
     await tester.pumpAndSettle();
-    expect(background().a, greaterThan(0));
+    expect(ink(), isNot(restingInk));
+    expect(rim().color.a, 0, reason: 'hover is distinct from keyboard focus');
     await mouse.moveTo(Offset.zero);
     await tester.pumpAndSettle();
-    expect(background().a, 0);
+    expect(ink(), restingInk);
     await tester.sendKeyEvent(LogicalKeyboardKey.tab);
     await tester.pumpAndSettle();
-    expect(background().a, greaterThan(0));
+    expect(rim().color.a, greaterThan(0));
+    expect(
+      tester.getRect(button),
+      bounds,
+      reason: 'focus must not move controls',
+    );
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.sendKeyEvent(LogicalKeyboardKey.space);
     expect(presses, 2);

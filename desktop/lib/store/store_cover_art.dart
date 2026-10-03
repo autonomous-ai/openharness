@@ -342,6 +342,13 @@ const storeCoverArt = <String, StoreCoverArt>{
     imageSize: Size(1600, 1100),
     viewport: Rect.fromLTWH(112, 280, 992, 671),
   ),
+  'autonomous/trailofbits-skills': StoreCoverArt(
+    asset: 'assets/store/covers/trailofbits-skills.jpg',
+    description: 'A Trail of Bits Skills audit report on OWASP NodeGoat',
+    imageSize: Size(1600, 1000),
+    viewport: Rect.fromLTWH(340, 20, 920, 557),
+    background: Color(0xff16181c),
+  ),
   'autonomous/yosys': StoreCoverArt(
     asset: 'assets/store/covers/yosys.jpg',
     description: 'Timing traces from a CPU built with Yosys',

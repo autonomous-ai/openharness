@@ -1,0 +1,19 @@
+{
+  "method": "Synthetic accepted inputs, a controlled delayed invocation, and real current service/wire code; admission only, no provider or terminal transport.",
+  "observations": {
+    "initialContextWasA": true,
+    "frozenACommandRejectedAfterB": true,
+    "delayedOldInvocationReceivedBContext": true,
+    "delayedOldInvocationAdmittedInB": true,
+    "priorInputCommandAdmittedAfterNewInputInSameSwarm": true,
+    "transportStubCalls": 0
+  },
+  "sourceSha256": {
+    "promptScope.ts": "f363ee6a29aa92f2cdc398123a9e0e9880721d39cbf9a07c98f76df55dd722bb",
+    "channels.ts": "0e76298b4ef4c6f8e20db5dc0738df82cdaa072038145bafccbe64c7acbbe05f",
+    "service.ts": "c7f67f9eb48e3112f0e53e1eb6eda7f70edb52510a9e142a6ec80b30c215f75e",
+    "wire.ts": "47a9bedd44909edca7dd0c504beba37060d9e5464a9608dae462a9c06b36ec71",
+    "model.ts": "b08fb28d5382b63f9df95cf21103d4b671dc0c7f441f2cfd21c6bb618c908abd"
+  },
+  "limit": "Demonstrates the current API cannot distinguish these synthetic invocation origins. Does not measure native engine frequency, deployed behavior, semantic necessity, or actual peer delivery."
+}

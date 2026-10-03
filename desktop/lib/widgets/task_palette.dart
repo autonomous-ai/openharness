@@ -1,11 +1,12 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/models.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../shared/widgets/app_dialog.dart';
+import 'desktop_chrome.dart';
 import '../state/app_state.dart';
 import 'engine_identity.dart';
 
@@ -86,62 +87,6 @@ Future<void> showTaskPalette(
     // already answered by then and this does nothing; anything else is a person walking away, which the
     // dial has to hear about or it keeps showing work that is not happening.
   ).whenComplete(() => spoken?.cancelled());
-}
-
-/// The design's own values, lifted rather than approximated.
-///
-/// Every number here is read off the `Palette_*` CSS module the design team published on the product
-/// page — the same component, already drawn for this exact feature down to the "taken" row and the
-/// confidence column. Naming them together is what keeps a later "small tidy" from drifting off it one
-/// value at a time; if the page changes, this block is the diff.
-abstract final class _D {
-  /// The opaque sheet.
-  static const width = 680.0;
-  static const radius = 16.0;
-  static const fill = Color(0xFF1E1E21);
-  static const rim = Color(0x1FFFFFFF); // rgba(255,255,255,.12)
-
-  /// The lit top edge — `inset 0 1px 0 rgba(255,255,255,.06)`. A one-pixel highlight is most of what
-  /// makes glass read as glass rather than as a grey box.
-  static const innerLight = Color(0x0FFFFFFF);
-
-  /// The veil.
-  static const veil = kDialogVeilTint;
-
-  /// ABOVE the middle, deliberately: the list grows downwards, and a box pinned to the centre would
-  /// jump every time the answer arrived. Anchored high, it stays put and the results unroll beneath it.
-  static const lift = -0.38;
-
-  /// The field.
-  static const fieldInk = Color(0xFFF4F4F6);
-  static const hint = Color(0xFF6E6E76);
-  static const caret = Color(0xFFE6E6EA);
-
-  /// The rows.
-  static const sep = Color(0x14FFFFFF); // rgba(255,255,255,.08)
-  static const activeFill = Color(0x14FFFFFF);
-  static const engineInk = Color(0xFFF4F4F6);
-  static const machineInk = Color(0xFF8A8A92);
-  static const machineDim = Color(0xFF6A6A72);
-  static const nameInk = Color(0xFFD0D0D6);
-  static const questionInk = Color(0xFF7C7C84);
-  static const questionMark = Color(0xFFB9F0CF);
-
-  /// Green means "this one", in both places it appears: the fit that is worth considering, and the row
-  /// that took the work.
-  static const green = Color(0xFF3DDC84);
-  static const takenFill = Color(0x243DDC84); // rgba(61,220,132,.14)
-  static const takenRim = Color(0x733DDC84); // rgba(61,220,132,.45)
-  static const lowFit = Color(0xFF8A8A92);
-
-  /// The five columns. Fixed, and that IS the feature: three rows whose machine and fit line up can be
-  /// read down a column, which is the comparison the person was stopped to make. Flex columns put the
-  /// same facts at three different x positions and turn a comparison into three separate readings.
-  static const colIcon = 16.0;
-  static const colName = 118.0;
-  static const colMachine = 190.0;
-  static const colFit = 44.0;
-  static const colGap = 12.0;
 }
 
 /// Below this the palette stops guessing and asks.
@@ -291,16 +236,22 @@ class _TaskPaletteState extends State<_TaskPalette> {
     if (answer == null) {
       setState(() {
         _stage = _Stage.empty;
-        _note = widget.notifier.localMachineState == null
-            ? 'No local machine is connected yet.'
-            : 'Could not reach the router on this computer.';
+        _note = widget.notifier.ownedActionMachine == null
+            ? (widget.notifier.viewer == null
+                  ? 'No local machine is connected yet.'
+                  : 'Connect a machine first.')
+            : (widget.notifier.viewer == null
+                  ? 'Could not reach the router on this computer.'
+                  : 'Could not reach the router on the connected machine.');
       });
       return;
     }
     if (answer.isEmpty) {
       setState(() {
         _stage = _Stage.empty;
-        _note = 'There is no agent on this computer to send that to.';
+        _note = widget.notifier.viewer == null
+            ? 'There is no harness on this computer to send that to.'
+            : 'There is no harness on the connected machine to send that to.';
       });
       return;
     }
@@ -420,13 +371,20 @@ class _TaskPaletteState extends State<_TaskPalette> {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
-    if (event.logicalKey == LogicalKeyboardKey.escape) {
-      Navigator.of(context).pop();
-      return KeyEventResult.handled;
-    }
     final isEnter =
         event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.numpadEnter;
+    final isEscape = event.logicalKey == LogicalKeyboardKey.escape;
+    final composing = _text.value.composing;
+    if (composing.isValid && !composing.isCollapsed) {
+      return isEnter || isEscape
+          ? KeyEventResult.skipRemainingHandlers
+          : KeyEventResult.ignored;
+    }
+    if (isEscape) {
+      Navigator.of(context).pop();
+      return KeyEventResult.handled;
+    }
     // ⇧Enter is the newline — ignored here so the field does what it always does with it.
     final shift = HardwareKeyboard.instance.isShiftPressed;
     if (isEnter && !shift && _stage != _Stage.choosing) {
@@ -456,23 +414,19 @@ class _TaskPaletteState extends State<_TaskPalette> {
     grid.AppTheme.watch(context);
     return Stack(
       children: [
-        // The veil, built rather than tinted — see showTaskPalette. Tapping it closes, which is what the
-        // barrier it replaces did.
         Positioned.fill(
-          child: GestureDetector(
-            onTap: () => Navigator.of(context).maybePop(),
-            behavior: HitTestBehavior.opaque,
-            child: const ColoredBox(color: _D.veil),
+          child: DesktopDialogBackdrop(
+            onDismiss: () => Navigator.of(context).maybePop(),
           ),
         ),
-        Center(
-          child: FractionalTranslation(
-            translation: const Offset(0, _D.lift),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Align(
+              alignment: const Alignment(0, -.18),
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: _D.width),
-                child: _sheet(),
+                constraints: const BoxConstraints(maxWidth: 680),
+                child: SingleChildScrollView(child: _sheet()),
               ),
             ),
           ),
@@ -481,52 +435,13 @@ class _TaskPaletteState extends State<_TaskPalette> {
     );
   }
 
-  /// An opaque sheet avoids compositing and blurring the live terminals.
-  Widget _sheet() {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(_D.radius),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: _D.fill,
-          borderRadius: BorderRadius.circular(_D.radius),
-          border: Border.all(color: _D.rim),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x99000000),
-              blurRadius: 12,
-              offset: Offset(0, 4),
-            ),
-          ],
-        ),
-        // TRANSPARENT Material, and it is required rather than decorative: dropping Dialog for a
-        // hand-built veil dropped the Material ancestor with it, and TextField and InkWell both
-        // assert without one. `transparency` provides it while painting nothing, so the glass above
-        // stays the only surface — a MaterialType.canvas here would put an opaque sheet over it.
-        child: Material(
-          type: MaterialType.transparency,
-          child: Stack(
-            children: [
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [_field(), _results()],
-              ),
-              // `inset 0 1px 0 rgba(255,255,255,.06)`.
-              const Positioned(
-                left: 0,
-                right: 0,
-                top: 0,
-                child: ColoredBox(
-                  color: _D.innerLight,
-                  child: SizedBox(height: 1),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+  Widget _sheet() => DesktopDialogSurface(
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [_field(), _results()],
+    ),
+  );
 
   /// The field, with Material's own skin switched OFF.
   ///
@@ -556,8 +471,8 @@ class _TaskPaletteState extends State<_TaskPalette> {
             // Read-only rather than disabled while the router thinks: a disabled field drops the focus,
             // and the focus is what Esc is listening on.
             readOnly: working || _stage == _Stage.sent,
-            style: grid.AppType.mono(color: _D.fieldInk, height: 1.35),
-            cursorColor: _D.caret,
+            style: DesktopChrome.text(size: 17, height: 1.35),
+            cursorColor: DesktopChrome.accent,
             cursorWidth: 2,
             cursorRadius: Radius.zero,
             decoration: InputDecoration(
@@ -571,13 +486,17 @@ class _TaskPaletteState extends State<_TaskPalette> {
               focusedBorder: InputBorder.none,
               disabledBorder: InputBorder.none,
               hintText: 'Describe the work…',
-              hintStyle: grid.AppType.mono(color: _D.hint, height: 1.35),
+              hintStyle: DesktopChrome.text(
+                size: 17,
+                color: DesktopChrome.muted,
+                height: 1.35,
+              ),
             ),
           ),
         ),
         // The whole of the waiting state, in the field's own right margin: a 16px ring at right:24.
         if (working) ...[
-          const Positioned(
+          Positioned(
             right: 24,
             top: 0,
             bottom: 0,
@@ -587,7 +506,7 @@ class _TaskPaletteState extends State<_TaskPalette> {
                 height: 16,
                 child: CircularProgressIndicator(
                   strokeWidth: 1.8,
-                  color: _D.hint,
+                  color: DesktopChrome.muted,
                 ),
               ),
             ),
@@ -603,7 +522,7 @@ class _TaskPaletteState extends State<_TaskPalette> {
               child: Center(
                 child: Text(
                   '${_elapsed}s',
-                  style: grid.AppType.monoMeta(color: _D.hint),
+                  style: grid.AppType.caption(color: DesktopChrome.muted),
                 ),
               ),
             ),
@@ -625,9 +544,9 @@ class _TaskPaletteState extends State<_TaskPalette> {
             padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
             child: Text(
               _note,
-              style: grid.AppType.monoLabel(
+              style: grid.AppType.body(
                 fontWeight: FontWeight.w400,
-                color: _D.questionInk,
+                color: DesktopChrome.muted,
                 height: 1.45,
               ),
             ),
@@ -643,9 +562,12 @@ class _TaskPaletteState extends State<_TaskPalette> {
             padding: EdgeInsets.fromLTRB(16, 8, 16, 6),
             child: Row(
               children: [
-                Icon(Icons.check, size: 14, color: _D.green),
+                Icon(AppIcons.check, size: 14, color: DesktopChrome.accent),
                 SizedBox(width: 8),
-                Text('on it', style: grid.AppType.monoLabel(color: _D.green)),
+                Text(
+                  'Task sent',
+                  style: grid.AppType.body(color: DesktopChrome.accent),
+                ),
               ],
             ),
           ),
@@ -687,8 +609,8 @@ class _TaskPaletteState extends State<_TaskPalette> {
 
   Widget _panel(List<Widget> children) => Container(
     padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
-    decoration: const BoxDecoration(
-      border: Border(top: BorderSide(color: _D.sep)),
+    decoration: BoxDecoration(
+      border: Border(top: BorderSide(color: DesktopChrome.rim)),
     ),
     child: Column(
       mainAxisSize: MainAxisSize.min,
@@ -708,12 +630,12 @@ class _TaskPaletteState extends State<_TaskPalette> {
     final reason = (answer?.reason ?? '').trim();
     final weighed = answer?.weighed ?? 0;
     final machines = answer?.machines ?? 0;
-    final base = grid.AppType.monoLabel(
+    final base = grid.AppType.body(
       fontWeight: FontWeight.w400,
-      color: _D.questionInk,
+      color: DesktopChrome.muted,
       height: 1.45,
     );
-    final mark = grid.AppType.monoLabel(color: _D.questionMark);
+    final mark = grid.AppType.body(color: DesktopChrome.foreground);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
       child: Column(
@@ -726,7 +648,7 @@ class _TaskPaletteState extends State<_TaskPalette> {
                 if (weighed > 0) ...[
                   const TextSpan(text: 'Weighed '),
                   TextSpan(
-                    text: '$weighed agent${weighed == 1 ? '' : 's'}',
+                    text: '$weighed ${weighed == 1 ? 'harness' : 'harnesses'}',
                     style: mark,
                   ),
                   if (machines > 1) ...[
@@ -753,8 +675,8 @@ class _TaskPaletteState extends State<_TaskPalette> {
                 '“$reason”',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: grid.AppType.monoMeta(
-                  color: _D.machineDim,
+                style: grid.AppType.caption(
+                  color: DesktopChrome.muted,
                   fontStyle: FontStyle.italic,
                 ),
               ),
@@ -764,103 +686,87 @@ class _TaskPaletteState extends State<_TaskPalette> {
     );
   }
 
-  /// One candidate, on the design's five-column grid.
+  /// Shared picker anatomy keeps machine context legible in narrow windows.
   Widget _row(
     RouteCandidate candidate, {
     required bool active,
     required bool taken,
   }) {
     final fit = candidate.confidence;
-    // Green is a claim, and it is only made about the leader. Everything else is grey — a runner-up
-    // wearing the same colour as the pick would be the palette arguing with itself.
-    final leader = fit > 0 && candidate.agentId == (_answer?.agentId ?? '');
-    return InkWell(
-      onTap: taken
-          ? null
-          : () => unawaited(
-              _commit(
-                candidate.agentId,
-                candidate.machineId,
-                _text.text.trim(),
-              ),
-            ),
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        decoration: BoxDecoration(
-          color: taken
-              ? _D.takenFill
-              : active
-              ? _D.activeFill
-              : null,
-          borderRadius: BorderRadius.circular(10),
-          border: taken ? Border.all(color: _D.takenRim) : null,
-        ),
-        child: Row(
-          children: [
-            // Greyed and lifted, so a row of six vendors reads as one list instead of six brand marks.
-            SizedBox(
-              width: _D.colIcon,
-              height: _D.colIcon,
-              child: ColorFiltered(
-                colorFilter: const ColorFilter.matrix(<double>[
-                  0.2126 * 1.3, 0.7152 * 1.3, 0.0722 * 1.3, 0, 0, //
-                  0.2126 * 1.3, 0.7152 * 1.3, 0.0722 * 1.3, 0, 0, //
-                  0.2126 * 1.3, 0.7152 * 1.3, 0.0722 * 1.3, 0, 0, //
-                  0, 0, 0, 1, 0,
-                ]),
-                child: EngineMark(engine: candidate.engine, size: _D.colIcon),
-              ),
-            ),
-            const SizedBox(width: _D.colGap),
-            SizedBox(
-              width: _D.colName,
-              child: Text(
-                candidate.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: grid.AppType.monoLabel(
-                  color: taken ? const Color(0xFFDFFBE9) : _D.engineInk,
+    final selected = active || taken;
+    final ink = selected
+        ? grid.AppDesktop.onSelection
+        : DesktopChrome.foreground;
+    final detail = selected
+        ? grid.AppDesktop.selectionDetail
+        : DesktopChrome.muted;
+    final description = [
+      if (candidate.machine.isNotEmpty) candidate.machine,
+      if (candidate.recent.isNotEmpty) candidate.recent,
+    ].join(' · ');
+    return Semantics(
+      selected: active,
+      child: InkWell(
+        mouseCursor: taken
+            ? SystemMouseCursors.basic
+            : SystemMouseCursors.click,
+        onTap: taken
+            ? null
+            : () => unawaited(
+                _commit(
+                  candidate.agentId,
+                  candidate.machineId,
+                  _text.text.trim(),
                 ),
               ),
-            ),
-            const SizedBox(width: _D.colGap),
-            SizedBox(
-              width: _D.colMachine,
-              child: Text(
-                candidate.machine,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: grid.AppType.monoMeta(
-                  color: taken ? const Color(0xFF9FD9B6) : _D.machineInk,
+        borderRadius: BorderRadius.circular(grid.AppDesktop.rowRadius),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: selected ? grid.AppDesktop.selection : null,
+            borderRadius: BorderRadius.circular(grid.AppDesktop.rowRadius),
+          ),
+          child: Row(
+            children: [
+              EngineMark(
+                engine: candidate.engine,
+                size: grid.AppDesktop.identitySize,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      candidate.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.control(color: ink, medium: true),
+                    ),
+                    if (description.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        description,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: DesktopChrome.metadata(color: detail),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-            ),
-            const SizedBox(width: _D.colGap),
-            Expanded(
-              child: Text(
-                candidate.recent,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: grid.AppType.monoMeta(
-                  color: taken ? const Color(0xFFDFFBE9) : _D.nameInk,
-                ),
-              ),
-            ),
-            const SizedBox(width: _D.colGap),
-            SizedBox(
-              width: _D.colFit,
-              // Drawn only where there IS one: 0 means the router said nothing about this candidate, and
-              // a printed 0.00 would be a claim it never made.
-              child: Text(
-                fit > 0 ? fit.toStringAsFixed(2) : '',
-                textAlign: TextAlign.right,
-                style: grid.AppType.monoMeta(
-                  color: leader || taken ? _D.green : _D.lowFit,
-                ),
-              ),
-            ),
-          ],
+              if (fit > 0 || taken) ...[
+                const SizedBox(width: 12),
+                if (taken)
+                  Icon(AppIcons.check, size: 16, color: ink)
+                else
+                  Text(
+                    fit.toStringAsFixed(2),
+                    style: DesktopChrome.metadata(color: detail),
+                  ),
+              ],
+            ],
+          ),
         ),
       ),
     );

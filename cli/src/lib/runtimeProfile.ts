@@ -585,6 +585,51 @@ async function claudeConfiguredEffort(session: RegisteredSession): Promise<strin
   return configured ?? 'auto'
 }
 
+/** The first-run banner names the model before Claude writes a conversation transcript. */
+function claudeStartupBanner(pane: string): { model: string; effort?: string } | null {
+  const lines = pane.split('\n')
+  const start = lines.findLastIndex(line => /\bClaude Code v\d+\.\d+/.test(line))
+  if (start < 0) return null
+  const banner = lines.slice(start, start + 4).join('\n')
+  const match = /\b(Fable|Opus|Sonnet|Haiku)\s+(\d+(?:\.\d+)*)(\s+\(1M context\))?(?:\s+with\s+(low|medium|high|xhigh|max|ultracode)\s+effort)?\s*·\s*Claude\s+(?:Max|Pro|Team|Enterprise)\b/i.exec(banner)
+  if (!match) return null
+  return {
+    model: `claude-${match[1].toLowerCase()}-${match[2].replace(/\./g, '-')}${match[3] ? '[1m]' : ''}`,
+    ...(match[4] ? { effort: match[4].toLowerCase() } : {}),
+  }
+}
+
+/**
+ * Read-only evidence for a ready, pre-conversation CLI. Callers must scope this to the live process;
+ * it deliberately never enters RuntimeProfileManager's conversation cache under an empty session ID.
+ */
+export async function readStartupProfile(session: RegisteredSession, pane: string): Promise<string | null> {
+  if (session.sessionId || !session.active || session.grid || session.gridLaunch || session.gateway) return null
+  pane = stripAnsi(pane).trimEnd()
+  // A banner above an onboarding dialog is not a ready agent. Do not accept a numbered menu cursor.
+  if (/trust this (?:folder|directory)|trust the files|sign in|log in|select a login|choose.*theme/i.test(pane)) return null
+  if (session.engine === 'claude') {
+    const banner = claudeStartupBanner(pane)
+    if (!banner || !/^\s*❯\s*(?:Try\s+[^\n]*)?$/mu.test(pane)) return null
+    // Slash commands can change the selection before a first conversational turn binds the session.
+    const change = [...pane.matchAll(/(?:^|\n)\s*(?:⎿\s*)?Set model to\s+([^\n]+)/gi)].at(-1)
+    const model = change ? normalizeClaudeDisplay(change[1]) : banner.model
+    if (!model) return null
+    const effort = banner.effort ?? await claudeConfiguredEffort(session)
+    return encodeRuntimeProfile({ sessionId: session.agentId, engine: 'claude',
+      model: claudeAliasForModel(model) ?? model, effort })
+  }
+  if (session.engine === 'codex') {
+    if (!/\bOpenAI Codex\b/.test(pane) || !/^\s*›(?!\s*\d+\.)[^\n]*$/mu.test(pane)) return null
+    const matches = [...pane.matchAll(/\b(gpt-[a-z0-9][a-z0-9._-]*)\s+(low|medium|high|xhigh|max|ultra|default)\s*[·│]/gi)]
+    const match = matches.at(-1)
+    if (!match) return null
+    return encodeRuntimeProfile({ sessionId: session.agentId, engine: 'codex', model: match[1].toLowerCase(),
+      effort: match[2].toLowerCase() === 'default' ? 'auto' : match[2].toLowerCase() })
+  }
+  return null
+}
+
 function addOption(
   output: RuntimeModelOption[],
   seen: Set<string>,
@@ -899,6 +944,12 @@ export class RuntimeProfileManager {
         state.observedAt = Date.now()
       }
     } else {
+      const banner = !state.model ? claudeStartupBanner(paneText) : null
+      if (banner) {
+        state.model = banner.model
+        if (banner.effort) state.effort = banner.effort
+        state.observedAt = Date.now()
+      }
       const header = /(Fable|Opus|Sonnet|Haiku)\s+(\d+(?:\.\d+)*)(\s+\(1M context\))?\s+with\s+(low|medium|high|xhigh|max|ultracode)\s+effort/gi
       const matches = [...paneText.matchAll(header)]
       const latest = matches[matches.length - 1]
@@ -1093,9 +1144,10 @@ export class RuntimeProfileManager {
    * first. The claude pane came home with `ANTHROPIC_MODEL=opencode/big-pickle` and Claude Code
    * answered "There's an issue with the selected model (opencode/big-pickle). It may not exist".
    *
-   * So `''` gets no entry. Reads answer "nothing observed", which is TRUE — an agent with no engine
-   * session has no model to report — and writes land in a throwaway rather than in a bucket the next
-   * agent will read. Everything real is re-read once the session binds, moments later.
+   * So `''` gets no entry in this conversation cache, and writes land in a throwaway rather than a
+   * bucket the next agent will read. A ready startup banner can be read separately with
+   * readStartupProfile, whose caller must scope that observation to the live process. Transcript
+   * state is re-read once a real conversation binds.
    */
   private unbound(sessionId: string): boolean {
     return !sessionId
@@ -1171,7 +1223,9 @@ export class RuntimeProfileManager {
     }
     const message = record(raw.message)
     const assistantModel = raw.type === 'assistant' ? text(message?.model) : ''
-    if (assistantModel) {
+    // Claude uses this marker for local errors such as exhausted quota.
+    // It is not a model change; keep the last real observation.
+    if (assistantModel && assistantModel !== '<synthetic>') {
       state.model = assistantModel
       state.observedAt = Date.now()
     }

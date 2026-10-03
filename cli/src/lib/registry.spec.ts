@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { processStartMarker } from './processLiveness.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { ProcessIdentity, RegisteredSession, RegisterInput } from './registry.js'
 
@@ -271,12 +272,17 @@ describe('registry remote display names', () => {
       tmuxPane: '%17',
       runtimes: [{ backend: 'tmux', paneId: '%17' }],
       schemaVersion: 2,
+      // Saved as `updatedAt` before the row's bookkeeping time was named for what it is.
+      touchedAt: 20,
     })
-    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))[0]).toMatchObject({
+    const saved = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))[0]
+    expect(saved).toMatchObject({
       agentId: 'stable-agent',
       tmuxPane: '%17',
       runtimes: [{ backend: 'tmux', paneId: '%17' }],
+      touchedAt: 20,
     })
+    expect(saved).not.toHaveProperty('updatedAt')
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.pre-v2.json'), 'utf8'))[0]).toMatchObject({
       agentId: 'stable-agent', sessionId: 'legacy-session', tmuxPane: '%17',
     })
@@ -359,7 +365,7 @@ describe('registry remote display names', () => {
     mkdirSync(lockDir, { mode: 0o700 })
     writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({
       pid: process.pid,
-      startMarker: 'different-process-generation',
+      startMarker: '', generationMarker: `${processStartMarker(process.pid)}-earlier`,
       token: 'stale-owner',
     }), { mode: 0o600 })
 
@@ -372,66 +378,59 @@ describe('registry remote display names', () => {
     expect(registry.byAgent('after-reused-pid-lock')).toBeTruthy()
   })
 
-  it('deduplicates nested backends by process identity while scoping Herdr routes to endpoints', async () => {
+  it('deduplicates nested panes by process identity', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()
     const identity = processIdentity(700)
-    const tmux = registry.openProcessAgent({
+    const outer = registry.openProcessAgent({
       agentId: 'nested-agent',
       engine: 'claude',
       tmuxPane: '%7',
       processIdentity: identity,
     })
-    const herdrRuntime = {
-      backend: 'herdr' as const,
-      endpointId: 'herdr:default:abc',
-      sessionName: 'default',
-      terminalId: 'terminal-a',
-      paneId: 'w1:p1',
-    }
     const nested = registry.openProcessAgent({
       engine: 'claude',
-      runtimes: [herdrRuntime],
+      runtimes: [{ backend: 'tmux', paneId: '%8' }],
       processIdentity: identity,
     })
     const other = registry.openProcessAgent({
-      agentId: 'other-endpoint-agent',
+      agentId: 'other-agent',
       engine: 'claude',
-      runtimes: [{ ...herdrRuntime, endpointId: 'herdr:work:def', sessionName: 'work', terminalId: 'terminal-b' }],
+      runtimes: [{ backend: 'tmux', paneId: '%9' }],
       processIdentity: processIdentity(701),
     })
 
-    expect(nested?.entry.agentId).toBe(tmux?.entry.agentId)
+    expect(nested?.entry.agentId).toBe(outer?.entry.agentId)
     expect(nested?.entry.runtimes).toHaveLength(2)
-    expect(other?.entry.agentId).toBe('other-endpoint-agent')
+    expect(other?.entry.agentId).toBe('other-agent')
     expect(registry.list()).toHaveLength(2)
   })
 
-  it('persists Herdr-only rows without a legacy tmuxPane projection', async () => {
+  it('drops runtimes a retired Herdr backend left on disk, and agents left with none', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()
-    registry.openProcessAgent({
-      agentId: 'herdr-agent',
-      engine: 'codex',
-      runtimes: [{
-        backend: 'herdr',
-        endpointId: 'herdr:default:abc',
-        sessionName: 'default',
-        terminalId: 'terminal-1',
-        paneId: 'w1:p1',
-      }],
-      processIdentity: processIdentity(900),
-    })
+    registry.openProcessAgent({ agentId: 'mixed', engine: 'claude', tmuxPane: '%40', processIdentity: processIdentity(940) })
+    const [row] = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))
+    const herdr = { backend: 'herdr', endpointId: 'herdr:default:abc', sessionName: 'default', terminalId: 'terminal-1', paneId: 'w1:p1' }
+    const herdrKey = 'herdr\u0000herdr:default:abc\u0000w1:p1'
+    const { tmuxPane: _pane, ...herdrOnly } = row
+    writeFileSync(join(dataDir, 'registry.json'), JSON.stringify([
+      { ...row, runtimes: [...row.runtimes, herdr], primaryRuntimeKey: herdrKey },
+      { ...herdrOnly, agentId: 'herdr-only', sessionId: '', processIdentity: null, runtimes: [herdr], primaryRuntimeKey: herdrKey },
+    ]), { mode: 0o600 })
 
-    const [persisted] = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))
-    expect(persisted).not.toHaveProperty('tmuxPane')
-    expect(persisted).toMatchObject({
-      schemaVersion: 2,
-      agentId: 'herdr-agent',
-      runtimes: [{ backend: 'herdr', endpointId: 'herdr:default:abc', paneId: 'w1:p1' }],
-    })
-    registry.load()
-    expect(registry.byAgent('herdr-agent')?.runtimes[0]).toMatchObject({ backend: 'herdr', terminalId: 'terminal-1' })
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+
+    expect(reloaded.byAgent('mixed')?.runtimes).toEqual([{ backend: 'tmux', paneId: '%40' }])
+    expect(reloaded.byAgent('mixed')?.primaryRuntimeKey).toBe('tmux\u0000%40')
+    expect(reloaded.byAgent('herdr-only')).toBeUndefined()
+    const persisted = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))
+    expect(persisted.map((entry: { agentId: string }) => entry.agentId)).toEqual(['mixed'])
+    expect(JSON.stringify(persisted)).not.toContain('herdr')
+    // Still writable: nothing about the retired rows blocked the file.
+    reloaded.openProcessAgent({ agentId: 'after', engine: 'claude', tmuxPane: '%41', processIdentity: processIdentity(941) })
+    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))).toHaveLength(2)
   })
 
   it('repairs a Codex parent registry entry overwritten with a child rollout', async () => {
@@ -1833,5 +1832,81 @@ describe('a terminal: a pane that becomes an engine and back', () => {
 
     // And the next engine typed into the same shell is adopted just the same.
     expect(registry.adoptEngine(opened.agentId, 'codex', processIdentity(913))).toMatchObject({ engine: 'codex' })
+  })
+})
+
+describe('lastOpenedAt: when an app last opened the agent, on the daemon clock', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    dataDir = mkdtempSync(join(tmpdir(), 'adapter-registry-opened-'))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    rmSync(dataDir, { recursive: true, force: true })
+    delete process.env.ADAPTER_DATA_DIR
+    delete process.env.CLAUDE_PROJECTS_DIR
+    delete process.env.CODEX_HOME
+    delete process.env.CURSOR_HOME
+  })
+
+  const OPENED = Date.UTC(2026, 8, 26, 9, 30)
+  const onDisk = () => JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8')) as Array<Record<string, unknown>>
+
+  it('stamps the daemon’s own clock, persists it, and leaves the bookkeeping `touchedAt` alone', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const pending = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%41' }], cwd: '/tmp/demo' })!
+    expect(pending.lastOpenedAt).toBeUndefined()
+    expect(onDisk()[0]).not.toHaveProperty('lastOpenedAt')
+    const touchedAt = pending.touchedAt
+
+    vi.setSystemTime(OPENED)
+    const opened = registry.markOpened(pending.agentId)
+    expect(opened?.lastOpenedAt).toBe(OPENED)
+    expect(opened?.touchedAt).toBe(touchedAt)
+    expect(onDisk()[0]).toMatchObject({ agentId: pending.agentId, lastOpenedAt: OPENED, touchedAt })
+    expect(registry.markOpened('nobody')).toBeNull()
+
+    // The load rebuilds every row from a named list: a field missing there is written and then lost.
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(pending.agentId)?.lastOpenedAt).toBe(OPENED)
+  })
+
+  it('survives the hook that rebuilds the row — the first prompt after an open must not erase it', async () => {
+    const transcriptPath = join(dataDir, 'session-opened.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const pending = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%42' }], cwd: '/tmp/demo' })!
+    vi.setSystemTime(OPENED)
+    registry.markOpened(pending.agentId)
+
+    vi.setSystemTime(OPENED + 60_000)
+    const bound = registry.register({ sessionId: 'session-opened', transcriptPath, tmuxPane: '%42', cwd: '/tmp/demo' })
+    expect(bound?.entry.agentId).toBe(pending.agentId)
+    expect(bound?.entry.lastOpenedAt).toBe(OPENED)
+    // ...and again on a re-register of the same session, then on disk.
+    const again = registry.register({ sessionId: 'session-opened', transcriptPath, tmuxPane: '%42', cwd: '/tmp/demo' })
+    expect(again?.entry.lastOpenedAt).toBe(OPENED)
+    expect(onDisk()[0]).toMatchObject({ agentId: pending.agentId, lastOpenedAt: OPENED })
+  })
+
+  it('never lets a hand-edited or nonsensical stamp reach the frame', async () => {
+    const { registry, strictPersistedRow } = await loadRegistryModule()
+    registry.load()
+    const pending = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%43' }], cwd: '/tmp/demo' })!
+    const row = onDisk()[0]
+    expect(strictPersistedRow({ ...row, lastOpenedAt: OPENED })?.lastOpenedAt).toBe(OPENED)
+    for (const bad of ['yesterday', -5, 0, 1.5, Number.NaN, null]) {
+      expect(strictPersistedRow({ ...row, lastOpenedAt: bad })).not.toHaveProperty('lastOpenedAt')
+    }
+
+    writeFileSync(join(dataDir, 'registry.json'), JSON.stringify([{ ...row, lastOpenedAt: 'yesterday' }]), { mode: 0o600 })
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(pending.agentId)).toBeTruthy()
+    expect(reloaded.byAgent(pending.agentId)).not.toHaveProperty('lastOpenedAt')
   })
 })

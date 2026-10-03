@@ -14,6 +14,9 @@ class _RecordingNotices implements SystemNotices {
   final opened = ValueNotifier<AgentRef?>(null);
 
   @override
+  final openedDevice = ValueNotifier<String?>(null);
+
+  @override
   Future<void> requestPermission() async {}
 
   @override
@@ -21,6 +24,9 @@ class _RecordingNotices implements SystemNotices {
 
   @override
   Future<void> cancel(AgentRef agent) async => cancelled.add(agent);
+
+  @override
+  Future<void> showAccountNotice({required String key, required String title, required String body}) async {}
 }
 
 void main() {
@@ -235,6 +241,31 @@ void main() {
       final body = noticeBody('x' * 400, limit: 20);
       expect(body.length, 20);
       expect(body.endsWith('…'), isTrue);
+    });
+
+    test('never cuts an emoji in half', () {
+      // 🎉 is two UTF-16 units. Cut between them, the lock screen got a lone
+      // surrogate — which the platform channel's UTF-8 encoding turns into
+      // U+FFFD, a `�` in front of the ellipsis.
+      final body = noticeBody('${'x' * 18}🎉 and the rest', limit: 20);
+      expect(body, '${'x' * 18}…');
+      expect(
+        body.codeUnits.any((unit) => unit >= 0xD800 && unit <= 0xDFFF),
+        isFalse,
+      );
+      // An emoji that fits whole is kept whole.
+      expect(noticeBody('${'x' * 17}🎉 and more', limit: 20), '${'x' * 17}🎉…');
+    });
+
+    test('a reply that is only whitespace says nothing', () {
+      expect(noticeBody(' \n\n  \t'), '');
+    });
+
+    test('a question is one line already, and is said as asked', () {
+      expect(
+        noticeBody('Approve Bash command: psql -f migrate.sql'),
+        'Approve Bash command: psql -f migrate.sql',
+      );
     });
   });
 }

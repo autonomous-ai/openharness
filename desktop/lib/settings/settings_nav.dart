@@ -1,6 +1,6 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shared/layouts/widgets/rail_section_header.dart';
 import '../shared/layouts/widgets/sidebar_item.dart';
@@ -11,10 +11,24 @@ import 'settings_section.dart';
 /// The settings list: the way back, a field that narrows the list to what you
 /// type, then one row per screen with the open one highlighted.
 class SettingsNav extends StatefulWidget {
-  const SettingsNav({super.key, required this.section, required this.onSelect});
+  const SettingsNav({
+    super.key,
+    required this.section,
+    required this.onSelect,
+    this.railWidth = SettingsNav.width,
+    this.autofocusSearch = true,
+  });
 
   final SettingsSection section;
   final ValueChanged<SettingsSection> onSelect;
+
+  /// [width] beside a section; the whole width where it is the whole screen
+  /// (a phone's list of sections).
+  final double railWidth;
+
+  /// Whether the filter takes the keys on open. Not on a phone, where focus
+  /// raises the on-screen keyboard over half the list.
+  final bool autofocusSearch;
 
   /// The machine rail's own default width, so Settings opens without the left
   /// column jumping.
@@ -104,7 +118,7 @@ class _SettingsNavState extends State<SettingsNav> {
     // The rail and the section begin below the native title bar.
     grid.AppTheme.watch(context);
     return Container(
-      width: SettingsNav.width,
+      width: widget.railWidth,
       color: grid.AppSurface.recess,
       child: Padding(
         // Rows add their own icon gutter: their glyphs and group captions sit
@@ -124,7 +138,7 @@ class _SettingsNavState extends State<SettingsNav> {
               child: Center(
                 child: SidebarItem(
                   key: const Key('settings-back-button'),
-                  icon: LucideIcons.arrowLeft300,
+                  icon: AppIcons.arrowLeft,
                   label: 'Back to app',
                   onTap: () => Navigator.of(context).maybePop(),
                 ),
@@ -137,6 +151,7 @@ class _SettingsNavState extends State<SettingsNav> {
               child: _SearchField(
                 controller: _search,
                 focusNode: _searchFocus,
+                autofocus: widget.autofocusSearch,
                 onChanged: (value) => setState(() => _query = value),
                 onSubmitted: (_) => _chooseMatch(),
               ),
@@ -176,12 +191,14 @@ class _SearchField extends StatelessWidget {
   const _SearchField({
     required this.controller,
     required this.focusNode,
+    required this.autofocus,
     required this.onChanged,
     required this.onSubmitted,
   });
 
   final TextEditingController controller;
   final FocusNode focusNode;
+  final bool autofocus;
   final ValueChanged<String> onChanged;
   final ValueChanged<String> onSubmitted;
 
@@ -196,7 +213,7 @@ class _SearchField extends StatelessWidget {
       key: const Key('settings-search-field'),
       controller: controller,
       focusNode: focusNode,
-      autofocus: true,
+      autofocus: autofocus,
       onChanged: onChanged,
       onSubmitted: onSubmitted,
       onEditingComplete: () {},
@@ -205,7 +222,7 @@ class _SearchField extends StatelessWidget {
       decoration: InputDecoration(
         hintText: 'Search settings',
         prefixIcon: Icon(
-          LucideIcons.search300,
+          AppIcons.search,
           size: grid.kFieldIconSize,
           color: grid.AppPalette.textFaint,
         ),

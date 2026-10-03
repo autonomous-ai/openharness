@@ -1,0 +1,1173 @@
+{
+  "schemaVersion": 1,
+  "experiment": "source-first-field-review",
+  "status": "stopped",
+  "startedAt": "2026-10-03T03:46:34.996Z",
+  "suiteSha256": "d9b1cd4c9a50327935dde45115afc23e7550a8a1a33c61c1ee0d9a0d3889e430",
+  "planSha256": "a258503c0110960505468b2d4929dcd3e601c4a7d64ebcb7b1c14da5b8dfc156",
+  "runnerSha256": "fb6c51a508c1fe18f9e93c55d8aa2bc7479b5853777a3eb806cebd65d7ff030e",
+  "sourcePromptSha256": "a52453c341a5fb7f9ea7e13cc4cb23415fe3c9c04bc4f888084bd6179d4f9aa5",
+  "reviewPromptSha256": "cf732edd5f4cd6fe70ea57aa5a1f5a2e446b5cbb6cfb77365eafa0858a05179b",
+  "limits": {
+    "schemaVersion": 1,
+    "createdAt": "2026-10-03T03:44:56.216363+00:00",
+    "experiment": "source-first-field-review",
+    "purpose": "Check whether candidate-hidden source interpretation plus field-level judgments rejects known interpretation errors without rejecting faithful memories.",
+    "corpus": "../2026-10-02-memory-source-audit/cases.json",
+    "corpusSha256": "d9b1cd4c9a50327935dde45115afc23e7550a8a1a33c61c1ee0d9a0d3889e430",
+    "expectedCases": 16,
+    "model": "Qwen3.8-27B-Q4_0",
+    "weightSha256": "ede16c7b36e578ca87a8c70e011e4b4633a32c831c0ce76d0f474582384e671d",
+    "runtime": "llama.cpp 9870 (2d973636e)",
+    "temperature": 0,
+    "seed": 42,
+    "thinking": false,
+    "contextTokens": 16384,
+    "sourceOutputTokens": 1536,
+    "reviewOutputTokens": 2048,
+    "callDeadlineMs": 90000,
+    "totalDeadlineMs": 900000,
+    "maxCalls": 32,
+    "retries": 0,
+    "sourceDeduplication": "Exact source-only input JSON hash; all source interpretations finish before any candidate is shown.",
+    "labels": "Frozen implementing-agent judgments; withheld from both model stages. Not independent or held-out.",
+    "acceptance": "A diagnostic candidate only if all 16 complete, both previously missed unsupported proposals are rejected, no unsupported proposal is accepted, and every supported proposal is accepted. Invalid, incomplete or unclear outputs receive no success credit.",
+    "followup": "No production changes from this diagnostic. If it passes, test separately frozen source/proposal contrasts and existing consented private excerpts before considering production budgets and leases.",
+    "limits": [
+      "Synthetic source/proposal pairs only; no private text, selected-provider call or live memory write.",
+      "Same reference model for both stages and the earlier extractor; correlated errors remain possible.",
+      "No claim of actual participation or endorsement by the programmers whose published principles inform the design."
+    ]
+  },
+  "networkGuard": {
+    "nonLoopbackConnectError": 1
+  },
+  "inferenceCalls": 16,
+  "sourceInterpretations": [
+    {
+      "key": "94dc29d74a70cea29e88868a9d750c676f7647117165f7d9ad5c5d9635b355d4",
+      "durationMs": 26990,
+      "promptSha256": "875d9de01d33c2bf4c94c62ffc402ec4952c733c14e534a665bf637cc8138205",
+      "answer": {
+        "text": "{\n  \"statements\": [\n    {\n      \"sourceId\": \"quoted-plan-and-user-correction-0\",\n      \"quote\": \"Set every retry delay to 2 seconds and hide failures\",\n      \"kind\": \"reported_state\",\n      \"meaning\": \"The user reports that an assistant previously proposed setting all retry delays to 2 seconds and hiding failures.\"\n    },\n    {\n      \"sourceId\": \"quoted-plan-and-user-correction-0\",\n      \"quote\": \"I have not approved that\",\n      \"kind\": \"decision\",\n      \"meaning\": \"The user explicitly states they have not approved the assistant's previous proposal.\"\n    },\n    {\n      \"sourceId\": \"quoted-plan-and-user-correction-0\",\n      \"quote\": \"keep showing failures to users\",\n      \"kind\": \"decision\",\n      \"meaning\": \"The user decides that the network client must continue displaying failures to users.\"\n    },\n    {\n      \"sourceId\": \"quoted-plan-and-user-correction-0\",\n      \"quote\": \"the retry delay still needs measurement\",\n      \"kind\": \"unresolved\",\n      \"meaning\": \"The user indicates that the specific value for the retry delay is not yet determined and requires further measurement.\"\n    }\n  ],\n  \"qualifications\": [\n    {\n      \"sourceId\": \"quoted-plan-and-user-correction-0\",\n      \"quote\": \"For this network client\",\n      \"meaning\": \"The user's decisions regarding failure visibility and retry delays apply specifically to the network client project.\"\n    }\n  ],\n  \"unknowns\": [\n    \"The specific method or criteria for measuring the retry delay.\",\n    \"The current implementation status of the failure visibility feature.\",\n    \"Whether the assistant's previous proposal was implemented before the user's correction.\"\n  ]\n}",
+        "finishReason": "stop",
+        "model": "memory-reference",
+        "usage": {
+          "completion_tokens": 403,
+          "prompt_tokens": 461,
+          "total_tokens": 864,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "interpretation": {
+        "statements": [
+          {
+            "sourceId": "quoted-plan-and-user-correction-0",
+            "quote": "Set every retry delay to 2 seconds and hide failures",
+            "kind": "reported_state",
+            "meaning": "The user reports that an assistant previously proposed setting all retry delays to 2 seconds and hiding failures."
+          },
+          {
+            "sourceId": "quoted-plan-and-user-correction-0",
+            "quote": "I have not approved that",
+            "kind": "decision",
+            "meaning": "The user explicitly states they have not approved the assistant's previous proposal."
+          },
+          {
+            "sourceId": "quoted-plan-and-user-correction-0",
+            "quote": "keep showing failures to users",
+            "kind": "decision",
+            "meaning": "The user decides that the network client must continue displaying failures to users."
+          },
+          {
+            "sourceId": "quoted-plan-and-user-correction-0",
+            "quote": "the retry delay still needs measurement",
+            "kind": "unresolved",
+            "meaning": "The user indicates that the specific value for the retry delay is not yet determined and requires further measurement."
+          }
+        ],
+        "qualifications": [
+          {
+            "sourceId": "quoted-plan-and-user-correction-0",
+            "quote": "For this network client",
+            "meaning": "The user's decisions regarding failure visibility and retry delays apply specifically to the network client project."
+          }
+        ],
+        "unknowns": [
+          "The specific method or criteria for measuring the retry delay.",
+          "The current implementation status of the failure visibility feature.",
+          "Whether the assistant's previous proposal was implemented before the user's correction."
+        ]
+      }
+    },
+    {
+      "key": "7c2c9bc68cb970487790fb73466c3b23ba324dca7cd26c7c4e021dd025ccb3c9",
+      "durationMs": 23456,
+      "promptSha256": "7e4b7a061494596ac5da274caf5ef71bd68494884c3a4c50ac89a0dba5823a90",
+      "answer": {
+        "text": "{\n  \"statements\": [\n    {\n      \"sourceId\": \"source-0\",\n      \"quote\": \"use a condensed file tree by default\",\n      \"kind\": \"preference\",\n      \"meaning\": \"The user prefers the file tree to be condensed by default in this project.\"\n    },\n    {\n      \"sourceId\": \"source-0\",\n      \"quote\": \"If I expand a folder manually, leave it expanded for the current session\",\n      \"kind\": \"preference\",\n      \"meaning\": \"The user prefers that manually expanded folders remain expanded for the duration of the current session.\"\n    }\n  ],\n  \"qualifications\": [\n    {\n      \"sourceId\": \"source-0\",\n      \"quote\": \"In this project\",\n      \"meaning\": \"The preference applies specifically to the current project context.\"\n    },\n    {\n      \"sourceId\": \"source-0\",\n      \"quote\": \"by default\",\n      \"meaning\": \"The condensed state is the initial or default behavior, subject to manual override.\"\n    },\n    {\n      \"sourceId\": \"source-0\",\n      \"quote\": \"for the current session\",\n      \"meaning\": \"The expanded state persists only within the current session and does not imply permanent storage.\"\n    }\n  ],\n  \"unknowns\": [\n    \"Whether the condensed file tree preference applies to other projects or only the specified one.\",\n    \"Whether the expanded state persists across sessions or resets upon restart.\",\n    \"The specific mechanism or UI component used to implement the file tree.\"\n  ]\n}",
+        "finishReason": "stop",
+        "model": "memory-reference",
+        "usage": {
+          "completion_tokens": 354,
+          "prompt_tokens": 442,
+          "total_tokens": 796,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "interpretation": {
+        "statements": [
+          {
+            "sourceId": "source-0",
+            "quote": "use a condensed file tree by default",
+            "kind": "preference",
+            "meaning": "The user prefers the file tree to be condensed by default in this project."
+          },
+          {
+            "sourceId": "source-0",
+            "quote": "If I expand a folder manually, leave it expanded for the current session",
+            "kind": "preference",
+            "meaning": "The user prefers that manually expanded folders remain expanded for the duration of the current session."
+          }
+        ],
+        "qualifications": [
+          {
+            "sourceId": "source-0",
+            "quote": "In this project",
+            "meaning": "The preference applies specifically to the current project context."
+          },
+          {
+            "sourceId": "source-0",
+            "quote": "by default",
+            "meaning": "The condensed state is the initial or default behavior, subject to manual override."
+          },
+          {
+            "sourceId": "source-0",
+            "quote": "for the current session",
+            "meaning": "The expanded state persists only within the current session and does not imply permanent storage."
+          }
+        ],
+        "unknowns": [
+          "Whether the condensed file tree preference applies to other projects or only the specified one.",
+          "Whether the expanded state persists across sessions or resets upon restart.",
+          "The specific mechanism or UI component used to implement the file tree."
+        ]
+      }
+    },
+    {
+      "key": "b9349badbc8eed59430e2b08d5249351d3d63ad0c04e5c71b1639d63c2840636",
+      "durationMs": 17031,
+      "promptSha256": "d32c9a8006bd83c2f5f0469aab5edd37532ddc45c3e35233de00fc477cea9dc4",
+      "answer": {
+        "text": "{\n  \"statements\": [\n    {\n      \"sourceId\": \"source-0\",\n      \"quote\": \"prefer SQLite for the local cache\",\n      \"kind\": \"preference\",\n      \"meaning\": \"The user expresses a preference to use SQLite for the local cache component in this project.\"\n    }\n  ],\n  \"qualifications\": [\n    {\n      \"sourceId\": \"source-0\",\n      \"quote\": \"For this project\",\n      \"meaning\": \"The preference applies specifically to the current project context.\"\n    },\n    {\n      \"sourceId\": \"source-0\",\n      \"quote\": \"for the local cache\",\n      \"meaning\": \"The preference is restricted to the local cache component, not other parts of the system.\"\n    }\n  ],\n  \"unknowns\": [\n    \"Whether SQLite is the only permitted option or if other databases are allowed as alternatives.\",\n    \"The specific version of SQLite to be used.\",\n    \"The implementation details of the local cache beyond the database choice.\"\n  ]\n}",
+        "finishReason": "stop",
+        "model": "memory-reference",
+        "usage": {
+          "completion_tokens": 235,
+          "prompt_tokens": 426,
+          "total_tokens": 661,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "interpretation": {
+        "statements": [
+          {
+            "sourceId": "source-0",
+            "quote": "prefer SQLite for the local cache",
+            "kind": "preference",
+            "meaning": "The user expresses a preference to use SQLite for the local cache component in this project."
+          }
+        ],
+        "qualifications": [
+          {
+            "sourceId": "source-0",
+            "quote": "For this project",
+            "meaning": "The preference applies specifically to the current project context."
+          },
+          {
+            "sourceId": "source-0",
+            "quote": "for the local cache",
+            "meaning": "The preference is restricted to the local cache component, not other parts of the system."
+          }
+        ],
+        "unknowns": [
+          "Whether SQLite is the only permitted option or if other databases are allowed as alternatives.",
+          "The specific version of SQLite to be used.",
+          "The implementation details of the local cache beyond the database choice."
+        ]
+      }
+    },
+    {
+      "key": "73b1fb3a5ae62fc1aa28e88886e626280dafce44519918a7d763d62167df775d",
+      "durationMs": 19723,
+      "promptSha256": "12172f30ab2fa2cb17e8915bea1701a90c56dac48131d70ba40d911d5c4b1e06",
+      "answer": {
+        "text": "{\n  \"statements\": [\n    {\n      \"sourceId\": \"source-0\",\n      \"quote\": \"Please show a retry button after an upload fails in this project.\",\n      \"kind\": \"request\",\n      \"meaning\": \"The user requests that a retry button be displayed following an upload failure within the specified project.\"\n    }\n  ],\n  \"qualifications\": [\n    {\n      \"sourceId\": \"source-0\",\n      \"quote\": \"after an upload fails\",\n      \"meaning\": \"The display of the retry button is restricted to the specific condition where an upload operation has failed.\"\n    },\n    {\n      \"sourceId\": \"source-0\",\n      \"quote\": \"in this project\",\n      \"meaning\": \"The request is scoped to the current project context, limiting the application of the change to that specific project.\"\n    }\n  ],\n  \"unknowns\": [\n    \"The specific UI component or design system to be used for the retry button is not established.\",\n    \"The exact location of the retry button within the interface is not specified.\",\n    \"The behavior of the retry button upon user interaction is not defined.\",\n    \"Whether the retry mechanism should be automatic or manual is not clarified.\"\n  ]\n}",
+        "finishReason": "stop",
+        "model": "memory-reference",
+        "usage": {
+          "completion_tokens": 278,
+          "prompt_tokens": 428,
+          "total_tokens": 706,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "interpretation": {
+        "statements": [
+          {
+            "sourceId": "source-0",
+            "quote": "Please show a retry button after an upload fails in this project.",
+            "kind": "request",
+            "meaning": "The user requests that a retry button be displayed following an upload failure within the specified project."
+          }
+        ],
+        "qualifications": [
+          {
+            "sourceId": "source-0",
+            "quote": "after an upload fails",
+            "meaning": "The display of the retry button is restricted to the specific condition where an upload operation has failed."
+          },
+          {
+            "sourceId": "source-0",
+            "quote": "in this project",
+            "meaning": "The request is scoped to the current project context, limiting the application of the change to that specific project."
+          }
+        ],
+        "unknowns": [
+          "The specific UI component or design system to be used for the retry button is not established.",
+          "The exact location of the retry button within the interface is not specified.",
+          "The behavior of the retry button upon user interaction is not defined.",
+          "Whether the retry mechanism should be automatic or manual is not clarified."
+        ]
+      }
+    },
+    {
+      "key": "6c5489aa57ad1d1b88bfbdb96096d84045f32bda1cffe29023e980cdb112e5f1",
+      "durationMs": 25598,
+      "promptSha256": "1874e959cdccfaec96e738668dad35191bea2325e9fa478488847c6c604230e9",
+      "answer": {
+        "text": "{\n  \"statements\": [\n    {\n      \"sourceId\": \"default-with-user-override-0\",\n      \"quote\": \"In our editor, compact navigation is the default.\",\n      \"kind\": \"reported_state\",\n      \"meaning\": \"The user reports that compact navigation is the default setting in the editor.\"\n    },\n    {\n      \"sourceId\": \"default-with-user-override-0\",\n      \"quote\": \"Do not replace that default.\",\n      \"kind\": \"request\",\n      \"meaning\": \"The user requests that the default compact navigation setting not be replaced.\"\n    },\n    {\n      \"sourceId\": \"default-with-user-override-0\",\n      \"quote\": \"People can expand navigation manually and keep it expanded for the current visit.\",\n      \"kind\": \"reported_state\",\n      \"meaning\": \"The user reports that users can manually expand navigation and retain that state for the current visit.\"\n    }\n  ],\n  \"qualifications\": [\n    {\n      \"sourceId\": \"default-with-user-override-0\",\n      \"quote\": \"Do not replace that default.\",\n      \"meaning\": \"The restriction applies to the default navigation state, prohibiting its replacement.\"\n    },\n    {\n      \"sourceId\": \"default-with-user-override-0\",\n      \"quote\": \"keep it expanded for the current visit\",\n      \"meaning\": \"The manual expansion state is limited to the duration of the current visit.\"\n    }\n  ],\n  \"unknowns\": [\n    \"Whether the manual expansion state persists across different visits or sessions.\",\n    \"The specific mechanism or UI element used to manually expand the navigation.\",\n    \"Whether other navigation defaults exist in the editor besides compact navigation.\"\n  ]\n}",
+        "finishReason": "stop",
+        "model": "memory-reference",
+        "usage": {
+          "completion_tokens": 386,
+          "prompt_tokens": 448,
+          "total_tokens": 834,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "interpretation": {
+        "statements": [
+          {
+            "sourceId": "default-with-user-override-0",
+            "quote": "In our editor, compact navigation is the default.",
+            "kind": "reported_state",
+            "meaning": "The user reports that compact navigation is the default setting in the editor."
+          },
+          {
+            "sourceId": "default-with-user-override-0",
+            "quote": "Do not replace that default.",
+            "kind": "request",
+            "meaning": "The user requests that the default compact navigation setting not be replaced."
+          },
+          {
+            "sourceId": "default-with-user-override-0",
+            "quote": "People can expand navigation manually and keep it expanded for the current visit.",
+            "kind": "reported_state",
+            "meaning": "The user reports that users can manually expand navigation and retain that state for the current visit."
+          }
+        ],
+        "qualifications": [
+          {
+            "sourceId": "default-with-user-override-0",
+            "quote": "Do not replace that default.",
+            "meaning": "The restriction applies to the default navigation state, prohibiting its replacement."
+          },
+          {
+            "sourceId": "default-with-user-override-0",
+            "quote": "keep it expanded for the current visit",
+            "meaning": "The manual expansion state is limited to the duration of the current visit."
+          }
+        ],
+        "unknowns": [
+          "Whether the manual expansion state persists across different visits or sessions.",
+          "The specific mechanism or UI element used to manually expand the navigation.",
+          "Whether other navigation defaults exist in the editor besides compact navigation."
+        ]
+      }
+    },
+    {
+      "key": "370df38c89479ce0960cce58921b1df3c2b2c3ecdbefcd9b15030624eae5bc7b",
+      "durationMs": 24302,
+      "promptSha256": "aba4198b74394004a6b85ba90407e5e1b001849985a0dc5537c4010b60d1220e",
+      "answer": {
+        "text": "{\n  \"statements\": [\n    {\n      \"sourceId\": \"firm-request-with-unresolved-placement-0\",\n      \"quote\": \"Preserve the last successful build log when another build starts.\",\n      \"kind\": \"request\",\n      \"meaning\": \"The user requests that the system retain the log of the most recent successful build even when a new build process begins.\"\n    },\n    {\n      \"sourceId\": \"firm-request-with-unresolved-placement-0\",\n      \"quote\": \"Maybe the history chooser belongs in the footer, or beside Run?\",\n      \"kind\": \"unresolved\",\n      \"meaning\": \"The user presents two potential UI locations for the history chooser as open alternatives without committing to either.\"\n    },\n    {\n      \"sourceId\": \"firm-request-with-unresolved-placement-0\",\n      \"quote\": \"Let us settle its placement later.\",\n      \"kind\": \"decision\",\n      \"meaning\": \"The user decides to defer the final determination of the history chooser's placement to a future time.\"\n    }\n  ],\n  \"qualifications\": [\n    {\n      \"sourceId\": \"firm-request-with-unresolved-placement-0\",\n      \"quote\": \"when another build starts\",\n      \"meaning\": \"The requirement to preserve the log is specifically triggered by the initiation of a subsequent build.\"\n    }\n  ],\n  \"unknowns\": [\n    \"The final chosen placement for the history chooser (footer vs. beside Run vs. other).\",\n    \"Whether the preservation logic applies to all build types or only specific ones.\",\n    \"The specific mechanism or storage method used to preserve the log.\"\n  ]\n}",
+        "finishReason": "stop",
+        "model": "memory-reference",
+        "usage": {
+          "completion_tokens": 363,
+          "prompt_tokens": 452,
+          "total_tokens": 815,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "interpretation": {
+        "statements": [
+          {
+            "sourceId": "firm-request-with-unresolved-placement-0",
+            "quote": "Preserve the last successful build log when another build starts.",
+            "kind": "request",
+            "meaning": "The user requests that the system retain the log of the most recent successful build even when a new build process begins."
+          },
+          {
+            "sourceId": "firm-request-with-unresolved-placement-0",
+            "quote": "Maybe the history chooser belongs in the footer, or beside Run?",
+            "kind": "unresolved",
+            "meaning": "The user presents two potential UI locations for the history chooser as open alternatives without committing to either."
+          },
+          {
+            "sourceId": "firm-request-with-unresolved-placement-0",
+            "quote": "Let us settle its placement later.",
+            "kind": "decision",
+            "meaning": "The user decides to defer the final determination of the history chooser's placement to a future time."
+          }
+        ],
+        "qualifications": [
+          {
+            "sourceId": "firm-request-with-unresolved-placement-0",
+            "quote": "when another build starts",
+            "meaning": "The requirement to preserve the log is specifically triggered by the initiation of a subsequent build."
+          }
+        ],
+        "unknowns": [
+          "The final chosen placement for the history chooser (footer vs. beside Run vs. other).",
+          "Whether the preservation logic applies to all build types or only specific ones.",
+          "The specific mechanism or storage method used to preserve the log."
+        ]
+      }
+    },
+    {
+      "key": "6214bbef1603bae50bfdf55dbb874dc02c68fab8e04f3cbeae194586d77d5e80",
+      "durationMs": 27080,
+      "promptSha256": "56c40a92fd45d72574f7301f23978d64be0cba84a548a013fc39efdf2f54b9cb",
+      "answer": {
+        "text": "{\n  \"statements\": [\n    {\n      \"sourceId\": \"limited-control-set-0\",\n      \"quote\": \"remove Replace and Skip\",\n      \"kind\": \"request\",\n      \"meaning\": \"The user requests the removal of the Replace and Skip options from the export dialog's conflict prompt.\"\n    },\n    {\n      \"sourceId\": \"limited-control-set-0\",\n      \"quote\": \"Keep Cancel and Save copy\",\n      \"kind\": \"request\",\n      \"meaning\": \"The user requests that the Cancel and Save copy options remain in the export dialog's conflict prompt.\"\n    },\n    {\n      \"sourceId\": \"limited-control-set-0\",\n      \"quote\": \"For the export dialog's conflict prompt\",\n      \"kind\": \"reported_state\",\n      \"meaning\": \"The user identifies the specific UI component targeted by the requested changes as the export dialog's conflict prompt.\"\n    }\n  ],\n  \"qualifications\": [\n    {\n      \"sourceId\": \"limited-control-set-0\",\n      \"quote\": \"This change is only about that prompt\",\n      \"meaning\": \"The requested modifications are strictly limited to the export dialog's conflict prompt and do not apply to other parts of the interface.\"\n    },\n    {\n      \"sourceId\": \"limited-control-set-0\",\n      \"quote\": \"do not remove any other export actions\",\n      \"meaning\": \"The user explicitly restricts the scope of removal to the conflict prompt, prohibiting the deletion of any other export actions.\"\n    }\n  ],\n  \"unknowns\": [\n    \"Whether the implementation has been completed or verified.\",\n    \"The specific visual layout or order of the remaining Cancel and Save copy buttons.\",\n    \"Whether other export dialogs or contexts exist that might be affected indirectly.\"\n  ]\n}",
+        "finishReason": "stop",
+        "model": "memory-reference",
+        "usage": {
+          "completion_tokens": 399,
+          "prompt_tokens": 452,
+          "total_tokens": 851,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "interpretation": {
+        "statements": [
+          {
+            "sourceId": "limited-control-set-0",
+            "quote": "remove Replace and Skip",
+            "kind": "request",
+            "meaning": "The user requests the removal of the Replace and Skip options from the export dialog's conflict prompt."
+          },
+          {
+            "sourceId": "limited-control-set-0",
+            "quote": "Keep Cancel and Save copy",
+            "kind": "request",
+            "meaning": "The user requests that the Cancel and Save copy options remain in the export dialog's conflict prompt."
+          },
+          {
+            "sourceId": "limited-control-set-0",
+            "quote": "For the export dialog's conflict prompt",
+            "kind": "reported_state",
+            "meaning": "The user identifies the specific UI component targeted by the requested changes as the export dialog's conflict prompt."
+          }
+        ],
+        "qualifications": [
+          {
+            "sourceId": "limited-control-set-0",
+            "quote": "This change is only about that prompt",
+            "meaning": "The requested modifications are strictly limited to the export dialog's conflict prompt and do not apply to other parts of the interface."
+          },
+          {
+            "sourceId": "limited-control-set-0",
+            "quote": "do not remove any other export actions",
+            "meaning": "The user explicitly restricts the scope of removal to the conflict prompt, prohibiting the deletion of any other export actions."
+          }
+        ],
+        "unknowns": [
+          "Whether the implementation has been completed or verified.",
+          "The specific visual layout or order of the remaining Cancel and Save copy buttons.",
+          "Whether other export dialogs or contexts exist that might be affected indirectly."
+        ]
+      }
+    },
+    {
+      "key": "fd88375d3aacdb7274f05305c5ce179ab7f472ea7a297b5ab8700a7f8ea4ab22",
+      "durationMs": 22914,
+      "promptSha256": "fe92356122e1fae23a4f4959ac6f94d49567621b82a436ffc4f5a74c7ff63028",
+      "answer": {
+        "text": "{\n  \"statements\": [\n    {\n      \"sourceId\": \"accepted-number-0\",\n      \"quote\": \"retain completed logs for 14 days\",\n      \"kind\": \"decision\",\n      \"meaning\": \"The user decided to retain completed logs for 14 days for the build monitor.\"\n    },\n    {\n      \"sourceId\": \"accepted-number-0\",\n      \"quote\": \"This is the policy we agreed to; keep it.\",\n      \"kind\": \"decision\",\n      \"meaning\": \"The user asserted that the 14-day retention is an agreed-upon policy that must be maintained.\"\n    }\n  ],\n  \"qualifications\": [\n    {\n      \"sourceId\": \"accepted-number-0\",\n      \"quote\": \"For this build monitor\",\n      \"meaning\": \"The retention policy applies specifically to the build monitor project.\"\n    },\n    {\n      \"sourceId\": \"accepted-number-0\",\n      \"quote\": \"completed logs\",\n      \"meaning\": \"The retention period applies only to logs that are completed.\"\n    }\n  ],\n  \"unknowns\": [\n    \"Whether the 14-day retention policy has been technically implemented in the system.\",\n    \"The specific storage location or mechanism used for retaining the logs.\",\n    \"Whether other types of logs (e.g., failed or in-progress) are subject to different retention rules.\"\n  ]\n}",
+        "finishReason": "stop",
+        "model": "memory-reference",
+        "usage": {
+          "completion_tokens": 315,
+          "prompt_tokens": 441,
+          "total_tokens": 756,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "interpretation": {
+        "statements": [
+          {
+            "sourceId": "accepted-number-0",
+            "quote": "retain completed logs for 14 days",
+            "kind": "decision",
+            "meaning": "The user decided to retain completed logs for 14 days for the build monitor."
+          },
+          {
+            "sourceId": "accepted-number-0",
+            "quote": "This is the policy we agreed to; keep it.",
+            "kind": "decision",
+            "meaning": "The user asserted that the 14-day retention is an agreed-upon policy that must be maintained."
+          }
+        ],
+        "qualifications": [
+          {
+            "sourceId": "accepted-number-0",
+            "quote": "For this build monitor",
+            "meaning": "The retention policy applies specifically to the build monitor project."
+          },
+          {
+            "sourceId": "accepted-number-0",
+            "quote": "completed logs",
+            "meaning": "The retention period applies only to logs that are completed."
+          }
+        ],
+        "unknowns": [
+          "Whether the 14-day retention policy has been technically implemented in the system.",
+          "The specific storage location or mechanism used for retaining the logs.",
+          "Whether other types of logs (e.g., failed or in-progress) are subject to different retention rules."
+        ]
+      }
+    },
+    {
+      "key": "830d4131092b1755ef8b9d0b4a31164446edec6e3e498c848149ef33aef1a68b",
+      "durationMs": 18332,
+      "promptSha256": "f609fb3c71f85a9b50dcf64c539dda9bc1d28d0cc7157d3511837f99b5edf5c3",
+      "answer": {
+        "text": "{\n  \"statements\": [\n    {\n      \"sourceId\": \"source-0\",\n      \"quote\": \"keep error details visible until I dismiss them\",\n      \"kind\": \"preference\",\n      \"meaning\": \"The user prefers that error details remain visible until they are explicitly dismissed.\"\n    }\n  ],\n  \"qualifications\": [\n    {\n      \"sourceId\": \"source-0\",\n      \"quote\": \"For this project\",\n      \"meaning\": \"The preference applies specifically to the current project context.\"\n    },\n    {\n      \"sourceId\": \"source-0\",\n      \"quote\": \"until I dismiss them\",\n      \"meaning\": \"The visibility of error details is conditional on the user not having dismissed them.\"\n    }\n  ],\n  \"unknowns\": [\n    \"The specific mechanism or UI element used to dismiss error details is not specified.\",\n    \"Whether this preference overrides any existing global or system-level error handling settings is not established.\"\n  ]\n}",
+        "finishReason": "stop",
+        "model": "memory-reference",
+        "usage": {
+          "completion_tokens": 224,
+          "prompt_tokens": 428,
+          "total_tokens": 652,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "interpretation": {
+        "statements": [
+          {
+            "sourceId": "source-0",
+            "quote": "keep error details visible until I dismiss them",
+            "kind": "preference",
+            "meaning": "The user prefers that error details remain visible until they are explicitly dismissed."
+          }
+        ],
+        "qualifications": [
+          {
+            "sourceId": "source-0",
+            "quote": "For this project",
+            "meaning": "The preference applies specifically to the current project context."
+          },
+          {
+            "sourceId": "source-0",
+            "quote": "until I dismiss them",
+            "meaning": "The visibility of error details is conditional on the user not having dismissed them."
+          }
+        ],
+        "unknowns": [
+          "The specific mechanism or UI element used to dismiss error details is not specified.",
+          "Whether this preference overrides any existing global or system-level error handling settings is not established."
+        ]
+      }
+    },
+    {
+      "key": "f328fb6d240cc67bba49adec28343f2de68d6303690858fdbf1b747ab1860943",
+      "durationMs": 23790,
+      "promptSha256": "813d9687aa3bc2d87728d96f6beddcfbe08fd073d3d8a925113cb16b746c3756",
+      "answer": {
+        "text": "{\n  \"statements\": [\n    {\n      \"sourceId\": \"polite-request-0\",\n      \"quote\": \"Could you please keep keyboard focus in the search box after running a search in this review tool?\",\n      \"kind\": \"request\",\n      \"meaning\": \"The user requests that keyboard focus remain in the search box after a search is executed in the review tool.\"\n    }\n  ],\n  \"qualifications\": [\n    {\n      \"sourceId\": \"polite-request-0\",\n      \"quote\": \"in this review tool\",\n      \"meaning\": \"The request is scoped specifically to the review tool project.\"\n    },\n    {\n      \"sourceId\": \"polite-request-0\",\n      \"quote\": \"after running a search\",\n      \"meaning\": \"The focus retention requirement applies specifically to the state following the execution of a search.\"\n    }\n  ],\n  \"unknowns\": [\n    \"Whether the current implementation already retains focus in the search box after a search.\",\n    \"Whether the user requires focus retention for all search types or only specific ones.\",\n    \"Whether other UI elements should lose focus when the search box retains it.\"\n  ]\n}",
+        "finishReason": "stop",
+        "model": "memory-reference",
+        "usage": {
+          "completion_tokens": 264,
+          "prompt_tokens": 436,
+          "total_tokens": 700,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "interpretation": {
+        "statements": [
+          {
+            "sourceId": "polite-request-0",
+            "quote": "Could you please keep keyboard focus in the search box after running a search in this review tool?",
+            "kind": "request",
+            "meaning": "The user requests that keyboard focus remain in the search box after a search is executed in the review tool."
+          }
+        ],
+        "qualifications": [
+          {
+            "sourceId": "polite-request-0",
+            "quote": "in this review tool",
+            "meaning": "The request is scoped specifically to the review tool project."
+          },
+          {
+            "sourceId": "polite-request-0",
+            "quote": "after running a search",
+            "meaning": "The focus retention requirement applies specifically to the state following the execution of a search."
+          }
+        ],
+        "unknowns": [
+          "Whether the current implementation already retains focus in the search box after a search.",
+          "Whether the user requires focus retention for all search types or only specific ones.",
+          "Whether other UI elements should lose focus when the search box retains it."
+        ]
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "audit-01f634831f20",
+      "sourceKey": "94dc29d74a70cea29e88868a9d750c676f7647117165f7d9ad5c5d9635b355d4",
+      "requiredPaths": [
+        "/kind",
+        "/assertionType",
+        "/scope",
+        "/claim",
+        "/rationale",
+        "/futureAction",
+        "/applicability",
+        "/exceptions",
+        "/evidenceClass",
+        "/validity"
+      ],
+      "durationMs": 79965,
+      "promptSha256": "b7f72faeae262b1fea139522b21fdd1c0434378492432c5178c29ce84469466d",
+      "answer": {
+        "text": "{\n  \"checks\": [\n    {\n      \"path\": \"/kind\",\n      \"assertion\": \"The memory is classified as a project_decision.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"quoted-plan-and-user-correction-0\",\n          \"quote\": \"I have not approved that\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/assertionType\",\n      \"assertion\": \"The assertion type is accepted_decision.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"quoted-plan-and-user-correction-0\",\n          \"quote\": \"I have not approved that\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/scope\",\n      \"assertion\": \"The scope is limited to profileId synthetic-owner and projectId network-client.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"quoted-plan-and-user-correction-0\",\n          \"quote\": \"For this network client\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/claim\",\n      \"assertion\": \"The retry delay for the network-client project has not been set to 2 seconds; the user stated that the retry delay still needs measurement.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"quoted-plan-and-user-correction-0\",\n          \"quote\": \"I have not approved that\"\n        },\n        {\n          \"sourceId\": \"quoted-plan-and-user-correction-0\",\n          \"quote\": \"the retry delay still needs measurement\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/rationale\",\n      \"assertion\": \"The rationale field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/futureAction\",\n      \"assertion\": \"Do not hardcode the retry delay to 2 seconds in network-client; the value remains unresolved pending measurement.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"quoted-plan-and-user-correction-0\",\n          \"quote\": \"I have not approved that\"\n        },\n        {\n          \"sourceId\": \"quoted-plan-and-user-correction-0\",\n          \"quote\": \"the retry delay still needs measurement\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/applicability\",\n      \"assertion\": \"The applicability field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/exceptions\",\n      \"assertion\": \"The exceptions field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/evidenceClass\",\n      \"assertion\": \"The evidence class is user_stated.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"quoted-plan-and-user-correction-0\",\n          \"quote\": \"I have not approved that\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/validity\",\n      \"assertion\": \"The validity field contains nulls and empty arrays, adding no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    }\n  ]\n}",
+        "finishReason": "stop",
+        "model": "memory-reference",
+        "usage": {
+          "completion_tokens": 879,
+          "prompt_tokens": 1164,
+          "total_tokens": 2043,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "checks": [
+          {
+            "path": "/kind",
+            "assertion": "The memory is classified as a project_decision.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "quoted-plan-and-user-correction-0",
+                "quote": "I have not approved that"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/assertionType",
+            "assertion": "The assertion type is accepted_decision.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "quoted-plan-and-user-correction-0",
+                "quote": "I have not approved that"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/scope",
+            "assertion": "The scope is limited to profileId synthetic-owner and projectId network-client.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "quoted-plan-and-user-correction-0",
+                "quote": "For this network client"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/claim",
+            "assertion": "The retry delay for the network-client project has not been set to 2 seconds; the user stated that the retry delay still needs measurement.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "quoted-plan-and-user-correction-0",
+                "quote": "I have not approved that"
+              },
+              {
+                "sourceId": "quoted-plan-and-user-correction-0",
+                "quote": "the retry delay still needs measurement"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/rationale",
+            "assertion": "The rationale field is empty and adds no substantive restriction.",
+            "verdict": "supported",
+            "evidence": [],
+            "issue": null
+          },
+          {
+            "path": "/futureAction",
+            "assertion": "Do not hardcode the retry delay to 2 seconds in network-client; the value remains unresolved pending measurement.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "quoted-plan-and-user-correction-0",
+                "quote": "I have not approved that"
+              },
+              {
+                "sourceId": "quoted-plan-and-user-correction-0",
+                "quote": "the retry delay still needs measurement"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/applicability",
+            "assertion": "The applicability field is empty and adds no substantive restriction.",
+            "verdict": "supported",
+            "evidence": [],
+            "issue": null
+          },
+          {
+            "path": "/exceptions",
+            "assertion": "The exceptions field is empty and adds no substantive restriction.",
+            "verdict": "supported",
+            "evidence": [],
+            "issue": null
+          },
+          {
+            "path": "/evidenceClass",
+            "assertion": "The evidence class is user_stated.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "quoted-plan-and-user-correction-0",
+                "quote": "I have not approved that"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/validity",
+            "assertion": "The validity field contains nulls and empty arrays, adding no substantive restriction.",
+            "verdict": "supported",
+            "evidence": [],
+            "issue": null
+          }
+        ],
+        "verdict": "supported"
+      }
+    },
+    {
+      "id": "audit-07e16b26a94a",
+      "sourceKey": "7c2c9bc68cb970487790fb73466c3b23ba324dca7cd26c7c4e021dd025ccb3c9",
+      "requiredPaths": [
+        "/kind",
+        "/assertionType",
+        "/scope",
+        "/claim",
+        "/rationale",
+        "/futureAction",
+        "/applicability",
+        "/exceptions",
+        "/evidenceClass",
+        "/validity"
+      ],
+      "durationMs": 75921,
+      "promptSha256": "c536d7f204c34996233b8090478af82b4eaab704996986a4f5f4fd2563b596a6",
+      "answer": {
+        "text": "{\n  \"checks\": [\n    {\n      \"path\": \"/kind\",\n      \"assertion\": \"The memory is classified as a project_decision.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"In this project\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/assertionType\",\n      \"assertion\": \"The assertion is a project_constraint.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"use a condensed file tree by default\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/scope\",\n      \"assertion\": \"The scope is limited to profile synthetic-owner and project sample-project.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"In this project\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/claim\",\n      \"assertion\": \"Use a condensed file tree by default and preserve manually expanded folders for the session.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"use a condensed file tree by default. If I expand a folder manually, leave it expanded for the current session.\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/rationale\",\n      \"assertion\": \"The rationale field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/futureAction\",\n      \"assertion\": \"Collapse all folders after every navigation to enforce the condensed default.\",\n      \"verdict\": \"unsupported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"If I expand a folder manually, leave it expanded for the current session.\"\n        }\n      ],\n      \"issue\": \"The source requires preserving manually expanded folders for the session. The candidate action to collapse all folders after every navigation directly contradicts this preservation requirement.\"\n    },\n    {\n      \"path\": \"/applicability\",\n      \"assertion\": \"The applicability field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/exceptions\",\n      \"assertion\": \"The exceptions field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/evidenceClass\",\n      \"assertion\": \"The evidence class is user_stated.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"In this project, use a condensed file tree by default.\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/validity\",\n      \"assertion\": \"The validity field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    }\n  ]\n}",
+        "finishReason": "stop",
+        "model": "memory-reference",
+        "usage": {
+          "completion_tokens": 811,
+          "prompt_tokens": 1049,
+          "total_tokens": 1860,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "checks": [
+          {
+            "path": "/kind",
+            "assertion": "The memory is classified as a project_decision.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "source-0",
+                "quote": "In this project"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/assertionType",
+            "assertion": "The assertion is a project_constraint.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "source-0",
+                "quote": "use a condensed file tree by default"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/scope",
+            "assertion": "The scope is limited to profile synthetic-owner and project sample-project.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "source-0",
+                "quote": "In this project"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/claim",
+            "assertion": "Use a condensed file tree by default and preserve manually expanded folders for the session.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "source-0",
+                "quote": "use a condensed file tree by default. If I expand a folder manually, leave it expanded for the current session."
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/rationale",
+            "assertion": "The rationale field is empty and adds no substantive restriction.",
+            "verdict": "supported",
+            "evidence": [],
+            "issue": null
+          },
+          {
+            "path": "/futureAction",
+            "assertion": "Collapse all folders after every navigation to enforce the condensed default.",
+            "verdict": "unsupported",
+            "evidence": [
+              {
+                "sourceId": "source-0",
+                "quote": "If I expand a folder manually, leave it expanded for the current session."
+              }
+            ],
+            "issue": "The source requires preserving manually expanded folders for the session. The candidate action to collapse all folders after every navigation directly contradicts this preservation requirement."
+          },
+          {
+            "path": "/applicability",
+            "assertion": "The applicability field is empty and adds no substantive restriction.",
+            "verdict": "supported",
+            "evidence": [],
+            "issue": null
+          },
+          {
+            "path": "/exceptions",
+            "assertion": "The exceptions field is empty and adds no substantive restriction.",
+            "verdict": "supported",
+            "evidence": [],
+            "issue": null
+          },
+          {
+            "path": "/evidenceClass",
+            "assertion": "The evidence class is user_stated.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "source-0",
+                "quote": "In this project, use a condensed file tree by default."
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/validity",
+            "assertion": "The validity field is empty and adds no substantive restriction.",
+            "verdict": "supported",
+            "evidence": [],
+            "issue": null
+          }
+        ],
+        "verdict": "unsupported"
+      }
+    },
+    {
+      "id": "audit-1f43fab87514",
+      "sourceKey": "b9349badbc8eed59430e2b08d5249351d3d63ad0c04e5c71b1639d63c2840636",
+      "requiredPaths": [
+        "/kind",
+        "/assertionType",
+        "/scope",
+        "/claim",
+        "/rationale",
+        "/futureAction",
+        "/applicability",
+        "/exceptions",
+        "/evidenceClass",
+        "/validity"
+      ],
+      "durationMs": 65759,
+      "promptSha256": "3a98e44eb5c77e429cef4dbd4ebf5e858065bf4303a8f033260666c5397d34d2",
+      "answer": {
+        "text": "{\n  \"checks\": [\n    {\n      \"path\": \"/kind\",\n      \"assertion\": \"The memory is classified as a project decision.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"For this project\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/assertionType\",\n      \"assertion\": \"The assertion is a project constraint.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"prefer SQLite\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/scope\",\n      \"assertion\": \"The scope is limited to profile synthetic-owner and project sample-project.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"For this project\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/claim\",\n      \"assertion\": \"This project should prefer SQLite for its local cache.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"prefer SQLite for the local cache\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/rationale\",\n      \"assertion\": \"The rationale field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/futureAction\",\n      \"assertion\": \"Prefer SQLite when choosing this project’s local cache.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"prefer SQLite for the local cache\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/applicability\",\n      \"assertion\": \"The applicability field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/exceptions\",\n      \"assertion\": \"The exceptions field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/evidenceClass\",\n      \"assertion\": \"The evidence class is user_stated.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"For this project, prefer SQLite for the local cache.\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/validity\",\n      \"assertion\": \"The validity field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    }\n  ]\n}",
+        "finishReason": "stop",
+        "model": "memory-reference",
+        "usage": {
+          "completion_tokens": 746,
+          "prompt_tokens": 929,
+          "total_tokens": 1675,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "checks": [
+          {
+            "path": "/kind",
+            "assertion": "The memory is classified as a project decision.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "source-0",
+                "quote": "For this project"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/assertionType",
+            "assertion": "The assertion is a project constraint.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "source-0",
+                "quote": "prefer SQLite"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/scope",
+            "assertion": "The scope is limited to profile synthetic-owner and project sample-project.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "source-0",
+                "quote": "For this project"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/claim",
+            "assertion": "This project should prefer SQLite for its local cache.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "source-0",
+                "quote": "prefer SQLite for the local cache"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/rationale",
+            "assertion": "The rationale field is empty and adds no substantive restriction.",
+            "verdict": "supported",
+            "evidence": [],
+            "issue": null
+          },
+          {
+            "path": "/futureAction",
+            "assertion": "Prefer SQLite when choosing this project’s local cache.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "source-0",
+                "quote": "prefer SQLite for the local cache"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/applicability",
+            "assertion": "The applicability field is empty and adds no substantive restriction.",
+            "verdict": "supported",
+            "evidence": [],
+            "issue": null
+          },
+          {
+            "path": "/exceptions",
+            "assertion": "The exceptions field is empty and adds no substantive restriction.",
+            "verdict": "supported",
+            "evidence": [],
+            "issue": null
+          },
+          {
+            "path": "/evidenceClass",
+            "assertion": "The evidence class is user_stated.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "source-0",
+                "quote": "For this project, prefer SQLite for the local cache."
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/validity",
+            "assertion": "The validity field is empty and adds no substantive restriction.",
+            "verdict": "supported",
+            "evidence": [],
+            "issue": null
+          }
+        ],
+        "verdict": "supported"
+      }
+    },
+    {
+      "id": "audit-3cba24a110f0",
+      "sourceKey": "94dc29d74a70cea29e88868a9d750c676f7647117165f7d9ad5c5d9635b355d4",
+      "requiredPaths": [
+        "/kind",
+        "/assertionType",
+        "/scope",
+        "/claim",
+        "/rationale",
+        "/futureAction",
+        "/applicability",
+        "/exceptions",
+        "/evidenceClass",
+        "/validity"
+      ],
+      "durationMs": 78156,
+      "promptSha256": "f2ceaf663c4828579e7793dc295e78d060321754b2434e18d155ed5ce592ba05",
+      "answer": {
+        "text": "{\n  \"checks\": [\n    {\n      \"path\": \"/kind\",\n      \"assertion\": \"The memory is classified as a project decision.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"quoted-plan-and-user-correction-0\",\n          \"quote\": \"For this network client, keep showing failures to users\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/assertionType\",\n      \"assertion\": \"The assertion is an accepted decision.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"quoted-plan-and-user-correction-0\",\n          \"quote\": \"I have not approved that. For this network client, keep showing failures to users\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/scope\",\n      \"assertion\": \"The scope is limited to the network-client project for the synthetic-owner profile.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"quoted-plan-and-user-correction-0\",\n          \"quote\": \"For this network client\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/claim\",\n      \"assertion\": \"Failures must be shown to users in the network-client project.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"quoted-plan-and-user-correction-0\",\n          \"quote\": \"keep showing failures to users\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/claim\",\n      \"assertion\": \"The assistant's suggestion to hide failures was explicitly not approved.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"quoted-plan-and-user-correction-0\",\n          \"quote\": \"I have not approved that\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/rationale\",\n      \"assertion\": \"The rationale field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/futureAction\",\n      \"assertion\": \"When implementing or modifying error handling in network-client, ensure that failures are displayed to users rather than hidden.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"quoted-plan-and-user-correction-0\",\n          \"quote\": \"keep showing failures to users\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/applicability\",\n      \"assertion\": \"The applicability field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/exceptions\",\n      \"assertion\": \"The exceptions field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/evidenceClass\",\n      \"assertion\": \"The evidence class is user_stated.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"quoted-plan-and-user-correction-0\",\n          \"quote\": \"I have not approved that\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/validity\",\n      \"assertion\": \"The validity field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    }\n  ]\n}",
+        "finishReason": "stop",
+        "model": "memory-reference",
+        "usage": {
+          "completion_tokens": 898,
+          "prompt_tokens": 1159,
+          "total_tokens": 2057,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "checks": [
+          {
+            "path": "/kind",
+            "assertion": "The memory is classified as a project decision.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "quoted-plan-and-user-correction-0",
+                "quote": "For this network client, keep showing failures to users"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/assertionType",
+            "assertion": "The assertion is an accepted decision.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "quoted-plan-and-user-correction-0",
+                "quote": "I have not approved that. For this network client, keep showing failures to users"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/scope",
+            "assertion": "The scope is limited to the network-client project for the synthetic-owner profile.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "quoted-plan-and-user-correction-0",
+                "quote": "For this network client"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/claim",
+            "assertion": "Failures must be shown to users in the network-client project.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "quoted-plan-and-user-correction-0",
+                "quote": "keep showing failures to users"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/claim",
+            "assertion": "The assistant's suggestion to hide failures was explicitly not approved.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "quoted-plan-and-user-correction-0",
+                "quote": "I have not approved that"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/rationale",
+            "assertion": "The rationale field is empty and adds no substantive restriction.",
+            "verdict": "supported",
+            "evidence": [],
+            "issue": null
+          },
+          {
+            "path": "/futureAction",
+            "assertion": "When implementing or modifying error handling in network-client, ensure that failures are displayed to users rather than hidden.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "quoted-plan-and-user-correction-0",
+                "quote": "keep showing failures to users"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/applicability",
+            "assertion": "The applicability field is empty and adds no substantive restriction.",
+            "verdict": "supported",
+            "evidence": [],
+            "issue": null
+          },
+          {
+            "path": "/exceptions",
+            "assertion": "The exceptions field is empty and adds no substantive restriction.",
+            "verdict": "supported",
+            "evidence": [],
+            "issue": null
+          },
+          {
+            "path": "/evidenceClass",
+            "assertion": "The evidence class is user_stated.",
+            "verdict": "supported",
+            "evidence": [
+              {
+                "sourceId": "quoted-plan-and-user-correction-0",
+                "quote": "I have not approved that"
+              }
+            ],
+            "issue": null
+          },
+          {
+            "path": "/validity",
+            "assertion": "The validity field is empty and adds no substantive restriction.",
+            "verdict": "supported",
+            "evidence": [],
+            "issue": null
+          }
+        ],
+        "verdict": "supported"
+      }
+    },
+    {
+      "id": "audit-4d25c6f7134d",
+      "sourceKey": "73b1fb3a5ae62fc1aa28e88886e626280dafce44519918a7d763d62167df775d",
+      "requiredPaths": [
+        "/kind",
+        "/assertionType",
+        "/scope",
+        "/claim",
+        "/rationale",
+        "/futureAction",
+        "/applicability",
+        "/exceptions",
+        "/evidenceClass",
+        "/validity"
+      ],
+      "durationMs": 72442,
+      "promptSha256": "8ff5a1e43ecd4eda6dffe5af3ce4afd2937637dc4f249770eabc19211e656ef7",
+      "answer": {
+        "text": "```json\n{\n  \"checks\": [\n    {\n      \"path\": \"/kind\",\n      \"assertion\": \"The memory is classified as a project_decision.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"in this project\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/assertionType\",\n      \"assertion\": \"The memory is classified as a project_constraint.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"Please show a retry button\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/scope\",\n      \"assertion\": \"The scope is limited to profileId 'synthetic-owner' and projectId 'sample-project'.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"in this project\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/claim\",\n      \"assertion\": \"Failed uploads already show a working retry button in this project.\",\n      \"verdict\": \"unsupported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"Please show a retry button\"\n        }\n      ],\n      \"issue\": \"The source is a request to implement a feature ('Please show'), whereas the candidate asserts the feature is already implemented ('already show'). This turns a request into a verified implementation.\"\n    },\n    {\n      \"path\": \"/rationale\",\n      \"assertion\": \"The rationale field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/futureAction\",\n      \"assertion\": \"Rely on the existing retry button after upload failures.\",\n      \"verdict\": \"unsupported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"Please show a retry button\"\n        }\n      ],\n      \"issue\": \"The source requests the creation of a retry button. The candidate instructs to rely on an existing one, which contradicts the source's implication that the button is not yet present.\"\n    },\n    {\n      \"path\": \"/applicability\",\n      \"assertion\": \"The applicability field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/exceptions\",\n      \"assertion\": \"The exceptions field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/evidenceClass\",\n      \"assertion\": \"The evidence class is user_stated.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [\n        {\n          \"sourceId\": \"source-0\",\n          \"quote\": \"Please show a retry button\"\n        }\n      ],\n      \"issue\": null\n    },\n    {\n      \"path\": \"/validity\",\n      \"assertion\": \"The validity field is empty and adds no substantive restriction.\",\n      \"verdict\": \"supported\",\n      \"evidence\": [],\n      \"issue\": null\n    }\n  ]\n}\n```",
+        "finishReason": "stop",
+        "model": "memory-reference",
+        "usage": {
+          "completion_tokens": 828,
+          "prompt_tokens": 975,
+          "total_tokens": 1803,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "error": "invalid_proposal_review: Unexpected token '`', \"```json\n{\n\"... is not valid JSON"
+    }
+  ],
+  "uniqueSourceInputs": 10,
+  "model": {
+    "name": "Qwen3.8-27B-Q4_0",
+    "weightSha256": "ede16c7b36e578ca87a8c70e011e4b4633a32c831c0ce76d0f474582384e671d"
+  },
+  "runtimeVersion": "version: 9870 (2d973636e)\nbuilt with AppleClang 17.0.0.17000604 for Darwin arm64",
+  "health": {
+    "status": "ok"
+  },
+  "sourceStageCompletedAt": "2026-10-03T03:50:52.562Z",
+  "error": "TimeoutError: The operation was aborted due to timeout",
+  "workerExit": {
+    "code": 0,
+    "signal": null
+  },
+  "finishedAt": "2026-10-03T03:58:35.566Z"
+}

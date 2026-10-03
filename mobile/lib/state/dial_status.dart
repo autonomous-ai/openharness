@@ -53,16 +53,6 @@ class DialState extends ChangeNotifier {
   DialStatus status = DialStatus.none;
   bool seen = false;
 
-  Future<void> restore() async {
-    try {
-      seen = (await _storage?.read(_seenKey)) == '1';
-    } catch (_) {
-      seen =
-          false; // a missing or unreadable file is a first run, not a failure
-    }
-    notifyListeners();
-  }
-
   void apply(DialStatus next) {
     status = next;
     if (next.attached && !seen) {

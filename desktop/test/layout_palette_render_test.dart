@@ -82,7 +82,7 @@ void main() {
         Rect card(PanePreset preset) => tester.getRect(
           find.ancestor(
             of: find.text(preset.label),
-            matching: find.byType(Container),
+            matching: find.byType(TextButton),
           ),
         );
         for (final preset in choices) {

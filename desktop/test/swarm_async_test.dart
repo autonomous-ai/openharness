@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/app_shell.dart';
+import 'package:harness/logging/app_log.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm_catalog.dart';
@@ -243,6 +244,10 @@ void main() {
       'quit ${timedOut ? 'stays available with a stalled disk' : 'waits for the latest saved arrangement'}',
       (tester) async {
         final storage = _PendingWriteStore();
+        final previousLog = appLog;
+        final log = _FlushLog();
+        appLog = log;
+        addTearDown(() => appLog = previousLog);
         final app = createApp(store: storage)..status = AppStatus.authenticated;
         app.newSwarm();
         app.renameSwarm(app.activeSwarmId, 'Before quit');
@@ -269,6 +274,11 @@ void main() {
         storage.release.complete();
         await tester.pump();
         expect(await quitting, AppExitResponse.exit);
+        expect(
+          log.flushes,
+          1,
+          reason: 'quit must commit the pending debug tail',
+        );
         await app.flushPaneLayout();
         expect(storage.values['swarm_layout_v1'], contains('Before quit'));
         await tester.pumpWidget(const SizedBox());
@@ -276,6 +286,33 @@ void main() {
       },
     );
   }
+
+  testWidgets(
+    'backgrounding and disposing the shell flush pending diagnostics',
+    (tester) async {
+      final app = createApp()..status = AppStatus.authenticated;
+      final previousLog = appLog;
+      final log = _FlushLog();
+      appLog = log;
+      addTearDown(() => appLog = previousLog);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [appStateProvider.overrideWithValue(app)],
+          child: HarnessApp(authenticatedScreen: _swarm),
+        ),
+      );
+      await tester.pump();
+      final observer =
+          tester.state(find.byType(RootShell)) as WidgetsBindingObserver;
+      observer.didChangeAppLifecycleState(AppLifecycleState.inactive);
+      expect(log.flushes, 1);
+      observer.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      expect(log.flushes, 1);
+      await tester.pumpWidget(const SizedBox());
+      expect(log.flushes, 2);
+      app.dispose();
+    },
+  );
 
   for (final change in ['switch', 'close', 'dispose']) {
     test(
@@ -373,6 +410,20 @@ void main() {
       store.dispose();
     },
   );
+}
+
+class _FlushLog implements FlushableAppLog {
+  var flushes = 0;
+  @override
+  void flush() => flushes++;
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) {}
 }
 
 /// The screen the desktop app mounts once signed in — the argument `HarnessApp`

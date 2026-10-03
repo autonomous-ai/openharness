@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/app_shell.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/settings/settings_screen.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_preset.dart';
 
@@ -48,6 +49,37 @@ Future<void> _mount(WidgetTester tester, AppNotifier app) async {
 }
 
 void main() {
+  testWidgets('desktop shell preserves platform text size and contrast', (
+    tester,
+  ) async {
+    final app = createApp()..status = AppStatus.authenticated;
+    tester.platformDispatcher.textScaleFactorTestValue = 1.6;
+    tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(highContrast: true);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appStateProvider.overrideWithValue(app)],
+        child: HarnessApp(
+          authenticatedScreen: (_) =>
+              const Scaffold(body: Text('Readable desktop controls')),
+        ),
+      ),
+    );
+    await tester.pump();
+    final context = tester.element(find.text('Readable desktop controls'));
+    expect(MediaQuery.textScalerOf(context).scale(10), 16);
+    expect(MediaQuery.highContrastOf(context), isTrue);
+    final theme = Theme.of(context);
+    final rim = theme.outlinedButtonTheme.style!.side!.resolve({})!;
+    expect(rim.width, 2);
+    expect(rim.color.a, greaterThan(.5));
+    expect(theme.textTheme.bodyMedium!.fontFamily, grid.AppType.sansFamily);
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+  });
+
   testWidgets('held app menu commands open only one dialog', (tester) async {
     final app = createApp();
     await _mount(tester, app);

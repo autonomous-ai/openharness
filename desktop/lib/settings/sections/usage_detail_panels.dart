@@ -310,7 +310,7 @@ class UsageBreakdownCard extends StatelessWidget {
 
   static String _rowDetail(BreakdownRow row) {
     final parts = <String>[
-      '${row.sessions} ${row.sessions == 1 ? 'session' : 'sessions'}',
+      '${row.sessions} ${row.sessions == 1 ? 'conversation' : 'conversations'}',
       '${row.turns} ${row.turns == 1 ? 'turn' : 'turns'}',
       if (row.costUsd != null) formatCost(row.costUsd),
     ];
@@ -328,8 +328,9 @@ class UsageSessionsTable extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     return _Card(
-      title: 'Recent sessions',
-      subtitle: 'The latest sessions this provider recorded on this computer.',
+      title: 'Recent conversations',
+      subtitle:
+          'The latest conversations this provider recorded on this computer.',
       child: rows.isEmpty
           ? Text(
               'Nothing in this range.',

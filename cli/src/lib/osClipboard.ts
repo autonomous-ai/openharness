@@ -7,6 +7,7 @@
  * needed; no OS-level keystroke synthesis is involved.
  */
 import { execFile, spawn } from 'node:child_process'
+import { release } from 'node:os'
 import { binaryOnPath } from './binaryOnPath.js'
 
 export type OsClipboardImageResult =
@@ -74,11 +75,22 @@ function writeMacClipboard(pngPath: string): Promise<OsClipboardImageResult> {
   })
 }
 
+/** Running inside Windows Subsystem for Linux: WSL sets `WSL_DISTRO_NAME` for every process it
+ *  starts, and its kernels name themselves `…-microsoft-standard-WSL2` for one that was not. */
+export function isWsl(env: NodeJS.ProcessEnv = process.env, kernel: string = release()): boolean {
+  return !!env.WSL_DISTRO_NAME || /microsoft/i.test(kernel)
+}
+
 /** Linux: which clipboard tool applies depends on the ACTIVE session, not the distro, so this is
  *  checked per-call rather than once at startup — `$WAYLAND_DISPLAY`/`$DISPLAY` reflect the
  *  session the daemon is currently running under. Neither set means no display server at all
  *  (a genuinely headless box), which no clipboard tool can fix. */
 async function writeLinuxClipboard(pngBytes: Uint8Array): Promise<OsClipboardImageResult> {
+  // Under WSL the Linux clipboard is WSLg's mirror of the Windows one, and WSLg syncs an image back
+  // from Windows as BMP only (microsoft/wslg#833) — a PNG written here is replaced before the engine
+  // reads it, and Codex/Claude Code then find no image at all (openharness#107). The path fallback
+  // is the one that works there: both engines attach an image whose path is pasted.
+  if (isWsl()) return { state: 'unavailable', reason: 'WSL: WSLg replaces a PNG on the clipboard with BMP' }
   if (process.env.WAYLAND_DISPLAY) {
     if (!binaryOnPath('wl-copy')) {
       return { state: 'unavailable', reason: 'wl-copy not found (install the wl-clipboard package)' }

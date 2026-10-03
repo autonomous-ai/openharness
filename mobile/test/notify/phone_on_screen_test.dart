@@ -40,6 +40,9 @@ void main() {
       ),
     );
     await tester.pump();
+    // A new phone opens on its sessions to pick from (`PickUpPage`): `a` is picked there.
+    request.value = (machineId: 'm', agentId: 'a');
+    await tester.pump();
     return app;
   }
 

@@ -1,0 +1,1511 @@
+{
+  "recordedAt": "2026-10-01T11:51:57.495Z",
+  "node": "v22.23.2",
+  "platform": "darwin-arm64",
+  "scope": "Private real tmux with recorded dialog paint. Node CPU excludes tmux clients/server; not whole-app energy.",
+  "tmux": "tmux 3.5a",
+  "endToEnd": {
+    "result": "passed",
+    "sessions": 32,
+    "firstTickProcesses": 1,
+    "firstTickMs": 1553.500625,
+    "checks": [
+      "question identity",
+      "deduplication",
+      "answer routing",
+      "two-read close",
+      "stale answer refusal",
+      "question reopens",
+      "missing-pane isolation",
+      "unknown capture preservation",
+      "poll teardown"
+    ]
+  },
+  "benchmark": {
+    "warmups": 5,
+    "iterations": 30,
+    "samples": [
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 0,
+        "elapsedMs": 3.3780839999999444,
+        "nodeCpuMs": 0.366,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 0,
+        "elapsedMs": 3.8534579999995913,
+        "nodeCpuMs": 0.355,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 1,
+        "elapsedMs": 3.576042000000598,
+        "nodeCpuMs": 0.394,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 1,
+        "elapsedMs": 3.472334000000046,
+        "nodeCpuMs": 0.362,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 2,
+        "elapsedMs": 3.4621660000011616,
+        "nodeCpuMs": 0.415,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 2,
+        "elapsedMs": 3.6232919999984006,
+        "nodeCpuMs": 0.491,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 3,
+        "elapsedMs": 3.43841699999939,
+        "nodeCpuMs": 1.09,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 3,
+        "elapsedMs": 3.7765419999996084,
+        "nodeCpuMs": 0.352,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 4,
+        "elapsedMs": 3.7990420000005543,
+        "nodeCpuMs": 0.445,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 4,
+        "elapsedMs": 3.638375000000451,
+        "nodeCpuMs": 0.358,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 5,
+        "elapsedMs": 3.6424580000002607,
+        "nodeCpuMs": 0.341,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 5,
+        "elapsedMs": 3.595833000001221,
+        "nodeCpuMs": 0.351,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 6,
+        "elapsedMs": 3.8239159999993717,
+        "nodeCpuMs": 0.736,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 6,
+        "elapsedMs": 3.7034999999996217,
+        "nodeCpuMs": 2.51,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 7,
+        "elapsedMs": 3.5328339999996388,
+        "nodeCpuMs": 0.349,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 7,
+        "elapsedMs": 3.517083000000639,
+        "nodeCpuMs": 0.308,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 8,
+        "elapsedMs": 3.889999999999418,
+        "nodeCpuMs": 0.391,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 8,
+        "elapsedMs": 3.5351670000000013,
+        "nodeCpuMs": 0.351,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 9,
+        "elapsedMs": 3.516250000000582,
+        "nodeCpuMs": 0.348,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 9,
+        "elapsedMs": 3.353541000000405,
+        "nodeCpuMs": 0.315,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 10,
+        "elapsedMs": 3.510041999999885,
+        "nodeCpuMs": 0.321,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 10,
+        "elapsedMs": 3.512917000000016,
+        "nodeCpuMs": 0.357,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 11,
+        "elapsedMs": 3.474207999999635,
+        "nodeCpuMs": 0.351,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 11,
+        "elapsedMs": 3.318375000000742,
+        "nodeCpuMs": 0.353,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 12,
+        "elapsedMs": 3.47400000000016,
+        "nodeCpuMs": 0.901,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 12,
+        "elapsedMs": 3.504624999999578,
+        "nodeCpuMs": 0.343,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 13,
+        "elapsedMs": 3.837792000000263,
+        "nodeCpuMs": 0.333,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 13,
+        "elapsedMs": 3.6857920000002196,
+        "nodeCpuMs": 0.366,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 14,
+        "elapsedMs": 3.646999999999025,
+        "nodeCpuMs": 0.33,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 14,
+        "elapsedMs": 3.9822079999994457,
+        "nodeCpuMs": 0.371,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 15,
+        "elapsedMs": 3.9746670000004087,
+        "nodeCpuMs": 0.453,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 15,
+        "elapsedMs": 4.070832999999766,
+        "nodeCpuMs": 0.446,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 16,
+        "elapsedMs": 3.945791999998619,
+        "nodeCpuMs": 0.413,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 16,
+        "elapsedMs": 4.424999999999272,
+        "nodeCpuMs": 0.453,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 17,
+        "elapsedMs": 3.99029100000007,
+        "nodeCpuMs": 0.488,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 17,
+        "elapsedMs": 3.5762500000000728,
+        "nodeCpuMs": 0.451,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 18,
+        "elapsedMs": 3.4724159999987023,
+        "nodeCpuMs": 1.089,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 18,
+        "elapsedMs": 3.4254999999993743,
+        "nodeCpuMs": 0.353,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 19,
+        "elapsedMs": 3.5590830000001006,
+        "nodeCpuMs": 0.351,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 19,
+        "elapsedMs": 3.699000000000524,
+        "nodeCpuMs": 0.376,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 20,
+        "elapsedMs": 3.5359580000003916,
+        "nodeCpuMs": 0.645,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 20,
+        "elapsedMs": 3.455792000000656,
+        "nodeCpuMs": 0.34,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 21,
+        "elapsedMs": 3.5152500000003783,
+        "nodeCpuMs": 0.349,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 21,
+        "elapsedMs": 3.4523750000007567,
+        "nodeCpuMs": 0.306,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 22,
+        "elapsedMs": 3.5402910000011616,
+        "nodeCpuMs": 0.318,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 22,
+        "elapsedMs": 3.9985409999990225,
+        "nodeCpuMs": 0.312,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 23,
+        "elapsedMs": 3.422207999999955,
+        "nodeCpuMs": 0.313,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 23,
+        "elapsedMs": 3.4164999999993597,
+        "nodeCpuMs": 0.314,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 24,
+        "elapsedMs": 3.4122500000012224,
+        "nodeCpuMs": 0.314,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 24,
+        "elapsedMs": 3.6193750000002183,
+        "nodeCpuMs": 0.353,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 25,
+        "elapsedMs": 3.4626250000001164,
+        "nodeCpuMs": 0.334,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 25,
+        "elapsedMs": 3.4549580000002607,
+        "nodeCpuMs": 0.312,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 26,
+        "elapsedMs": 3.3878329999988637,
+        "nodeCpuMs": 0.333,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 26,
+        "elapsedMs": 3.477708000000348,
+        "nodeCpuMs": 0.756,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 27,
+        "elapsedMs": 3.4933750000000146,
+        "nodeCpuMs": 0.329,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 27,
+        "elapsedMs": 3.435749999998734,
+        "nodeCpuMs": 0.34,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 28,
+        "elapsedMs": 3.3415839999997843,
+        "nodeCpuMs": 0.312,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 28,
+        "elapsedMs": 3.595584000000599,
+        "nodeCpuMs": 0.331,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "batched",
+        "iteration": 29,
+        "elapsedMs": 3.432875000000422,
+        "nodeCpuMs": 0.331,
+        "processes": 1
+      },
+      {
+        "count": 1,
+        "mode": "direct",
+        "iteration": 29,
+        "elapsedMs": 3.563709000000017,
+        "nodeCpuMs": 0.34,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 0,
+        "elapsedMs": 6.066791999999623,
+        "nodeCpuMs": 2.508,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 0,
+        "elapsedMs": 4.803458000000319,
+        "nodeCpuMs": 0.522,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 1,
+        "elapsedMs": 4.979917000000569,
+        "nodeCpuMs": 0.547,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 1,
+        "elapsedMs": 5.8272500000002765,
+        "nodeCpuMs": 2.519,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 2,
+        "elapsedMs": 5.8890420000007,
+        "nodeCpuMs": 2.601,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 2,
+        "elapsedMs": 4.956292000000758,
+        "nodeCpuMs": 0.57,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 3,
+        "elapsedMs": 4.868000000000393,
+        "nodeCpuMs": 0.552,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 3,
+        "elapsedMs": 5.72954099999879,
+        "nodeCpuMs": 2.384,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 4,
+        "elapsedMs": 5.936000000001513,
+        "nodeCpuMs": 2.224,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 4,
+        "elapsedMs": 5.007916999998997,
+        "nodeCpuMs": 0.588,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 5,
+        "elapsedMs": 4.915416000001642,
+        "nodeCpuMs": 0.535,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 5,
+        "elapsedMs": 5.7152920000007725,
+        "nodeCpuMs": 2.414,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 6,
+        "elapsedMs": 6.9167080000006536,
+        "nodeCpuMs": 5.171,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 6,
+        "elapsedMs": 4.895790999999008,
+        "nodeCpuMs": 0.564,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 7,
+        "elapsedMs": 4.891417000000729,
+        "nodeCpuMs": 0.518,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 7,
+        "elapsedMs": 5.931291000000783,
+        "nodeCpuMs": 2.374,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 8,
+        "elapsedMs": 6.361417000000074,
+        "nodeCpuMs": 2.591,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 8,
+        "elapsedMs": 4.88958300000013,
+        "nodeCpuMs": 0.542,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 9,
+        "elapsedMs": 5.209500000000844,
+        "nodeCpuMs": 0.526,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 9,
+        "elapsedMs": 6.05225000000064,
+        "nodeCpuMs": 2.906,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 10,
+        "elapsedMs": 5.757707999999184,
+        "nodeCpuMs": 2.317,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 10,
+        "elapsedMs": 5.035916999999245,
+        "nodeCpuMs": 0.751,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 11,
+        "elapsedMs": 5.036167000000205,
+        "nodeCpuMs": 1.163,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 11,
+        "elapsedMs": 6.083792000001267,
+        "nodeCpuMs": 4.566,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 12,
+        "elapsedMs": 6.387165999998615,
+        "nodeCpuMs": 2.606,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 12,
+        "elapsedMs": 5.17987500000163,
+        "nodeCpuMs": 0.588,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 13,
+        "elapsedMs": 5.210875000000669,
+        "nodeCpuMs": 0.554,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 13,
+        "elapsedMs": 6.619625000001179,
+        "nodeCpuMs": 4.894,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 14,
+        "elapsedMs": 6.5945839999985765,
+        "nodeCpuMs": 12.827,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 14,
+        "elapsedMs": 4.967667000000802,
+        "nodeCpuMs": 0.624,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 15,
+        "elapsedMs": 5.25066599999991,
+        "nodeCpuMs": 0.539,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 15,
+        "elapsedMs": 6.820332999999664,
+        "nodeCpuMs": 2.451,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 16,
+        "elapsedMs": 5.843249999999898,
+        "nodeCpuMs": 2.68,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 16,
+        "elapsedMs": 5.032999999999447,
+        "nodeCpuMs": 0.628,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 17,
+        "elapsedMs": 4.971708000000945,
+        "nodeCpuMs": 0.534,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 17,
+        "elapsedMs": 5.819541999999274,
+        "nodeCpuMs": 2.553,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 18,
+        "elapsedMs": 5.903207999999722,
+        "nodeCpuMs": 2.457,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 18,
+        "elapsedMs": 5.0144580000014685,
+        "nodeCpuMs": 0.6,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 19,
+        "elapsedMs": 5.007666999999856,
+        "nodeCpuMs": 0.514,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 19,
+        "elapsedMs": 5.763165999998819,
+        "nodeCpuMs": 2.45,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 20,
+        "elapsedMs": 5.887750000001688,
+        "nodeCpuMs": 2.57,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 20,
+        "elapsedMs": 4.957790999998906,
+        "nodeCpuMs": 0.589,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 21,
+        "elapsedMs": 4.994333000000552,
+        "nodeCpuMs": 0.53,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 21,
+        "elapsedMs": 6.3229169999995065,
+        "nodeCpuMs": 4.815,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 22,
+        "elapsedMs": 5.973415999998906,
+        "nodeCpuMs": 2.497,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 22,
+        "elapsedMs": 4.877666999998837,
+        "nodeCpuMs": 0.576,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 23,
+        "elapsedMs": 4.977708000000348,
+        "nodeCpuMs": 0.505,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 23,
+        "elapsedMs": 7.323792000001049,
+        "nodeCpuMs": 2.85,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 24,
+        "elapsedMs": 7.551166000001103,
+        "nodeCpuMs": 8.428,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 24,
+        "elapsedMs": 5.615750000000844,
+        "nodeCpuMs": 0.662,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 25,
+        "elapsedMs": 5.677207999999155,
+        "nodeCpuMs": 0.689,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 25,
+        "elapsedMs": 6.778374999999869,
+        "nodeCpuMs": 5.73,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 26,
+        "elapsedMs": 6.242708000001585,
+        "nodeCpuMs": 2.581,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 26,
+        "elapsedMs": 5.241500000000087,
+        "nodeCpuMs": 1.909,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 27,
+        "elapsedMs": 5.262333000000581,
+        "nodeCpuMs": 0.589,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 27,
+        "elapsedMs": 5.9756670000006125,
+        "nodeCpuMs": 4.02,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 28,
+        "elapsedMs": 5.888457999999446,
+        "nodeCpuMs": 2.908,
+        "processes": 8
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 28,
+        "elapsedMs": 4.971665999999459,
+        "nodeCpuMs": 0.567,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "batched",
+        "iteration": 29,
+        "elapsedMs": 5.053125000000364,
+        "nodeCpuMs": 0.52,
+        "processes": 1
+      },
+      {
+        "count": 8,
+        "mode": "direct",
+        "iteration": 29,
+        "elapsedMs": 5.996957999999722,
+        "nodeCpuMs": 4.295,
+        "processes": 8
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 0,
+        "elapsedMs": 19.887500000000728,
+        "nodeCpuMs": 16.538,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 0,
+        "elapsedMs": 10.046125000000757,
+        "nodeCpuMs": 1.227,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 1,
+        "elapsedMs": 10.065957999999227,
+        "nodeCpuMs": 1.275,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 1,
+        "elapsedMs": 18.206082999999126,
+        "nodeCpuMs": 11.946,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 2,
+        "elapsedMs": 18.734167000000525,
+        "nodeCpuMs": 18.272,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 2,
+        "elapsedMs": 10.167583000000377,
+        "nodeCpuMs": 1.285,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 3,
+        "elapsedMs": 9.91295799999898,
+        "nodeCpuMs": 1.199,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 3,
+        "elapsedMs": 18.191208000000188,
+        "nodeCpuMs": 10.781,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 4,
+        "elapsedMs": 18.92870800000128,
+        "nodeCpuMs": 13.277,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 4,
+        "elapsedMs": 9.729041999999026,
+        "nodeCpuMs": 1.162,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 5,
+        "elapsedMs": 9.720833000001221,
+        "nodeCpuMs": 1.132,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 5,
+        "elapsedMs": 20.176375000000917,
+        "nodeCpuMs": 26.749,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 6,
+        "elapsedMs": 18.485249999999724,
+        "nodeCpuMs": 17.354,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 6,
+        "elapsedMs": 10.065833000000566,
+        "nodeCpuMs": 2.423,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 7,
+        "elapsedMs": 9.744124999999258,
+        "nodeCpuMs": 1.196,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 7,
+        "elapsedMs": 19.69183300000077,
+        "nodeCpuMs": 10.288,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 8,
+        "elapsedMs": 22.020375000000058,
+        "nodeCpuMs": 13.11,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 8,
+        "elapsedMs": 10.392499999999927,
+        "nodeCpuMs": 3.198,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 9,
+        "elapsedMs": 10.038415999999415,
+        "nodeCpuMs": 1.195,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 9,
+        "elapsedMs": 18.73225000000093,
+        "nodeCpuMs": 15.315,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 10,
+        "elapsedMs": 19.898165999999037,
+        "nodeCpuMs": 28.374,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 10,
+        "elapsedMs": 9.879291999999623,
+        "nodeCpuMs": 1.188,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 11,
+        "elapsedMs": 9.827499999999418,
+        "nodeCpuMs": 1.146,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 11,
+        "elapsedMs": 18.700208000000202,
+        "nodeCpuMs": 13.545,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 12,
+        "elapsedMs": 18.840833000000202,
+        "nodeCpuMs": 14.648,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 12,
+        "elapsedMs": 9.808500000001004,
+        "nodeCpuMs": 1.265,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 13,
+        "elapsedMs": 9.849500000000262,
+        "nodeCpuMs": 1.18,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 13,
+        "elapsedMs": 17.91966599999978,
+        "nodeCpuMs": 12.583,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 14,
+        "elapsedMs": 19.350500000000466,
+        "nodeCpuMs": 13.604,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 14,
+        "elapsedMs": 9.841291000000638,
+        "nodeCpuMs": 1.207,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 15,
+        "elapsedMs": 9.846459000000323,
+        "nodeCpuMs": 1.157,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 15,
+        "elapsedMs": 17.839874999999665,
+        "nodeCpuMs": 10.797,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 16,
+        "elapsedMs": 18.467583999999988,
+        "nodeCpuMs": 18.189,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 16,
+        "elapsedMs": 10.060166000001118,
+        "nodeCpuMs": 1.271,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 17,
+        "elapsedMs": 9.662292000000889,
+        "nodeCpuMs": 1.164,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 17,
+        "elapsedMs": 19.58820900000137,
+        "nodeCpuMs": 9.55,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 18,
+        "elapsedMs": 18.596707999999126,
+        "nodeCpuMs": 12.115,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 18,
+        "elapsedMs": 9.906208000000333,
+        "nodeCpuMs": 1.197,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 19,
+        "elapsedMs": 9.829458000000159,
+        "nodeCpuMs": 1.137,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 19,
+        "elapsedMs": 19.275374999999258,
+        "nodeCpuMs": 11.232,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 20,
+        "elapsedMs": 18.13195900000028,
+        "nodeCpuMs": 10.246,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 20,
+        "elapsedMs": 9.807957999999417,
+        "nodeCpuMs": 1.231,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 21,
+        "elapsedMs": 9.718333000000712,
+        "nodeCpuMs": 1.149,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 21,
+        "elapsedMs": 18.861332999998922,
+        "nodeCpuMs": 21.859,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 22,
+        "elapsedMs": 17.926041999999143,
+        "nodeCpuMs": 12.592,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 22,
+        "elapsedMs": 10.091291000000638,
+        "nodeCpuMs": 1.229,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 23,
+        "elapsedMs": 9.716667000000598,
+        "nodeCpuMs": 1.164,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 23,
+        "elapsedMs": 17.310833000001367,
+        "nodeCpuMs": 10.584,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 24,
+        "elapsedMs": 19.17304199999853,
+        "nodeCpuMs": 9.284,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 24,
+        "elapsedMs": 10.013625000001412,
+        "nodeCpuMs": 1.241,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 25,
+        "elapsedMs": 9.783666999999696,
+        "nodeCpuMs": 1.173,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 25,
+        "elapsedMs": 19.634541999999783,
+        "nodeCpuMs": 25.876,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 26,
+        "elapsedMs": 18.92683399999987,
+        "nodeCpuMs": 12.465,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 26,
+        "elapsedMs": 10.104374999998981,
+        "nodeCpuMs": 1.492,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 27,
+        "elapsedMs": 10.33008300000074,
+        "nodeCpuMs": 1.147,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 27,
+        "elapsedMs": 19.879916999998386,
+        "nodeCpuMs": 10.897,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 28,
+        "elapsedMs": 19.654209000000264,
+        "nodeCpuMs": 12.004,
+        "processes": 32
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 28,
+        "elapsedMs": 10.326750000000175,
+        "nodeCpuMs": 3.003,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "batched",
+        "iteration": 29,
+        "elapsedMs": 10.35687499999949,
+        "nodeCpuMs": 1.154,
+        "processes": 1
+      },
+      {
+        "count": 32,
+        "mode": "direct",
+        "iteration": 29,
+        "elapsedMs": 22.764458999999988,
+        "nodeCpuMs": 17.324,
+        "processes": 32
+      }
+    ]
+  },
+  "summary": [
+    {
+      "count": 1,
+      "direct": {
+        "medianMs": 3.513562500000262,
+        "nodeCpuMs": 12.620999999999995,
+        "processes": 30
+      },
+      "batched": {
+        "medianMs": 3.547125000000051,
+        "nodeCpuMs": 14.187999999999997,
+        "processes": 30
+      }
+    },
+    {
+      "count": 8,
+      "direct": {
+        "medianMs": 5.986312500000167,
+        "nodeCpuMs": 108.18699999999998,
+        "processes": 240
+      },
+      "batched": {
+        "medianMs": 5.001000000000204,
+        "nodeCpuMs": 19.095,
+        "processes": 30
+      }
+    },
+    {
+      "count": 32,
+      "direct": {
+        "medianMs": 18.894083499999397,
+        "nodeCpuMs": 441.39799999999985,
+        "processes": 960
+      },
+      "batched": {
+        "medianMs": 9.892749999999978,
+        "nodeCpuMs": 41.18700000000001,
+        "processes": 30
+      }
+    }
+  ]
+}

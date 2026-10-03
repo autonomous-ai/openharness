@@ -1,10 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/analytics/analytics.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/cli_login.dart';
+import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/bootstrap/environment_provisioner.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
@@ -38,7 +38,10 @@ class _Cli extends CliLogin {
       const CliAuthStatus(loggedIn: true);
 
   @override
-  Future<void> login({void Function(String url)? onAuthorizeUrl}) async {}
+  Future<void> login({
+    void Function(String url)? onAuthorizeUrl,
+    SignInProvider? provider,
+  }) async {}
 
   @override
   Future<void> logout() async {}
@@ -170,12 +173,8 @@ void main() {
     api = _Api();
     connection = _Connection();
     app = _App(api, connection);
-    analyticsAccount.clear();
   });
-  tearDown(() {
-    disposeApp();
-    analyticsAccount.clear();
-  });
+  tearDown(disposeApp);
 
   for (final signingIn in [false, true]) {
     test(
@@ -484,7 +483,6 @@ void main() {
     // what left. What must not survive is the old account's identity.
     expect(app.signedIn, isFalse);
     expect(app.currentUser, isNull);
-    expect(analyticsAccount.current.id, isNull);
     expect(app.machines, isEmpty);
     expect(connection.requests, isEmpty);
   });
@@ -524,7 +522,6 @@ void main() {
       await _tick();
       expect(profileNotifications, 1);
       expect(app.currentUser!.id, 'current');
-      expect(analyticsAccount.current.id, 'current');
       expect(api.lists, hasLength(1));
       expect(
         connection.requests.where((r) => r == 'agents_list'),
@@ -581,7 +578,6 @@ void main() {
       await newLogin;
       await _tick();
       expect(app.currentUser!.id, 'new');
-      expect(analyticsAccount.current.id, 'new');
       expect(app.signingIn, isFalse);
       expect(app.machinesLoading, isFalse);
     },
@@ -616,7 +612,6 @@ void main() {
       await _tick();
       expect(app.currentUser, isNull);
       expect(app.machines, isEmpty);
-      expect(analyticsAccount.current.id, isNull);
       expect(connection.requests, isEmpty);
     },
   );

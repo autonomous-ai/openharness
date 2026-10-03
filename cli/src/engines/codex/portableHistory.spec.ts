@@ -1,8 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { constants as bufferConstants } from 'node:buffer'
+import { createHash } from 'node:crypto'
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs'
+import * as fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { portableCodexHistory, prepareCodexResume } from './portableHistory.js'
+
+// Keep the real filesystem, with configurable exports for simulating a concurrent writer.
+vi.mock('node:fs', async importOriginal => ({ ...await importOriginal<typeof import('node:fs')>() }))
 
 const SESSION = '01a0a3cd-a374-71f2-a11a-1fc1cc41b36d'
 const BAD_ID = 'msg_aY9suLof0GA06VzeKPXLM7rjUhoRRF9d'
@@ -68,7 +74,7 @@ describe('preparing a stopped Codex session for resume', () => {
     mkdirSync(dir, { recursive: true })
     file = join(dir, `rollout-2026-09-15T13-42-38-${SESSION}.jsonl`)
   })
-  afterEach(() => { rmSync(profile, { recursive: true, force: true }) })
+  afterEach(() => { vi.restoreAllMocks(); rmSync(profile, { recursive: true, force: true }) })
   const source = () => ({ engine: 'codex', sessionId: SESSION, transcriptPath: file, codexHome: profile })
 
   it('backs up the exact original, repairs the same session, and is a no-op on the next resume', () => {
@@ -87,6 +93,71 @@ describe('preparing a stopped Codex session for resume', () => {
     expect(statSync(file).mtimeMs).toBe(before.mtimeMs)
     expect(statSync(file).ino).toBe(before.ino)
     expect(readdirSync(join(profile, 'sessions', '2026', '09', '15'))).toHaveLength(2)
+  })
+
+  it('resumes and repairs a rollout larger than the engine single-string limit without losing history', () => {
+    const chunk = Buffer.from(record('event_msg', { type: 'agent_message', message: 'x'.repeat(512 * 1024) }) + '\n')
+    const fd = openSync(file, 'wx')
+    const originalHash = createHash('sha256')
+    const write = (bytes: string | Buffer) => { writeSync(fd, Buffer.from(bytes)); originalHash.update(bytes) }
+    try {
+      write(meta + '\r\n')
+      for (let bytes = 0; bytes <= bufferConstants.MAX_STRING_LENGTH; bytes += chunk.length) write(chunk)
+    } finally { closeSync(fd) }
+    const before = statSync(file)
+    expect(before.size).toBeGreaterThan(bufferConstants.MAX_STRING_LENGTH)
+    // The common case must not rewrite or create a backup just to reopen an existing session.
+    expect(prepareCodexResume(source())).toEqual({ repairedItems: 0 })
+    expect(statSync(file).ino).toBe(before.ino)
+    expect(readdirSync(join(profile, 'sessions', '2026', '09', '15'))).toHaveLength(1)
+
+    const tail = record('response_item', badReasoning())
+    writeFileSync(file, tail, { flag: 'a' })
+    originalHash.update(tail)
+    const result = prepareCodexResume(source())
+    expect(result.repairedItems).toBe(1)
+    expect(result.repairedBytes).toBe(statSync(file).size)
+    const backupHash = createHash('sha256')
+    const backup = openSync(result.backupPath!, 'r')
+    try {
+      const buffer = Buffer.alloc(64 * 1024)
+      let read: number
+      while ((read = readSync(backup, buffer)) > 0) backupHash.update(buffer.subarray(0, read))
+    } finally { closeSync(backup) }
+    expect(backupHash.digest('hex')).toBe(originalHash.digest('hex'))
+    const repaired = openSync(file, 'r')
+    try {
+      const expected = Buffer.from(record('response_item', { type: 'reasoning', summary, content: [] }))
+      const actual = Buffer.alloc(expected.length)
+      readSync(repaired, actual, 0, actual.length, statSync(file).size - actual.length)
+      expect(actual).toEqual(expected)
+    } finally { closeSync(repaired) }
+  }, 30_000)
+
+  it('preserves UTF-8, CRLF, blank lines, and a final record without a newline across chunk boundaries', () => {
+    const original = '\r\n' + history(badReasoning(), { ...message,
+      content: [{ type: 'output_text', text: '𐐀é'.repeat(40_000) }],
+    }).replaceAll('\n', '\r\n').trimEnd()
+    writeFileSync(file, original)
+    const result = prepareCodexResume(source())
+    expect(result.repairedItems).toBe(1)
+    expect(readFileSync(result.backupPath!, 'utf8')).toBe(original)
+    expect(readFileSync(file, 'utf8')).toBe(portableCodexHistory(original, SESSION).history)
+  })
+
+  it('keeps a concurrent writer’s update instead of replacing it with prepared history', () => {
+    writeFileSync(file, history(badReasoning()))
+    const originalRead = fs.readSync
+    let changed = false
+    const appended = record('event_msg', { type: 'agent_message', message: 'new work' }) + '\n'
+    vi.spyOn(fs, 'readSync').mockImplementation((...args: Parameters<typeof fs.readSync>) => {
+      const read = originalRead(...args)
+      if (!changed) { changed = true; writeFileSync(file, appended, { flag: 'a' }) }
+      return read
+    })
+    expect(() => prepareCodexResume(source())).toThrow('changed during resume preparation')
+    expect(readFileSync(file, 'utf8')).toBe(history(badReasoning()) + appended)
+    expect(readdirSync(join(profile, 'sessions', '2026', '09', '15'))).toHaveLength(1)
   })
 
   it('resolves a rollout in the selected profile when the registry has no transcript path', () => {

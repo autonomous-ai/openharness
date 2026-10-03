@@ -1,0 +1,39 @@
+{
+  "kind": "synthetic-saved-session-catalog",
+  "node": "v22.23.2",
+  "platform": "darwin",
+  "arch": "arm64",
+  "summaries": [
+    {
+      "count": 32,
+      "coldMs": 2.1812499999999773,
+      "reads": 60,
+      "warmMedianMs": 1.1652919999999654,
+      "warmP95Ms": 1.2583329999999933,
+      "warmMaxMs": 1.651625000000024,
+      "cpuMs": 85.175
+    },
+    {
+      "count": 272,
+      "coldMs": 11.692666999999972,
+      "reads": 60,
+      "warmMedianMs": 8.055000000000064,
+      "warmP95Ms": 9.360125000000039,
+      "warmMaxMs": 9.903082999999981,
+      "cpuMs": 504.729
+    },
+    {
+      "count": 1000,
+      "coldMs": 32.435249999999996,
+      "reads": 60,
+      "warmMedianMs": 30.811749999999847,
+      "warmP95Ms": 34.27866700000004,
+      "warmMaxMs": 37.59762500000011,
+      "cpuMs": 1892.008
+    }
+  ],
+  "limitations": [
+    "Synthetic metadata with a warm OS file cache.",
+    "Measures catalog reads, not whole-app CPU, display latency, or model processes."
+  ]
+}

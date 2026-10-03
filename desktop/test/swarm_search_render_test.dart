@@ -91,7 +91,7 @@ void main() {
           ...machine.agents.where((agent) => agent.id != original.id),
         ];
         machine.nodeOnline = false;
-        app.renameSwarm(source.id, 'Renamed swarm');
+        app.renameSwarm(source.id, 'Renamed tab');
         await tester.pump();
         await open();
         await tester.enterText(field, 'after-branch');
@@ -114,7 +114,7 @@ void main() {
           });
           expect(
             rows.singleWhere((row) => row.swarmId == source.id).swarmName,
-            'Renamed swarm',
+            'Renamed tab',
           );
         }
         await tester.enterText(field, 'before-branch');
@@ -254,12 +254,16 @@ void main() {
         )
         .search!;
     final previous = search.selected!.id;
-    final visibleRows = find.byType(InkWell).evaluate().toSet();
+    final visibleRows = find.byType(ListTile).evaluate().where((element) {
+      final key = element.widget.key;
+      return key is ValueKey<String> && key.value.startsWith('agent:');
+    }).toSet();
+    expect(visibleRows, isNotEmpty);
     var fields = 0;
     var rows = 0;
     debugOnRebuildDirtyWidget = (element, _) {
       if (element.widget is TextField) fields++;
-      if (element.widget is InkWell && visibleRows.contains(element)) rows++;
+      if (element.widget is ListTile && visibleRows.contains(element)) rows++;
     };
     try {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
@@ -274,10 +278,10 @@ void main() {
       reason: 'Moving the highlight does not change the editor',
     );
     expect(rows, 2, reason: 'Only the old and new existing highlights changed');
-    final selected = tester
-        .element(find.byKey(ValueKey(search.selected!.id)))
-        .findAncestorWidgetOfExactType<Semantics>()!;
-    expect(selected.properties.selected, isTrue);
+    final selected = tester.widget<ListTile>(
+      find.byKey(ValueKey(search.selected!.id)),
+    );
+    expect(selected.selected, isTrue);
     expect(find.byKey(const ValueKey('swarm-search-count')), findsNothing);
     expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
     expect(input, isEmpty);
@@ -296,14 +300,14 @@ void main() {
       final field = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(field, 'Agent');
       await tester.pump(const Duration(milliseconds: 200));
-      final visibleRows = find.byType(InkWell).evaluate().where((element) {
+      final visibleRows = find.byType(ListTile).evaluate().where((element) {
         final key = element.widget.key;
         return key is ValueKey<String> && key.value.startsWith('agent:');
       }).toSet();
       expect(visibleRows, isNotEmpty);
       var rowBuilds = 0;
       debugOnRebuildDirtyWidget = (element, _) {
-        if (element.widget is InkWell && visibleRows.contains(element)) {
+        if (element.widget is ListTile && visibleRows.contains(element)) {
           rowBuilds++;
         }
       };
@@ -363,38 +367,17 @@ void main() {
           .search!;
       final row = find.byKey(ValueKey(search.selected!.id));
       expect(find.byType(Checkbox), findsNothing);
-      expect(
-        tester
-            .element(row)
-            .findAncestorWidgetOfExactType<Semantics>()!
-            .properties
-            .selected,
-        isTrue,
-      );
+      expect(tester.widget<ListTile>(row).selected, isTrue);
       final height = tester.getSize(row).height;
       grid.AppTheme.palette.value = HarnessPalette.ember;
       await tester.pump();
-      expect(
-        tester
-            .element(row)
-            .findAncestorWidgetOfExactType<Semantics>()!
-            .properties
-            .selected,
-        isTrue,
-      );
+      expect(tester.widget<ListTile>(row).selected, isTrue);
       tester.platformDispatcher.textScaleFactorTestValue = 2;
       await tester.pump();
       expect(tester.getSize(row).height, greaterThan(height));
       expect(tester.widget<TextField>(field).controller!.text, 'Agent');
       expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
-      expect(
-        tester
-            .element(row)
-            .findAncestorWidgetOfExactType<Semantics>()!
-            .properties
-            .selected,
-        isTrue,
-      );
+      expect(tester.widget<ListTile>(row).selected, isTrue);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       app.dispose();
@@ -419,14 +402,7 @@ void main() {
     app.dismissError(); // Publish the sessions assembled through the test seam.
     await tester.pump();
     final row = find.byKey(ValueKey(agentDestinationId('m', 'a0')));
-    expect(
-      tester
-          .element(row)
-          .findAncestorWidgetOfExactType<Semantics>()!
-          .properties
-          .enabled,
-      isTrue,
-    );
+    expect(tester.widget<ListTile>(row).enabled, isTrue);
     expect(
       find.descendant(of: row, matching: find.text('Already added')),
       findsNothing,

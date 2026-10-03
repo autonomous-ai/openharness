@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import 'app_log.dart';
 import 'cli_log.dart';
 import 'debug_surface.dart';
@@ -15,22 +17,29 @@ const String kCliLogBase = 'cli';
 ///
 /// Called once from `main()`. Nothing else calls it, which is what keeps the
 /// suite honest: both sinks default to their no-op, so `flutter test` cannot
-/// write into a real Harness home no matter which code path it exercises — the
-/// same rule analytics follows.
+/// write into a real Harness home no matter which code path it exercises.
 ///
 /// Deliberately not `async`: the first lines this app writes are the ones about
 /// starting up, and awaiting a directory probe here would lose them.
 void installFileLogs() {
+  if (kIsWeb) {
+    appLog = StreamAppLog(logStream);
+    cliLog = StreamCliLog(logStream);
+    return;
+  }
   final directory = DailyLogFile.defaultDirectory;
-  final file = FileAppLog(DailyLogFile(directory, kAppLogBase));
+  final file = FileAppLog(
+    DailyLogFile(directory, kAppLogBase),
+    bufferDebug: true,
+  );
   final cli = FileCliLog(DailyLogFile(directory, kCliLogBase));
   if (!kDebugSurfaceEnabled) {
     appLog = file;
     cliLog = cli;
     return;
   }
-  // The file first in both fan-outs: if the mirror ever throws, the durable
-  // copy is already written.
+  // The file first in both fan-outs: if the mirror ever throws, the record
+  // has already reached the file sink (routine debug entries may be buffered).
   appLog = FanoutAppLog([file, StreamAppLog(logStream)]);
   cliLog = FanoutCliLog([cli, StreamCliLog(logStream)]);
   // The dial's log is the daemon's to write; this app only reads it. Tailed

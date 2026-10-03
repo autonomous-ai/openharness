@@ -1,0 +1,30 @@
+{
+  "kind": "synthetic-memory-performance",
+  "mode": "prepare-with-full-receipt-history",
+  "retainedReceipts": 5000,
+  "records": 10000,
+  "projects": 10,
+  "node": "v22.23.2",
+  "platform": "darwin",
+  "arch": "arm64",
+  "seedMs": 57644.669666999995,
+  "cold": {
+    "p50Ms": 58.674334000003,
+    "p95Ms": 67.33458300000348,
+    "maxMs": 67.33458300000348
+  },
+  "warm": {
+    "p50Ms": 23.567708000002312,
+    "p95Ms": 30.22320899999613,
+    "maxMs": 44.904333999998926
+  },
+  "requests": 310,
+  "timeouts": 0,
+  "largestPacketBytes": 2642,
+  "parentEventLoopP95Ms": 1.649663,
+  "limitations": [
+    "Synthetic lexical matches, not a retrieval-quality benchmark.",
+    "Cold means a new worker, not an emptied OS disk cache.",
+    "One local machine; provider extraction and native hook delivery are not measured."
+  ]
+}

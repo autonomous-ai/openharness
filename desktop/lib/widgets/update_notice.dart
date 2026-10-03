@@ -1,7 +1,7 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/app_version.dart';
@@ -109,8 +109,8 @@ class UpdateNotice extends StatelessWidget {
                             )
                           : Icon(
                               failed
-                                  ? LucideIcons.triangleAlert300
-                                  : LucideIcons.arrowDownToLine300,
+                                  ? AppIcons.triangleAlert
+                                  : AppIcons.arrowDownToLine,
                               size: 16,
                               color: markColor,
                             ),
@@ -301,6 +301,7 @@ Future<void> showUpdateCheckDialog(
   AppNotifier notifier,
   ManualUpdateCheck result,
 ) {
+  Future<String>? installedVersion;
   return showAppDialog<void>(
     context: context,
     builder: (dialogContext) {
@@ -311,7 +312,7 @@ Future<void> showUpdateCheckDialog(
         builder: (context, setState) {
           if (checking) {
             return const _UpdateDialog(
-              icon: LucideIcons.refreshCw300,
+              icon: AppIcons.refreshCw,
               title: 'Checking for updates…',
               body: 'Looking for a newer version of Harness.',
               busy: true,
@@ -319,7 +320,7 @@ Future<void> showUpdateCheckDialog(
           }
           if (current.status == DesktopUpdateCheckStatus.failed) {
             return _UpdateDialog(
-              icon: LucideIcons.triangleAlert300,
+              icon: AppIcons.triangleAlert,
               tone: _DialogTone.warning,
               title: 'Couldn’t check for updates',
               body:
@@ -348,18 +349,23 @@ Future<void> showUpdateCheckDialog(
           }
           if (current.status == DesktopUpdateCheckStatus.disabled) {
             return const _UpdateDialog(
-              icon: LucideIcons.info300,
+              icon: AppIcons.info,
               title: 'Updates are off for this build',
               body: 'This build does not check for or install desktop updates.',
             );
           }
           final update = current.update;
           if (update == null) {
-            return const _UpdateDialog(
-              icon: LucideIcons.circleCheck300,
-              tone: _DialogTone.ok,
-              title: 'You’re up to date',
-              body: 'This copy of Harness already has the latest version.',
+            return FutureBuilder<String>(
+              future: installedVersion ??= runningAppVersion(),
+              builder: (context, snapshot) => _UpdateDialog(
+                icon: AppIcons.circleCheck,
+                tone: _DialogTone.ok,
+                title: 'You’re up to date',
+                body: snapshot.hasData
+                    ? 'Harness ${snapshot.data} is the latest version.'
+                    : 'This copy of Harness already has the latest version.',
+              ),
             );
           }
           return PopScope(
@@ -377,7 +383,7 @@ Future<void> showUpdateCheckDialog(
                 final installingVersion =
                     notifier.availableUpdate?.version ?? update.version;
                 return _UpdateDialog(
-                  icon: LucideIcons.arrowDownToLine300,
+                  icon: AppIcons.arrowDownToLine,
                   title: installing
                       ? 'Installing Harness $installingVersion…'
                       : 'Harness ${update.version} is available',

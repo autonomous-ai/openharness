@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
@@ -235,7 +236,7 @@ class _AppChoicePickerState<T> extends State<AppChoicePicker<T>> {
                   width: moreWidth,
                   height: controlHeight,
                   trigger: Icon(
-                    Icons.more_horiz,
+                    AppIcons.ellipsis,
                     size: 20,
                     color: AppPalette.textSecondary,
                   ),
@@ -314,7 +315,7 @@ class _AppChoicePickerState<T> extends State<AppChoicePicker<T>> {
                     : extra == null
                     ? widget.moreLeading
                     : extra.leading?.call(),
-                trailing: const Icon(Icons.keyboard_arrow_down, size: 18),
+                trailing: const Icon(AppIcons.chevronDown, size: 18),
               ),
             ),
           ),
@@ -407,7 +408,9 @@ class _AppChoicePickerState<T> extends State<AppChoicePicker<T>> {
             SizedBox(
               width: 16,
               child: selected
-                  ? const ExcludeSemantics(child: Icon(Icons.check, size: 16))
+                  ? const ExcludeSemantics(
+                      child: Icon(AppIcons.check, size: 16),
+                    )
                   : null,
             ),
           ],

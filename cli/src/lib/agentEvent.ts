@@ -1,3 +1,4 @@
+import type { ActivityFrame } from './turnActivity.js'
 export interface AgentEvent extends Record<string, unknown> {
   type: string
   payload: Record<string, unknown>
@@ -20,6 +21,7 @@ export function correlateAgentEvent(
 export function turnHeartbeatFrame(
   sessionId: string,
   agentId: string,
+  activity?: ActivityFrame,
 ): AgentEvent & { agentId: string; dbSessionId: string } {
-  return correlateAgentEvent({ type: 'turn_heartbeat', payload: {} }, sessionId, agentId)
+  return correlateAgentEvent({ type: 'turn_heartbeat', payload: activity ? { activity } : {} }, sessionId, agentId)
 }

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -504,5 +504,89 @@ describe('ensureLauncher', () => {
     ensureLauncher(NODE)
 
     expect(existsSync(launcherPath())).toBe(false)
+  })
+})
+
+describe('hn launcher migration', () => {
+  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`
+  const cliPath = () => join(cliDir, 'cli.js')
+  const harnessPath = () => join(binDir, 'harness')
+  const hnPath = () => join(binDir, 'hn')
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "harness launcher's "))
+    runtimeDir = join(root, '.harness', 'runtime')
+    binDir = join(root, '.local', 'bin')
+    cliDir = join(root, '.harness', 'cli')
+    for (const dir of [runtimeDir, binDir, cliDir]) mkdirSync(dir, { recursive: true })
+    writeFileSync(join(cliDir, 'package.json'), '{"type":"module"}')
+    writeFileSync(cliPath(), 'console.log(JSON.stringify({args:process.argv.slice(2),pin:process.env.ADAPTER_UPDATE_DISABLE}))')
+    writeFileSync(harnessPath(), `#!/bin/sh\nexport ADAPTER_UPDATE_DISABLE=true\nexec ${quote(process.execPath)} ${quote(cliPath())} "$@"\n`, { mode: 0o755 })
+  })
+
+  afterEach(() => {
+    chmodSync(binDir, 0o755)
+    rmSync(root, { recursive: true, force: true })
+    for (const key of ['ADAPTER_RUNTIME_DIR', 'HARNESS_BIN_DIR', 'ADAPTER_CLI_DIR', 'ADAPTER_RUNTIME_METADATA_URL', 'ADAPTER_GRID_RUNTIME_METADATA_URL']) delete process.env[key]
+  })
+
+  it('upgrades an old install with a working hn command, preserving quoted arguments and its update pin', async () => {
+    const { ensureHnLauncher } = await load()
+    expect(ensureHnLauncher(cliPath())).toBe(true)
+    const args = ['-L', 'hn-upgrade-unit', '--port', '19448', '--version', 'a b', "a'b", '$(false)']
+    const childEnv: NodeJS.ProcessEnv = { ...process.env, HOME: root, PORT: '19448', HN_SOCKET_NAME: 'hn-upgrade-unit' }
+    for (const key of ['TMUX', 'TMUX_PANE', 'HN_SOCKET']) delete childEnv[key]
+    const result = JSON.parse(execFileSync(hnPath(), args, { env: childEnv, encoding: 'utf8' }))
+    expect(result).toEqual({ args: ['tui', ...args], pin: 'true' })
+    const inode = statSync(hnPath()).ino
+    expect(ensureHnLauncher(cliPath())).toBe(false)
+    expect(statSync(hnPath()).ino).toBe(inode)
+    expect(readdirSync(binDir).sort()).toEqual(['harness', 'hn'])
+  })
+
+  it.each(['file', 'symlink', 'dangling symlink'])('preserves an existing hn %s', async (kind) => {
+    const target = join(root, 'other-hn')
+    if (kind !== 'dangling symlink') writeFileSync(target, 'another program')
+    if (kind === 'file') writeFileSync(hnPath(), 'another program')
+    else symlinkSync(target, hnPath())
+    const { ensureHnLauncher } = await load()
+    expect(ensureHnLauncher(cliPath())).toBe(false)
+    if (kind === 'file') expect(readFileSync(hnPath(), 'utf8')).toBe('another program')
+    else expect(readlinkSync(hnPath())).toBe(target)
+    if (kind !== 'dangling symlink') expect(readFileSync(target, 'utf8')).toBe('another program')
+    else expect(existsSync(target)).toBe(false)
+  })
+
+  it('does not migrate an installed copy while running a checkout or update canary', async () => {
+    const { ensureHnLauncher } = await load()
+    for (const other of [join(root, 'checkout', 'dist', 'cli.js'), join(cliDir, '.canary-test', 'cli.js')]) {
+      mkdirSync(dirname(other), { recursive: true })
+      writeFileSync(other, readFileSync(cliPath()))
+      expect(ensureHnLauncher(other)).toBe(false)
+      expect(existsSync(hnPath())).toBe(false)
+    }
+  })
+
+  it('recognizes the installed bundle through a symlink', async () => {
+    const alias = join(root, 'cli-link.js')
+    symlinkSync(cliPath(), alias)
+    const { ensureHnLauncher } = await load()
+    expect(ensureHnLauncher(alias)).toBe(true)
+  })
+
+  it.each(['missing', 'foreign', 'not executable'])('leaves a %s harness launcher alone', async (kind) => {
+    if (kind === 'missing') rmSync(harnessPath())
+    else if (kind === 'foreign') writeFileSync(harnessPath(), '#!/bin/sh\nexec another-command "$@"\n')
+    else chmodSync(harnessPath(), 0o644)
+    const { ensureHnLauncher } = await load()
+    expect(ensureHnLauncher(cliPath())).toBe(false)
+    expect(existsSync(hnPath())).toBe(false)
+  })
+
+  it.skipIf(process.getuid?.() === 0)('tolerates an unwritable bin directory', async () => {
+    const { ensureHnLauncher } = await load()
+    chmodSync(binDir, 0o555)
+    expect(ensureHnLauncher(cliPath())).toBe(false)
+    expect(existsSync(hnPath())).toBe(false)
   })
 })

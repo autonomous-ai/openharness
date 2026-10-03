@@ -214,6 +214,32 @@ void main() {
     },
   );
 
+  testWidgets('usage selectors announce purpose as well as current scope', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      final controller = controllerWith(const {});
+      await controller.load();
+      await pumpUsage(tester, controller);
+      final provider = tester
+          .getSemantics(find.bySemanticsLabel('Usage provider'))
+          .getSemanticsData();
+      final range = tester
+          .getSemantics(find.bySemanticsLabel('Usage date range'))
+          .getSemanticsData();
+      expect(provider.label, 'Usage provider');
+      expect(provider.value, 'Overview');
+      expect(range.label, 'Usage date range');
+      expect(
+        range.value,
+        tester.widget<AppSelectField<UsageRange>>(_rangeField).value.label,
+      );
+    } finally {
+      semantics.dispose();
+    }
+  });
+
   testWidgets('rests with nothing switched on, and offers the switches', (
     tester,
   ) async {
@@ -240,10 +266,10 @@ void main() {
         await pumpUsage(tester, controller);
 
         expect(
-          find.text('Start your first agent to begin tracking.'),
+          find.text('Start your first harness to begin tracking.'),
           findsOneWidget,
         );
-        expect(find.text('Agents spawned'), findsNothing);
+        expect(find.text('Harnesses started'), findsNothing);
       },
     );
 
@@ -262,7 +288,7 @@ void main() {
       await controller.load();
       await pumpUsage(tester, controller, stats: stats);
 
-      expect(find.text('Agents spawned'), findsOneWidget);
+      expect(find.text('Harnesses started'), findsOneWidget);
       expect(find.text('2'), findsOneWidget);
       expect(find.text('2h 30m'), findsOneWidget);
       expect(find.text('Tracking since Sep 1, 2026'), findsOneWidget);
@@ -275,12 +301,12 @@ void main() {
       await controller.load();
       await pumpUsage(tester, controller, stats: stats);
 
-      expect(find.text('Agents spawned'), findsNothing);
+      expect(find.text('Harnesses started'), findsNothing);
 
       stats.onAgentSpawned();
       await tester.pumpAndSettle();
 
-      expect(find.text('Agents spawned'), findsOneWidget);
+      expect(find.text('Harnesses started'), findsOneWidget);
     });
   });
 
@@ -527,7 +553,7 @@ void main() {
       expect(find.byType(UsageProviderPane), findsOneWidget);
       // The eight figures, the range it is showing, and the panels under them.
       expect(find.text('Cache reuse rate'), findsOneWidget);
-      expect(find.text('Sessions / turns'), findsOneWidget);
+      expect(find.text('Conversations / turns'), findsOneWidget);
       expect(
         find.text('All local Claude usage · Last 30 days'),
         findsOneWidget,
@@ -628,7 +654,7 @@ void main() {
       await pumpUsage(tester, controller);
       expect(find.text('Incomplete'), findsOneWidget);
       expect(find.text('No figures available.'), findsOneWidget);
-      expect(find.text('0 sessions'), findsNothing);
+      expect(find.text('0 conversations'), findsNothing);
       expect(find.text('0 tokens'), findsNothing);
       expect(find.textContaining('0 with data'), findsNothing);
     },
@@ -641,7 +667,7 @@ void main() {
     await controller.load();
     await controller.storeFor(LedgerProvider.claude).setEnabled(true);
     await pumpUsage(tester, controller);
-    expect(find.text('0 sessions'), findsOneWidget);
+    expect(find.text('0 conversations'), findsOneWidget);
     expect(find.text('0 tokens'), findsOneWidget);
     expect(find.text('Incomplete'), findsNothing);
   });

@@ -1,21 +1,22 @@
 /// The model picker's own furniture: the search field, the section headings, the rows and the
 /// footer that closes the panel.
 ///
-/// Kept here rather than in `pane_menu.dart` because this is ONE menu's look, not the shape every
-/// pane menu shares. The find bar and the New Harness box draw their rows from `PaneMenuRow`, and
-/// a model picker that wanted an avatar, a second line and a quota meter would have dragged all of
-/// them somewhere they never asked to go.
+/// Model-specific content stays here; the surface and focusable actions share
+/// the desktop menu treatment in `pane_menu.dart`.
 ///
 /// Everything here is presentation and nothing here decides: what a row means, whether it can be
 /// chosen, and what happens when it is are all the picker's ([GridModelPicker]).
 library;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/model_mark.dart';
-import '../shared/theme/app_type.dart';
+import '../shared/theme/app_theme.dart' as grid;
 import '../theme/app_theme.dart';
+import 'desktop_chrome.dart';
+import 'pane_menu.dart';
 import 'resting_section.dart' show kUnavailableOpacity;
 
 /// The panel's own width. Narrower than a row list, because every row here is two lines and the
@@ -50,7 +51,7 @@ class ModelAvatar extends StatelessWidget {
     alignment: Alignment.center,
     decoration: BoxDecoration(
       color: AppColors.surface,
-      borderRadius: BorderRadius.circular(9),
+      borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
     ),
     child: child ?? ModelMark(model: label),
   );
@@ -69,87 +70,67 @@ class ModelPickerSearch extends StatelessWidget {
   final ValueChanged<String> onChanged;
 
   @override
-  Widget build(BuildContext context) => Container(
-    height: 44,
-    padding: const EdgeInsets.symmetric(horizontal: kModelPickerInset),
-    decoration: BoxDecoration(
-      color: AppColors.surface,
-      borderRadius: BorderRadius.circular(10),
-      border: Border.all(color: AppColors.border),
-    ),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Icon(Icons.search, size: 16, color: AppColors.mutedStrong),
-        const SizedBox(width: 9),
-        Expanded(
-          // ⚠️ Arrow keys belong to the LIST, not to the text.
-          //
-          // A text field consumes up and down for cursor movement, and it is the first thing this
-          // panel focuses so a person can type straight away — which left the rows unreachable
-          // from the keyboard entirely: every arrow went into the field and Enter submitted
-          // nothing. `Shortcuts` nearest the focused node wins over the editing shortcuts the app
-          // installs at its root, so this is where that is taken back.
-          child: Shortcuts(
-            shortcuts: const <ShortcutActivator, Intent>{
-              SingleActivator(LogicalKeyboardKey.arrowDown): NextFocusIntent(),
-              SingleActivator(LogicalKeyboardKey.arrowUp):
-                  PreviousFocusIntent(),
-            },
-            // The nudge, and it is a nudge on purpose. The icon centres correctly in this row; the
-            // text does not, because the decorator gives the field more height than the letters use
-            // and hands the slack to the bottom. Several principled fixes were tried first — even
-            // leading distribution, a pinned line height, sizing the box from its padding — and each
-            // moved the number without closing the gap; the last one only made the box taller. What
-            // is left is a measured offset, stated as one, rather than another theory dressed as a
-            // layout rule. Half of it lands on the glyphs, which is why it is twice what the eye
-            // asked for.
-            child: Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: TextField(
-                controller: controller,
-                onChanged: onChanged,
-                autofocus: true,
-                // The LINE box centres correctly on its own; the glyphs inside it do not. The app's
-                // sans face has a lopsided ascent and descent, and the default leading distribution
-                // hands that asymmetry straight to the text — so the hint sat visibly high in a box a
-                // widget test measures as perfectly centred, because a test measures the line box and
-                // an eye sees the letters. Splitting the leading evenly is what puts them in the
-                // middle of it.
-                style: AppType.body(
-                  color: AppColors.text,
-                ).copyWith(leadingDistribution: TextLeadingDistribution.even),
-                textAlignVertical: TextAlignVertical.center,
-                cursorColor: AppColors.text,
-                decoration: InputDecoration(
-                  isCollapsed: true,
-                  // ⚠️ EVERY border state, and `filled: false`. The app's theme gives fields a 1.5px
-                  // accent `focusedBorder` and a fill of their own, and `border:` overrides neither —
-                  // so a field that autofocuses the moment the panel opens drew a second, brighter box
-                  // INSIDE the one around it. The box is this container's; the caret is the focus.
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  disabledBorder: InputBorder.none,
-                  errorBorder: InputBorder.none,
-                  focusedErrorBorder: InputBorder.none,
-                  filled: false,
-                  contentPadding: EdgeInsets.zero,
-                  hintText: 'Search models or machines',
-                  hintStyle: AppType.body(
-                    color: AppColors.muted,
-                  ).copyWith(leadingDistribution: TextLeadingDistribution.even),
-                ),
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final highContrast = MediaQuery.highContrastOf(context);
+    final border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
+      borderSide: BorderSide(
+        color: highContrast
+            ? DesktopChrome.foreground.withValues(alpha: .55)
+            : DesktopChrome.rim,
+      ),
+    );
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 40),
+      // The existing list-navigation shortcuts stay nearest the editor.
+      child: Shortcuts(
+        shortcuts: const <ShortcutActivator, Intent>{
+          SingleActivator(LogicalKeyboardKey.arrowDown): NextFocusIntent(),
+          SingleActivator(LogicalKeyboardKey.arrowUp): PreviousFocusIntent(),
+        },
+        child: TextField(
+          controller: controller,
+          onChanged: onChanged,
+          autofocus: true,
+          style: DesktopChrome.control(),
+          textAlignVertical: TextAlignVertical.center,
+          cursorColor: DesktopChrome.accent,
+          decoration: InputDecoration(
+            hintText: 'Search models or machines',
+            hintStyle: DesktopChrome.control(color: DesktopChrome.muted),
+            prefixIcon: Icon(
+              AppIcons.search,
+              size: 16,
+              color: DesktopChrome.muted,
+            ),
+            prefixIconConstraints: const BoxConstraints(
+              minWidth: 36,
+              minHeight: 36,
+            ),
+            isDense: true,
+            filled: true,
+            fillColor: DesktopChrome.field,
+            border: border,
+            enabledBorder: border,
+            focusedBorder: border.copyWith(
+              borderSide: BorderSide(
+                color: DesktopChrome.focusRing,
+                width: grid.AppDesktop.focusWidth,
               ),
+            ),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 10,
             ),
           ),
         ),
-      ],
-    ),
-  );
+      ),
+    );
+  }
 }
 
-/// A section's heading: what the group is, in small caps, with how many rows are under it.
+/// A section's name and the number of visible models it contains.
 ///
 /// The count is on the right and quiet. It answers "is the thing I want even here" before the eye
 /// walks the list, which matters most in the section a search has just emptied.
@@ -163,7 +144,7 @@ class ModelPickerSectionHeader extends StatelessWidget {
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.fromLTRB(
       kModelPickerInset,
-      14,
+      16,
       kModelPickerInset,
       8,
     ),
@@ -171,19 +152,13 @@ class ModelPickerSectionHeader extends StatelessWidget {
       children: [
         Expanded(
           child: Text(
-            label.toUpperCase(),
-            style: AppType.body(color: AppColors.mutedStrong).copyWith(
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.9,
+            label,
+            style: DesktopChrome.metadata().copyWith(
+              fontWeight: FontWeight.w500,
             ),
           ),
         ),
-        if (count != null)
-          Text(
-            '$count',
-            style: AppType.body(color: AppColors.muted).copyWith(fontSize: 11),
-          ),
+        if (count != null) Text('$count', style: DesktopChrome.metadata()),
       ],
     ),
   );
@@ -236,118 +211,138 @@ class ModelPickerRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final row = Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        if (avatar != null) ...[
-          dimmed
-              ? Opacity(opacity: kUnavailableOpacity, child: avatar)
-              : avatar!,
-          const SizedBox(width: 11),
-        ],
-        Expanded(
+    grid.AppTheme.watch(context);
+    return PaneMenuAction(
+      onPressed: onTap,
+      selected: selected,
+      builder: (context, active) {
+        final row = Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            if (avatar != null) ...[
+              dimmed
+                  ? Opacity(opacity: kUnavailableOpacity, child: avatar)
+                  : avatar!,
+              const SizedBox(width: 11),
+            ],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Tooltip(
+                    message: title,
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          DesktopChrome.control(
+                            color: active
+                                ? grid.AppDesktop.onSelection
+                                : dimmed
+                                ? DesktopChrome.muted
+                                : DesktopChrome.foreground,
+                            medium: true,
+                          ).copyWith(
+                            fontWeight: selected
+                                ? FontWeight.w600
+                                : FontWeight.w500,
+                          ),
+                    ),
+                  ),
+                  if (subtitle.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.metadata(
+                        color: active ? grid.AppDesktop.onSelection : null,
+                      ),
+                    ),
+                  ],
+                  if (hint != null) ...[
+                    const SizedBox(height: 2),
+                    // Two lines: "<computer> seems offline — its models come back when it does" is
+                    // longer than a row is wide, and cut short it no longer says when.
+                    Text(
+                      hint!,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.metadata(
+                        color: active ? grid.AppDesktop.onSelection : null,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (trailing != null) ...[
+              const SizedBox(width: 12),
+              // Capped, not flexed — see [kModelPickerTrailingMax]. The cap is also what keeps a quota
+              // column from overflowing the row at a large text size in a small window.
+              ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxWidth: kModelPickerTrailingMax,
+                ),
+                child: active
+                    ? ColorFiltered(
+                        colorFilter: const ColorFilter.mode(
+                          grid.AppDesktop.onSelection,
+                          BlendMode.srcIn,
+                        ),
+                        child: trailing!,
+                      )
+                    : trailing!,
+              ),
+            ],
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 16,
+              child: selected
+                  ? Icon(
+                      AppIcons.check,
+                      size: 16,
+                      color: active
+                          ? grid.AppDesktop.onSelection
+                          : DesktopChrome.foreground,
+                    )
+                  : null,
+            ),
+          ],
+        );
+        return Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: kModelPickerInset,
+            vertical: 8,
+          ),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: AppType.body(
-                  color: dimmed ? AppColors.muted : AppColors.text,
-                ).copyWith(fontWeight: FontWeight.w600, fontSize: 13.5),
-              ),
-              if (subtitle.isNotEmpty) ...[
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppType.mono(
-                    color: dimmed ? AppColors.muted : AppColors.mutedStrong,
+              row,
+              if (meter != null) ...[
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(3),
+                  child: LinearProgressIndicator(
+                    value: meter!.clamp(0, 1),
+                    minHeight: 5,
+                    backgroundColor: active
+                        ? grid.AppDesktop.onSelection.withValues(alpha: .2)
+                        : AppColors.border,
+                    valueColor: AlwaysStoppedAnimation(
+                      active
+                          ? grid.AppDesktop.onSelection
+                          : note ?? AppColors.accent,
+                    ),
                   ),
-                ),
-              ],
-              if (hint != null) ...[
-                const SizedBox(height: 2),
-                // Two lines: "<computer> seems offline — its models come back when it does" is
-                // longer than a row is wide, and cut short it no longer says when.
-                Text(
-                  hint!,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppType.body(color: AppColors.muted)
-                      .copyWith(fontSize: 11.5),
                 ),
               ],
             ],
           ),
-        ),
-        if (trailing != null) ...[
-          const SizedBox(width: 12),
-          // Capped, not flexed — see [kModelPickerTrailingMax]. The cap is also what keeps a quota
-          // column from overflowing the row at a large text size in a small window.
-          ConstrainedBox(
-            constraints: const BoxConstraints(
-              maxWidth: kModelPickerTrailingMax,
-            ),
-            child: trailing!,
-          ),
-        ],
-      ],
-    );
-    // No tick. The fill and its border are the mark, and a tick beside a quota figure crowded the
-    // one thing on the row worth reading. A screen reader is told in words instead.
-    return Semantics(
-      selected: selected,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: InkWell(
-          onTap: onTap,
-          mouseCursor: SystemMouseCursors.click,
-          borderRadius: BorderRadius.circular(11),
-          hoverColor: AppColors.rowHover,
-          // Focus is a keyboard position, not a decision, and the panel focuses something the moment
-          // it opens; painting it would light a row the person never pointed at.
-          focusColor: Colors.transparent,
-          splashColor: Colors.transparent,
-          highlightColor: Colors.transparent,
-          child: Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: kModelPickerInset,
-              vertical: 9,
-            ),
-            decoration: BoxDecoration(
-              color: selected ? AppColors.selected : null,
-              borderRadius: BorderRadius.circular(11),
-              border: selected
-                  ? Border.all(color: AppColors.accent.withValues(alpha: 0.45))
-                  : null,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                row,
-                if (meter != null) ...[
-                  const SizedBox(height: 9),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(3),
-                    child: LinearProgressIndicator(
-                      value: meter!.clamp(0, 1),
-                      minHeight: 5,
-                      backgroundColor: AppColors.border,
-                      valueColor: AlwaysStoppedAnimation(
-                        note ?? AppColors.accent,
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
@@ -374,71 +369,43 @@ class ModelPickerFooter extends StatelessWidget {
     decoration: BoxDecoration(
       border: Border(top: BorderSide(color: AppColors.border)),
     ),
-    child: Row(
-      // ⚠️ Both halves Flexible and pushed apart, never Expanded + Flexible. That pair splits the
-      // row down the middle and leaves the button at the START of its half, stranded short of
-      // the right edge. Flexible still gives each half a fair share when a large text size means
-      // they cannot both have everything they want.
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Flexible(
-          child: Text(
-            summary,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: AppType.body(color: AppColors.muted).copyWith(fontSize: 12),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Flexible(
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: InkWell(
-              onTap: onAction,
-              mouseCursor: SystemMouseCursors.click,
-              borderRadius: BorderRadius.circular(9),
-              hoverColor: AppColors.rowHover,
-              focusColor: Colors.transparent,
-              splashColor: Colors.transparent,
-              highlightColor: Colors.transparent,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 9,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(9),
-                  border: Border.all(color: AppColors.border),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.grid_view_rounded,
-                      size: 15,
-                      color: AppColors.textSoft,
-                    ),
-                    const SizedBox(width: 8),
-                    // Flexible: at a large text size the summary and the action cannot both have
-                    // everything they want, and a fixed label overflowed a small window.
-                    Flexible(
-                      child: Text(
-                        actionLabel,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppType.body(
-                          color: AppColors.text,
-                        ).copyWith(fontSize: 12.5, fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final count = Text(
+          summary,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: DesktopChrome.metadata(),
+        );
+        final action = DesktopPill(
+          label: actionLabel,
+          icon: AppIcons.layoutGrid,
+          onPressed: onAction,
+          tooltip: actionLabel,
+        );
+        // At larger text sizes the action needs its own line so its label stays
+        // readable. Both remain pinned while the model list scrolls above them.
+        if (constraints.maxWidth <
+            MediaQuery.textScalerOf(context).scale(300)) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              count,
+              const SizedBox(height: DesktopChrome.controlGap),
+              Align(alignment: Alignment.centerRight, child: action),
+            ],
+          );
+        }
+        // Flexible content pushed apart retains the shared left/right edges.
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Flexible(child: count),
+            const SizedBox(width: 12),
+            Flexible(child: action),
+          ],
+        );
+      },
     ),
   );
 }

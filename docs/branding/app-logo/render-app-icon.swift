@@ -6,9 +6,11 @@
 // mark as the design ships it, fitted into a 1024 canvas with 54px of margin (a 916px tile), which is
 // what keeps macOS from clipping the corners of its own squircle. The drawing is cut three ways:
 //   mac     the canvas as-is: macOS icon set, Linux harness.png, both apps' in-app assets/app_icon.png
-//   tile    cropped to the tile, the design's own rounded corners: Windows .ico, Android launcher
+//   tile    cropped to the tile, the design's own rounded corners: Windows .ico, Android launcher,
+//           the web favicon and install icons, the website's icon.svg
 //   square  cropped to the tile with its corners squared off and no alpha: iOS, which masks the
-//           icon itself and whose App Store upload rejects an alpha channel
+//           icon itself and whose App Store upload rejects an alpha channel; the web's
+//           apple-touch-icon, which iOS masks the same way
 // To adopt a new logo, keep its untouched SVG beside this script, put its 400x400 markup inside the
 // <g transform> in app_icon.svg, and rerun.
 import AppKit
@@ -85,6 +87,17 @@ try write(try png(.mac, 256), "mobile/assets/app_icon.png")
 try write(try png(.mac, 512), "desktop/linux/harness.png")
 
 try write(ico(try [16, 32, 48, 256].map { ($0, try png(.tile, $0)) }), "desktop/windows/runner/resources/app_icon.ico")
+
+// The browser app: tab icon, install icons, and the Home Screen icon, which iOS masks like an app's.
+// The website's own pages and its /favicon.ico fallback wear the same tile.
+let favicon = ico(try [16, 32, 48].map { ($0, try png(.tile, $0)) })
+try write(favicon, "desktop/web/favicon.ico")
+try write(favicon, "website/src/app/favicon.ico")
+for size in [192, 512] {
+  try write(try png(.tile, size), "desktop/web/icons/icon-\(size).png")
+}
+try write(try png(.square, 180), "desktop/web/icons/apple-touch-icon.png")
+try write(try svg(.tile), "website/public/icon.svg")
 
 for (density, size) in [("mdpi", 48), ("hdpi", 72), ("xhdpi", 96), ("xxhdpi", 144), ("xxxhdpi", 192)] {
   try write(try png(.tile, size), "mobile/android/app/src/main/res/mipmap-\(density)/ic_launcher.png")

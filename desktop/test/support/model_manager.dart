@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:harness/auth/auth_session.dart';
+import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/core/models.dart';
@@ -101,22 +102,99 @@ class ModelManagerTestApp extends AppNotifier {
   final sent = <({String id, String machine, String task})>[];
 
   Map<String, dynamic> localInventory = modelInventory();
+  final machineInventories = <String, Map<String, dynamic>>{};
+  final inventoryReads = <String>[];
+  Map<String, dynamic> inventoryFor(String machineId) =>
+      machineInventories[machineId] ??
+      (machineId == 'm' ? localInventory : {'models': <Object>[]});
+  void setInventoryFor(String machineId, Map<String, dynamic> value) {
+    if (machineId == 'm') {
+      localInventory = value;
+    } else {
+      machineInventories[machineId] = value;
+    }
+  }
+
   final actions = <({String machine, String model, bool start})>[];
+  final downloads = <({String machine, String model})>[];
+
+  @override
+  Future<Map<String, dynamic>> downloadLocalModel(
+    String machineId,
+    String modelId,
+  ) async {
+    downloads.add((machine: machineId, model: modelId));
+    final inventory = inventoryFor(machineId);
+    final operation = <String, dynamic>{
+      'id': 'download',
+      'modelId': modelId,
+      'action': 'download',
+      'stage': 'downloading',
+      'phase': 'running',
+      'progress': .42,
+    };
+    setInventoryFor(machineId, {
+      ...inventory,
+      'busy': true,
+      'models': [
+        for (final raw in inventory['models'] as List)
+          if (raw['id'] == modelId)
+            {...raw as Map<String, dynamic>, 'operation': operation}
+          else
+            raw,
+      ],
+    });
+    return {'operation': operation};
+  }
+
   bool localReadFails = false, actionReplyLost = false;
   Completer<Map<String, dynamic>>? actionReply;
+
+  /// Harness sign-ins started ([login]), and whether the next one lands — the browser completing it
+  /// — or is cancelled.
+  int logins = 0;
+  bool loginLands = true;
+
+  @override
+  Future<void> login([SignInProvider? provider]) async {
+    logins++;
+    signingIn = true;
+    notifyListeners();
+    await Future<void>.delayed(Duration.zero);
+    if (loginLands) signedIn = true;
+    signingIn = false;
+    notifyListeners();
+  }
+
+  /// Machines Grid was set up on, in order — a list read carrying `setup`.
+  final gridSetups = <String>[];
+
+  /// What the daemon says when setting Grid up fails; null sets it up.
+  String? gridSetupFailure;
+
   @override
   Future<Map<String, dynamic>> localModels(
     String machineId, {
     bool refresh = false,
+    bool setup = false,
   }) async {
     localReads++;
+    inventoryReads.add(machineId);
+    if (setup) {
+      gridSetups.add(machineId);
+      final inventory = inventoryFor(machineId);
+      if (gridSetupFailure != null) {
+        return {...inventory, 'gridSetupError': gridSetupFailure};
+      }
+      setInventoryFor(machineId, {...inventory}..remove('gridSetupNeeded'));
+    }
     final held = localReply;
     if (held != null) {
       localReply = null;
       return held.future;
     }
     if (localReadFails) throw StateError('offline');
-    return localInventory;
+    return inventoryFor(machineId);
   }
 
   @override
@@ -126,6 +204,7 @@ class ModelManagerTestApp extends AppNotifier {
     required bool start,
   }) async {
     actions.add((machine: machineId, model: modelId, start: start));
+    final inventory = inventoryFor(machineId);
     if (actionReply != null) return actionReply!.future;
     final operation = <String, dynamic>{
       'id': 'operation',
@@ -135,17 +214,17 @@ class ModelManagerTestApp extends AppNotifier {
       'phase': 'running',
       if (start) 'progress': .42,
     };
-    localInventory = {
-      ...localInventory,
+    setInventoryFor(machineId, {
+      ...inventory,
       'busy': true,
       'models': [
-        for (final raw in localInventory['models'] as List)
+        for (final raw in inventory['models'] as List)
           if (raw['id'] == modelId)
             {...raw as Map<String, dynamic>, 'operation': operation}
           else
             raw,
       ],
-    };
+    });
     if (actionReplyLost) throw StateError('lost acknowledgement');
     return {'operation': operation};
   }
@@ -171,7 +250,11 @@ class ModelManagerTestApp extends AppNotifier {
   }
 
   @override
-  Future<String?> installDsh(String machineId, String harness) async {
+  Future<String?> installDsh(
+    String machineId,
+    String harness, {
+    bool trustUnverified = false,
+  }) async {
     installs++;
     if (installError != null) return installError;
     installed = true;
@@ -210,6 +293,7 @@ Map<String, dynamic> modelInventory({String scenario = 'first'}) {
   return {
     'memoryBytes': 64 * 1024 * 1024 * 1024,
     'hardware': 'Apple M2 Max',
+    'supportsDownload': true,
     'busy': scenario == 'downloading',
     'models': [
       {

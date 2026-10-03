@@ -193,6 +193,15 @@
     "licenseFile": "licenses/original.txt"
   },
   {
+    "id": "autonomous/trailofbits-skills",
+    "file": "trailofbits-skills.svg",
+    "color": "#7fd1c7",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
+  },
+  {
     "id": "autonomous/harness-monitor",
     "file": "harness-monitor.svg",
     "color": "#add1a3",

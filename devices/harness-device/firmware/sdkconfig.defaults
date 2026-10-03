@@ -1,11 +1,15 @@
-# Default sdkconfig for the Interns commander device.
-# These are applied on first `idf.py build`; tweak via `idf.py menuconfig`.
-
-# --- Target / flash ---
+# The dial's config. ESP-IDF reads this first, then appends sdkconfig.defaults.esp32s3.
+#
+# CONFIG_IDF_TARGET IS HERE, AND THAT MATTERS. IDF only reads sdkconfig.defaults.<target> once it
+# already knows the target, so while it lived in the per-target file a build that named no target
+# guessed — from a stale `sdkconfig` if one was lying around, and from plain `esp32` if not, which
+# died at CMake on a clean checkout (verified 2026-09-28). With one board there is nothing to choose
+# between, so the choice is made here, once, where it is always read.
 CONFIG_IDF_TARGET="esp32s3"
+
+# --- Flash (both boards carry 16 MB) ---
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
-CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
@@ -19,41 +23,8 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # refuses a non-verified server ("No option for server verification is enabled").
 CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 
-# --- PSRAM (ESP32-S3R8 = 8MB octal PSRAM; LVGL object pool lives here) ---
-CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_OCT=y
-CONFIG_SPIRAM_SPEED_80M=y
-CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
-CONFIG_SPIRAM_RODATA=y
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
-CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
-CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
-
-# --- CPU ---
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
-
 # --- FreeRTOS ---
 CONFIG_FREERTOS_HZ=1000
-
-# --- WiFi (STA for commander, AP for provisioning portal) ---
-CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y
-
-# --- HTTP server (captive portal) ---
-CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
-
-# --- WebSocket client ---
-CONFIG_WS_TRANSPORT=y
-
-# --- TLS (wss:// + https:// to the prod backend) ---
-# Verify the prod cert chain against Mozilla's CA roots via esp_crt_bundle_attach.
-CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
-CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
-# Leave CONFIG_MBEDTLS_HAVE_TIME_DATE OFF (default) so the TLS handshake does NOT depend on a synced
-# clock — REST pairing runs before SNTP, and cert validity dates are not enforced.
-# Allocate mbedTLS buffers (~32KB per TLS conn: two 16KB record buffers) from the 8MB PSRAM instead
-# of the ~150KB internal heap. Internal heap fragments after the first few TLS connections, so the
-# persistent commander WSS + periodic REST fail ssl_setup with -0x7F00 (ALLOC_FAILED) / sock<0.
-CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 
 # --- Main task stack (UI + init) ---
 # OTA boot mode performs HTTP download and SHA verification on app_main. The
@@ -63,33 +34,7 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=10240
 # --- Log level ---
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
-# --- LVGL v9 (configured via the lvgl/lvgl component's Kconfig) ---
-CONFIG_LV_COLOR_DEPTH_16=y
-CONFIG_LV_USE_PERF_MONITOR=n
-# Fonts used by ui_screens.c (montserrat_14 default; _22 headers; _30 OTA title; _40 big pairing code).
-# 18 is the Model/Effort pills; 22 was 20% too big on the panel. 24 is the swarm pill that replaced
-# them — one pill on the band where two sat, so it has the room the pair did not.
-CONFIG_LV_FONT_MONTSERRAT_18=y
-CONFIG_LV_FONT_MONTSERRAT_22=y
-CONFIG_LV_FONT_MONTSERRAT_24=y
-CONFIG_LV_FONT_MONTSERRAT_30=y
-CONFIG_LV_FONT_MONTSERRAT_40=y
-# Keep a small built-in internal LVGL pool and add a 64KiB PSRAM pool at
-# runtime. EXPAND_SIZE sets the TLSF size classes needed for that added pool.
-CONFIG_LV_USE_LOG=y
-CONFIG_LV_LOG_LEVEL_WARN=y
-CONFIG_LV_LOG_PRINTF=y
-CONFIG_LV_ASSERT_HANDLER_INCLUDE="stdlib.h"
-CONFIG_LV_MEM_SIZE_KILOBYTES=8
-CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=512
 
-# --- LWIP: room for commander WS + HTTP client + DNS concurrently ---
-CONFIG_LWIP_MAX_SOCKETS=16
-# Larger TCP send/recv buffers so continuous voice PCM streaming tolerates WiFi jitter
-# (default ~5.7KB fills in ~180ms at 32KB/s → esp_websocket_client tears down on write-0).
-CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65534
-CONFIG_LWIP_TCP_WND_DEFAULT=65534
-CONFIG_LWIP_TCP_RECVMBOX_SIZE=16
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
 # Panic output must reach the wire. The PRIMARY console is where the panic handler, the stack-overflow
@@ -105,7 +50,7 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 
 # ── a wedged UI task reboots instead of freezing ─────────────────────────────────────────────────────
-# The LVGL task subscribes to the task watchdog (display.c). Without PANIC the watchdog only prints a
+# The render task subscribes to the task watchdog (display_habitat.c). Without PANIC the watchdog only prints a
 # warning every few seconds and the glass stays frozen; with it the dial reboots, and the reset reason
 # plus the last log lines before it come back over the cable (last_words.c). 10s rather than the 5s
 # default: a full-face redraw or a touch-controller reset (60ms of delays inside the indev read) must

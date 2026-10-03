@@ -7,7 +7,7 @@ import {
   type TerminalAgentProbe,
 } from './terminalAgentDiscovery.js'
 import type { TerminalBackend } from './terminalBackend.js'
-import { mergeTerminalRuntimes, processIdentityKey, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
+import { mergeTerminalRuntimes, processIdentityKey, terminalInstanceId, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { TerminalRuntimeRef } from './terminalTypes.js'
 
 const MISS_LIMIT = 2
@@ -16,7 +16,6 @@ export interface TerminalAgentReconcilerDeps {
   current: () => RegisteredSession[]
   backends: readonly TerminalBackend[]
   backendOrder: readonly string[]
-  herdrSessionOrder: readonly string[]
   onDiscovered: (agent: DiscoveredTerminalAgent) => void | Promise<void>
   onObserved: (agent: DiscoveredTerminalAgent, current: RegisteredSession) => void | Promise<void>
   onDormant: (current: RegisteredSession, reason: string) => void | Promise<void>
@@ -24,10 +23,11 @@ export interface TerminalAgentReconcilerDeps {
   onTerminalAvailability?: (current: RegisteredSession, available: boolean) => void | Promise<void>
   onProbeStatus?: (status: { ready: true; error: string | null }) => void
   transaction?: <T>(apply: () => T | Promise<T>) => Promise<T>
-  /** Refresh configured backend instances before each immutable probe cycle. */
-  beforeProbe?: () => void | Promise<void>
   probe?: (hints: ReadonlyMap<string, AgentEngine>) => Promise<TerminalAgentProbe>
   daemonPid?: number
+  /** Hooks may arrive while reboot restoration is still allocating panes. Keep their hints,
+   * but do not scan or retire any saved owners until start() opens discovery. */
+  deferUntilStart?: boolean
 }
 
 function currentProcessKey(session: RegisteredSession): string | null {
@@ -111,13 +111,27 @@ export class TerminalAgentReconciler {
   private pending = false
   private inFlight: Promise<void> | null = null
   private timer: NodeJS.Timeout | null = null
+  private waitingForStart: boolean
 
-  constructor(private readonly deps: TerminalAgentReconcilerDeps) {}
+  constructor(private readonly deps: TerminalAgentReconcilerDeps) {
+    this.waitingForStart = deps.deferUntilStart === true
+  }
 
+  /**
+   * Arm the interval FIRST, then run the opening pass.
+   *
+   * The other way round — await, then schedule — meant a first pass that threw left discovery
+   * unscheduled for the life of the daemon: no new agents, no liveness, `discoveryReady` never true,
+   * and the caller's own start-up rejected on top of it. Neither is worth one bad probe. The opening
+   * pass is reported and dropped; the interval retries it a few seconds later.
+   */
   async start(intervalMs: number): Promise<void> {
-    await this.trigger()
+    this.waitingForStart = false
     this.timer = setInterval(() => { void this.trigger() }, intervalMs)
     this.timer.unref?.()
+    await this.trigger().catch((error) => {
+      console.warn(`[discovery] first pass failed, retrying on the interval · ${error instanceof Error ? error.message : error}`)
+    })
   }
 
   stop(): void {
@@ -195,6 +209,9 @@ export class TerminalAgentReconciler {
 
   trigger(): Promise<void> {
     this.pending = true
+    // Return promptly to startup hooks: waiting for start() here can hold up the very engines
+    // restore is trying to launch. The opening pass consumes every retained hint after restore.
+    if (this.waitingForStart) return Promise.resolve()
     if (!this.inFlight) this.inFlight = this.drain().finally(() => { this.inFlight = null })
     return this.inFlight
   }
@@ -207,14 +224,12 @@ export class TerminalAgentReconciler {
   }
 
   private async reconcileOnce(): Promise<void> {
-    await this.deps.beforeProbe?.()
     const hints = new Map(this.hints)
     const probe = await (this.deps.probe
       ? this.deps.probe(hints)
       : probeTerminalAgents(
         this.deps.backends,
         this.deps.backendOrder,
-        this.deps.herdrSessionOrder,
         this.deps.daemonPid ?? process.pid,
         hints,
       ))
@@ -351,7 +366,7 @@ export class TerminalAgentReconciler {
             .filter((target) => target.result.state === 'available')
             .map((target) => target.instanceId))
           const unknownRuntimes = current.runtimes.filter((runtime) => !availableInstances.has(
-            runtime.backend === 'tmux' ? 'tmux:default' : `herdr:${runtime.endpointId}`,
+            terminalInstanceId(runtime),
           ))
           const merged: DiscoveredTerminalAgent = {
             ...observed,

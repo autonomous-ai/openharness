@@ -90,6 +90,33 @@ void main() {
     expect(Swarm.defaultName, 'New Tab');
   });
 
+  test('legacy New Swarm becomes New Tab while custom titles stay exact', () {
+    expect(Swarm(id: 'legacy', name: 'New Swarm').name, 'New Tab');
+    for (final title in ['New Swarm', 'New swarm', '1: Release planning']) {
+      final tab = Swarm(id: 'custom', name: title, nameIsCustom: true);
+      expect(tab.name, title);
+      expect(tab.nameIsCustom, isTrue);
+    }
+  });
+
+  test(
+    'a saved custom New Swarm title survives restore and opening work',
+    () async {
+      final store = MemoryStore();
+      final original = createApp(store: store);
+      original.renameSwarm(original.activeSwarmId, 'New Swarm');
+      await original.flushPaneLayout();
+      original.dispose();
+      final restored = createApp(store: store);
+      addTearDown(restored.dispose);
+      await restored.restorePaneLayoutForTest();
+      expect(restored.activeSwarm.name, 'New Swarm');
+      expect(restored.activeSwarm.nameIsCustom, isTrue);
+      await restored.addAgentToSwarm('m', 'a0');
+      expect(restored.activeSwarm.name, 'New Swarm');
+    },
+  );
+
   test('tab follows its first harness until an explicit rename, including after restore', () async {
     final store = MemoryStore();
     final app = createApp(store: store);

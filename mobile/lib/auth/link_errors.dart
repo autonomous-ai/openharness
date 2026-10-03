@@ -17,13 +17,16 @@ String humanizeLinkError(String code, String machineId, {DateTime? retryAt}) {
   }
   return switch (code) {
     'NO_REMOTE_PASSWORD' =>
-      'Machine $machineId has no remote password set. Ask its operator to run '
-          '`harness remote-password set` there first.',
+      '$machineId has no phone password yet. On it, run '
+          '`harness remote-password set`, then try again.',
     'BAD_INTENT' =>
       'The connection request was malformed — this usually means a version mismatch. '
           'Update harness on both machines and try again.',
     'WRONG_PASSWORD' =>
-      'That password is wrong. Check it against the other machine and try again.',
+      'That password is wrong. It is the one set on $machineId with '
+          '`harness remote-password set`.',
+    'BUSY' =>
+      'Machine $machineId is already handling another link attempt. Wait a moment and try again.',
     'TIMEOUT' =>
       "Machine $machineId didn't respond in time. Make sure it's running `harness start` "
           'and reachable, then try again.',

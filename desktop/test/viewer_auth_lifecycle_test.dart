@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
+import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/viewer/direct_auth.dart';
@@ -34,18 +35,26 @@ class _Api extends DirectAuthApi {
   final authorizations = <Completer<({String authorizeUrl, String tx})>>[];
   final redirects = <String>[];
 
+  /// The client each refresh named.
+  final refreshClients = <String?>[];
+
   @override
   Future<IssuedTokens> refresh(
     String refreshToken, {
     required String autonomousEnv,
+    String? clientId,
   }) {
     final result = Completer<IssuedTokens>();
     refreshes.add(result);
+    refreshClients.add(clientId);
     return result.future;
   }
 
   @override
-  Future<({String authorizeUrl, String tx})> authorizeNative(String uri) {
+  Future<({String authorizeUrl, String tx})> authorizeNative(
+    String uri, {
+    SignInProvider? provider,
+  }) {
     redirects.add(uri);
     final result = Completer<({String authorizeUrl, String tx})>();
     authorizations.add(result);
@@ -194,6 +203,33 @@ void main() {
     expect(await session.refreshToken(), 'old-refresh');
     expect(await auth.accessToken(force: true, failedToken: 'old'), 'renewed');
     expect(api.refreshes, hasLength(1));
+  });
+
+  test('a session refreshes as the client it was issued to, and a later '
+      'sign-in that names none inherits none', () async {
+    // auth-service refuses a refresh token presented under another client.
+    await auth.signIn(
+      const IssuedTokens(
+        token: 'old',
+        refreshToken: 'old-refresh',
+        clientId: 'harness-web',
+      ),
+    );
+    final first = auth.accessToken(force: true);
+    await _until(() => api.refreshes.isNotEmpty);
+    api.refreshes.single.complete(const IssuedTokens(token: 'renewed'));
+    expect(await first, 'renewed');
+    expect(api.refreshClients, ['harness-web']);
+    // The refresh's answer names no client: the session keeps the one it has.
+    expect(await session.ssoClientId(), 'harness-web');
+
+    // A backend from before the clients were split answers an exchange with none.
+    await auth.signIn(_old);
+    final second = auth.accessToken(force: true);
+    await _until(() => api.refreshes.length == 2);
+    api.refreshes.last.complete(const IssuedTokens(token: 'renewed-again'));
+    expect(await second, 'renewed-again');
+    expect(api.refreshClients, ['harness-web', null]);
   });
 
   for (final expires in [false, true]) {

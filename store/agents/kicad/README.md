@@ -4,7 +4,9 @@
 pipeline of [Autonomous Circuit](https://github.com/autonomous-ai/autonomous-circuit): describe a board
 in the chat pane and get a real KiCad project — a wired schematic, copper KiCad's own ERC/DRC has
 checked, a prototype packet a fab can quote — with the project's own live board view in the pane beside
-the agent. Runs on Claude Code.
+the agent. Runs on Codex (GPT-6 Astra) with the upstream tile's exact arguments: approvals off, sandbox
+off (kicad-cli, pcbnew and Freerouting do not survive it), and Circuit's Stop hook that finishes a build
+and asks once for the firmware. What the person flashes, they flash from the pane's Flash button.
 
 The KiCad tile is the sibling of [Autonomous Circuit](../autonomous-circuit/) (the v1 pipeline, tscircuit
 sources, the same repository's `main`), not its replacement: the two wrap different branches of one

@@ -29,6 +29,66 @@ void main() {
     app.dispose();
   });
 
+  test(
+    'Download is explicit and never falls back to Start on an older daemon',
+    () async {
+      app.localInventory.remove('supportsDownload');
+      await controller.refresh();
+      await controller.control(controller.localModels.first, 'download');
+      expect(app.downloads, isEmpty);
+      expect(app.actions, isEmpty);
+      app.localInventory['supportsDownload'] = true;
+      await controller.refresh();
+      await controller.control(controller.localModels.first, 'download');
+      expect(app.downloads, [(machine: 'm', model: 'qwen')]);
+      expect(app.actions, isEmpty);
+      expect(
+        controller.operationFor(controller.localModels.first)?.action,
+        'download',
+      );
+      expect(
+        controller.operationFor(controller.localModels.first)?.label,
+        'Downloading',
+      );
+      expect(controller.readyModel, isNull);
+      await controller.control(controller.localModels.first, 'start');
+      expect(app.actions, isEmpty);
+    },
+  );
+
+  test('model titles include supplied quantization exactly once', () {
+    expect(
+      const LocalModel(
+        id: 'local:Qwen3.8-27B-Q4_0.gguf',
+        name: 'qwen3.8-27b',
+      ).displayName,
+      'qwen3.8-27b · Q4_0',
+    );
+    expect(
+      const LocalModel(
+        id: 'local:Qwen3.5-4B-Q4_K_M.gguf',
+        name: 'qwen35-4b',
+      ).displayName,
+      'qwen35-4b · Q4_K_M',
+    );
+    expect(
+      const LocalModel(id: 'a', name: 'Example', quant: 'Q4_K_M').displayName,
+      'Example · Q4_K_M',
+    );
+    expect(
+      const LocalModel(
+        id: 'a',
+        name: 'Example-Q4_K_M',
+        quant: 'Q4_K_M',
+      ).displayName,
+      'Example-Q4_K_M',
+    );
+    expect(
+      const LocalModel(id: 'a', name: 'Example', quant: '').displayName,
+      'Example',
+    );
+  });
+
   test('silent discovery preserves the workspace and never starts a model or sends a chat', () async {
     connection.holdCreation = Completer<void>();
     final original = app.activeSwarmId;
@@ -356,19 +416,25 @@ void main() {
     expect(controller.localModels, isEmpty);
   });
 
-  test('a notice beside the list keeps the list, and every row it offers', () async {
-    // ⚠️ REGRESSION. The daemon's sentence for a grid it could not fully read rode in `error`,
-    // and an `error` fails the request whole — the rows it came with were thrown away and the
-    // Local tab read 0. The sentence now arrives as `notice`, and the list with it.
-    app.localInventory = {
-      ...modelInventory(),
-      'notice': 'Running models could not be checked. Try again.',
-    };
-    await controller.refresh();
-    expect(controller.localModels, hasLength(5));
-    expect(controller.inventoryAvailable, isTrue);
-    expect(controller.error, 'Running models could not be checked. Try again.');
-  });
+  test(
+    'a notice beside the list keeps the list, and every row it offers',
+    () async {
+      // ⚠️ REGRESSION. The daemon's sentence for a grid it could not fully read rode in `error`,
+      // and an `error` fails the request whole — the rows it came with were thrown away and the
+      // Local tab read 0. The sentence now arrives as `notice`, and the list with it.
+      app.localInventory = {
+        ...modelInventory(),
+        'notice': 'Running models could not be checked. Try again.',
+      };
+      await controller.refresh();
+      expect(controller.localModels, hasLength(5));
+      expect(controller.inventoryAvailable, isTrue);
+      expect(
+        controller.error,
+        'Running models could not be checked. Try again.',
+      );
+    },
+  );
 
   test('an old daemon or malformed inventory disables actions without clearing the last view', () async {
     await controller.refresh();
@@ -377,6 +443,11 @@ void main() {
     expect(controller.localModels, hasLength(5));
     expect(controller.inventoryAvailable, isFalse);
     expect(controller.error, contains('Update Harness'));
+    app.localInventory = {};
+    await controller.refresh();
+    expect(controller.localModels, hasLength(5));
+    expect(controller.inventoryAvailable, isFalse);
+    expect(controller.error, contains('unavailable'));
     app.localInventory = {
       'models': [
         {'id': 7},

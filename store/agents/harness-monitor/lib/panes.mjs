@@ -43,7 +43,7 @@ const FIELDS = [
  * Every pane on this tmux server, by pane id.
  *
  * `dead` is a pane whose process exited while tmux was told to keep it — its scrollback is still there
- * and `respawn-pane` brings it back, which is what makes pausing lossless. `engineExit` is the status
+ * and `respawn-pane` brings it back, which is what makes stopping lossless. `engineExit` is the status
  * Harness's own launch wrapper records when an engine leaves and the pane falls back to a shell: its
  * presence is the difference between "the engine is gone" and "the install is still running".
  */
@@ -108,7 +108,7 @@ const SHELLS = new Set(['zsh', 'bash', 'sh', 'fish', 'dash', 'ksh', '-zsh', '-ba
  * Walk a pane's process subtree: the engine process to signal, the subtree's memory, its CPU.
  *
  * Memory is the whole subtree because an engine's helpers are its cost too — the number a person is
- * deciding about is "what do I get back if I pause this", not "how big is one pid".
+ * deciding about is "what do I get back if I stop this", not "how big is one pid".
  *
  * The engine is matched at the ROOT as well as below it. tmux's `pane_pid` is the engine itself for
  * every agent whose pane was started on the engine directly (most of them); it is a shell only when the
@@ -131,7 +131,7 @@ export function engineProcess(pane, table, engine) {
   walk(pane.pid, 0)
   const self = table.byPid.get(pane.pid)
   // The pane's own shell is not the agent's cost; subtract it when the engine is gone and all that is
-  // left is the fallback shell, so a paused row reads 0 rather than a few megabytes of zsh.
+  // left is the fallback shell, so a stopped row reads 0 rather than a few megabytes of zsh.
   if (!pid && self && SHELLS.has(self.comm.split('/').pop())) return { pid: null, rss: 0, cpu: 0, procs, engineAlive: false }
   return { pid, rss, cpu, procs, engineAlive: pid !== null }
 }
@@ -149,7 +149,7 @@ export async function capture(pane, { lines = 40, run = tmux } = {}) {
  * Best effort, and deliberately loud about it: the app's own **Agents needing input** (⇧⌘I) is the
  * authority, and the daemon does not put pending questions on the local bridge. What is available is
  * the pane's last screen, and an engine waiting for an answer draws a recognizable prompt on it. A
- * false positive costs a harness that stays running; a false negative costs a question paused before it
+ * false positive costs a harness that stays running; a false negative costs a question stopped before it
  * was read — so the patterns are broad on purpose, and the policy protects anything that matches.
  */
 const BLOCKED_PATTERNS = [
@@ -172,7 +172,7 @@ const BLOCKED_PATTERNS = [
  *
  * `❯ ` alone is NOT enough, and that mistake is worth keeping a note about: Claude Code echoes the
  * prompt you just submitted as `❯ your text`, so matching a lone cursor line marked every recently used
- * harness as blocked and refused to pause any of them. A menu has a second option under the cursor —
+ * harness as blocked and refused to stop any of them. A menu has a second option under the cursor —
  * short, indented, and not a separator — and that is what this looks for.
  */
 function looksLikeMenu(lines) {
@@ -185,7 +185,7 @@ function looksLikeMenu(lines) {
 }
 
 /** The prompt an idle engine draws when it is waiting for a TASK, not for an answer. Subtracted before
- *  anything else runs — otherwise every quiet harness looks blocked and nothing would ever be paused. */
+ *  anything else runs — otherwise every quiet harness looks blocked and nothing would ever be stopped. */
 const IDLE_PROMPTS = [
   /^\s*❯\s*$/,
   /^\s*>\s*$/,
@@ -207,7 +207,7 @@ export function looksBlocked(screen) {
 }
 
 /** Hold a pane open across its process exiting, and hand it back to tmux's own disposal afterwards —
- *  the same pair the daemon uses around a restart (`holdOpen` / `clearPaneRemainOnExit`). Pausing sets
+ *  the same pair the daemon uses around a restart (`holdOpen` / `clearPaneRemainOnExit`). Stopping sets
  *  it before the engine is asked to leave, so a pane whose launch wrapper predates the fallback shell
  *  keeps its scrollback instead of taking its window down with it. */
 export async function holdOpen(pane, on, { run = tmux } = {}) {
@@ -225,7 +225,7 @@ export async function paneState(pane, { run = tmux } = {}) {
   } catch { return null }
 }
 
-/** Type a line into a pane's shell. Used for one thing only: the local resume path, when the daemon is
+/** Type a line into a pane's shell. Used for one thing only: the local open path, when the daemon is
  *  not reachable and the pane has already fallen back to a shell that adopts an engine when told to. */
 export async function sendLine(pane, line, { run = tmux } = {}) {
   assertPane(pane)

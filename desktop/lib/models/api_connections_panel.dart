@@ -1,6 +1,6 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../shared/theme/app_theme.dart';
@@ -165,7 +165,7 @@ class _ApiConnectionsPanelState extends State<ApiConnectionsPanel> {
               connection.provider == 'anthropic')
             ModelMark(model: connection.provider)
           else
-            const Icon(LucideIcons.plug, size: 20),
+            const Icon(AppIcons.plug, size: 20),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -211,16 +211,13 @@ class _ApiConnectionsPanelState extends State<ApiConnectionsPanel> {
             IconButton(
               tooltip: 'Keep ${connection.name}',
               onPressed: () => setState(() => _removing = null),
-              icon: const Icon(LucideIcons.x, size: 16),
+              icon: const Icon(AppIcons.close, size: 16),
             ),
           ] else ...[
             IconButton(
               tooltip: '${saved ? 'Edit' : 'Add'} ${connection.name}',
               onPressed: enabled ? () => _edit(connection) : null,
-              icon: Icon(
-                saved ? LucideIcons.pencil : LucideIcons.plus,
-                size: 18,
-              ),
+              icon: Icon(saved ? AppIcons.pencil : AppIcons.plus, size: 18),
             ),
             if (saved)
               IconButton(
@@ -228,7 +225,7 @@ class _ApiConnectionsPanelState extends State<ApiConnectionsPanel> {
                 onPressed: enabled
                     ? () => setState(() => _removing = connection.id)
                     : null,
-                icon: const Icon(LucideIcons.trash2, size: 16),
+                icon: const Icon(AppIcons.trash2, size: 16),
               ),
           ],
         ],
@@ -365,7 +362,7 @@ class _ApiEditorState extends State<_ApiEditor> {
                     IconButton(
                       onPressed: widget.onClose,
                       tooltip: widget.backLabel,
-                      icon: const Icon(LucideIcons.arrowLeft, size: 18),
+                      icon: const Icon(AppIcons.arrowLeft, size: 18),
                     ),
                     const SizedBox(width: 4),
                     Expanded(
@@ -377,6 +374,13 @@ class _ApiEditorState extends State<_ApiEditor> {
                   ],
                 ),
                 const SizedBox(height: 12),
+                if (controller.app.viewer != null) ...[
+                  Text(
+                    'Saved on ${controller.hostLabel}',
+                    style: AppType.monoMeta(color: AppPalette.textSecondary),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 if (custom || _advanced) ...[
                   _field(
                     _name,
@@ -388,17 +392,7 @@ class _ApiEditorState extends State<_ApiEditor> {
                     _url,
                     'Base URL',
                     hint: 'https://api.example.com/v1',
-                    validator: (value) {
-                      final url = Uri.tryParse(value?.trim() ?? '');
-                      return url == null ||
-                              !['https', 'http'].contains(url.scheme) ||
-                              url.host.isEmpty ||
-                              url.userInfo.isNotEmpty ||
-                              url.hasQuery ||
-                              url.hasFragment
-                          ? 'Enter an API URL without credentials or query parameters.'
-                          : null;
-                    },
+                    validator: (value) => apiUrlProblem(value ?? ''),
                   ),
                 ],
                 _field(
@@ -414,7 +408,7 @@ class _ApiEditorState extends State<_ApiEditor> {
                     alignment: Alignment.centerLeft,
                     child: TextButton.icon(
                       onPressed: () => _openKeyPage(keyUrl),
-                      icon: const Icon(LucideIcons.arrowUpRight, size: 14),
+                      icon: const Icon(AppIcons.arrowUpRight, size: 14),
                       label: const Text('Get API key'),
                     ),
                   ),
@@ -423,9 +417,7 @@ class _ApiEditorState extends State<_ApiEditor> {
                   child: TextButton.icon(
                     onPressed: () => setState(() => _advanced = !_advanced),
                     icon: Icon(
-                      _advanced
-                          ? LucideIcons.chevronUp
-                          : LucideIcons.chevronDown,
+                      _advanced ? AppIcons.chevronUp : AppIcons.chevronDown,
                       size: 14,
                     ),
                     label: const Text('Advanced'),
@@ -463,7 +455,7 @@ class _ApiEditorState extends State<_ApiEditor> {
                   children: [
                     Expanded(
                       child: Text(
-                        'Stored on this computer.',
+                        'Stored on ${controller.hostLabel}.',
                         style: AppType.monoMeta(
                           color: AppPalette.textSecondary,
                         ),
@@ -516,11 +508,10 @@ class _ApiEditorState extends State<_ApiEditor> {
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,
-        labelStyle: AppType.monoMeta(color: AppPalette.textSecondary),
-        hintStyle: AppType.monoMeta(color: AppPalette.textFaint),
+        labelStyle: AppType.caption(color: AppPalette.textSecondary),
+        hintStyle: AppType.body(color: AppPalette.textFaint),
         filled: true,
         fillColor: AppPalette.windowBg,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
         suffixIcon: secret
             ? Row(
                 mainAxisSize: MainAxisSize.min,
@@ -528,13 +519,13 @@ class _ApiEditorState extends State<_ApiEditor> {
                   IconButton(
                     tooltip: 'Paste API key',
                     onPressed: widget.controller.saving ? null : _pasteKey,
-                    icon: const Icon(LucideIcons.clipboardPaste, size: 16),
+                    icon: const Icon(AppIcons.clipboardPaste, size: 16),
                   ),
                   IconButton(
                     tooltip: _visible ? 'Hide API key' : 'Show API key',
                     onPressed: () => setState(() => _visible = !_visible),
                     icon: Icon(
-                      _visible ? LucideIcons.eyeOff : LucideIcons.eye,
+                      _visible ? AppIcons.eyeOff : AppIcons.eye,
                       size: 16,
                     ),
                   ),

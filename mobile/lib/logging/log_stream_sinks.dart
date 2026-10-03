@@ -2,13 +2,12 @@
 /// the in-memory [LogStream] the Debug screen reads.
 ///
 /// A mirror rather than a second stream. Every call site keeps writing to the
-/// one `appLog`/`cliLog` it already writes to, so a line cannot reach the
+/// one `appLog` it already writes to, so a line cannot reach the
 /// screen without reaching the file — which is what makes "read it in Settings
 /// ▸ Debug" and "send us the log" the same evidence.
 library;
 
 import 'app_log.dart';
-import 'cli_log.dart';
 import 'log_stream.dart';
 
 /// Writes one event to each of [sinks], in order.
@@ -63,77 +62,4 @@ class StreamAppLog implements AppLog {
       stackTrace: stackTrace?.toString(),
     );
   }
-}
-
-/// Opens one section on each of [sinks] and keeps them in step.
-class FanoutCliLog implements CliLog {
-  const FanoutCliLog(this.sinks);
-
-  final List<CliLog> sinks;
-
-  @override
-  CliLogEntry begin(String command) =>
-      _FanoutEntry([for (final sink in sinks) sink.begin(command)]);
-}
-
-class _FanoutEntry implements CliLogEntry {
-  const _FanoutEntry(this._entries);
-
-  final List<CliLogEntry> _entries;
-
-  @override
-  void output(String line, {bool isError = false}) {
-    for (final entry in _entries) {
-      entry.output(line, isError: isError);
-    }
-  }
-
-  @override
-  void end({int? exitCode, Duration? duration, String? error}) {
-    for (final entry in _entries) {
-      entry.end(exitCode: exitCode, duration: duration, error: error);
-    }
-  }
-}
-
-/// [CliLog] that turns each invocation into one [LogEntry] carrying its own
-/// transcript — one row in the Debug list that grows, rather than a row per
-/// line, which is what the file wants and a list does not.
-class StreamCliLog implements CliLog {
-  const StreamCliLog(this._stream);
-
-  final LogStream _stream;
-
-  @override
-  CliLogEntry begin(String command) {
-    final invocation = LogCommand();
-    final id = _stream.add(
-      AppLogLevel.info,
-      'cli',
-      command,
-      command: invocation,
-    );
-    return _StreamEntry(_stream, id, DateTime.now());
-  }
-}
-
-class _StreamEntry implements CliLogEntry {
-  _StreamEntry(this._stream, this._id, this._start);
-
-  final LogStream _stream;
-  final int _id;
-  final DateTime _start;
-
-  @override
-  void output(String line, {bool isError = false}) =>
-      _stream.appendOutput(_id, line, isError: isError);
-
-  @override
-  void end({int? exitCode, Duration? duration, String? error}) =>
-      _stream.finish(
-        _id,
-        exitCode: exitCode,
-        duration: duration ?? DateTime.now().difference(_start),
-        error: error,
-      );
 }

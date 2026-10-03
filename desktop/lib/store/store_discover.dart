@@ -1,5 +1,5 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/dsh_catalog.dart';
@@ -300,9 +300,8 @@ class _FeaturedStory extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  category.toUpperCase(),
-                  style: grid.AppType.monoMeta(
-                    letterSpacing: 1.1,
+                  category,
+                  style: grid.AppType.caption(
                     fontWeight: grid.AppFont.medium,
                     color: grid.AppPalette.accentOnSurface,
                   ),
@@ -333,8 +332,8 @@ class _FeaturedStory extends StatelessWidget {
                       ),
                     ),
                     Icon(
-                      LucideIcons.arrowRight300,
-                      size: 15,
+                      AppIcons.arrowRight,
+                      size: 16,
                       color: grid.AppPalette.textSecondary,
                     ),
                   ],
@@ -403,7 +402,7 @@ class _DisciplineLink extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             Icon(
-              LucideIcons.chevronRight300,
+              AppIcons.chevronRight,
               size: 16,
               color: grid.AppPalette.textSecondary,
             ),

@@ -82,6 +82,17 @@ describe('handOffToGrid — which grid it runs', () => {
     expect(updateCheckSeenBy('override')).toBe('1')
   })
 
+  it('does not hand grid a session a phone approved: grid signs in with the Autonomous account', async () => {
+    const override = fakeGrid(join(root, 'elsewhere'), 'override')
+    process.env.HARNESS_GRID_BIN = override
+    const { handOffToGrid } = await load()
+
+    const result = await handOffToGrid('hna_' + 'x'.repeat(43), { json: true })
+
+    expect(result).toMatchObject({ code: 'GRID_NEEDS_SSO', exitCode: 1 })
+    expect(result.message).toContain('harness login --force')
+  })
+
   it('prefers the managed runtime over a grid on PATH', async () => {
     fakeGrid(join(root, 'path-bin'), 'path')
     process.env.PATH = join(root, 'path-bin')
@@ -121,7 +132,8 @@ describe('handOffToGrid — a child that never answers', () => {
   function hangingGrid(dir: string): string {
     mkdirSync(dir, { recursive: true })
     const bin = join(dir, 'grid')
-    writeFileSync(bin, ['#!/bin/sh', "trap '' TERM", '/bin/cat > /dev/null', 'sleep 60', ''].join('\n'), { mode: 0o755 })
+    // Absolute paths, since PATH is empty here: Linux's sh exits 127 on a bare `sleep` before the watchdog fires.
+    writeFileSync(bin, ['#!/bin/sh', "trap '' TERM", '/bin/cat > /dev/null', '/bin/sleep 60', ''].join('\n'), { mode: 0o755 })
     return bin
   }
 

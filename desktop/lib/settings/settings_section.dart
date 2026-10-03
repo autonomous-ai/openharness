@@ -1,5 +1,6 @@
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/widgets.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../logging/debug_surface.dart';
 
@@ -10,15 +11,17 @@ import '../logging/debug_surface.dart';
 /// rail, the search filter and the pane all read this list, so a section cannot
 /// be listed without a screen behind it or reachable without a row.
 enum SettingsSection {
-  account(LucideIcons.user300, 'Account'),
-  usage(LucideIcons.chartNoAxesColumn300, 'Usage'),
-  customize(LucideIcons.palette300, 'Customize'),
-  notifications(LucideIcons.bell300, 'Notifications'),
-  devices(LucideIcons.zap300, 'Autonomous robots'),
-  shortcuts(LucideIcons.keyboard300, 'Keyboard shortcuts'),
-  debug(LucideIcons.bug300, 'Debug'),
-  tracking(LucideIcons.activity300, 'Tracking'),
-  about(LucideIcons.info300, 'About');
+  account(AppIcons.user, 'Account'),
+  accountDevices(AppIcons.shieldCheck, 'Your devices'),
+  profiles(AppIcons.monitor, 'Profiles'),
+  usage(AppIcons.chartNoAxesColumn, 'Usage'),
+  customize(AppIcons.palette, 'Customize'),
+  notifications(AppIcons.bell, 'Notifications'),
+  experimental(AppIcons.flaskConical, 'Experimental'),
+  devices(AppIcons.zap, 'Autonomous robots'),
+  shortcuts(AppIcons.keyboard, 'Keyboard shortcuts'),
+  debug(AppIcons.bug, 'Debug'),
+  about(AppIcons.info, 'About');
 
   const SettingsSection(this.icon, this.label);
 
@@ -43,9 +46,9 @@ class SettingsGroup {
 
 /// What Settings lists, in order.
 ///
-/// A getter rather than a `const`, for the rows that are not always there:
-/// [SettingsSection.debug] and [SettingsSection.tracking] are developer
-/// furniture and ship only where [kDebugSurfaceEnabled] says so. Everything
+/// A getter rather than a `const`, for the row that is not always there:
+/// [SettingsSection.debug] is developer furniture and ships only where
+/// [kDebugSurfaceEnabled] says so. Everything
 /// that draws or searches the rail reads this, so a hidden section cannot be
 /// reached by a stale copy of the list — while the enum values themselves
 /// always exist, so the screens behind them need no gate of their own.
@@ -55,13 +58,14 @@ List<SettingsGroup> get settingsGroups =>
 /// [settingsGroups] with the gate passed in rather than read off the build.
 ///
 /// The flag is a compile-time const, so the shape a SHIPPED build has — no
-/// Debug, no Tracking — is otherwise unreachable from a test, which by
+/// Debug — is otherwise unreachable from a test, which by
 /// definition runs with it switched on. This seam is the only way to assert
 /// the thing the gate exists to do.
 @visibleForTesting
 List<SettingsGroup> settingsGroupsFor({required bool debugSurface}) {
   bool visible(SettingsSection section) =>
-      debugSurface || !_kDeveloperSections.contains(section);
+      (!kIsWeb || section != SettingsSection.devices) &&
+      (debugSurface || !_kDeveloperSections.contains(section));
   return [
     for (final group in _kSettingsGroups)
       if (group.sections.any(visible))
@@ -72,14 +76,13 @@ List<SettingsGroup> settingsGroupsFor({required bool debugSurface}) {
   ];
 }
 
-/// The two developer sections, named once. Both read the same in-memory
-/// buffers, both are worth nothing in a build that cannot open them, and a
-/// second list of "which ones are hidden" is how the two would drift apart.
-const _kDeveloperSections = {SettingsSection.debug, SettingsSection.tracking};
+/// The developer sections, named once: worth nothing in a build that cannot
+/// open them, and a second list of "which ones are hidden" would drift.
+const _kDeveloperSections = {SettingsSection.debug};
 
 const _kSettingsGroups = [
-  // Usage sits with the preferences rather than with Debug and Tracking, which
-  // it otherwise resembles: those two are developer furniture a shipped build
+  // Usage sits with the preferences rather than with Debug, which it
+  // otherwise resembles: that is developer furniture a shipped build
   // hides, and this is a screen anybody is meant to open. It earns its place in
   // a run titled "what you change" by carrying the three switches that decide
   // which logs are read at all — the pane is off until somebody sets it.
@@ -91,17 +94,18 @@ const _kSettingsGroups = [
     // the app looks; a sound is not a look, and somebody turning one off does not think to look
     // under Appearance for it.
     SettingsSection.notifications,
+    SettingsSection.experimental,
     SettingsSection.devices,
     SettingsSection.account,
+    // Beside Account: the devices signed in to it, each trusted by the others because of that.
+    SettingsSection.accountDevices,
+    SettingsSection.profiles,
   ]),
-  // Debug and Tracking sit between the two things they are most often reached
-  // from: the keys that open them, and the version a report has to name. The
-  // two are adjacent because they answer the same question from opposite ends
-  // — what this app asked for, and what it reported about being asked.
+  // Debug sits between the two things it is most often reached from: the keys
+  // that open it, and the version a report has to name.
   SettingsGroup('Help', [
     SettingsSection.shortcuts,
     SettingsSection.debug,
-    SettingsSection.tracking,
     SettingsSection.about,
   ]),
 ];

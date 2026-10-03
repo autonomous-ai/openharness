@@ -18,12 +18,12 @@ export function painter({ tty = false } = {}) {
   return { ...Object.fromEntries(Object.entries(CODES).map(([key, code]) => [key, paint(code)])), plain: (text) => String(text) }
 }
 
-/** ● running · ◐ working · ○ paused · $ shell · ✕ gone · ! waiting on you. Two characters wide so the
+/** ● running · ◐ working · ○ stopped · $ shell · ✕ gone · ! waiting on you. Two characters wide so the
  *  column never shifts when a glyph is double-width on someone's font. */
 export function glyph(row, c) {
   if (row.needsInput) return c.amber('! ')
   if (row.state === 'running') return row.working ? c.gold('◐ ') : c.green('● ')
-  if (row.state === 'paused') return c.dim('○ ')
+  if (row.state === 'stopped') return c.dim('○ ')
   if (row.state === 'terminal') return c.dim('$ ')
   return c.dim('✕ ')
 }
@@ -92,7 +92,7 @@ export function footer(summary, policy, { tty = false, problems = [] } = {}) {
   const parts = [
     `${summary.total} ${summary.total === 1 ? 'harness' : 'harnesses'}`,
     `${c.green(summary.running)} running`,
-    summary.paused ? `${summary.paused} paused` : null,
+    summary.stopped ? `${summary.stopped} stopped` : null,
     summary.gone ? `${summary.gone} gone` : null,
     summary.terminals ? `${summary.terminals} ${summary.terminals === 1 ? 'shell' : 'shells'}` : null,
     summary.needsInput ? c.amber(`${summary.needsInput} waiting on you`) : null,
@@ -101,18 +101,18 @@ export function footer(summary, policy, { tty = false, problems = [] } = {}) {
     summary.machines > 1 ? `${summary.machines} machines` : null,
   ].filter(Boolean)
   const lines = [parts.join(c.dim(' · '))]
-  if (policy) lines.push(c.dim(`policy: pause after ${policy.pauseAfterIdle} · hide after ${policy.hideAfterIdle} · ceiling ${policy.runningCeiling} running`))
+  if (policy) lines.push(c.dim(`policy: stop after ${policy.stopAfterIdle} · hide after ${policy.hideAfterIdle} · ceiling ${policy.runningCeiling} running`))
   for (const problem of problems) lines.push(c.red(`${problem.machine}: ${problem.error}`))
   return lines.join('\n')
 }
 
-/** `hps prune --explain` and `hps pause --dry-run`: the plan, one line each, longest reason last. */
+/** `hps prune --explain` and `hps stop --dry-run`: the plan, one line each, longest reason last. */
 export function planLines(entries, { tty = false, verb = null } = {}) {
   const c = painter({ tty })
   const shown = entries.filter((entry) => entry.action !== 'keep' && (!verb || entry.action === verb))
   if (!shown.length) return c.dim('Nothing to do — every harness is where the policy wants it.')
   const width = Math.max(...shown.map((entry) => entry.name.length), 4)
-  // Both columns are measured, never guessed: a hardcoded action width silently truncated `pause`
+  // Both columns are measured, never guessed: a hardcoded action width silently truncated `stop`
   // to `hiberna`, which is the kind of thing only a test notices.
   const verbWidth = Math.max(...shown.map((entry) => entry.action.length))
   return shown.map((entry) => `${c.bold(pad(entry.action, verbWidth))} ${pad(entry.name, width)}  ${c.dim(entry.why)}`).join('\n')

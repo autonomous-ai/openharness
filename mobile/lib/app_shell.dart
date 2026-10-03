@@ -1,40 +1,24 @@
-import 'dart:async';
-import 'dart:ui' show AppExitResponse;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'analytics/analytics_lifecycle.dart';
+import 'stats/stats_lifecycle.dart';
 import 'core/crash_log.dart';
-import 'screens/login_screen.dart';
 import 'state/app_state.dart';
 import 'viewer/viewer_services.dart';
 import 'ws/terminal_transport_plugin.dart';
 import 'shared/theme/app_theme.dart' as grid;
 import 'shared/theme/appearance_prefs_store.dart';
-import 'terminal/terminal_font_store.dart';
-import 'widgets/bootstrapping_screen.dart';
-import 'widgets/layout_palette.dart';
-import 'widgets/environment_preflight_screen.dart';
-import 'widgets/environment_setup_screen.dart';
-import 'widgets/flash_firmware_dialog.dart';
 import 'core/startup.dart';
 import 'logging/app_log.dart';
 import 'logging/install.dart';
 import 'logging/startup_trace.dart';
-import 'shortcuts/app_keymap.dart';
-import 'widgets/shortcuts_sheet.dart';
-import 'widgets/update_notice.dart';
 
-/// The screen an app puts up once someone is signed in — the desktop's swarm of
-/// panes, or the phone's one-agent-at-a-time shell. It is the only thing the two
-/// entry points disagree about; everything below is shared.
+/// A screen the app puts up for one of its states — signed in, signed out, starting.
 typedef AuthenticatedScreenBuilder = Widget Function(AppNotifier app);
 
-/// Everything both entry points do before their first frame: file logs, the
-/// crash log, the keyboard config, the saved appearance, and the native window
-/// where there is one.
+/// Everything the app does before its first frame: file logs, the crash log and
+/// the saved appearance.
 ///
 /// Lives here rather than in either `main.dart` so the two cannot drift — the
 /// mobile app is a separate package (`../mobile`) that depends on this one, and
@@ -42,6 +26,12 @@ typedef AuthenticatedScreenBuilder = Widget Function(AppNotifier app);
 /// stranded from the desktop it shared a codebase with.
 Future<void> startHarness({
   required AuthenticatedScreenBuilder authenticatedScreen,
+
+  /// The signed-out screen — the phone's welcome.
+  required AuthenticatedScreenBuilder signedOutScreen,
+
+  /// The screen while the app starts.
+  required AuthenticatedScreenBuilder bootScreen,
 
   /// A viewer build's second wire to each machine (see
   /// [TerminalTransportPlugin]); the desktop passes none.
@@ -58,23 +48,17 @@ Future<void> startHarness({
   // is an offset into THIS launch. Touched before any awaited work so the origin
   // is the entrypoint rather than whatever step happens to mark itself first.
   StartupTrace.mark('startHarness');
-  final keymap = AppKeymap(store: AppKeymap.fileStore());
-  // Keyboard configuration has its own file and watchers. It can load beside
-  // the appearance, but both must be ready before the window becomes usable.
-  //
-  // Timed apart rather than as one `Future.wait`: they finish together by
-  // construction, so a single number around the pair would only ever report the
-  // slower one and never say WHICH. On a phone that distinction is the whole
-  // question — the keymap reads a file nobody on a touchscreen can have edited.
-  await Future.wait([
-    StartupTrace.time('settings.load', loadPersistedSettings),
-    StartupTrace.time('keymap.start', keymap.start),
-  ]);
+  // ⚠️ **No keymap.** The desktop loads its keyboard configuration here, a file
+  // and its watchers, beside the appearance. Nothing on the phone reads a keymap
+  // — no key is ever matched against one — so the file a touchscreen could not
+  // have edited is not read either.
+  await StartupTrace.time('settings.load', loadPersistedSettings);
   runApp(
     ProviderScope(
       child: HarnessApp(
-        keymap: keymap,
         authenticatedScreen: authenticatedScreen,
+        signedOutScreen: signedOutScreen,
+        bootScreen: bootScreen,
       ),
     ),
   );
@@ -89,9 +73,15 @@ Future<void> startHarness({
 }
 
 class HarnessApp extends StatelessWidget {
-  const HarnessApp({super.key, this.keymap, required this.authenticatedScreen});
-  final AppKeymap? keymap;
+  const HarnessApp({
+    super.key,
+    required this.authenticatedScreen,
+    required this.signedOutScreen,
+    required this.bootScreen,
+  });
   final AuthenticatedScreenBuilder authenticatedScreen;
+  final AuthenticatedScreenBuilder signedOutScreen;
+  final AuthenticatedScreenBuilder bootScreen;
 
   @override
   Widget build(BuildContext context) {
@@ -133,13 +123,17 @@ class HarnessApp extends StatelessWidget {
       // one name, and telling them apart otherwise means reading `dumpsys` over
       // a cable — by which point a bug has already been reported against the
       // wrong build. Flutter draws it in DEBUG ONLY, so a release ships clean
-      // without anyone having to remember to switch this back.
-      debugShowCheckedModeBanner: true,
+      // without anyone having to remember to switch this back. Off only for a
+      // recording of the app (`--dart-define=HARNESS_RECORDING=true`), which a
+      // simulator can only make from a debug build.
+      debugShowCheckedModeBanner: !const bool.fromEnvironment(
+        'HARNESS_RECORDING',
+      ),
       // The design system's own `buildAppTheme` — see the note where a second,
       // hand-written `ThemeData` used to shadow it, in `lib/theme/app_theme.dart`.
-      // Harness Desktop is dark-only: one theme, no `darkTheme`/`themeMode` to
-      // resolve between.
-      theme: grid.buildAppTheme(brightness: Brightness.dark),
+      // One theme, no `darkTheme`/`themeMode` to resolve between: the chosen
+      // palette says whether it is light or dark.
+      theme: grid.buildAppTheme(brightness: prefs.palette.brightness),
       // The UI size reaches every `Text` as a text SCALE rather than as hundreds
       // of edited call sites. `withClampedTextScaling` with both bounds equal IS
       // the way to force a factor — MediaQuery has no "set the scale"
@@ -151,11 +145,10 @@ class HarnessApp extends StatelessWidget {
       // is applied exactly once. Ship one without the other and a 19px setting
       // gives 19px-tall buttons wrapped around 13pt labels.
       //
-      // ⚠️ The terminal is fenced out of this at five seams — see
-      // `terminal_panel.dart`, `terminal_composer.dart`, `engine_identity.dart`
-      // and `terminal_section.dart`, and the regression test in
-      // `test/terminal_ui_scale_isolation_test.dart`. The terminal keeps its own
-      // font settings because its type is a grid a remote program draws into.
+      // ⚠️ The terminal is fenced out of this — see `terminal_panel.dart`
+      // (`textScaler: TextScaler.noScaling`) and `engine_identity.dart`. The
+      // terminal keeps its own font settings because its type is a grid a remote
+      // program draws into.
       //
       // Outermost inside `builder`, with `_GridTokenScope` inside it: the clamp
       // has to be an ancestor of everything that lays out text, while the scope
@@ -163,17 +156,14 @@ class HarnessApp extends StatelessWidget {
       builder: (context, child) => MediaQuery.withClampedTextScaling(
         minScaleFactor: scale,
         maxScaleFactor: scale,
-        child: _GridTokenScope(
-          child: keymap == null
-              ? child ?? const SizedBox.shrink()
-              : KeymapProvider(
-                  keymap: keymap!,
-                  child: child ?? const SizedBox.shrink(),
-                ),
-        ),
+        child: _GridTokenScope(child: child ?? const SizedBox.shrink()),
       ),
-      home: AnalyticsLifecycle(
-        child: RootShell(authenticatedScreen: authenticatedScreen),
+      home: StatsLifecycle(
+        child: RootShell(
+          authenticatedScreen: authenticatedScreen,
+          signedOutScreen: signedOutScreen,
+          bootScreen: bootScreen,
+        ),
       ),
     );
   }
@@ -186,9 +176,13 @@ class HarnessApp extends StatelessWidget {
 /// mounted with. [grid.BrightnessScope] marks the ones that called
 /// `AppTheme.watch` dirty directly, across that boundary.
 ///
-/// Pinned to [Brightness.dark] rather than read from `Theme.of(context)`:
-/// Harness Desktop is dark-only, and there is no other theme for `Theme.of`
-/// to ever resolve to here.
+/// Set from the palette rather than read from `Theme.of(context)`: the palette
+/// is where light or dark is chosen, and [HarnessApp] builds the theme from the
+/// same value, so the two cannot disagree.
+///
+/// The status and navigation bar icons follow it too. Nothing else sets them —
+/// the phone draws no `AppBar` — so without this they kept the OS's own style
+/// and went dark-on-dark or light-on-light with the app.
 class _GridTokenScope extends StatelessWidget {
   const _GridTokenScope({required this.child});
 
@@ -196,144 +190,68 @@ class _GridTokenScope extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    grid.AppTheme.brightness.value = Brightness.dark;
-    return grid.BrightnessScope(child: child);
+    final brightness = grid.AppTheme.palette.value.brightness;
+    grid.AppTheme.brightness.value = brightness;
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: systemBarsFor(brightness),
+      child: grid.BrightnessScope(child: child),
+    );
   }
 }
 
-/// Carries "Check for Updates…" from the macOS application menu into Dart.
-///
-/// The item is installed natively (MainFlutterWindow.swift) so the rest of the
-/// menu bar keeps coming from the nib; all this side does is act on the tap.
-const _appMenuChannel = MethodChannel('harness/app_menu');
+/// The system bars' style for an app of [brightness]: icons that contrast with it, over the
+/// transparent bars `main.dart` draws edge to edge under. The colours are restated because an
+/// [AnnotatedRegion]'s style replaces the one set at launch.
+SystemUiOverlayStyle systemBarsFor(Brightness brightness) {
+  // The icons are the opposite of the app; iOS's `statusBarBrightness` names the GROUND instead.
+  final icons = brightness == Brightness.dark
+      ? Brightness.light
+      : Brightness.dark;
+  return SystemUiOverlayStyle(
+    statusBarColor: const Color(0x00000000),
+    systemNavigationBarColor: const Color(0x00000000),
+    statusBarIconBrightness: icons,
+    systemNavigationBarIconBrightness: icons,
+    statusBarBrightness: brightness,
+  );
+}
 
-class RootShell extends ConsumerStatefulWidget {
-  const RootShell({super.key, required this.authenticatedScreen});
+/// Which screen the app's state calls for.
+///
+/// ⚠️ **What a desktop window also had here, and why it is gone.** The macOS application menu
+/// (`harness/app_menu`: check for updates, flash firmware, layouts, shortcuts, terminal font
+/// size), the update band, and the two first-run provisioning screens. No iOS or Android runner
+/// registers that channel, and a viewer build never provisions or self-updates — an app the store
+/// updates installs nothing — so neither the provisioner nor the updater is in this package.
+class RootShell extends ConsumerWidget {
+  const RootShell({
+    super.key,
+    required this.authenticatedScreen,
+    required this.signedOutScreen,
+    required this.bootScreen,
+  });
 
   final AuthenticatedScreenBuilder authenticatedScreen;
+  final AuthenticatedScreenBuilder signedOutScreen;
+  final AuthenticatedScreenBuilder bootScreen;
 
   @override
-  ConsumerState<RootShell> createState() => _RootShellState();
-}
-
-class _RootShellState extends ConsumerState<RootShell>
-    with WidgetsBindingObserver {
-  bool _menuDialogOpen = false;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _appMenuChannel.setMethodCallHandler(_onAppMenu);
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _appMenuChannel.setMethodCallHandler(null);
-    super.dispose();
-  }
-
-  @override
-  Future<AppExitResponse> didRequestAppExit() async {
-    // Save the final arrangement, with a bound so an unavailable disk cannot
-    // trap the user in the app. Input and tab switching never wait for disk.
-    await ref
-        .read(appStateProvider)
-        .flushPaneLayout()
-        .timeout(const Duration(seconds: 1), onTimeout: () {});
-    return AppExitResponse.exit;
-  }
-
-  Future<void> _onAppMenu(MethodCall call) async {
-    if (!mounted) return;
-    switch (call.method) {
-      case 'checkForUpdates':
-        final app = ref.read(appStateProvider);
-        await _menuDialog(() async {
-          final result = await app.checkForUpdates();
-          if (!mounted) return;
-          await showUpdateCheckDialog(context, app, result);
-        });
-      case 'flashFirmware':
-        await _menuDialog(() => showFlashFirmwareDialog(context));
-      case 'showLayout':
-        if (advanceLayoutPalette()) return;
-        await _menuDialog(
-          () => showLayoutPalette(context, ref.read(appStateProvider)),
-        );
-      case 'showShortcuts':
-        await _menuDialog(() => showShortcutsSheet(context));
-      case 'increaseTerminalFontSize':
-        await terminalFontStore.increaseSize();
-      case 'decreaseTerminalFontSize':
-        await terminalFontStore.decreaseSize();
-      case 'resetTerminalFontSize':
-        await terminalFontStore.reset();
-    }
-  }
-
-  Future<void> _menuDialog(Future<void> Function() action) async {
-    if (_menuDialogOpen || ModalRoute.isCurrentOf(context) == false) return;
-    // Reserve before the first frame too: held menu shortcuts can arrive
-    // before the new dialog has changed the route's current state.
-    _menuDialogOpen = true;
-    try {
-      await action();
-    } finally {
-      _menuDialogOpen = false;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final app = ref.watch(appStateProvider);
     return ListenableBuilder(
       listenable: app,
-      builder: (context, _) {
-        final Widget screen;
-        switch (app.status) {
-          case AppStatus.bootstrapping:
-            // `bootstrapping` covers two unrelated moments: the app starting
-            // cold, and a sign-in the user just began. The second keeps
-            // LoginScreen, which carries the wait as a state of its own
-            // button; swapping the window for a separate screen there was a
-            // hard cut in the middle of a flow, and it is why that button's
-            // spinner was almost never seen.
-            //
-            // ⚠️ Keyed on `signingIn`, NOT on `pendingAuthorizeUrl`. The URL
-            // only exists for the middle stretch of the flow — the CLI has to
-            // start before it can print one, and it is cleared again while
-            // the post-login restore is still running — so keying on it blew
-            // the user's own screen away twice per sign-in: once on the click
-            // and again on success.
-            screen = app.signingIn
-                ? LoginScreen(notifier: app)
-                : BootstrappingScreen(statusMessage: app.bootStatusMessage);
-          case AppStatus.checkingEnvironment:
-            screen = EnvironmentPreflightScreen(
-              readiness: app.environmentReadiness,
-            );
-          case AppStatus.preparingEnvironment:
-            screen = EnvironmentSetupScreen(notifier: app);
-          case AppStatus.unauthenticated:
-            screen = LoginScreen(notifier: app);
-          case AppStatus.authenticated:
-            screen = widget.authenticatedScreen(app);
-        }
-        // The band takes a row of its own rather than floating over one. As an
-        // overlay it landed on the screen's own head — covering the controls
-        // along the top edge, which is the one strip that must stay reachable.
-        return Column(
-          children: [
-            if (app.hasAvailableUpdate &&
-                app.status != AppStatus.bootstrapping &&
-                app.status != AppStatus.checkingEnvironment &&
-                app.status != AppStatus.preparingEnvironment)
-              UpdateNotice(notifier: app),
-            Expanded(child: screen),
-          ],
-        );
+      builder: (context, _) => switch (app.status) {
+        // `bootstrapping` covers two unrelated moments: the app starting
+        // cold, and a sign-in the user just began. The second keeps the
+        // signed-out screen, which carries the wait as a state of its own
+        // button; swapping the window for a separate screen there was a
+        // hard cut in the middle of a flow, and it is why that button's
+        // spinner was almost never seen. Keyed on `signingIn`, which spans
+        // the whole of it — see [AppNotifier.signingIn].
+        AppStatus.bootstrapping =>
+          app.signingIn ? signedOutScreen(app) : bootScreen(app),
+        AppStatus.unauthenticated => signedOutScreen(app),
+        AppStatus.authenticated => authenticatedScreen(app),
       },
     );
   }

@@ -24,7 +24,8 @@
  * Selection is by digit: typing `3` on a live pane picked Blue immediately, with no Enter.
  */
 
-import type { PaneView, QuestionRow } from '../../lib/askQuestion.js'
+import type { FoundDialog, PaneView, QuestionRow } from '../../lib/askQuestion.js'
+import { earlierDialogEnd } from '../../lib/dialogEnd.js'
 
 const ESCAPES = /\u001b\[[0-9;:]*[A-Za-z]/g
 /** `Question 1/1: <text>` — the `N/M` counter is what tells this dialog apart from an echoed prompt. */
@@ -42,13 +43,20 @@ const FOOTER = /↑\/↓\s*Navigate/
 const WRITE_IN = /^write[- ]?in\b/i
 
 export function parseAgyQuestionPane(capture: string): PaneView {
+  return locateAgyQuestion(capture)?.view ?? null
+}
+
+/** `parseAgyQuestionPane`, with the footer it anchored on. */
+export function locateAgyQuestion(capture: string): FoundDialog | null {
   const lines = capture.replace(ESCAPES, '').split('\n').map((line) => line.trimEnd())
   const footer = lines.findLastIndex((line) => FOOTER.test(line))
   if (footer === -1) return null
 
+  // Up to the heading, and never past an earlier dialog's end: its heading is not this one's.
+  const floor = earlierDialogEnd(lines, footer, footer)
   const rows: QuestionRow[] = []
   let question = ''
-  for (let i = footer - 1; i >= 0; i--) {
+  for (let i = footer - 1; i > floor; i--) {
     const line = lines[i]
     if (!line.trim()) continue
     const heading = HEADING.exec(line.trim())
@@ -63,5 +71,5 @@ export function parseAgyQuestionPane(capture: string): PaneView {
     rows.unshift({ number: row[1], label: row[2], checked: false })
   }
   if (!question || rows.length < 2) return null
-  return { kind: 'question', question, rows, multi: false, typeRow: null }
+  return { view: { kind: 'question', question, rows, multi: false, typeRow: null }, at: footer }
 }

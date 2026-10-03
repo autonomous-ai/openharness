@@ -2,15 +2,11 @@ import { execFile } from 'node:child_process'
 import { open, opendir, realpath, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { homedir } from 'node:os'
-import { isAbsolute, join, relative } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
-import { env } from '../config/env.js'
+import { withinRoots } from './pathContainment.js'
 
 const exec = promisify(execFile)
-const within = (root: string, path: string) => {
-  const rel = relative(root, path)
-  return rel === '' || (rel !== '..' && !rel.startsWith('../') && !isAbsolute(rel))
-}
 
 /** Existing local content only. Paths/README symlinks stay inside the browsable
  * home or an agent's known workspace; all Git commands are read-only/bounded. */
@@ -18,8 +14,7 @@ export async function projectPreview(path: string, knownRoots: string[] = []) {
   if (!isAbsolute(path) || path.length > 4096 || /[\x00-\x1f\x7f]/.test(path)) return { error: 'INVALID_PATH' }
   try {
     const target = await realpath(path)
-    const roots = await Promise.all([homedir(), ...knownRoots].map(root => realpath(root).catch(() => '')))
-    if (env.HARNESS_FS_BROWSE_UNRESTRICTED !== '1' && !roots.some(root => root && within(root, target))) return { error: 'FORBIDDEN' }
+    if (!(await withinRoots(target, [homedir(), ...knownRoots]))) return { error: 'FORBIDDEN' }
     if (!(await stat(target)).isDirectory()) return { error: 'NOT_FOUND' }
     const files: string[] = []
     let readme: string | undefined

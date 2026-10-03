@@ -1,8 +1,8 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../theme/app_theme.dart';
@@ -23,11 +23,13 @@ class TerminalComposer extends StatefulWidget {
     required this.session,
     required this.focusNode,
     this.inputEnabled = true,
+    this.tabId,
   });
 
   final TerminalSession session;
   final FocusNode focusNode;
   final bool inputEnabled;
+  final String? tabId;
 
   @override
   State<TerminalComposer> createState() => _TerminalComposerState();
@@ -99,7 +101,9 @@ class _TerminalComposerState extends State<TerminalComposer> {
     if (text.isEmpty) return;
     _sending = true;
     try {
-      if (!await widget.session.sendComposerText(text)) return;
+      if (!await widget.session.sendComposerText(text, tabId: widget.tabId)) {
+        return;
+      }
       _controller.clear();
     } finally {
       _sending = false;
@@ -259,7 +263,7 @@ class _TerminalComposerState extends State<TerminalComposer> {
                         // `terminal_ui_scale_isolation_test.dart`.
                         constraints: const BoxConstraints(minHeight: 0),
                         hintText: enabled
-                            ? 'Message agent…  ·  ↵ send'
+                            ? 'Message harness…  ·  ↵ send'
                             : 'Connecting to terminal…',
                         // InputDecorator merges this with the app-wide field hint
                         // style. Set tracking explicitly so the UI-control font's
@@ -340,9 +344,7 @@ class ComposerGrip extends StatelessWidget {
                   width: 40,
                   height: height,
                   child: Icon(
-                    expanded
-                        ? LucideIcons.chevronDown300
-                        : LucideIcons.chevronUp300,
+                    expanded ? AppIcons.chevronDown : AppIcons.chevronUp,
                     size: 12,
                     // One step up from the faint ink this started on, in both directions at once:
                     // the token resolves lighter on dark and darker on light, so the glyph gains

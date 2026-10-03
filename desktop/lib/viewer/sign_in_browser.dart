@@ -1,6 +1,8 @@
-import 'dart:io';
+import 'package:flutter/foundation.dart';
 
 import 'package:url_launcher/url_launcher.dart';
+
+import '../core/runtime_platform.dart';
 
 /// Where the SSO page opens: the system browser, as it always has — except on a phone.
 ///
@@ -14,11 +16,12 @@ import 'package:url_launcher/url_launcher.dart';
 /// has to answer.
 Future<bool> openSignInPage(Uri url) => launchUrl(
   url,
-  mode: Platform.isIOS || Platform.isAndroid
+  webOnlyWindowName: kIsWeb ? '_self' : null,
+  mode: RuntimePlatform.isIOS || RuntimePlatform.isAndroid
       ? LaunchMode.inAppBrowserView
       : LaunchMode.externalApplication,
 );
 
 Future<void> closeSignInPage() async {
-  if (Platform.isIOS || Platform.isAndroid) await closeInAppWebView();
+  if (RuntimePlatform.isIOS || RuntimePlatform.isAndroid) await closeInAppWebView();
 }

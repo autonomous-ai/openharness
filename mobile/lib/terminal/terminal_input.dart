@@ -7,8 +7,8 @@ import 'package:xterm/xterm.dart';
 /// that only when it is configured to treat ⌥ as Meta (iTerm's "Esc+", Terminal.app's "Use Option
 /// as Meta Key"); xterm.dart has no such setting, and its [AltInputHandler] deliberately does
 /// nothing on macOS so ⌥ stays the compose key for `å`/`ø`/`¬`. So ⌥⏎ fell through to the keytab,
-/// which matches on `Return` alone and answers `\r` — the submit. The key the shortcuts sheet
-/// promises (`kTerminalOwnedKeys`) sent the turn instead of breaking the line.
+/// which matches on `Return` alone and answers `\r` — the submit. The key the desktop's shortcuts
+/// sheet promises (its `kTerminalOwnedKeys`) sent the turn instead of breaking the line.
 ///
 /// ⌥ is Meta for THIS ONE KEY, not for the keyboard: Enter carries no character to compose, so
 /// prefixing it costs nothing that ⌥-as-compose needs, and the rest of the alphabet is untouched.

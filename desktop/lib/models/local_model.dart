@@ -15,12 +15,25 @@ class LocalModel {
     this.windowSeconds,
     this.operation,
     this.gridAsleep = false,
+    this.contextWindow,
+    this.estTokS,
+    this.paramsB,
+    this.app,
   });
   final String id, name, state;
+
+  /// The app this model was downloaded with and starts in (`Ollama`, `LM Studio`, `llama.cpp`): one found
+  /// in that app's folder. Null for Grid's own models, and from an older daemon.
+  final String? app;
   final String? quant;
   final double? sizeBytes, tokensPerSecond, requests, windowSeconds;
   final bool recommended, canStart, canStop;
   final LocalModelOperation? operation;
+
+  /// What the grid catalog expects of this model on its machine, for choosing before a download:
+  /// the window it is given, its estimated speed, and its size in billions of parameters. Absent
+  /// for weights found on disk, which the catalog never sized, and from an older daemon.
+  final double? contextWindow, estTokS, paramsB;
 
   /// Running here, parked while the account's own grid sleeps (`gridAsleep`). It answers again by
   /// itself on the next message, so the row says so rather than reading as a plain `running`. An
@@ -31,6 +44,25 @@ class LocalModel {
   /// Running, and resting until somebody sends a message — see [gridAsleep].
   bool get resting => running && gridAsleep;
   bool get downloaded => state == 'downloaded' || running;
+
+  /// Imported weights can omit `quant`, but their filename still names the
+  /// exact variant. Never infer quantization from size or model family.
+  String? get quantization {
+    if (quant?.trim().isNotEmpty == true) return quant!.trim();
+    return RegExp(
+      r'(?:^|[^a-z0-9])(IQ\d+[a-z0-9_]*|Q\d+[a-z0-9_]*|MXFP\d+(?:_[a-z0-9]+)*|BF16|FP16|F16)(?=[^a-z0-9_]|$)',
+      caseSensitive: false,
+    ).firstMatch(id)?.group(1)?.toUpperCase();
+  }
+
+  String get displayName {
+    final variant = quantization;
+    if (variant == null || variant.isEmpty) return name;
+    final present = RegExp(
+      '(^|[^a-z0-9])${RegExp.escape(variant.toLowerCase())}([^a-z0-9]|\$)',
+    ).hasMatch(name.toLowerCase());
+    return present ? name : '$name · $variant';
+  }
 
   factory LocalModel.fromJson(Map<String, dynamic> data) => LocalModel(
     id: data['id'] as String? ?? '',
@@ -46,6 +78,13 @@ class LocalModel {
     windowSeconds: _number(data['windowSeconds']),
     operation: LocalModelOperation.parse(data['operation']),
     gridAsleep: data['gridAsleep'] == true,
+    contextWindow: _number(data['contextWindow']),
+    estTokS: _number(data['estTokS']),
+    paramsB: _number(data['paramsB']),
+    app: switch (data['app']) {
+      final String app when app.trim().isNotEmpty => app.trim(),
+      _ => null,
+    },
   );
 }
 
@@ -76,7 +115,7 @@ class LocalModelOperation {
     if (raw is! Map<String, dynamic> ||
         raw['id'] is! String ||
         raw['modelId'] is! String ||
-        !['start', 'stop'].contains(raw['action']) ||
+        !['download', 'start', 'stop'].contains(raw['action']) ||
         ![
           'checking',
           'downloading',

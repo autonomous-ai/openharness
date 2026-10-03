@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/cli_login.dart';
+import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
@@ -35,6 +36,10 @@ class _Api extends ApiClient {
   @override
   Future<Map<String, dynamic>?> desk() async => null;
 
+  // A retry also re-reads the daemon's pending devices: a daemon that predates them.
+  @override
+  Future<Map<String, dynamic>?> daemonDevices() async => null;
+
   @override
   Future<List<Machine>> machines() async {
     reads++;
@@ -51,7 +56,10 @@ class _Cli extends CliLogin {
   Future<CliAuthStatus> checkStatus() async =>
       const CliAuthStatus(loggedIn: true);
   @override
-  Future<void> login({void Function(String url)? onAuthorizeUrl}) async {}
+  Future<void> login({
+    void Function(String url)? onAuthorizeUrl,
+    SignInProvider? provider,
+  }) async {}
   @override
   Future<void> logout() async {}
 }

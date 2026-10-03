@@ -33,9 +33,6 @@ abstract final class StartupTrace {
   /// mid-launch would report negative elapsed time.
   static final Stopwatch _sinceLaunch = Stopwatch()..start();
 
-  /// How long since the app entered `startHarness`.
-  static Duration get sinceLaunch => _sinceLaunch.elapsed;
-
   /// One moment on the launch timeline, stamped with its offset from launch.
   ///
   /// For things that have no duration of their own — the first frame, the point
@@ -73,10 +70,7 @@ abstract final class StartupTrace {
 
   static void _record(String step, Duration started) {
     final elapsed = _sinceLaunch.elapsed - started;
-    appLog.info(
-      'startup',
-      '$step took ${_ms(elapsed)} (at ${_ms(started)})',
-    );
+    appLog.info('startup', '$step took ${_ms(elapsed)} (at ${_ms(started)})');
   }
 
   /// Milliseconds, the unit a launch is argued about in.

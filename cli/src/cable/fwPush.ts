@@ -21,8 +21,39 @@ export interface FirmwareRelease {
   size: number
 }
 
-/** The dial's key in the shared manifest. Other boards and the CLI itself live in the same file. */
+/** The round dial's key in the shared manifest. Other boards and the CLI itself live in the same file. */
 export const CIRCLE_OTA_KEY = 'commander'
+
+/** Harness Pro's. A different SoC entirely — an image from either key bricks the other board. */
+export const PRO_OTA_KEY = 'harness-pro'
+
+/**
+ * Which manifest entry belongs to the board that just greeted us, or null for "do not offer anything".
+ *
+ * THIS IS A SAFETY GATE, NOT A LOOKUP. Until the Pro existed there was one board, so the caller could
+ * omit the key and take the default; now there are two, built for different silicon, and an ESP32-S3
+ * image written to an ESP32-P4 is a device that will not boot — and cannot be recovered over the cable,
+ * because the cable is the firmware that just stopped running. So an unrecognised board gets nothing.
+ *
+ * The `hw` string is what the device puts in its hello (`board()->name`, cable_client.c).
+ *
+ * ABSENT IS THE DIAL, deliberately, and it is the one case where guessing is right: the field has been
+ * in the protocol since before the Pro was designed, so a device that does not send it is a build old
+ * enough to predate it — which can only be a dial. Refusing those would stop updates reaching exactly
+ * the devices most in need of one.
+ */
+export function otaKeyForBoard(hw: string | undefined | null): string | null {
+  if (!hw) return CIRCLE_OTA_KEY
+  switch (hw) {
+    case 'cst9217+axp2101':
+    case 'cst816s':
+      return CIRCLE_OTA_KEY
+    case 'harness-pro':
+      return PRO_OTA_KEY
+    default:
+      return null
+  }
+}
 
 /**
  * Whether `published` should be offered to a dial running `running`.

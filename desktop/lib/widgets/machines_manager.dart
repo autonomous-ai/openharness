@@ -76,7 +76,7 @@ class _MachinesManagerState extends State<_MachinesManager> {
     if (machine.machine.isShared) 'view only',
     if (machine.agentLoadStatus == AgentLoadStatus.loaded ||
         machine.agents.isNotEmpty)
-      '${machine.agents.length} ${machine.agents.length == 1 ? 'agent' : 'agents'}',
+      '${machine.agents.length} ${machine.agents.length == 1 ? 'harness' : 'harnesses'}',
   ].join(' · ');
 
   List<_Entry> get _allEntries {
@@ -373,7 +373,7 @@ class _MachinesManagerState extends State<_MachinesManager> {
             onTap: () => unawaited(_open(entry)),
             child: BoxRowHighlight(
               highlighted: selected,
-              accent: Colors.white70,
+              accent: boxText(.70),
               terminal: true,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -392,8 +392,8 @@ class _MachinesManagerState extends State<_MachinesManager> {
                             entry.title,
                             style: boxMonoStyle(
                               color: entry.danger
-                                  ? Colors.orangeAccent
-                                  : Colors.white,
+                                  ? boxErrorText
+                                  : boxText(1),
                               weight: selected ? FontWeight.w600 : null,
                             ),
                           ),
@@ -500,7 +500,7 @@ class _MachinesManagerState extends State<_MachinesManager> {
                               heightFactor: 1,
                               child: Text(
                                 _machineId == null ? 'machine >' : 'action >',
-                                style: boxMonoStyle(color: Colors.white70),
+                                style: boxMonoStyle(color: boxText(.70)),
                               ),
                             ),
                           ),

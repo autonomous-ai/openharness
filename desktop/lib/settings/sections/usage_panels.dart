@@ -6,8 +6,8 @@
 /// handed — none reads a store — so the pane can be driven from a fixture.
 library;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/theme/app_theme.dart';
 import '../../shared/widgets/skeleton.dart';
@@ -69,7 +69,7 @@ class StatsSummaryCards extends StatelessWidget {
         ),
         child: Center(
           child: Text(
-            'Start your first agent to begin tracking.',
+            'Start your first harness to begin tracking.',
             style: AppType.body(color: AppPalette.textSecondary),
           ),
         ),
@@ -77,19 +77,19 @@ class StatsSummaryCards extends StatelessWidget {
     }
     final cards = [
       UsageStatCard(
-        label: 'Agents spawned',
+        label: 'Harnesses started',
         value: '${summary.agentsSpawned}',
-        icon: LucideIcons.bot300,
+        icon: AppIcons.bot,
       ),
       UsageStatCard(
-        label: 'Time agents worked',
+        label: 'Time harnesses worked',
         value: formatWorkedTime(summary.timeWorked),
-        icon: LucideIcons.clock300,
+        icon: AppIcons.clock,
       ),
       UsageStatCard(
         label: 'Turns',
         value: '${summary.turns}',
-        icon: LucideIcons.messagesSquare300,
+        icon: AppIcons.messagesSquare,
       ),
     ];
     return Column(
@@ -676,7 +676,7 @@ class ProviderUsageRow extends StatelessWidget {
       LedgerStatus.ok =>
         ledger.hasData
             ? '${ledger.sessionCount} '
-                  '${ledger.sessionCount == 1 ? 'session' : 'sessions'}'
+                  '${ledger.sessionCount == 1 ? 'conversation' : 'conversations'}'
             : 'Nothing spent here yet.',
     };
   }
@@ -735,8 +735,8 @@ class UsageEmptyState extends StatelessWidget {
           Row(
             children: [
               Icon(
-                LucideIcons.chartNoAxesColumn300,
-                size: 15,
+                AppIcons.chartNoAxesColumn,
+                size: 16,
                 color: AppPalette.textFaint,
               ),
               const SizedBox(width: 8),

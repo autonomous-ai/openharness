@@ -92,6 +92,18 @@ describe('package updates', { timeout: 30_000 }, () => {
     expect(lines).toContain(`${id} is already up to date`)
   })
 
+  it('keeps release-bundled core packages on the Harness update path without fetching a Store copy', async () => {
+    upsertInstalledRecord({ id, dir: join(root, 'bundled'), source: 'builtin:harness-monitor',
+      ref: null, commit: null, linked: false, installedAt: 123 })
+    const before = readInstalledIndex()
+    const registry = vi.fn()
+    const result = await updateDsh({ id, registry })
+    expect(result).toEqual({ ok: false, error: 'BUNDLED_PACKAGE',
+      detail: `${id} updates automatically with Harness. Update Harness to receive the latest core packages.` })
+    expect(registry).not.toHaveBeenCalled()
+    expect(readInstalledIndex()).toEqual(before)
+  })
+
   it('repairs a missing installed directory and a record with unknown commit/ref', async () => {
     const repo = create()
     await installDsh({ source: repo })

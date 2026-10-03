@@ -32,6 +32,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     required TerminalStyle textStyle,
     required TextScaler textScaler,
     required TerminalTheme theme,
+    bool fillsBackground = true,
     required FocusNode focusNode,
     required TerminalCursorType cursorType,
     required bool alwaysShowCursor,
@@ -52,6 +53,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         _onEditableRect = onEditableRect,
         _composingText = composingText,
         _composingBacktrackCells = composingBacktrackCells,
+        _fillsBackground = fillsBackground,
         _painter = TerminalPainter(
           theme: theme,
           textStyle: textStyle,
@@ -161,6 +163,18 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   set theme(TerminalTheme value) {
     if (value == _painter.theme) return;
     _painter.theme = value;
+    markNeedsPaint();
+  }
+
+  /// Whether each frame opens with a solid fill in the theme's background.
+  /// False while [TerminalView.backgroundOpacity] is below 1: the view's own
+  /// translucent fill sits underneath, and a solid one here would hide what
+  /// shows through it. This render object is a repaint boundary, so its layer
+  /// is re-recorded from empty on every paint either way.
+  bool _fillsBackground;
+  set fillsBackground(bool value) {
+    if (value == _fillsBackground) return;
+    _fillsBackground = value;
     markNeedsPaint();
   }
 
@@ -544,6 +558,11 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     return _painter.cellSize;
   }
 
+  /// The colour a cell's foreground word paints in under the current theme.
+  Color resolveForegroundColor(int cellColor) {
+    return _painter.resolveForegroundColor(cellColor);
+  }
+
   @override
   void paint(PaintingContext context, Offset offset) {
     _paint(context, offset);
@@ -563,10 +582,12 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     final paintBounds = offset & size;
     canvas.save();
     canvas.clipRect(paintBounds);
-    canvas.drawRect(
-      paintBounds,
-      Paint()..color = _painter.theme.background,
-    );
+    if (_fillsBackground) {
+      canvas.drawRect(
+        paintBounds,
+        Paint()..color = _painter.theme.background,
+      );
+    }
 
     final lines = _terminal.buffer.lines;
     final charHeight = _painter.cellSize.height;

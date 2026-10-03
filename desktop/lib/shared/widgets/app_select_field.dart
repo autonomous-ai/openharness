@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -85,6 +86,7 @@ class AppSelectField<T> extends StatefulWidget {
     this.filterThreshold = 8,
     this.textStyle,
     this.radius,
+    this.semanticLabel,
   });
 
   final T value;
@@ -118,6 +120,11 @@ class AppSelectField<T> extends StatefulWidget {
   final TextStyle? textStyle;
   final double? radius;
   final String? emptyLabel;
+
+  /// The control's purpose, separate from its current option's label and note.
+  /// For example, "Terminal font" with a value of "SF Mono". Omit this for
+  /// existing custom triggers that already provide their own accessible name.
+  final String? semanticLabel;
 
   /// Whether a long list may put a search field at the head of its menu.
   ///
@@ -403,45 +410,12 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
     return KeyEventResult.ignored;
   }
 
-  /// How tall this panel may draw.
-  ///
-  /// ⚠️ NOT [AppControl.menuMaxHeight]. That token's 240 is for a menu that
-  /// opens UPWARD and places itself by summing the height it is about to take;
-  /// this one hangs below its field, so it is free to be as tall as its own
-  /// list. Left at 240, a seven-item picker overflowed by five pixels and grew
-  /// a scrollbar to show them — furniture that says "there is more here" when
-  /// there is not.
-  ///
-  /// The ceiling is still real: past it a long list scrolls instead of running
-  /// off the window.
-  double get _panelHeight => math.min(
-    // A row with a detail line is TALLER, and the difference has to be counted
-    // per row rather than assumed for all of them: a list where only some
-    // options carry a sentence would otherwise be measured wrong in whichever
-    // direction the guess went, and a panel that disagrees with its layout by a
-    // few pixels wears a scrollbar it does not need.
-    _shownOptions.fold<double>(
-          0,
-          (total, option) =>
-              total +
-              (option.detail == null
-                  ? AppMenuRowMetrics.roomy.extent
-                  : AppMenuRowMetrics.roomy.detailExtent),
-        ) +
-        AppMenu.panelPadding.vertical +
-        ((widget.options.isEmpty && widget.emptyLabel != null) || _noMatches
-            ? AppMenuRowMetrics.roomy.extent
-            : 0) +
-        (_filtering ? _filterExtent : 0),
-    _maxPanelHeight,
-  );
-
+  /// Let MenuAnchor measure the rows, including scaled text, detail lines,
+  /// custom marks and the search field. An estimate from unscaled row metrics
+  /// can hide a final option even when all choices fit in the window.
+  /// This is only a ceiling: shorter lists keep their natural height; longer
+  /// lists scroll, and MenuAnchor also constrains them to the available window.
   static const double _maxPanelHeight = 380;
-
-  /// The search field's own band: a field at the app's own height, plus the
-  /// gap that separates it from the first row. Read from the scaled token, so
-  /// a larger UI size grows the panel with the field inside it.
-  double get _filterExtent => AppControl.heightFieldScaled + 10;
 
   /// A floor under the panel's width, on top of the field's own.
   ///
@@ -477,7 +451,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
           decoration: InputDecoration(
             hintText: 'Search',
             prefixIcon: Icon(
-              Icons.search,
+              AppIcons.search,
               size: kFieldIconSize,
               color: AppPalette.textFaint,
             ),
@@ -535,7 +509,7 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
       // with a mysterious margin down one side. Sizing the row makes the panel
       // follow it, and the hover pill then spans the width a person is aiming
       // at.
-      style: AppMenu.style(maxHeight: _panelHeight),
+      style: AppMenu.style(maxHeight: _maxPanelHeight),
       menuChildren: [
         if (_filtering) _filterField(_rowWidth(panelWidth)),
         if (widget.options.isEmpty && widget.emptyLabel != null)
@@ -605,93 +579,128 @@ class _AppSelectFieldState<T> extends State<AppSelectField<T>> {
               const SingleActivator(LogicalKeyboardKey.arrowDown): _open,
               const SingleActivator(LogicalKeyboardKey.arrowUp): _open,
             },
-            child: InkWell(
-              focusNode: _fieldFocus,
-              onFocusChange: (value) => setState(() => _focused = value),
-              onTap: () => controller.isOpen ? controller.close() : _open(),
-              splashFactory: NoSplash.splashFactory,
-              hoverColor: Colors.transparent,
-              focusColor: Colors.transparent,
-              borderRadius: BorderRadius.circular(
-                widget.radius ?? AppControl.radius,
-              ),
-              child: SizedBox(
-                width: widget.width,
-                height: widget.height,
-                child: AnimatedContainer(
-                  duration: AppMotion.hover,
-                  curve: AppMotion.curve,
-                  padding: widget.padding,
-                  decoration: BoxDecoration(
-                    color: _hovered || _focused || controller.isOpen
-                        ? widget.fillColor == null
-                              ? AppSurface.recessHover
-                              : Color.alphaBlend(
-                                  Colors.white.withValues(alpha: .05),
-                                  widget.fillColor!,
-                                )
-                        : widget.fillColor ?? AppSurface.recess,
-                    borderRadius: BorderRadius.circular(
-                      widget.radius ?? AppControl.radius,
-                    ),
-                    border: Border.all(
-                      color:
-                          widget.selected == true ||
-                              (_focused && widget.selected == null)
-                          ? AppPalette.accentOnSurface
-                          : Colors.transparent,
-                    ),
-                  ),
-                  child:
-                      widget.trigger ??
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Row(
-                              children: [
-                                if (current?.leading != null) ...[
-                                  current!.leading!(),
-                                  const SizedBox(width: 8),
-                                ],
-                                Flexible(
-                                  child: Text(
-                                    current?.label ?? '—',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style:
-                                        widget.textStyle ??
-                                        AppType.label(
-                                          fontWeight: AppControl.fontWeight,
-                                          color: AppPalette.textPrimary,
-                                        ),
-                                  ),
-                                ),
-                                if (current?.note != null) ...[
-                                  const SizedBox(width: 8),
-                                  Flexible(
-                                    child: Text(
-                                      current!.note!,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: AppType.mono(
-                                        color: AppPalette.textFaint,
+            child: Semantics(
+              container: widget.semanticLabel != null,
+              button: true,
+              expanded: controller.isOpen,
+              selected: widget.selected,
+              label: widget.semanticLabel,
+              value: widget.semanticLabel == null
+                  ? null
+                  : [
+                      current?.label ?? widget.emptyLabel ?? 'No selection',
+                      ?current?.note,
+                    ].join(', '),
+              child: InkWell(
+                focusNode: _fieldFocus,
+                onFocusChange: (value) => setState(() => _focused = value),
+                onTap: () => controller.isOpen ? controller.close() : _open(),
+                splashFactory: NoSplash.splashFactory,
+                hoverColor: Colors.transparent,
+                focusColor: Colors.transparent,
+                borderRadius: BorderRadius.circular(
+                  widget.radius ?? AppControl.radius,
+                ),
+                child: ExcludeSemantics(
+                  // The purpose and full value above replace only the visual
+                  // trigger's text. The surrounding InkWell retains its actions.
+                  excluding: widget.semanticLabel != null,
+                  child: SizedBox(
+                    width: widget.width,
+                    height: widget.trigger == null
+                        ? math.max(
+                            widget.height,
+                            MediaQuery.textScalerOf(context).scale(
+                                      widget.textStyle?.fontSize ??
+                                          AppType.bodySize,
+                                    ) *
+                                    1.4 +
+                                12,
+                          )
+                        : widget.height,
+                    child: AnimatedContainer(
+                      duration: MediaQuery.disableAnimationsOf(context)
+                          ? Duration.zero
+                          : AppMotion.hover,
+                      curve: AppMotion.curve,
+                      padding: widget.padding,
+                      decoration: BoxDecoration(
+                        color: _hovered || _focused || controller.isOpen
+                            ? widget.fillColor == null
+                                  ? AppSurface.recessHover
+                                  : Color.alphaBlend(
+                                      AppPalette.textPrimary.withValues(
+                                        alpha: .05,
+                                      ),
+                                      widget.fillColor!,
+                                    )
+                            : widget.fillColor ?? AppSurface.recess,
+                        borderRadius: BorderRadius.circular(
+                          widget.radius ?? AppControl.radius,
+                        ),
+                        border: Border.all(
+                          width: MediaQuery.highContrastOf(context) ? 2 : 1.5,
+                          color: _focused
+                              ? AppDesktop.focus
+                              : widget.selected == true
+                              ? AppPalette.accentOnSurface
+                              : MediaQuery.highContrastOf(context)
+                              ? AppPalette.textSecondary
+                              : Colors.transparent,
+                        ),
+                      ),
+                      child:
+                          widget.trigger ??
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Row(
+                                  children: [
+                                    if (current?.leading != null) ...[
+                                      current!.leading!(),
+                                      const SizedBox(width: 8),
+                                    ],
+                                    Flexible(
+                                      child: Text(
+                                        current?.label ?? '—',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style:
+                                            widget.textStyle ??
+                                            AppType.label(
+                                              fontWeight: AppControl.fontWeight,
+                                              color: AppPalette.textPrimary,
+                                            ),
                                       ),
                                     ),
-                                  ),
-                                ],
-                              ],
-                            ),
+                                    if (current?.note != null) ...[
+                                      const SizedBox(width: 8),
+                                      Flexible(
+                                        child: Text(
+                                          current!.note!,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: AppType.body(
+                                            color: AppPalette.textFaint,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Icon(
+                                AppIcons.chevronDown,
+                                size: AppControl.iconSize,
+                                color: _hovered || controller.isOpen
+                                    ? AppPalette.textPrimary
+                                    : AppPalette.textSecondary,
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 6),
-                          Icon(
-                            Icons.expand_more_rounded,
-                            size: AppControl.iconSize,
-                            color: _hovered || controller.isOpen
-                                ? AppPalette.textPrimary
-                                : AppPalette.textSecondary,
-                          ),
-                        ],
-                      ),
+                    ),
+                  ),
                 ),
               ),
             ),

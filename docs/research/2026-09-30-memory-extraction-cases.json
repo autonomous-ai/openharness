@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "suite": "synthetic-extraction-diagnostics-v1",
+  "purpose": "Development diagnostics, not a held-out benchmark or real-user utility study. Freeze this file before the first native run. Expectations and recall probes never enter the model prompt.",
+  "cases": [
+    {
+      "id": "conditional-debugging",
+      "projectId": null,
+      "sources": [{"role": "user", "text": "Across my coding projects, when debugging I prefer a small failing test before changing implementation. This preference does not apply during production incidents."}],
+      "expected": {"records": {"min": 1, "max": 1}, "scope": "personal", "rationale": "null", "review": ["Preserves the test-before-implementation preference only for debugging.", "Preserves the production-incident exception without inventing an incident workflow.", "Does not invent a reason for the preference."]},
+      "probes": [
+        {"id": "debugging", "query": "debugging failing test implementation", "projectIds": ["alpha"], "conditions": {"taskType": "debugging", "productionIncident": false}, "expected": "recall"},
+        {"id": "incident", "query": "debugging failing test implementation", "projectIds": ["alpha"], "conditions": {"taskType": "debugging", "productionIncident": true}, "expected": "abstain"},
+        {"id": "unclassified-task", "query": "debugging failing test implementation", "projectIds": ["alpha"], "conditions": {}, "expected": "abstain"}
+      ]
+    },
+    {
+      "id": "project-database-decision",
+      "projectId": "desktop-repo",
+      "sources": [{"role": "user", "text": "For this local-first desktop app, we have decided on SQLite because deployment should be one file with no database server. This is a decision for this repository, not my general database preference. Keep using SQLite for this app."}],
+      "expected": {"records": {"min": 1, "max": 1}, "scope": "project", "rationale": "unspecified", "review": ["Represents an accepted project decision, not a universal preference or required database for all desktop apps.", "Rationale is limited to the stated single-file deployment and absence of a database server.", "Does not add performance, scale, transaction or security claims."]},
+      "probes": [
+        {"id": "same-repository", "query": "SQLite desktop database deployment", "projectIds": ["desktop-repo"], "conditions": {}, "expected": "recall"},
+        {"id": "different-repository", "query": "SQLite desktop database deployment", "projectIds": ["server-repo"], "conditions": {}, "expected": "abstain"}
+      ]
+    },
+    {
+      "id": "routine-tool-choice",
+      "projectId": "scratch-repo",
+      "sources": [
+        {"role": "assistant", "text": "I used MongoDB for this throwaway demo and rendered a green button. The demo launches."},
+        {"role": "user", "text": "Thanks."}
+      ],
+      "expected": {"records": {"min": 0, "max": 0}, "scope": "none", "rationale": "unspecified", "review": ["Does not infer the user's database or visual-design taste, expertise, or endorsement from assistant activity and an acknowledgement."]},
+      "probes": [{"id": "no-assumed-taste", "query": "MongoDB database green button design", "projectIds": ["scratch-repo"], "conditions": {}, "expected": "abstain"}]
+    },
+    {
+      "id": "quoted-third-party",
+      "projectId": null,
+      "sources": [{"role": "user", "text": "A blog author wrote: 'I always prefer microservices and never write tests.' That is their opinion. I am pasting it for discussion, not adopting it as my own preference."}],
+      "expected": {"records": {"min": 0, "max": 0}, "scope": "none", "rationale": "unspecified", "review": ["Does not assign the quoted author's preference to the user.", "Does not invent the user's opposite preference from non-adoption."]},
+      "probes": [{"id": "no-borrowed-opinion", "query": "microservices tests preference", "projectIds": ["alpha"], "conditions": {}, "expected": "abstain"}]
+    },
+    {
+      "id": "unstated-rationale",
+      "projectId": null,
+      "sources": [{"role": "user", "text": "My default database preference for coding projects is PostgreSQL. Please remember that preference."}],
+      "expected": {"records": {"min": 1, "max": 1}, "scope": "personal", "rationale": "null", "review": ["Preserves a default preference, not an absolute requirement or expertise claim.", "Does not invent reasons such as ACID, performance, familiarity, reliability or cost.", "No invented conditions limit this explicit default."]},
+      "probes": [
+        {"id": "database-choice", "query": "PostgreSQL database preference", "projectIds": ["alpha"], "conditions": {}, "expected": "recall"},
+        {"id": "irrelevant-ui-task", "query": "button color hover animation", "projectIds": ["alpha"], "conditions": {}, "expected": "abstain"}
+      ]
+    },
+    {
+      "id": "unbound-project-fact",
+      "projectId": null,
+      "sources": [{"role": "user", "text": "The billing repository uses Redis for its job queue. We decided that for billing only. I am discussing that repository here; this is not a preference for my other projects."}],
+      "expected": {"records": {"min": 0, "max": 0}, "scope": "none", "rationale": "unspecified", "review": ["Abstains because a repository decision has no verified project binding.", "Does not broaden billing's Redis decision to a personal preference or another project."]},
+      "probes": [{"id": "no-project-leak", "query": "Redis billing queue", "projectIds": ["other-repo"], "conditions": {}, "expected": "abstain"}]
+    }
+  ]
+}

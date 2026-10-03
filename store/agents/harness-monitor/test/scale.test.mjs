@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { CEIL, FLOOR, PAUSE_STEPS, HIDE_STEPS, bytes, humanIdle as pageIdle, idleOfX, parseDuration, snap, xOf } from '../viewer/scale.js'
+import { CEIL, FLOOR, STOP_STEPS, HIDE_STEPS, bytes, humanIdle as pageIdle, idleOfX, parseDuration, snap, xOf } from '../viewer/scale.js'
 import { humanIdle as cliIdle } from '../lib/policy.mjs'
 import { DAY, HOUR } from './fixtures.mjs'
 
@@ -22,10 +22,10 @@ test('the scale is monotonic and its inverse round-trips', () => {
 })
 
 test('a dragged rule lands on a threshold a person would type', () => {
-  assert.equal(snap(4.2 * HOUR, PAUSE_STEPS), '4h')
-  assert.equal(snap(70 * 60_000, PAUSE_STEPS), '1h')
+  assert.equal(snap(4.2 * HOUR, STOP_STEPS), '4h')
+  assert.equal(snap(70 * 60_000, STOP_STEPS), '1h')
   assert.equal(snap(13 * DAY, HIDE_STEPS), '14d')
-  assert.equal(snap(1, PAUSE_STEPS), '15m')
+  assert.equal(snap(1, STOP_STEPS), '15m')
   assert.equal(snap(99 * DAY, HIDE_STEPS), '30d')
 })
 

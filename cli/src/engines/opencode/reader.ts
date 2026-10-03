@@ -141,10 +141,9 @@ export class OpencodeReader {
    * and return the one event that MUST still be emitted: a `turn_started` when we attached mid-turn.
    *
    * Hydrating in silence loses the opening frame of a turn that is already running, and the daemon then
-   * drops that turn's recap because it never saw it open. Measured on a real pane, on both terminal
-   * backends:
+   * drops that turn's recap because it never saw it open. Measured on a real pane:
    *
-   *   [agent] fa12f4cb re-attached · engine=opencode · terminal=herdr:default:wG:p1 · session=ses_fec1
+   *   [agent] fa12f4cb re-attached · engine=opencode · terminal=tmux:%12 · session=ses_fec1
    *   [turn]  ses_fec1 ended                     ← close with nothing to close
    *   [recap] DROPPED (no turn_started was ever seen for this session)
    *

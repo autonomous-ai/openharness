@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 
 import '../shortcuts/app_keymap.dart';
 import '../state/app_state.dart';
-import '../terminal/terminal_text.dart';
-import 'box_chrome.dart';
+import '../shared/theme/app_theme.dart' as grid;
+import 'desktop_chrome.dart';
+import 'desktop_prompt_surface.dart';
+import 'box_chrome.dart' show BoxAnnouncer;
 import 'engine_identity.dart';
 import 'terminal_prompt.dart';
 
@@ -181,150 +183,136 @@ class _RestartAgentPromptState extends State<_RestartAgentPrompt> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
-    return ListenableBuilder(
-      listenable: terminalFontStore,
-      builder: (context, _) => TerminalPromptKeys(
-        focusNode: _focus,
-        inputFocus: _focus,
-        accept: _accept,
-        cancel: _confirmAgain ? _cancelAgain : _close,
-        pageDown: () => _page(1),
-        pageUp: () => _page(-1),
-        child: TerminalPrompt(
-          child: Column(
-            key: const ValueKey('agent-restart-prompt'),
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Flexible(
-                child: ExcludeFocus(
-                  child: SingleChildScrollView(
-                    controller: _body,
-                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          _terminal ? 'Restart Terminal' : 'Restart Harness',
-                          style: boxMonoStyle(color: kBoxFaint),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          _attempt.agent?.name ?? widget.agentId,
-                          style: boxMonoStyle(weight: FontWeight.w600),
-                        ),
-                        if (widget.notifier
-                                .stateOf(widget.machineId)
-                                ?.machine
-                                .displayName
-                            case final machine?)
-                          Text(machine, style: boxMonoStyle(color: kBoxFaint)),
-                        if (!_confirmAgain) ...[
-                          const SizedBox(height: 10),
-                          Text(
-                            _terminal
-                                ? 'Starts a fresh shell in the same pane.'
-                                : 'Restarts the harness in the same pane and tries to resume its conversation.',
-                            style: boxMonoStyle(color: Colors.white70),
-                          ),
-                          if (_busy) ...[
-                            const SizedBox(height: 8),
-                            Text(
-                              'Restart continues if you close this prompt.',
-                              style: boxMonoStyle(color: kBoxFaint),
-                            ),
-                          ],
-                          if (_error case final error?) ...[
-                            const SizedBox(height: 12),
-                            Text(
-                              error,
-                              style: boxMonoStyle(color: Colors.orangeAccent),
-                            ),
-                          ],
-                          if (_fresh) ...[
-                            const SizedBox(height: 12),
-                            Text(
-                              'Started a new conversation. The previous session could not be resumed.',
-                              style: boxMonoStyle(color: Colors.orangeAccent),
-                            ),
-                          ],
-                        ],
-                      ],
-                    ),
-                  ),
+    grid.AppTheme.watch(context);
+    final uncertain = _attempt.awaitingConfirmation && !_closeOnly;
+    final status = _busy
+        ? 'Restarting…'
+        : _confirmAgain
+        ? 'May have already restarted.'
+        : uncertain
+        ? 'Restart not confirmed.'
+        : null;
+    final actionLabel = uncertain ? 'Check status' : 'Retry';
+    final closeLabel = _confirmAgain ? 'Cancel' : 'Close';
+    return TerminalPromptKeys(
+      focusNode: _focus,
+      inputFocus: _focus,
+      accept: _accept,
+      cancel: _confirmAgain ? _cancelAgain : _close,
+      pageDown: () => _page(1),
+      pageUp: () => _page(-1),
+      child: DesktopPromptSurface(
+        key: const ValueKey('agent-restart-prompt'),
+        body: ExcludeFocusTraversal(
+          child: DesktopPromptScrollBody(
+            controller: _body,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  _terminal ? 'Restart Terminal' : 'Restart Harness',
+                  style: DesktopChrome.heading(),
                 ),
-              ),
-              if (_confirmAgain) ...[
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-                  child: Wrap(
-                    spacing: 12,
-                    children: [
-                      terminalPromptButton(
-                        'Cancel',
-                        _cancelAgain,
-                        focusNode: _cancel,
-                      ),
-                      terminalPromptButton(
-                        'Restart',
-                        _restartAgain,
-                        key: const Key('restart-again-confirm'),
-                      ),
-                    ],
-                  ),
+                const SizedBox(height: DesktopChrome.groupGap),
+                Text(
+                  _attempt.agent?.name ?? widget.agentId,
+                  style: DesktopChrome.text(size: 14, medium: true),
                 ),
-              ] else if (_attempt.awaitingConfirmation && !_busy && !_closeOnly)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: terminalPromptButton(
-                      'Restart again…',
-                      _askAgain,
-                      key: const Key('restart-again'),
-                    ),
-                  ),
-                ),
-              BoxHintStrip(
-                message: _busy
-                    ? 'Restarting…'
-                    : (_confirmAgain
-                          ? 'May have already restarted.'
-                          : (_attempt.awaitingConfirmation && !_closeOnly
-                                ? 'Restart not confirmed.'
-                                : null)),
-                isError: !_busy && _attempt.awaitingConfirmation,
-                hints: [
-                  if (!_busy)
-                    BoxHint(
-                      terminalPromptHint(context, 'picker.accept', 'enter'),
-                      _confirmAgain
-                          ? 'select'
-                          : (_closeOnly
-                                ? 'close'
-                                : (_attempt.awaitingConfirmation && !_closeOnly
-                                      ? 'check status'
-                                      : 'retry')),
-                      onTap: _confirmAgain
-                          ? null
-                          : (_closeOnly ? _close : _retry),
-                    ),
-                  if (_confirmAgain)
-                    BoxHint(
-                      terminalPromptHint(context, 'picker.complete', 'tab'),
-                      'controls',
-                    ),
-                  BoxHint(
-                    terminalPromptHint(context, 'picker.cancel', 'esc'),
-                    _confirmAgain ? 'back' : 'close',
-                    onTap: _confirmAgain ? _cancelAgain : _close,
-                  ),
+                if (widget.notifier
+                        .stateOf(widget.machineId)
+                        ?.machine
+                        .displayName
+                    case final machine?) ...[
+                  const SizedBox(height: 4),
+                  Text(machine, style: DesktopChrome.metadata()),
                 ],
-              ),
-            ],
+                const SizedBox(height: DesktopChrome.groupGap),
+                if (_confirmAgain)
+                  Text(
+                    'Start another restart attempt for this harness?',
+                    style: DesktopChrome.text(size: 13),
+                  )
+                else ...[
+                  Text(
+                    _terminal ? 'Starts a fresh shell in the same pane.' : 'Restarts the harness in the same pane and tries to resume its conversation.',
+                    style: DesktopChrome.text(size: 13),
+                  ),
+                  if (_busy) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Restart continues if you close this dialog.',
+                      style: DesktopChrome.text(
+                        size: 13,
+                        color: DesktopChrome.muted,
+                      ),
+                    ),
+                  ],
+                  if (_error case final error?) ...[
+                    const SizedBox(height: 12),
+                    DesktopPromptMessage(
+                      error,
+                      color: uncertain
+                          ? grid.AppPalette.warn
+                          : Theme.of(context).colorScheme.error,
+                    ),
+                  ],
+                  if (_fresh) ...[
+                    const SizedBox(height: 12),
+                    DesktopPromptMessage(
+                      'Started a new conversation. The previous conversation could not be resumed.',
+                      color: grid.AppPalette.warn,
+                    ),
+                  ],
+                ],
+              ],
+            ),
           ),
         ),
+        footer: status == null
+            ? null
+            : Semantics(
+                liveRegion: true,
+                child: DesktopPromptMessage(
+                  status,
+                  color: _busy ? DesktopChrome.muted : grid.AppPalette.warn,
+                ),
+              ),
+        actions: [
+          if (!_confirmAgain && uncertain && !_busy)
+            OutlinedButton(
+              key: const Key('restart-again'),
+              onPressed: _askAgain,
+              child: const Text('Restart again…'),
+            ),
+          Tooltip(
+            message:
+                '$closeLabel · ${terminalPromptHint(context, 'picker.cancel', 'esc')}',
+            child: _closeOnly && !_confirmAgain && !_busy
+                ? FilledButton(onPressed: _close, child: const Text('Close'))
+                : TextButton(
+                    focusNode: _confirmAgain ? _cancel : null,
+                    onPressed: _confirmAgain ? _cancelAgain : _close,
+                    child: Text(closeLabel),
+                  ),
+          ),
+          if (_confirmAgain)
+            FilledButton(
+              key: const Key('restart-again-confirm'),
+              onPressed: _restartAgain,
+              style: grid.dangerButtonStyle(),
+              child: const Text('Restart'),
+            )
+          else if (!_busy && !_closeOnly)
+            Tooltip(
+              message:
+                  '$actionLabel · ${terminalPromptHint(context, 'picker.accept', 'enter')}',
+              child: FilledButton(
+                key: const Key('agent-restart-retry'),
+                onPressed: _retry,
+                child: Text(actionLabel),
+              ),
+            ),
+        ],
       ),
     );
   }

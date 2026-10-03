@@ -1,0 +1,366 @@
+{
+  "status": "Offline fixture verification using hand-written reference solutions; no agents or model calls",
+  "generator_schema": "swarm-pilot-upload-recovery.v2",
+  "generator_sha256": "60cdbe04c93457131c7fa8f02ea89be1939f90a043583ee0529a7f1bb7ec7b00",
+  "verifier_sha256": "38ad1238ac243be97c5d75e643f0c4c9711512d914995bad9705904a1f3cc86a",
+  "checks": [
+    {
+      "name": "public_inputs_identical_across_private_conditions",
+      "consumers": 1,
+      "conditions": 12,
+      "passed": true
+    },
+    {
+      "name": "local_authoritative_fact_and_reference_artifacts",
+      "consumers": 1,
+      "policy": "manual_retry",
+      "passed": true
+    },
+    {
+      "name": "local_authoritative_fact_and_reference_artifacts",
+      "consumers": 1,
+      "policy": "automatic_once",
+      "passed": true
+    },
+    {
+      "name": "local_authoritative_fact_and_reference_artifacts",
+      "consumers": 1,
+      "policy": "undecided",
+      "passed": true
+    },
+    {
+      "name": "local_control_changes_only_authoritative_decision_files",
+      "consumers": 1,
+      "passed": true
+    },
+    {
+      "name": "unfinished_scaffolds_do_not_pass",
+      "consumers": 1,
+      "passed": true
+    },
+    {
+      "name": "editing_public_tests_does_not_change_judge",
+      "consumers": 1,
+      "passed": true
+    },
+    {
+      "name": "six_directed_provider_rotations",
+      "consumers": 1,
+      "pairs": [
+        [
+          "Claude Code",
+          "Codex"
+        ],
+        [
+          "Claude Code",
+          "Grok"
+        ],
+        [
+          "Codex",
+          "Claude Code"
+        ],
+        [
+          "Codex",
+          "Grok"
+        ],
+        [
+          "Grok",
+          "Claude Code"
+        ],
+        [
+          "Grok",
+          "Codex"
+        ]
+      ],
+      "passed": true
+    },
+    {
+      "name": "reference_artifacts",
+      "consumers": 1,
+      "policy": "manual_retry",
+      "passed": true
+    },
+    {
+      "name": "wrong_private_choice_rejected",
+      "consumers": 1,
+      "policy": "manual_retry",
+      "participant": "Alpha",
+      "passed": true
+    },
+    {
+      "name": "reference_artifacts",
+      "consumers": 1,
+      "policy": "automatic_once",
+      "passed": true
+    },
+    {
+      "name": "wrong_private_choice_rejected",
+      "consumers": 1,
+      "policy": "automatic_once",
+      "participant": "Alpha",
+      "passed": true
+    },
+    {
+      "name": "reference_artifacts",
+      "consumers": 1,
+      "policy": "undecided",
+      "passed": true
+    },
+    {
+      "name": "wrong_private_choice_rejected",
+      "consumers": 1,
+      "policy": "undecided",
+      "participant": "Alpha",
+      "passed": true
+    },
+    {
+      "name": "private_policy_not_supplied_to_submitted_code",
+      "consumers": 1,
+      "policy": "manual_retry",
+      "artifact_pass": true,
+      "passed": true
+    },
+    {
+      "name": "private_policy_not_supplied_to_submitted_code",
+      "consumers": 1,
+      "policy": "automatic_once",
+      "artifact_pass": false,
+      "passed": true
+    },
+    {
+      "name": "private_policy_not_supplied_to_submitted_code",
+      "consumers": 1,
+      "policy": "undecided",
+      "artifact_pass": false,
+      "passed": true
+    },
+    {
+      "name": "missing_artifact_reports_other_owner_results",
+      "consumers": 1,
+      "participant": "Alpha",
+      "passed": true
+    },
+    {
+      "name": "missing_artifact_reports_other_owner_results",
+      "consumers": 1,
+      "participant": "Beta",
+      "passed": true
+    },
+    {
+      "name": "missing_artifact_reports_other_owner_results",
+      "consumers": 1,
+      "participant": "Gamma",
+      "passed": true
+    },
+    {
+      "name": "ordinary_module_stdout_does_not_corrupt_observation",
+      "consumers": 1,
+      "passed": true
+    },
+    {
+      "name": "public_and_private_checks_use_same_frozen_artifacts",
+      "consumers": 1,
+      "passed": true
+    },
+    {
+      "name": "public_inputs_identical_across_private_conditions",
+      "consumers": 2,
+      "conditions": 12,
+      "passed": true
+    },
+    {
+      "name": "local_authoritative_fact_and_reference_artifacts",
+      "consumers": 2,
+      "policy": "manual_retry",
+      "passed": true
+    },
+    {
+      "name": "local_authoritative_fact_and_reference_artifacts",
+      "consumers": 2,
+      "policy": "automatic_once",
+      "passed": true
+    },
+    {
+      "name": "local_authoritative_fact_and_reference_artifacts",
+      "consumers": 2,
+      "policy": "undecided",
+      "passed": true
+    },
+    {
+      "name": "local_control_changes_only_authoritative_decision_files",
+      "consumers": 2,
+      "passed": true
+    },
+    {
+      "name": "unfinished_scaffolds_do_not_pass",
+      "consumers": 2,
+      "passed": true
+    },
+    {
+      "name": "editing_public_tests_does_not_change_judge",
+      "consumers": 2,
+      "passed": true
+    },
+    {
+      "name": "six_directed_provider_rotations",
+      "consumers": 2,
+      "pairs": [
+        [
+          "Claude Code",
+          "Codex"
+        ],
+        [
+          "Claude Code",
+          "Grok"
+        ],
+        [
+          "Codex",
+          "Claude Code"
+        ],
+        [
+          "Codex",
+          "Grok"
+        ],
+        [
+          "Grok",
+          "Claude Code"
+        ],
+        [
+          "Grok",
+          "Codex"
+        ]
+      ],
+      "passed": true
+    },
+    {
+      "name": "reference_artifacts",
+      "consumers": 2,
+      "policy": "manual_retry",
+      "passed": true
+    },
+    {
+      "name": "wrong_private_choice_rejected",
+      "consumers": 2,
+      "policy": "manual_retry",
+      "participant": "Alpha",
+      "passed": true
+    },
+    {
+      "name": "wrong_private_choice_rejected",
+      "consumers": 2,
+      "policy": "manual_retry",
+      "participant": "Gamma",
+      "passed": true
+    },
+    {
+      "name": "reference_artifacts",
+      "consumers": 2,
+      "policy": "automatic_once",
+      "passed": true
+    },
+    {
+      "name": "wrong_private_choice_rejected",
+      "consumers": 2,
+      "policy": "automatic_once",
+      "participant": "Alpha",
+      "passed": true
+    },
+    {
+      "name": "wrong_private_choice_rejected",
+      "consumers": 2,
+      "policy": "automatic_once",
+      "participant": "Gamma",
+      "passed": true
+    },
+    {
+      "name": "reference_artifacts",
+      "consumers": 2,
+      "policy": "undecided",
+      "passed": true
+    },
+    {
+      "name": "wrong_private_choice_rejected",
+      "consumers": 2,
+      "policy": "undecided",
+      "participant": "Alpha",
+      "passed": true
+    },
+    {
+      "name": "wrong_private_choice_rejected",
+      "consumers": 2,
+      "policy": "undecided",
+      "participant": "Gamma",
+      "passed": true
+    },
+    {
+      "name": "private_policy_not_supplied_to_submitted_code",
+      "consumers": 2,
+      "policy": "manual_retry",
+      "artifact_pass": true,
+      "passed": true
+    },
+    {
+      "name": "private_policy_not_supplied_to_submitted_code",
+      "consumers": 2,
+      "policy": "automatic_once",
+      "artifact_pass": false,
+      "passed": true
+    },
+    {
+      "name": "private_policy_not_supplied_to_submitted_code",
+      "consumers": 2,
+      "policy": "undecided",
+      "artifact_pass": false,
+      "passed": true
+    },
+    {
+      "name": "missing_artifact_reports_other_owner_results",
+      "consumers": 2,
+      "participant": "Alpha",
+      "passed": true
+    },
+    {
+      "name": "missing_artifact_reports_other_owner_results",
+      "consumers": 2,
+      "participant": "Beta",
+      "passed": true
+    },
+    {
+      "name": "missing_artifact_reports_other_owner_results",
+      "consumers": 2,
+      "participant": "Gamma",
+      "passed": true
+    },
+    {
+      "name": "ordinary_module_stdout_does_not_corrupt_observation",
+      "consumers": 2,
+      "passed": true
+    },
+    {
+      "name": "public_and_private_checks_use_same_frozen_artifacts",
+      "consumers": 2,
+      "passed": true
+    },
+    {
+      "name": "existing_fixture_is_not_overwritten",
+      "passed": true
+    },
+    {
+      "name": "invalid_consumer_count_has_no_directory_effect",
+      "passed": true
+    },
+    {
+      "name": "legacy_single_consumer_fixture_remains_judgeable",
+      "passed": true
+    },
+    {
+      "name": "two_consumer_command_line_prepare_and_judge",
+      "passed": true
+    },
+    {
+      "name": "local_control_command_line_preparation",
+      "passed": true
+    }
+  ],
+  "limit": "Validates prepared task inputs and artifact checks, not agent behavior, isolation, semantic routing, shared-request lifecycle, owner delay, or token savings."
+}

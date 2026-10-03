@@ -78,7 +78,11 @@ class _Notifier extends AppNotifier {
   }) async => {'profiles': <dynamic>[]};
 
   @override
-  Future<String?> installDsh(String machineId, String id) {
+  Future<String?> installDsh(
+    String machineId,
+    String id, {
+    bool trustUnverified = false,
+  }) {
     installs.add(id);
     final machine = machineStates[machineId]!;
     machine.dsh.applyInstall(DshInstallProgress(id: id, phase: 'setup'));

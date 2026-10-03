@@ -1,4 +1,6 @@
-import 'dart:io';
+import 'package:flutter/foundation.dart';
+
+import 'runtime_platform.dart';
 
 /// True inside `flutter test`, which sets `FLUTTER_TEST` for every test process.
 ///
@@ -16,4 +18,6 @@ import 'dart:io';
 /// One definition rather than a `FLUTTER_TEST` literal at each site: the two
 /// call sites are asking the same question, and a second copy is a second thing
 /// to get wrong.
-final bool kUnderTest = Platform.environment.containsKey('FLUTTER_TEST');
+final bool kUnderTest =
+    const bool.fromEnvironment('HARNESS_TEST') ||
+    (!kIsWeb && RuntimePlatform.environment.containsKey('FLUTTER_TEST'));

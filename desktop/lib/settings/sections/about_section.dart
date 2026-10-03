@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:harness/terminal/terminal_text.dart';
 
 import '../../core/app_version.dart';
@@ -72,7 +73,9 @@ class _AboutSectionState extends State<AboutSection> {
               ),
               const SizedBox(height: 12),
               Text(
-                widget.notifier.updateChecksEnabled
+                kIsWeb
+                    ? 'Refresh the page to load the latest version.'
+                    : widget.notifier.updateChecksEnabled
                     ? 'Harness checks for a newer build when it starts, '
                           'and every six hours after that.'
                     : 'Updates are disabled in this build.',
@@ -123,12 +126,14 @@ class _AboutCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _Identity(state: _PillState.of(notifier, checking: checking)),
-          const SizedBox(height: 18),
-          Container(height: 1, color: grid.AppPalette.divider),
-          const SizedBox(height: 14),
-          _CheckRow(checking: checking, onCheck: onCheck),
-          const SizedBox(height: 12),
-          const _FlashRow(),
+          if (!kIsWeb) ...[
+            const SizedBox(height: 18),
+            Container(height: 1, color: grid.AppPalette.divider),
+            const SizedBox(height: 14),
+            _CheckRow(checking: checking, onCheck: onCheck),
+            const SizedBox(height: 12),
+            const _FlashRow(),
+          ],
         ],
       ),
     );
@@ -226,7 +231,7 @@ class _VersionLineState extends State<_VersionLine> {
             return Text(version, style: style);
           },
         ),
-        _StatusPill(state: state),
+        if (!kIsWeb) _StatusPill(state: state),
       ],
     );
   }

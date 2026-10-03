@@ -254,7 +254,7 @@ void main() {
         tester.getSize(find.byKey(ValueKey('store-resume:$id'))).width,
         tester.getSize(find.byKey(ValueKey('store-new:$id'))).width,
       );
-      await tester.tap(find.text('Resume Harness'));
+      await tester.tap(find.text('Open Harness'));
       await tester.pumpAndSettle();
       expect(find.text('Recent harnesses'), findsNothing);
       expect(app.focusedPane?.agentId, 'one');
@@ -290,7 +290,7 @@ void main() {
         tester.getSize(find.byKey(const ValueKey('store-resume:codex'))).width,
         tester.getSize(find.byKey(const ValueKey('store-new:codex'))).width,
       );
-      await tester.tap(find.text('Resume Harness'));
+      await tester.tap(find.text('Open Harness'));
       await tester.pumpAndSettle();
       expect(
         app.activeSwarm,
@@ -357,7 +357,7 @@ void main() {
     app.machineStates['m']!.agents = [_agent('a'), _agent('b')];
     await showActions(tester, app, onNew: () async {}, width: 360, scale: 2);
     expect(tester.takeException(), isNull);
-    await tester.tap(find.text('Resume Harness'));
+    await tester.tap(find.text('Open Harness'));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(find.text('Recent harnesses'), findsOneWidget);

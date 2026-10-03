@@ -1,0 +1,137 @@
+{
+  "scope": "Abstract idle-resume contract; not production or model-behavior validation",
+  "method": "Exhaustive unique event permutations within 14 bounded scenario families",
+  "assumptions": [
+    "One already-admitted dependency and one matching result; content, routing, and permission judgments are outside this model",
+    "External state changes and actual dispatch share a serialized destination boundary",
+    "A new explicit wait after human input also represents authorized adoption of the existing dependency",
+    "A dispatch attempt may have reached the engine; uncertainty never proves safe replay"
+  ],
+  "families": {
+    "new_input": {
+      "traces": 180,
+      "failures": 0,
+      "dispatches": 19
+    },
+    "finished_task": {
+      "traces": 180,
+      "failures": 0,
+      "dispatches": 19
+    },
+    "read_before_wake": {
+      "traces": 180,
+      "failures": 0,
+      "dispatches": 38
+    },
+    "deadline": {
+      "traces": 180,
+      "failures": 0,
+      "dispatches": 19
+    },
+    "disable_enable": {
+      "traces": 1260,
+      "failures": 0,
+      "dispatches": 133
+    },
+    "leave_rejoin": {
+      "traces": 1260,
+      "failures": 0,
+      "dispatches": 133
+    },
+    "session_replacement": {
+      "traces": 180,
+      "failures": 0,
+      "dispatches": 19
+    },
+    "daemon_restart": {
+      "traces": 180,
+      "failures": 0,
+      "dispatches": 19
+    },
+    "draft_boundary": {
+      "traces": 1260,
+      "failures": 0,
+      "dispatches": 237
+    },
+    "approval_boundary": {
+      "traces": 1260,
+      "failures": 0,
+      "dispatches": 237
+    },
+    "busy_boundary": {
+      "traces": 1260,
+      "failures": 0,
+      "dispatches": 237
+    },
+    "duplicate_delivery": {
+      "traces": 30,
+      "failures": 0,
+      "dispatches": 11
+    },
+    "uncertain_retry": {
+      "traces": 720,
+      "failures": 0,
+      "dispatches": 48
+    },
+    "wait_after_result": {
+      "traces": 120,
+      "failures": 0,
+      "dispatches": 6
+    }
+  },
+  "counterexamples": {
+    "admission_only": {
+      "family": "new_input",
+      "events": [
+        "wait",
+        "result",
+        "stage",
+        "human",
+        "stage",
+        "write",
+        "write"
+      ],
+      "violations": [
+        "resume_after_new_human_input",
+        "resume_with_revoked_grant",
+        "resume_without_current_grant"
+      ]
+    },
+    "rearm_on_enable": {
+      "family": "disable_enable",
+      "events": [
+        "wait",
+        "result",
+        "stage",
+        "off",
+        "on",
+        "stage",
+        "write",
+        "write"
+      ],
+      "violations": [
+        "resume_with_revoked_grant"
+      ]
+    },
+    "retry_unknown": {
+      "family": "uncertain_retry",
+      "events": [
+        "wait",
+        "result",
+        "stage",
+        "write_uncertain",
+        "daemon_restart",
+        "retry_unknown",
+        "write"
+      ],
+      "violations": [
+        "repeated_dispatch_of_one_grant",
+        "resume_with_revoked_grant",
+        "resume_without_current_grant"
+      ]
+    }
+  },
+  "positive_paths": 4,
+  "total_traces": 8250,
+  "failures": 0
+}

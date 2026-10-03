@@ -1,11 +1,97 @@
-import { spawnSync } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { join } from "path";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { describe, expect, it } from "vitest";
+import { ensureTmuxOnPath, tmuxInstallDirectories } from "../lib/tmuxOnPath.js";
+import { TmuxBackend } from "../lib/tmuxBackend.js";
 
 // vitest runs from cli/, so this is cli/scripts/install.sh — the file published to the CDN.
 const installer = join(process.cwd(), "scripts", "install.sh");
+
+describe('installer interrupted downloads', () => {
+  it('recovers real truncated HTTP responses without mixing manifest or binary bytes', async () => {
+    const { createServer } = await import('node:http');
+    const scratch = mkdtempSync(join(tmpdir(), 'harness-download-http-'));
+    const bytes = Buffer.from([0, 1, 255, 10, 2, 0, 42, 128]);
+    const counts = new Map<string, number>();
+    const server = createServer((req, res) => {
+      const route = req.url!;
+      const count = (counts.get(route) ?? 0) + 1;
+      counts.set(route, count);
+      const body = route === '/manifest' ? Buffer.from('{"version":"verified"}') : bytes;
+      res.writeHead(200, { 'Content-Length': body.length, 'Connection': 'close' });
+      res.end(count < 3 ? body.subarray(0, 3) : body);
+    });
+    try {
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      const port = (server.address() as { port: number }).port;
+      const source = readFileSync(installer, 'utf8');
+      const fn = source.slice(source.indexOf('download() {'), source.indexOf('# sha256 is'));
+      const child = spawn('/bin/sh', ['-ec', fn + '\ndownload "$URL/manifest"\ndownload "$URL/binary" -o "$TARGET"'], {
+        env: { ...process.env, URL: `http://127.0.0.1:${port}`, TARGET: join(scratch, 'binary') },
+      });
+      let stdout = '', stderr = '';
+      child.stdout.on('data', data => { stdout += data });
+      child.stderr.on('data', data => { stderr += data });
+      const code = await new Promise<number | null>((resolve, reject) => {
+        child.on('error', reject); child.on('close', resolve);
+      });
+      expect(code, stderr).toBe(0);
+      expect(JSON.parse(stdout)).toEqual({ version: 'verified' });
+      expect(readFileSync(join(scratch, 'binary'))).toEqual(bytes);
+      expect(Object.fromEntries(counts)).toEqual({ '/manifest': 3, '/binary': 3 });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it.each([6, 7, 18, 28, 35, 52, 55, 56, 92])('retries curl error %i and discards partial manifest output', code => {
+    const scratch = mkdtempSync(join(tmpdir(), 'harness-download-'));
+    try {
+      writeCommand(scratch, 'curl', [
+        'n=0; [ ! -f "$COUNT" ] || n=$(cat "$COUNT")',
+        'n=$((n + 1)); echo "$n" > "$COUNT"',
+        `if [ "$n" -lt 3 ]; then printf 'broken partial JSON'; exit ${code}; fi`,
+        'printf \'{"version":"test"}\\n\'',
+      ]);
+      writeCommand(scratch, 'sleep', ['exit 0']);
+      const source = readFileSync(installer, 'utf8');
+      const fn = source.slice(source.indexOf('download() {'), source.indexOf('# sha256 is'));
+      const result = spawnSync('/bin/sh', ['-c', fn + '\ndownload https://example.invalid/manifest'], {
+        encoding: 'utf8', env: { ...process.env, PATH: `${scratch}:/usr/bin:/bin`, COUNT: join(scratch, 'count') },
+      });
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({ version: 'test' });
+      expect(readFileSync(join(scratch, 'count'), 'utf8').trim()).toBe('3');
+      expect(result.stderr).toContain('retrying download (3/3)');
+    } finally { rmSync(scratch, { recursive: true, force: true }); }
+  });
+
+  it.each([[35, 3], [22, 1], [60, 1], [23, 1]])('bounds failures and preserves curl status %i', (code, attempts) => {
+    const scratch = mkdtempSync(join(tmpdir(), 'harness-download-fail-'));
+    try {
+      writeCommand(scratch, 'curl', [
+        'echo "$*" >> "$CALLS"', `printf partial; exit ${code}`,
+      ]);
+      writeCommand(scratch, 'sleep', ['exit 0']);
+      const source = readFileSync(installer, 'utf8');
+      const fn = source.slice(source.indexOf('download() {'), source.indexOf('# sha256 is'));
+      const result = spawnSync('/bin/sh', ['-c', fn + '\ndownload https://example.invalid/runtime -o "$TARGET"'], {
+        encoding: 'utf8', env: { ...process.env, PATH: `${scratch}:/usr/bin:/bin`,
+          CALLS: join(scratch, 'calls'), TARGET: join(scratch, 'download') },
+      });
+      expect(result.status).toBe(code);
+      expect(result.stdout).toBe('');
+      const calls = readFileSync(join(scratch, 'calls'), 'utf8').trim().split('\n');
+      expect(calls).toHaveLength(attempts);
+      expect(calls[0]).toContain('--connect-timeout 20 --max-time 600');
+      expect(calls[0]).toContain(`-o ${join(scratch, 'download')}`);
+    } finally { rmSync(scratch, { recursive: true, force: true }); }
+  });
+});
 
 const writeCommand = (directory: string, name: string, lines: string[]) => {
   const path = join(directory, name);
@@ -284,6 +370,49 @@ describe("scripts/install.sh command contract", () => {
       expect(result.stdout).not.toContain("managed");
       expect(() => readFileSync(fetched, "utf8")).toThrow();
     } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it("finds Homebrew tmux after the installer exits and creates the first harness pane", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-mac-brew-daemon-"));
+    const home = join(scratch, "home");
+    const prefix = join(scratch, "homebrew");
+    const bin = join(prefix, "bin");
+    const originalPath = process.env.PATH;
+    mkdirSync(home);
+    mkdirSync(bin, { recursive: true });
+    try {
+      writeCommand(scratch, "uname", ["printf 'Darwin\\n'"]);
+      writeCommand(bin, "brew", [
+        `if [ "$1" = shellenv ]; then printf 'export PATH="${bin}:$PATH"\\n'; fi`,
+        "exit 0",
+      ]);
+      writeCommand(bin, "tmux", [
+        'case "$1" in -V) printf "tmux 3.7c\\n" ;; new-session) printf "%%0\\n" ;; esac',
+      ]);
+      const daemonEnv = { HOME: home, PATH: scratch, HARNESS_HOMEBREW_PREFIXES: prefix };
+      const installed = spawnSync("/bin/sh", ["-c", hostSetupOf(readFileSync(installer, "utf8"))], {
+        encoding: "utf8", env: { ...daemonEnv, INSTALL_MODE: "standalone" },
+      });
+      expect(installed.status, installed.stderr).toBe(0);
+      expect(installed.stdout).toContain("tmux ready (tmux 3.7c)");
+      expect(existsSync(join(home, ".harness/runtime/current-tmux"))).toBe(false);
+
+      // A child cannot export PATH back into its parent. Start the daemon with
+      // the original environment, as hn does in a fresh macOS user account.
+      process.env.PATH = daemonEnv.PATH;
+      expect(await new TmuxBackend().create({ label: "harness-first" })).toMatchObject({
+        state: "failed", reason: "tmux is unavailable",
+      });
+      expect(await ensureTmuxOnPath(daemonEnv, "/nonexistent/shell", join(home, ".harness/runtime"),
+        tmuxInstallDirectories(daemonEnv, "darwin"))).toMatchObject({ state: "adopted" });
+      process.env.PATH = daemonEnv.PATH;
+      expect(await new TmuxBackend().create({ label: "harness-first" })).toMatchObject({
+        state: "succeeded", runtime: { backend: "tmux", paneId: "%0" },
+      });
+    } finally {
+      process.env.PATH = originalPath;
       rmSync(scratch, { recursive: true, force: true });
     }
   });
@@ -727,7 +856,7 @@ describe("scripts/install.sh command contract", () => {
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
-  });
+  }, 20_000); // Several real shell/package-manager processes, as in the other installer integration checks.
 
   // ── the managed grid ──────────────────────────────────────────────────────────────────────────
   //
@@ -891,4 +1020,203 @@ describe("scripts/install.sh command contract", () => {
       rmSync(scratch, { recursive: true, force: true });
     }
   });
+});
+
+describe("scripts/install.sh: hn", () => {
+  // The constants and helpers (install_hn among them), then step 3c alone.
+  const hnStepOf = (source: string) =>
+    source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# 1. Host requirements")) +
+    source.slice(source.indexOf("# 3c. hn's binary"), source.indexOf("# 4. Ensure ~/.local/bin"));
+
+  it("installs hn after the grid and before PATH, as a step the install can survive", () => {
+    const source = readFileSync(installer, "utf8");
+    const grid = source.indexOf("# 3b. The managed grid");
+    const hn = source.indexOf("# 3c. hn's binary");
+    const path = source.indexOf("# 4. Ensure ~/.local/bin");
+    expect(hn).toBeGreaterThan(grid);
+    expect(path).toBeGreaterThan(hn);
+    expect(source.slice(hn, path)).toMatch(/install_hn \|\|/);
+    const fn = source.slice(source.indexOf("install_hn() {"), source.indexOf("install_managed_grid() {"));
+    expect(fn).not.toContain("exit ");
+    // Where `harness tui` looks for the binary (cli/src/tui/index.ts), and release-tui.yml's manifest.
+    expect(source).toContain('TUI_BIN="$HOME/.harness/bin/harness-tui"');
+    expect(source).toContain("harness/tui/metadata.json");
+  });
+
+  const hnFixture = (scratch: string, { tamper = false, runs = true } = {}) => {
+    const home = join(scratch, "home");
+    mkdirSync(home, { recursive: true });
+    const binary = join(scratch, "harness-tui-darwin-arm64");
+    writeFileSync(binary, runs ? "#!/bin/sh\necho 'hn 0.1.0 (tmux 3.5a)'\n" : "#!/bin/sh\nexit 1\n");
+    chmodSync(binary, 0o755);
+    const sha = spawnSync("shasum", ["-a", "256", binary], { encoding: "utf8" }).stdout.split(" ")[0];
+    // As release-tui.yml writes it: jq's pretty print, one build per platform.
+    writeFileSync(join(scratch, "manifest.json"), JSON.stringify({
+      version: "0.1.0",
+      builds: {
+        "darwin-x64": { url: "https://cdn.example/harness-tui-darwin-x64", sha256: "1".repeat(64) },
+        "darwin-arm64": { url: "https://cdn.example/harness-tui-darwin-arm64", sha256: tamper ? "0".repeat(64) : sha },
+      },
+    }, null, 2));
+    writeCommand(scratch, "curl", [
+      `printf '%s\\n' "$*" >> '${join(scratch, "curl-invocations")}'`,
+      `case "$*" in *"-o "*) cp '${binary}' "$4" ;; *) cat '${join(scratch, "manifest.json")}' ;; esac`,
+    ]);
+    writeCommand(scratch, "uname", [`if [ "$1" = "-m" ]; then printf 'arm64\\n'; else printf 'Darwin\\n'; fi`]);
+    return { home, tui: join(home, ".harness", "bin", "harness-tui") };
+  };
+
+  const runHnStep = (scratch: string, home: string, mode: string) =>
+    spawnSync("/bin/sh", ["-c", hnStepOf(readFileSync(installer, "utf8"))], {
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, INSTALL_MODE: mode, PATH: `${scratch}:/usr/bin:/bin`, HARNESS_TUI_MANIFEST_URL: "https://cdn.example/manifest.json" },
+    });
+
+  it("downloads this computer's build, verifies it and installs it where `harness tui` finds it", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-hn-"));
+    try {
+      const { home, tui } = hnFixture(scratch);
+      const result = runHnStep(scratch, home, "standalone");
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("downloading hn 0.1.0 (darwin-arm64)");
+      expect(result.stdout).toContain(`installed hn 0.1.0 → ${tui}`);
+      expect(statSync(tui).mode & 0o111).not.toBe(0);
+      expect(spawnSync(tui, ["--version"], { encoding: "utf8" }).stdout).toContain("hn 0.1.0");
+      expect(readFileSync(join(scratch, "curl-invocations"), "utf8")).toContain("harness-tui-darwin-arm64");
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("survives a download whose checksum does not match: says so, installs nothing, and the install goes on", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-hn-tampered-"));
+    try {
+      const { home, tui } = hnFixture(scratch, { tamper: true });
+      const result = runHnStep(scratch, home, "standalone");
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("checksum verification");
+      expect(result.stdout).toContain("hn will download itself the first time you run it");
+      expect(existsSync(tui)).toBe(false);
+      expect(readdirSync(join(home, ".harness", "bin")).filter((n) => n.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("keeps no binary that does not run on this computer", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-hn-broken-"));
+    try {
+      const { home, tui } = hnFixture(scratch, { runs: false });
+      const result = runHnStep(scratch, home, "standalone");
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("hn does not run on this computer");
+      expect(existsSync(tui)).toBe(false);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("fetches nothing in desktop mode (its first `hn` does) or host mode (no CLI)", () => {
+    for (const mode of ["desktop", "host"]) {
+      const scratch = mkdtempSync(join(tmpdir(), `harness-hn-${mode}-`));
+      try {
+        const { home, tui } = hnFixture(scratch);
+        const result = runHnStep(scratch, home, mode);
+        expect(result.status).toBe(0);
+        expect(existsSync(join(scratch, "curl-invocations"))).toBe(false);
+        expect(existsSync(tui)).toBe(false);
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    }
+  }, 20_000);
+
+  // Step 3 for real: the Node that writes the launchers, against a local manifest server.
+  const runCliStep = async (home: string) => {
+    const { createServer } = await import("node:http");
+    const { createHash } = await import("node:crypto");
+    const { spawn } = await import("node:child_process");
+    const files: Record<string, string> = { "/cli.js": "console.log('cli')\n", "/notify.mjs": "export {}\n" };
+    const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+    const server = createServer((req, res) => {
+      const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+      if (req.url === "/manifest.json") {
+        res.end(JSON.stringify({ cli: { version: "9.9.9", cli: { url: `${base}/cli.js`, sha256: sha(files["/cli.js"]) }, notify: { url: `${base}/notify.mjs`, sha256: sha(files["/notify.mjs"]) } } }));
+      } else if (files[req.url ?? ""]) res.end(files[req.url ?? ""]);
+      else { res.statusCode = 404; res.end() }
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+    const source = readFileSync(installer, "utf8");
+    const js = source.slice(source.indexOf("<<'HARNESSJS'\n") + "<<'HARNESSJS'\n".length, source.indexOf("\nHARNESSJS\n"));
+    const child = spawn(process.execPath, [], { env: { ...process.env, HOME: home, HARNESS_METADATA_URL: `http://127.0.0.1:${port}/manifest.json`, HARNESS_KEY: "cli", HARNESS_NODE_BINARY: "/opt/harness node/bin/node" } });
+    let out = "";
+    child.stdout.on("data", (d) => { out += d });
+    child.stderr.on("data", (d) => { out += d });
+    child.stdin.end(js);
+    const code = await new Promise<number | null>((resolve) => child.on("close", resolve));
+    server.close();
+    return { code, out };
+  };
+
+  it("writes `hn` beside `harness`, following its runtime and update policy", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-hn-launcher-"));
+    try {
+      const home = join(scratch, "home");
+      mkdirSync(home, { recursive: true });
+      const { code, out } = await runCliStep(home);
+      expect(code).toBe(0);
+      expect(out).toContain("installed harness 9.9.9");
+      const cli = join(home, ".harness", "cli", "cli.js");
+      expect(readFileSync(join(home, ".local", "bin", "hn"), "utf8")).toBe(`#!/bin/sh\nexec '${join(home, ".local", "bin", "harness")}' tui "$@"\n`);
+      expect(readFileSync(join(home, ".local", "bin", "harness"), "utf8")).toBe(`#!/bin/sh\nexec '/opt/harness node/bin/node' '${cli}' "$@"\n`);
+      expect(statSync(join(home, ".local", "bin", "hn")).mode & 0o111).not.toBe(0);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("leaves someone else's `hn` alone and says how to run Harness's", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-hn-theirs-"));
+    try {
+      const home = join(scratch, "home");
+      mkdirSync(join(home, ".local", "bin"), { recursive: true });
+      writeFileSync(join(home, ".local", "bin", "hn"), "#!/bin/sh\necho hacker news\n", { mode: 0o755 });
+      const { code, out } = await runCliStep(home);
+      expect(code).toBe(0);
+      expect(readFileSync(join(home, ".local", "bin", "hn"), "utf8")).toBe("#!/bin/sh\necho hacker news\n");
+      expect(out).toContain("Kept existing");
+      expect(out).toContain("use harness tui");
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it.each(['native symlink', 'dangling symlink', 'unrelated wrapper'])("preserves an existing %s even when it contains .harness", async kind => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-hn-preserved-"));
+    try {
+      const home = join(scratch, "home");
+      const bin = join(home, ".local", "bin");
+      const hn = join(bin, "hn");
+      const target = join(scratch, "old-hn");
+      mkdirSync(bin, { recursive: true });
+      const bytes = kind === 'unrelated wrapper' ? Buffer.from('#!/bin/sh\necho "$HOME/.harness"\n') : Buffer.from('\x7fELF native .harness bytes');
+      if (kind === 'unrelated wrapper') writeFileSync(hn, bytes);
+      else {
+        if (kind === 'native symlink') writeFileSync(target, bytes, { mode: 0o755 });
+        symlinkSync(target, hn);
+      }
+      const { code, out } = await runCliStep(home);
+      expect(code).toBe(0);
+      expect(out).toContain('harness tui --install');
+      if (kind === 'unrelated wrapper') expect(readFileSync(hn)).toEqual(bytes);
+      else {
+        expect(lstatSync(hn).isSymbolicLink()).toBe(true);
+        expect(readlinkSync(hn)).toBe(target);
+        if (kind === 'native symlink') expect(readFileSync(target)).toEqual(bytes);
+        else expect(existsSync(target)).toBe(false);
+      }
+      expect(readdirSync(bin).sort()).toEqual(['harness', 'hn']);
+    } finally { rmSync(scratch, { recursive: true, force: true }); }
+  }, 20_000);
 });

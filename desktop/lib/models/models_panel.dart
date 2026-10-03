@@ -1,8 +1,8 @@
 import 'dart:async';
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../core/models.dart';
 import '../shared/theme/app_theme.dart';
@@ -53,7 +53,12 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
   @override
   void initState() {
     super.initState();
-    unawaited(controller.apis.refresh());
+    // Starting a refresh synchronously notifies the workspace's shared model
+    // catalog. This panel mounts in an overlay during layout, when the
+    // workspace cannot rebuild yet.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(controller.apis.refresh());
+    });
   }
 
   @override
@@ -160,7 +165,7 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
                       IconButton(
                         onPressed: widget.onClose,
                         tooltip: 'Close Models',
-                        icon: const Icon(LucideIcons.x, size: 16),
+                        icon: const Icon(AppIcons.close, size: 16),
                       ),
                     ],
                   ),
@@ -196,8 +201,8 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
                           color: AppPalette.textFaint,
                         ),
                         prefixIcon: Icon(
-                          LucideIcons.search,
-                          size: 15,
+                          AppIcons.search,
+                          size: 16,
                           color: AppPalette.textFaint,
                         ),
                         prefixIconConstraints: const BoxConstraints(
@@ -207,7 +212,7 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
                             ? null
                             : IconButton(
                                 tooltip: 'Clear search',
-                                icon: const Icon(LucideIcons.x, size: 14),
+                                icon: const Icon(AppIcons.close, size: 14),
                                 onPressed: () {
                                   setState(_search.clear);
                                   _searchFocus.requestFocus();
@@ -221,13 +226,18 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
                           horizontal: 12,
                         ),
                         border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
+                          borderRadius: BorderRadius.circular(
+                            AppDesktop.fieldRadius,
+                          ),
                           borderSide: BorderSide.none,
                         ),
                         focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
+                          borderRadius: BorderRadius.circular(
+                            AppDesktop.fieldRadius,
+                          ),
                           borderSide: BorderSide(
-                            color: AppPalette.accent.withValues(alpha: .8),
+                            color: AppDesktop.focus,
+                            width: AppDesktop.focusWidth,
                           ),
                         ),
                       ),
@@ -398,8 +408,8 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
                           Expanded(
                             child: Text(
                               _selectedTab == ModelsTab.apis || _editingApi
-                                  ? 'Available to harness tools on this computer.'
-                                  : 'Select models in a session’s model picker.',
+                                  ? 'Available to harness tools on ${controller.apis.hostLabel}.'
+                                  : 'Select models in a harness’s model picker.',
                               style: AppType.monoMeta(
                                 color: AppPalette.textSecondary,
                               ),
@@ -514,10 +524,10 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
         ? 'Start'
         : 'Download and start';
     final icon = model.canStop
-        ? LucideIcons.pause
+        ? AppIcons.pause
         : model.downloaded
-        ? LucideIcons.play
-        : LucideIcons.download;
+        ? AppIcons.play
+        : AppIcons.download;
     final tooltip = active
         ? status
         : model.canStop
@@ -618,7 +628,7 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
                           : () => unawaited(controller.toggle(model)),
                       icon: Icon(
                         icon,
-                        size: 17,
+                        size: 16,
                         semanticLabel: '$action ${model.name}',
                       ),
                       style: IconButton.styleFrom(
@@ -788,7 +798,7 @@ class LocalModelInvitation extends StatelessWidget {
                       tooltip: 'Dismiss',
                       onPressed: () =>
                           unawaited(controller.dismissIntroduction()),
-                      icon: const Icon(Icons.close, size: 17),
+                      icon: const Icon(AppIcons.close, size: 16),
                     ),
                   ],
                 ),

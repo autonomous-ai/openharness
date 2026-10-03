@@ -1,7 +1,9 @@
+import 'dart:ui' show SemanticsAction, Tristate;
+
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/widgets/app_select_field.dart';
@@ -48,6 +50,110 @@ Future<void> _open(WidgetTester tester) async {
 
 void main() {
   tearDown(() => grid.AppTheme.brightness.value = Brightness.light);
+
+  testWidgets('accessible selector announces purpose, value and open state', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      String? chosen;
+      await tester.pumpWidget(
+        _host(
+          StatefulBuilder(
+            builder: (context, setState) => AppSelectField<String?>(
+              semanticLabel: 'Terminal font',
+              value: chosen,
+              options: _options,
+              width: 280,
+              onChanged: (value) => setState(() => chosen = value),
+            ),
+          ),
+          top: true,
+        ),
+      );
+      final trigger = find.bySemanticsLabel('Terminal font');
+      final closed = tester.getSemantics(trigger);
+      expect(closed.getSemanticsData().value, 'System, SF Pro');
+      expect(closed.getSemanticsData().flagsCollection.isButton, isTrue);
+      expect(
+        closed.getSemanticsData().flagsCollection.isExpanded,
+        Tristate.isFalse,
+      );
+      expect(closed.getSemanticsData().hasAction(SemanticsAction.tap), isTrue);
+      // Activating through assistive technology must open the same working menu.
+      tester
+          .renderObject(trigger)
+          .owner!
+          .semanticsOwner!
+          .performAction(closed.id, SemanticsAction.tap);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .getSemantics(trigger)
+            .getSemanticsData()
+            .flagsCollection
+            .isExpanded,
+        Tristate.isTrue,
+      );
+      expect(chosen, isNull, reason: 'opening does not change the setting');
+      await tester.tap(find.widgetWithText(AppMenuItem, 'Menlo'));
+      await tester.pumpAndSettle();
+      expect(chosen, 'Menlo');
+      final updated = tester.getSemantics(trigger).getSemanticsData();
+      expect(updated.label, 'Terminal font');
+      expect(updated.value, 'Menlo');
+      expect(updated.flagsCollection.isExpanded, Tristate.isFalse);
+      expect(updated.flagsCollection.isFocused, Tristate.isTrue);
+    } finally {
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('large text fits and focus remains distinct from selection', (
+    tester,
+  ) async {
+    final focus = FocusNode();
+    addTearDown(focus.dispose);
+    await tester.pumpWidget(
+      _host(
+        MediaQuery(
+          data: const MediaQueryData(
+            textScaler: TextScaler.linear(2),
+            highContrast: true,
+            disableAnimations: true,
+          ),
+          child: AppSelectField<String>(
+            width: 280,
+            value: 'a',
+            options: const [SelectOption(value: 'a', label: 'Alpha')],
+            selected: false,
+            focusNode: focus,
+            onChanged: (_) {},
+          ),
+        ),
+      ),
+    );
+    final field = tester.getRect(_field);
+    final label = tester.getRect(find.text('Alpha'));
+    expect(label.top, greaterThan(field.top));
+    expect(label.bottom, lessThan(field.bottom));
+    final box = find.descendant(
+      of: _field,
+      matching: find.byType(AnimatedContainer),
+    );
+    Border rim() =>
+        (tester.widget<AnimatedContainer>(box).decoration! as BoxDecoration)
+                .border!
+            as Border;
+    final before = rim();
+    focus.requestFocus();
+    await tester.pump();
+    expect(rim().top.color, isNot(before.top.color));
+    expect(rim().top.width, before.top.width);
+    expect(tester.getRect(find.text('Alpha')), label);
+    expect(tester.widget<AnimatedContainer>(box).duration, Duration.zero);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('typing a name focuses a choice without applying it', (
     tester,
@@ -147,7 +253,7 @@ void main() {
     tester,
   ) async {
     // The regression this exists for: the leading slot was once filled with
-    // `Icons.check_box_outline_blank` to keep the labels aligned. That glyph
+    // `AppIcons.square` to keep the labels aligned. That glyph
     // draws a real outlined square, so a pick-one menu rendered as a list of
     // empty checkboxes — and put a border where §1 allows none.
     await tester.pumpWidget(
@@ -163,7 +269,7 @@ void main() {
     await _open(tester);
 
     expect(find.byType(AppMenuItem), findsNWidgets(3));
-    expect(find.byIcon(Icons.check_box_outline_blank), findsNothing);
+    expect(find.byIcon(AppIcons.square), findsNothing);
     // Exactly one glyph in the whole panel: the tick on the chosen row.
     expect(
       find.descendant(
@@ -172,7 +278,7 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.byIcon(LucideIcons.check300), findsOneWidget);
+    expect(find.byIcon(AppIcons.check), findsOneWidget);
   });
 
   testWidgets('the choice is marked three ways, not by colour alone', (
@@ -199,7 +305,7 @@ void main() {
 
     // 1. the tick, 2. the heavier label. (3. the accent wash is painted by an
     // `Ink` and is checked by eye, not here.)
-    expect(find.byIcon(LucideIcons.check300), findsOneWidget);
+    expect(find.byIcon(AppIcons.check), findsOneWidget);
     expect(labelIn('Menlo').style?.fontWeight, grid.AppFont.medium);
     expect(labelIn('Helvetica Neue').style?.fontWeight, grid.AppFont.regular);
   });
@@ -256,12 +362,12 @@ void main() {
             SelectOption(
               value: 'a',
               label: 'Alpha',
-              leading: () => const Icon(Icons.circle, size: 14),
+              leading: () => const Icon(AppIcons.dot, size: 14),
             ),
             SelectOption(
               value: 'b',
               label: 'Beta',
-              leading: () => const Icon(Icons.square, size: 14),
+              leading: () => const Icon(AppIcons.square, size: 14),
             ),
           ],
           onChanged: (_) {},
@@ -286,9 +392,9 @@ void main() {
       reason: 'the ticked row and the unticked one start on the same column',
     );
     // Both marks are drawn, and the tick is drawn as well as them, not instead.
-    expect(find.byIcon(Icons.circle), findsWidgets);
-    expect(find.byIcon(Icons.square), findsWidgets);
-    expect(find.byIcon(LucideIcons.check300), findsOneWidget);
+    expect(find.byIcon(AppIcons.dot), findsWidgets);
+    expect(find.byIcon(AppIcons.square), findsWidgets);
+    expect(find.byIcon(AppIcons.check), findsOneWidget);
   });
 
   testWidgets('picking a row reports it and closes the panel', (tester) async {
@@ -347,7 +453,7 @@ void main() {
               width: 188,
             ),
             AppMenuItem(
-              icon: Icons.circle,
+              icon: AppIcons.dot,
               label: 'A context row',
               onPressed: () {},
             ),

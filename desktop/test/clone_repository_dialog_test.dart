@@ -77,6 +77,62 @@ Future<void> _openClone(
 }
 
 void main() {
+  testWidgets('clone URL takes keyboard focus and owns composing Escape', (
+    tester,
+  ) async {
+    var closed = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async {
+              await showCloneRepositoryDialog(context);
+              closed = true;
+            },
+            child: const Text('Open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    final input = find.byKey(const ValueKey('clone-repository-url'));
+    expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
+    const value = TextEditingValue(
+      text: 'owner/repository',
+      selection: TextSelection.collapsed(offset: 16),
+      composing: TextRange(start: 6, end: 16),
+    );
+    tester.testTextInput.updateEditingValue(value);
+    await tester.pump();
+    expect(tester.widget<TextField>(input).controller!.value, value);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(closed, isFalse);
+    expect(tester.widget<TextField>(input).controller!.value, value);
+    expect(
+      tester.widget<EditableText>(find.byType(EditableText)).focusNode.hasFocus,
+      isTrue,
+    );
+    tester.testTextInput.updateEditingValue(
+      value.copyWith(composing: TextRange.empty),
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(closed, isTrue);
+    expect(find.byType(CloneRepositoryDialog), findsNothing);
+    closed = false;
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    tester.testTextInput.updateEditingValue(value);
+    await tester.pump();
+    expect(tester.widget<TextField>(input).controller!.value, value);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(closed, isTrue);
+    expect(find.byType(CloneRepositoryDialog), findsNothing);
+  });
+
   testWidgets('clone failure is visible with large text and keyboard retry', (
     tester,
   ) async {

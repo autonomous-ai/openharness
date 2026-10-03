@@ -10,12 +10,92 @@ function session(engine: 'claude' | 'codex' | 'cursor' | 'commandcode' = 'codex'
     sessionId: 's1', engine, launcherId: 'h1', agentId: 'h1', boundAt: 0, transcriptPath: '/tmp/s1.jsonl', projectDir: 'tmp', cwd: '/tmp',
     tmuxPane: '%1', source: null, title: null, model: null, cliVersion: null, processIdentity: null,
     runtimes: [{ backend: 'tmux', paneId: '%1' }], primaryRuntimeKey: 'tmux\u0000%1',
-    registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
   }
 }
 
 describe('SessionInputController', () => {
   afterEach(() => vi.useRealTimers())
+
+  it('retains the submitted swarm through the input queue and records it only at dispatch', async () => {
+    const beforeSubmit = vi.fn(() => vi.fn())
+    const controller = new SessionInputController({ getSession: () => session('cursor'), validateRuntime: async () => true,
+      inject: async () => true, sendKey: async () => true, beforeSubmit, onError: vi.fn() })
+    controller.setTurnOpen('s1', true)
+    controller.submit('s1', 'task from A', undefined, 'swarm-a')
+    expect(beforeSubmit).not.toHaveBeenCalled()
+    controller.onTurnEnded('s1')
+    await vi.waitFor(() => expect(beforeSubmit).toHaveBeenCalledWith('h1', 'task from A', 'swarm-a'))
+    controller.forget('s1')
+  })
+
+  it.each(['team_waiting_draft', 'team_waiting_user', 'team_waiting_idle'])('team input preserves the composer on %s', async reason => {
+    const inject = vi.fn(async () => true), sendKey = vi.fn(async () => true), onDelivery = vi.fn()
+    const controller = new SessionInputController({ getSession: () => session('cursor'), validateRuntime: async () => true,
+      inject, sendKey, onError: vi.fn(), onDelivery, beforeTeamWrite: async () => reason })
+    controller.submit('s1', 'peer question', 'team:fixture')
+    await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ state: 'rejected', reason })))
+    expect(inject).not.toHaveBeenCalled()
+    expect(sendKey).not.toHaveBeenCalled()
+    controller.forget('s1')
+  })
+
+  it('rechecks a queued team message at the actual write boundary', async () => {
+    const beforeTeamWrite = vi.fn(async () => 'team_waiting_draft'), inject = vi.fn(async () => true), onDelivery = vi.fn()
+    const controller = new SessionInputController({ getSession: () => session(), validateRuntime: async () => true,
+      inject, sendKey: async () => true, onError: vi.fn(), onDelivery, beforeTeamWrite })
+    controller.setTurnOpen('s1', true)
+    controller.submit('s1', 'peer question', 'team:fixture')
+    expect(beforeTeamWrite).not.toHaveBeenCalled()
+    controller.onTurnEnded('s1')
+    await vi.waitFor(() => expect(beforeTeamWrite).toHaveBeenCalledOnce())
+    expect(inject).not.toHaveBeenCalled()
+    controller.forget('s1')
+  })
+
+  it('never retries Enter for an automatic team message with uncertain acceptance', async () => {
+    vi.useFakeTimers()
+    const sendKey = vi.fn(async () => true), onDelivery = vi.fn()
+    const controller = new SessionInputController({ getSession: () => session(), validateRuntime: async () => true,
+      inject: async () => true, sendKey, onError: vi.fn(), onDelivery, beforeTeamWrite: async () => null })
+    controller.submit('s1', 'peer question', 'team:fixture')
+    await vi.advanceTimersByTimeAsync(12_000)
+    expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ state: 'unknown' }))
+    expect(sendKey).not.toHaveBeenCalled()
+    controller.forget('s1')
+  })
+
+  it('requeues a team notice when a draft appears while waiting for the terminal writer', async () => {
+    const inject = vi.fn(async () => true), onError = vi.fn(), onDelivery = vi.fn()
+    const controller = new SessionInputController({ getSession: () => session(), validateRuntime: async () => true,
+      beforeTeamWrite: async () => null, inject,
+      injectTeam: async () => ({ state: 'failed', dispatch: 'not_started', reason: 'team_waiting_draft' }),
+      sendKey: async () => true, onError, onDelivery })
+    controller.submit('s1', 'peer question', 'team:fixture')
+    await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ state: 'rejected', reason: 'team_waiting_draft' })))
+    expect(inject).not.toHaveBeenCalled()
+    expect(onError).not.toHaveBeenCalled()
+    controller.forget('s1')
+  })
+
+  it.each([
+    { engine: 'claude', observed: '\n\n<pasted_content id="04e3">\npeer question\n</pasted_content id="04e3">\n', state: 'started' },
+    { engine: 'claude', observed: 'extra user instructions\n<pasted_content id="04e3">\npeer question\n</pasted_content id="04e3">', state: 'unknown' },
+    { engine: 'claude', observed: '<pasted_content id="04e3">\npeer question\n</pasted_content id="ffff">', state: 'unknown' },
+    { engine: 'claude', observed: '<pasted_content id="04e3">\na different question\n</pasted_content id="04e3">', state: 'unknown' },
+    { engine: 'codex', observed: '<pasted_content id="04e3">\npeer question\n</pasted_content id="04e3">', state: 'unknown' },
+  ] as const)('attributes native paste evidence only to the exact $engine message: $state', async ({ engine, observed, state }) => {
+    const inject = vi.fn(async () => true), sendKey = vi.fn(async () => true), onDelivery = vi.fn()
+    const controller = new SessionInputController({ getSession: () => session(engine), validateRuntime: async () => true,
+      inject, sendKey, onError: vi.fn(), onDelivery, beforeTeamWrite: async () => null })
+    controller.submit('s1', 'peer question', 'team:fixture')
+    await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ state: 'delivered' })))
+    controller.onTurnStarted('s1', observed)
+    expect(onDelivery).toHaveBeenLastCalledWith(expect.objectContaining({ state }))
+    expect(inject).toHaveBeenCalledOnce()
+    expect(sendKey).not.toHaveBeenCalled()
+    controller.forget('s1')
+  })
 
   it('types into a busy Codex pane at once — the TUI queues the follow-up, not the daemon', async () => {
     // A voice command spoken while a Codex task ran used to sit in this controller's queue, invisible,
@@ -215,7 +295,8 @@ describe('SessionInputController', () => {
     })
 
     controller.submit('s1', 'hello')
-    await vi.advanceTimersByTimeAsync(3_100 * 4)
+    // Past the old five-observation cutoff and both blind Enter retries.
+    await vi.advanceTimersByTimeAsync(60_000)
 
     expect(sendKey).not.toHaveBeenCalled()
     expect(onError).not.toHaveBeenCalled()
@@ -244,6 +325,43 @@ describe('SessionInputController', () => {
 
     expect(onError).not.toHaveBeenCalled()
     expect(sendKey).not.toHaveBeenCalled()   // and no stray Enter into a live composer
+    controller.forget('s1')
+  })
+
+  it('leaves a fresh Claude draft alone while a submitted voice message waits for background agents', async () => {
+    vi.useFakeTimers()
+    const sendKey = vi.fn(async () => true)
+    const onError = vi.fn()
+    const capture = vi.fn(async () => '❯ What are you working on?\n✻ Waiting for 4 background agents to finish\n────\n❯ a different draft I am still writing\n────')
+    const controller = new SessionInputController({
+      getSession: () => session('claude'), validateRuntime: async () => true,
+      inject: async () => true, sendKey, capture, onError,
+    })
+    controller.submit('s1', 'What are you working on?')
+    await vi.advanceTimersByTimeAsync(30_000)
+    const observations = capture.mock.calls.length
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(capture).toHaveBeenCalledTimes(observations) // no permanent polling while Claude waits
+    expect(sendKey).not.toHaveBeenCalled() // never submits the unrelated draft
+    expect(onError).not.toHaveBeenCalled()
+    controller.onTurnStarted('s1', 'What are you working on?')
+    controller.onTurnEnded('s1')
+    expect(onError).not.toHaveBeenCalled()
+    controller.forget('s1')
+  })
+
+  it('reports uncertainty without blindly pressing Enter when the terminal shows no composer', async () => {
+    vi.useFakeTimers()
+    const sendKey = vi.fn(async () => true)
+    const onError = vi.fn()
+    const controller = new SessionInputController({
+      getSession: () => session('claude'), validateRuntime: async () => true,
+      inject: async () => true, sendKey, capture: async () => 'Sign in required', onError,
+    })
+    controller.submit('s1', 'hello')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sendKey).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('could not be confirmed'))
     controller.forget('s1')
   })
 
@@ -282,7 +400,7 @@ describe('SessionInputController', () => {
     })
 
     controller.submit('s1', 'hello')
-    await vi.advanceTimersByTimeAsync(1_600 * 4)
+    await vi.advanceTimersByTimeAsync(60_000)
 
     expect(sendKey).not.toHaveBeenCalled()
     expect(onError).not.toHaveBeenCalled()
@@ -510,6 +628,17 @@ describe('delivery correlation', () => {
     await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith({ sessionId: 's1', deliveryId: 'delivery-1', state: 'delivered' }))
     controller.onTurnStarted('s1', 'hello')
     expect(onDelivery.mock.calls.map(([event]) => event.state)).toEqual(['queued', 'delivered', 'started'])
+    controller.forget('s1')
+  })
+
+  it('does not claim a started receipt or press Enter when only composer clearance was observed', async () => {
+    vi.useFakeTimers()
+    const sendKey = vi.fn(async () => true)
+    const { controller, onDelivery } = setup({ sendKey, capture: async () => '› \n' })
+    controller.submit('s1', 'hello', 'delivery-1')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sendKey).not.toHaveBeenCalled()
+    expect(onDelivery.mock.calls.map(([event]) => event.state)).toEqual(['queued', 'delivered', 'unknown'])
     controller.forget('s1')
   })
 

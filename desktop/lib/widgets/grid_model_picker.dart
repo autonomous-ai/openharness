@@ -1,16 +1,15 @@
 import 'dart:async';
-import 'dart:math' as math;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
-import '../shared/theme/workspace_bar_style.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../terminal/terminal_theme.dart';
-import '../terminal/terminal_theme_store.dart';
 
 import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/models.dart';
+import '../core/runtime_model_name.dart';
 import '../core/test_run.dart';
 import '../state/app_state.dart';
 import '../shared/theme/app_type.dart';
@@ -20,9 +19,9 @@ import 'engine_identity.dart';
 import 'model_picker_answer.dart';
 import 'model_picker_chrome.dart';
 import 'pane_menu.dart';
+import 'pane_header_text_button.dart';
 import 'resting_model_words.dart';
 import 'resting_section.dart';
-import 'workspace_bar_control.dart';
 
 /// The engines whose panes carry a model picker.
 ///
@@ -64,6 +63,9 @@ class GridModelPicker extends StatefulWidget {
   final AppNotifier notifier;
   final String machineId;
 
+  /// Uses the shared resource picker while keeping this control's live label.
+  final VoidCallback? onOpen;
+
   /// Called with the chosen grid model.
   final ValueChanged<GridModel>? onSelected;
 
@@ -81,6 +83,9 @@ class GridModelPicker extends StatefulWidget {
 
   /// Observed subscription model for the label. Does not select a Local row.
   final String? subscriptionModel;
+
+  /// Effort observed with [subscriptionModel]; never carried onto a Local row.
+  final String? subscriptionEffort;
 
   /// Whether the agent can search the web on [currentModel], as the daemon decided when it built
   /// the launch. Shown as a subtitle under the current Local row and in the control's tooltip —
@@ -104,11 +109,13 @@ class GridModelPicker extends StatefulWidget {
     super.key,
     required this.notifier,
     required this.machineId,
+    this.onOpen,
     this.onSelected,
     this.onUseOwnLogin,
     this.onRunLocalModel,
     this.currentModel,
     this.subscriptionModel,
+    this.subscriptionEffort,
     this.webSearch,
     this.engineLabel,
     this.compact = false,
@@ -160,6 +167,13 @@ class _GridModelPickerState extends State<GridModelPicker> {
         !widget.enabled ||
         !_prefetchOwed ||
         !widget.notifier.inForeground) {
+      return;
+    }
+    // Init and re-enabling can happen during layout. Usage refresh notifies
+    // the workspace footer synchronously, so wait until its frame is complete.
+    if (WidgetsBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _foregroundChanged());
       return;
     }
     _prefetchOwed = false;
@@ -329,6 +343,10 @@ class _GridModelPickerState extends State<GridModelPicker> {
 
   Future<void> _open() async {
     if (_loading || !widget.enabled) return;
+    if (widget.onOpen case final open?) {
+      open();
+      return;
+    }
     // A warm answer opens the menu with no wait at all. It is at most seconds old — the daemon's own
     // memo is what bounds that — and the refresh below lands in time for the next open.
     final GridModels answer;
@@ -510,7 +528,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
     TerminalFontScope.watch(context);
     if (widget.menuOnly) return const SizedBox.shrink();
     final sentence = _webSearchSentence;
-    final current =
+    final model =
         widget.currentModel ??
         widget.subscriptionModel ??
         switch (widget.engineLabel?.toLowerCase()) {
@@ -519,56 +537,26 @@ class _GridModelPickerState extends State<GridModelPicker> {
           'opencode' => 'OpenCode',
           _ => 'Model',
         };
+    final current = modelLabelWithEffort(
+      model,
+      widget.currentModel == null && widget.subscriptionModel != null
+          ? widget.subscriptionEffort
+          : null,
+    );
     final label = _expecting ? 'Switching…' : current;
     if (widget.paneHeader) {
-      final theme = terminalThemeFor(
-        grid.AppTheme.palette.value,
-        terminalThemeStore.value,
-      );
-      final cell = workspaceBarCellSizeOf(context);
-      final labelSize = workspaceBarTextSizeOf(context, label);
-      return LayoutBuilder(
-        builder: (context, constraints) {
-          final padding = math.min(cell.width, constraints.maxWidth / 2);
-          final textWidth = math.max(
-            0.0,
-            math.min(220.0, constraints.maxWidth - padding * 2),
-          );
-          final clipped = labelSize.width > textWidth;
-          return WorkspaceBarControl(
-            label: 'Model: $current',
-            tooltip: [
-              if (clipped || label != current) current,
-              if (widget.enabled) 'Switch model · Subscription or local models',
-              ?sentence,
-            ].join('\n'),
-            foreground: theme.foreground,
-            onPressed: widget.enabled ? _open : null,
-            builder: (context, emphasized) => SizedBox(
-              width: math.min(labelSize.width, textWidth) + padding * 2,
-              height: workspaceBarControlHeight(context),
-              child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: padding),
-                child: Center(
-                  child: Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: workspaceBarTextStyle(emphasized: emphasized),
-                  ),
-                ),
-              ),
-            ),
-          );
-        },
+      return PaneHeaderTextButton(
+        text: label,
+        fullText: current,
+        label: 'Model: $current',
+        tooltip: [
+          if (widget.enabled) 'Change model · Subscription or local models',
+          ?sentence,
+        ].join('\n'),
+        onPressed: widget.enabled ? _open : null,
       );
     }
-    final foreground = widget.paneHeader
-        ? terminalThemeFor(
-            grid.AppTheme.palette.value,
-            terminalThemeStore.value,
-          ).foreground.withValues(alpha: .65)
-        : AppColors.textSoft;
+    final foreground = AppColors.textSoft;
     return Tooltip(
       // The same sentence the menu shows, one line under the control's own — so a person can learn
       // the agent has no web search without opening the menu at all.
@@ -577,7 +565,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
         if (widget.enabled) 'Switch model · Subscription or local models',
         ?sentence,
       ].join('\n'),
-      waitDuration: const Duration(milliseconds: 700),
+      waitDuration: const Duration(milliseconds: 500),
       child: MouseRegion(
         // Stated rather than inherited. The pane header sits over a terminal, and the cursor a
         // person sees while hovering this was whatever the surface underneath asked for — so a
@@ -622,12 +610,10 @@ class _GridModelPickerState extends State<GridModelPicker> {
                         label,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: widget.paneHeader
-                            ? workspaceBarTextStyle(color: foreground)
-                            : AppType.monoLabel(
-                                fontWeight: FontWeight.w400,
-                                color: AppColors.textSoft,
-                              ),
+                        style: AppType.monoLabel(
+                          fontWeight: FontWeight.w400,
+                          color: AppColors.textSoft,
+                        ),
                       ),
                     ),
                   ),
@@ -641,7 +627,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
                     )
                   else if (!widget.paneHeader)
                     Icon(
-                      Icons.arrow_drop_down,
+                      AppIcons.chevronDown,
                       size: 14,
                       color: AppColors.mutedStrong,
                     ),
@@ -731,6 +717,7 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel>
 
   @override
   Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
     final canRunLocally = widget.answer.canRunLocally(widget.engineLabel);
     final sections = widget.sections;
     final total = sections.fold<int>(0, (n, s) => n + _matching(s).length);
@@ -784,7 +771,7 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel>
             padding: const EdgeInsets.only(bottom: 2),
             child: Tooltip(
               message: [
-                'Where this agent runs',
+                'Where this harness runs',
                 ?offlineSentence,
                 ?widget.subtitleFor(model),
               ].join('\n'),

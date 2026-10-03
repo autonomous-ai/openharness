@@ -1,0 +1,315 @@
+{
+  "success": true,
+  "startedAt": "2026-10-03T02:22:08.629535+00:00",
+  "finishedAt": "2026-10-03T02:27:23.139867+00:00",
+  "scope": "Private source-built daemon, tmux, ten idle terminal shells; no desktop or model processes. Component CPU, not energy.",
+  "warmupSeconds": 20,
+  "sampleSeconds": 30,
+  "terminals": 10,
+  "bundleSha256": {
+    "baseline": "081bef927fb76b77bb07930956a57c3e01c8619c24a9e65dc20f5f9fcac4c1a1",
+    "current": "3af3bc4973032cb532f58022be682d70238ac9df5019e2a2698a4f5d66159a0c"
+  },
+  "medians": {
+    "baseline": {
+      "cpuPercentOneCore": 3.5147590248012213,
+      "interruptWakeupsPerSecond": 7.9662418778889235,
+      "summedPhysicalFootprintMiBMedian": 102.56239318847656
+    },
+    "current": {
+      "cpuPercentOneCore": 2.9899000260170165,
+      "interruptWakeupsPerSecond": 7.766925423945827,
+      "summedPhysicalFootprintMiBMedian": 102.7493896484375
+    }
+  },
+  "pairedRelativeChangesPercent": [
+    {
+      "cpuPercentOneCore": -15.29241614896697,
+      "interruptWakeupsPerSecond": -6.858075628817661
+    },
+    {
+      "cpuPercentOneCore": -19.830129874532865,
+      "interruptWakeupsPerSecond": -2.502013584301499
+    },
+    {
+      "cpuPercentOneCore": -5.431246582728743,
+      "interruptWakeupsPerSecond": 3.026602437220305
+    }
+  ],
+  "sourceRevisions": {
+    "baseline": "29e03783d3eb94c3a42969dbb9facce7915103e7",
+    "current": "e2801a8b4f1761b542a7bd64c6ffdc586e1501fb"
+  },
+  "toolingSha256": {
+    "noble-tiger-daemon-idle-pairs-20261003.py": "fe31e80de598780198ae1d426d229fea398e21866c98035787cd556af26d1704",
+    "connected_stack.mjs": "819ed8941fa33d05bedc732461e9753f69fba9c5796f915909b6c3c1e1f663fe",
+    "harness-connected-forest-counters-20261003": "eb53258301fd6008bad4a3cbbde6a0429fc8ed6f11cb89599172618800e53031"
+  },
+  "runnerSource": "#!/usr/bin/env python3\n\"\"\"Bounded component comparison; no desktop, user sessions, or installed daemon.\"\"\"\nimport datetime\nimport hashlib\nimport json\nimport os\nfrom pathlib import Path\nimport statistics\nimport subprocess\nimport time\n\nREPO = Path('/ABSOLUTE/CHECKOUT')\nNODE = Path('/ABSOLUTE/NODE_22_23_2')\nTMUX = Path('/opt/homebrew/bin/tmux')\nSAMPLER = Path('/private/tmp/harness-connected-forest-counters-20261003')\nHELPER = REPO / 'desktop/tool/native_benchmark/connected_stack.mjs'\nBUNDLES = {\n    'baseline': Path('/private/tmp/harness-idle-baseline-src-20261003/cli/dist/cli.js'),\n    'current': REPO / 'cli/dist/cli.js',\n}\nEXPECTED = {\n    'baseline': '081bef927fb76b77bb07930956a57c3e01c8619c24a9e65dc20f5f9fcac4c1a1',\n    'current': '3af3bc4973032cb532f58022be682d70238ac9df5019e2a2698a4f5d66159a0c',\n}\nRECEIPT = Path('/private/tmp/noble-tiger-daemon-idle-pairs-20261003.json')\n\ndef stamp():\n    return datetime.datetime.now(datetime.timezone.utc).isoformat()\n\nassert not RECEIPT.exists(), 'Preserve previous evidence'\nfor label, bundle in BUNDLES.items():\n    assert hashlib.sha256(bundle.read_bytes()).hexdigest() == EXPECTED[label], label\nfor tool in [NODE, TMUX, SAMPLER, HELPER]:\n    assert tool.is_file(), tool\nreceipt = {\n    'success': False, 'startedAt': stamp(),\n    'scope': 'Private source-built daemon, tmux, ten idle terminal shells; no desktop or model processes. Component CPU, not energy.',\n    'warmupSeconds': 20, 'sampleSeconds': 30, 'terminals': 10,\n    'toolingSha256': {str(path): hashlib.sha256(path.read_bytes()).hexdigest()\n                      for path in [Path(__file__), HELPER, SAMPLER]},\n    'bundleSha256': EXPECTED, 'runs': [],\n}\n\ndef save():\n    RECEIPT.write_text(json.dumps(receipt, indent=2) + '\\n')\n\ndef wait_for(path, child, timeout=45):\n    end = time.monotonic() + timeout\n    while not path.exists():\n        if child.poll() is not None:\n            raise RuntimeError('Private launcher exited before readiness')\n        if time.monotonic() >= end:\n            raise RuntimeError('Private launcher readiness timeout')\n        time.sleep(.1)\n\ntry:\n    for number, label in enumerate(['baseline', 'current', 'current', 'baseline', 'baseline', 'current'], 1):\n        root = Path(f'/private/tmp/harness-connected-daemon-idle-pair-{number}-{label}-20261003')\n        assert not root.exists()\n        run = {'label': label, 'root': str(root), 'startedAt': stamp(),\n               'loadAverageStart': os.getloadavg()}\n        receipt['runs'].append(run)\n        save()\n        with root.with_suffix('.stdout').open('x') as stdout, root.with_suffix('.stderr').open('x') as stderr:\n            child = subprocess.Popen([str(NODE), str(HELPER), f'--root={root}',\n                                      f'--tmux={TMUX}', '--terminals=10', f'--bundle={BUNDLES[label]}'],\n                                     stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, text=True,\n                                     cwd=REPO)\n            try:\n                wait_for(root / 'stack.json', child)\n                manifest = json.loads((root / 'stack.json').read_text())\n                assert manifest['bundleSha256'] == EXPECTED[label]\n                assert len(manifest['agents']) == 10\n                run['daemonPid'] = manifest['daemonPid']\n                run['tmuxPid'] = manifest['tmuxPid']\n                run['agents'] = len(manifest['agents'])\n                time.sleep(20)\n                assert child.poll() is None, 'Private stack exited during warmup'\n                run['sampleStartedAt'] = stamp()\n                result = subprocess.run([str(SAMPLER), f\"{manifest['daemonPid']},{manifest['tmuxPid']}\",\n                                         '30', f'daemon-idle-{label}', str(root / 'resources.json')],\n                                        capture_output=True, text=True, timeout=50)\n                run['samplerExitCode'] = result.returncode\n                if result.returncode:\n                    run['samplerError'] = result.stderr\n                    raise RuntimeError('Component sampler rejected run')\n                data = json.loads((root / 'resources.json').read_text())\n                assert data['success'] is True\n                run['summary'] = data['summary']\n                run['loadAverageEnd'] = os.getloadavg()\n            finally:\n                try:\n                    child.communicate(input='', timeout=15)\n                except subprocess.TimeoutExpired:\n                    child.terminate()\n                    child.wait(timeout=15)\n                run['launcherExitCode'] = child.returncode\n                run['cleanup'] = json.loads((root / 'cleanup.json').read_text())\n                run['finishedAt'] = stamp()\n                save()\n            assert child.returncode == 0 and run['cleanup']['success'], 'Fixture cleanup failed'\n        print(json.dumps({'run': number, 'label': label, **run['summary'], 'cleanup': True}), flush=True)\n    pairs = []\n    for a, b in zip(receipt['runs'][::2], receipt['runs'][1::2]):\n        before, after = (a, b) if a['label'] == 'baseline' else (b, a)\n        pairs.append({key: (after['summary'][key] / before['summary'][key] - 1) * 100\n                      for key in ['cpuPercentOneCore', 'interruptWakeupsPerSecond']})\n    receipt['pairedRelativeChangesPercent'] = pairs\n    receipt['medians'] = {label: {key: statistics.median(r['summary'][key] for r in receipt['runs'] if r['label'] == label)\n                                  for key in ['cpuPercentOneCore', 'interruptWakeupsPerSecond', 'summedPhysicalFootprintMiBMedian']}\n                          for label in BUNDLES}\n    receipt['success'] = True\nexcept BaseException as error:\n    receipt['error'] = str(error)\n    raise\nfinally:\n    receipt['finishedAt'] = stamp()\n    save()\n",
+  "runnerSourceNote": "User-specific checkout/runtime locations redacted; tooling hash identifies original executed script.",
+  "limits": [
+    "Component CPU only; desktop, model processes, GPU, battery discharge and shared system services excluded.",
+    "Other real work remained running. Short read-only git/receipt operations and an 0.004-second Python guard test suite also ran during the comparison; no builds or CPU-heavy test suites overlapped.",
+    "Original unmodified CLI bundles were measured; later main-branch memory-learning changes are not represented by this comparison."
+  ],
+  "runs": [
+    {
+      "label": "baseline",
+      "startedAt": "2026-10-03T02:22:08.629917+00:00",
+      "loadAverageStart": [
+        39.55419921875,
+        31.4677734375,
+        27.4287109375
+      ],
+      "daemonPid": 33626,
+      "tmuxPid": 33624,
+      "agents": 10,
+      "sampleStartedAt": "2026-10-03T02:22:30.991526+00:00",
+      "samplerExitCode": 0,
+      "summary": {
+        "cpuPercentOneCore": 3.5147590248012213,
+        "cpuSeconds": 1.0546784166666667,
+        "elapsedSeconds": 30.00713304168312,
+        "interruptWakeupsPerSecond": 8.231376175021138,
+        "liveProcessCountMax": 13,
+        "liveProcessCountMin": 13,
+        "packageIdleWakeupsPerSecond": 0,
+        "processCountMax": 13,
+        "processCountMin": 13,
+        "summedPhysicalFootprintMiBMedian": 102.56239318847656,
+        "summedPhysicalFootprintMiBPeak": 123.96855163574219
+      },
+      "loadAverageEnd": [
+        23.103515625,
+        28.30859375,
+        26.50927734375
+      ],
+      "launcherExitCode": 0,
+      "finishedAt": "2026-10-03T02:23:01.178340+00:00",
+      "rawResourceSha256": "b5c451be5c4eca3067dc69614f1fee5b82b003033ca796f38079e84607ab6fd2",
+      "runDirectoryName": "harness-connected-daemon-idle-pair-1-baseline-20261003",
+      "cleanup": {
+        "success": true,
+        "errors": [],
+        "daemonExit": 0,
+        "daemonSignal": null,
+        "finishedAt": "2026-10-03T02:23:01.155Z"
+      }
+    },
+    {
+      "label": "current",
+      "startedAt": "2026-10-03T02:23:01.181951+00:00",
+      "loadAverageStart": [
+        23.103515625,
+        28.30859375,
+        26.50927734375
+      ],
+      "daemonPid": 42579,
+      "tmuxPid": 42577,
+      "agents": 10,
+      "sampleStartedAt": "2026-10-03T02:23:23.350988+00:00",
+      "samplerExitCode": 0,
+      "summary": {
+        "cpuPercentOneCore": 2.9772674480952452,
+        "cpuSeconds": 0.8931574583333334,
+        "elapsedSeconds": 29.999235000024782,
+        "interruptWakeupsPerSecond": 7.66686217164571,
+        "liveProcessCountMax": 13,
+        "liveProcessCountMin": 13,
+        "packageIdleWakeupsPerSecond": 0,
+        "processCountMax": 13,
+        "processCountMin": 13,
+        "summedPhysicalFootprintMiBMedian": 102.7493896484375,
+        "summedPhysicalFootprintMiBPeak": 118.79619598388672
+      },
+      "loadAverageEnd": [
+        14.5302734375,
+        25.16455078125,
+        25.44482421875
+      ],
+      "launcherExitCode": 0,
+      "finishedAt": "2026-10-03T02:23:53.640008+00:00",
+      "rawResourceSha256": "01a06ff9f0975359595e67bf4a2ede7da6d85e836f51d529aeda9c3a6892fa5e",
+      "runDirectoryName": "harness-connected-daemon-idle-pair-2-current-20261003",
+      "cleanup": {
+        "success": true,
+        "errors": [],
+        "daemonExit": 0,
+        "daemonSignal": null,
+        "finishedAt": "2026-10-03T02:23:53.623Z"
+      }
+    },
+    {
+      "label": "current",
+      "startedAt": "2026-10-03T02:23:53.640771+00:00",
+      "loadAverageStart": [
+        14.5302734375,
+        25.16455078125,
+        25.44482421875
+      ],
+      "daemonPid": 49641,
+      "tmuxPid": 49639,
+      "agents": 10,
+      "sampleStartedAt": "2026-10-03T02:24:15.698269+00:00",
+      "samplerExitCode": 0,
+      "summary": {
+        "cpuPercentOneCore": 2.9899000260170165,
+        "cpuSeconds": 0.896940125,
+        "elapsedSeconds": 29.9990005416621,
+        "interruptWakeupsPerSecond": 7.766925423945827,
+        "liveProcessCountMax": 14,
+        "liveProcessCountMin": 13,
+        "packageIdleWakeupsPerSecond": 0,
+        "processCountMax": 14,
+        "processCountMin": 13,
+        "summedPhysicalFootprintMiBMedian": 102.984130859375,
+        "summedPhysicalFootprintMiBPeak": 119.49984741210938
+      },
+      "loadAverageEnd": [
+        21.6640625,
+        24.99072265625,
+        25.33642578125
+      ],
+      "launcherExitCode": 0,
+      "finishedAt": "2026-10-03T02:24:45.924134+00:00",
+      "rawResourceSha256": "a6ff1523ca5418261bebf7ce916430079c06c382ef2ecf71d062404beb391e73",
+      "runDirectoryName": "harness-connected-daemon-idle-pair-3-current-20261003",
+      "cleanup": {
+        "success": true,
+        "errors": [],
+        "daemonExit": 0,
+        "daemonSignal": null,
+        "finishedAt": "2026-10-03T02:24:45.890Z"
+      }
+    },
+    {
+      "label": "baseline",
+      "startedAt": "2026-10-03T02:24:45.924915+00:00",
+      "loadAverageStart": [
+        21.6640625,
+        24.99072265625,
+        25.33642578125
+      ],
+      "daemonPid": 55168,
+      "tmuxPid": 55166,
+      "agents": 10,
+      "sampleStartedAt": "2026-10-03T02:25:07.938898+00:00",
+      "samplerExitCode": 0,
+      "summary": {
+        "cpuPercentOneCore": 3.72945599305297,
+        "cpuSeconds": 1.1188964583333332,
+        "elapsedSeconds": 30.001599708310096,
+        "interruptWakeupsPerSecond": 7.9662418778889235,
+        "liveProcessCountMax": 14,
+        "liveProcessCountMin": 13,
+        "packageIdleWakeupsPerSecond": 0,
+        "processCountMax": 14,
+        "processCountMin": 13,
+        "summedPhysicalFootprintMiBMedian": 100.56202697753906,
+        "summedPhysicalFootprintMiBPeak": 122.79637908935547
+      },
+      "loadAverageEnd": [
+        24.04541015625,
+        24.853515625,
+        25.2490234375
+      ],
+      "launcherExitCode": 0,
+      "finishedAt": "2026-10-03T02:25:38.273886+00:00",
+      "rawResourceSha256": "53024f04e98b03c104621338e2fd25e52e9f3902d4dec227b0797d41b3c1135d",
+      "runDirectoryName": "harness-connected-daemon-idle-pair-4-baseline-20261003",
+      "cleanup": {
+        "success": true,
+        "errors": [],
+        "daemonExit": 0,
+        "daemonSignal": null,
+        "finishedAt": "2026-10-03T02:25:38.240Z"
+      }
+    },
+    {
+      "label": "baseline",
+      "startedAt": "2026-10-03T02:25:38.274672+00:00",
+      "loadAverageStart": [
+        24.04541015625,
+        24.853515625,
+        25.2490234375
+      ],
+      "daemonPid": 61759,
+      "tmuxPid": 61757,
+      "agents": 10,
+      "sampleStartedAt": "2026-10-03T02:26:00.326344+00:00",
+      "samplerExitCode": 0,
+      "summary": {
+        "cpuPercentOneCore": 3.2663412146801365,
+        "cpuSeconds": 0.979695375,
+        "elapsedSeconds": 29.99366295832442,
+        "interruptWakeupsPerSecond": 7.601605723075615,
+        "liveProcessCountMax": 15,
+        "liveProcessCountMin": 13,
+        "packageIdleWakeupsPerSecond": 0,
+        "processCountMax": 15,
+        "processCountMin": 13,
+        "summedPhysicalFootprintMiBMedian": 103.53118896484375,
+        "summedPhysicalFootprintMiBPeak": 117.2029037475586
+      },
+      "loadAverageEnd": [
+        29.1875,
+        26.20556640625,
+        25.73193359375
+      ],
+      "launcherExitCode": 0,
+      "finishedAt": "2026-10-03T02:26:30.669776+00:00",
+      "rawResourceSha256": "1354d1ee88ec8dfae3bdbbdbd042eed0cb9d8430a83f0fe41ab86bf006f8d964",
+      "runDirectoryName": "harness-connected-daemon-idle-pair-5-baseline-20261003",
+      "cleanup": {
+        "success": true,
+        "errors": [],
+        "daemonExit": 0,
+        "daemonSignal": null,
+        "finishedAt": "2026-10-03T02:26:30.624Z"
+      }
+    },
+    {
+      "label": "current",
+      "startedAt": "2026-10-03T02:26:30.671136+00:00",
+      "loadAverageStart": [
+        29.1875,
+        26.20556640625,
+        25.73193359375
+      ],
+      "daemonPid": 67146,
+      "tmuxPid": 67144,
+      "agents": 10,
+      "sampleStartedAt": "2026-10-03T02:26:52.798902+00:00",
+      "samplerExitCode": 0,
+      "summary": {
+        "cpuPercentOneCore": 3.088938169077561,
+        "cpuSeconds": 0.9268775416666666,
+        "elapsedSeconds": 30.00634816667298,
+        "interruptWakeupsPerSecond": 7.831676107158099,
+        "liveProcessCountMax": 13,
+        "liveProcessCountMin": 13,
+        "packageIdleWakeupsPerSecond": 0,
+        "processCountMax": 13,
+        "processCountMin": 13,
+        "summedPhysicalFootprintMiBMedian": 101.62445831298828,
+        "summedPhysicalFootprintMiBPeak": 119.51508331298828
+      },
+      "loadAverageEnd": [
+        21.52490234375,
+        25.0478515625,
+        25.3603515625
+      ],
+      "launcherExitCode": 0,
+      "finishedAt": "2026-10-03T02:27:23.137705+00:00",
+      "rawResourceSha256": "abe485772cc94ef6a49411f9588aa37eeddf1b9499e66f338858c11f0e411bd7",
+      "runDirectoryName": "harness-connected-daemon-idle-pair-6-current-20261003",
+      "cleanup": {
+        "success": true,
+        "errors": [],
+        "daemonExit": 0,
+        "daemonSignal": null,
+        "finishedAt": "2026-10-03T02:27:23.096Z"
+      }
+    }
+  ]
+}

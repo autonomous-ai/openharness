@@ -68,7 +68,7 @@ describe('buildEngineLaunchArgv', () => {
 
   it('wraps zsh in its interactive login form and execs the resolved binary', () => {
     expect(buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, undefined, NO_TMUX)).toEqual([
-      '/bin/zsh', '-lic', `${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}harness_engine "$@"`, 'harness-engine', engineBin('claude'),
+      '/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', '/bin/zsh', '-lic', `${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}harness_engine "$@"`, 'harness-engine', engineBin('claude'),
     ])
   })
 
@@ -81,7 +81,7 @@ describe('buildEngineLaunchArgv', () => {
   it('enters the workspace only after interactive startup has completed', () => {
     const argv = buildEngineLaunchArgv('claude', { cwd: '/work/project' }, '/bin/zsh', undefined, undefined, NO_TMUX)
     expect(argv).toEqual([
-      '/bin/zsh', '-lic',
+      '/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', '/bin/zsh', '-lic',
       `${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}if ! cd -- "$1"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\n${unreadableCwdGuard(process.platform)}shift\nharness_engine "$@"`,
       'harness-engine', '/work/project', engineBin('claude'),
     ])
@@ -106,6 +106,32 @@ describe('buildEngineLaunchArgv', () => {
       // No shell was handed over and no "this pane is a shell now" line was printed: no tty.
       expect(result.out).not.toContain('This pane is a shell now')
     })
+    it('a take-over that waits says so, and starts the engine only once the other process is gone', () => {
+      const folder = mkdtempSync(join(tmpdir(), 'harness-wait-engine-'))
+      const binary = join(folder, 'codex')
+      // /bin/sh --help succeeds on macOS but fails with Ubuntu's dash. A
+      // simulated CLI needs its own help contract for the real startup probe.
+      writeFileSync(binary, '#!/bin/sh\nif [ "$1" = "--help" ]; then echo "fixture CLI"; exit 0; fi\necho "engine ran"\n', { mode: 0o755 })
+      // Not a child of this process, as the terminal's is not: an unreaped child never looks gone.
+      const pid = Number(execFileSync('/bin/sh', ['-c', 'sleep 1 >/dev/null 2>&1 & echo $!']).toString().trim())
+      try {
+        const argv = buildEngineLaunchArgv('codex', { waitForPid: { pid, name: 'Codex' } }, '/bin/sh', undefined, undefined, NO_TMUX)
+        const started = Date.now()
+        const result = run([argv[0], argv[1], argv[2], 'harness-engine', binary])
+        expect(Date.now() - started).toBeGreaterThanOrEqual(800)
+        expect(result.out).toContain('Waiting for the Codex in your terminal to finish its turn.')
+        expect(result.out.indexOf('Waiting for')).toBeLessThan(result.out.indexOf('engine ran'))
+        expect(result.status).toBe(0)
+        // Nothing to wait for: it starts at once.
+        const immediate = buildEngineLaunchArgv('codex', { waitForPid: { pid: 2 ** 22 + 7, name: 'Codex' } }, '/bin/sh', undefined, undefined, NO_TMUX)
+        const immediateStarted = Date.now()
+        expect(run([immediate[0], immediate[1], immediate[2], 'harness-engine', binary]).out).toContain('engine ran')
+        expect(Date.now() - immediateStarted).toBeLessThan(800)
+      } finally {
+        try { process.kill(pid) } catch { /* gone */ }
+        rmSync(folder, { recursive: true, force: true })
+      }
+    })
     it('a command that does not exist still ends the pane with 127, so "not installed" stays a launch failure', () => {
       const argv = buildEngineLaunchArgv('claude', {}, '/bin/sh', undefined, undefined, NO_TMUX)
       expect(run([argv[0], argv[1], argv[2], 'harness-engine', '/nowhere/claude-that-is-not-here']).status).toBe(127)
@@ -119,6 +145,31 @@ describe('buildEngineLaunchArgv', () => {
       expect(engineFallbackPrelude('codex', '/bin/zsh', null)).toContain("exec '/bin/zsh' -l\n")
       expect(engineFallbackPrelude('codex', '/bin/bash', null)).toContain("exec '/bin/bash'\n")
       expect(engineFallbackPrelude('codex', '/bin/bash', null)).not.toContain('set-option')
+    })
+  })
+
+  describe('Codex writer ownership', () => {
+    it.each(['supported', 'older', 'failed'] as const)('probes %s startup options without changing prompt arguments', mode => {
+      const folder = mkdtempSync(join(tmpdir(), 'harness-codex-launch-'))
+      try {
+        const binary = join(folder, 'codex fixture')
+        writeFileSync(binary, '#!/bin/sh\nif [ "$1" = "--help" ]; then\n'
+          + (mode === 'failed' ? 'exit 2\n' : `printf '%s\\n' '${mode === 'supported' ? '  --no-daemon  Run locally' : '  --model  Choose a model'}'\nexit 0\n`)
+          + 'fi\nprintf "<%s>\\n" "$@"\n', { mode: 0o755 })
+        const prelude = engineFallbackPrelude('codex', '/bin/sh', null)
+        const args = ['-c', `${prelude}harness_engine "$@"`, 'harness-engine', binary, 'resume', 'same-conversation', 'literal $(nothing) `nothing` and spaces']
+        if (mode === 'failed') {
+          try { execFileSync('/bin/sh', args, { stdio: ['ignore', 'pipe', 'pipe'] }); expect.fail('launch must refuse an unknown startup mode') }
+          catch (error) {
+            expect((error as any).status).toBe(1)
+            expect(String((error as any).stderr)).toContain('could not verify Codex startup options')
+            expect(String((error as any).stdout)).not.toContain('same-conversation')
+          }
+        } else {
+          const output = execFileSync('/bin/sh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+          expect(output).toBe(`${mode === 'supported' ? '<--no-daemon>\n' : ''}<resume>\n<same-conversation>\n<literal $(nothing) \`nothing\` and spaces>\n`)
+        }
+      } finally { rmSync(folder, { recursive: true, force: true }) }
     })
   })
 
@@ -318,10 +369,10 @@ describe('buildEngineLaunchArgv', () => {
     // On this branch every pane script opens with the open-files raise, the engine-in-a-shell
     // wrapper and the grid prelude; the Node line lands after them, and a launch without
     // `harnessNode` is exactly the baseline above.
-    expect(argv[2]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${harnessNodePrelude('/opt/harness runtime/bin/node')}harness_engine "$@"`)
+    expect(argv[4]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${harnessNodePrelude('/opt/harness runtime/bin/node')}harness_engine "$@"`)
     expect(harnessNodePrelude('/opt/harness runtime/bin/node')).toBe(
       'if ! command -v node >/dev/null 2>&1; then PATH="${PATH:+$PATH:}"\'/opt/harness runtime/bin\'; export PATH; fi\n')
-    expect(buildEngineLaunchArgv('claude', { harnessNode: false }, '/bin/zsh', undefined, undefined, NO_TMUX)[2]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}harness_engine "$@"`)
+    expect(buildEngineLaunchArgv('claude', { harnessNode: false }, '/bin/zsh', undefined, undefined, NO_TMUX)[4]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}harness_engine "$@"`)
   })
 
   it('the DSH prelude, run by a real shell, reaches the engine\'s PATH only when node is missing', () => {
@@ -421,16 +472,15 @@ describe('buildEngineLaunchArgv', () => {
       .toEqual([engineBin('claude'), '--permission-mode', 'auto'])
   })
 
-  it('is a no-op when resumeSessionId is set but the engine has no known launch resume flag', () => {
-    expect(buildEngineCommandArgv('devin', { resumeSessionId: 'abc-123' })).toEqual([engineBin('devin')])
+  it('resumes devin by its session slug (docs.devin.ai/cli, since 2026.4.17)', () => {
+    expect(buildEngineCommandArgv('devin', { resumeSessionId: 'brisk-otter' })).toEqual([engineBin('devin'), '--resume', 'brisk-otter'])
   })
 
   it('has a launch resume flag for every engine RESUME_ARGS also covers, plus claude/codex', () => {
     for (const engine of ['claude', 'codex', 'cursor', 'opencode', 'kilo', 'pi', 'hermes', 'commandcode',
-      'muse', 'amp', 'grok', 'agy', 'copilot'] as const) {
+      'muse', 'amp', 'grok', 'agy', 'copilot', 'devin'] as const) {
       expect(LAUNCH_RESUME_FLAG[engine]?.length).toBeGreaterThan(0)
     }
-    expect(LAUNCH_RESUME_FLAG.devin).toBeUndefined()
   })
 })
 
@@ -445,6 +495,15 @@ describe('a first prompt on launch', () => {
   it('hands claude and codex the text positionally', () => {
     expect(buildEngineCommandArgv('claude', { firstPrompt: PROMPT })).toEqual([engineBin('claude'), PROMPT])
     expect(buildEngineCommandArgv('codex', { firstPrompt: PROMPT })).toEqual([engineBin('codex'), PROMPT])
+  })
+
+  it('hands hermes the text as the first turn of an interactive chat, after a resume', () => {
+    // `hermes chat -q` on a TTY seeds the session and keeps the TUI open (measured on a live pane).
+    expect(buildEngineCommandArgv('hermes', { firstPrompt: PROMPT }))
+      .toEqual([engineBin('hermes'), 'chat', '-q', PROMPT])
+    // Global flags stay ahead of the subcommand, where hermes's parser reads them.
+    expect(buildEngineCommandArgv('hermes', { resumeSessionId: 'abc', firstPrompt: PROMPT }))
+      .toEqual([engineBin('hermes'), '--resume', 'abc', 'chat', '-q', PROMPT])
   })
 
   it('puts the text LAST, after every flag, so a positional is never read as an option value', () => {
@@ -503,6 +562,14 @@ describe('opening as a named agent', () => {
     // Resume keeps it too — the flag rides `extraArgs`, which every relaunch rebuilds from the row.
     expect(buildEngineCommandArgv('opencode', { resumeSessionId: 'ses_1', extraArgs: namedAgentArgs('opencode', 'harness-compute') }))
       .toEqual([engineBin('opencode'), '--session', 'ses_1', '--agent', 'harness-compute'])
+  })
+
+  it('refuses opencode v2, whose TUI has no --agent (only `opencode run` does)', () => {
+    expect(supportsNamedAgent('opencode', 2)).toBe(false)
+    expect(() => namedAgentArgs('opencode', 'harness-compute', 2)).toThrow(NamedAgentUnsupportedError)
+    // v1, or a version not read, keeps the flag it always had.
+    expect(supportsNamedAgent('opencode', 1)).toBe(true)
+    expect(supportsNamedAgent('opencode', null)).toBe(true)
   })
 
   it('refuses every other engine, naming it, rather than dropping the name', () => {
@@ -827,7 +894,7 @@ describe('buildEngineLaunchArgv — the grid the pane finds', () => {
 
   it('puts the resolved grid first on PATH and turns its update check off, before the engine', () => {
     const managed = '/opt/harness/runtime/grid-0.3.47-darwin-arm64/grid'
-    const script = buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, managed)[2]
+    const script = buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, managed)[4]
 
     expect(script).toContain(`PATH='/opt/harness/runtime/grid-0.3.47-darwin-arm64'"\${PATH:+:$PATH}"\nexport PATH\n`)
     expect(script).toContain('GRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\n')
@@ -835,7 +902,7 @@ describe('buildEngineLaunchArgv — the grid the pane finds', () => {
   })
 
   it('leaves PATH alone when grid is only a name on it, but still turns the update check off', () => {
-    const script = buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, 'grid')[2]
+    const script = buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, 'grid')[4]
 
     expect(script).not.toContain('export PATH')
     expect(script).toContain('GRID_NO_UPDATE_CHECK=1')
@@ -887,10 +954,10 @@ describe('buildEngineLaunchArgv with installFirst', () => {
   // Doing so reproduces the `command not found` this feature exists to replace, with a screenful of
   // installer output above it to bury the cause.
   const script = (install: string): string =>
-    buildEngineLaunchArgv('opencode', { installFirst: install }, '/bin/zsh')[2]
+    buildEngineLaunchArgv('opencode', { installFirst: install }, '/bin/zsh')[4]
 
   it('leaves the plain launch alone when nothing has to be installed', () => {
-    expect(buildEngineLaunchArgv('opencode', {}, '/bin/zsh', undefined, undefined, NO_TMUX)[2]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('opencode', '/bin/zsh')}${GRID_PRELUDE}harness_engine "$@"`)
+    expect(buildEngineLaunchArgv('opencode', {}, '/bin/zsh', undefined, undefined, NO_TMUX)[4]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('opencode', '/bin/zsh')}${GRID_PRELUDE}harness_engine "$@"`)
   })
 
   it('keeps the engine argv positional, so the shell never re-parses a path or a flag', () => {
@@ -898,9 +965,9 @@ describe('buildEngineLaunchArgv with installFirst', () => {
       installFirst: 'npm install -g opencode-ai',
       bypassPermission: true,
     }, '/bin/zsh')
-    expect(argv.slice(0, 2)).toEqual(['/bin/zsh', '-lic'])
-    expect(argv.slice(3)).toEqual(['harness-engine', ...buildEngineCommandArgv('opencode', { bypassPermission: true })])
-    expect(argv[2]).toContain('harness_engine "$@"')
+    expect(argv.slice(0, 4)).toEqual(['/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', '/bin/zsh', '-lic'])
+    expect(argv.slice(5)).toEqual(['harness-engine', ...buildEngineCommandArgv('opencode', { bypassPermission: true })])
+    expect(argv[4]).toContain('harness_engine "$@"')
   })
 
   it('runs the engine only when the install succeeded', async () => {
@@ -940,7 +1007,7 @@ describe('buildEngineLaunchArgv with installIfMissing', () => {
     executable: EngineInstallRecipe['executable'] = { names: ['harness-no-such-engine'] },
   ): EngineInstallRecipe => ({ command, source: 'test fixture', executable })
   const script = (install: EngineInstallRecipe, runtimeNode?: string): string =>
-    buildEngineLaunchArgv('opencode', { installIfMissing: install }, '/bin/zsh', runtimeNode)[2]
+    buildEngineLaunchArgv('opencode', { installIfMissing: install }, '/bin/zsh', runtimeNode)[4]
 
   it('execs an installed engine without running the installer', async () => {
     await expect(runPaneScript(script(recipe('false')))).resolves.toMatchObject({ code: 0, ranEngine: true })
@@ -1002,7 +1069,7 @@ if [ "$1" = prefix ]; then exit 0; fi
     )
 
     expect(result).toMatchObject({ code: 0, ranEngine: true })
-    expect(result.stdout).toContain('enabling Harness managed Node.js/npm')
+    expect(result.stdout).toContain('installing for this user')
   })
 
   it('does not add the npm bootstrap to non-npm installers', () => {

@@ -1,5 +1,6 @@
 import 'dart:ui' show PointerDeviceKind;
 
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
@@ -26,6 +27,7 @@ void main() {
       final closed = <int>[];
       final deleted = <int>[];
       final zoomed = <int>[];
+      final splits = <(String, int)>[];
       tester.view.devicePixelRatio = 1;
       tester.view.physicalSize = const Size(1100, 700);
       addTearDown(tester.view.reset);
@@ -41,6 +43,8 @@ void main() {
               onClose: () => closed.add(version),
               onDelete: () => deleted.add(version),
               onToggleZoom: () => zoomed.add(version),
+              onSplitDown: () => splits.add(('down', version)),
+              onSplitRight: () => splits.add(('right', version)),
               zoomed: version >= 2,
             ),
           ),
@@ -49,12 +53,24 @@ void main() {
       await tester.pump();
       revision.value = 1;
       await tester.pump();
-      for (final label in ['Close Pane', 'Zoom Pane', 'Stop Harness']) {
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: const Offset(1, 100));
+      await mouse.moveTo(tester.getCenter(find.text(session.agentName)));
+      await tester.pump();
+      expect(find.byTooltip('Close Pane').hitTestable(), findsOneWidget);
+      for (final label in ['Stop Harness']) {
         expect(find.byTooltip(label), findsNothing);
       }
       expect(closed, isEmpty);
       expect(deleted, isEmpty);
       expect(zoomed, isEmpty);
+      // Split controls live on workspace edges (swarm_split_test.dart), not
+      // in the compact header. Its retained Close callback must still be live.
+      expect(find.byTooltip('New Pane Below'), findsNothing);
+      expect(find.byTooltip('New Pane to the Right'), findsNothing);
+      expect(splits, isEmpty);
+      await tester.tap(find.byTooltip('Close Pane'));
+      expect(closed, [1]);
       expect(find.byTooltip('Pane actions'), findsNothing);
       expect(find.byTooltip('Restart Harness'), findsNothing);
       expect(find.byTooltip('Share harness'), findsNothing);
@@ -167,6 +183,11 @@ void main() {
       revision.value = 2;
       await tester.pump();
       expect(find.byTooltip('Restore Pane'), findsNothing);
+      expect(zoomed, isEmpty);
+      await mouse.moveTo(tester.getCenter(find.text('Renamed terminal')));
+      await tester.pump();
+      await tester.tap(find.byTooltip('Close Pane'));
+      expect(closed, [1, 2]);
       session.status = TerminalSessionStatus.takenOver;
       revision.value = 3;
       await tester.pump();
@@ -190,6 +211,7 @@ void main() {
         tester.widget<Text>(find.text('Renamed terminal')).style!.fontFamily,
         workspaceBarTextStyle().fontFamily,
       );
+      await mouse.removePointer();
       await tester.pumpWidget(const SizedBox());
       revision.dispose();
       session.dispose();
@@ -198,7 +220,7 @@ void main() {
   );
   for (final local in [true, false]) {
     testWidgets(
-      '${local ? 'local' : 'remote'} compact model selectors stay visible without moving the title or terminal',
+      '${local ? 'local' : 'remote'} compact headers keep the title and close control stable',
       (tester) async {
         final app = createApp();
         app.stateOf('m')!.localOnly = local;
@@ -259,8 +281,13 @@ void main() {
               .length,
           0,
         );
-        expect(find.text('OpenAI').hitTestable(), findsOneWidget);
-        for (final label in ['Close Pane', 'Zoom Pane', 'Stop Harness']) {
+        expect(
+          find.byType(GridModelPicker),
+          findsOneWidget,
+          reason: 'The model belongs to its pane header.',
+        );
+        expect(find.byTooltip('Close Pane').hitTestable(), findsOneWidget);
+        for (final label in ['Stop Harness']) {
           expect(find.byTooltip(label).hitTestable(), findsNothing);
         }
         final controlsBounds = tester.getRect(controls);
@@ -268,14 +295,15 @@ void main() {
         await mouse.addPointer(location: const Offset(1, 100));
         await mouse.moveTo(tester.getCenter(title));
         await tester.pump();
-        for (final label in ['Close Pane', 'Zoom Pane', 'Stop Harness']) {
+        expect(find.byTooltip('Close Pane').hitTestable(), findsOneWidget);
+        for (final label in ['Stop Harness']) {
           expect(find.byTooltip(label), findsNothing);
         }
         expect(tester.getRect(title), titleBounds);
         expect(tester.getRect(controls), controlsBounds);
         await mouse.moveTo(tester.getCenter(find.byType(TerminalView)));
         await tester.pump();
-        for (final label in ['Close Pane', 'Zoom Pane', 'Stop Harness']) {
+        for (final label in ['Stop Harness']) {
           expect(find.byTooltip(label).hitTestable(), findsNothing);
         }
         expect(find.byTooltip('Share harness'), findsNothing);
@@ -297,7 +325,7 @@ void main() {
     );
   }
   testWidgets(
-    'narrow headers preserve identity and model selection at large text',
+    'narrow headers preserve identity and close control at large text',
     (tester) async {
       final app = createApp();
       final session = terminal('a0', []);
@@ -341,11 +369,16 @@ void main() {
         );
         await tester.pump();
         final title = find.text(session.agentName);
-        expect(tester.getSize(title).width, greaterThan(64));
+        expect(tester.getSize(title).width, greaterThan(40));
         expect(tester.takeException(), isNull);
         final titleBefore = tester.getRect(title);
-        final picker = find.byType(GridModelPicker);
-        expect(picker.hitTestable(), findsOneWidget);
+        expect(find.byType(GridModelPicker), findsOneWidget);
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: const Offset(1, 100));
+        await mouse.moveTo(tester.getCenter(title));
+        await tester.pump();
+        expect(find.byTooltip('Close Pane').hitTestable(), findsOneWidget);
+        await mouse.removePointer();
         expect(find.byTooltip('Stop Harness'), findsNothing);
         expect(find.byTooltip('Zoom Pane'), findsNothing);
         expect(tester.getRect(title), titleBefore);
@@ -364,7 +397,7 @@ void main() {
         expect(
           tester
               .widget<IconButton>(
-                find.widgetWithIcon(IconButton, Icons.refresh),
+                find.widgetWithIcon(IconButton, AppIcons.refreshCw),
               )
               .onPressed,
           isNotNull,

@@ -154,7 +154,7 @@ void main() {
     );
   }
   testWidgets(
-    'a fresh hidden terminal follows its keyframe when its swarm is opened',
+    'a fresh hidden terminal follows its keyframe when its tab is opened',
     (tester) async {
       final app = createApp();
       final session = terminal('a0', []);

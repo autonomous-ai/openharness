@@ -1,0 +1,13 @@
+{
+  "name": "Harness",
+  "short_name": "Harness",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#141414",
+  "theme_color": "#141414",
+  "description": "Your machines, agents, and workspace in the browser.",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

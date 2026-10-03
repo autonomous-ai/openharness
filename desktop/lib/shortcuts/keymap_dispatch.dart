@@ -1,4 +1,5 @@
 import 'keymap.dart';
+import 'keymap_commands.dart' show harnessCommandActive;
 
 enum KeymapKeyPhase { down, repeat, up }
 
@@ -88,7 +89,12 @@ class KeymapDispatch {
       return const KeymapDispatchResult(handled: true);
     }
     cancel();
-    final command = match.command;
+    // A command this window does not have now (the daemon's, while daemons
+    // are off) is not bound: its key goes where it went before.
+    final command =
+        match.command != null && harnessCommandActive(match.command!)
+        ? match.command
+        : null;
     if (command != null) {
       // In the workspace a matched key is consumed even when its command is
       // unavailable: it must not fall through and type into a terminal. In a
