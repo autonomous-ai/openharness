@@ -671,7 +671,9 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
     if !row.is_empty() { lines.push(Line::from(row)) }
     lines.push(Line::raw(""));
     let prefix = crate::keys::name(&app.keymap.prefix);
-    lines.push(Line::from(vec![Span::styled(format!("{prefix} ?"), bold(theme::accent())), Span::styled(" every key   ", fg(theme::SOFT)), Span::styled(format!("{prefix} d"), bold(theme::accent())), Span::styled(" detach — everything keeps running", fg(theme::SOFT))]));
+    let (key, description) = if app.os_session { ("Super+B".into(), " browser · Super+Enter terminal") }
+        else { (format!("{prefix} d"), " detach — everything keeps running") };
+    lines.push(Line::from(vec![Span::styled(format!("{prefix} ?"), bold(theme::accent())), Span::styled(" every key   ", fg(theme::SOFT)), Span::styled(key, bold(theme::accent())), Span::styled(description, fg(theme::SOFT))]));
     let top = area.y + area.height.saturating_sub(lines.len() as u16) / 2;
     for (index, line) in lines.iter().enumerate() {
         let y = top + index as u16;

@@ -6,7 +6,7 @@
   "merge_utc": null,
   "publication_utc": null,
   "completion_utc": null,
-  "status": "Image payload inspection passed; real UEFI boot found foot configuration incompatibility, corrected image rebuilding; Mac VM launcher prepared",
+  "status": "Testing real developer workflows in installed Mac VM; reducing live image duplication and fixing actual daemon readiness.",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -64,6 +64,32 @@
       "command": "make -C os check",
       "source_commit": "1a71edc0dd2ece66781ff94073acdd17f30e1bf9",
       "limitations": "Portable guard/syntax checks only. Actual VM installation/recovery remains pending."
+    },
+    {
+      "scope": "BIOS/plain and UEFI/encrypted live boot, installation, reboot and offline recovery",
+      "result": "passed",
+      "source_commit": "7d778fe8586fc74cb7133896086537fb16f410de",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37075579216",
+      "limitations": "This image precedes the discovered last-terminal identity fix; physical hardware and real model turns unverified."
+    },
+    {
+      "scope": "On-demand gcc/make, C compilation, Git diff and local web preview",
+      "result": "failed after compiler success",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37076181584",
+      "reason": "Closing the last terminal restarts the underlying tmux server and reuses a pane ID before discovery forgets the old row. Fixed OS tmux server policy in f0b3c0488."
+    },
+    {
+      "scope": "Native terminal regression fixture",
+      "result": "first attempt failed in reference tmux; bounded retry passed all unit, native and machine checks",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37077942258",
+      "reason": "hn reported expected exit status 9; the unchanged reference tmux fixture reported an empty dead status. Other nine native fixtures and 334 unit tests passed. No required check bypassed."
+    },
+    {
+      "scope": "BIOS/plain and UEFI/encrypted installation, recovery, terminal reopen, compiler/browser preview and four vendor agent binaries",
+      "result": "passed",
+      "source_commit": "f0b3c0488c6709ce7afc49224659d5890d9c2584",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37077942258",
+      "limitations": "Visual review found the screen can appear before daemon discovery is ready. Readiness and timing checks strengthened for the next image. No model calls in this suite."
     }
   ],
   "waiting": [
@@ -77,15 +103,13 @@
     }
   ],
   "remaining": [
-    "Finish the corrected image build and repeat BIOS/UEFI machine validation",
-    "Pass BIOS and UEFI live boot, browser/clipboard/session, offline install and reboot tests",
-    "Pass real offline root/boot recovery with project preservation",
-    "Run real agent executable install/start checks; credential-dependent model turns remain separate",
-    "Measure boot, install duration, idle RAM/CPU and disk footprint; optimize from those measurements",
-    "Publish a verified preview with checksum and installation directions; physical ThinkPad/RTX verification remains separate"
+    "Validate runtime readiness, smaller live initramfs and usable live scratch space",
+    "Complete requested real-agent workloads and DSH checks",
+    "Profile installed idle resource use and remove unnecessary image/runtime work",
+    "Publish final verified preview and document physical hardware limitations"
   ],
-  "last_updated_utc": "2026-10-02T22:37:21.045939+00:00",
-  "remote_build_commit": "1a71edc0dd2ece66781ff94073acdd17f30e1bf9",
+  "last_updated_utc": "2026-10-03T00:07:25.569329+00:00",
+  "remote_build_commit": "f0b3c0488c6709ce7afc49224659d5890d9c2584",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
     {
@@ -136,5 +160,16 @@
     "Inspect the actual ISO payload and shorten the USB boot-menu delay to one second",
     "Guard preview publication with matching full machine evidence and verify all public assets after publishing",
     "Add an interactive QEMU launcher for the full installation and reboot experience on macOS"
-  ]
+  ],
+  "additional_user_requested_work": [
+    "Use OpenCode free models for real development inside the installed VM",
+    "Build and exercise a terminal tool, website and keyboard-controlled game",
+    "Build a full-stack application with dependencies, persistent data and automated tests",
+    "Create several DSH packages using existing repository components; exercise native hn and HTML viewers",
+    "Measure and reduce boot time, steady idle CPU/RAM and image footprint without losing functionality"
+  ],
+  "computer_use": {
+    "status": "Local browser VM viewer access denied by browser approval policy; no alternate browser route attempted",
+    "continued": "Automated guest CLI tests and framebuffer screenshot inspection"
+  }
 }

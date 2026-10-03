@@ -126,6 +126,9 @@ for d in ['syslinux', 'efiboot', 'grub']:
             except UnicodeDecodeError: continue
             s = s.replace('vmlinuz-linux', 'vmlinuz-linux-lts').replace('initramfs-linux.img', 'initramfs-linux-lts.img')
             s = s.replace('Arch Linux install medium', 'Programmer OS - try or install')
+            # The 256 MiB Archiso default cannot install even one current agent.
+            # tmpfs grows on demand; this is a ceiling, not reserved memory.
+            s = s.replace('archisobasedir=%INSTALL_DIR%', 'archisobasedir=%INSTALL_DIR% cow_spacesize=50%')
             # Keep a short opportunity to choose recovery media or firmware tools.
             s = re.sub(r'(?m)^timeout(?:=|\s+)\d+', lambda m: 'timeout=1' if '=' in m[0] else 'timeout 1', s)
             s = re.sub(r'(?m)^TIMEOUT\s+\d+', 'TIMEOUT 10', s)  # Syslinux uses tenths of a second.

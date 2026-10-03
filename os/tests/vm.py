@@ -146,6 +146,7 @@ class VM:
                 self.keys('ret')
                 time.sleep(2)
         self.command('for n in $(seq 1 90); do systemctl --user is-active --quiet hn-screen && pgrep -x "hn|harness-tui" >/dev/null && exit 0; sleep 1; done; exit 1', timeout=110)
+        self.command('/usr/lib/harness-os/wait-runtime', timeout=160)
 
     def screenshot(self, name):
         ppm = self.folder / (name + '.ppm')
@@ -208,7 +209,14 @@ def main():
         vm.command('stty -echo')
         vm.command('foot --check-config --config=/usr/share/harness-os/foot.ini')
         vm.command(user("sh -c 'for n in $(seq 1 90); do systemctl --user is-active --quiet hn-screen && pgrep -u 1000 -x \"hn|harness-tui\" >/dev/null && exit 0; sleep 1; done; systemctl --user --no-pager status hn-screen harness-daemon; exit 1'"), timeout=110)
+        vm.command(user('/usr/lib/harness-os/wait-runtime'), timeout=160)
         result['live_hn_ready_seconds'] = round(time.monotonic() - vm.started, 3)
+        result['checks'].append('Harness runtime reports discovery ready before hn startup is measured')
+        output, _ = vm.command("df -B1 --output=size /run/archiso/cowspace | tail -1")
+        scratch_bytes = int(output.strip())
+        if scratch_bytes < args.memory * 1024 ** 2 * 0.45:
+            raise RuntimeError('Live writable space is too small for on-demand agent installation.')
+        result['live_scratch_mib'] = round(scratch_bytes / 1024 ** 2, 1)
         vm.command('! pgrep -x chromium')
         result['checks'].append('Live hn ready; browser absent at boot')
         vm.command('systemctl start harness-keyring; pacman -Si git chromium >/dev/null', timeout=180)

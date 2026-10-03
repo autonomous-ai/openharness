@@ -255,21 +255,29 @@ def selected_size(config):
 
 def interactive():
     print('Programmer OS — offline installation\n')
+    candidates = []
     for d in inventory():
-        if d['type'] == 'disk':
-            print(f"{d['name']:16} {int(d['size']) / 1024**3:7.1f} GiB  {d.get('model', '')}  {d.get('serial', '')}")
+        try:
+            validate_disk(d)
+        except ValueError:
+            continue
+        candidates.append(d)
+        print(f"{d['name']:16} {int(d['size']) / 1024**3:7.1f} GiB  {d.get('model') or ''}  {d.get('serial') or ''}")
+    if not candidates:
+        raise ValueError('No unmounted, writable whole disk of at least 12 GiB is available.')
     config = {'disk': input('\nInstall to whole disk: ').strip(),
               'username': input('Username [programmer]: ').strip() or 'programmer',
               'hostname': input('Computer name [programmer]: ').strip() or 'programmer',
               'encrypt': input('Encrypt the disk? [Y/n]: ').strip().lower() != 'n'}
-    config['password'] = getpass.getpass('Account and disk-unlock password: ')
+    config['password'] = getpass.getpass('Account and disk-unlock password: ' if config['encrypt'] else 'Account password: ')
     if getpass.getpass('Repeat password: ') != config['password']:
         raise ValueError('Passwords do not match.')
     validate_config(config)
     disk = selected_disk(config)
     if disk.get('serial'):
         config['expected_serial'] = disk['serial'].strip()
-    print(f"\nAll data on {disk['name']} ({disk.get('model', '')}, {disk.get('serial', '')}) will be erased.")
+    identity = ', '.join(str(disk.get(key) or '').strip() for key in ['model', 'serial'] if disk.get(key))
+    print(f"\nAll data on {disk['name']}" + (f' ({identity})' if identity else '') + ' will be erased.')
     config['confirm_erase'] = input(f"Type {disk['name']} to erase and install: ").strip()
     return config
 
