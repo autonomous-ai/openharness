@@ -4,21 +4,22 @@ Boot into `hn`. Talk to agents in their own terminal panes. Review their diffs,
 tests and output there. The browser opens only when requested. Development
 toolchains are installed by the agents as needed.
 
-**Preview 2:** the keyboard installer passes real BIOS/plain and UEFI/encrypted
-installation, reboot, update retry and recovery checks. The form has a disk picker,
-encryption on by default, password twice, and a separate erase confirmation.
-The installed account is `me@harness`.
+**Preview 3:** the installer finds its offline image after USB boot copies it into
+RAM, and excludes the boot USB even when it has been unmounted. Both optical-media
+and writable-USB tests pass BIOS/plain and UEFI/encrypted installation, reboot,
+update retry and recovery. The form has a disk picker, encryption on by default,
+password twice, and a separate erase confirmation. The account is `me@harness`.
 
-Preview 2 has a confirmed USB installation issue when Archiso copies its image
-into RAM. Use the [documented source-path workaround](INSTALL.md#5-install).
-The branch prepares preview 3 with automatic image detection and protection for
-the now-unmounted boot USB. The corrected image still needs native USB validation.
+Already using preview 2? Its [source-path workaround](INSTALL.md#5-install) works;
+this installer fix does not require reinstalling a working system.
 
-[Download preview 2](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.2)
+[Download preview 3](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.3)
 · [Mac → USB → ThinkPad installation guide](INSTALL.md)
 · [Standalone HTML/CSS landing page](site/README.md)
 
-Physical ThinkPad, Wi-Fi, suspend and NVIDIA hardware remain unverified.
+The user confirmed preview 2 installation with the workaround and boot into hn
+from a physical ThinkPad's internal disk with the USB removed. Further issues
+have been reported and await details. Wi-Fi, suspend and NVIDIA remain unverified.
 The release's `validation.json` identifies the exact image and coverage. Real
 OpenCode project and DSH exercises were validated separately on preview 1.
 
@@ -205,24 +206,27 @@ separately in `progress.json`.
 
 ## Measured preview footprint
 
-These measurements cover preview 2 image `a155a16850438e04315a1959b1bfd1c387d8bf99`,
-tested in [the complete image run](https://github.com/autonomous-ai/openharness/actions/runs/37101103529).
-The guests have two virtual CPUs and 2 GiB RAM. Browser and agents are closed
-for idle measurements; the measurement process is included.
+These measurements cover preview 3 image `bbf6442d9c62fc8a4e9ad9acf5668159f35c99f0`.
+The ISO is 1,525,678,080 bytes (1.42 GiB). Both test environments have two virtual
+CPUs. [Optical-media tests](https://github.com/autonomous-ai/openharness/actions/runs/37106807986)
+use 2 GiB RAM; [writable-USB tests](https://github.com/autonomous-ai/openharness/actions/runs/37107310576)
+use 4 GiB to trigger automatic RAM copying. Idle and installed-boot measurements
+are taken after booting the installed disk without the live medium. Browser and
+agents are closed; the measurement process is included.
 
-| Measurement | Result |
-| --- | --- |
-| Hybrid ISO | 1,525,678,080 bytes (1.42 GiB) |
-| Installed root filesystem used, including home and snapshots | 1.90–1.97 GiB |
-| Settled RAM, six samples across both firmware modes | 395.05–404.37 MiB |
-| Settled CPU, six two-second samples | 0–1.25% |
-| Offline BIOS/plain installation | 30.4 seconds |
-| Offline UEFI/encrypted installation | 49.3 seconds |
-| Installed BIOS boot through hn process readiness, including test login | 17.8 seconds |
+| Measurement | 2 GiB VM, optical installer | 4 GiB VM, USB installer |
+| --- | --- | --- |
+| Installed root used, including home and snapshots | 1.91–1.94 GiB | 1.93–1.97 GiB |
+| Settled RAM, six samples across both firmware modes | 397.77–407.73 MiB | 469.92–513.75 MiB |
+| Settled CPU, six two-second samples | 0–1.5% | 0–0.75% |
+| Offline BIOS/plain installation | 33.8 seconds | 34.7 seconds |
+| Offline UEFI/encrypted installation | 47.0 seconds | 42.1 seconds |
+| Installed BIOS boot through hn process readiness, including test login | 17.5 seconds | 18.1 seconds |
 
-The encrypted boot check deliberately waits 100 seconds before entering the disk
-password; its total is 111.7 seconds (11.7 excluding that deliberate wait). These
-are VM observations, not laptop power-on benchmarks. The Mac's x86 emulation is
+Encrypted boot checks deliberately wait 100 seconds before entering the disk
+password. Totals are 112.0 seconds at 2 GiB and 111.0 seconds at 4 GiB (12.0 and
+11.0 excluding that wait). These are VM observations, not laptop power-on
+benchmarks. The Mac's x86 emulation is
 substantially slower and is for trying the
 installation and interface. The image shrank by 304 MiB (17%) during testing by
 removing duplicated live-initramfs graphics payload, while retaining the installed
@@ -237,7 +241,7 @@ memory for projects, browser tabs and local model weights.
 
 ## Real programmer exercises
 
-These real-model project and DSH results cover preview 1. Preview 2 reran OS,
+These real-model project and DSH results cover preview 1. Previews 2 and 3 reran OS,
 compiler and agent executable checks, without new model turns.
 
 Opt-in tests use free OpenCode model turns inside a freshly installed OS. They

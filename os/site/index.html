@@ -36,8 +36,8 @@
           </div>
         </div>
         <div class="hero-actions">
-          <a class="button" href="https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.2/programmer-os-0.1.0-preview.2-x86_64.iso">Download the ISO <span aria-hidden="true">↓</span></a>
-          <a class="text-link" href="https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.2">Release notes <span aria-hidden="true">↗</span></a>
+          <a class="button" href="https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.3/programmer-os-0.1.0-preview.3-x86_64.iso">Download the ISO <span aria-hidden="true">↓</span></a>
+          <a class="text-link" href="https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.3">Release notes <span aria-hidden="true">↗</span></a>
           <span class="download-meta">x86-64 · 1.42 GiB · Open source</span>
         </div>
       </section>
@@ -76,20 +76,20 @@
       </section>
 
       <section class="section measurements" aria-labelledby="measurements-title">
-        <div class="section-heading"><h2 id="measurements-title">Small. Measured.</h2><a class="text-link" href="https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.2/validation.json">Read the evidence <span aria-hidden="true">↗</span></a></div>
+        <div class="section-heading"><h2 id="measurements-title">Small. Measured.</h2><a class="text-link" href="https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.3/validation.json">Read the evidence <span aria-hidden="true">↗</span></a></div>
         <dl class="numbers">
           <div><dt>ISO download</dt><dd>1.42<span>GiB</span></dd></div>
-          <div><dt>Settled idle memory</dt><dd>~400<span>MiB</span></dd></div>
-          <div><dt>Offline VM installation</dt><dd>30–49<span>sec</span></dd></div>
+          <div><dt>Settled idle memory</dt><dd>~500<span>MiB</span></dd></div>
+          <div><dt>Offline VM installation</dt><dd>35–42<span>sec</span></dd></div>
         </dl>
-        <p class="measurement-note">Preview 2 measurements in 2-vCPU, 2-GiB x86 VMs. Idle memory is with agents and browser closed. Installation excludes downloading the image and answering prompts. Physical hardware will differ.</p>
+        <p class="measurement-note">Preview 3 measurements in 2-vCPU, 4-GiB x86 VMs installed from virtual USB. Idle memory is with agents and browser closed. Installation excludes downloading the image and answering prompts. Physical hardware will differ.</p>
         <details>
           <summary>What has actually been tested? <span aria-hidden="true">+</span></summary>
           <div class="details-content">
-            <p>The keyboard installer, BIOS and UEFI boot, offline installation, encrypted disks, clipboard, browser switching, update retry, and recovery that preserves projects. Preview 1 also passed both firmware paths with 1 GiB RAM.</p>
-            <p>In the native VM checks, unencrypted BIOS boot reached hn process readiness in 17.8 seconds, including automated login. Encrypted UEFI took about 11.7 seconds excluding a deliberate 100-second wait at the disk-password prompt. These are not physical power-on benchmarks.</p>
+            <p>The keyboard installer, BIOS and UEFI boot from optical media and USB, automatic RAM-image detection, offline installation, encrypted disks, clipboard, browser switching, update retry, and recovery that preserves projects. Preview 3 also passed at 2 GiB RAM; preview 1 passed both firmware paths at 1 GiB.</p>
+            <p>In the 4-GiB USB checks, installed BIOS boot reached hn process readiness in 18.1 seconds, including automated login. Encrypted UEFI took about 11.0 seconds excluding a deliberate 100-second wait at the disk-password prompt. Settled idle memory was 470–514 MiB. Separate <a href="https://github.com/autonomous-ai/openharness/blob/os/boot-to-hn/os/README.md#measured-preview-footprint">2-GiB VM checks measured 398–408 MiB</a>. These are not physical power-on benchmarks.</p>
             <p>In preview 1, free OpenCode agents built a Python CLI, a website, a keyboard game, and a Fastify/SQLite app. Their 103 unit tests and independent browser/API checks passed. Three domain-specific harnesses also exercised the shared HTML and game viewers.</p>
-            <p>Physical ThinkPad, Wi-Fi, suspend, and NVIDIA testing remains. Agent authentication and local model support depend on the tools and hardware you choose.</p>
+            <p>A user confirmed preview 2 installation and boot into hn from a ThinkPad’s internal disk. Further hardware issues are being investigated; Wi-Fi, suspend, and NVIDIA remain unverified. Agent authentication and local model support depend on the tools and hardware you choose.</p>
             <a class="text-link" href="https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.1/programmer-examples.zip">Download the projects and harness examples <span aria-hidden="true">↓</span></a>
           </div>
         </details>
@@ -104,14 +104,14 @@
 
       <section id="install" class="section install" aria-labelledby="install-title">
         <div class="section-intro">
-          <p class="eyebrow">0.1.0-preview.2</p>
+          <p class="eyebrow">0.1.0-preview.3</p>
           <h2 id="install-title">Give it a machine.<br>Make something.</h2>
           <p>An x86-64 Intel or AMD PC. Start with 2 GiB RAM and a spare disk of at least 12 GiB. Secure Boot off. A disposable x86 VM works too.</p>
           <a class="text-link" href="https://github.com/autonomous-ai/openharness/blob/os/boot-to-hn/os/INSTALL.md">USB installation guide <span aria-hidden="true">↗</span></a>
         </div>
         <div class="install-copy">
           <ol>
-            <li>Download the ISO and <a href="https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.2/programmer-os-0.1.0-preview.2-x86_64.iso.sha256">verify its checksum</a>.</li>
+            <li>Download the ISO and <a href="https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.3/programmer-os-0.1.0-preview.3-x86_64.iso.sha256">verify its checksum</a>.</li>
             <li>Write the whole image to a USB stick and boot it.</li>
             <li>Open a Terminal pane in hn and run:</li>
           </ol>
@@ -119,7 +119,7 @@
           <p class="install-notice"><strong>The installer erases the entire selected disk.</strong> It does not resize an existing OS. Back up that disk first. Encryption is on by default.</p>
           <p class="install-note">Choose your disk, leave encryption on, and enter your password twice. Continue shows the disk again; choose Erase and install to begin. Your account is <code>me@harness</code>.</p>
           <p class="install-note">Installation works offline. Downloading agents, signing in, and cloud model calls need a connection. Accounts and model usage are yours.</p>
-          <a class="button" href="https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.2/programmer-os-0.1.0-preview.2-x86_64.iso">Download the ISO <span aria-hidden="true">↓</span></a>
+          <a class="button" href="https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.3/programmer-os-0.1.0-preview.3-x86_64.iso">Download the ISO <span aria-hidden="true">↓</span></a>
         </div>
       </section>
     </main>

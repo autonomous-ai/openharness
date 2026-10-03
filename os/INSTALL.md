@@ -1,6 +1,6 @@
 # Install Programmer OS on a ThinkPad
 
-These instructions are for **0.1.0-preview.2**, using a Mac to prepare the USB.
+These instructions are for **0.1.0-preview.3**, using a Mac to prepare the USB.
 The USB boots a live system first. It changes the ThinkPad's disk only after you
 choose **Erase and install** in the installer.
 
@@ -14,24 +14,25 @@ choose **Erase and install** in the installer.
 
 Start with 2 GiB RAM or more. The earlier preview passed base VM checks at 1 GiB,
 but that did not establish comfortable browser or concurrent agent use at 1 GiB.
-Physical ThinkPad, Wi-Fi and suspend testing is still needed.
+A user has installed preview 2 on a ThinkPad and booted hn with the USB removed.
+Further hardware issues are being investigated; Wi-Fi and suspend remain unverified.
 
 ## 2. Download and verify on the Mac
 
-From the [preview 2 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.2),
+From the [preview 3 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.3),
 download both files into the same folder:
 
-- `programmer-os-0.1.0-preview.2-x86_64.iso`
-- `programmer-os-0.1.0-preview.2-x86_64.iso.sha256`
+- `programmer-os-0.1.0-preview.3-x86_64.iso`
+- `programmer-os-0.1.0-preview.3-x86_64.iso.sha256`
 
 If they are in Downloads, open Terminal and run:
 
 ```sh
 cd ~/Downloads
-shasum -a 256 -c programmer-os-0.1.0-preview.2-x86_64.iso.sha256
+shasum -a 256 -c programmer-os-0.1.0-preview.3-x86_64.iso.sha256
 ```
 
-The result must say `programmer-os-0.1.0-preview.2-x86_64.iso: OK`.
+The result must say `programmer-os-0.1.0-preview.3-x86_64.iso: OK`.
 If it does not, stop and download again.
 
 ## 3. Flash the USB
@@ -81,13 +82,14 @@ sudo hn-os install --source /run/archiso/copytoram/airootfs.sfs
 
 Use this path only when that file exists. In preview 2's RAM mode, the USB can
 also appear in the disk list: select the ThinkPad's internal disk by model and
-capacity. The pending preview 3 detects both locations and excludes the boot USB.
+capacity. Preview 3 detects both locations and excludes the boot USB. If preview 2
+is already installed and boots normally, this fix does not require reinstalling it.
 
 The live session does not need an account password. In the form:
 
 1. Press **Enter** on Disk, use the arrow keys to choose the ThinkPad's internal
    disk by model and capacity, then press **Enter**. Do not choose another attached
-   drive. The mounted live USB is excluded from installation targets.
+   drive. Preview 3 excludes the live USB from installation targets in both boot modes.
 2. Leave **Encrypt disk** checked, or use **Tab** and **Space** to uncheck it.
 3. Enter your password twice. Use at least eight characters. This preview uses a
    **US keyboard layout**, including at the boot unlock prompt.

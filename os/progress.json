@@ -6,7 +6,7 @@
   "merge_utc": null,
   "publication_utc": "2026-10-03T02:03:47Z",
   "completion_utc": null,
-  "status": "Preview 2 is published. User booted the physical ThinkPad into hn, then exposed a RAM-copy source-path bug before any disk erase. A --source workaround was supplied. Preview 3 source fix and real writable-USB regression checks are being validated.",
+  "status": "Preview 3 published and all eight public downloads verified. Exact-source optical and RAM-copy USB checks passed in BIOS/plain and UEFI/encrypted modes. User confirms preview 2 installation with workaround and internal-disk boot on ThinkPad; details of remaining physical issues pending.",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -257,7 +257,7 @@
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
     "Physical ThinkPad boot, installation, Wi-Fi, suspend and hardware verification; user will test manually"
   ],
-  "last_updated_utc": "2026-10-03T07:34:37.125072+00:00",
+  "last_updated_utc": "2026-10-03T07:37:46.727698+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -626,24 +626,25 @@
       ]
     }
   },
-  "published_version": "0.1.0-preview.2",
+  "published_version": "0.1.0-preview.3",
   "latest_publication": {
-    "version": "0.1.0-preview.2",
-    "source_commit": "a155a16850438e04315a1959b1bfd1c387d8bf99",
-    "release_url": "https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.2",
-    "published_at": "2026-10-03T07:04:33Z",
-    "verified_at": "2026-10-03T07:07:19.173864+00:00",
+    "version": "0.1.0-preview.3",
+    "source_commit": "bbf6442d9c62fc8a4e9ad9acf5668159f35c99f0",
+    "release_url": "https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.3",
+    "published_at": "2026-10-03T07:53:11Z",
+    "verified_at": "2026-10-03T07:53:47.799570+00:00",
     "verified_assets": [
       "boot-layout.txt",
       "inspection.json",
       "machine-evidence.zip",
       "manifest.json",
       "packages.txt",
-      "programmer-os-0.1.0-preview.2-x86_64.iso",
-      "programmer-os-0.1.0-preview.2-x86_64.iso.sha256",
+      "programmer-os-0.1.0-preview.3-x86_64.iso",
+      "programmer-os-0.1.0-preview.3-x86_64.iso.sha256",
       "validation.json"
     ],
-    "receipt": "os/work/release-preview2/publication.json"
+    "receipt": "os/work/release-preview3/publication-ci/publication.json",
+    "verification_run": "https://github.com/autonomous-ai/openharness/actions/runs/37107746318"
   },
   "physical_thinkpad": {
     "live_boot": {
@@ -653,13 +654,24 @@
       "model": "not yet provided",
       "scope": "USB reaches hn on a physical ThinkPad; installation, encrypted disk boot, network and suspend not yet verified"
     },
-    "installation": "User reported: Live system payload is missing. Diagnostic find located /run/archiso/copytoram/airootfs.sfs. Installer guard stopped before any disk write. Supplied sudo hn-os install --source /run/archiso/copytoram/airootfs.sfs; result pending."
+    "installation": "Passed by user report using the explicit RAM-image --source workaround; user confirms shutdown, USB removal and successful boot into hn from the internal disk. Encryption choice and hardware model remain unknown.",
+    "workaround_result": {
+      "recorded_utc": "2026-10-03T07:47:40.256187+00:00",
+      "evidence": "User: yeah it works i'm in hn now but there are a few issues",
+      "status": "workaround passed by user report; remaining issue details pending"
+    },
+    "installed_boot": {
+      "status": "passed by user report",
+      "recorded_utc": "2026-10-03T07:49:33.368095+00:00",
+      "evidence": "User answered Yes, booted with USB removed to the internal-disk boot question.",
+      "limitations": "Further issues reported; user will describe them later. No physical performance, Wi-Fi, suspend or NVIDIA measurements established."
+    }
   },
   "resumed_goal_audit": {
     "started_utc": "2026-10-03T07:19:35.550371+00:00",
     "previous_turn_classification": "progress: preview 2 published and every public asset verified; complete manual guide delivered; Etcher startup failure diagnosed and official workaround downloaded",
-    "status": "completion unproven; physical USB boot is now reported successful; graphics-failure fallback still needs a real runtime check",
-    "next_work": "Force compositor startup failure in a disposable native VM using the unchanged released ISO; verify hn owns tty1, keyboard input reaches a terminal pane, existing work survives, and normal graphics can be restored.",
+    "status": "Console fallback and RAM-copy installer fix validated and published. Physical installation/internal-disk boot passed by user report; remaining hardware issue details pending.",
+    "next_work": "Investigate the physical ThinkPad issues when described; retain unverified Wi-Fi, suspend, NVIDIA and local page/VM visual rows.",
     "validation_plan": [
       "Python and shell syntax for the test-only change",
       "Native BIOS/plain and UEFI/encrypted machine workflow reusing image run 37101103529; no new ISO/runtime build or duplicate application unit suite"
@@ -682,7 +694,7 @@
     "request_time_basis": "User reported the physical USB error in the active turn; exact message timestamp unavailable.",
     "implementation_ready_utc": "2026-10-03T07:34:37.125072+00:00",
     "source_version": "0.1.0-preview.3",
-    "published_version": "0.1.0-preview.2",
+    "published_version": "0.1.0-preview.3",
     "cause": "Archiso 73 automatically copies a USB root image into RAM when it has enough free memory, then removes bootmnt. The installer only knew the bootmnt path. Previous native tests used virtual optical discs, where automatic RAM copying is disabled.",
     "changes": [
       "Detect both copytoram and bootmnt before collecting passwords; explicit missing source fails without fallback.",
@@ -697,10 +709,10 @@
       "Publish immutable preview 3 only after all required gates pass and public assets verify"
     ],
     "local_installer_tests": "24 passed",
-    "native_validation_started_utc": null,
-    "native_validation_completed_utc": null,
+    "native_validation_started_utc": "2026-10-03T07:34:41Z",
+    "native_validation_completed_utc": "2026-10-03T07:49:43Z",
     "merge_utc": null,
-    "publication_utc": null,
+    "publication_utc": "2026-10-03T07:53:11Z",
     "local_validation": {
       "result": "39 portable tests and Python/JSON/XML/shell syntax passed; git diff --check passed",
       "recorded_utc": "2026-10-03T07:34:37.125072+00:00",
@@ -712,6 +724,150 @@
         "os/lock.json": "55dbc169ebc74eadd4a99c83839b3c9f92c84238a46aa7fd8f689c8365c89399"
       },
       "coverage": "Installer/unit source unchanged since the passed run; final QEMU removable-device flag is verified against local device help and requires the native USB run. Workflow actionlint runs in the build job."
+    },
+    "source_commit": "bbf6442d9c62fc8a4e9ad9acf5668159f35c99f0",
+    "native_run_id": 37106807986,
+    "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37106807986",
+    "usb_run_id": 37107310576,
+    "usb_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37107310576",
+    "usb_validation_started_utc": "2026-10-03T07:43:51Z",
+    "next_step": "Published installer fix complete. Await reported ThinkPad issue details and continue physical hardware acceptance; local page visual/keyboard verification remains unavailable.",
+    "publication_trigger_utc": "2026-10-03T07:51:39Z",
+    "publication_verified_utc": "2026-10-03T07:53:47.799570+00:00",
+    "publication_run_id": 37107746318,
+    "publication_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37107746318",
+    "publication_receipt": "os/work/release-preview3/publication-ci/publication.json",
+    "native_validation_result": "All required exact-source checks passed: 39 portable tests, pinned actionlint, CLI typecheck/affected tests, 335 hn unit tests (one benchmark ignored), ten native terminal fixtures, ISO inspection, optical BIOS/plain and UEFI/encrypted machine tests, and writable USB RAM-copy BIOS/plain and UEFI/encrypted tests.",
+    "machine_checks": {
+      "optical_2gib": {
+        "bios_plain": 20,
+        "uefi_encrypted": 19
+      },
+      "usb_4gib": {
+        "bios_plain": 22,
+        "uefi_encrypted": 21
+      }
+    },
+    "measurements": [
+      {
+        "mode": "cdrom",
+        "firmware": "bios",
+        "memory_mib": 2048,
+        "install_seconds": 33.764,
+        "boot_seconds": 17.509,
+        "unlock_wait_seconds": 0,
+        "idle_mib": [
+          398.02,
+          397.88,
+          397.77
+        ],
+        "idle_cpu_percent": [
+          0.75,
+          0.25,
+          0.0
+        ],
+        "root_gib": [
+          1.9095,
+          1.9103,
+          1.9103
+        ]
+      },
+      {
+        "mode": "cdrom",
+        "firmware": "uefi",
+        "memory_mib": 2048,
+        "install_seconds": 47.013,
+        "boot_seconds": 111.998,
+        "unlock_wait_seconds": 100,
+        "idle_mib": [
+          403.73,
+          403.73,
+          407.73
+        ],
+        "idle_cpu_percent": [
+          1.5,
+          0.25,
+          0.25
+        ],
+        "root_gib": [
+          1.9395,
+          1.9395,
+          1.9395
+        ]
+      },
+      {
+        "mode": "usb",
+        "firmware": "bios",
+        "memory_mib": 4096,
+        "install_seconds": 34.698,
+        "boot_seconds": 18.067,
+        "unlock_wait_seconds": 0,
+        "idle_mib": [
+          471.6,
+          471.71,
+          469.92
+        ],
+        "idle_cpu_percent": [
+          0.5,
+          0.5,
+          0.0
+        ],
+        "root_gib": [
+          1.9664,
+          1.9672,
+          1.9672
+        ]
+      },
+      {
+        "mode": "usb",
+        "firmware": "uefi",
+        "memory_mib": 4096,
+        "install_seconds": 42.136,
+        "boot_seconds": 111.029,
+        "unlock_wait_seconds": 100,
+        "idle_mib": [
+          510.91,
+          510.62,
+          513.75
+        ],
+        "idle_cpu_percent": [
+          0.75,
+          0.25,
+          0.25
+        ],
+        "root_gib": [
+          1.9338,
+          1.9338,
+          1.9338
+        ]
+      }
+    ],
+    "visual_review": "Reviewed actual BIOS installed hn home and local development browser screenshots. UEFI installed/recovered captures show early startup states; live-session operation, installed readiness and recovery are covered by the passing machine checks. No completed UEFI home screenshot is claimed.",
+    "elapsed_seconds": {
+      "request_to_completion": null,
+      "first_recorded_fix_to_public_verification": 1305.523,
+      "implementation_recorded_interval": 154.848,
+      "native_validation": 902.0,
+      "artifact_review_and_publication_preparation": 116.0,
+      "publication_and_full_public_download_verification": 128.8,
+      "merge": null
+    },
+    "waiting": [
+      {
+        "started_utc": "2026-10-03T07:34:41Z",
+        "ended_utc": "2026-10-03T07:49:43Z",
+        "reason": "Fresh image and two parallel native VM environments; user workaround support and documentation continued."
+      },
+      {
+        "started_utc": "2026-10-03T07:43:51Z",
+        "reason": "Optional local ISO mirror was slow and was cancelled after roughly ten minutes. Publication proceeded in CI, which verified every public asset; no duplicate full local download is required. Exact cancellation timestamp was not recorded.",
+        "recorded_utc": "2026-10-03T08:00:05.732467+00:00",
+        "ended_utc": null
+      }
+    ],
+    "documentation_validation": {
+      "recorded_utc": "2026-10-03T08:03:04.680531+00:00",
+      "result": "Passed local HTML/CSS assets and fonts, fragment targets, PNG dimensions, public asset names, Markdown file links/fences, JSON and git diff --check. Current BIOS screenshot inspected. Full local page visual/keyboard validation remains unverified."
     }
   }
 }
