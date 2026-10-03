@@ -30,6 +30,7 @@ class VM:
         self.live_transport = live_transport
         self.cpu = cpu
         self.unlock_count = 0
+        self.boot_count = 0
         self.process = None
         self.serial = None
         self.qmp = None
@@ -56,6 +57,8 @@ class VM:
         for name in ['serial.sock', 'qmp.sock']:
             (self.control_path / name).unlink(missing_ok=True)
         self.started = time.monotonic()
+        self.boot_count += 1
+        self.boot_event('start', live=live)
         acceleration = 'kvm' if os.access('/dev/kvm', os.R_OK | os.W_OK) else 'tcg'
         args = ['qemu-system-x86_64', '-accel', acceleration, '-m', str(self.memory), '-smp', '2',
                 '-cpu', self.cpu or ('host' if acceleration == 'kvm' else 'max'), '-device', 'virtio-vga',
@@ -133,6 +136,22 @@ class VM:
     def send(self, text):
         self.serial.sendall(text.encode())
 
+    def boot_event(self, stage, **details):
+        event = dict(boot=self.boot_count, stage=stage,
+                     seconds=round(time.monotonic() - self.started, 3), **details)
+        with (self.folder / 'boot-events.jsonl').open('a') as log:
+            log.write(json.dumps(event) + '\n')
+
+    def boot_diagnostics(self, config, name):
+        # Keep the initrd journal as well as userspace timings. A single overall
+        # boot duration cannot distinguish waiting for a person from an OS stall.
+        output, _ = self.command('printf %s ' + shlex.quote(config['password'] + '\n') +
+                                 ' | sudo -S journalctl -b -o short-monotonic --no-pager', timeout=60)
+        (self.folder / (name + '-boot-journal.log')).write_text(output)
+        output, _ = self.command('systemd-analyze; systemd-analyze blame; '
+                                 'systemd-analyze critical-chain; systemctl --failed --no-pager')
+        (self.folder / (name + '-boot-analysis.txt')).write_text(output)
+
     def command(self, command, timeout=90, check=True):
         marker = 'HN_RESULT_' + uuid.uuid4().hex
         # A probe may use `exit` or `exec`. Keep it inside a subshell so the
@@ -149,6 +168,7 @@ class VM:
         if config['encrypt']:
             self.unlock_count += 1
             self.wait_unlock()
+            self.boot_event('unlock-prompt')
             if unlock_delay:
                 time.sleep(unlock_delay)
                 self.screenshot('delayed-disk-unlock')
@@ -158,12 +178,15 @@ class VM:
                 self.keys('ret')
                 time.sleep(8)
                 self.wait_unlock()
+                self.boot_event('unlock-retry-prompt')
                 self.screenshot('disk-unlock-retry')
             self.type_probe(config['password'][:3])
             self.screenshot(f'disk-unlock-{self.unlock_count}-masked')
             self.type_probe(config['password'][3:])
             self.keys('ret')
+            self.boot_event('password-submitted')
         self.wait(r'login:', timeout=180)
+        self.boot_event('serial-login-prompt')
         self.send(config['username'] + '\n')
         self.wait(r'Password:')
         self.send(config['password'] + '\n')
@@ -178,6 +201,7 @@ class VM:
                 time.sleep(2)
         self.command('for n in $(seq 1 90); do systemctl --user is-active --quiet hn-screen && pgrep -x "hn|harness-tui" >/dev/null && exit 0; sleep 1; done; exit 1', timeout=110)
         self.command('/usr/lib/harness-os/wait-runtime', timeout=160)
+        self.boot_event('harness-ready')
 
     def wait_unlock(self):
         # OCR reads the actual framebuffer; a process or serial prompt alone
@@ -462,7 +486,8 @@ installer.main()
         # Password entry focuses Install. Only its explicit activation starts it.
         time.sleep(.25)
         vm.send('\n')
-        wait(r'Harness is installed', timeout=900)
+        output = wait(r'Harness is installed|\r?\n' + marker + r':\d+\r?\n', timeout=900)
+        assert 'Harness is installed' in output, 'Interactive installation failed; see installer-ui.log'
         vm.send('\x1b')  # Completion remains visible; return to the live system for the receipt.
         output = wait(r'\r?\n' + marker + r':\d+\r?\n', timeout=900)
         status = int(re.search(r'\r?\n' + marker + r':(\d+)\r?\n', output).group(1))
@@ -634,6 +659,7 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         # measurements, including CPU, rather than selecting the smallest one.
         output, _ = vm.command('sleep 45; for n in 1 2 3; do hn-os measure; done', timeout=65)
         (folder / 'installed-idle-measurements.txt').write_text(output)
+        vm.boot_diagnostics(config, 'installed')
         # A disposable failure exercises actual root + boot restoration, including
         # an encrypted root in the UEFI row. The project's separate subvolume survives.
         vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
@@ -679,6 +705,7 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
         vm.stop()
         vm.start(live=False)
         vm.login_installed(config)
+        vm.boot_diagnostics(config, 'recovered')
         vm.command('test ! -e /etc/hn-os-recovery-probe && test -x /usr/lib/harness/harness-tui && test "$(cat ~/Projects/recovery-probe.txt)" = keep-my-project')
         vm.command('test ! -e /var/lib/pacman/db.lck && ! pacman -Q hn-os-recovery-probe')
         result['recovered_keyboard_readiness'] = check_graphical_keyboard(vm, 'recovered')

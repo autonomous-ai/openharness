@@ -6,7 +6,7 @@
   "merge_utc": null,
   "publication_utc": "2026-10-03T02:03:47Z",
   "completion_utc": null,
-  "status": "Preview 3 remains public. Preview 4 first-use changes and Naming System are committed or ready; VM-discovered terminal lifecycle regression is fixed in source and awaits the next exact-source build.",
+  "status": "Preview 3 remains public. Preview 4 first-use behavior and Naming System are implemented; validation found an encrypted boot delay and low-memory installation failure.",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -257,7 +257,7 @@
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
     "Physical ThinkPad boot, installation, Wi-Fi, suspend and hardware verification; user will test manually"
   ],
-  "last_updated_utc": "2026-10-03T10:48:06.598341+00:00",
+  "last_updated_utc": "2026-10-03T11:08:42.507975+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -922,7 +922,7 @@
   "usb_first_use_revision": {
     "request_received_utc": null,
     "first_recorded_utc": "2026-10-03T08:28:25.074631+00:00",
-    "status": "Exact image and full CLI CI passed; actual first keyboard chat passed at 1 GiB. Corrected full installation, recovery, workload and DSH journeys are running.",
+    "status": "Full CLI and image passed. Full DSH journey passed; investigating encrypted initrd delay and 1 GiB extractor OOM before publication.",
     "implementation_complete_utc": "2026-10-03T09:23:12.711637+00:00",
     "validation_complete_utc": null,
     "publication_utc": null,
@@ -1094,8 +1094,8 @@
         "publication_utc": null
       }
     },
-    "next_step": "Follow the three exact-image runs, inspect any failure and unlock/retry/completion screenshots. Preserve full CLI/native evidence because subsequent changes are test-only. Update public guide and publish preview 4 only after required complete receipts and examples pass.",
-    "last_recorded_utc": "2026-10-03T10:48:06.598341+00:00",
+    "next_step": "Run targeted boot diagnostics against the unchanged verified image; cap extraction memory and correct the independent game selector before the next image.",
+    "last_recorded_utc": "2026-10-03T11:08:42.507975+00:00",
     "first_use_visual_review": "Inspected BIOS 01d-bundled-opencode.png and failure.png from run 37116595898: upstream-default Fledge Alpha Free is shown without a plugin warning; after Ctrl+C twice, the clean Harness Install/Try welcome is visible. Both firmware JSONL replies are 42. The retained process in each is /usr/bin/opencode serve --service.",
     "revision_ready_utc": "2026-10-03T10:29:26.198461+00:00",
     "development_acceptance_revision": {
@@ -1171,7 +1171,8 @@
         "image_run_id": 37116595898,
         "image_source_commit": "67958156da30d2983daee22ddab48c43970fa244",
         "test_source_commit": "5001600ca051e07152be9000b2470512ebddb5c4",
-        "status": "in progress"
+        "status": "failed",
+        "result": "UEFI complete journey passed. All four agents completed and project unit tests passed; independent game browser check wrongly assumes a .legend class absent from the task contract. Website and fullstack browser/API checks passed."
       },
       {
         "scope": "three DSH exercises plus complete BIOS/UEFI USB journey",
@@ -1182,7 +1183,8 @@
         "image_run_id": 37116595898,
         "image_source_commit": "67958156da30d2983daee22ddab48c43970fa244",
         "test_source_commit": "5001600ca051e07152be9000b2470512ebddb5c4",
-        "status": "in progress"
+        "status": "passed",
+        "result": "Both complete USB installation/recovery journeys passed, plus three real default-model DSH exercises and shared viewer checks."
       },
       {
         "scope": "constrained complete BIOS/UEFI USB journey and bundled default-model chat",
@@ -1193,9 +1195,18 @@
         "image_run_id": 37116595898,
         "image_source_commit": "67958156da30d2983daee22ddab48c43970fa244",
         "test_source_commit": "5001600ca051e07152be9000b2470512ebddb5c4",
-        "status": "in progress"
+        "status": "failed",
+        "result": "Both 1 GiB installations exhausted memory during unsquashfs extraction; kernel killed the extractor (about 384\u2013441 MiB resident plus swap). First live model conversations passed."
       }
-    ]
+    ],
+    "boot_performance_investigation": {
+      "image_run_id": 37116595898,
+      "evidence_run_id": 37117493096,
+      "uefi_initrd_seconds_including_100s_wait": 210.533,
+      "recovered_keyboard_ready_seconds": 116.847,
+      "status": "unresolved",
+      "next_step": "Record unlock prompt/password/serial login/Harness readiness timestamps and installed/recovered initrd journals. Do not attribute the delay to Plymouth until logs establish the cause."
+    }
   },
   "previous_goal_turn_classification": {
     "classification": "progress",
