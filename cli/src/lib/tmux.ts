@@ -310,23 +310,44 @@ function execText(command: string, args: string[], timeout: number): Promise<str
   })
 }
 
-/** macOS has no /proc; one lsof call resolves every collision candidate's executable image. */
-async function darwinProcessImages(pids: readonly number[]): Promise<Map<number, string>> {
-  if (!pids.length) return new Map()
-  const stdout = await execText('lsof', ['-a', '-p', pids.join(','), '-d', 'txt', '-Fn'], 3000)
+function parseDarwinProcessImages(stdout: string | null): Map<number, string> {
   const images = new Map<number, string>()
   if (stdout === null) return images
+  const seen = new Set<number>()
   let pid: number | null = null
   let textFile = false
-  for (const line of stdout.split('\n')) {
+  // A killed/buffer-limited helper may end halfway through a path.
+  for (const line of stdout.slice(0, stdout.lastIndexOf('\n') + 1).split('\n')) {
     if (/^p\d+$/.test(line)) {
       pid = Number(line.slice(1))
       textFile = false
     } else if (line === 'ftxt') {
       textFile = true
-    } else if (textFile && pid && line.startsWith('n') && !images.has(pid)) {
-      images.set(pid, line.slice(1))
+    } else if (textFile && pid && line.startsWith('n')) {
+      // The first text region is the executable. An error record must not let
+      // a later dylib masquerade as it; incomplete probes use the fallback.
+      if (!seen.has(pid) && line.startsWith('n/')) images.set(pid, line.slice(1))
+      seen.add(pid)
       textFile = false
+    }
+  }
+  return images
+}
+
+/** macOS has no /proc. Its libproc-backed lsof supplies text-region paths from
+ * the kernel; -b avoids filesystem stat/readlink helpers unnecessary for those
+ * names. Keep the normal probe for missing paths, inside the same 3s budget.
+ * Never cache by PID: exec can replace an image without changing its birth. */
+async function darwinProcessImages(pids: readonly number[]): Promise<Map<number, string>> {
+  if (!pids.length) return new Map()
+  const deadline = performance.now() + 3000
+  const args = (selected: readonly number[]) => ['-a', '-p', selected.join(','), '-d', 'txt', '-Fn']
+  const images = parseDarwinProcessImages(await execText('lsof', ['-b', ...args(pids)], 1000))
+  const missing = pids.filter(pid => !images.has(pid))
+  const remaining = Math.floor(deadline - performance.now())
+  if (missing.length && remaining > 0) {
+    for (const [pid, path] of parseDarwinProcessImages(await execText('lsof', args(missing), remaining))) {
+      images.set(pid, path)
     }
   }
   return images

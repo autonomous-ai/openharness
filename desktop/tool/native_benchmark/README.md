@@ -53,6 +53,9 @@ workers redraw eight rows at 20 Hz. Output must reach every retained terminal,
 connections must remain controlling, and actual output counts and skipped ticks
 are retained. A focus, visibility or geometry change during a phase rejects it.
 This controls terminal traffic, not model behavior, inference or cloud latency.
+Use `--background-only` for the two hidden-app phases when foreground focus
+cannot be held. Compare it only with the same mode: it starts idle directly,
+without the foreground phases' preceding allocation and output history.
 
 `process_forest_usage.swift` samples the app, daemon and tmux process trees at
 1 Hz. CPU and wakeup accounting includes kernel-recorded exited children, so

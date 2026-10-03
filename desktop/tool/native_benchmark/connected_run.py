@@ -114,9 +114,12 @@ def run(args):
         print(json.dumps({'ready': True, 'root': str(root), 'appPid': native.pid,
                           'daemonPid': manifest['daemonPid'], 'terminals': args.terminals}), flush=True)
         roots = ','.join(str(value) for value in [native.pid, manifest['daemonPid'], manifest['tmuxPid']])
-        for visibility, mode in [('foreground', 'idle-visible'), ('foreground', 'idle-hidden'),
-                                 ('foreground', 'active'), ('background', 'idle-hidden'),
-                                 ('background', 'active')]:
+        phases = [('background', 'idle-hidden'), ('background', 'active')]
+        if not args.background_only:
+            phases = [('foreground', 'idle-visible'), ('foreground', 'idle-hidden'),
+                      ('foreground', 'active')] + phases
+        result['backgroundOnly'] = args.background_only
+        for visibility, mode in phases:
             label = f'{visibility}-{mode}'
             rpc(control, {'operation': 'show' if visibility == 'foreground' else 'hide'})
             for index in range(args.terminals):
@@ -209,6 +212,8 @@ if __name__ == '__main__':
         parser.add_argument('--' + name, required=True, type=Path)
     parser.add_argument('--bundle', type=Path)
     parser.add_argument('--label', required=True)
+    parser.add_argument('--background-only', action='store_true',
+                        help='Measure hidden-app idle/output without foreground phases')
     parser.add_argument('--terminals', type=int, choices=range(1, 49), default=10)
     parser.add_argument('--seconds', type=int, choices=range(5, 181), default=30)
     parser.add_argument('--settle', type=int, choices=range(1, 31), default=5)
