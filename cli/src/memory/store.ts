@@ -858,7 +858,7 @@ export class CodingMemoryStore {
   notebookFinish(lease: NotebookLease, proposal: NotebookProposal, target: InferenceTarget): ReturnType<MemoryNotebook['finish']> {
     return this.notebook.finish(lease, proposal, target)
   }
-  notebookDefer(lease: NotebookLease, reason: Parameters<MemoryNotebook['defer']>[1]): void { this.notebook.defer(lease, reason) }
+  notebookDefer(...args: Parameters<MemoryNotebook['defer']>): void { this.notebook.defer(...args) }
 
   /** Owner-only index. Apply source and project visibility before pagination, including labels. */
   libraryNotebooks(owner: string, input: NotebookQuery = {}): NotebookIndex {

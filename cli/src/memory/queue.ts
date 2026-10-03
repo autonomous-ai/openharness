@@ -316,9 +316,10 @@ export class MemoryQueue {
     })
   }
 
-  defer(lease: LearningLease, reason: 'queued' | 'waiting_for_model' | 'budget_deferred' | 'failed' | 'source_incomplete'): void {
+  defer(lease: LearningLease, reason: 'queued' | 'waiting_for_model' | 'budget_deferred' | 'failed' | 'source_incomplete', waitReason?: InferenceWaitReason): void {
     this.deps.transaction(() => {
-      this.releaseLease(lease, reason, reason, this.deps.now() + (reason === 'queued' ? 0 : reason === 'budget_deferred' ? HOUR : 60_000))
+      const detail = reason === 'waiting_for_model' ? inferenceWaitReason(waitReason) ?? reason : reason
+      this.releaseLease(lease, reason, detail, this.deps.now() + (reason === 'queued' ? 0 : reason === 'budget_deferred' ? HOUR : 60_000))
     })
   }
 

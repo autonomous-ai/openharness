@@ -47,6 +47,64 @@ function page(lease: NotebookLease) {
   return { statements: [{ text: record.claim, supports: [{ memoryId: record.id, revision: record.revision, paths: ['/claim'] }] }] }
 }
 
+function editDatabase(edit: (db: MemoryDatabase) => void): void {
+  const Database = builtinSqlite()!
+  const db = new Database(join(directory, 'memory.sqlite'), { readOnly: false }) as unknown as MemoryDatabase
+  try { edit(db) } finally { db.close() }
+}
+
+it.each(['off', 'project', 'session', 'forgotten', 'expired'] as const)(
+  'withdraws deferred notebook notices when work becomes %s', change => {
+    const record = remember({ validity: { ...draft.validity, validUntil: now + 5_000 } })
+    const lease = claim()
+    store.notebookDefer(lease, 'waiting_for_model', 'companion_account_unavailable')
+    expect(store.notebookPending()).toEqual({ state: 'waiting_for_model', prefer: false, reason: 'companion_account_unavailable' })
+    if (change === 'off') store.setControls({ learn: false, recall: true })
+    if (change === 'project') store.setProjectIncluded('project', false)
+    if (change === 'session') store.setSessionIncluded(source.engine, source.sessionId, false)
+    if (change === 'forgotten') store.forget(record.id, record.revision, access)
+    if (change === 'expired') now += 5_001
+    expect(store.notebookPending().state).toBe(change === 'off' ? 'learning_off' : 'idle')
+    expect(store.learning.status().callsLastHour).toBe(1)
+  },
+)
+
+it('adds wait metadata to an older store without changing its memories, controls or retry delay', () => {
+  const record = remember(), controls = store.controls()
+  const lease = claim()
+  store.notebookDefer(lease, 'waiting_for_model', 'companion_stopped')
+  store.close()
+  editDatabase(db => { db.exec('DROP TABLE memory_notebook_waits') })
+  const reopened = CodingMemoryStore.open({ directory, profileId: 'owner', now: () => now })
+  if (!reopened.ok) throw new Error(reopened.reason)
+  store = reopened.store
+  expect(store.notebookPending()).toEqual({ state: 'waiting_for_model', prefer: false })
+  expect(store.list(access)).toEqual([record])
+  expect(store.controls()).toEqual(controls)
+  now += 60_001
+  expect(store.notebookPending()).toEqual({ state: 'ready', prefer: false })
+})
+
+it.each(['version', 'updated_at'] as const)('discards an old reason after an older writer changes job %s', field => {
+  remember()
+  const lease = claim()
+  store.notebookDefer(lease, 'waiting_for_model', 'companion_stopped')
+  editDatabase(db => { db.prepare(`UPDATE memory_notebook_jobs SET ${field}=${field}+1 WHERE id=?`).run(lease.id) })
+  expect(store.notebookPending()).toEqual({ state: 'waiting_for_model', prefer: false })
+})
+
+it('clears a previous wait reason before a new claim and never stores unknown provider text', () => {
+  remember()
+  const first = claim()
+  store.notebookDefer(first, 'waiting_for_model', 'companion_stopped')
+  now += 60_001
+  const resumed = claim()
+  editDatabase(db => { expect(db.prepare('SELECT * FROM memory_notebook_waits').all()).toEqual([]) })
+  store.notebookDefer(resumed, 'waiting_for_model', 'secret-provider-response' as 'companion_stopped')
+  expect(store.notebookPending()).toEqual({ state: 'waiting_for_model', prefer: false })
+  expect(readFileSync(join(directory, 'memory.sqlite')).includes(Buffer.from('secret-provider-response'))).toBe(false)
+})
+
 it('builds a project explanation with exact source revisions and inherited conditions, without extra truth support', () => {
   const record = remember(), support = store.support(record.id, access)
   const lease = claim()

@@ -130,7 +130,8 @@ export class MemoryLearner {
       if (!buildNotebook && pending !== 'ready') {
         const waiting = await this.memory.request('waitingForModel', [])
         assertActive(controller.signal)
-        return waiting ?? { state: notebook.state === 'idle' ? pending : notebook.state }
+        return waiting ?? { state: notebook.state === 'idle' ? pending : notebook.state,
+          ...(notebook.state === 'waiting_for_model' && notebook.reason ? { reason: notebook.reason } : {}) }
       }
       target ??= await this.inference.target()
       if (controller.signal.aborted) return { state: controller.signal.reason === 'foreground_activity' ? 'waiting_for_quiet' : 'cancelled' }
@@ -139,11 +140,10 @@ export class MemoryLearner {
         return { state: 'waiting_for_model', reason: target.reason }
       }
       const timeoutMs = Math.max(1, Math.min(this.timeoutMs, 90_000))
-      const waitReason = inferenceWaitReason(target.reason)
       if (buildNotebook) {
         const claim = await this.memory.request('notebookClaim', [target])
         if (claim.state !== 'claimed') return { state: claim.state,
-          ...(claim.state === 'waiting_for_model' && waitReason ? { reason: waitReason } : {}) }
+          ...(claim.reason ? { reason: claim.reason } : {}) }
         notebookLease = claim.lease
         assertActive(controller.signal)
         const answer = await infer(this.inference, notebookPrompt(notebookLease), controller, timeoutMs, target.key!)
@@ -191,11 +191,12 @@ export class MemoryLearner {
       const code = failure === 'inference_cancelled' && controller.signal.reason === 'foreground_activity'
         ? 'inference_interrupted' : failure
       if (code === 'inference_provider_restricted') this.providerRestricted = true
+      const waitReason = inferenceWaitReason(code)
       const state = code === 'inference_interrupted' ? 'queued' : code === 'inference_usage_limit' ? 'budget_deferred'
-        : ['inference_cancelled', 'inference_context_changed', 'inference_unavailable', 'inference_provider_restricted', 'codex_version_uncertified', 'claude_version_uncertified'].includes(code) ? 'waiting_for_model'
+        : waitReason || ['inference_cancelled', 'inference_unavailable'].includes(code) ? 'waiting_for_model'
           : code === 'episode_context_too_large' ? 'source_incomplete' : 'failed'
-      if (lease) await this.memory.request('defer', [lease, state]).catch(() => {})
-      if (notebookLease) await this.memory.request('notebookDefer', [notebookLease, state === 'source_incomplete' ? 'failed' : state]).catch(() => {})
+      if (lease) await this.memory.request('defer', [lease, state, waitReason]).catch(() => {})
+      if (notebookLease) await this.memory.request('notebookDefer', [notebookLease, state === 'source_incomplete' ? 'failed' : state, waitReason]).catch(() => {})
       return { state: state === 'queued' ? 'waiting_for_quiet' : state, reason: code }
     }
   }

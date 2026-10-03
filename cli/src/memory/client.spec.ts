@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { afterEach, beforeAll, beforeEach, expect, it } from 'vitest'
 import { MemoryClient } from './client.js'
-import type { MemoryAccess, SourceEvent } from './types.js'
+import type { MemoryAccess, MemoryDraft, SourceEvent } from './types.js'
 
 let directory: string
 let source: string
@@ -23,6 +23,35 @@ function client(workerSource = source): MemoryClient {
   clients.push(instance)
   return instance
 }
+
+it('keeps a notebook wait reason through the worker boundary and restart, then withdraws it for private work', async () => {
+  const first = client()
+  await first.request('registerProject', ['project'])
+  await first.request('setControls', [{ learn: true, recall: true }])
+  const event: SourceEvent = { id: 'source', profileId: 'owner', projectId: 'project', engine: 'codex', sessionId: 'session',
+    nativeEventId: 'source', role: 'user', eligibility: 'coding', observedAt: Date.now(), rootIds: ['source'],
+    text: 'For debugging, start with a small failing test.' }
+  const draft: MemoryDraft = { kind: 'working_preference', facet: 'debugging', assertionType: 'stated_preference',
+    scope: { profileId: 'owner', projectId: 'project' }, claim: event.text, rationale: null, futureAction: event.text,
+    applicability: { taskType: 'debugging' }, exceptions: [], retrievalCues: ['debugging', 'test'], evidenceClass: 'user_stated',
+    evidence: [{ sourceEventId: event.id, quote: event.text, paths: ['/claim', '/futureAction', '/applicability', '/validity'] }],
+    conflictKey: 'debugging_order', validity: { validFrom: null, validUntil: null, recheckWhen: [] } }
+  await first.request('ingest', [event])
+  const { record } = await first.request('propose', [draft, access])
+  await first.request('notebookPending', [])
+  const claimed = await first.request('notebookClaim', [{ state: 'ready', key: 'selected-connection' }])
+  if (claimed.state !== 'claimed') throw new Error(claimed.state)
+  await first.request('notebookDefer', [claimed.lease, 'waiting_for_model', 'companion_account_unavailable'])
+  await first.close()
+  const restarted = client()
+  expect(await restarted.request('notebookPending', [])).toEqual({
+    state: 'waiting_for_model', prefer: false, reason: 'companion_account_unavailable',
+  })
+  expect(await restarted.request('read', [record.id, access])).toEqual(record)
+  expect((await restarted.request('status', [])).callsLastHour).toBe(1)
+  await restarted.request('setSessionIncluded', ['codex', 'session', false])
+  expect(await restarted.request('notebookPending', [])).toEqual({ state: 'idle', prefer: false })
+})
 
 it('captures, learns, recalls, and forgets through the bundled worker across restart', async () => {
   const first = client()

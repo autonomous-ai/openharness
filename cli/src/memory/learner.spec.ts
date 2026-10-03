@@ -329,6 +329,59 @@ async function seedNotebook(): Promise<void> {
   expect((await new MemoryLearner(memory, inference()).tick()).state).toBe('learned')
 }
 
+it('keeps notebook model waits through backoff and restart without probing or changing memories', async () => {
+  await seedNotebook()
+  const records = store.list(access)
+  const provider = inference('{"statements":[]}')
+  provider.target = vi.fn(async () => ({ state: 'waiting' as const, reason: 'companion_stopped' as const }))
+  const waiting = { state: 'waiting_for_model', reason: 'companion_stopped' }
+  const learner = new MemoryLearner(memory, provider)
+  expect(await learner.tick()).toEqual(waiting)
+  expect(await learner.tick()).toEqual(waiting)
+  expect(provider.target).toHaveBeenCalledOnce()
+  expect(provider.run).not.toHaveBeenCalled()
+
+  store.close()
+  const reopened = CodingMemoryStore.open({ directory, profileId: 'owner', now: () => now })
+  if (!reopened.ok) throw new Error(reopened.reason)
+  store = reopened.store
+  const restarted = new MemoryLearner(memory, provider)
+  expect(await restarted.tick()).toEqual(waiting)
+  expect(provider.target).toHaveBeenCalledOnce()
+  expect(store.learning.status().callsLastHour).toBe(1)
+  expect(store.list(access)).toEqual(records)
+  now += 60_001
+  provider.target = vi.fn(async () => ({ state: 'ready' as const, key: 'resumed-companion' }))
+  expect(await restarted.tick()).toEqual({ state: 'notebook_empty' })
+  expect(await restarted.tick()).toEqual({ state: 'idle' })
+  expect(provider.run).toHaveBeenCalledOnce()
+  expect(store.learning.status().callsLastHour).toBe(2)
+})
+
+it.each([false, true])('persists lease-time model and framework waits (notebook: %s)', async notebook => {
+  if (notebook) await seedNotebook()
+  const provider = inference()
+  provider.run = vi.fn(async () => { throw new MemoryError('opencode_version_uncertified') })
+  const waiting = { state: 'waiting_for_model', reason: 'opencode_version_uncertified' }
+  expect(await new MemoryLearner(memory, provider).tick()).toEqual(waiting)
+  vi.mocked(provider.target).mockClear()
+  expect(await new MemoryLearner(memory, provider).tick()).toEqual(waiting)
+  expect(provider.target).not.toHaveBeenCalled()
+  expect(provider.run).toHaveBeenCalledOnce()
+})
+
+it('retains a refused notebook reason in a new learner without a provider probe', async () => {
+  await seedNotebook()
+  const provider = inference()
+  provider.run = vi.fn(async () => { throw new MemoryError('inference_provider_restricted') })
+  const waiting = { state: 'waiting_for_model', reason: 'inference_provider_restricted' }
+  expect(await new MemoryLearner(memory, provider).tick()).toEqual(waiting)
+  vi.mocked(provider.target).mockClear()
+  expect(await new MemoryLearner(memory, provider).tick()).toEqual(waiting)
+  expect(provider.target).not.toHaveBeenCalled()
+  expect(provider.run).toHaveBeenCalledOnce()
+})
+
 it('cancels notebook work promptly and does not publish a late answer after foreground activity', async () => {
   await seedNotebook()
   const { provider, entered, resolve } = pendingInference()
@@ -363,8 +416,18 @@ it('keeps notebook quota failures pending and does not probe the selected accoun
   provider.run = vi.fn(async () => { throw new MemoryError('inference_usage_limit') })
   const learner = new MemoryLearner(memory, provider)
   expect(await learner.tick()).toEqual({ state: 'budget_deferred', reason: 'inference_usage_limit' })
-  expect(await learner.tick()).toEqual({ state: 'idle' })
+  expect(await learner.tick()).toEqual({ state: 'budget_deferred' })
+  store.close()
+  const reopened = CodingMemoryStore.open({ directory, profileId: 'owner', now: () => now })
+  if (!reopened.ok) throw new Error(reopened.reason)
+  store = reopened.store
+  const restarted = new MemoryLearner(memory, provider)
+  expect(await restarted.tick()).toEqual({ state: 'budget_deferred' })
   expect(provider.target).toHaveBeenCalledOnce()
+  expect(provider.run).toHaveBeenCalledOnce()
+  now += 3_600_001
+  provider.run = vi.fn(async () => '{"statements":[]}')
+  expect(await restarted.tick()).toEqual({ state: 'notebook_empty' })
   expect(provider.run).toHaveBeenCalledOnce()
 })
 
