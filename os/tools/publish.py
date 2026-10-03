@@ -43,6 +43,26 @@ def validate_install_guide(manifest, guide):
         raise ValueError('The installation guide must match the release version and ISO filename.')
 
 
+def validate_hardware(manifest, receipt):
+    if (receipt.get('status') != 'passed' or receipt.get('iso_sha256') != manifest['iso']['sha256'] or
+            receipt.get('image_source_commit') != manifest['source_commit']):
+        raise ValueError('Hardware installation evidence covers a different image or did not pass.')
+    installed = receipt.get('installation', {})
+    if installed.get('status') != 'passed' or installed.get('kernel') != manifest['hardware']['broadcom']['kernel']:
+        raise ValueError('The offline hardware installation did not pass for this kernel.')
+    for check in ['corrupted_bundle_rejected', 'cache_removed', 'base_packages_unchanged', 'native_drivers_preserved']:
+        if installed.get(check) is not True:
+            raise ValueError('Missing hardware installation check: ' + check)
+    expected = {value['name']: value['version'] for value in manifest['hardware']['broadcom']['packages'].values()}
+    if installed.get('optional_packages') != expected:
+        raise ValueError('Installed optional packages differ from the image manifest.')
+    for check in ['keyboard', 'post_rebuild_keyboard']:
+        if not isinstance(receipt.get(check), dict) or receipt[check].get('confirmed_seconds_since_boot', 0) <= 0:
+            raise ValueError('The installed hardware profile has not passed keyboard acceptance.')
+    if receipt.get('installed_offline_rebuild_seconds', 0) <= 0:
+        raise ValueError('Installed driver dependencies have not passed an offline rebuild.')
+
+
 def validate_receipts(manifest, receipts):
     rows = {(r['firmware'], r['encrypted']): r for r in receipts}
     if set(rows) != {('bios', False), ('uefi', True)} or len(receipts) != 2:
@@ -116,6 +136,13 @@ def main():
         raise ValueError('The machine workflow did not finish successfully.')
     if image['head_sha'] != manifest['source_commit'] or not any(j['name'] == 'image' and j['conclusion'] == 'success' for j in jobs['jobs']):
         raise ValueError('The image does not match a successful build job.')
+    hardware = None
+    if 'broadcom-offline' in manifest.get('capabilities', []):
+        if not any(j['name'] == 'hardware' and j['conclusion'] == 'success' for j in jobs['jobs']):
+            raise ValueError('The image build has no successful hardware installation job.')
+        gh('run', 'download', args.image, '--repo', args.repo, '--name', 'harness-os-hardware', '--dir', root / 'hardware')
+        hardware = read(root / 'hardware/receipt.json')
+        validate_hardware(manifest, hardware)
     examples = {}
     if list((root / 'machines').rglob('workloads/reports')):
         examples['workloads'] = {'run': run['html_url'], 'browser_checks': validate_examples(root / 'machines', 'workloads')}
@@ -132,6 +159,8 @@ def main():
                    'Timing and memory measurements describe these VMs, not physical laptop power-on time.']
     validation = {'status': 'passed', 'image_run': image['html_url'], 'machine_run': run['html_url'],
                   'machines': receipts, 'examples': examples, 'limitations': limitations}
+    if hardware is not None:
+        validation['hardware'] = hardware
     (folder / 'validation.json').write_text(json.dumps(validation, indent=2) + '\n')
     manifest['validation'] = {'status': 'passed', 'receipt': 'validation.json', 'machine_run': run['html_url'], 'limitations': limitations}
     (folder / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
@@ -139,7 +168,7 @@ def main():
     validate_install_guide(manifest, guide)
     (folder / 'INSTALL.md').write_text(guide)
     with zipfile.ZipFile(folder / 'machine-evidence.zip', 'w', compression=zipfile.ZIP_DEFLATED) as archive:
-        for directory in ['machines', 'dsh-machines']:
+        for directory in ['machines', 'dsh-machines', 'hardware']:
             for path in sorted((root / directory).rglob('*')):
                 include = path.suffix in {'.png', '.json', '.txt', '.jsonl'} or path.name.endswith('-boot-journal.log')
                 if path.is_file() and include and 'Projects' not in path.relative_to(root / directory).parts:
@@ -177,6 +206,8 @@ To try it: follow the included `INSTALL.md` for Mac → USB → ThinkPad instruc
 {'Super+U opens Updates. hn and CLI releases are prepared automatically; Enter activates an available runtime update. hn reconnects to the local tabs while agent processes keep running. System updates are a separate action in the same screen, with a checkpoint and a restart when you are ready. Neither channel automatically interrupts your work. Older preview 4 installations need the matching small bootstrap bundle once; routine updates do not require reflashing.' if in_place_updates else ''}
 
 BIOS/plain and UEFI/encrypted VM boot, clipboard, browser switching, offline installation and package-checkpoint recovery passed. The BIOS VM uses a Nehalem CPU profile without AVX2, starts bundled OpenCode, installs the other agent executables, installs a compiler on demand, builds C, and serves a local Node preview. See `validation.json` and `machine-evidence.zip` for the exact checks and measurements.
+
+{'The USB carries an optional Broadcom Wi-Fi module and signed offline dependencies for selected BCM4331/BCM4360 radios. Fresh installations retain those packages only when needed; other computers receive no additional compiler or driver packages. The exact module and offline installation/rebuild path passed native VM checks with synthetic PCI selection. Physical Mac radio association and sleep/wake remain unverified.' if hardware is not None else ''}
 
 {'Real free OpenCode agents built a Python CLI, a conference website, a keyboard game and a Fastify/SQLite application. Their unit tests and independent browser/API checks passed. The retained projects are in `harness-examples.zip`, separate from the minimal ISO.' if 'workloads' in examples else ''}
 

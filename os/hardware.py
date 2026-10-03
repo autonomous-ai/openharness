@@ -117,7 +117,7 @@ def activate(address, sysfs=Path('/sys'), bundle=BUNDLE):
             raise ValueError('The Wi-Fi bundle is for a different kernel.')
         loader = ['insmod', str(bundle / manifest['module'])]
     else:
-        run('modinfo', 'wl', capture=True)
+        run('modinfo', 'wl', capture=True, timeout=5)
         loader = ['modprobe', 'wl']
     path = sysfs / 'bus/pci/devices' / address
     previous = read(path / 'driver_override')
@@ -126,9 +126,9 @@ def activate(address, sysfs=Path('/sys'), bundle=BUNDLE):
         (path / 'driver_override').write_text('wl\n')
         if device['driver']:
             (path / 'driver/unbind').write_text(address + '\n')
-        run('modprobe', 'cfg80211')
+        run('modprobe', 'cfg80211', timeout=8)
         if not (sysfs / 'module/wl').is_dir():
-            run(*loader)
+            run(*loader, timeout=15)
         if not (path / 'driver').is_symlink():
             (sysfs / 'bus/pci/drivers_probe').write_text(address + '\n')
         if not (path / 'driver').is_symlink() or (path / 'driver').resolve().name != 'wl':

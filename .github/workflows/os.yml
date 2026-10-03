@@ -47,11 +47,11 @@ on:
         default: false
         type: boolean
       checks:
-        description: 'Image journey, focused lock/suspend checks, or simulated Wi-Fi/audio essentials; use image_run_id to reuse an image'
+        description: 'Image journey, lock/suspend, Wi-Fi/audio essentials, or offline hardware installation; image_run_id reuses an image'
         required: false
         default: image
         type: choice
-        options: [image, session, essentials]
+        options: [image, session, essentials, hardware]
   push:
     branches: ['os/**']
     paths: ['os/**', 'tui/**', 'cli/**', '.github/workflows/os.yml']
@@ -61,7 +61,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'session' && 'session' || inputs.checks == 'essentials' && 'essentials' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
+  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'session' && 'session' || inputs.checks == 'essentials' && 'essentials' || inputs.checks == 'hardware' && 'hardware' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
   cancel-in-progress: false
 
 jobs:
@@ -138,11 +138,13 @@ jobs:
             os/work/profile/profiledef.sh
             os/work/profile/pacman.conf
             os/work/archiso/x86_64/airootfs/var/log/pacman.log
+            os/work/hardware-build/root/var/lib/dkms/**/make.log
+            os/work/profile/airootfs/usr/share/harness-os/hardware/broadcom/manifest.json
           retention-days: 7
 
   machine:
     needs: image
-    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}
+    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     strategy:
@@ -211,6 +213,40 @@ jobs:
             os/test-results/**/workloads/**
             os/test-results/**/dsh/**
           retention-days: 14
+
+  hardware:
+    needs: image
+    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && (needs.image.result == 'success' || inputs.checks == 'hardware' && inputs.image_run_id != '') && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Check the fixture and install VM tools
+        run: |
+          python3 -m py_compile os/tests/hardware_install_guest.py os/tests/hardware_install_vm.py
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+      - name: Install the selected driver offline and reboot with 1 GiB
+        run: python3 os/tests/hardware_install_vm.py --iso os/dist/*.iso
+      - name: Retain hardware installation and rebuild evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-hardware
+          path: |
+            os/test-results/hardware-install/
+            !os/test-results/hardware-install/*.qcow2
+            !os/test-results/hardware-install/OVMF_VARS.fd
+          retention-days: 14
+          compression-level: 0
 
   essentials:
     needs: image

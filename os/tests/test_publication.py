@@ -11,6 +11,30 @@ spec.loader.exec_module(publish)
 
 
 class PublicationGuards(unittest.TestCase):
+    def test_optional_hardware_requires_matching_native_install_and_rebuild(self):
+        manifest = {'source_commit': 'source-one', 'iso': {'sha256': 'image-one'},
+                    'hardware': {'broadcom': {'kernel': 'exact-kernel',
+                    'packages': {'driver.pkg.tar.zst': {'name': 'driver', 'version': '1'}}}}}
+        receipt = dict(status='passed', iso_sha256='image-one', image_source_commit='source-one',
+                       installed_offline_rebuild_seconds=12,
+                       keyboard={'confirmed_seconds_since_boot': 20},
+                       post_rebuild_keyboard={'confirmed_seconds_since_boot': 40},
+                       installation=dict(status='passed', kernel='exact-kernel',
+                           optional_packages={'driver': '1'}, corrupted_bundle_rejected=True,
+                           cache_removed=True, base_packages_unchanged=True, native_drivers_preserved=True))
+        publish.validate_hardware(manifest, receipt)
+        for change in [dict(status='failed'), dict(iso_sha256='other'), dict(image_source_commit='other'),
+                       dict(keyboard={}), dict(post_rebuild_keyboard={}), dict(installed_offline_rebuild_seconds=0)]:
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                publish.validate_hardware(manifest, dict(receipt, **change))
+        for change in [dict(status='failed'), dict(kernel='other'), dict(optional_packages={'driver': '2'}),
+                       dict(corrupted_bundle_rejected=False), dict(cache_removed=False),
+                       dict(base_packages_unchanged=False), dict(native_drivers_preserved=False)]:
+            bad = copy.deepcopy(receipt)
+            bad['installation'].update(change)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                publish.validate_hardware(manifest, bad)
+
     def test_installation_guide_cannot_name_an_older_release_or_image(self):
         manifest = {'version': '0.1.0-preview.4', 'iso': {'name': 'harness-0.1.0-preview.4-x86_64.iso'}}
         guide = 'These instructions are for **0.1.0-preview.4**. Download harness-0.1.0-preview.4-x86_64.iso.'

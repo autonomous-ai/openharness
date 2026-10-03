@@ -54,6 +54,7 @@ def main():
     cache, database, root = (work / name for name in ['cache', 'database', 'root'])
     cache.mkdir()
     database.mkdir()
+    root.mkdir()
     (database / 'local').mkdir()
     config = work / 'pacman.conf'
     config.write_text(args.config.read_text().replace('[options]', '[options]\nCacheDir = ' + str(cache)))
