@@ -1,5 +1,11 @@
 # Coding memory across agent frameworks
 
+Current delivery milestone: the user explicitly scoped a
+[two-hour personal-memory MVP](2026-10-03-personal-memory-mvp.md) on October 3.
+The broader research and rollout gates below remain a later roadmap, rather than
+prerequisites for that bounded review milestone. Its evidence and consent rules
+still apply; deferred checks must not be described as completed.
+
 Status: experimental implementation available for review, 2026-10-01; quality validation remains incomplete. The memory core, native transcript reader, durable learning loop, restricted inference adapters, worker isolation and owner library have executable tests. Opt-in host capture, scoped collection recall, native prompt adapters and the desktop Memories viewer are connected. Synthetic native probes cover next-user-prompt delivery after resume, manual compaction and a model change in Claude 2.1.286/2.1.287 and trusted interactive Codex 0.159.3. The older Codex 0.159.0 prompt certificate remains. Local synthetic recall performance has been measured; real extraction quality, full native lifecycles and production integration remain unverified. The [sequential review log](2026-09-30-coding-memory-review-log.md) records findings, fixes, and remaining completion evidence.
 
 Codex **0.159.3 prompt delivery and background extraction have separate status**. Its trusted prompt

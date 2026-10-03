@@ -1,5 +1,12 @@
 # Coding memory: sequential review and implementation
 
+Current priority: the user replaced open-ended research with a
+[bounded personal-memory MVP](2026-10-03-personal-memory-mvp.md) on October 3.
+Council and benchmark work is deferred until the user reviews the MVP and
+authorizes further scope. The
+historical entries below record evidence and remaining broader work; they do not
+expand the current milestone.
+
 Status: in progress, 2026-09-30. The objective remains a thoroughly reviewed, useful coding memory system across agent frameworks. Passing an isolated core suite does not establish completion or perfection.
 
 These reviews are performed by Codex using the published principles collected in the [historical council](2026-09-30-coding-memory-council.md) and [modern practitioner study](../research/2026-09-30-modern-coding-memory.md). They are not personal participation, simulated quotations, or endorsements by the named programmers. Each perspective produces a concrete question, a change or open requirement, and evidence needed to close it. Review again after integration, not just after the design document.
