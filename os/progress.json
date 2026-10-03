@@ -6,7 +6,7 @@
   "merge_utc": null,
   "publication_utc": "2026-10-03T02:03:47Z",
   "completion_utc": null,
-  "status": "Harness preview 4 is public and all ten public downloads are fully checksum/size verified. Exact-image 1 GiB/4 GiB USB install, boot, recovery, first chats, projects and DSH checks passed. Physical Wi-Fi/suspend/NVIDIA, reliable Mac emulation and landing-page browser review remain unverified.",
+  "status": "Preview 4 and optional development update are public and verified. User reports physical ThinkPad install/boot/use success. Updating the agents-as-apps landing page and validating the authorized main merge. Physical Wi-Fi/suspend/Mac/NVIDIA and browser visual review remain unverified.",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -1530,5 +1530,55 @@
     },
     "shared_terminal_behavior_approved": true,
     "future_packaging_note": "Development versions include revision count and full source identity. CI shallow checkout yielded r1; before an automatic ordered update channel exists, replace the count with a source-date ordering key. Current explicit local pacman installs and rollback are validated."
+  },
+  "physical_preview4_user_report": {
+    "recorded_utc": "2026-10-03T13:29:43.451299+00:00",
+    "version": "0.1.0-preview.4",
+    "device": "ThinkPad (model not supplied)",
+    "reported": "User reported successful installation, boot and use of the new OS; described it as awesome.",
+    "timings_measured": false,
+    "limits": "No independent timing, Wi-Fi, suspend, or GPU evidence supplied."
+  },
+  "landing_narrative_and_merge": {
+    "request_received_utc": null,
+    "first_recorded_utc": "2026-10-03T13:29:43.451299+00:00",
+    "status": "Page static validation passed; visual review awaiting access or user feedback. Integrated main; native fixture expectation updated for main\u2019s shared Models picker; final CLI/TUI/OS validation next.",
+    "merge_authorized": true,
+    "base_commit": "423b47cf94b0b495d0a950ac05dbbb350281afe7",
+    "integration_commit": "dd8fb89c8a5e665153f5783d1651440d4d3321d9",
+    "narrative": "Agents are the new apps. Conversation is the interface. Terminal and optional browser are the working surfaces.",
+    "implementation_ready_utc": "2026-10-03T13:33:48.223860+00:00",
+    "validation_started_utc": "2026-10-03T13:24:16Z",
+    "validation_completed_utc": null,
+    "merge_utc": null,
+    "publication_utc": null,
+    "validation_plan": [
+      "Static HTML/CSS, local assets, headings, links and current public release asset names",
+      "Local browser visual/keyboard review; currently denied by saved permission; manual review requested",
+      "Full CLI scope including supported platform matrix after integrating main",
+      "Full TUI scope on x86_64 and aarch64 including native terminal fixtures after integrating main",
+      "Fresh exact-source OS build plus BIOS/plain and UEFI/encrypted installation/boot/agent/recovery checks; existing workload and development-update evidence remains tied to its original source"
+    ],
+    "os_integration_run": "https://github.com/autonomous-ai/openharness/actions/runs/37125918188",
+    "waiting": [
+      {
+        "kind": "visual review",
+        "reason": "Chrome rejected http://127.0.0.1:18092/ due a saved site permission despite earlier user approval. Manual review requested; no alternate route used.",
+        "started_utc": "2026-10-03T13:29:43.451299+00:00",
+        "completed_utc": null
+      }
+    ],
+    "follow_up_preserved": "Unvalidated session lock/suspend test script and workflow patch saved under ignored os/work/next-session; excluded from this merge.",
+    "hardware_priority": [
+      "Identify and validate one older Intel Mac without T2 from the user\u2019s MacBook Air/Pro collection",
+      "NVIDIA desktop 4090, then 5090",
+      "Separate T2 and Apple Silicon platform work"
+    ],
+    "integration_diagnosis": {
+      "failed_run": 37125918188,
+      "finding": "342 Rust tests and nine native fixtures passed. The e2e fixture still expected Sonnet / High, but current main intentionally replaced those engine rows with the shared subscriptions/local/Grid Models picker. Models source and stale fixture matched main.",
+      "change": "Update the existing native fixture to verify connected subscriptions, available Grid model, and shell focus guidance; no product model-picker behavior changed."
+    },
+    "static_validation": "Strict HTML5 and CSS parsing; local assets, fonts, dimensions, headings and fragments; release download names; 65 portable OS tests; Python/JSON/XML/shell checks; git diff --check passed."
   }
 }

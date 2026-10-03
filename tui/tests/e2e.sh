@@ -158,7 +158,13 @@ tmux_ send-keys -t t C-b z
 expect "C-b z zooms (Z flag)" "*Z"
 tmux_ send-keys -t t C-b z
 tmux_ send-keys -t t C-b I
-expect "C-b I: models for the focused harness" "Sonnet / High"
+# Models now shares the desktop's subscriptions/local/Grid picker. This pane is
+# a shell, so it lists available sources without offering an engine model switch.
+expect "C-b I opens the shared Models picker" "Subscriptions"
+expect "Models lists the connected Anthropic subscription" "Anthropic"
+expect "Models lists the connected OpenAI subscription" "OpenAI"
+expect "Models lists the available Grid model" "demo-model"
+expect "a shell must focus a harness before switching models" "Focus a harness"
 tmux_ send-keys -t t Escape
 tmux_ send-keys -t t C-b @
 expect "C-b @: machines" "mock-remote"
