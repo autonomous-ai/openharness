@@ -5,8 +5,9 @@ boot changes. Reflashing is a release/install test, not the intended way to try
 every interface fix. Keep the development tools on the build/test host; the
 installed OS keeps the same minimal interface.
 
-This plan was recorded on October 3, 2026. Preview 4 is published. The update and
-remote-interaction work marked below is still to be implemented and verified.
+This plan was recorded on October 3, 2026. Preview 4 is published. The small-package
+updater and remote-launcher options are implemented on the OS branch; their native
+integration checks are tracked below and in `progress.json` before distribution.
 
 ## The feedback loop
 
@@ -52,26 +53,77 @@ project but later reboot checks failed with soft-lockups. Use the native x86 CI
 results for current performance measurements.
 [QEMU documents these acceleration options](https://www.qemu.org/docs/master/system/introduction.html).
 
-## Next tooling work
+## Small development updates
 
-1. Add an explicit remote test-VM mode to `run-vm.py`: a display reachable through
-   an SSH tunnel, optional localhost guest-SSH forwarding, and a clear connection
-   command. Its current `--headless` mode exposes only local QMP/serial sockets;
-   an interactive remote viewer has not been built into this helper yet.
-2. Add a development deployment command for the Harness runtime and OS integration.
-   It must identify the target as a disposable/dedicated test installation, verify
-   architecture and artifact hashes, preserve the prior version and user data,
-   record the source revision, and provide rollback. Failed transfers must leave
-   the previous version usable. UI-only changes should not require downloading
-   another 1.5 GiB ISO.
-3. Add stopped-VM snapshot/restore to the test workflow so repeated installer and
-   recovery experiments start from a known state. Never snapshot a running disk
-   by blindly copying its file.
+`tools/build-package.py` assembles the same `harness-os` package used by the ISO.
+On a clean x86 Linux checkout, build a bundle with:
+
+```sh
+make -C os runtime
+python3 os/tools/build-package.py --runtime os/work/runtime --output os/work/my-update --development
+```
+
+The bundle identifies the source commit, architecture, required base image and
+every runtime file. It includes a package, manifest, SHA-256 checksums and a
+standalone bootstrap for preview 4. This is an explicit development installation
+from a trusted build, not an automatic public update channel. Checksums detect
+corruption; they do not authenticate an unknown publisher.
+
+Copy the complete bundle to a dedicated installed test machine. After native
+acceptance passes for that bundle, the bootstrap command is:
+
+```sh
+cd /path/to/bundle
+sha256sum -c SHA256SUMS
+sudo python3 apply-update.py apply "$PWD"
+```
+
+Subsequent bundles can use `sudo harness upgrade /path/to/bundle`. Roll back with
+`sudo harness rollback`, or with `sudo python3 apply-update.py rollback` from the
+retained bootstrap if the installed launcher is unavailable. Use the same
+bootstrap's `status` command to inspect source and transaction identity.
+
+The updater verifies a private copy before changing the installation, makes a
+Btrfs root/boot checkpoint, and retains a package of the previous owned files.
+Pacman performs the actual upgrade and rollback, preserving package ownership
+and dependency checks. Home directories and projects are outside the package.
+An interrupted update retains its receipt and recovery point and requires rollback
+before another runtime update. If the installed system cannot run, use the live
+USB's existing checkpoint recovery. There is no background updater, service
+restart, network requirement or automatic reboot. Reboot when ready to use the
+new session; boot/kernel changes still need image-specific validation.
+
+The workflow input `development_update=true` with `image_run_id=37119543543`
+builds the candidate and tests it against the published preview 4 image. Required
+acceptance covers truncated downloads, a real failed pacman transaction, apply,
+rollback, package identity, project preservation, the same terminal process
+through daemon/screen restarts, and an encrypted reboot with keyboard input.
+Portable guards pass locally; native acceptance is pending for the initial build.
+
+Shared hn changes in preview 4 are still on the OS branch. Ordinary Mac/Linux hn
+keeps its usual home and detach/quit behavior; live USB and installed OS welcome
+actions require explicit OS mode. Opening Terminal directly is a shared chooser
+change. It needs normal TUI release review along with the shared agent-discovery
+and OpenCode compatibility fixes; publishing the ISO did not release these through
+the general TUI channel. The small updater adds no changes to `tui/` or `cli/`.
+
+## Optional remote VM controls
+
+`run-vm.py --vnc-port 5901 --ssh-port 2222 --remote-host me@build-host
+--require-acceleration` binds both optional listeners to localhost and prints an
+SSH tunnel command. The display port implies headless QEMU; guest SSH still needs
+deliberate service/key setup. Without these flags no TCP listener is added. The
+acceleration flag refuses software emulation instead of silently using it.
+Argument and binding tests pass; real remote display/SSH interaction is not yet
+validated. These host tools add no software to the installed OS.
+
+Stopped-VM snapshot/restore remains future work. Never snapshot a running disk
+by blindly copying its file.
 
 `hn-os update` currently upgrades Arch packages and keeps a recovery checkpoint;
-it does **not** update the pinned Harness runtime. No preview-channel app updater
-or small development-update command is shipped yet. Until that mechanism passes
-its checks, use a matching image for an end-to-end test of new OS interface code.
+it does **not** update the pinned Harness runtime. Preview 4 does not yet contain
+the small updater. Until the development bundle passes its native checks, use
+the published image for an end-to-end test of new OS interface code.
 
 ## Mac support targets
 

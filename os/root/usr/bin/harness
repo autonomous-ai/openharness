@@ -3,5 +3,13 @@ if [ "${1:-}" = install ]; then
     shift
     exec /usr/bin/python3 /usr/lib/harness-os/install.py "$@"
 fi
+if [ "${1:-}" = upgrade ]; then
+    shift
+    exec /usr/bin/python3 /usr/lib/harness-os/runtime_update.py apply "$@"
+fi
+if [ "${1:-}" = rollback ]; then
+    shift
+    exec /usr/bin/python3 /usr/lib/harness-os/runtime_update.py rollback "$@"
+fi
 export ADAPTER_UPDATE_DISABLE=true
 exec /usr/bin/node /usr/lib/harness/cli.mjs "$@"

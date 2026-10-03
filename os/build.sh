@@ -11,8 +11,6 @@ SOURCE_ROOT=$(cd "$OS_DIR/.." && pwd)
 }
 export HARNESS_OS_SOURCE_SHA=${HARNESS_OS_SOURCE_SHA:-$(git -c safe.directory="$SOURCE_ROOT" -C "$SOURCE_ROOT" rev-parse HEAD)}
 VERSION=$(python3 -c 'import json; print(json.load(open("lock.json"))["version"])')
-# Pacman orders 0.1.0pre2 before 0.1.0; a dotted suffix would sort after it.
-PACKAGE_VERSION=${VERSION/-preview./pre}
 SNAPSHOT=$(python3 -c 'import json; print(json.load(open("lock.json"))["arch_snapshot"])')
 BUILD_DIR=${HARNESS_OS_BUILD_DIR:-$OS_DIR/work}
 RUNTIME_DIR=${HARNESS_OS_RUNTIME_DIR:-$OS_DIR/work/runtime}
@@ -43,53 +41,9 @@ Server = https://archive.archlinux.org/repos/$SNAPSHOT/\$repo/os/\$arch
 [extra]
 Server = https://archive.archlinux.org/repos/$SNAPSHOT/\$repo/os/\$arch
 EOF
-mkdir -p "$BUILD_DIR/package/usr/lib/harness" "$BUILD_DIR/repo"
-cp -a root/. "$BUILD_DIR/package/"
-install -Dm 644 "$SOURCE_ROOT/LICENSE" "$BUILD_DIR/package/usr/share/licenses/harness-os/LICENSE"
-cp installer.py "$BUILD_DIR/package/usr/lib/harness-os/install.py"
-cp system.py "$BUILD_DIR/package/usr/lib/harness-os/system.py"
-install -m 755 tools/hn-os "$BUILD_DIR/package/usr/bin/hn-os"
-cp lock.json "$BUILD_DIR/package/usr/share/harness-os/lock.json"
-install -m 755 "$RUNTIME_DIR/harness-tui" "$BUILD_DIR/package/usr/lib/harness/harness-tui"
-install -m 644 "$RUNTIME_DIR/cli.js" "$BUILD_DIR/package/usr/lib/harness/cli.mjs"
-install -m 644 "$RUNTIME_DIR/notify.mjs" "$BUILD_DIR/package/usr/lib/harness/notify.mjs"
-ln -s harness-tui "$BUILD_DIR/package/usr/lib/harness/hn"
-python3 - "$BUILD_DIR/package/usr/lib/harness" "$BUILD_DIR/package/usr/share/harness-os/runtime.json" "$RUNTIME_DIR/source.json" <<'PY'
-import hashlib, json, os, sys
-from pathlib import Path
-root = Path(sys.argv[1])
-data = json.loads(Path(sys.argv[3]).read_text())
-if data['dirty'] or (os.environ.get('HARNESS_OS_SOURCE_SHA') and data['source_commit'] != os.environ['HARNESS_OS_SOURCE_SHA']):
-    raise SystemExit('OS runtime must be built from the same clean source commit as the image.')
-data.update(mode='source', files={})
-for path in root.iterdir():
-    if path.is_file() and not path.is_symlink():
-        with path.open('rb') as handle:
-            data['files'][path.name] = {'sha256': hashlib.file_digest(handle, 'sha256').hexdigest(), 'bytes': path.stat().st_size}
-Path(sys.argv[2]).write_text(json.dumps(data, indent=2) + '\n')
-PY
-find "$BUILD_DIR/package/usr/bin" "$BUILD_DIR/package/usr/lib/harness-os" -type f -exec chmod 755 {} +
-chmod 755 "$BUILD_DIR/package/usr/share/harness-os/labwc/"{autostart,shutdown}
-# Source files belong to the build runner; system package files must belong to root.
-chown -R 0:0 "$BUILD_DIR/package"
-cat > "$BUILD_DIR/package/.PKGINFO" <<EOF
-pkgname = harness-os
-pkgbase = harness-os
-pkgver = $PACKAGE_VERSION-1
-pkgdesc = Harness session and verified Harness runtime
-url = https://github.com/autonomous-ai/openharness
-builddate = ${SOURCE_DATE_EPOCH:-$(date +%s)}
-packager = OpenHarness
-size = $(du -sb "$BUILD_DIR/package" | cut -f1)
-arch = x86_64
-license = MIT
-depend = nodejs-lts-jod
-depend = tmux
-depend = foot
-depend = labwc
-EOF
-bsdtar --zstd -cf "$BUILD_DIR/repo/harness-os-$PACKAGE_VERSION-1-x86_64.pkg.tar.zst" -C "$BUILD_DIR/package" .PKGINFO etc usr
-repo-add "$BUILD_DIR/repo/harness-build.db.tar.gz" "$BUILD_DIR/repo/"*.pkg.tar.zst
+# Reuse the same package assembly for fresh images and small development updates.
+python3 tools/build-package.py --runtime "$RUNTIME_DIR" --output "$BUILD_DIR/repo"
+repo-add "$BUILD_DIR/repo/harness-build.db.tar.gz" "$BUILD_DIR/repo/"*.pkg.tar.gz
 cp -a live/. "$PROFILE/airootfs/"
 mkdir -p "$PROFILE/airootfs/root" "$PROFILE/airootfs/etc/pacman.d/hooks"
 cp tools/customize-live.sh "$PROFILE/airootfs/root/setup-live.sh"

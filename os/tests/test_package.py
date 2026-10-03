@@ -1,0 +1,61 @@
+import importlib.util
+import json
+from pathlib import Path
+import tarfile
+import tempfile
+import unittest
+
+
+spec = importlib.util.spec_from_file_location('os_package', Path(__file__).parents[1] / 'tools/build-package.py')
+package = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(package)
+
+
+class PackageIdentity(unittest.TestCase):
+    def test_macos_wrong_architecture_dirty_or_different_source_cannot_be_packaged(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            good = {'source_commit': 'a' * 40, 'dirty': False, 'target': 'x86_64-unknown-linux-musl'}
+            header = bytearray(20)
+            header[:6] = b'\x7fELF\x02\x01'
+            header[18:20] = (62).to_bytes(2, 'little')
+            (root / 'harness-tui').write_bytes(header)
+            for name in ['cli.js', 'notify.mjs']:
+                (root / name).write_text('runtime fixture')
+            (root / 'source.json').write_text(json.dumps(good))
+            self.assertEqual(package.validate_runtime(root, 'a' * 40), good)
+            for changes in [{'dirty': True}, {'source_commit': 'b' * 40}, {'target': 'aarch64-apple-darwin'}]:
+                (root / 'source.json').write_text(json.dumps(dict(good, **changes)))
+                with self.subTest(changes=changes), self.assertRaises(ValueError):
+                    package.validate_runtime(root, 'a' * 40)
+            (root / 'source.json').write_text(json.dumps(good))
+            for bad_header in [b'\xcf\xfa\xed\xfe', header[:18] + (183).to_bytes(2, 'little')]:
+                (root / 'harness-tui').write_bytes(bad_header)
+                with self.assertRaises(ValueError):
+                    package.validate_runtime(root, 'a' * 40)
+
+    def test_archive_preserves_executable_and_symlink_with_root_ownership(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / 'stage'
+            binary = root / 'usr/lib/harness/harness-tui'
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b'executable fixture')
+            binary.chmod(0o755)
+            (binary.parent / 'hn').symlink_to('harness-tui')
+            output = Path(temp) / 'harness-os.pkg.tar.gz'
+            package.archive_package(root, output, 'pkgname = harness-os\npkgver = 1-1\n', 123456)
+            with tarfile.open(output) as archive:
+                executable = archive.getmember('usr/lib/harness/harness-tui')
+                self.assertEqual(executable.mode, 0o755)
+                self.assertEqual(archive.extractfile(executable).read(), b'executable fixture')
+                link = archive.getmember('usr/lib/harness/hn')
+                self.assertTrue(link.issym())
+                self.assertEqual(link.linkname, 'harness-tui')
+                for member in archive.getmembers():
+                    self.assertEqual((member.uid, member.gid, member.mtime), (0, 0, 123456))
+                self.assertIn(b'pkgname = harness-os', archive.extractfile('.PKGINFO').read())
+            self.assertFalse(output.with_name(output.name + '.partial').exists())
+
+
+if __name__ == '__main__':
+    unittest.main()

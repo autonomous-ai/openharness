@@ -1418,5 +1418,45 @@
       "https://asahilinux.org/docs/project/faq/"
     ],
     "validation": "Documentation local links and JSON checked; no native Mac install, server deployment, new ARM image or hardware success claimed."
+  },
+  "local_preview4_iso": {
+    "path": "/Users/ab/Downloads/harness-0.1.0-preview.4-x86_64.iso",
+    "bytes": 1612300288,
+    "sha256": "d111c2127e503818e4fccba62b8460e6160063bbf3b48e004e51516416229a92",
+    "checksum_verified": true,
+    "download_complete_utc": "2026-10-03T12:32:00Z",
+    "timestamp_basis": "Approximate completion reported by preceding download/copy sessions; local file verified present this turn."
+  },
+  "small_development_update": {
+    "request_received_utc": null,
+    "first_recorded_utc": "2026-10-03T12:12:18.648429+00:00",
+    "implementation_ready_utc": "2026-10-03T12:51:11.390514+00:00",
+    "status": "Implemented; 65 portable checks passed. Native package/update lifecycle workflow not yet run.",
+    "merge_utc": null,
+    "publication_utc": null,
+    "validation_plan": [
+      "Portable package identity, hash, architecture, source, archive path and rollback guards; Python/shell/JSON/XML syntax and workflow actionlint",
+      "Build exact-source Linux runtime and standalone native package; apply it offline to published preview 4 in an encrypted disposable KVM guest",
+      "Reject truncated download; exercise failed pacman transaction and retained recovery; verify apply, rollback, repeat apply, running terminal and project survival through daemon/screen restarts, encrypted reboot and physical-keyboard input",
+      "Reuse unchanged CLI/TUI source evidence from full CLI run 37116593867 and exact-image native run 37119543543; no redundant full suites"
+    ],
+    "changes": [
+      "Shared package assembly for ISO and development bundle with source/hash manifest",
+      "Explicit installed-OS update and rollback using pacman plus Btrfs checkpoint; no automatic service restart",
+      "Standalone bootstrap for existing preview 4 installations",
+      "Optional loopback-only remote VM launcher endpoints; real remote UI/SSH remains unverified"
+    ],
+    "waiting": [
+      {
+        "reason": "Local ISO transfer/copy was separate from server-side build and public publication; now complete.",
+        "started_utc": null,
+        "completed_utc": "2026-10-03T12:32:00Z"
+      }
+    ],
+    "research_page": {
+      "url": "https://chatgpt.com/space/page_d5d04ee40e348191b2b1aa9274b14e53",
+      "status": "page_read_forbidden; content not read, update implementation proceeds independently"
+    },
+    "shared_runtime_scope": "No cli/ or tui/ edits in this update. Earlier shared chooser/agent fixes remain on OS branch, not merged to main or published in a general TUI release."
   }
 }

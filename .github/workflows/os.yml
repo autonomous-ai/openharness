@@ -41,6 +41,11 @@ on:
         default: 'cdrom'
         type: choice
         options: ['cdrom', 'usb']
+      development_update:
+        description: 'Build a small Harness package; test offline apply, failure, rollback and reboot using image_run_id'
+        required: false
+        default: false
+        type: boolean
   push:
     branches: ['os/**']
     paths: ['os/**', 'tui/**', 'cli/**', '.github/workflows/os.yml']
@@ -50,12 +55,12 @@ permissions:
   actions: read
 
 concurrency:
-  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
+  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
   cancel-in-progress: false
 
 jobs:
   image:
-    if: ${{ !inputs.image_run_id && !inputs.publish_run_id }}
+    if: ${{ !inputs.image_run_id && !inputs.publish_run_id && !inputs.development_update }}
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     steps:
@@ -131,7 +136,7 @@ jobs:
 
   machine:
     needs: image
-    if: ${{ always() && !inputs.publish_run_id && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}
+    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     strategy:
@@ -191,6 +196,68 @@ jobs:
             os/test-results/**/workloads/**
             os/test-results/**/dsh/**
           retention-days: 14
+
+  development-update:
+    if: ${{ inputs.development_update && !inputs.publish_run_id }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check package and updater contracts
+        env:
+          OS_IMAGE_RUN: ${{ inputs.image_run_id }}
+        run: |
+          test -n "$OS_IMAGE_RUN"
+          date -u
+          df -h .
+          make -C os check
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.2'
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: tui
+          shared-key: tui-x86_64-unknown-linux-musl
+          cache-bin: false
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id }}
+          github-token: ${{ github.token }}
+      - name: Build the small package from this source
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y musl-tools qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
+          make -C os runtime
+          python3 os/tools/build-package.py --runtime os/work/runtime --output os/work/development-update --development
+      - name: Exercise apply, rollback, running work and encrypted reboot
+        run: python3 os/tests/update_vm.py --iso os/dist/*.iso --bundle os/work/development-update
+      - name: Show update failure diagnostics
+        if: failure()
+        run: |
+          find os/test-results/runtime-update -type f \( -name receipt.json -o -name qemu.log -o -name update.log -o -name serial.log \) -exec tail -c 10000 {} \;
+      - name: Retain the package and exact update evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-development-update
+          path: |
+            os/work/development-update/
+            os/test-results/runtime-update/*.json
+            os/test-results/runtime-update/*.jsonl
+            os/test-results/runtime-update/*.log
+            os/test-results/runtime-update/*.txt
+            os/test-results/runtime-update/*.png
+          retention-days: 14
+          compression-level: 0
 
   publish:
     if: ${{ inputs.publish_run_id != '' }}
