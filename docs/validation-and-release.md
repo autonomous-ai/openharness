@@ -288,15 +288,45 @@ file/case totals. Desktop scope similarly verifies the summary for both platform
 and preserves explicit startup-recovery counts. Network calls are bounded; the
 default collection budget is 90s.
 
-Exit 0 means the requested CI scope passed and its committed source tree matches
-the selected target (`HEAD` by default). Exit 3 still saves the record but flags
-different source, a dirty working tree or a PR head mismatch for review. It lists
-changed paths without deciding that they are harmless. Review their impact and
-reuse only applicable evidence; a different SHA with the same tree is accepted.
+Exit 0 means the requested CI scope passed and covers the selected target (`HEAD`
+by default): either the full source tree matches or the verified input contract
+below matches. Exit 3 still saves the record but flags uncovered source changes,
+a dirty working tree or a PR head mismatch for review. A clean squash with the
+same tree is accepted. The receipt always retains both actual commits/trees.
 `--target COMMIT` supports historical audits and labels them as covering that
 commit rather than the current working copy. Missing objects need a fetch before
 comparison; failed/pending runs, missing/skipped required jobs, corrupt/expired
 artifacts, and changing run/PR state cannot become a successful record.
+
+For `process` and `desktop`, CI records a `ci-source-inputs` artifact and verifies
+each required job's sparse checkout before running its checks. The collector
+checks that artifact's immutable digest, run/source/attempt identity and recorded
+Git objects, then independently compares the selected inputs with the target:
+
+| CI scope | Complete input boundary |
+| --- | --- |
+| `process` | `.github/`, `scripts/`, `desktop/scripts/`, root Git configuration files and `Makefile` |
+| `desktop` | `.github/`, `scripts/`, `desktop/`, `cli/`, `tests/`, `daemons/`, `store/`, `docs/images/`, `mobile/pubspec.lock`, root Git configuration files and `Makefile` |
+
+The root Git files are `.gitattributes`, `.gitignore` and `.gitmodules`. Directory
+objects include every tracked descendant; file modes, additions and removals are
+covered. Desktop's tests read CLI protocol definitions, shared layout fixtures,
+daemon metadata and catalog artwork, so those are inputs too. The workflow/action
+trees include toolchain pins and cache recipes. Extend both the checkout and
+`SOURCE_INPUTS` in `scripts/record-ci-validation.py` before using a new dependency.
+CI verifies that the checkout agrees with that contract and exposes no tracked
+files outside it; the Desktop aggregate uses a smaller subset of the same inputs.
+
+A documentation edit outside those boundaries or an unrelated firmware merge can
+therefore preserve a completed run. Pass its original run ID to the collector or
+merge helper; no extra option or replacement CI run is needed. The resulting
+receipt says which scope was reused, records the matching fingerprint and lists
+changed paths outside that scope. Review those changes and run any checks they
+require separately. This is a source-input comparison, not a file-extension rule:
+Desktop documentation inside `desktop/` and artwork inside `docs/images/` remain
+inputs. Other CI scopes and older runs without an input receipt still require
+whole-tree equality. A malformed receipt cannot authorize reuse. Rerun all jobs
+when rerunning a workflow so its input receipt belongs to the current attempt.
 
 Keep routine validation evidence in these receipts, CI artifacts and the PR body.
 Do not add a documentation commit or recreate all raw logs just to record another
@@ -388,11 +418,13 @@ inspects the same PR without replaying the merge request.
 A changed head, dirty checkout, moved main, failed CI or blocked merge stops the
 command. Review new source differences and reuse only applicable evidence, as above;
 the command does not decide that impact or replace native checks and code review.
-After a merge, it verifies the actual Git tree against the tested tree. A different
-tree is recorded as `merged_source_review_required` (exit 3), so resolve that source
-review before release. An unconfirmed write is recorded as `merge_not_confirmed`;
-inspect the same PR before further action. This command does not create release tags
-or dispatch release workflows.
+After a merge, it verifies the actual Git tree against the reviewed target tree.
+The receipt separately reports whether the full tested tree matches; scoped CI
+reuse may preserve test inputs while other reviewed files differ. A merge tree
+different from the reviewed target is recorded as `merged_source_review_required`
+(exit 3), so resolve that source review before release. An unconfirmed write is
+recorded as `merge_not_confirmed`; inspect the same PR before further action. This
+command does not create release tags or dispatch release workflows.
 
 ## Complete the authorized release
 
