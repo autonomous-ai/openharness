@@ -33,7 +33,7 @@ and the release's download names. Visually inspect desktop and narrow screens;
 use the keyboard to reach every link and toggle both disclosures. Confirm that
 no content overflows at 320 px, 390 px, 768 px, and desktop widths.
 
-The first implementation passed static asset, font, markup, and release-link
-checks. Browser preview access was denied by the local browser permission policy,
-so visual layout and interactive browser checks remain unverified. This is not a
-passing browser validation result.
+The current implementation passed static asset, font, markup, and release-link
+checks. The user approved visual review, but a saved browser permission still
+blocked the local preview. Visual layout and interactive browser checks remain
+unverified. This is not a passing browser validation result.

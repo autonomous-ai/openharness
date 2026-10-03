@@ -83,6 +83,11 @@ and projects add more. Run the same installer described below, selecting
 from the virtual disk. The left Command key supplies the Super shortcuts.
 Apple Silicon uses x86 emulation: this tests the PC image's behavior, while boot
 and application timings need separate native x86 measurements.
+The current Mac check is partial: the installed VM rendered a project in Chromium,
+and the refreshed hn/CLI binaries match the published hashes, but subsequent
+background reboot checks missed readiness deadlines with guest soft-lockup reports.
+Use the native x86 VM results for the preview's measured performance. Mac emulation
+is not yet a reliably validated demonstration environment.
 
 After an image has passed the VM gates, write the **whole ISO** to a USB stick
 using an image writer such as Etcher, boot the USB, and try hn before installing.

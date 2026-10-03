@@ -6,7 +6,7 @@
   "merge_utc": null,
   "publication_utc": "2026-10-03T02:03:47Z",
   "completion_utc": null,
-  "status": "Public preview published; all nine public assets verified. Landing page static checks and Mac VM refresh continue.",
+  "status": "Verified public preview and standalone landing page published to the OS branch. Native x86 tests pass. Mac runtime/examples retained; background emulation reboot checks failed and unproven launcher changes were discarded.",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -207,6 +207,24 @@
       "iso_sha256": "51e3315843440bcdd445ead6b55d281dd1ae40685f3399c084ac5cf33cf5bce6",
       "finished_at_utc": "2026-10-03T02:06:57.675352+00:00",
       "method": "Same guarded publisher run locally with authorized gh authentication; Actions run 37087917557 could not create release (403 Resource not accessible by integration). Receipt reused; no duplicate download cycle."
+    },
+    {
+      "scope": "Mac refreshed runtime and retained examples",
+      "result": "partial",
+      "runtime_source_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
+      "verified": [
+        "published hn and CLI SHA-256 values inside the VM disk",
+        "all four original example directories retained",
+        "verified public project and DSH archive installed under Projects/preview-examples",
+        "qcow2 integrity check passed",
+        "normal graphical boot configuration restored"
+      ],
+      "failed": [
+        "background Mac reboot readiness",
+        "single-CPU emulation trial"
+      ],
+      "at_utc": "2026-10-03T03:21:35.153023+00:00",
+      "limitations": "Apple Silicon x86 TCG emulation; no new native x86 runtime failure. Earlier Chromium project rendering is separate evidence."
     }
   ],
   "waiting": [
@@ -228,11 +246,11 @@
     }
   ],
   "remaining": [
-    "Finish standalone landing page and record browser preview permission denial",
-    "Refresh installed Mac VM and preserve generated projects",
-    "Continue focused experience checks through requested work window"
+    "Landing-page visual and keyboard validation: user approved, but saved browser permission still blocks localhost access",
+    "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
+    "Finish the requested four-hour testing window and report results"
   ],
-  "last_updated_utc": "2026-10-03T02:15:13.412990+00:00",
+  "last_updated_utc": "2026-10-03T03:30:06.413807+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -293,8 +311,9 @@
     "Measure and reduce boot time, steady idle CPU/RAM and image footprint without losing functionality"
   ],
   "computer_use": {
-    "status": "Local browser VM viewer access denied by browser approval policy; no alternate browser route attempted",
-    "continued": "Automated guest CLI tests and framebuffer screenshot inspection"
+    "status": "User explicitly approved local landing-page and native VM visual checks. Both tools still rejected access; no workaround used.",
+    "browser": "Saved user permission blocks http://127.0.0.1:18092. Asked user to change the saved setting.",
+    "native_vm": "Local app launched successfully after renewed approval. cua.getApp(local.programmer-os.vm) refused computer use. Stopped that VM through its own QMP control socket; preserved disk and projects."
   },
   "additional_work_window": {
     "started_utc": "2026-10-02T23:33:00Z",
@@ -308,8 +327,29 @@
   "landing_page": {
     "path": "os/site",
     "implementation": "Plain HTML/CSS, local WOFF fonts, actual OS and generated-game screenshots",
-    "initial_asset_bytes_before_compression": 156557,
+    "initial_asset_bytes_before_compression": 156626,
     "validation": "Static assets, fragment references, fonts, image dimensions and verified release asset names passed",
-    "browser_validation": "Blocked: browser approval denied http://127.0.0.1:18092; no alternate access attempted"
+    "browser_validation": "Unverified: renewed user approval received, but saved browser permission continues to block the exact local URL.",
+    "implementation_commit": "86955f946"
+  },
+  "mac_vm": {
+    "status": "partial; readiness failures retained",
+    "runtime_hashes_match_published_image": true,
+    "saved_projects": [
+      "os-components",
+      "os-examples",
+      "os-workloads",
+      "preview-examples"
+    ],
+    "normal_graphical_boot_configuration": "restored after stopping the failed test VM",
+    "disk": "os/work/interactive-vm/disk.qcow2",
+    "backup": "os/work/interactive-vm/disk-before-control-recovery.qcow2",
+    "mac_application_boot": "Failed readiness deadline with two emulated CPUs; one-CPU trial also failed. No performance improvement is claimed.",
+    "discarded_experiments": [
+      "one TCG CPU",
+      "application scheduling wrapper",
+      "temporary wake assertion in launcher"
+    ],
+    "computer_use": "Renewed explicit user approval received. VM launched once, but native computer-use tool still denied Programmer OS VM. VM stopped safely; no alternate observation path attempted."
   }
 }
