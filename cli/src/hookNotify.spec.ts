@@ -130,6 +130,8 @@ function runHook(opts: RunHookOpts): Promise<string> {
 async function collect(response: Record<string, unknown> = {}): Promise<{ port: number; requests: Array<{ url: string; body: Record<string, unknown> }> }> {
   const requests: Array<{ url: string; body: Record<string, unknown> }> = []
   const server = createServer((req, res) => {
+    // Local service discovery may probe a test port. Only hook POSTs belong to this fixture.
+    if (req.method !== 'POST') { res.writeHead(405).end(); return }
     let raw = ''
     req.on('data', (chunk) => { raw += chunk.toString() })
     req.on('end', () => {
@@ -240,6 +242,7 @@ describe('hook notify terminal scope', () => {
     const cursorHome = join(dir, 'cursor')
     const requests: Array<{ url: string; body: Record<string, unknown> }> = []
     const server = createServer((req, res) => {
+      if (req.method !== 'POST') { res.writeHead(405).end(); return }
       let raw = ''
       req.on('data', (chunk) => { raw += chunk.toString() })
       req.on('end', () => {
@@ -375,6 +378,7 @@ describe('hook notify terminal scope', () => {
   it('forwards tmux events regardless of legacy MACHINE_ID', async () => {
     const requests: Array<{ url: string; body: Record<string, unknown> }> = []
     const server = createServer((req, res) => {
+      if (req.method !== 'POST') { res.writeHead(405).end(); return }
       let raw = ''
       req.on('data', (chunk) => { raw += chunk.toString() })
       req.on('end', () => {
@@ -398,6 +402,7 @@ describe('hook notify terminal scope', () => {
   it('drops standalone SessionEnd but forwards tmux SessionEnd', async () => {
     const requests: Array<{ url: string; body: Record<string, unknown> }> = []
     const server = createServer((req, res) => {
+      if (req.method !== 'POST') { res.writeHead(405).end(); return }
       let raw = ''
       req.on('data', (chunk) => { raw += chunk.toString() })
       req.on('end', () => {

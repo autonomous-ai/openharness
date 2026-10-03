@@ -18,10 +18,12 @@
  *           exactly it, wherever it is.
  */
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import type { LessonRecord, LessonStore } from './store.js'
 import { projectHash } from './types.js'
+import { addExcludeEntry, isLink, isPlainDir, isPlainFile } from '../../../../cli/src/lib/projectFiles.js'
+export { addExcludeEntry, isLink, isPlainDir, isPlainFile }
 
 /** What dsh/runtime.ts copies and lists for one session. */
 export interface RuntimeLessons {
@@ -38,21 +40,6 @@ function hashesOf(dir: string): Set<string> {
   if (plain) hashes.add(plain)
   try { const real = projectHash(realpathSync(dir)); if (real) hashes.add(real) } catch { /* gone */ }
   return hashes
-}
-
-/** A regular file, not a symlink to one. */
-export function isPlainFile(path: string): boolean {
-  try { const stat = lstatSync(path); return stat.isFile() && !stat.isSymbolicLink() } catch { return false }
-}
-
-/** A real folder, not a symlink to one. */
-export function isPlainDir(path: string): boolean {
-  try { const stat = lstatSync(path); return stat.isDirectory() && !stat.isSymbolicLink() } catch { return false }
-}
-
-/** A symlink (to anything, or dangling). */
-export function isLink(path: string): boolean {
-  try { return lstatSync(path).isSymbolicLink() } catch { return false }
 }
 
 /** The approved skills a session in `workspace` loads (every one made in no project, or in this one), and its notes. */
@@ -244,20 +231,6 @@ export function excludeNotes(projectDir: string, git = 'git'): string | null {
   } catch { return null }
   if (!path) return null
   return addExcludeEntry(isAbsolute(path) ? path : resolve(projectDir, path), { pattern: NOTES_EXCLUDE, comment: 'Harness lessons (untracked notes)' })
-}
-
-/**
- * One line (under a `# comment` line) in an exclude file, once: an entry already there is left as it is.
- * Never through a symlink: null when the file or its folder is one. Creates the folder when missing; read and
- * write errors throw. Returns the file when the entry is there.
- */
-export function addExcludeEntry(file: string, entry: { pattern: string; comment: string }): string | null {
-  if (isLink(file) || isLink(join(file, '..'))) return null
-  const text = existsSync(file) ? readFileSync(file, 'utf8') : ''
-  if (text.split('\n').some((line) => line.trim() === entry.pattern)) return file
-  mkdirSync(join(file, '..'), { recursive: true })
-  appendFileSync(file, `${text && !text.endsWith('\n') ? '\n' : ''}# ${entry.comment}\n${entry.pattern}\n`)
-  return file
 }
 
 /**
