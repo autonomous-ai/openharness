@@ -2,6 +2,7 @@
 """Offline full-disk installer. Nothing is erased until the exact disk is confirmed."""
 from __future__ import annotations
 import argparse
+from contextlib import contextmanager
 import curses
 from datetime import datetime, timezone
 import hashlib
@@ -9,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -17,11 +19,37 @@ import time
 MIN_DISK_BYTES = 12 * 1024**3
 LIVE_PAYLOADS = (Path('/run/archiso/copytoram/airootfs.sfs'),
                  Path('/run/archiso/bootmnt/arch/x86_64/airootfs.sfs'))
+WORDMARK = ('█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀', '█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█')
+COMMAND_LOG = None
+INSTALL_LOG = Path('/var/log/harness-install.log')
+LAST_LOG = None
+
+
+@contextmanager
+def command_log(path):
+    """Keep command output off the form. Never record stdin (which may be a password)."""
+    global COMMAND_LOG
+    previous = COMMAND_LOG
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, 'w') as output:
+            fd = None
+            COMMAND_LOG = output
+            yield output
+    finally:
+        COMMAND_LOG = previous
+        if fd is not None:
+            os.close(fd)
 
 
 def run(*args, input=None, capture=False):
+    if COMMAND_LOG:
+        COMMAND_LOG.write('\n$ ' + shlex.join(str(a) for a in args) + '\n')
+        COMMAND_LOG.flush()
     result = subprocess.run([str(a) for a in args], input=input, check=True,
-                            stdout=subprocess.PIPE if capture else None)
+                            stdout=subprocess.PIPE if capture else COMMAND_LOG,
+                            stderr=COMMAND_LOG if capture else subprocess.STDOUT if COMMAND_LOG else None)
     return result.stdout.decode().strip() if capture else None
 
 
@@ -121,13 +149,14 @@ def preflight(config, source):
     kernel = json.loads(run('unsquashfs', '-cat', source, 'usr/share/harness-os/kernel.json', capture=True))
     if not re.fullmatch(r'usr/lib/modules/[a-zA-Z0-9._+-]+/vmlinuz', kernel.get('path', '')) or not re.fullmatch(r'[a-f0-9]{64}', kernel.get('sha256', '')):
         raise ValueError('The image has an invalid kernel manifest.')
-    payload = subprocess.check_output(['unsquashfs', '-cat', str(source), kernel['path']])
+    payload = subprocess.check_output(['unsquashfs', '-cat', str(source), kernel['path']], stderr=COMMAND_LOG)
     if hashlib.sha256(payload).hexdigest() != kernel['sha256']:
         raise ValueError('The installation kernel failed verification. No disk has been erased.')
     return kernel
 
 
-def install(config, source, target):
+def install(config, source, target, progress=None):
+    report = progress or (lambda message: print(message, flush=True))
     validate_config(config)
     # Inspect again immediately before partitioning, rather than trusting the picker.
     selected_disk(config)
@@ -137,6 +166,7 @@ def install(config, source, target):
         raise ValueError('Installation mountpoint is not empty.')
     if config.get('confirm_erase') != config['disk']:
         raise ValueError('Explicit confirmation of the exact disk is required.')
+    report('Checking installation files…')
     kernel = preflight(config, source)
     selected_disk(config)
     started = time.monotonic()
@@ -147,7 +177,7 @@ def install(config, source, target):
     opened = False
     mounted = False
     try:
-        print(f'Erasing {disk} and installing Harness...', flush=True)
+        report('Preparing the disk…')
         run('sgdisk', '--zap-all', disk)
         run('sgdisk', '-n', '1:1MiB:+2MiB', '-t', '1:ef02', '-c', '1:HN BIOS',
             '-n', '2:0:+1GiB', '-t', '2:ef00', '-c', '2:HN BOOT',
@@ -175,7 +205,7 @@ def install(config, source, target):
         for name, subvol in [('home', '@home'), ('.snapshots', '@snapshots')]:
             (target / name).mkdir()
             run('mount', '-o', f'subvol={subvol},compress=zstd:1,noatime', root_device, target / name)
-        print('Copying the verified offline system...', flush=True)
+        report('Copying Harness…')
         # Unsquashfs defaults to 512 MiB of caches. Bound them so installation
         # still fits on a 1 GiB machine after trying the bundled agent/browser.
         run('unsquashfs', '-mem', '64M', '-f', '-no-progress', '-d', target, source)
@@ -196,7 +226,7 @@ def install(config, source, target):
         # mkarchiso moves the live /boot files out of SquashFS. Regenerate the
         # disk initramfs around this verified, package-owned kernel instead.
         shutil.copyfile(target / kernel['path'], target / 'boot/vmlinuz-linux-lts')
-        print('Configuring account, boot and recovery...', flush=True)
+        report('Setting up your account…')
         # The live image is immutable. No live passwords, SSH keys or sessions are copied.
         for path in ['etc/sudoers.d/10-live', 'etc/mkinitcpio.conf.d/archiso.conf',
                      'etc/systemd/system/serial-getty@ttyS0.service.d/live.conf',
@@ -263,6 +293,7 @@ def install(config, source, target):
             shutil.copytree(networks, target / 'etc/NetworkManager/system-connections', dirs_exist_ok=True)
         chroot(target, 'systemctl', 'enable', 'NetworkManager', 'systemd-resolved', 'systemd-timesyncd')
         chroot(target, 'systemctl', 'disable', 'sshd.service')
+        report('Preparing startup and recovery…')
         chroot(target, '/usr/lib/harness-os/init-keyring')
         chroot(target, 'mkinitcpio', '-P')
         chroot(target, 'grub-install', '--target=i386-pc', '--recheck', disk)
@@ -272,8 +303,10 @@ def install(config, source, target):
                    'duration_seconds': round(time.monotonic() - started, 3), 'encrypted': config['encrypt'],
                    'disk_bytes': selected_size(config), 'root_uuid': root_uuid, 'boot_uuid': boot_uuid}
         write(target, '/var/lib/harness-os/install.json', json.dumps(receipt, indent=2) + '\n')
+        report('Finishing installation…')
         run('sync')
-        print(f"Installed in {receipt['duration_seconds']:.1f}s. Shut down, remove the USB, and boot the disk.", flush=True)
+        if progress is None:
+            print(f"Installed in {receipt['duration_seconds']:.1f}s. Shut down, remove the USB, and boot the disk.", flush=True)
     finally:
         if mounted:
             run('umount', '-R', target)
@@ -291,9 +324,13 @@ def display_text(value):
     return ''.join(c if c.isprintable() else '?' for c in str(value or '')).strip()
 
 
-def disk_label(disk):
+def disk_label(disk, width=None):
     size = f"{int(disk['size']) / 1_000_000_000:.1f}".removesuffix('.0')
-    return f"{display_text(disk.get('model')) or 'Disk'}  {size} GB"
+    model = display_text(disk.get('model')) or 'Disk'
+    suffix = f'  {size} GB'
+    if width is not None and len(model) + len(suffix) > width:
+        model = model[:max(1, width - len(suffix) - 1)] + '…'
+    return model + suffix
 
 
 class InstallForm:
@@ -306,13 +343,24 @@ class InstallForm:
         self.error = ''
         self.title = None
         self.cursor_visible = None
+        self.top, self.left, self.width = 0, 2, 60
+        self.accent = curses.A_BOLD
+        try:
+            if curses.has_colors():
+                curses.start_color()
+                curses.use_default_colors()
+                curses.init_pair(1, curses.COLOR_YELLOW, -1)
+                self.accent = curses.color_pair(1) | curses.A_BOLD
+        except curses.error:
+            pass
 
-    def line(self, row, text, active=False, bold=False):
+    def line(self, row, text, active=False, bold=False, accent=False):
         height, width = self.screen.getmaxyx()
+        row += self.top
         if row >= height or width < 5:
             return
-        attr = curses.A_REVERSE if active else curses.A_BOLD if bold else curses.A_NORMAL
-        self.screen.addnstr(row, 2, text, width - 4, attr)
+        attr = curses.A_REVERSE if active else self.accent if accent else curses.A_BOLD if bold else curses.A_NORMAL
+        self.screen.addnstr(row, self.left, text, min(self.width, width - self.left - 1), attr)
 
     def cursor(self, visible):
         if visible == self.cursor_visible:
@@ -330,6 +378,7 @@ class InstallForm:
         else:
             self.screen.erase()
         height, width = self.screen.getmaxyx()
+        self.top, self.left, self.width = 0, 2, max(1, width - 4)
         if height < 18 or width < 54:
             self.cursor(False)
             self.line(0, 'Resize terminal to at least 54 columns and 18 rows.')
@@ -338,6 +387,13 @@ class InstallForm:
             if self.key() == '\x1b':
                 raise KeyboardInterrupt('Cancelled.')
             return False
+        self.width = min(60, width - 4)
+        self.left = (width - self.width) // 2
+        self.top = max(0, (height - (22 if height >= 24 else 18)) // 2)
+        if height >= 24:
+            for row, word in enumerate(WORDMARK):
+                self.line(row, word.center(self.width), accent=True)
+            self.top += 4
         self.line(1, title, bold=True)
         return True
 
@@ -357,12 +413,14 @@ class InstallForm:
             if not self.begin('Select disk'):
                 continue
             height, _ = self.screen.getmaxyx()
-            count = max(1, height - 8)
+            count = max(1, height - self.top - 7)
             start = (selected // count) * count
             for index in range(start, min(start + count, len(self.disks))):
                 disk = self.disks[index]
                 row = 4 + index - start
-                self.line(row, ('> ' if index == selected else '  ') + disk_label(disk) + '  ' + disk['name'], index == selected)
+                name = display_text(disk['name'])
+                label = disk_label(disk, self.width - len(name) - 4)
+                self.line(row, ('> ' if index == selected else '  ') + label + '  ' + name, index == selected)
             self.cursor(False)
             self.screen.refresh()
             key = self.key()
@@ -403,9 +461,13 @@ class InstallForm:
             if not self.begin('Install Harness'):
                 continue
             disk = self.disks[self.selected]
-            self.line(4, f"{'Disk':18}{disk_label(disk)}", self.focus == 0)
+            # Identical models/capacities need a visible discriminator after selection.
+            duplicate = sum(disk_label(d) == disk_label(disk) for d in self.disks) > 1
+            suffix = '  ' + Path(disk['name']).name if duplicate else ''
+            label = disk_label(disk, self.width - 18 - len(suffix)) + suffix
+            self.line(4, f"{'Disk':18}{label}", self.focus == 0)
             self.line(6, f"{'Encryption':18}[{'x' if self.encrypt else ' '}]", self.focus == 1)
-            capacity = min(32, self.screen.getmaxyx()[1] - 24)
+            capacity = min(32, self.width - 21)
             for index, label in enumerate(('Password', 'Repeat password')):
                 position = self.positions[index]
                 offset = max(0, position - capacity + 1)
@@ -417,7 +479,8 @@ class InstallForm:
             self.cursor(self.focus in (2, 3))
             if self.focus in (2, 3):
                 position = self.positions[self.focus - 2]
-                self.screen.move(8 + (self.focus - 2) * 2, 21 + min(position, capacity - 1))
+                self.screen.move(self.top + 8 + (self.focus - 2) * 2,
+                                 self.left + 19 + min(position, capacity - 1))
             self.screen.refresh()
             key = self.key()
             if key == '\x1b':
@@ -475,22 +538,16 @@ def completion(screen):
     """Keep success visible when the installer owns an hn pane, then shut down on request."""
     screen.keypad(True)
     curses.flushinp()
-    try:
-        curses.curs_set(0)
-    except curses.error:
-        pass
+    view = InstallForm(screen, [], 'me', 'harness', True)
+    view.cursor(False)
     selected = 0
     while True:
-        screen.erase()
-        height, width = screen.getmaxyx()
-        rows = [(1, 'Harness is installed.', curses.A_BOLD),
-                (4, 'Remove the USB after shutdown.', curses.A_NORMAL),
-                (5, 'Then turn on this computer.', curses.A_NORMAL),
-                (8, '[ Shut down ]', curses.A_REVERSE if selected == 0 else curses.A_NORMAL),
-                (10, 'Back to Harness', curses.A_REVERSE if selected == 1 else curses.A_NORMAL)]
-        for row, text, attr in rows:
-            if row < height and width >= 5:
-                screen.addnstr(row, 2, text, width - 4, attr)
+        if not view.begin('Harness is installed.'):
+            continue
+        view.line(4, 'Remove the USB after shutdown.')
+        view.line(5, 'Then turn on this computer.')
+        view.line(8, '[ Shut down ]', active=selected == 0)
+        view.line(10, 'Back to Harness', active=selected == 1)
         screen.refresh()
         key = screen.get_wch()
         if key in ('\x1b', '\x03'):
@@ -499,6 +556,44 @@ def completion(screen):
             selected = 1 - selected
         elif InstallForm.enter(key):
             return selected == 0
+
+
+def install_with_progress(screen, config, source, target):
+    """A static text view: real stages, no invented percentage or extra process."""
+    view = InstallForm(screen, [], config['username'], config['hostname'], config['encrypt'])
+    view.cursor(False)
+
+    def render(message):
+        # A resize must never pause a disk operation waiting for keyboard input.
+        screen.erase()
+        height, width = screen.getmaxyx()
+        view.width = max(1, min(60, width - 4))
+        view.left = max(0, (width - view.width) // 2)
+        view.top = max(0, (height - 12) // 2)
+        if height >= 18:
+            for row, word in enumerate(WORDMARK):
+                view.line(row, word.center(view.width), accent=True)
+            view.top += 4
+        view.line(1, 'Installing Harness', bold=True)
+        view.line(4, message)
+        view.line(6, 'Keep this computer powered on.')
+        screen.refresh()
+
+    def progress(message):
+        if COMMAND_LOG:
+            COMMAND_LOG.write('\n' + message + '\n')
+            COMMAND_LOG.flush()
+        try:
+            render(message)
+        except curses.error:
+            # A display resize or lost terminal is not a reason to interrupt a
+            # disk transaction. Its diagnostics and final status are retained.
+            pass
+
+    global LAST_LOG
+    with command_log(INSTALL_LOG):
+        LAST_LOG = INSTALL_LOG
+        install(config, source, target, progress=progress)
 
 
 def arguments():
@@ -532,8 +627,10 @@ def main(args=None):
         config = interactive(username=args.username if args.username is not None else 'me',
                              hostname=args.hostname if args.hostname is not None else 'harness',
                              encrypt=not args.no_encryption)
-    install(config, source, Path('/mnt/harness-os'))
-    if not args.config:
+    if args.config:
+        install(config, source, Path('/mnt/harness-os'))
+    else:
+        curses.wrapper(lambda screen: install_with_progress(screen, config, source, Path('/mnt/harness-os')))
         if curses.wrapper(completion):
             run('systemctl', 'poweroff')
 
@@ -546,6 +643,8 @@ def entrypoint():
         return 130
     except (ValueError, OSError, curses.error, subprocess.CalledProcessError) as error:
         print(f'Installation stopped: {error}', file=sys.stderr, flush=True)
+        if not args.config and LAST_LOG is not None:
+            print(f'Details: {LAST_LOG}', file=sys.stderr, flush=True)
         # An installer launched from the USB welcome owns its pane. Retain the
         # error until it has been read instead of closing the pane immediately.
         # Unattended configuration files and piped callers never wait for input.

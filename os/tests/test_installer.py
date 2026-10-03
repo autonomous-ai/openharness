@@ -5,6 +5,8 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -167,6 +169,9 @@ class InteractiveInstall(unittest.TestCase):
         self.output = io.StringIO()
         context.enter_context(redirect_stdout(self.output))
         self.argv = ['install.py']
+        log_directory = context.enter_context(tempfile.TemporaryDirectory())
+        context.enter_context(patch.object(installer, 'INSTALL_LOG', Path(log_directory) / 'install.log'))
+        context.enter_context(patch.object(installer, 'LAST_LOG', None))
         context.enter_context(patch.object(installer.sys, 'argv', self.argv))
         context.enter_context(patch.object(installer.os, 'geteuid', return_value=0))
         self.disk = dict(name='/dev/vda', type='disk', ro=False, size=32 * 1024**3,
@@ -269,10 +274,25 @@ class InteractiveInstall(unittest.TestCase):
         config = self.install.call_args.args[0]
         self.assertEqual((config['disk'], config['confirm_erase'], config['expected_serial']),
                          ('/dev/vdb', '/dev/vdb', 'SECOND_DISK'))
-        picker = next(f for f in self.screen.frames if f.startswith('Select disk'))
+        picker = next(f for f in self.screen.frames if 'Select disk' in f.splitlines())
         disk_rows = [r for r in picker.splitlines() if '/dev/' in r]
         self.assertEqual(len(disk_rows), 2)
         self.assertTrue(all('Test SSD' in r and 'GB' in r for r in disk_rows))
+        self.assertTrue(any('vdb' in row for row in self.screen.frames[-1].splitlines() if row.startswith('Disk')))
+
+    def test_long_disk_model_keeps_size_and_device_visible_on_a_small_screen(self):
+        self.screen.size = (18, 54)
+        self.disk['model'] = 'A very long manufacturer and model name' * 3
+        self.screen.keys.extend(['\n', '\n'])
+        self.fill_passwords()
+        self.confirm()
+        installer.main()
+        picker = next(f for f in self.screen.frames if 'Select disk' in f.splitlines())
+        disk_row = next(row for row in picker.splitlines() if '/dev/' in row)
+        self.assertIn('34.4 GB', disk_row)
+        self.assertTrue(disk_row.endswith('/dev/vda'))
+        self.assertIn('…', disk_row)
+        self.assertTrue(any('34.4 GB' in row for row in self.screen.frames[-1].splitlines() if row.startswith('Disk')))
 
     def test_escaping_disk_picker_preserves_original_selection(self):
         self.inventory.return_value.append(dict(self.disk, name='/dev/vdb', serial='SECOND_DISK'))
@@ -381,6 +401,59 @@ class InstallerExit(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(error, '')
         acknowledge.assert_not_called()
+
+
+class InstallerOutput(unittest.TestCase):
+    def test_display_resize_does_not_abort_installation(self):
+        config = dict(username='me', hostname='harness', encrypt=True)
+        screen = Screen()
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(installer, 'INSTALL_LOG', Path(temp) / 'install.log'), \
+             patch.object(installer, 'LAST_LOG', None), \
+             patch.object(installer.curses, 'curs_set'), \
+             patch.object(screen, 'erase', side_effect=installer.curses.error), \
+             patch.object(installer, 'install', side_effect=lambda *args, progress: progress('Copying Harness…')) as install:
+            installer.install_with_progress(screen, config, Path('/unused'), Path('/unused-target'))
+            install.assert_called_once()
+            self.assertIn('Copying Harness…', installer.INSTALL_LOG.read_text())
+
+    def test_command_log_retains_diagnostics_and_excludes_password_input(self):
+        with tempfile.TemporaryDirectory() as temp:
+            log = Path(temp) / 'install.log'
+            log.write_text('stale log')
+            log.chmod(0o644)
+            with installer.command_log(log):
+                installer.run(sys.executable, '-c',
+                              "import sys; sys.stdin.read(); print('copied'); print('diagnostic', file=sys.stderr)",
+                              input=b'private-password-123')
+                self.assertEqual(installer.run(sys.executable, '-c', "print('metadata')", capture=True), 'metadata')
+            text = log.read_text()
+            self.assertIn('copied', text)
+            self.assertIn('diagnostic', text)
+            self.assertNotIn('private-password-123', text)
+            self.assertNotIn('stale log', text)
+            self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+            self.assertIsNone(installer.COMMAND_LOG)
+
+    def test_failed_command_is_not_success_and_log_redirection_is_restored(self):
+        with tempfile.TemporaryDirectory() as temp:
+            log = Path(temp) / 'install.log'
+            with self.assertRaises(subprocess.CalledProcessError):
+                with installer.command_log(log):
+                    installer.run(sys.executable, '-c', "import sys; print('disk error', file=sys.stderr); sys.exit(9)")
+            self.assertIn('disk error', log.read_text())
+            self.assertIsNone(installer.COMMAND_LOG)
+
+    def test_log_cannot_follow_a_symlink(self):
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / 'unrelated'
+            target.write_text('preserve')
+            log = Path(temp) / 'install.log'
+            log.symlink_to(target)
+            with self.assertRaises(OSError):
+                with installer.command_log(log):
+                    self.fail('A symlink must never be opened as the installer log')
+            self.assertEqual(target.read_text(), 'preserve')
 
 
 if __name__ == '__main__':
