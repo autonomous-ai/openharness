@@ -84,10 +84,8 @@ export interface CommanderMirrorOpts {
   subagentActive?: (sessionId: string, agentId: string) => boolean
   dataDir: string
   recapForce?: boolean
-  /** A function when it can change while the daemon runs — the pair brain switches it on with pairing. */
+  /** A function when the setting can change while the daemon runs. */
   alwaysGenerate?: boolean | (() => boolean)
-  /** Every recap that is stored, as it is stored — the pair sensor journals it (pair/sensor.ts). */
-  onSummary?: (sessionId: string, summary: { recap: string; body: string }) => void
 }
 
 interface SessionState {
@@ -376,35 +374,11 @@ export class CommanderMirror {
     ;(isError ? console.error : console.log)(`[recap] ${line}`)
   }
 
-  /**
-   * Tool calls started and not yet answered, per session, exactly as the transcript has them: the pair's
-   * floor (pair/classify.ts) reads a permission prompt from the call it is about, not from its wrapped paint.
-   */
-  private readonly toolCalls = new Map<string, Map<string, { name: string; input: unknown }>>()
-
-  /** The session's open tool calls (started, no result yet), oldest first. */
-  openTools(sessionId: string): Array<{ name: string; input: unknown }> {
-    return [...(this.toolCalls.get(sessionId)?.values() ?? [])]
-  }
-
-  private trackTool(sessionId: string, e: LiveEvent): void {
-    if (e.type === 'turn_started' || e.type === 'turn_ended') { this.toolCalls.delete(sessionId); return }
-    if (e.type === 'tool_start') {
-      let open = this.toolCalls.get(sessionId)
-      if (!open) { open = new Map(); this.toolCalls.set(sessionId, open) }
-      open.set(String(e.payload.id), { name: String(e.payload.tool || ''), input: e.payload.input })
-      if (open.size > 32) open.delete(open.keys().next().value as string)
-    } else if (e.type === 'tool_end') {
-      this.toolCalls.get(sessionId)?.delete(String(e.payload.id))
-    }
-  }
-
   /** Fold one session's LiveEvents into device commander_event frames (live cards + async recap). */
   ingest(events: LiveEvent[], sessionId: string, options?: { replay?: boolean }): void {
     const st = this.stateFor(sessionId)
     if (!options?.replay && st.turnOpen) this.notifications.continued(sessionId)
     for (const e of events) {
-      this.trackTool(sessionId, e)
       switch (e.type) {
         case 'turn_started':
           this.notifications.started(sessionId, options?.replay)
@@ -770,7 +744,6 @@ export class CommanderMirror {
           const { recap, body } = splitSummary(summary)
           const notification = this.notifications.completed(sessionId, body || recap,
             (this.opts.isSubagent?.(sessionId) ?? false) || st.abandoned)
-          try { this.opts.onSummary?.(sessionId, { recap, body }) } catch { /* an observer never costs the recap */ }
           this.trace(sessionId, `${sid} done in ${ms}ms · recap="${recap}" · bodyLen=${body.length}`)
           this.emit(sessionId, { kind: 'done', text: 'done' })
           // One decision feeds both clients. A silent recap still updates the
@@ -961,7 +934,6 @@ export class CommanderMirror {
     // The state object is about to be dropped; a held turn-end timer would fire against a dead session.
     if (st) this.clearEndTimers(st)
     this.states.delete(sessionId)
-    this.toolCalls.delete(sessionId)
     // NB: intentionally do NOT delete this.summaries[sessionId] — reuse it on the next resume.
     this.emit(sessionId, { kind: 'done', text: 'done' })
   }

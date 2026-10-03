@@ -25,7 +25,6 @@ import {
 } from './askQuestion.js'
 import type { RegisteredSession } from './registry.js'
 import type { AgentEngine } from '../engines/types.js'
-import { isAllowClass } from '../pair/classify.js'
 
 const fixture = (name: string): string => readFileSync(join(__dirname, '__fixtures__', `question-${name}.txt`), 'utf8')
 const permission = (name: string): string => readFileSync(join(__dirname, '__fixtures__', `permission-${name}.txt`), 'utf8')
@@ -228,7 +227,6 @@ describe('a stale `Approve …` header (regression: a header from an earlier dia
   const unframed = [' Do you want to proceed?', '   python3 scripts/wipe.py --all', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel', '']
   const headerOnly = [rule, ' Bash command', '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel'].join('\n')
   const rmRf = permission('claude').replaceAll('curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin', 'rm -rf ~/projects')
-  const project = { permission: true, cwd: '/tmp/project' }
 
   it('pickAnswer: an approval is named by its own text only, never a prefix either way', () => {
     expect(pickAnswer({ 'Approve Bash command': 'Yes' }, 'Approve Bash command: rm -rf ~/projects', new Set())).toBeNull()
@@ -264,9 +262,6 @@ describe('a stale `Approve …` header (regression: a header from an earlier dia
     expect(view.question).toBe('python3 scripts/wipe.py --all')
     expect(view.dialog).not.toMatch(/Bash command|^\s*npm test$|Tab to amend/m)
     expect(view.dialog).toContain('python3 scripts/wipe.py --all')
-    expect(isAllowClass(view.dialog!, project)).toBe(false)
-    // What it was read as before: `Approve Bash command: npm test`, a dialog the classifier allows a [y] on.
-    expect(isAllowClass([' Bash command', '', '   npm test', ''].join('\n'), project)).toBe(true)
   })
 
   it('an earlier question dialog ends the walk the same way; right under one, the title is "Approval required"', () => {

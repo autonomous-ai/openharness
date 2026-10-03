@@ -132,7 +132,6 @@ import {
 } from './lib/terminalBinary.js'
 import { b64d, fingerprint, isWrapped } from './lib/e2ee/core.js'
 import { encryptRpcResult, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType } from './lib/e2ee/applicationFrames.js'
-import type { PairEvent, PairService } from './pair/protocol.js'
 import { tmuxPaneInfo } from './lib/tmux.js'
 import { DEVICE_RECENT_SAFE_FRAME_BYTES, fitRecentReplyPayloadForDevice } from './lib/deviceRecentTrim.js'
 import { shouldReplayCommander } from './lib/commanderReplay.js'
@@ -792,17 +791,6 @@ export class BackendSocket {
   /** Receives `theme_set` — the desktop's pane colours, to become this machine's tmux
    *  `window-style` (lib/hostTheme.ts). Wired by cli.ts; null answers with UNSUPPORTED. */
   hostThemeSink: ((theme: HostTheme) => void) | null = null
-  /**
-   * The pair brain's sensor (pair/sensor.ts): answers the sealed `pair_*` RPCs another machine's brain
-   * sends, and the loopback-only `pair` request. Null answers UNSUPPORTED, like an older daemon.
-   */
-  pairService: PairService | null = null
-  /** The owning machine's reads and writes for the pair (pair/owner.ts). Null: those answer UNSUPPORTED. */
-  pairOwner: { handle: (type: string, payload: Record<string, unknown>, from: { connId: string; label?: string | null }) => Promise<Record<string, unknown>> } | null = null
-  /** The control interface (pair/control.ts) behind the loopback `pair` request: the verbs it answers. */
-  pairControl: { verbs: ReadonlySet<string>; local: (payload: Record<string, unknown>, connId: string) => Promise<Record<string, unknown>> } | null = null
-  /** The account's zoo changed (a `zoo_changed` from the backend) — cli.ts re-reads which daemon is paired. */
-  onZooChanged: ((revision: number) => void) | null = null
   /** The account's device key log grew (lib/e2ee/deviceLogSyncer.ts): re-read it from this machine's head. */
   onDeviceKeysChanged: (() => void) | null = null
   /** This machine's key was taken out of the account's device key log (`machine_revoked` says so). */
@@ -814,17 +802,6 @@ export class BackendSocket {
   onLinkUp: (() => void) | null = null
   /** Appends to the device key log waiting for the backend's answer, by requestId. */
   private readonly devlogAppends = new Map<string, (payload: Record<string, unknown> | null) => void>()
-  /**
-   * Whether daemons run at all (lib/daemonsSwitch.ts). Off, the loopback `pair` request (`harness pair`, the
-   * MCP server) is answered DAEMONS_OFF before any verb runs, except the verified owner's local coding
-   * memory opt-in setting. That setting does not read memory or start a companion. Null: always on.
-   */
-  daemonsOn: (() => boolean) | null = null
-  /**
-   * An individual's art (pair/plateService.ts), for the phone's sealed `pair_plate_get` → `pair_plate`. Null
-   * answers UNSUPPORTED, like an older daemon. The service answers DAEMONS_OFF itself while daemons are off.
-   */
-  plateService: { get: (payload: Record<string, unknown>) => Promise<Record<string, unknown>> } | null = null
   runtimeProfileProvider: ((session: RegisteredSession) => string | null) | null = null
   onRuntimeProfileUpdate: ((sessionId: string, selectedModel: string) => Promise<void>) | null = null
   /** Web↔adapter E2EE: group-encrypts user events, runs the CPace pairing, holds per-conn sessions. */
@@ -1445,7 +1422,6 @@ export class BackendSocket {
     if (!this.toolClients.delete(connId)) this.onLocalClient?.(connId, false)
     this.rowStateWindows.delete(connId)
     this.viewerForwarder.closeConnection(connId)
-    this.pairService?.unwatch(connId)
     this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId)
     // The window left before any link could hear it attach: nothing happened, as far as the backend
     // is concerned, and a later link must not be told otherwise.
@@ -1699,75 +1675,6 @@ export class BackendSocket {
     this.send({ type: resultType, payload: { requestId, ...payload } })
   }
 
-  /**
-   * The pair brain's requests (daemons/BRAIN.md):
-   *   - `pair_watch` / `pair_journal` from another machine's brain, answered by the sensor;
-   *   - `pair_list`, `pair_read` and the writes (`pair_answer`, `pair_send`, `pair_stop`, `pair_start`,
-   *     `pair_pause`, `pair_resume`), answered by the owning machine's PairOwner (pair/owner.ts), which
-   *     re-checks the floor and journals every action;
-   *   - the loopback-only `pair`: the control interface's verbs (pair/control.ts) when it is wired, the
-   *     sensor's own read verbs otherwise.
-   * An older daemon answers every one of them UNSUPPORTED, which a brain already handles.
-   */
-  private handlePair(connId: string, type: string, payload: Record<string, unknown>, local: boolean,
-    reply: (t: string, rid: unknown, p: Record<string, unknown>) => void): void {
-    const requestId = payload.requestId
-    const service = this.pairService
-    const detached = (work: Promise<Record<string, unknown>>): void => {
-      void work.then((result) => reply(type, requestId, result)).catch(() => reply(type, requestId, { error: 'PAIR_FAILED' }))
-    }
-    if (type === 'pair') {
-      if (!local) { reply(type, requestId, { error: 'LOCAL_ONLY', detail: 'Ask the pair brain on this computer.' }); return }
-      const verb = typeof payload.verb === 'string' ? payload.verb : ''
-      const control = this.pairControl
-      // The owner must be able to clear the saved opt-in without turning companions on. Only these
-      // two settings actions reach MemoryControl, which checks their full schema and verifies the OS
-      // caller. Ordinary library, recall and agent tools remain inert while the master switch is off.
-      const memorySetting = control?.verbs.has('memory') && verb === 'memory' &&
-        (payload.action === 'experiment' || payload.action === 'configure_experiment')
-      if (this.daemonsOn && !this.daemonsOn() && !memorySetting) { reply(type, requestId, { error: 'DAEMONS_OFF', detail: 'Daemons are off for this account or on this computer.' }); return }
-      if (control && control.verbs.has(verb)) { detached(control.local(payload, connId)); return }
-      if (!service) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
-      detached(service.local(payload))
-      return
-    }
-    // The machine-to-machine requests come from ANOTHER machine, sealed. This computer's own processes use
-    // `pair` (a tool) or the window's daemon_* frames; a loopback `pair_*` would be a local process
-    // claiming to be a remote brain — and the owner treats a remote request as one (daemons/BRAIN.md).
-    if (local) { reply(type, requestId, { error: 'REMOTE_ONLY', detail: 'pair_* requests come from another machine.' }); return }
-    if (!service) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
-    if (!service.enabled()) { reply(type, requestId, { error: 'PAIR_OFF' }); return }
-    if (type === 'pair_watch') {
-      if (payload.off === true) { service.unwatch(connId); reply(type, requestId, { ok: true }); return }
-      const snapshot = service.watch(connId, (event) => this.sendPairEvent(connId, event))
-      reply(type, requestId, { snapshot })
-      return
-    }
-    if (type === 'pair_journal') { reply(type, requestId, { ...service.journal(payload) }); return }
-    const owner = this.pairOwner
-    if (!owner) {
-      reply(type, requestId, type === 'pair_read' ? service.read(payload) : { error: 'UNSUPPORTED' })
-      return
-    }
-    // Detached: an answer keys a dialog and a pause saves a conversation, both seconds of work that must
-    // not hold the watch's pushes behind them on this connection.
-    detached(owner.handle(type, payload, { connId, label: this.e2ee.sessionLabel(connId) }))
-  }
-
-  /** One `pair_event` to one watcher: plaintext over loopback, sealed pairwise (`wrapTarget`) otherwise.
-   *  Through the same ordered queue as the watch's reply, and only while the link is up — a push for a
-   *  connection the backend has forgotten is dropped there anyway. False = stop pushing to it. */
-  private sendPairEvent(connId: string, event: PairEvent): boolean {
-    const payload = event as unknown as Record<string, unknown>
-    const local = this.localClients.get(connId)
-    if (local) return local.sendFrame({ type: 'pair_event', payload })
-    if (!this.isConnected()) return false
-    const frame = this.e2ee.wrapTarget(connId, 'pair_event', payload)
-    if (!frame) return false
-    this.sendTo(connId, frame)
-    return true
-  }
-
   private async dispatchDown(frame: Frame, connId: string, transport: DownTransport = 'relay'): Promise<void> {
     const type = frame.type as string | undefined
     if (!type) return
@@ -1900,7 +1807,6 @@ export class BackendSocket {
       this.autonomousDeviceRelay?.drop(connId)
       this.e2ee.dropSession(connId)
       this.viewerForwarder.closeConnection(connId)
-      this.pairService?.unwatch(connId)
       this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId)
       await this.terminalP2p.closeConnection(connId, 'client_disconnected', false)
       this.p2pPendingOpens.delete(connId)
@@ -1951,7 +1857,6 @@ export class BackendSocket {
     if (type === 'zoo_changed') {
       const revision = (typeof frame.payload === 'object' && frame.payload !== null ? (frame.payload as { revision?: unknown }).revision : undefined)
       this.sendLocal({ type: 'zoo_changed', payload: { revision: typeof revision === 'number' ? revision : 0 } })
-      this.onZooChanged?.(typeof revision === 'number' ? revision : 0)
       return
     }
 
@@ -2068,21 +1973,12 @@ export class BackendSocket {
       return
     }
 
-    // The pair brain (daemons/BRAIN.md). `pair_*` come from another machine's brain and reach here only
-    // sealed — the default-deny above already refused them in the clear. `pair` is this computer's own.
-    if (PAIR_REQUESTS.has(type) || type === 'pair') {
-      this.handlePair(connId, type, payload, local, reply)
-      return
-    }
-    // An individual's art for the phone, sealed (the default-deny above refused it in the clear). A window
-    // on this computer asks `daemon_plate_get` over the Unix socket instead; the same request over loopback
-    // would let a TCP client past that, so it is refused like a loopback `pair_*`.
-    if (type === PLATE_REQUEST) {
-      if (local) { reply(type, requestId, { error: 'REMOTE_ONLY', detail: 'On this computer, ask daemon_plate_get over the daemon\'s socket.' }); return }
-      const plates = this.plateService
-      if (!plates) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
-      // Detached: a plate not drawn yet takes seconds, and this connection's other requests must not wait.
-      void plates.get(payload).then((result) => reply(type, requestId, result)).catch(() => reply(type, requestId, { error: 'RENDER_FAILED' }))
+    // Retired optional-feature requests remain reserved. Never reinterpret one as an
+    // ordinary command or weaken its existing encryption / local transport boundary.
+    if (PAIR_REQUESTS.has(type) || type === 'pair' || type === PLATE_REQUEST) {
+      const error = type === 'pair' && !local ? 'LOCAL_ONLY'
+        : type !== 'pair' && local ? 'REMOTE_ONLY' : 'UNSUPPORTED'
+      reply(type, requestId, { error })
       return
     }
 
