@@ -88,6 +88,11 @@ records three pairs, the rejected initial accounting experiment, and both the
 hidden-cursor idle improvement and higher foreground active-output CPU. It does
 not establish overall energy savings.
 
+The [macOS discovery experiment](../../../docs/performance/2026-10-02-daemon-process-discovery.md)
+records a cheaper executable-image probe, inconsistent connected CPU results,
+and a diagnostic that keeps the same app and worker processes alive. The
+candidate remains unmerged while the higher fresh-process active CPU is investigated.
+
 ## Core experiences and process resources
 
 ```sh
