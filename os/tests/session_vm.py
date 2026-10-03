@@ -32,7 +32,11 @@ for line in sys.stdin:
 
 def put(vm, path, data):
     encoded = base64.b64encode(data.encode()).decode()
-    vm.command('printf %s ' + encoded + ' | base64 -d > ' + shlex.quote(path))
+    scratch = shlex.quote(path + '.base64')
+    vm.command(': > ' + scratch)
+    for start in range(0, len(encoded), 1800):
+        vm.command('printf %s ' + encoded[start:start + 1800] + ' >> ' + scratch)
+    vm.command('base64 -d ' + scratch + ' > ' + shlex.quote(path) + '; rm ' + scratch)
 
 
 def screen_text(vm, name):
@@ -158,6 +162,8 @@ def main():
     parser.add_argument('--iso', type=Path, required=True)
     parser.add_argument('--firmware', choices=['bios', 'uefi'], required=True)
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--session-file', type=Path,
+                        help='Explicitly test this candidate launcher over the verified base ISO; records its hash and reboots before checking')
     args = parser.parse_args()
     if not os.access('/dev/kvm', os.R_OK | os.W_OK):
         parser.error('Use native x86 KVM for session and suspend acceptance.')
@@ -204,6 +210,21 @@ def main():
         print('Booting the installed session', flush=True)
         vm.login_installed(config)
         vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+        tty_probe = "sudo -n stty -a -F /dev/tty1; ps -u 1000 -o pid,ppid,sid,tpgid,tty,comm --width 200"
+        output, _ = vm.command(tty_probe)
+        (folder / 'base-console-state.txt').write_text(output)
+        if args.session_file:
+            candidate = args.session_file.read_bytes()
+            result['candidate_session'] = {'path': str(args.session_file), 'sha256': hashlib.sha256(candidate).hexdigest(),
+                'scope': 'Only /usr/lib/harness-os/session replaced in disposable installed guest; other files are the verified base image'}
+            put(vm, '/tmp/session-candidate', candidate.decode())
+            vm.command('sudo install -o root -g root -m 755 /tmp/session-candidate /usr/lib/harness-os/session; sync')
+            vm.stop()
+            vm.start(live=False)
+            vm.login_installed(config)
+            vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+            output, _ = vm.command(tty_probe)
+            (folder / 'candidate-console-state.txt').write_text(output)
         installed_session(vm, config, result)
         assert 'live_lock_error' not in result, 'The unconfigured live session could not be unlocked'
         result['status'] = 'passed'

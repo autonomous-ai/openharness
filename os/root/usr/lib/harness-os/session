@@ -20,9 +20,20 @@ mkdir -p "$HOME/.local/bin" "$HOME/Projects" "$HOME/.local/state/harness-os"
 # Use the systemd user's existing bus so activation and the compositor share one
 # environment. A second dbus-run-session bus would split those services.
 export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+# The graphical keyboard belongs to Wayland. In particular, an autologin TTY
+# must not interpret Ctrl+C as SIGINT for the compositor's foreground group.
+# Restore the console before using hn's text fallback or leaving the session.
+tty_state=$(stty -g 2>/dev/null || true)
+restore_tty() {
+    if [ -n "$tty_state" ]; then stty "$tty_state" 2>/dev/null || true; fi
+}
+trap restore_tty EXIT
+if [ -n "$tty_state" ]; then stty -echo -icanon -isig; fi
 if labwc -C /usr/share/harness-os/labwc > "$HOME/.local/state/harness-os/display.log" 2>&1; then
     exit 0
 fi
+restore_tty
+trap - EXIT
 # A missing/broken GPU driver must not strand the programmer at a blank screen.
 # Stay in hn on the Linux console; an agent can install drivers and arrange a reboot.
 systemctl --user stop harness-os.target || true

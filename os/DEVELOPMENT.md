@@ -32,9 +32,12 @@ not introduce a desktop, control panel, background updater or extra launcher.
    Harness test.
 
 `session_checks=true` with an `image_run_id` in the Harness OS workflow exercises
-the published image's live and installed lock, wrong-password input isolation,
-and actual virtual ACPI suspend/resume. The same terminal process, heartbeat and
-project must survive. This complements installation tests; it does not establish
+the published image's live session, then its installed session with the candidate
+`os/root/usr/lib/harness-os/session` launcher. The receipt records both the base
+image and that file's hash; a reboot activates the candidate before lock,
+wrong-password input isolation and actual virtual ACPI suspend/resume checks.
+The same terminal process, heartbeat and project must survive. This is a quick
+integration check, followed by a fresh final image test. It does not establish
 physical laptop suspend, radio, audio or battery behavior.
 
 ## The feedback loop
