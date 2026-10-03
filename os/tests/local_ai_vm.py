@@ -34,6 +34,9 @@ def main():
     served.mkdir()
     script = Path(__file__).with_name('local_ai_guest.py')
     shutil.copyfile(script, served / script.name)
+    (served / 'browser.html').write_text('<!doctype html><html lang="en"><title>Harness check</title>'
+        '<style>body{font:32px monospace;margin:3rem}</style>'
+        '<h1>Optional driver browser check</h1><p>Harness preview is visible.</p></html>')
     server = ThreadingHTTPServer(('127.0.0.1', 0), partial(SimpleHTTPRequestHandler, directory=str(served)))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     vm = VM(folder, iso, 'uefi', 4096)
@@ -90,8 +93,21 @@ def main():
             result['post_driver_reboot_keyboard'] = check_graphical_keyboard(vm, 'nvidia-package-reboot')
             vm.keys('meta_l', 'b')
             vm.command('for n in $(seq 1 30); do pgrep -x chromium && exit 0; sleep 1; done; exit 1')
-            vm.screenshot('browser-after-driver-packages')
-            result['generic_browser_after_driver_reboot'] = 'passed; virtual GPU only'
+            vm.command('hn-browser ' + shlex.quote(f'http://10.0.2.2:{server.server_port}/browser.html'))
+            deadline = time.monotonic() + 45
+            while time.monotonic() < deadline:
+                vm.screenshot('browser-after-driver-packages')
+                visible = subprocess.check_output(['tesseract', str(folder / 'browser-after-driver-packages.png'),
+                    'stdout', '--psm', '11'], text=True, stderr=subprocess.DEVNULL, timeout=10)
+                if 'Harness preview is visible.' in visible:
+                    (folder / 'browser-after-driver-packages.txt').write_text(visible)
+                    break
+                time.sleep(1)
+            else:
+                raise AssertionError('Chromium did not render the expected page after driver installation')
+            vm.keys('meta_l', 'ret')
+            result['return_to_terminal_keyboard'] = check_graphical_keyboard(vm, 'after-browser')
+            result['generic_browser_after_driver_reboot'] = 'passed: rendered page and return to hn; virtual GPU only'
         result['status'] = 'passed'
     except BaseException as error:
         result.update(status='failed', error=repr(error))

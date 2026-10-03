@@ -8,9 +8,11 @@ on:
         type: string
         default: '37149350400'
         required: true
-  push:
-    branches: ['os-polish/local-ai-*']
-    paths: ['os/tests/local_ai_*.py', '.github/workflows/os-local-ai.yml']
+      probe:
+        description: 'Assessment to run'
+        type: choice
+        options: [both, local-ai, nvidia]
+        default: both
 
 permissions:
   contents: read
@@ -27,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        probe: [local-ai, nvidia]
+        probe: ${{ inputs.probe == 'nvidia' && fromJSON('["nvidia"]') || inputs.probe == 'local-ai' && fromJSON('["local-ai"]') || fromJSON('["local-ai", "nvidia"]') }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v6

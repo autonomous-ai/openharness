@@ -82,7 +82,7 @@ and [Ollama's integration guide](https://docs.ollama.com/integrations/opencode)
 cover configuration; full agent workloads need substantially more context and
 memory than this small conversation test.
 
-Run the complete assessment with `image_run_id` in that workflow, or on a native
+Run the assessment with `image_run_id` and `probe` in that workflow, or on a native
 x86 KVM host with its image and matching `manifest.json`:
 
 ```sh
