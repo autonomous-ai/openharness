@@ -296,7 +296,7 @@ def main():
         result['installed_hn_ready_seconds_including_test_login'] = round(time.monotonic() - vm.started, 3)
         vm.command('test "$(id -un)" = ' + shlex.quote(config['username']) +
                    ' && test "$HOME" = ' + shlex.quote('/home/' + config['username']) +
-                   ' && test "$(hostname)" = ' + shlex.quote(config['hostname']))
+                   ' && test "$(uname -n)" = ' + shlex.quote(config['hostname']))
         vm.command('test ! -e /etc/sudoers.d/10-live && ! sudo -n true')
         vm.command('! pgrep -x chromium')
         vm.command('test "$(npm prefix -g)" = "$HOME/.local"')

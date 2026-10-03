@@ -391,13 +391,22 @@
         "os/system.py": "5e04e3f213cf0276df6cd7724af734d6f52f59f8aa1a7dce057347805c81c05b",
         "os/tests/test_system.py": "3e5f226ef656c0a830ec8ee6904b359b516dea009acfe9cc147feefec13908df"
       },
-      "affected_installer_tests": "7 passed; final syntax and diff checks passed"
+      "affected_installer_tests": "7 passed; final syntax and diff checks passed",
+      "working_copy_after_cli_options": {
+        "result": "26 portable tests and Python/JSON/XML/shell syntax passed",
+        "scope": "Includes uncommitted interactive CLI changes, not present in the previously built ISO; does not validate the proposed disk picker/checkbox interface.",
+        "sha256": {
+          "os/installer.py": "2b0f58bedf6fc1107c384535d3c80ea54ecdac449d35d9b02f13867f643d159f",
+          "os/tests/test_installer.py": "a7265db6cdd3b6ad93acb7ad456f9b3753af6ac71814a1453135c0f4298863a7",
+          "os/tests/vm.py": "3ebfb7dc815b77e1969c0ae62667e2c1b34411f829356504cb6054876da5c14a"
+        }
+      }
     },
     "native_validation_started_utc": "2026-10-03T04:13:46Z",
     "native_validation_completed_utc": null,
     "merge_utc": null,
     "publication_utc": null,
-    "limitations": "Preview 1 remains the published image. The first preview 2 image built and inspected successfully, but native validation failed in the update fixture. A fresh build is required for the changed installer defaults and the corrected machine test; no candidate release is claimed.",
+    "limitations": "Preview 1 remains the published image. Both preview 2 images built and inspected successfully; machine checks failed in test fixtures. Rerun the corrected machine check against the exact second ISO without rebuilding. Installer interaction design is still being discussed; local CLI prompt changes are not part of that ISO.",
     "implementation_revised_utc": "2026-10-03T04:28:01.749594+00:00",
     "installer_defaults": {
       "username": "me",
@@ -414,10 +423,28 @@
         "iso_sha256": "67816cd667a4be9c2f0560f8f9e4981a28b5ffcc0a4d1a9c1161764aaf0ff221",
         "image": "passed",
         "bios": "failed in the new update fixture after successful installation and boot",
-        "uefi": "still running at this record",
+        "uefi": "failed in the new update fixture after successful encrypted installation and boot",
         "diagnosis": "Pacman stops at the first unreachable repository; appending the local fixture after core prevented it from syncing. Put the local repository first so the check exercises a real partially synchronized database state.",
         "evidence": "os/test-results/ci-37095837835-bios/bios-plain/update-retry.log"
+      },
+      {
+        "run_id": 37096639763,
+        "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37096639763",
+        "source_commit": "7a64753b25819b833d5b20f39862f9fab8d97e2a",
+        "iso_sha256": "6c8ee5a89ae8dda35c133276d50fa22635c1e726c96ced94ee82505e7ec2985c",
+        "started_utc": "2026-10-03T04:28:09Z",
+        "completed_utc": "2026-10-03T04:41:00Z",
+        "image": "passed",
+        "bios": "failed after successful installation and boot, before the update fixture",
+        "uefi": "failed after successful encrypted installation and boot, before the update fixture",
+        "diagnosis": "The account/hostname assertion invoked hostname, which is not installed in the minimal image. Use coreutils uname -n to inspect the active kernel hostname without adding a package. Guest shell metadata already showed me@harness; update retry and later checks were not reached.",
+        "evidence": [
+          "os/test-results/ci-37096639763-bios/bios-plain/receipt.json",
+          "os/test-results/ci-37096639763-uefi/uefi-encrypted/receipt.json"
+        ]
       }
-    ]
+    ],
+    "test_fixture_revised_utc": "2026-10-03T04:46:52.305584+00:00",
+    "installer_ux_proposal": "A keyboard-selectable disk list, visible encryption checkbox enabled by default, password twice, and explicit Erase and install confirmation. No typed device path. Proposed after user feedback; not implemented or validated."
   }
 }
