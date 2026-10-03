@@ -1,6 +1,6 @@
 # Install Harness on a ThinkPad
 
-These instructions are for **0.1.0-preview.4**, using a Mac to prepare the USB.
+These instructions are for **0.1.0-preview.5**, using a Mac to prepare the USB.
 The USB starts a live session. Installation begins only when you choose **Install**
 in the installer; it erases the entire selected disk.
 
@@ -11,28 +11,29 @@ in the installer; it erases the entire selected disk.
 - An internal disk of at least 12 GiB, with important files backed up elsewhere.
 - AC power. Installation works offline; trying a cloud agent needs a connection.
 
-Start with 2 GiB RAM or more. This preview passed installation, reboot, recovery
-and a first OpenCode conversation in 1 GiB VMs. Allow more memory for browser
+Start with 2 GiB RAM or more. Preview 4 passed installation, reboot, recovery
+and a first OpenCode conversation in 1 GiB VMs; each new image repeats the native
+installation and boot checks before publication. Allow more memory for browser
 tabs, concurrent agents and local models.
-Preview 2 was installed and booted on a physical ThinkPad. Wi-Fi, suspend and GPU
+Preview 4 was installed, booted and used on a physical ThinkPad by the user. Wi-Fi, suspend and GPU
 compute still need testing on the actual hardware.
 
 ## 2. Download and verify on the Mac
 
-From the [preview 4 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.4),
+From the [preview 5 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.5),
 download both files into the same folder:
 
-- `harness-0.1.0-preview.4-x86_64.iso`
-- `harness-0.1.0-preview.4-x86_64.iso.sha256`
+- `harness-0.1.0-preview.5-x86_64.iso`
+- `harness-0.1.0-preview.5-x86_64.iso.sha256`
 
 If they are in Downloads, open Terminal and run:
 
 ```sh
 cd ~/Downloads
-shasum -a 256 -c harness-0.1.0-preview.4-x86_64.iso.sha256
+shasum -a 256 -c harness-0.1.0-preview.5-x86_64.iso.sha256
 ```
 
-The result must say `harness-0.1.0-preview.4-x86_64.iso: OK`.
+The result must say `harness-0.1.0-preview.5-x86_64.iso: OK`.
 If it does not, download the files again before flashing.
 
 ## 3. Flash the USB
@@ -126,13 +127,38 @@ below mean **Shift + letter**.
 | Super+B | Open/focus Chromium, or return to Harness |
 | Super+Enter | Focus Harness |
 | Super+L | Lock; unlock with the account password |
+| Super+U | Updates |
 | `hn-browser http://localhost:3000` | Open a local project in the browser |
 | `sudo systemctl poweroff` | Shut down |
 
 Claude Code, Codex, OpenCode and pi each run in their own pane. Let the agent
 install the tools the project needs. Save work under `~/Projects`.
 
-## 8. First manual test
+## 8. Updates
+
+A small **Update ready · Super+U** notice appears when a new hn or CLI release
+has downloaded and passed its checks. Press **Super+U**, then Enter to apply it.
+The screen reconnects; your running agents and terminal processes remain.
+Use **R** in Updates to restore the previous runtime if needed.
+
+System updates use **S** in the same screen and ask for your account password.
+They retain a recovery checkpoint and rebuild the boot image. When the screen
+offers **Restart now**, save your work and press Enter when ready. Downloads do
+not restart the computer, and routine updates do not require another USB flash.
+
+Preview 4 needs the small bootstrap bundle from the new preview release once.
+Verify and extract that bundle, open a terminal in its folder, and run:
+
+```sh
+sha256sum -c SHA256SUMS
+sudo python3 apply-update.py apply "$PWD"
+```
+
+Reboot when it finishes; subsequent updates are available through Super+U.
+If the bootstrap fails, use `sudo python3 apply-update.py rollback` from that
+same folder before trying again.
+
+## 9. First manual test
 
 1. Boot with the USB removed. Confirm disk unlock and the Harness home screen.
 2. Connect Wi-Fi, open a terminal, type a command, and exit with Ctrl+D.
@@ -150,7 +176,7 @@ unlock screen and the time from submitting the password to Harness separately.
 
 If something fails, keep the exact error and ThinkPad model. `hn-os status` and
 `hn-os measure` provide system information. Keep passwords and agent tokens private.
-The [OS README](https://github.com/autonomous-ai/openharness/blob/os/boot-to-hn/os/README.md#updates-and-recovery) describes updates and recovery.
+The [OS README](https://github.com/autonomous-ai/openharness/blob/main/os/README.md#updates-and-recovery) describes updates and recovery.
 
 ## Older USB images
 

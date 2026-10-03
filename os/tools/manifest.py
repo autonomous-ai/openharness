@@ -18,11 +18,20 @@ with iso.open('rb') as handle:
 (out / (iso.name + '.sha256')).write_text(f'{digest}  {iso.name}\n')
 packages = (root / 'usr/share/harness-os/packages.txt').read_text()
 (out / 'packages.txt').write_text(packages)
+capabilities = []
+if all((root / path).is_file() for path in [
+        'usr/lib/harness-os/live_update.py',
+        'usr/lib/systemd/user/harness-update.timer']):
+    capabilities.append('runtime-updates')
+if (root / 'usr/lib/harness-os/release_update.py').is_file():
+    capabilities.append('system-updates')
 manifest = {
     'version': lock['version'], 'architecture': 'x86_64',
     'source_commit': os.environ.get('HARNESS_OS_SOURCE_SHA') or subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
     'built_at_unix': int(time.time()), 'arch_snapshot': lock['arch_snapshot'],
     'iso': {'name': iso.name, 'bytes': iso.stat().st_size, 'sha256': digest},
+    'capabilities': capabilities,
+    'package_version': dict(row.split(maxsplit=1) for row in packages.splitlines())['harness-os'],
     'harness_inputs': json.loads((root / 'usr/share/harness-os/runtime.json').read_text()), 'validation': 'pending',
 }
 (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')

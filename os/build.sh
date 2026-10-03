@@ -42,7 +42,9 @@ Server = https://archive.archlinux.org/repos/$SNAPSHOT/\$repo/os/\$arch
 Server = https://archive.archlinux.org/repos/$SNAPSHOT/\$repo/os/\$arch
 EOF
 # Reuse the same package assembly for fresh images and small development updates.
-python3 tools/build-package.py --runtime "$RUNTIME_DIR" --output "$BUILD_DIR/repo"
+# Use the same source-versioned identity as its update-channel package. An ISO
+# installation should not immediately be offered this identical build again.
+python3 tools/build-package.py --runtime "$RUNTIME_DIR" --output "$BUILD_DIR/repo" --development
 repo-add "$BUILD_DIR/repo/harness-build.db.tar.gz" "$BUILD_DIR/repo/"*.pkg.tar.gz
 cp -a live/. "$PROFILE/airootfs/"
 mkdir -p "$PROFILE/airootfs/root" "$PROFILE/airootfs/etc/pacman.d/hooks"

@@ -159,6 +159,7 @@ def main():
     notes = root / 'release-notes.md'
     interactive_install = all(any(c.startswith('Keyboard disk selection, encryption checkbox') for c in r['checks']) for r in receipts)
     update_retry = all(any(c.startswith('Failed full update blocks package changes') for c in r['checks']) for r in receipts)
+    in_place_updates = {'runtime-updates', 'system-updates'}.issubset(manifest.get('capabilities', []))
     project_source_runs = sorted({str(r['workload_project_source_run_id']) for r in receipts if r.get('workload_project_source_run_id')})
     reuse_note = ('Completed project sources were retained from ' + ', '.join(
         f'[run {source}](https://github.com/{args.repo}/actions/runs/{source})' for source in project_source_runs) +
@@ -171,7 +172,9 @@ To try it: follow the included `INSTALL.md` for Mac → USB → ThinkPad instruc
 
 {'The installer has four aligned fields: disk, encryption, password, repeat password. Disk choices fit on one line. Activate Install to begin; there is no second confirmation screen or minimum password length. Empty passwords are rejected. The account is me@harness. The password initially protects both the local account and, when enabled, the encrypted disk. There is no first-boot account wizard.' if interactive_install else ''}
 
-{'Interrupted full OS updates now block ordinary package transactions until a full retry succeeds. Retrying keeps the original recovery checkpoint. This was exercised with a real failed repository refresh, blocked package upgrade, successful retry, and offline recovery. The bundled Harness runtime remains pinned to this preview; hn-os update updates Arch packages.' if update_retry else ''}
+{'Interrupted full OS updates block ordinary package transactions until a full retry succeeds. Retrying keeps the original recovery checkpoint. This was exercised with a real failed repository refresh, blocked package upgrade, successful retry, and offline recovery. hn-os update upgrades Arch packages.' if update_retry else ''}
+
+{'Super+U opens Updates. hn and CLI releases are prepared automatically; Enter activates an available runtime update. hn reconnects to the local tabs while agent processes keep running. System updates are a separate action in the same screen, with a checkpoint and a restart when you are ready. Neither channel automatically interrupts your work. Older preview 4 installations need the matching small bootstrap bundle once; routine updates do not require reflashing.' if in_place_updates else ''}
 
 BIOS/plain and UEFI/encrypted VM boot, clipboard, browser switching, offline installation and package-checkpoint recovery passed. The BIOS VM uses a Nehalem CPU profile without AVX2, starts bundled OpenCode, installs the other agent executables, installs a compiler on demand, builds C, and serves a local Node preview. See `validation.json` and `machine-evidence.zip` for the exact checks and measurements.
 

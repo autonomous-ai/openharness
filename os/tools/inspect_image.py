@@ -32,6 +32,9 @@ def inspect(iso):
         files = {str(p.relative_to(source / 'root')): p for p in (source / 'root').rglob('*') if p.is_file()}
         files.update({'usr/lib/harness-os/install.py': source / 'installer.py',
                       'usr/lib/harness-os/system.py': source / 'system.py',
+                      'usr/lib/harness-os/runtime_update.py': source / 'runtime_update.py',
+                      'usr/lib/harness-os/live_update.py': source / 'live_update.py',
+                      'usr/lib/harness-os/release_update.py': source / 'release_update.py',
                       'usr/bin/hn-os': source / 'tools/hn-os',
                       'usr/share/harness-os/lock.json': source / 'lock.json'})
         for path, expected in files.items():
@@ -62,7 +65,11 @@ def inspect(iso):
         names = set(inventory)
         version = json.loads(read('usr/share/harness-os/lock.json'))['version']
         assert version == manifest['version'], 'Image version differs from the build manifest'
-        assert inventory['harness-os'] == version.replace('-preview.', 'pre') + '-1', 'OS package version differs from the image version'
+        package_version = inventory['harness-os']
+        expected_version = re.escape(version.replace('-preview.', 'pre')) + r'\.r\d+\.g' + manifest['source_commit'][:10] + '-1'
+        assert re.fullmatch(expected_version, package_version), 'OS package version differs from the image source'
+        assert package_version == manifest['package_version'], 'OS package version differs from the manifest'
+        assert set(manifest['capabilities']) == {'runtime-updates', 'system-updates'}, 'Update capabilities are missing from the manifest'
         wanted = {row.strip() for row in (source / 'packages.x86_64').read_text().splitlines() if row.strip() and not row.startswith('#')}
         assert wanted.issubset(names), f'Missing packages: {wanted - names}'
         config = read('etc/pacman.conf').decode()
