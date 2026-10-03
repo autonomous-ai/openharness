@@ -269,8 +269,8 @@ def interactive():
     if not candidates:
         raise ValueError('No unmounted, writable whole disk of at least 12 GiB is available.')
     config = {'disk': input('\nInstall to whole disk: ').strip(),
-              'username': input('Username [programmer]: ').strip() or 'programmer',
-              'hostname': input('Computer name [programmer]: ').strip() or 'programmer',
+              'username': input('Username [me]: ').strip() or 'me',
+              'hostname': input('Computer name [harness]: ').strip() or 'harness',
               'encrypt': input('Encrypt the disk? [Y/n]: ').strip().lower() != 'n'}
     config['password'] = getpass.getpass('Account and disk-unlock password: ' if config['encrypt'] else 'Account password: ')
     if getpass.getpass('Repeat password: ') != config['password']:

@@ -13,9 +13,10 @@ The release's `validation.json` identifies the exact image and coverage.
 [Download the verified preview](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.1)
 or [run the standalone HTML/CSS landing page](site/README.md).
 
-The branch is preparing preview 2 with interrupted-update protection. Its image
-and machine checks are pending; the published download and measurements below
-remain preview 1.
+The branch is preparing preview 2 with interrupted-update protection and shorter
+installer defaults: username `me` and computer name `harness`, both editable.
+Candidate machine checks are pending; the published download and measurements
+below remain preview 1.
 
 ## Design
 

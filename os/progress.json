@@ -6,7 +6,7 @@
   "merge_utc": null,
   "publication_utc": "2026-10-03T02:03:47Z",
   "completion_utc": null,
-  "status": "Preview 1 remains published and verified. Continued work prepares preview 2 with failed-update protection; native candidate checks pending. Local visual checks still await saved permission changes.",
+  "status": "Preview 1 remains published and verified. Preparing preview 2 with interrupted-update protection and me@harness installer defaults. Corrected a native update-test fixture failure; fresh candidate validation required. Local visual permissions still pending.",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -257,7 +257,7 @@
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
     "Build and validate preview 2 update failure/retry behavior in disposable native x86 machines"
   ],
-  "last_updated_utc": "2026-10-03T04:13:24.219808+00:00",
+  "last_updated_utc": "2026-10-03T04:28:01.749594+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -373,13 +373,15 @@
       "Persist incomplete full-update state before repository or package changes.",
       "Block ordinary package transactions until a full-update retry succeeds.",
       "Retain the original recovery checkpoint across failed and interrupted retries.",
-      "Identify the OS package with the candidate image version using pacman prerelease ordering."
+      "Identify the OS package with the candidate image version using pacman prerelease ordering.",
+      "Use the user-selected editable installer defaults me@harness and validate installation under that account."
     ],
     "validation_plan": [
       "Portable installer/recovery/publication/protocol tests and source syntax checks.",
       "Build a fresh candidate ISO and inspect its exact payload, package version and manifest.",
       "Native BIOS/plain and UEFI/encrypted installation, update failure and successful retry, original checkpoint retention, package hook, offline recovery and reboot.",
-      "Existing hn/CLI lifecycle, compiler and applicable agent executable checks in the native workflow."
+      "Existing hn/CLI lifecycle, compiler and applicable agent executable checks in the native workflow.",
+      "Verify the installed me account, /home/me, hostname harness, and authentication in both firmware modes."
     ],
     "local_validation": {
       "system_unit_tests": "10 passed during implementation",
@@ -388,12 +390,34 @@
       "validated_runtime_sha256": {
         "os/system.py": "5e04e3f213cf0276df6cd7724af734d6f52f59f8aa1a7dce057347805c81c05b",
         "os/tests/test_system.py": "3e5f226ef656c0a830ec8ee6904b359b516dea009acfe9cc147feefec13908df"
-      }
+      },
+      "affected_installer_tests": "7 passed; final syntax and diff checks passed"
     },
-    "native_validation_started_utc": null,
+    "native_validation_started_utc": "2026-10-03T04:13:46Z",
     "native_validation_completed_utc": null,
     "merge_utc": null,
     "publication_utc": null,
-    "limitations": "Previous image and workload evidence still identifies preview 1. Preview 2 has not yet passed machine validation. Username, hostname and encryption installer changes are discussion only."
+    "limitations": "Preview 1 remains the published image. The first preview 2 image built and inspected successfully, but native validation failed in the update fixture. A fresh build is required for the changed installer defaults and the corrected machine test; no candidate release is claimed.",
+    "implementation_revised_utc": "2026-10-03T04:28:01.749594+00:00",
+    "installer_defaults": {
+      "username": "me",
+      "hostname": "harness",
+      "editable": true,
+      "encryption_default": true,
+      "selection_recorded_utc": "2026-10-03T04:28:01.749594+00:00"
+    },
+    "native_attempts": [
+      {
+        "run_id": 37095837835,
+        "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37095837835",
+        "source_commit": "8d3b09afda1e5be67d7581b07eff3db826649b79",
+        "iso_sha256": "67816cd667a4be9c2f0560f8f9e4981a28b5ffcc0a4d1a9c1161764aaf0ff221",
+        "image": "passed",
+        "bios": "failed in the new update fixture after successful installation and boot",
+        "uefi": "still running at this record",
+        "diagnosis": "Pacman stops at the first unreachable repository; appending the local fixture after core prevented it from syncing. Put the local repository first so the check exercises a real partially synchronized database state.",
+        "evidence": "os/test-results/ci-37095837835-bios/bios-plain/update-retry.log"
+      }
+    ]
   }
 }

@@ -138,14 +138,14 @@ class VM:
                 self.screenshot('delayed-disk-unlock')
             self.send(config['password'] + '\n')
         self.wait(r'login:', timeout=180)
-        self.send('programmer\n')
+        self.send(config['username'] + '\n')
         self.wait(r'Password:')
         self.send(config['password'] + '\n')
         self.wait(r'\$ ')
         self.shell_ready = True
         self.command('stty -echo')
         if not config['encrypt']:
-            for word in ['programmer', config['password']]:
+            for word in [config['username'], config['password']]:
                 for char in word:
                     self.keys('minus' if char == '-' else char)
                 self.keys('ret')
@@ -277,7 +277,7 @@ def main():
             result['status'] = 'passed'
             return
         config = dict(disk='/dev/vda', expected_serial='HN_OS_TEST', confirm_erase='/dev/vda',
-                      username='programmer', hostname='hn-test', password='test-password-123',
+                      username='me', hostname='harness', password='test-password-123',
                       encrypt=args.encrypt, serial_console=True)
         encoded = base64.b64encode(json.dumps(config).encode()).decode()
         vm.command(f"printf %s {shlex.quote(encoded)} | base64 -d > /run/hn-install-test.json; chmod 600 /run/hn-install-test.json")
@@ -294,6 +294,9 @@ def main():
         if unlock_delay:
             result['checks'].append('Encrypted disk still unlocks after waiting more than the default device timeout')
         result['installed_hn_ready_seconds_including_test_login'] = round(time.monotonic() - vm.started, 3)
+        vm.command('test "$(id -un)" = ' + shlex.quote(config['username']) +
+                   ' && test "$HOME" = ' + shlex.quote('/home/' + config['username']) +
+                   ' && test "$(hostname)" = ' + shlex.quote(config['hostname']))
         vm.command('test ! -e /etc/sudoers.d/10-live && ! sudo -n true')
         vm.command('! pgrep -x chromium')
         vm.command('test "$(npm prefix -g)" = "$HOME/.local"')
@@ -446,7 +449,7 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
         result['error'] = str(error)
         if vm.shell_ready:
             try:
-                diagnostics, _ = vm.command('journalctl -b --no-pager -n 350; systemctl --failed --no-pager; cat /home/programmer/.local/state/harness-os/display.log; ps -ef', timeout=20, check=False)
+                diagnostics, _ = vm.command('journalctl -b --no-pager -n 350; systemctl --failed --no-pager; cat /home/*/.local/state/harness-os/display.log; ps -ef', timeout=20, check=False)
                 (folder / 'guest-diagnostics.log').write_text(diagnostics)
             except Exception:
                 pass

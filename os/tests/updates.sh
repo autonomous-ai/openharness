@@ -13,7 +13,17 @@ for version in 1 2; do
 done
 pacman --noconfirm -U "$work/repo/hn-os-update-probe-1-1-any.pkg.tar.zst"
 repo-add "$work/repo/hn-update-test.db.tar.gz" "$work/repo/hn-os-update-probe-2-1-any.pkg.tar.zst"
-printf '\n[hn-update-test]\nSigLevel = Never\nServer = file://%s/repo\n' "$work" >> /etc/pacman.conf
+# Pacman stops at the first unavailable repository. Sync the local fixture
+# before hitting the disconnected Arch mirror, leaving a real mixed DB state.
+python3 - "$work" <<'PY'
+from pathlib import Path
+import sys
+config = Path('/etc/pacman.conf')
+text = config.read_text()
+assert '[core]\n' in text
+repo = f'[hn-update-test]\nSigLevel = Never\nServer = file://{sys.argv[1]}/repo\n\n'
+config.write_text(text.replace('[core]\n', repo + '[core]\n', 1))
+PY
 before=$(find /.snapshots -mindepth 1 -maxdepth 1 -type d | wc -l)
 # The local repository can sync v2, but the full Arch refresh fails. A later
 # ordinary install would otherwise upgrade against this partially synced state.
