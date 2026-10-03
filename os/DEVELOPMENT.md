@@ -135,6 +135,10 @@ a clean USB install to verify that upgrades have not hidden an installation bug.
   exercises a constrained machine; `memory_mib=4096` and `live_transport=usb`
   exercise automatic copy-to-RAM. `workloads=true` or `dsh=true` runs the relevant
   real-agent exercises. See the [measured evidence](README.md#real-programmer-exercises).
+- `workload_seed_run_id` preserves generated projects and reruns their acceptance
+  checks without another model turn. Enable `workloads=true` as well only when
+  asking the agent to repair the existing game's layout. The host reads control
+  labels from captured pixels, so a canvas legend does not need HTML duplicates.
 - `python3 os/tools/run-vm.py --iso PATH` creates a persistent virtual disk and
   opens the installer. `--installed` subsequently boots that disk without the ISO.
   `--directory PATH` keeps independent test machines separate.
