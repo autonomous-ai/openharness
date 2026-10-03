@@ -235,6 +235,9 @@ pub fn fill(app: &App, picker: &mut Picker) {
         rows.push(Row::new("machines", "Machines").right("Manage computer connections"));
         picker.status = "Physical Harness devices connected to your computers".into();
     }
+    // Device settings have a fixed order, independent of the inventory page
+    // that led here. Live inventory updates retain their existing row positions.
+    if app.hardware.selection.is_some() { picker.rows.clear(); }
     picker.keep_order = true; picker.set_rows(rows);
     picker.hints = vec![("enter", "choose"), ("esc", "back")];
 }
@@ -261,6 +264,7 @@ fn back(app: &mut App, mut picker: Picker) {
         crate::settings::back_to_commands_at(app, &mut picker, "cmd:hardware-devices");
         app.modal = Some(Modal::Picker { kind: PickerKind::Commands, picker }); return;
     } else { app.modal = None; return };
+    picker.rows.clear();
     fill(app, &mut picker);
     picker.scroll = 0; picker.select(&focus);
     app.modal = Some(Modal::Picker { kind: PickerKind::Hardware, picker });
