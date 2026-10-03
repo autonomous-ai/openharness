@@ -1,23 +1,26 @@
 # Harness landing page
 
 A standalone page: HTML, CSS, local fonts, and four real screenshots. No JavaScript,
-framework, package installation, analytics, or build step. This directory is not
-part of the OS image.
+framework, package installation, analytics, or page build step. It is served at
+<https://harness.autonomous.ai/os> by the existing website host, separately from
+the OS image. `os/site` is a compatibility symlink to this directory.
 
 From the repository root:
 
 ```sh
-python3 -m http.server 18092 --bind 127.0.0.1 --directory os/site
+python3 -m http.server 18092 --bind 127.0.0.1 --directory website/public
 ```
 
-Open `http://127.0.0.1:18092/`. Deploy the contents of this directory unchanged to
-any static host. Asset paths are relative so a subdirectory works too.
+Open `http://127.0.0.1:18092/os/`. The HTML base is `/os/`, so assets and in-page
+links resolve under the same path with or without a trailing slash. The website's
+`/os` rewrite serves this file directly without adding JavaScript. Release through
+the [website pipeline](../../README.md#releasing).
 
 ## Content and assets
 
 - The central narrative is **“Agents are the new apps.”** Conversation directs the
   work; terminal output, diffs, tests, and an optional browser make it inspectable.
-  Follow the [Naming System](../../docs/naming-system.md): Harness is the product,
+  Follow the [Naming System](../../../docs/naming-system.md): Harness is the product,
   programmers are the first audience, and owning Autonomous hardware is optional.
 - The page walks through installation, encrypted boot, and working with agents.
   Keep shipped behavior and future hardware support distinct. Ordinary Harness
@@ -56,7 +59,7 @@ use the keyboard to reach every link and toggle the disclosures. Confirm that
 no content overflows at 320 px, 390 px, 768 px, and desktop widths.
 
 The updated page passed HTML5/CSS parsing, asset, font, image-dimension, local
-anchor, and current release-download-name checks on October 3. The user approved visual review, but
-Chrome still rejected the exact local URL on October 3 because of a saved site
-permission. Visual layout and interactive browser checks remain unverified until
-that review succeeds. Do not replace it with an alternate browser or control path.
+anchor, and current release-download-name checks on October 3. The user visually
+reviewed the page and approved deployment on October 3. Automated browser review
+was blocked by the saved local site permission; responsive widths and keyboard
+interaction have not been independently checked in this revision.

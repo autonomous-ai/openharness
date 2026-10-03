@@ -3,6 +3,8 @@ name: Release web
 # Builds the Flutter web bundle from desktop/, bakes it into website/Dockerfile.k8s, and pushes the
 # result to gcr.io/autonomous-ecm/autonomous-code-website, on a pushed `v*_web` tag. ArgoCD deploys
 # that image to harness.autonomous.ai.
+# A tag annotated `Website-Only: true` keeps the pinned, already deployed Flutter
+# bundle. The release helper verifies that pin before creating such a tag.
 #
 # ONE REPO, ONE COMMIT. The site used to be a React app in the private autonomous-ai/autonomous-code
 # repo (apps/web) that hosted this bundle, and a web release was a relay: this repo published the bundle as a GitHub Release, a PR
@@ -60,6 +62,8 @@ jobs:
       HAS_WIF: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
 
       # Tag-only trigger, so GITHUB_REF_NAME is already the bare tag (e.g. v1.3.1_web) and that is
       # the image tag ArgoCD deploys by. The X.Y.Z inside it is also the bundle's version.
@@ -72,9 +76,19 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME is not vX.Y.Z_web"
             exit 1
           }
+          website_only=false
+          archive_path="$BUNDLE_IN_CONTEXT"
+          if git for-each-ref --format='%(contents)' "$GITHUB_REF" | grep -qx 'Website-Only: true'; then
+            website_only=true
+            archive_path=''
+            # Check again at publication time in case another app release landed.
+            python3 desktop/scripts/verify-website-only-release.py "$GITHUB_SHA" live
+          fi
           {
             echo "IMAGE_TAG=${GITHUB_REF_NAME}"
             echo "WEB_VERSION=${version}"
+            echo "WEBSITE_ONLY=${website_only}"
+            echo "ARCHIVE_PATH=${archive_path}"
           } >> "$GITHUB_ENV"
 
       - name: Fail early if no GCP credential was supplied
@@ -85,12 +99,14 @@ jobs:
           exit 1
 
       - uses: subosito/flutter-action@v2
+        if: env.WEBSITE_ONLY != 'true'
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
 
       - name: Build the Flutter web bundle
+        if: env.WEBSITE_ONLY != 'true'
         working-directory: desktop
         run: bash scripts/build-web-release.sh "$WEB_VERSION"
 
@@ -99,6 +115,7 @@ jobs:
       # the committed manifest — which pins an older release for local development — is replaced
       # with this build's own.
       - name: Stage the bundle in the image build context
+        if: env.WEBSITE_ONLY != 'true'
         run: |
           set -euo pipefail
           cp "desktop/build/web-dist/harness-web-${WEB_VERSION}.tar.gz" "${BUILD_CONTEXT}/${BUNDLE_IN_CONTEXT}"
@@ -143,7 +160,7 @@ jobs:
           cache-from: type=gha
           # Build args are PUBLIC to anyone who can pull the image. Only non-sensitive values here.
           build-args: |
-            HARNESS_WEB_ARCHIVE=${{ env.BUNDLE_IN_CONTEXT }}
+            HARNESS_WEB_ARCHIVE=${{ env.ARCHIVE_PATH }}
 
       # Last, so a failed image build can be re-run without tripping over a release it already made.
       - name: Publish the bundle as a GitHub Release
@@ -151,6 +168,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          if [ "$WEBSITE_ONLY" = true ]; then
+            printf '%s\n' \
+              'Website-only update. The existing Flutter app bundle is preserved.' \
+              "Served by harness.autonomous.ai from image ${IMAGE_NAME}:${IMAGE_TAG}." \
+              > "$RUNNER_TEMP/web-release-notes.md"
+            gh release create "$IMAGE_TAG" website/harness-web-release.json \
+              --verify-tag --latest=false --title "Harness Website $WEB_VERSION" \
+              --notes-file "$RUNNER_TEMP/web-release-notes.md"
+            exit 0
+          fi
           printf '%s\n' \
             'Browser build of the shared desktop Flutter app.' \
             "Served by harness.autonomous.ai from image ${IMAGE_NAME}:${IMAGE_TAG}." \

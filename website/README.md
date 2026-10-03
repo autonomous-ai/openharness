@@ -13,6 +13,7 @@ retired; only the host routes below were kept.
 | `/`, `/s/:id`, `/auth/callback`, `/callback` | The Flutter app (`public/harness-web/index.html`, via `rewrites()` in `next.config.js`) |
 | `/download` (and `/install` → it) | Install page: CLI command and desktop downloads |
 | `/pair` | Phone setup guidance — the mobile app and the desktop "add phone" dialog link here |
+| `/os` | The Harness operating system landing page: plain HTML/CSS, local fonts and screenshots in `public/os/` |
 | `/desktop` | Desktop download page |
 | `/desktop/download-macos`, `/desktop/download/linux-{x64,arm64}` | Redirect to the latest build in the desktop manifest |
 | `/flash-circle.sh` | The dial firmware flasher script |
@@ -30,6 +31,13 @@ Push a `vX.Y.Z_web` tag — `make release-web` from the repo root cuts the next 
 `gcr.io/autonomous-ecm/autonomous-code-website:<tag>` and `:latest`. ArgoCD rolls it out; verify
 `https://harness.autonomous.ai/harness-web/release.json` afterward. Rollback is the previous image
 tag, which carries its own bundle. The bundle is also published as a GitHub Release.
+
+For a website-only change, first pin `harness-web-release.json` to the currently
+deployed web release, then use `make release-web ARGS="--website-only"`. The helper
+checks that pin against production before creating the tag. Its `Website-Only: true`
+annotation tells CI to reuse that checksum-verified bundle instead of rebuilding
+Flutter. The new image gets its own version; `/harness-web/release.json` continues
+to identify the preserved app bundle. Verify the changed route after rollout.
 
 ## Local development
 

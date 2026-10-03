@@ -60,6 +60,8 @@ module.exports = {
         // Local website previews use the SSO service's native loopback callback.
         { source: '/callback', destination: '/harness-web/index.html' },
         { source: '/harness-web', destination: '/harness-web/index.html' },
+        // Plain HTML/CSS; served as a file without a React or Flutter runtime.
+        { source: '/os', destination: '/os/index.html' },
       ],
     }
   },
@@ -71,6 +73,17 @@ module.exports = {
           { key: 'Referrer-Policy', value: 'origin' },
         ],
       },
+      {
+        source: '/os/:path*',
+        headers: [
+          { key: 'Cache-Control', value: 'public, max-age=0, must-revalidate' },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+        ],
+      },
+      ...['/os', '/os/index.html'].map((source) => ({
+        source,
+        headers: [{ key: 'Cache-Control', value: 'no-store' }],
+      })),
       {
         source: '/harness-web/:path*',
         headers: [

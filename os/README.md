@@ -19,7 +19,7 @@ Both the live and installed system use `me@harness`.
 
 [Download preview 4](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.4)
 · [Mac → USB → ThinkPad installation guide](INSTALL.md)
-· [Standalone HTML/CSS landing page](site/README.md)
+· [Standalone HTML/CSS landing page](../website/public/os/README.md)
 · [Development feedback loop and Mac support targets](DEVELOPMENT.md)
 
 The exact image passed BIOS/plain and UEFI/encrypted USB installation, boot,

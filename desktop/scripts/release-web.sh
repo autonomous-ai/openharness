@@ -14,6 +14,7 @@
 #   bash desktop/scripts/release-web.sh              # bump the patch of the last v*_web tag and ship
 #   bash desktop/scripts/release-web.sh --dry-run    # print the plan, tag/push nothing
 #   bash desktop/scripts/release-web.sh --minor      # bump the MINOR version
+#   bash desktop/scripts/release-web.sh --website-only # preserve the deployed Flutter bundle
 #   bash desktop/scripts/release-web.sh 1.3.0        # an explicit version
 #
 # RESUMING: after a failure, re-run with the SAME explicit version — an existing tag is reused rather
@@ -39,11 +40,13 @@ RUN_APPEAR_TIMEOUT="${RUN_APPEAR_TIMEOUT:-180}"   # seconds for the tag's workfl
 
 DRY_RUN=0
 DO_MINOR=0
+WEBSITE_ONLY=0
 NEW_VER=""
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     --minor) DO_MINOR=1 ;;
+    --website-only) WEBSITE_ONLY=1 ;;
     -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "ERROR unknown flag: $arg" >&2; exit 1 ;;
     *) NEW_VER="${arg#v}" ;;
@@ -90,6 +93,12 @@ TAG="v${VER}_web"
 if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
   TAG_EXISTS=1
   SHA="$(git rev-list -n1 "$TAG")"
+  # A resume follows the immutable tag's mode, not new command-line flags.
+  if git for-each-ref --format='%(contents)' "refs/tags/$TAG" | grep -qx 'Website-Only: true'; then
+    WEBSITE_ONLY=1
+  else
+    [ "$WEBSITE_ONLY" -eq 0 ] || die "$TAG is a full web release; it cannot become website-only"
+  fi
 else
   TAG_EXISTS=0
   [ -z "$(git status --porcelain)" ] || { git status --short >&2; die "working tree is dirty — the tag must capture the tested source exactly"; }
@@ -100,11 +109,18 @@ else
     || die "$VER is not higher than the last web release $LAST_VER"
 fi
 
+EXPECTED_BUNDLE_VERSION="$VER"
+if [ "$WEBSITE_ONLY" -eq 1 ]; then
+  command -v python3 >/dev/null 2>&1 || die "python3 is required for website-only release verification"
+  EXPECTED_BUNDLE_VERSION="$(python3 desktop/scripts/verify-website-only-release.py "$SHA" "$([ "$TAG_EXISTS" -eq 0 ] && echo live || echo manifest)")"
+fi
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 say "release : $TAG @ ${SHA:0:8}  $(git log -1 --format=%s "$SHA" | cut -c1-60)$([ "$TAG_EXISTS" -eq 1 ] && echo '  (tag exists — resuming)')"
 say "image   : gcr.io/autonomous-ecm/autonomous-code-website:$TAG (+ :latest)"
+[ "$WEBSITE_ONLY" -eq 0 ] || say "bundle  : retain verified Harness Web $EXPECTED_BUNDLE_VERSION"
 
 if [ "$DRY_RUN" -eq 1 ]; then
   say "DRY RUN — nothing tagged or pushed."
@@ -113,7 +129,11 @@ fi
 
 # --- 1. the tag ---
 if [ "$TAG_EXISTS" -eq 0 ]; then
-  git tag -a "$TAG" -m "Harness web $VER" "$SHA"
+  if [ "$WEBSITE_ONLY" -eq 1 ]; then
+    git tag -a "$TAG" -m "Harness website $VER" -m 'Website-Only: true' "$SHA"
+  else
+    git tag -a "$TAG" -m "Harness web $VER" "$SHA"
+  fi
   git push origin "$TAG"
   say "pushed $TAG"
 fi
@@ -133,8 +153,8 @@ if ! gh release view "$TAG" --json assets -q '.assets[].name' 2>/dev/null | grep
     || die "build failed — fix it and cut the next version: gh run view $RUN_ID --log-failed"
 fi
 gh release download "$TAG" -p harness-web-release.json -D "$WORK" --clobber
-grep -q "\"version\": \"$VER\"" "$WORK/harness-web-release.json" \
-  || die "the release's manifest is not for $VER"
+grep -q "\"version\": \"$EXPECTED_BUNDLE_VERSION\"" "$WORK/harness-web-release.json" \
+  || die "the release's manifest is not for $EXPECTED_BUNDLE_VERSION"
 say "image pushed, bundle published: https://github.com/$REPO/releases/tag/$TAG"
 
-say "done — once ArgoCD rolls $TAG out, https://harness.autonomous.ai/harness-web/release.json reports $VER"
+say "done — once ArgoCD rolls $TAG out, verify the changed routes; the web bundle reports $EXPECTED_BUNDLE_VERSION"
