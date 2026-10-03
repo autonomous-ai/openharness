@@ -3036,6 +3036,7 @@ class _TerminalHeader extends StatelessWidget {
                             constraints: BoxConstraints(maxWidth: badgeWidth),
                             child: PullRequestBadge(
                               compact: narrow,
+                              foreground: notifier.foreground,
                               identity: (
                                 session.machineId,
                                 agent.id,
