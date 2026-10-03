@@ -1,6 +1,8 @@
 import 'dart:collection';
 
 class ByteConsumer {
+  static final _wideCharacter = RegExp(r'[\u0100-\uffff]');
+
   final _queue = ListQueue<List<int>>();
 
   final _consumed = ListQueue<List<int>>();
@@ -13,7 +15,12 @@ class ByteConsumer {
 
   void add(String data) {
     if (data.isEmpty) return;
-    final runes = data.runes.toList(growable: false);
+    // Latin-1 code units are already complete runes. Keep the string's read-only
+    // view instead of allocating/copying an int for every character. Wider text
+    // retains the original rune decoder (also faster for two-byte strings).
+    final runes = _wideCharacter.hasMatch(data)
+        ? data.runes.toList(growable: false)
+        : data.codeUnits;
     _queue.addLast(runes);
     _length += runes.length;
   }
