@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 SCRIPT = Path(__file__).resolve().parents[1] / "record-ci-validation.py"
@@ -55,7 +56,7 @@ class EvidenceTests(unittest.TestCase):
             archive.writestr(name, json.dumps(summary))
         return stream.getvalue()
 
-    def collect(self, scope="cli", target="HEAD", with_pr=False, pr_after=None):
+    def collect(self, scope="cli", target="HEAD", with_pr=False, pr_after=None, expected_run=None):
         fixture = self
 
         class FakeClient:
@@ -79,7 +80,7 @@ class EvidenceTests(unittest.TestCase):
                 fixture.command_args = args
                 return fixture.archives[args[-1]] if hasattr(fixture, "archives") else fixture.archive
 
-        return recorder.collect(FakeClient(), self.root, 123, scope, target, self.output, 5 if with_pr else None)
+        return recorder.collect(FakeClient(), self.root, 123, scope, target, self.output, 5 if with_pr else None, expected_run)
 
     def test_complete_record_checks_identity_digest_coverage_and_pr(self):
         result = self.collect(with_pr=True)
@@ -248,6 +249,12 @@ class EvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "PR head/base changed"):
                 self.collect(with_pr=True, pr_after=after)
 
+    def test_waited_attempt_cannot_be_replaced_before_collection(self):
+        self.assertEqual(self.collect(expected_run=self.run)["status"], "passed")
+        for change in [dict(run_attempt=2), dict(head_sha="b" * 40), dict(id=124)]:
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, "between waiting"):
+                self.collect(expected_run=dict(self.run, **change))
+
     def test_stable_pr_pointing_elsewhere_needs_source_review(self):
         self.pr["head"]["sha"] = "b" * 40
         result = self.collect(with_pr=True)
@@ -268,6 +275,104 @@ class EvidenceTests(unittest.TestCase):
         client.api = lambda _: {"total_count": 1, "jobs": []}
         with self.assertRaisesRegex(ValueError, "incomplete pagination"):
             client.pages("jobs", "jobs")
+
+
+class WaitTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 0
+        self.run = dict(id=123, repository=dict(full_name="owner/repo"), path=".github/workflows/ci.yml",
+                        head_sha="a" * 40, run_attempt=1, status="completed", conclusion="success")
+        self.client = recorder.Client("owner/repo", 120)
+        self.patch(recorder.time, "monotonic", side_effect=lambda: self.now)
+        self.sleep = self.patch(recorder.time, "sleep", side_effect=self.advance)
+        self.patch(recorder, "print", create=True)
+
+    def patch(self, obj, name, **kwargs):
+        patcher = mock.patch.object(obj, name, **kwargs)
+        value = patcher.start()
+        self.addCleanup(patcher.stop)
+        return value
+
+    def advance(self, seconds):
+        self.now += seconds
+
+    def observe(self, runs):
+        self.client.api = mock.Mock(side_effect=runs)
+        return recorder.wait_for_run(self.client, 123)
+
+    def test_live_states_and_completed_fast_path_follow_one_run(self):
+        for states in [[], ["queued", "pending", "waiting", "requested", "in_progress"]]:
+            with self.subTest(states=states):
+                self.now = 0
+                self.sleep.reset_mock()
+                result = self.observe([dict(self.run, status=s, conclusion=None) for s in states] + [self.run])
+                self.assertEqual(result, self.run)
+                self.assertEqual(self.sleep.call_count, len(states))
+                self.assertTrue(all(call == mock.call("actions/runs/123") for call in self.client.api.call_args_list))
+
+    def test_failed_or_cancelled_runs_stop_without_following_a_later_rerun(self):
+        for conclusion in ["failure", "cancelled", "timed_out", "action_required", "skipped"]:
+            with self.subTest(conclusion=conclusion), self.assertRaisesRegex(ValueError, "CI has not passed"):
+                self.observe([dict(self.run, conclusion=conclusion), dict(self.run, run_attempt=2)])
+            self.assertEqual(self.client.api.call_count, 1)
+        self.sleep.assert_not_called()
+
+    def test_identity_changes_and_unknown_states_fail_closed(self):
+        for change in [dict(id=124), dict(repository=dict(full_name="other/repo")), dict(path="other.yml"),
+                       dict(head_sha="b" * 40), dict(run_attempt=2), dict(status="unknown")]:
+            self.now = 0
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.observe([dict(self.run, status="queued", conclusion=None), dict(self.run, **change)])
+
+    def test_wait_deadline_does_not_restart_or_cancel_the_job(self):
+        self.client.deadline = 12
+        pending = dict(self.run, status="in_progress", conclusion=None)
+        with self.assertRaisesRegex(TimeoutError, "follow the same run 123"):
+            self.observe([pending, pending])
+        self.assertEqual(self.now, 12)
+        self.assertEqual(self.sleep.call_args_list, [mock.call(10), mock.call(2)])
+        self.assertEqual(self.client.api.call_count, 2)
+
+    def test_cli_keeps_waiting_and_collection_budgets_and_receipts_separate(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root, output = Path(folder), Path(folder) / "evidence"
+            self.patch(recorder.subprocess, "check_output", return_value=str(root))
+            self.patch(recorder, "markdown", return_value="verified\n")
+
+            def wait(client, run_id):
+                self.assertEqual((client.deadline, run_id), (120, 123))
+                self.advance(40)
+                return self.run
+
+            def collect(client, *args, expected_run=None):
+                self.assertEqual(client.deadline, 130)  # A fresh 90s after waiting 40s.
+                self.assertEqual(expected_run, self.run)
+                self.advance(5)
+                return dict(status="passed")
+
+            self.patch(recorder, "wait_for_run", side_effect=wait)
+            self.patch(recorder, "collect", side_effect=collect)
+            result = recorder.main(["123", "--repo", "owner/repo", "--scope", "process", "--wait",
+                                    "--wait-timeout", "120", "--output", str(output)])
+            receipt = json.loads((output / "receipt.json").read_text())
+            self.assertEqual(result, 0)
+            self.assertEqual(receipt["waiting"]["duration_seconds"], 40)
+            self.assertEqual(receipt["waiting"]["head_sha"], self.run["head_sha"])
+            self.assertEqual(receipt["collection"]["duration_seconds"], 5)
+
+    def test_cli_preserves_wait_failure_without_attempting_collection(self):
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "evidence"
+            self.patch(recorder.subprocess, "check_output", return_value=folder)
+            self.patch(recorder, "wait_for_run", side_effect=TimeoutError("CI wait deadline exceeded"))
+            collect = self.patch(recorder, "collect")
+            result = recorder.main(["123", "--scope", "process", "--wait", "--output", str(output)])
+            receipt = json.loads((output / "receipt.json").read_text())
+            self.assertEqual(result, 1)
+            self.assertIn("waiting", receipt)
+            self.assertNotIn("collection", receipt)
+            self.assertIn("CI wait deadline", receipt["error"])
+            collect.assert_not_called()
 
 
 if __name__ == "__main__":

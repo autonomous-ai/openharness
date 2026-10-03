@@ -73,14 +73,43 @@ class Client:
             page += 1
 
 
-def check_run(run, repository, run_id):
+def check_run_identity(run, repository, run_id):
     if (run.get("id") != run_id or run.get("repository", {}).get("full_name", "").lower() != repository.lower()
             or run.get("path") != ".github/workflows/ci.yml" or not re.fullmatch(r"[0-9a-f]{40}", run.get("head_sha", ""))):
         raise ValueError("run repository, workflow or source does not match this CI request")
-    if run.get("status") != "completed" or run.get("conclusion") != "success":
-        raise ValueError(f"CI has not passed: {run.get('status')}/{run.get('conclusion')}; follow the same run")
     if type(run.get("run_attempt")) is not int or run["run_attempt"] < 1:
         raise ValueError("run attempt is missing")
+
+
+def check_run(run, repository, run_id):
+    check_run_identity(run, repository, run_id)
+    if run.get("status") != "completed" or run.get("conclusion") != "success":
+        raise ValueError(f"CI has not passed: {run.get('status')}/{run.get('conclusion')}; follow the same run")
+
+
+def wait_for_run(client, run_id):
+    """Observe one immutable run attempt; never dispatch, cancel, or rerun it."""
+    identity, previous_state, announced_at = None, None, 0
+    while True:
+        if time.monotonic() >= client.deadline:
+            raise TimeoutError(f"CI wait deadline exceeded; follow the same run {run_id}")
+        run = client.api(f"actions/runs/{run_id}")
+        check_run_identity(run, client.repository, run_id)
+        current = (run["head_sha"], run["run_attempt"])
+        if identity is not None and current != identity:
+            raise ValueError("CI run source/attempt changed while waiting")
+        identity = current
+        state = (run.get("status"), run.get("conclusion"))
+        if state[0] not in {"queued", "requested", "waiting", "pending", "in_progress", "completed"}:
+            raise ValueError(f"unexpected CI run status: {state[0]}")
+        now = time.monotonic()
+        if state != previous_state or now - announced_at >= 30:
+            print(f"CI {run_id}, attempt {run['run_attempt']}: {state[0]}/{state[1] or 'pending'}", flush=True)
+            previous_state, announced_at = state, now
+        if state[0] == "completed":
+            check_run(run, client.repository, run_id)
+            return run
+        time.sleep(min(10, max(0, client.deadline - now)))
 
 
 def check_jobs(run, jobs, scope):
@@ -184,9 +213,11 @@ def source_comparison(root, tested, target):
             "same_tree": tested_tree == target_tree, "changed_files": list(filter(None, paths)), "working_tree_dirty": dirty, "checkout_head": checkout}
 
 
-def collect(client, root, run_id, scope, target, output, pr_number=None):
+def collect(client, root, run_id, scope, target, output, pr_number=None, expected_run=None):
     run = client.api(f"actions/runs/{run_id}")
     check_run(run, client.repository, run_id)
+    if expected_run is not None and any(run[key] != expected_run[key] for key in ["id", "head_sha", "run_attempt"]):
+        raise ValueError("CI run changed between waiting and evidence collection")
     with ThreadPoolExecutor(max_workers=3) as pool:
         job_future = pool.submit(client.pages, f"actions/runs/{run_id}/jobs?filter=latest", "jobs")
         artifact_future = pool.submit(client.pages, f"actions/runs/{run_id}/artifacts", "artifacts") if scope in {"cli", "desktop", "full"} else None
@@ -294,22 +325,38 @@ def main(argv=None):
     parser.add_argument("--target", default="HEAD", help="committed source to compare with the tested tree")
     parser.add_argument("--pr", type=int, help="also verify that this PR still names the target commit")
     parser.add_argument("--output", type=Path, help="new evidence directory; defaults to ignored .harness/validation/")
-    parser.add_argument("--timeout", type=float, default=90)
+    parser.add_argument("--timeout", type=float, default=90, help="evidence collection budget in seconds (default: 90)")
+    parser.add_argument("--wait", action="store_true", help="follow this run attempt, then collect its completed evidence")
+    parser.add_argument("--wait-timeout", type=float, default=900, help="separate CI observation budget in seconds (default: 900)")
     args = parser.parse_args(argv)
-    if args.run < 1 or (args.pr is not None and args.pr < 1) or not 0 < args.timeout < float("inf") or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*", args.repo):
+    if args.run < 1 or (args.pr is not None and args.pr < 1) or any(not 0 < value < float("inf") for value in [args.timeout, args.wait_timeout]) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*", args.repo):
         parser.error("supply a valid repository, positive IDs and finite positive timeout")
     root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()).resolve()
     output = args.output or root / ".harness" / "validation" / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ") + f"-ci-{args.run}")
     output.mkdir(parents=True, exist_ok=False)
-    started, started_at = time.monotonic(), utc_now()
+    waiting, observed, collection_started = None, None, None
     try:
-        record = collect(Client(args.repo, started + args.timeout), root, args.run, args.scope, args.target, output, args.pr)
+        if args.wait:
+            started = time.monotonic()
+            waiting = {"started_at": utc_now()}
+            try:
+                observed = wait_for_run(Client(args.repo, started + args.wait_timeout), args.run)
+                waiting.update(head_sha=observed["head_sha"], run_attempt=observed["run_attempt"])
+            finally:
+                waiting.update(finished_at=utc_now(), duration_seconds=round(time.monotonic() - started, 3))
+        collection_started, started_at = time.monotonic(), utc_now()
+        record = collect(Client(args.repo, collection_started + args.timeout), root, args.run, args.scope,
+                         args.target, output, args.pr, expected_run=observed)
     except (ValueError, KeyError, TypeError, OSError, RuntimeError, subprocess.SubprocessError, zipfile.BadZipFile) as error:
         record = {"schema": 1, "status": "collection_failed", "run_id": args.run, "error": str(error)}
-    record["collection"] = {"started_at": started_at, "finished_at": utc_now(), "duration_seconds": round(time.monotonic() - started, 3)}
+    if waiting is not None:
+        record["waiting"] = waiting
+    if collection_started is not None:
+        record["collection"] = {"started_at": started_at, "finished_at": utc_now(), "duration_seconds": round(time.monotonic() - collection_started, 3)}
     (output / "receipt.json").write_text(json.dumps(record, indent=2) + "\n")
     (output / "validation.md").write_text(markdown(record))
-    print(f"{record['status']} ({record['collection']['duration_seconds']:g}s): {output / 'validation.md'}")
+    elapsed = ", ".join(f"{record[phase]['duration_seconds']:g}s {phase}" for phase in ["waiting", "collection"] if phase in record)
+    print(f"{record['status']} ({elapsed}): {output / 'validation.md'}")
     if "error" in record:
         print(record["error"], file=sys.stderr)
     return {"passed": 0, "source_review_required": 3}.get(record["status"], 1)

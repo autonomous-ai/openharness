@@ -22,8 +22,9 @@ validation and shipping, use [docs/validation-and-release.md](docs/validation-an
   validation cycle. Verify published versions and checksums, then report completion.
   Desktop's `--wait` follows the exact tag/SHA through the workflow's six-artifact
   verification; reuse that receipt instead of repeating the downloads manually.
-- Prepare the PR and review while checks run. Collect completed CI evidence with
-  `scripts/record-ci-validation.py RUN_ID --scope SCOPE --pr PR_NUMBER`; retain routine
+- Prepare the PR and review while checks run. Once CI has a run ID, start
+  `scripts/record-ci-validation.py RUN_ID --scope SCOPE --pr PR_NUMBER --wait` to
+  collect its evidence as soon as that attempt passes; retain routine
   results in its ignored receipt and the PR body instead of another documentation
   commit. Resolve any source differences explicitly before reusing that evidence.
 - For an authorized Desktop release, start `make release-desktop ARGS="--prepare"`

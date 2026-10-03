@@ -269,6 +269,15 @@ collect its record with one read-only command:
 python3 scripts/record-ci-validation.py RUN_ID --scope cli --pr PR_NUMBER
 ```
 
+For a run still in progress, add `--wait` and start the collector alongside review.
+It observes that run every ten seconds and collects its evidence as soon as the
+attempt passes. The default wait budget is 900s (`--wait-timeout`); collection gets
+its own 90s budget (`--timeout`). Both durations are recorded separately. A failed
+or cancelled run, changed source/attempt, or expired observation budget stops the
+command. A timeout or lookup failure does not establish that CI stopped: inspect
+and follow the same run ID. The collector never dispatches, cancels or retries CI,
+and waiting does not bypass the required job, artifact, source or PR checks below.
+
 Use the required CI scope (`cli`, `tui`, `backend`, `desktop`, `process`, or `full`). The command
 writes a short `validation.md` and machine-readable `receipt.json` under ignored
 `.harness/validation/`; use the paragraph/table in the PR's verification section.
