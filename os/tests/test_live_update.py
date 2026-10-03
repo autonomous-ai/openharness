@@ -1,4 +1,5 @@
 import hashlib
+import fcntl
 import importlib.util
 import json
 from pathlib import Path
@@ -25,6 +26,9 @@ class FastUpdates(unittest.TestCase):
             (self.bundled / name).write_bytes(('old ' + name).encode())
         self.patches = [patch.object(update, 'STATE', self.state), patch.object(update, 'BUNDLED', self.bundled),
                         patch.object(update, 'BASE_ID', self.base),
+                        patch.object(update, 'RESTART_REQUIRED', self.root / 'restart-required'),
+                        patch.object(update, 'SYSTEM_LOCK', self.root / 'system.lock'),
+                        patch.object(update, 'check_system', return_value={}),
                         patch.object(update, 'screen_ready'),
                         patch.object(update, 'notice'), patch.object(update, 'versions', side_effect=self.versions)]
         for item in self.patches:
@@ -176,6 +180,30 @@ class FastUpdates(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'No attached client'):
                 update.apply()
         self.assertEqual(update.selected(), self.bundled)
+
+    def test_system_update_holds_fast_updates_until_reboot(self):
+        update.RESTART_REQUIRED.write_text('{"status":"ready"}')
+        with patch.object(update, 'fetch', side_effect=AssertionError('No download before restart')):
+            self.assertFalse(update.check())
+        with self.assertRaisesRegex(ValueError, 'Restart'):
+            update.apply()
+
+    def test_root_system_transaction_excludes_fast_activation(self):
+        with update.SYSTEM_LOCK.open('w') as root_lock:
+            fcntl.flock(root_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(ValueError, 'system update is in progress'):
+                with update.locked():
+                    self.fail('The root transaction must hold this lock exclusively')
+
+    def test_new_os_base_does_not_delete_runtime_used_by_the_running_old_session(self):
+        with self.feed(), patch.object(update, 'restart'):
+            update.check()
+            update.apply()
+        old_runtime = update.selected()
+        self.base.write_text('{"source_commit":"new-os"}\n')
+        with update.locked():
+            update.prune()
+        self.assertTrue(old_runtime.is_dir())
 
 
 if __name__ == '__main__':

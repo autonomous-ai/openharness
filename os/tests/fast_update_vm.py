@@ -10,12 +10,12 @@ def wait_text(vm, text, name, status_bar=False):
     def observed():
         if not status_bar:
             return screen_text(vm, name)
-        # The full-screen OCR skips the eight-pixel status text. Retain the
-        # original frame, then read its enlarged bottom line as one text row.
+        # Full-screen OCR skips this small status text. Include foot's bottom
+        # padding so the crop retains the complete glyphs, not just their tails.
         from PIL import Image
         vm.screenshot(name)
         with Image.open(vm.folder / (name + '.png')) as frame:
-            bar = frame.crop((0, frame.height - 20, frame.width, frame.height))
+            bar = frame.crop((0, frame.height - 32, frame.width, frame.height))
             bar.resize((bar.width * 3, bar.height * 3)).save(vm.folder / (name + '-bar.png'))
         result = subprocess.check_output(['tesseract', str(vm.folder / (name + '-bar.png')),
                                          'stdout', '--psm', '7'], text=True,

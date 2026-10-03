@@ -116,9 +116,13 @@ screen; a CLI change also restarts its supervised service. Failure restores the
 previous selection. Restore previous version holds the rejected versions until
 a newer release arrives. Ordinary macOS/Linux hn shortcuts are unchanged.
 
-This fast track is independent of OS releases. System updates remain a separate
-action in the same screen, using the existing full Arch upgrade and checkpoint
-path. Publishing an ISO is not a requirement for a TUI update. The public preview
+This fast track is independent of OS releases. The system channel is checked
+once daily; S in Updates installs the published OS package with an administrator
+password. Root independently fetches the official release metadata, verifies a
+private download, makes a checkpoint, updates any required Arch base first, and
+rebuilds the encrypted boot image. System packages never apply or reboot on a
+timer. After an OS package changes, fast updates wait for a reboot. Publishing an
+ISO is not a requirement for a TUI update. The public preview
 4 ISO predates this feature and needs a small OS integration package once this
 candidate has passed native acceptance; it does not need to be flashed again.
 
@@ -127,6 +131,17 @@ hn/CLI fixture. The installed VM's actual timer stages it, then real Super+U and
 Enter keys apply hn and CLI independently. Acceptance checks the same terminal
 process, a live OpenCode process, keyboard input, rollback and an unchanged boot
 ID. Those fixture binaries are never included in the package or public channel.
+The same installed VM restores the public package and upgrades through a private
+loopback OS channel, rejects a corrupt asset, keeps its running agent alive, and
+reboots the rebuilt encrypted image. This does not depend on a public test release.
+
+The OS feed is `os-preview-updates/metadata.json` in the repository's release
+assets. It names the exact package and manifest, their byte sizes and SHA-256
+hashes. HTTPS authenticates the channel; these are not custom package signatures.
+Cross-version packages list the exact validated `upgrades_from` bases. Direct
+local bundles cannot skip a required full Arch upgrade. A lower or equal package
+version is never offered by the public channel. The publisher must retain exact
+source and native acceptance evidence before advancing that feed.
 
 ### Local OS integration bundles
 

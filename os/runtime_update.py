@@ -22,6 +22,7 @@ STATE = Path('/var/lib/harness-os/runtime-updates')
 RUNTIME = Path('/usr/share/harness-os/runtime.json')
 LOCK = Path('/usr/share/harness-os/lock.json')
 PACKAGE_DB = Path('/var/lib/pacman/local')
+RESTART_REQUIRED = Path('/run/harness-os-restart-required')
 
 
 def digest(path):
@@ -104,12 +105,25 @@ def inspect_package(path, version, runtime=None):
                     raise ValueError('Runtime checksum mismatch: ' + name)
 
 
-def validate_bundle(folder, base):
-    manifest = read_json(folder / 'package-manifest.json')
+def validate_base(manifest, base):
     if not isinstance(manifest, dict) or manifest.get('schema') != 1 or manifest.get('kind') != 'harness-os-package':
         raise ValueError('Not a Harness package bundle.')
-    if manifest.get('architecture') != 'x86_64' or manifest.get('requires_os_version') != base['version'] or manifest.get('arch_snapshot') != base['arch_snapshot']:
+    base_identity = {'version': base['version'], 'arch_snapshot': base['arch_snapshot']}
+    same_base = manifest.get('requires_os_version') == base['version'] and manifest.get('arch_snapshot') == base['arch_snapshot']
+    migrations = manifest.get('upgrades_from', [])
+    if not isinstance(migrations, list) or len(migrations) > 32 or any(
+        not isinstance(item, dict) or set(item) != {'version', 'arch_snapshot'} or
+        not isinstance(item['version'], str) or not isinstance(item['arch_snapshot'], str) for item in migrations
+    ):
+        raise ValueError('Invalid system migration list.')
+    migration = base_identity in migrations
+    if manifest.get('architecture') != 'x86_64' or not (same_base or migration):
         raise ValueError('This package requires a different Harness base image or architecture.')
+
+
+def validate_bundle(folder, base):
+    manifest = read_json(folder / 'package-manifest.json')
+    validate_base(manifest, base)
     commit = manifest.get('source_commit', '')
     runtime = manifest.get('runtime', {})
     if not re.fullmatch(r'[0-9a-f]{40}', commit) or runtime.get('source_commit') != commit or runtime.get('dirty') is not False or runtime.get('target') != 'x86_64-unknown-linux-musl':
@@ -207,6 +221,11 @@ def apply(folder, system, base, installation):
     if previous and previous['status'] not in ('applied', 'rolled-back'):
         raise ValueError('The previous Harness update did not finish. Run rollback first; its checkpoint is retained.')
     manifest, source_package = validate_bundle(folder, base)
+    target_date = system.snapshot_date(manifest['arch_snapshot'])
+    if target_date > base['arch_snapshot']:
+        dates = set(re.findall(r'https://archive\.archlinux\.org/repos/(\d{4}/\d{2}/\d{2})/', system.PACMAN_CONFIG.read_text()))
+        if len(dates) != 1 or next(iter(dates)) < target_date or system.pending_update():
+            raise ValueError('Complete the full system upgrade to ' + target_date + ' before installing this package.')
     old_version, old_runtime = installed_version(), read_json(RUNTIME)
     if old_version == manifest['package']['version']:
         verify_runtime(manifest['runtime'])
@@ -233,14 +252,22 @@ def apply(folder, system, base, installation):
         system.write_json(saved / 'receipt.json', receipt)
         system.write_json(STATE / 'latest.json', {'id': identity})
         try:
+            # The fast user updater must not mix a running old session with newly
+            # installed OS integration. /run clears this only on a real reboot.
+            system.write_json(RESTART_REQUIRED, {'status': 'applying', 'package': manifest['package']['version']})
             install_package(incoming / source_package.name, manifest['package']['version'], manifest['runtime'])
+            # Plymouth and other initramfs assets may change without a kernel
+            # package transaction, so rebuild them on this path as well.
+            system.run('mkinitcpio', '-P')
         except BaseException:
             receipt.update(status='failed', finished_at=now())
             system.write_json(saved / 'receipt.json', receipt)
+            system.write_json(RESTART_REQUIRED, {'status': 'failed'})
             print('Update did not complete. Roll back with this same updater; the original checkpoint is retained.', file=sys.stderr)
             raise
         receipt.update(status='applied', finished_at=now())
         system.write_json(saved / 'receipt.json', receipt)
+        system.write_json(RESTART_REQUIRED, {'status': 'ready', 'package': manifest['package']['version']})
     print('Harness updated. Reboot when ready to use the new session. Your running work has not been restarted.')
 
 
@@ -260,9 +287,12 @@ def rollback(system, installation):
     inspect_package(backup, receipt['previous_version'], receipt['previous_runtime'])
     receipt.update(status='rolling-back', rollback_started_at=now())
     system.write_json(folder / 'receipt.json', receipt)
+    system.write_json(RESTART_REQUIRED, {'status': 'failed'})
     install_package(backup, receipt['previous_version'], receipt['previous_runtime'])
+    system.run('mkinitcpio', '-P')
     receipt.update(status='rolled-back', rollback_finished_at=now())
     system.write_json(folder / 'receipt.json', receipt)
+    system.write_json(RESTART_REQUIRED, {'status': 'ready', 'package': receipt['previous_version']})
     print('Previous Harness build restored. Reboot when ready to use it.')
 
 

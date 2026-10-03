@@ -87,6 +87,15 @@ def main():
             vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
             from fast_update_vm import exercise
             receipt['fast_updates'] = exercise(vm, args.fast_fixture, url)
+            from release_update_vm import exercise as release_exercise
+            receipt['system_channel'] = release_exercise(vm, manifest)
+            vm.command('sync')
+            vm.stop()
+            vm.start(live=False)
+            vm.login_installed(config)
+            vm.command('test ! -e /run/harness-os-restart-required; test -s ~/Projects/update-survivor/keep.txt')
+            receipt['system_channel']['reboot_keyboard'] = check_graphical_keyboard(vm, 'system-channel-reboot')
+            receipt['checks'].append('The OS-channel update boots its rebuilt encrypted image and accepts keyboard input')
         receipt['status'] = 'passed'
     except BaseException as error:
         receipt['error'] = str(error)

@@ -11,6 +11,7 @@ from contextlib import contextmanager
 import curses
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -32,6 +33,8 @@ FEEDS = {
 }
 FILES = ('harness-tui', 'cli.mjs', 'notify.mjs')
 LIMIT = 64 * 1024 * 1024
+RESTART_REQUIRED = Path('/run/harness-os-restart-required')
+SYSTEM_LOCK = Path('/run/lock/hn-os.lock')
 
 
 def version(value):
@@ -79,7 +82,37 @@ def locked():
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise ValueError('An update is already in progress.') from error
-        yield
+        # OS package replacement and fast activation cannot run concurrently.
+        # The root-owned file is created by tmpfiles before the user session.
+        system_lock = SYSTEM_LOCK.open('r') if SYSTEM_LOCK.exists() else None
+        try:
+            if system_lock:
+                try:
+                    fcntl.flock(system_lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                except BlockingIOError as error:
+                    raise ValueError('A system update is in progress. Try again when it finishes.') from error
+            yield
+        finally:
+            if system_lock:
+                system_lock.close()
+
+
+def check_system(force=False):
+    cached = read(STATE / 'system.json', {})
+    if not force and time.time() - cached.get('checked_at', 0) < 86400:
+        return cached
+    try:
+        spec = importlib.util.spec_from_file_location('harness_os_release_update', Path(__file__).with_name('release_update.py'))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        release = module.discover()
+        cached = {'checked_at': time.time(), 'available': bool(release and release['available']),
+                  'version': release['version'] if release else None}
+    except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        # An unavailable system channel must not hold up an independent hn fix.
+        cached = {'checked_at': time.time(), 'available': False, 'error': str(error)}
+    write(STATE / 'system.json', cached)
+    return cached
 
 
 def allowed_url(value):
@@ -199,6 +232,11 @@ def prune():
     # Retain only the active, previous and ready builds. Check/apply own the lock,
     # so a half-download here can only be left by an interrupted earlier check.
     keep = {path.resolve() for path in (selected(), prepared()) if path is not None}
+    pointer = STATE / 'current'
+    if pointer.is_symlink():
+        # A newly installed OS package changes base.json before the old session
+        # exits. Keep its files until its raw selection is actually replaced.
+        keep.add(pointer.resolve())
     receipt = read(STATE / 'applied.json', {})
     if receipt.get('previous'):
         keep.add(Path(receipt['previous']).resolve())
@@ -214,8 +252,11 @@ def prune():
                 shutil.rmtree(path)
 
 
-def check(feeds=None, progress=lambda _: None):
+def check(feeds=None, progress=lambda _: None, force_system=False):
     with locked():
+        if RESTART_REQUIRED.exists():
+            notice(('Restart ready' if read(RESTART_REQUIRED, {}).get('status') == 'ready' else 'System update needs attention') + ' · Super+U')
+            return False
         recover_interrupted()
         current = selected()
         running = versions(current)
@@ -276,7 +317,8 @@ def check(feeds=None, progress=lambda _: None):
                 write(STATE / 'ready.json', {'id': identity})
         write(STATE / 'check.json', {'checked_at': time.time(), 'errors': errors})
         available = ready is not None and ready != current
-        notice('Update ready · Super+U' if available else '')
+        system = check_system(force_system) if feeds is None else {}
+        notice('Update ready · Super+U' if available or system.get('available') else '')
         prune()
         if errors and not available:
             raise ValueError('Could not check for updates. Connect to the internet and try again.')
@@ -347,6 +389,8 @@ def recover_interrupted():
 
 def apply(rollback=False):
     with locked():
+        if RESTART_REQUIRED.exists():
+            raise ValueError('Restart to finish the system update before changing hn.')
         recover_interrupted()
         previous = selected()
         receipt = read(STATE / 'applied.json', {})
@@ -392,12 +436,22 @@ def screen(window):
         ready = prepared()
         available = ready is not None and ready != selected()
         checked = read(STATE / 'check.json', {})
+        system = read(STATE / 'system.json', {})
+        system_state = read(RESTART_REQUIRED, {}).get('status')
+        reboot = system_state == 'ready'
+        recovery = system_state == 'failed'
+        if system_state:
+            available = False
         summary = 'Could not check for updates.' if checked.get('errors') else (
             'Harness is up to date.' if checked.get('checked_at') else 'Updates are checked automatically.')
-        lines = ['harness', '', status or message or ('An update is ready.' if available else summary), '',
-                 'Enter   Update now' if available else 'C       Check for updates',
-                 'R       Restore previous version' if read(STATE / 'applied.json') else '',
-                 'S       System updates', '', 'Esc     Back']
+        lines = ['harness', '', status or message or (
+                 'Restore the previous system to recover.' if recovery else
+                 'Restart to finish the system update.' if reboot else
+                 'The system is updating…' if system_state else 'An update is ready.' if available else summary), '',
+                 'Enter   Restart now' if reboot else 'Enter   Update now' if available else 'C       Check for updates',
+                 'R       Restore previous system' if recovery else
+                 'R       Restore previous version' if not system_state and read(STATE / 'applied.json') else '',
+                 'S       System update ready' if system.get('available') else 'S       System updates', '', 'Esc     Back']
         top, left = max(0, (height - len(lines)) // 2), max(0, (width - 46) // 2)
         for index, line in enumerate(lines):
             if top + index < height - 1:
@@ -410,9 +464,13 @@ def screen(window):
         if key in (27, ord('q')):
             return
         try:
+            if key in (10, 13) and read(RESTART_REQUIRED, {}).get('status') == 'ready':
+                return 'reboot'
+            if key in (ord('r'), ord('R')) and read(RESTART_REQUIRED, {}).get('status') == 'failed':
+                return 'restore-system'
             if key in (ord('c'), ord('C')) or key in (10, 13) and not available:
                 draw('Checking for updates…')
-                check(progress=draw)
+                check(progress=draw, force_system=True)
                 message = ''
             elif key in (10, 13) and available or key in (ord('r'), ord('R')):
                 action = 'rollback' if key in (ord('r'), ord('R')) else 'apply'
@@ -438,15 +496,23 @@ def main(argv=None):
     if args.action == 'check':
         check(read(args.feeds) if args.feeds else None)
     elif args.action == 'screen':
-        if curses.wrapper(screen) == 'system':
-            subprocess.run(['sudo', '/usr/bin/hn-os', 'update'], check=False)
-            input('Press Enter to return to Harness.')
+        while True:
+            action = curses.wrapper(screen)
+            if action == 'reboot':
+                subprocess.run(['systemctl', 'reboot'], check=True)
+                break
+            if action not in ('system', 'restore-system'):
+                break
+            subprocess.run(['sudo', '/usr/bin/harness', 'rollback' if action == 'restore-system' else 'upgrade'], check=False)
+            (STATE / 'system.json').unlink(missing_ok=True)
+            input('Press Enter to return to Updates.')
     elif args.action in ('apply', 'rollback'):
         apply(rollback=args.action == 'rollback')
     else:
         print(json.dumps({'runtime': str(selected()), 'versions': versions(selected()),
                           'ready': str(prepared()) if prepared() else None,
-                          'check': read(STATE / 'check.json')}, indent=2))
+                          'restart_required': RESTART_REQUIRED.exists(),
+                          'system': read(STATE / 'system.json'), 'check': read(STATE / 'check.json')}, indent=2))
 
 
 if __name__ == '__main__':

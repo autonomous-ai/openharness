@@ -75,6 +75,20 @@ class BundleGuards(unittest.TestCase):
             with self.subTest(args=args), self.assertRaises(ValueError):
                 update.validate_bundle(self.root, self.base)
 
+    def test_release_migration_requires_an_explicit_matching_base(self):
+        self.manifest['requires_os_version'] = '0.1.0-preview.5'
+        self.write_manifest()
+        with self.assertRaisesRegex(ValueError, 'different Harness base'):
+            update.validate_bundle(self.root, self.base)
+        self.manifest['upgrades_from'] = [self.base]
+        self.write_manifest()
+        self.assertEqual(update.validate_bundle(self.root, self.base)[1], self.package)
+        for value in [None, {}, 'any', [{'version': self.base['version']}]]:
+            self.manifest['upgrades_from'] = value
+            self.write_manifest()
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'migration list'):
+                update.validate_bundle(self.root, self.base)
+
     def test_archive_cannot_escape_system_paths_or_execute_install_script(self):
         for name in ['../escape', '/etc/escape', 'home/me/project', '.INSTALL', 'usr/../escape', 'usr/lib/harness/cli.mjs']:
             member = tarfile.TarInfo(name)

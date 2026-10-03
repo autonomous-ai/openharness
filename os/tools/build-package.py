@@ -44,6 +44,7 @@ def stage(source, runtime, destination, commit):
         'os/system.py': 'usr/lib/harness-os/system.py',
         'os/runtime_update.py': 'usr/lib/harness-os/runtime_update.py',
         'os/live_update.py': 'usr/lib/harness-os/live_update.py',
+        'os/release_update.py': 'usr/lib/harness-os/release_update.py',
         'os/tools/hn-os': 'usr/bin/hn-os',
         'os/lock.json': 'usr/share/harness-os/lock.json',
     }
@@ -107,7 +108,9 @@ def main():
         parser.error('Expected a versioned x86-64 OS preview.')
     version = lock['version'].replace('-preview.', 'pre')
     if args.development:
-        version += '.r' + git(source, 'rev-list', '--count', 'HEAD') + '.g' + commit[:10]
+        # Shallow CI checkouts all have a revision count of one. Use the source
+        # commit time so independent packages do not sort by random Git hashes.
+        version += '.r' + str(timestamp) + '.g' + commit[:10]
     version += '-1'
     folder = args.output.resolve()
     folder.mkdir(parents=True, exist_ok=True)
@@ -130,6 +133,8 @@ def main():
                 'requires_os_version': lock['version'], 'arch_snapshot': lock['arch_snapshot'],
                 'runtime': runtime,
                 'package': {'name': package.name, 'version': version, 'bytes': package.stat().st_size, 'sha256': digest(package)}}
+    if lock.get('upgrades_from'):
+        manifest['upgrades_from'] = lock['upgrades_from']
     (folder / 'package-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     (folder / (package.name + '.sha256')).write_text(f'{manifest["package"]["sha256"]}  {package.name}\n')
     # A preview 4 installation can bootstrap the updater from this same bundle.
