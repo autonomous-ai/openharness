@@ -36,6 +36,13 @@ variables (`BACKEND_WS_URL`, `WEB_URL`, `ADAPTER_DATA_DIR`, `ADAPTER_COMPUTER_ID
 per-engine home directories); [`cli/README.md`](cli/README.md) has the full table and the
 `.env.example`.
 
+## Optional OpenCode phone approvals
+
+[Connect Pushary alongside Harness](pushary-opencode.md) to answer selected native OpenCode
+permission requests from your phone. Launch with `harness new opencode --mode ask` for this
+workflow; the default Auto mode adds `--auto`. The guide records the account requirements,
+plugin coexistence checks and the boundaries of the software validation.
+
 ## Automation
 
 The app is one client of the daemon. Anything on the same computer can be another: the loopback
