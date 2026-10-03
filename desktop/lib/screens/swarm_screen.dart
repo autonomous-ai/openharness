@@ -4210,6 +4210,31 @@ class _SwarmScreenState extends State<SwarmScreen> {
     return result;
   }
 
+  bool get _canOpenCompanionTerminal =>
+      mounted &&
+      _creatureEnabled &&
+      _zoo.loaded &&
+      !_zoo.isPreview &&
+      _zoo.paired != null &&
+      _brain.active &&
+      _companionOpeningKey == null;
+
+  VoidCallback? _companionConversationAction() {
+    if (!_canOpenCompanionTerminal) return null;
+    final key = '${_zoo.scope}:${_zoo.paired!.uid}';
+    final machineId = app.localMachineState?.machine.machineId;
+    return () {
+      if (!_canOpenCompanionTerminal ||
+          key != '${_zoo.scope}:${_zoo.paired?.uid}' ||
+          machineId != app.localMachineState?.machine.machineId) {
+        return;
+      }
+      _companionAttemptedKey = null;
+      _focusCompanionTerminal = true;
+      _scheduleCompanionWorkspace();
+    };
+  }
+
   Widget _companionViewer(BuildContext context) => !_zoo.loaded
       ? const Center(child: Text('Opening your collection…'))
       : CompanionHome(
@@ -4226,13 +4251,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
               (_companionOpeningKey != null
                   ? 'Opening your companion’s terminal…'
                   : null),
-          onOpenConversation: _companionTerminalError == null
-              ? null
-              : () {
-                  _companionAttemptedKey = null;
-                  _focusCompanionTerminal = true;
-                  _scheduleCompanionWorkspace();
-                },
+          onOpenConversation: _companionConversationAction(),
+          openingConversation: _companionOpeningKey != null,
           dial: app.dial,
           onDeviceSettings: app.setDeviceSettings,
         );

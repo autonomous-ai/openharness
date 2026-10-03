@@ -46,6 +46,8 @@ void main() {
     Brightness brightness = Brightness.dark,
     double scale = 1,
     Size size = const Size(850, 850),
+    VoidCallback? onOpenCompanion,
+    bool openingCompanion = false,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
@@ -75,7 +77,11 @@ void main() {
           home: Scaffold(
             body: SingleChildScrollView(
               padding: const EdgeInsets.all(24),
-              child: CodingMemoryView(library: library),
+              child: CodingMemoryView(
+                library: library,
+                onOpenCompanion: onOpenCompanion,
+                openingCompanion: openingCompanion,
+              ),
             ),
           ),
         ),
@@ -1190,6 +1196,99 @@ void main() {
   }
 
   for (final reason in [
+    'companion_unopened',
+    'companion_stopped',
+    'inference_provider_restricted',
+  ]) {
+    testWidgets('memory recovery explicitly opens the companion for $reason', (
+      tester,
+    ) async {
+      var opened = 0;
+      transport.runtime = {
+        'state': 'ready',
+        'learning': {'state': 'waiting_for_model', 'reason': reason},
+      };
+      await mount(tester, onOpenCompanion: () => opened++);
+      expect(opened, 0, reason: 'Reading memories cannot launch an agent.');
+      await tap(tester, 'Open companion terminal');
+      expect(opened, 1);
+      await tap(tester, 'Review learning');
+      await tap(tester, 'Open companion terminal');
+      expect(opened, 2);
+      expect(transport.learn, isTrue);
+      expect(transport.recall, isTrue);
+      expect(
+        transport.calls.where(
+          (p) => ['preview', 'apply'].contains(p['action']),
+        ),
+        isEmpty,
+      );
+      transport.runtime = {
+        'state': 'ready',
+        'learning': {'state': 'learned', 'learned': 1},
+      };
+      await library.refresh();
+      await tester.pumpAndSettle();
+      expect(find.text('Open companion terminal'), findsNothing);
+    });
+  }
+
+  testWidgets(
+    'pending recovery is disabled, while a paused or stale owner cannot open it',
+    (tester) async {
+      var opened = 0;
+      transport.runtime = {
+        'state': 'ready',
+        'learning': {
+          'state': 'waiting_for_model',
+          'reason': 'companion_stopped',
+        },
+      };
+      await mount(
+        tester,
+        onOpenCompanion: () => opened++,
+        openingCompanion: true,
+      );
+      expect(
+        tester
+            .widget<TextButton>(
+              find.byKey(const ValueKey('memory-open-companion')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(find.text('Opening terminal…'), findsOneWidget);
+      expect(opened, 0);
+
+      await mount(tester, onOpenCompanion: () => opened++);
+      final stale = tester
+          .widget<TextButton>(
+            find.byKey(const ValueKey('memory-open-companion')),
+          )
+          .onPressed!;
+      transport.learn = false;
+      await library.refresh();
+      stale();
+      await tester.pumpAndSettle();
+      expect(opened, 0);
+      expect(find.text('Open companion terminal'), findsNothing);
+      transport.learn = true;
+      await library.refresh();
+      await tester.pumpAndSettle();
+      final oldOwner = tester
+          .widget<TextButton>(
+            find.byKey(const ValueKey('memory-open-companion')),
+          )
+          .onPressed!;
+      transport.invalidate();
+      oldOwner();
+      expect(opened, 0);
+      await tester.pumpAndSettle();
+      expect(find.text('Open companion terminal'), findsNothing);
+    },
+  );
+
+  for (final reason in [
     ('companion_unopened', 'Start your companion'),
     ('companion_stopped', 'Reopen its conversation'),
     ('companion_starting', 'finish starting'),
@@ -1257,6 +1356,7 @@ void main() {
           brightness: brightness,
           scale: 2,
           size: const Size(440, 1100),
+          onOpenCompanion: () {},
         );
         expect(find.textContaining('Reopen its conversation'), findsOneWidget);
         expect(find.textContaining('queue is full'), findsOneWidget);

@@ -1106,3 +1106,18 @@ The candidate was rejected and archived with its exact patch and evidence.
 Production remains v6. No further private model call, native setting change,
 release or installation followed. This closes the compact-defaults experiment,
 not the live-learning blockage or the broader memory quality gates.
+
+### Reach the existing companion from a learning notice — October 3
+
+Memories now offers **Open companion terminal** when learning is waiting for its
+model. The action uses the same conversation in the existing DSH, is disabled
+while opening, and supports retry after failure. Rendering the notice does not
+trigger it. Stale owner/companion actions and paused learning are guarded; model
+selection, setup and trust remain in the real terminal.
+
+The [recovery review](../research/2026-10-03-memory-recovery.md) records layout,
+identity, retry, ownership and synthetic key-delivery checks. The native recovery
+journey passed, but the separate native foreground check failed, so the final
+native command remains failed. Physical input and the actual live model still
+need verification. This supplies a missing user action without claiming that
+the installed stopped conversation or its provider refusal was resolved.

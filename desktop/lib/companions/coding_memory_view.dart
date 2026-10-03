@@ -22,8 +22,15 @@ part 'coding_memory_activity_view.dart';
 
 /// The collection's owner library; it does not send chat or terminal input.
 class CodingMemoryView extends StatefulWidget {
-  const CodingMemoryView({super.key, required this.library});
+  const CodingMemoryView({
+    super.key,
+    required this.library,
+    this.onOpenCompanion,
+    this.openingCompanion = false,
+  });
   final CodingMemoryLibrary library;
+  final VoidCallback? onOpenCompanion;
+  final bool openingCompanion;
   @override
   State<CodingMemoryView> createState() => _CodingMemoryViewState();
 }
@@ -31,6 +38,28 @@ class CodingMemoryView extends StatefulWidget {
 class _CodingMemoryViewState extends State<CodingMemoryView> {
   String section = 'How you work';
   CodingMemoryLibrary get library => widget.library;
+
+  bool get _showConversationAction {
+    final runtime = memoryMap(library.status?['runtime']);
+    return library.valid &&
+        library.learn &&
+        runtime['state'] == 'ready' &&
+        memoryMap(runtime['learning'])['state'] == 'waiting_for_model' &&
+        (widget.onOpenCompanion != null || widget.openingCompanion);
+  }
+
+  Widget _conversationAction() => TextButton(
+    key: const ValueKey('memory-open-companion'),
+    onPressed: library.busy || widget.openingCompanion
+        ? null
+        : () {
+            // A stale rendered control cannot act after learning or ownership changes.
+            if (_showConversationAction) widget.onOpenCompanion?.call();
+          },
+    child: Text(
+      widget.openingCompanion ? 'Opening terminal…' : 'Open companion terminal',
+    ),
+  );
 
   @override
   void didUpdateWidget(CodingMemoryView oldWidget) {
@@ -118,11 +147,18 @@ class _CodingMemoryViewState extends State<CodingMemoryView> {
                 const SizedBox(height: 8),
                 _text(learning.captureIssue!),
               ],
-              TextButton(
-                onPressed: library.busy
-                    ? null
-                    : () => _selectSection('Learning'),
-                child: const Text('Review learning'),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  if (_showConversationAction) _conversationAction(),
+                  TextButton(
+                    onPressed: library.busy
+                        ? null
+                        : () => _selectSection('Learning'),
+                    child: const Text('Review learning'),
+                  ),
+                ],
               ),
               const SizedBox(height: 16),
             ],
@@ -195,6 +231,7 @@ class _CodingMemoryViewState extends State<CodingMemoryView> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _text(learning.message),
+        if (_showConversationAction) _conversationAction(),
         if (learning.captureIssue != null) ...[
           const SizedBox(height: 8),
           _text(learning.captureIssue!),
