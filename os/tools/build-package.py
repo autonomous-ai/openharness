@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build the same small Harness package for an ISO or an installed test machine."""
 import argparse
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -77,17 +78,22 @@ def archive_package(root, output, pkginfo, timestamp):
     (root / '.PKGINFO').write_text(pkginfo)
     partial = output.with_name(output.name + '.partial')
     try:
-        with tarfile.open(partial, 'w:gz', compresslevel=6, dereference=False) as archive:
-            for path in sorted(root.rglob('*')):
-                info = archive.gettarinfo(str(path), str(path.relative_to(root)))
-                info.uid = info.gid = 0
-                info.uname = info.gname = 'root'
-                info.mtime = timestamp
-                if info.isfile():
-                    with path.open('rb') as handle:
-                        archive.addfile(info, handle)
-                else:
-                    archive.addfile(info)
+        # Both container and members use the source time. Gzip's defaults put
+        # the build clock and temporary output filename into otherwise equal
+        # packages, preventing checksum reuse across native test environments.
+        with partial.open('wb') as raw, gzip.GzipFile(
+                filename='', mode='wb', fileobj=raw, compresslevel=6, mtime=timestamp) as compressed:
+            with tarfile.open(fileobj=compressed, mode='w', dereference=False) as archive:
+                for path in sorted(root.rglob('*')):
+                    info = archive.gettarinfo(str(path), str(path.relative_to(root)))
+                    info.uid = info.gid = 0
+                    info.uname = info.gname = 'root'
+                    info.mtime = timestamp
+                    if info.isfile():
+                        with path.open('rb') as handle:
+                            archive.addfile(info, handle)
+                    else:
+                        archive.addfile(info)
         partial.replace(output)
     finally:
         partial.unlink(missing_ok=True)

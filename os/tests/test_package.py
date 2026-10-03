@@ -4,6 +4,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 spec = importlib.util.spec_from_file_location('os_package', Path(__file__).parents[1] / 'tools/build-package.py')
@@ -12,6 +13,19 @@ spec.loader.exec_module(package)
 
 
 class PackageIdentity(unittest.TestCase):
+    def test_same_source_is_byte_identical_across_build_times_and_output_names(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / 'stage'
+            root.mkdir()
+            (root / 'contents').write_bytes(b'unchanged source\n')
+            artifacts = []
+            for name, clock in [('first.pkg.tar.gz', 1234567), ('second.pkg.tar.gz', 9876543)]:
+                output = Path(temp) / name
+                with patch('time.time', return_value=clock):
+                    package.archive_package(root, output, 'pkgname = fixture\npkgver = 1-1\n', 123456)
+                artifacts.append(output.read_bytes())
+            self.assertEqual(artifacts[0], artifacts[1])
+
     def test_macos_wrong_architecture_dirty_or_different_source_cannot_be_packaged(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
