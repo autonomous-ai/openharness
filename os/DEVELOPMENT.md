@@ -9,6 +9,34 @@ This plan was recorded on October 3, 2026. Preview 4 and its optional small-pack
 update are published. Native update/rollback acceptance passed; remote-launcher
 argument tests passed but remote display/SSH interaction is still unverified.
 
+## Next release priorities
+
+The next preview improves the complete experience before expanding the interface.
+Keep the existing terminal, agents and optional browser. Hardware integration must
+not introduce a desktop, control panel, background updater or extra launcher.
+
+1. Refine USB welcome, offline installation, Wi-Fi setup, trial, first conversation
+   and disk unlock. Review actual screens, keyboard navigation, narrow displays,
+   cancellation and recoverable errors. Keep the Naming System and text artwork
+   consistent across these steps.
+2. Verify the essentials of daily use: networking, brightness, audio, locking,
+   sleep/wake, browser switching, updates and recovery. Preserve running work
+   through display restarts and session transitions. Agents can use the ordinary
+   system tools; the user should not need to configure basic hardware to start.
+3. Expand hardware coverage by family: older Intel Macs without T2 first, NVIDIA
+   desktops next. Prepare separate boot/platform paths for T2, Apple Silicon and
+   Raspberry Pi. Detect devices rather than hard-coding one person's computer.
+4. Exercise real development work and retain installation, boot, idle-resource and
+   recovery evidence for the actual candidate image. Publish measured results and
+   an honest compatibility table; upstream driver availability is not a physical
+   Harness test.
+
+`session_checks=true` with an `image_run_id` in the Harness OS workflow exercises
+the published image's live and installed lock, wrong-password input isolation,
+and actual virtual ACPI suspend/resume. The same terminal process, heartbeat and
+project must survive. This complements installation tests; it does not establish
+physical laptop suspend, radio, audio or battery behavior.
+
 ## The feedback loop
 
 | Work being tested | Best environment | What it proves |
@@ -108,13 +136,12 @@ rollback took 1.083 seconds. Actual post-update keyboard and masked-unlock captu
 were reviewed. Public package/guide/evidence downloads were fully SHA-256 and size
 verified. Physical ThinkPad update behavior and timings remain unverified.
 
-Shared hn changes in preview 4 are still on the OS branch. Ordinary Mac/Linux hn
+Shared hn changes in preview 4 were merged to main in PR #669. Ordinary Mac/Linux hn
 keeps its usual home and detach/quit behavior; live USB and installed OS welcome
 actions require explicit OS mode. Opening Terminal directly is a shared chooser
-change, explicitly approved for all platforms. It needs normal TUI release review
-along with the shared agent-discovery
-and OpenCode compatibility fixes; publishing the ISO did not release these through
-the general TUI channel. The small updater adds no changes to `tui/` or `cli/`.
+change, explicitly approved for all platforms. Publishing the ISO did not release
+these through the general TUI channel. The small updater adds no changes to `tui/`
+or `cli/`.
 
 ## Optional remote VM controls
 
@@ -141,9 +168,10 @@ validated Harness OS hardware target by preview 4.
 
 | Target | Approach | Current Harness OS status |
 | --- | --- | --- |
-| Older Intel Mac, 64-bit CPU and EFI, without T2 | Reuse x86-64 userspace and validate firmware, graphics, Wi-Fi, input, sleep and installation per model | First physical Mac target; no tested model yet |
+| Older Intel Mac, 64-bit CPU and EFI, without T2 | Reuse x86-64 userspace, select drivers by detected hardware, and validate representative Air/Pro families | First Mac target family; no tested model yet |
 | Intel Mac with T2 | Add the T2 kernel/driver and firmware integration; validate built-in input at encrypted unlock | Separate hardware profile, not covered by generic x86 VM success |
 | Apple Silicon | Build arm64 userspace and integrate the Asahi boot/kernel/graphics/firmware stack | Port required; current x86-64 ISO cannot install natively |
+| Raspberry Pi | Evaluate a maintained ARM64 board kernel, firmware and boot image with the same Harness session | Separate board image required; not covered by the PC ISO or an ARM VM |
 | Native Harness app/TUI on macOS | Existing arm64 and x64 app/runtime releases | Separate from installing the Linux OS |
 
 The initial Intel scope excludes 32-bit-only CPUs/EFI. T2 machines need specific
