@@ -48,9 +48,15 @@ session before starting its replacement in the same project. Its pane and layout
 survive peer cleanup of the stopped source. Show the replacement terminal as soon
 as its creation is confirmed, including during startup. Setup and resume warnings
 preserve keyboard input on an available terminal, with guidance above the output
-so it cannot cover a prompt. Agents that accept an initial message receive bounded
-recent requests and saved answers, preserving the handoff across
-retries; the saved original session keeps the full transcript. Do not show worktree implementation
+so it cannot cover a prompt. Before the switch, the daemon writes a handoff
+record into `.harness/handoff/` in the project (requests, last answer, git state,
+tool calls already run, and a transcript), kept out of git. Agents that accept an
+initial message are told to read it and wait; if it cannot be written they receive
+bounded recent requests and saved answers instead. Both survive retries; the
+saved original session keeps the full transcript. A fork with no turns of its own
+hands off the conversation it was forked from, up to the fork. A switch that
+leaves the new agent with nothing shows a snack bar saying so, worded apart for
+"nothing to hand off" and "the handoff could not be made". Do not show worktree implementation
 paths in everyday labels. User-selected shell/Powerline status styles remain
 available, including PR state colors and the option to disable color.
 

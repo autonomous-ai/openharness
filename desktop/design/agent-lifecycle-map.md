@@ -28,16 +28,45 @@ three pushes discussed below run in the opposite direction.
 | `agent_create` | `new-session -d`: new session and initial pane | Launch `claude [prompt]` / `codex [prompt]`; install a missing executable through the existing launch wrapper | `openPendingAgent` creates a new Harness ID with the new route, saved launch settings, `launch: starting`, and no engine conversation yet. Hooks/discovery bind `sessionId` and the process identity. |
 | `agent_delete` | **`kill-session` for the session containing the registered pane** | In parallel, validate the engine PID identity; SIGTERM if still alive, then SIGKILL after the grace period if needed | Remove the live row and its route/process/conversation indexes through `removeAgent`; clear runtime tracking. Vendor history, recaps and name overrides remain. Save a durable archive **before removal**; a storage failure refuses the explicit stop before mutation. |
 | `agent_restart` | Enable `remain-on-exit`; terminate the engine; `respawn-pane -k` in the existing pane | `claude --resume ID` / `codex resume ID` when known; existing fallback can launch fresh | Retain Harness ID and route. Hold reconciliation during replacement; update process identity and provider observations, then persist. A fresh fallback's new conversation is bound by a later hook. No missing-pane recreation. |
-| `agent_fork` | New session and pane; source untouched | `claude --resume ID --fork-session` / `codex fork ID` | New pending row and Harness ID, initially carrying `forkedFrom`; bind the newly forked engine conversation later. Source row remains. |
+| `agent_fork` | New session and pane; source untouched | `claude --resume ID --fork-session` / `codex fork ID` | New pending row and Harness ID, initially carrying `forkedFrom`: the source's Harness ID and name, plus the source's engine session and transcript path at fork time (daemon-only; clients get ID and name). Bind the newly forked engine conversation later. Source row remains. |
 | `agent_retarget` | Existing pane, same process-swap mechanism as restart | Relaunch with changed provider/grid configuration and native resume arguments | Retain Harness ID and route; replace process identity, save the new grid launch configuration and any remembered subscription model. Inherits restart's possible fresh fallback. |
 | `agent_update` with `name` | `select-pane -T` changes the pane title | No native conversation rename command | `registry.rename` persists a name override keyed by engine `sessionId`, or `agentId` before a session is bound. Does not replace the row, process or conversation. |
 | `agent_update` with `selectedModel` | Send terminal input in the existing pane | Claude `/model <model>` and `/effort <effort>`; Codex `/model` menus | Keep registry identity, route and process. Runtime profile state/observations are updated and announced; no lifecycle row replacement. |
 | `agents_list` | No mutation | None | Reads `registry.advertised()` (verified available terminal routes). `includeStopped: true` merges eligible archive records into the response without adding stale routes back to the live registry. |
 | `agent_create_status` | No mutation | None | Reads a separate durable operation receipt, optionally resolving its resulting live row. Does not launch or recreate a registry entry. |
 | `agent_recent` | No mutation | None | Resolves Harness ID to engine `sessionId` and reads stored recaps/recent user asks. Providers resolve through the live registry or the archive, so recaps and recent asks work before Open. |
+| `agent_handoff_prepare` | No mutation | None | Owner-only, sealed, detached. Resolves Harness ID through the live registry or the archive and uses only its `cwd`. Reads the whole engine session (JSONL or SQLite), takes a git snapshot, and writes redacted `.harness/handoff/<agent>-<change>.md` and `.transcript.md` (0600; directories 0700; never through a symlink). In a repo, `**/.harness/handoff/` must be in `.git/info/exclude` first or nothing is written; a `.gitignore` of `*` guards the folder too. The same `changeId` returns the existing file. Reply `{agentId, file, gitRepo, cwd, degraded}`, no prompt text. 5 s deadline. |
 | `agent_read_file` | No mutation | None | Reads the live row's `cwd`, then a bounded project file/media chunk. No registry change. |
 | `agent_resume` **(this PR)** | Keep a verified running runtime; otherwise allocate a new session and pane for saved work | `claude --resume <savedSessionId>` / `codex resume <savedSessionId>`; no fresh fallback | Return a verified running engine. Otherwise reserve the operation, restore the **same Harness ID and conversation ID** on a new route with no stale PID and `launch: starting`, and await the exact conversation hook from the new process. Keep the saved record on failure. No fresh fallback. |
 
+
+Change agent in the desktop calls `agent_handoff_prepare` **before** it stops
+the source, once per change (`changeId` is the creation receipt ID, so a retry
+reuses the same file), with a 6 s timeout. The new engine's first prompt is
+the desktop's own fixed template pointing at the expected file; it accepts a
+reply only when `agentId`, `file` and `cwd` match what it computed. Any error,
+timeout, `file`-degraded or mismatched reply falls back to the earlier
+`agent_recent` handoff; if that fails too, the source keeps running. So does
+`file: null` with `transcript` in `degraded`: the daemon could not read the
+history, and the excerpt may still have it.
+
+A fork that has not answered on its own yet has no session of its own. The
+handoff then inherits the source's conversation, cut at the fork time, following
+`forkedFrom` up to 5 hops in the same project (claude and codex transcripts only;
+never a database engine or a transcript without times). It reads the session the
+fork recorded, or, for a fork recorded before sessions were kept, the source's
+current session only if it was bound before the fork. The file says the history
+is inherited and from whom. A live, unbound non-fork agent on a file engine first
+tries a born-only, unique, unowned session match. Otherwise nothing is guessed.
+
+When the new agent starts with no first prompt, the pane shows a snack bar:
+
+- `Switched to <B> without history: no earlier conversation from <A> was found to hand off.`
+  The daemon confirmed there was nothing to hand off.
+- `Switched to <B> without history: the handoff from <A> could not be prepared.`
+  The file road failed (timeout, `BUSY`, refusal or untrusted reply) and the
+  `agent_recent` excerpt came back empty, so no one confirmed the conversation
+  is empty.
 
 Harness normally creates one tmux session per harness, initially with one
 pane. The app's multi-pane layout displays these runtimes; selecting an
@@ -150,7 +179,7 @@ Natural engine exit ends the identity that ran the engine exactly as an explicit
 
 - Conversation resume supports **Claude Code and Codex on tmux**. A retained Terminal can open a new shell; shell process memory is not restored. Other engines' saved rows remain discoverable and return an explicit unsupported-history error on Open.
 - The catalog contains histories retained by this daemon, not vendor conversations that Harness never recorded. Previously deleted histories are not imported.
-- `agent_recent` works from the archive. Other file/model/edit RPCs still use a live row; open the harness before using them.
+- `agent_recent` and `agent_handoff_prepare` work from the archive. Other file/model/edit RPCs still use a live row; open the harness before using them.
 - Unknown tmux allocation is intentionally conservative. If the daemon died before any runtime was registered and no native hook later confirms it, the reservation remains blocked for operator investigation. There is no automatic force-clear, destructive retry or terminal takeover in this PR.
 - Native acceptance passed with Claude Code 2.1.278 and Codex 0.154.0 on macOS/tmux. Login with real accounts, other vendor versions and Linux remain team acceptance checks. Verification uses isolated profiles and a separate tmux server; it does not replace the running user daemon.
 

@@ -40,15 +40,18 @@ function hashesOf(dir: string): Set<string> {
   return hashes
 }
 
-function isPlainFile(path: string): boolean {
+/** A regular file, not a symlink to one. */
+export function isPlainFile(path: string): boolean {
   try { const stat = lstatSync(path); return stat.isFile() && !stat.isSymbolicLink() } catch { return false }
 }
 
-function isPlainDir(path: string): boolean {
+/** A real folder, not a symlink to one. */
+export function isPlainDir(path: string): boolean {
   try { const stat = lstatSync(path); return stat.isDirectory() && !stat.isSymbolicLink() } catch { return false }
 }
 
-function isLink(path: string): boolean {
+/** A symlink (to anything, or dangling). */
+export function isLink(path: string): boolean {
   try { return lstatSync(path).isSymbolicLink() } catch { return false }
 }
 
@@ -240,12 +243,20 @@ export function excludeNotes(projectDir: string, git = 'git'): string | null {
     }).trim()
   } catch { return null }
   if (!path) return null
-  const file = isAbsolute(path) ? path : resolve(projectDir, path)
+  return addExcludeEntry(isAbsolute(path) ? path : resolve(projectDir, path), { pattern: NOTES_EXCLUDE, comment: 'Harness lessons (untracked notes)' })
+}
+
+/**
+ * One line (under a `# comment` line) in an exclude file, once: an entry already there is left as it is.
+ * Never through a symlink: null when the file or its folder is one. Creates the folder when missing; read and
+ * write errors throw. Returns the file when the entry is there.
+ */
+export function addExcludeEntry(file: string, entry: { pattern: string; comment: string }): string | null {
   if (isLink(file) || isLink(join(file, '..'))) return null
   const text = existsSync(file) ? readFileSync(file, 'utf8') : ''
-  if (text.split('\n').some((line) => line.trim() === NOTES_EXCLUDE)) return file
+  if (text.split('\n').some((line) => line.trim() === entry.pattern)) return file
   mkdirSync(join(file, '..'), { recursive: true })
-  appendFileSync(file, `${text && !text.endsWith('\n') ? '\n' : ''}# Harness lessons (untracked notes)\n${NOTES_EXCLUDE}\n`)
+  appendFileSync(file, `${text && !text.endsWith('\n') ? '\n' : ''}# ${entry.comment}\n${entry.pattern}\n`)
   return file
 }
 

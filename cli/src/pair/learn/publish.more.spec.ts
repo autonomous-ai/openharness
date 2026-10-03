@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { LESSONS_BEGIN, LESSONS_END, LESSONS_MARK, NOTES_EXCLUDE, excludeNotes, findProject, installLessons, notesPath, publishNote, runtimeLessons, unpublishNote, withdrawSkill } from './publish.js'
+import { LESSONS_BEGIN, LESSONS_END, LESSONS_MARK, NOTES_EXCLUDE, addExcludeEntry, excludeNotes, findProject, isLink, isPlainDir, isPlainFile, installLessons, notesPath, publishNote, runtimeLessons, unpublishNote, withdrawSkill } from './publish.js'
 import { LessonStore, type LessonRecord } from './store.js'
 import { projectHash } from './types.js'
 
@@ -319,5 +319,65 @@ describe('a project reached through a link is the same project', () => {
     expect(runtimeLessons(store, link)?.notes).toBe(notesPath(link))
     // A folder that is gone is still hashed by its path.
     expect(findProject(projectHash(join(dir, 'gone')), [join(dir, 'gone')])).toBe(join(dir, 'gone'))
+  })
+})
+
+describe('addExcludeEntry (the handoff folder reuses the notes exclude)', () => {
+  const entry = { pattern: '**/.harness/handoff/', comment: 'X' }
+
+  it('appends the entry once, with its comment, to a missing or an existing file', () => {
+    git(ws, 'init', '-q')
+    const file = join(ws, '.git', 'info', 'exclude')
+    expect(addExcludeEntry(file, entry)).toBe(file)
+    expect(addExcludeEntry(file, entry)).toBe(file)
+    const text = readFileSync(file, 'utf8')
+    expect(text.split('**/.harness/handoff/\n').length - 1).toBe(1)
+    expect(text.endsWith('# X\n**/.harness/handoff/\n')).toBe(true)
+  })
+
+  it('creates the file and its folder when they are missing', () => {
+    git(ws, 'init', '-q')
+    rmSync(join(ws, '.git', 'info'), { recursive: true, force: true })
+    const file = join(ws, '.git', 'info', 'exclude')
+    expect(addExcludeEntry(file, entry)).toBe(file)
+    expect(readFileSync(file, 'utf8')).toBe('# X\n**/.harness/handoff/\n')
+  })
+
+  it('refuses a linked file or a linked folder', () => {
+    git(ws, 'init', '-q')
+    const exclude = join(ws, '.git', 'info', 'exclude')
+    writeFileSync(join(outside, 'exclude'), 'theirs\n')
+    rmSync(exclude, { force: true })
+    symlinkSync(join(outside, 'exclude'), exclude)
+    expect(addExcludeEntry(exclude, entry)).toBeNull()
+    expect(readFileSync(join(outside, 'exclude'), 'utf8')).toBe('theirs\n')
+    rmSync(join(ws, '.git', 'info'), { recursive: true, force: true })
+    mkdirSync(join(outside, 'info'))
+    symlinkSync(join(outside, 'info'), join(ws, '.git', 'info'))
+    expect(addExcludeEntry(exclude, entry)).toBeNull()
+    expect(readdirSync(join(outside, 'info'))).toEqual([])
+  })
+
+  it('keeps the notes line and the handoff line side by side, each once', () => {
+    git(ws, 'init', '-q')
+    const file = excludeNotes(ws)!
+    expect(addExcludeEntry(file, entry)).toBe(file)
+    excludeNotes(ws)
+    addExcludeEntry(file, entry)
+    const lines = readFileSync(file, 'utf8').split('\n')
+    expect(lines.filter((line) => line === NOTES_EXCLUDE)).toHaveLength(1)
+    expect(lines.filter((line) => line === entry.pattern)).toHaveLength(1)
+  })
+
+  it('exports the plain-file checks the handoff writer relies on', () => {
+    writeFileSync(join(outside, 'f'), 'x')
+    symlinkSync(join(outside, 'f'), join(dir, 'link-f'))
+    symlinkSync(outside, join(dir, 'link-d'))
+    expect(isPlainFile(join(outside, 'f'))).toBe(true)
+    expect(isPlainFile(join(dir, 'link-f'))).toBe(false)
+    expect(isPlainDir(outside)).toBe(true)
+    expect(isPlainDir(join(dir, 'link-d'))).toBe(false)
+    expect(isLink(join(dir, 'link-d'))).toBe(true)
+    expect(isLink(outside)).toBe(false)
   })
 })

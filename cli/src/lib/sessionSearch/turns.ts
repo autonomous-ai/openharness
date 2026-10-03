@@ -80,17 +80,22 @@ const AGENT_NOTES = /^Another \w+ session sent a message:[^\S\n]*|That "other \w
  */
 const CODEX_CONTEXT = /^# (?:Files mentioned by the user|In app browser|Context from my IDE setup):[\s\S]*?^#{1,2} My request(?: for Codex)?:[^\S\n]*\n?/gm
 
+// The label sits at a line's start, so dropping it joins nothing. The instruction can sit mid-line:
+// it leaves a space, so the text on both sides is not glued into one whitespace-free run, which the
+// shared secret patterns scan in cubic time.
+const dropNote = (note: string): string => (note.startsWith('Another') ? '' : ' ')
+
 export function personAsk(text: string): string {
   return text.replace(CODEX_CONTEXT, '')
 }
 
 /**
- * Text as it is stored and searched: wrappers out, secrets blanked, bounded. Line breaks and each
- * line's indentation stay, so a preview can show it as it was written; any other run of spaces is
- * one space, and blank lines are at most one.
+ * Text as it is stored and searched: wrappers and Claude Code's notes around another agent's message out,
+ * secrets blanked, bounded. Line breaks and each line's indentation stay, so a preview can show it as it
+ * was written; any other run of spaces is one space, and blank lines are at most one.
  */
 export function searchableText(text: string, max: number): string {
-  const folded = redactSecretsInText(text.replace(WRAPPERS, ' ').replace(PASTE_TAGS, ' ').replace(AGENT_NOTES, ''))
+  const folded = redactSecretsInText(text.replace(WRAPPERS, ' ').replace(PASTE_TAGS, ' ').replace(AGENT_NOTES, dropNote))
     .replace(/\r\n?/g, '\n')
     .replace(/(\S)[^\S\n]+/g, '$1 ')
     .replace(/[^\S\n]+$/gm, '')

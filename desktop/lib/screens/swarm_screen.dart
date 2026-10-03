@@ -583,6 +583,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.changeCompanionAgent = _changeCompanionAgent;
     app.canChangeCompanionAgent = _canChangeCompanionAgent;
     app.openAgentPicker = _openPaneAgents;
+    app.agentChangeNotice = _showPaneActionHint;
     _keymap.addListener(_keymapChanged);
     app.hasNavigationRail = false;
     app.railFocused = false;
@@ -801,6 +802,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       app.canChangeCompanionAgent = null;
     }
     if (app.openAgentPicker == _openPaneAgents) app.openAgentPicker = null;
+    if (app.agentChangeNotice == _showPaneActionHint) {
+      app.agentChangeNotice = null;
+    }
     linuxTitleBarActions.detach(this);
     _closeDaemonHint();
     app.foreground.removeListener(_daemonEnvironmentChanged);

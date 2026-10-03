@@ -14,7 +14,7 @@
 import { homedir } from 'node:os'
 import type { AgentEngine } from '../engines/types.js'
 import type { GridLaunchRecord } from './gridLaunch.js'
-import type { RegisteredSession } from './registry.js'
+import type { ForkOrigin, RegisteredSession } from './registry.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import type { TerminalCreateResult, TmuxRuntimeRef } from './terminalTypes.js'
 import { terminalRouteKey } from './terminalRuntime.js'
@@ -38,7 +38,7 @@ export interface CreateAgentPaneDeps {
     permissionMode?: string | null
     defaultName?: string | null
     label?: string | null
-    forkedFrom?: { agentId: string; name: string } | null
+    forkedFrom?: ForkOrigin | null
   }) => RegisteredSession | null }
   engine: AgentEngine
   cwd?: string | null
@@ -66,7 +66,7 @@ export interface CreateAgentPaneDeps {
    *  relaunch opens as it again. Already in `argv` — this is the record, not the launch. */
   agent?: string | null
   /** The agent this pane is a fork of (`agent_fork`), recorded on the row; null otherwise. */
-  forkedFrom?: { agentId: string; name: string } | null
+  forkedFrom?: ForkOrigin | null
   maxAttempts?: number
 }
 
