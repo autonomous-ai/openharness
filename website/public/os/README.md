@@ -16,6 +16,11 @@ links resolve under the same path with or without a trailing slash. The website'
 `/os` rewrite serves this file directly without adding JavaScript. Release through
 the [website pipeline](../../README.md#releasing).
 
+The HTML responses include `Cache-Control: no-store, no-transform`. The latter
+keeps Cloudflare's automatic Web Analytics injection out of this standalone page;
+see its [setup documentation](https://developers.cloudflare.com/web-analytics/get-started/).
+Verify the public HTML bytes after rollout as well as the origin's local routes.
+
 ## Content and assets
 
 - The central narrative is **“Agents are the new apps.”** Conversation directs the

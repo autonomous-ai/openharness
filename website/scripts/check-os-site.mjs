@@ -11,6 +11,7 @@ for (const route of ['/os', '/os/', '/os/index.html']) {
   assert.equal(response.status, 200, route);
   assert.match(response.headers.get('content-type'), /text\/html/);
   assert.match(response.headers.get('cache-control'), /no-store/);
+  assert.match(response.headers.get('cache-control'), /no-transform/);
   const html = await response.text();
   assert.equal(html, expected, 'Serve the approved HTML unchanged');
   assert.doesNotMatch(html, /<script\b/i, 'The OS page must not load an app runtime');

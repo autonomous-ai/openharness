@@ -82,7 +82,8 @@ module.exports = {
       },
       ...['/os', '/os/index.html'].map((source) => ({
         source,
-        headers: [{ key: 'Cache-Control', value: 'no-store' }],
+        // Keep the standalone page intact: CDN analytics must not inject JavaScript.
+        headers: [{ key: 'Cache-Control', value: 'no-store, no-transform' }],
       })),
       {
         source: '/harness-web/:path*',
