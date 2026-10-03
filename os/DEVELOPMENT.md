@@ -5,8 +5,8 @@ boot changes. Reflashing is a release/install test, not the intended way to try
 every interface fix. Keep the development tools on the build/test host; the
 installed OS keeps the same minimal interface.
 
-This plan was recorded on October 3, 2026. Preview 5 and its small bootstrap bundle
-and update channel are published. Native update/rollback acceptance passed; remote-launcher
+This plan was recorded on October 3, 2026. Preview 6 and its small bootstrap bundle
+and update channel are published. Native upgrades from previews 4 and 5 passed; remote-launcher
 argument tests passed but remote display/SSH interaction is still unverified.
 
 ## Next release priorities
@@ -56,6 +56,47 @@ keys, and checks DHCP, DNS, HTTP, reconnection and non-silent audio output. Acce
 point tools are installed only inside the disposable guest, never in the ISO.
 Physical radio, backlight, speaker and microphone tests remain separate.
 
+The **Harness OS optional local AI assessment** workflow reuses an exact image
+artifact and installs it to an encrypted disposable disk. Its two independent
+checks add packages only inside their guests:
+
+- `local-ai` installs the snapshot's CPU Ollama package and downloads a small
+  Qwen model. A project-local OpenCode configuration selects that local endpoint.
+  After one connected setup pass, networking is disabled; a direct API request
+  and an OpenCode command typed through hn must return the independently checked
+  arithmetic answer. The receipt records the model digest, actual CPU use and
+  loopback-only listener. This is a transport/compatibility check, not a coding
+  quality benchmark or a recommendation to use a tiny model for daily work.
+- `nvidia` installs matching `nvidia-open-lts` and `nvidia-utils` packages without
+  changing base packages. It checks all four module versions against the running
+  kernel, the driver's shipped support table, initramfs generation, encrypted
+  reboot, hn keyboard input and Chromium on the virtual display. No GPU is passed
+  through: binding, accelerated rendering, CUDA, physical suspend and inference
+  on a real card remain unverified. A failing `nvidia-smi` on this fixture is
+  recorded as unavailable hardware, never GPU success.
+
+Model weights, inference servers and NVIDIA packages do not enter the default
+image. Use an agent to set up the runtime and model that the actual machine and
+project need. [OpenCode's local-provider guide](https://opencode.ai/docs/providers/#ollama)
+and [Ollama's integration guide](https://docs.ollama.com/integrations/opencode)
+cover configuration; full agent workloads need substantially more context and
+memory than this small conversation test.
+
+Run the complete assessment with `image_run_id` in that workflow, or on a native
+x86 KVM host with its image and matching `manifest.json`:
+
+```sh
+python3 os/tests/local_ai_vm.py --iso os/dist/IMAGE.iso --probe local-ai
+python3 os/tests/local_ai_vm.py --iso os/dist/IMAGE.iso --probe nvidia
+```
+
+Evidence includes the original failed attempts. The initial fixture expected a
+JSON support table, but Arch ships `supportedchips.html`; the small model showed
+the correct equation rather than only the number. A second attempt completed
+both guest probes but stopped when terminal integration escapes preceded the
+JSON receipt. Those fixture corrections keep the actual answer, package,
+kernel, reboot and keyboard requirements intact.
+
 ## The feedback loop
 
 | Work being tested | Best environment | What it proves |
@@ -66,8 +107,8 @@ Physical radio, backlight, speaker and microphone tests remain separate.
 | Future arm64 userspace and package compatibility | Accelerated ARM Linux VM on Apple Silicon | ARM application/session behavior; not Apple boot or drivers |
 | Apple boot, internal storage, GPU, input and power management | Physical Mac with the matching hardware stack | Mac OS support for that exact model |
 
-For the current user setup, install preview 4 on the ThinkPad once and use it for
-normal programming. Run installer experiments on the server VM. Record an issue
+For the current user setup, keep the ThinkPad installation and update it in place
+for normal programming. Run installer experiments on the server VM. Record an issue
 with the exact keys/action, expected result, actual result and a screenshot or
 error text. Keep the image version and hardware model with the report.
 
