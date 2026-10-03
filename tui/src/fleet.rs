@@ -21,6 +21,8 @@ pub struct Machine {
     pub id: String,
     pub name: String,
     pub local: bool,
+    /// A shared machine is view-only; watching another client on an owned machine is not.
+    pub shared: bool,
     /// The control plane's word: running, offline, …
     pub status: String,
     pub reach: Reach,
@@ -57,6 +59,14 @@ pub struct Agent {
     pub project: String,
     pub branch: String,
     pub created_at: u64,
+    /// Keep the daemon's exact lifecycle identity. Millisecond sorting timestamps are not
+    /// sufficient to authorize a stop against a replacement session.
+    pub created_at_wire: String,
+    pub close_supported: bool,
+    pub terminal_available: bool,
+    /// Package identity, separate from the display name in `dsh`.
+    pub dsh_id: String,
+    pub permission_mode: String,
     /// When its conversation last moved (the daemon's `updatedAt`: dated work in its transcript,
     /// else its engine's last word, else its creation) — what the desktop and phone sort by.
     pub updated_at: u64,
@@ -315,6 +325,13 @@ pub fn agent_from(machine_id: &str, row: &Value, previous: Option<&Agent>) -> Ag
         project: s(&project, "name"),
         branch: s(&project, "branch"),
         created_at: time(row, "createdAt"),
+        created_at_wire: s(row, "createdAt"),
+        close_supported: row["closeSupported"] == true,
+        terminal_available: row.pointer("/terminal/available").and_then(Value::as_bool).unwrap_or_else(|| {
+            row.pointer("/terminal/runtimes").and_then(Value::as_array).is_some_and(|r| r.iter().any(|r| r["backend"] == "tmux"))
+        }),
+        dsh_id: s(row, "dsh"),
+        permission_mode: s(row, "permissionMode"),
         updated_at: time(row, "updatedAt"),
         known_at: previous.map(|p| p.known_at).unwrap_or_else(Instant::now),
         // Not `updatedAt`: the daemon restamps every row on each reconcile.
@@ -593,6 +610,11 @@ fn cache_path() -> std::path::PathBuf {
     crate::app::state_dir().join("fleet.json")
 }
 
+pub(crate) fn cached_owner() -> Option<String> {
+    let value: Value = serde_json::from_str(&std::fs::read_to_string(cache_path()).ok()?).ok()?;
+    value["owner"].as_str().filter(|id| !id.is_empty() && !crate::local::is_local(id)).map(str::to_string)
+}
+
 impl Fleet {
     /// Restore only after this user's daemon identifies the current account's machine. Old caches
     /// had no owner and may have come from another OS user's TCP listener; never adopt those.
@@ -607,7 +629,7 @@ impl Fleet {
         for m in value.get("machines").and_then(Value::as_array).into_iter().flatten() {
             let id = s(m, "id");
             if id.is_empty() || self.machine(&id).is_some() { continue }
-            self.machines.push(Machine { name: s(m, "name"), local: m.get("local").and_then(Value::as_bool).unwrap_or(false), status: s(m, "status"), reach: Reach::Unknown, id });
+            self.machines.push(Machine { shared: m["shared"] == true, name: s(m, "name"), local: m.get("local").and_then(Value::as_bool).unwrap_or(false), status: s(m, "status"), reach: Reach::Unknown, id });
         }
         for a in value.get("agents").and_then(Value::as_array).into_iter().flatten() {
             let machine = s(a, "machine");
@@ -622,7 +644,7 @@ impl Fleet {
 
     pub fn save_cache(&self) {
         if self.agents.is_empty() || self.local_id.is_empty() || crate::local::is_local(&self.local_id) { return }
-        let machines: Vec<Value> = self.machines.iter().map(|m| serde_json::json!({ "id": m.id, "name": m.name, "local": m.local, "status": m.status })).collect();
+        let machines: Vec<Value> = self.machines.iter().map(|m| serde_json::json!({ "id": m.id, "name": m.name, "local": m.local, "shared": m.shared, "status": m.status })).collect();
         let agents: Vec<Value> = self.agents.values().map(|a| serde_json::json!({
             "machine": a.machine_id, "activeAt": a.active_at,
             "row": { "id": a.id, "sessionId": a.session_id, "name": a.name, "engine": a.engine, "status": a.status,
@@ -676,7 +698,7 @@ mod tests {
         let shell = crate::local::MACHINE;
         let mut fleet = Fleet { local_id: "registered-local".into(), ..Default::default() };
         for (id, name, local) in [(shell, "m0", true), ("registered-local", "office", true), ("remote", "GPU rig", false)] {
-            fleet.machines.push(Machine { id: id.into(), name: name.into(), local, status: "running".into(), reach: Reach::Ready });
+            fleet.machines.push(Machine { shared: false, id: id.into(), name: name.into(), local, status: "running".into(), reach: Reach::Ready });
         }
         assert_eq!(fleet.machine_name(shell), "office");
         assert_eq!(fleet.machine_name("registered-local"), "office");

@@ -158,7 +158,7 @@ removes those objects and the consumed candidate. It cannot publish a product.
 
 Native TUI CI tests and builds the shipped musl target in the same Cargo output
 directory. Dependency caches are keyed by target, Rust toolchain, and Cargo inputs;
-cache hits still run every test. The eleven native TUI fixtures run two at a time,
+cache hits still run every test. The native TUI fixtures run two at a time,
 using their own homes, socket names, and mock ports. CI retains each fixture's log
 and validation receipt as an artifact. To run the same set locally after building:
 

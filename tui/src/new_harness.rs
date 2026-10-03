@@ -1,11 +1,12 @@
 //! New Harness: a compact keyboard-driven form, with a persistent draft and side choosers.
-mod data;
-mod receipt;
+pub(crate) mod data;
+pub(crate) mod receipt;
 mod task;
 mod welcome;
 pub(crate) use welcome::{Welcome, draw as draw_welcome, ensure as ensure_welcome, tick as welcome_tick};
 pub(crate) use welcome::{key as welcome_key, mouse as welcome_mouse, paste as welcome_paste};
 pub(crate) use welcome::editing as welcome_editing;
+pub(crate) use welcome::remap as remap_welcome;
 pub(crate) use receipt::Creation;
 mod view;
 use crate::{
@@ -777,6 +778,35 @@ fn store_form(app: &mut App, form: Box<Form>) {
         Surface::Dialog => app.modal = Some(Modal::NewHarness(form)),
         Surface::Dismissed => app.new_harness_draft = Some(form),
         Surface::Window(tab) => { app.welcome.forms.insert(tab.clone(), form); }
+    }
+}
+
+/// Preserve a local draft when first signing in, while invalidating every outstanding
+/// read/launch callback. An uncertain creation keeps its receipt and is checked, never replayed.
+pub(crate) fn account_changed(app: &mut App, local_before: Option<&str>, machine: &str) {
+    welcome::account_changed(app);
+    let mut forms: Vec<_> = std::mem::take(&mut app.welcome.forms).into_values().collect();
+    if let Some(form) = app.new_harness_draft.take() { forms.push(form); }
+    if matches!(app.modal, Some(Modal::NewHarness(_))) {
+        let Some(Modal::NewHarness(form)) = app.modal.take() else { unreachable!() }; forms.push(form);
+    }
+    let windows: std::collections::HashSet<_> = app.tabs.iter().chain(app.sessions.iter().flat_map(|s| s.tabs.iter())).map(|t| t.id.clone()).collect();
+    for mut form in forms {
+        let local = local_before == Some(form.draft.machine.as_str());
+        if !local && !crate::local::is_local(&form.draft.machine) { continue }
+        form.id = uuid::Uuid::new_v4().to_string();
+        form.starting = false; form.checking = false; form.git_loading = false;
+        form.git_key = None; form.git = Value::Null; form.models = Value::Null; form.profiles = Value::Null;
+        form.child = None; form.child_active = false; form.trail.clear(); form.projects.clear();
+        form.recent.clear(); form.recent_labels.clear(); form.recent_status.clear();
+        if local {
+            form.draft.machine = machine.into(); form.local_only = false;
+            if let Some((host, _, _)) = &mut form.draft.profile { if local_before == Some(host.as_str()) { *host = machine.into(); } }
+            if let Some(attempt) = &mut form.attempt { if local_before == Some(attempt.machine.as_str()) { attempt.machine = machine.into(); } }
+        }
+        form.error = if form.attempt.is_some() { "Connection changed during launch. Check status to recover the same harness.".into() } else { String::new() };
+        if matches!(&form.surface, Surface::Window(tab) if !windows.contains(tab)) { form.surface = Surface::Dismissed; }
+        store_form(app, form);
     }
 }
 fn dismiss(app: &mut App, mut form: Box<Form>) {
@@ -1782,7 +1812,7 @@ mod tests {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19789, sink, (150, 42));
         app.fleet.local_id = "local".into();
-        app.fleet.machines.push(crate::fleet::Machine {
+        app.fleet.machines.push(crate::fleet::Machine { shared: false,
             id: "local".into(),
             name: "studio".into(),
             local: true,
@@ -1813,7 +1843,7 @@ mod tests {
     async fn local_shell_entry_does_not_override_the_registered_launch_machine() {
         let mut app = app();
         let shell = crate::local::MACHINE;
-        app.fleet.machines.insert(0, crate::fleet::Machine {
+        app.fleet.machines.insert(0, crate::fleet::Machine { shared: false,
             id: shell.into(), name: "m0".into(), local: true,
             status: "running".into(), reach: crate::fleet::Reach::Ready,
         });
@@ -1845,7 +1875,7 @@ mod tests {
     async fn project_search_reaches_remote_machines_after_a_large_local_history() {
         let mut app = app();
         for name in ["office", "m2"] {
-            app.fleet.machines.push(crate::fleet::Machine {
+            app.fleet.machines.push(crate::fleet::Machine { shared: false,
                 id: name.into(), name: name.into(), local: false,
                 status: "running".into(), reach: crate::fleet::Reach::Ready,
             });
@@ -1885,7 +1915,7 @@ mod tests {
         let mut app = app();
         let shell = crate::local::MACHINE;
         for (id, local) in [(shell, true), ("office", false)] {
-            app.fleet.machines.push(crate::fleet::Machine {
+            app.fleet.machines.push(crate::fleet::Machine { shared: false,
                 id: id.into(), name: id.into(), local,
                 status: "running".into(), reach: crate::fleet::Reach::Ready,
             });
@@ -1950,7 +1980,7 @@ mod tests {
         for pending in [false, true] {
             let mut app = app();
             let shell = crate::local::MACHINE;
-            app.fleet.machines.insert(0, crate::fleet::Machine {
+            app.fleet.machines.insert(0, crate::fleet::Machine { shared: false,
                 id: shell.into(), name: "m0".into(), local: true,
                 status: "running".into(), reach: crate::fleet::Reach::Ready,
             });

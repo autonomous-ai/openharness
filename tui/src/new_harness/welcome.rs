@@ -18,6 +18,22 @@ struct Search {
     next: Instant,
 }
 
+/// Changing a tab's sole harness gives its shared desk identity a fresh key; its local draft
+/// and any receipt still belong to the same visible tab.
+pub(crate) fn remap(app: &mut App, old: &str, new: &str) {
+    if let Some(mut form) = app.welcome.forms.remove(old) {
+        if matches!(&form.surface, Surface::Window(id) if id == old) { form.surface = Surface::Window(new.into()); }
+        if let Some(target) = &mut form.launch_target { if target.tab == old { target.tab = new.into(); } }
+        if let Some(target) = form.attempt.as_mut().and_then(|a| a.target.as_mut()) { if target.tab == old { target.tab = new.into(); } }
+        app.welcome.forms.insert(new.into(), form);
+    }
+}
+
+pub(super) fn account_changed(app: &mut App) {
+    app.welcome.generation = app.welcome.generation.wrapping_add(1);
+    app.welcome.searches.clear(); app.welcome.shown = false;
+}
+
 /// Context is captured before creating the window; switching windows never replaces its draft.
 pub(crate) fn ensure(app: &mut App, from: Option<(String, String)>, cwd: Option<String>) {
     if crate::input::os_home(app) { return }
@@ -235,7 +251,7 @@ mod tests {
         let mut app = App::new(19789, sink, (150, 42));
         app.fleet.local_id = "local".into();
         app.fleet.machines.push(crate::fleet::Machine {
-            id: "local".into(), name: "office".into(), local: true,
+            id: "local".into(), name: "office".into(), local: true, shared: false,
             status: "online".into(), reach: crate::fleet::Reach::Ready,
         });
         app.tab_mut().home = true;
@@ -333,7 +349,7 @@ mod tests {
         assert_eq!(app.welcome.forms[&tab].draft.machine, crate::local::MACHINE);
         app.fleet.local_id = "registered-local".into();
         app.fleet.machines.push(crate::fleet::Machine {
-            id: "registered-local".into(), name: "office".into(), local: true,
+            id: "registered-local".into(), name: "office".into(), local: true, shared: false,
             status: "online".into(), reach: crate::fleet::Reach::Ready,
         });
         super::super::refresh(&mut app);

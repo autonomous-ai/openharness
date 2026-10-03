@@ -3,6 +3,9 @@
 //! are the account's desk, driven with tmux's keys.
 
 mod activity;
+mod account;
+mod agent_handoff;
+mod agent_switch;
 mod app;
 mod capture;
 mod tree;
@@ -24,6 +27,7 @@ mod config;
 mod copy;
 mod daemon;
 mod devices;
+mod hardware;
 mod dial;
 mod draw;
 mod event;
@@ -36,6 +40,11 @@ mod layout;
 mod desk_layout;
 mod local;
 mod modal;
+mod workspace_menu;
+mod workspace_controls;
+mod workspace_events;
+mod workspace_resources;
+mod session_close;
 mod new_harness;
 mod mouse;
 mod options;
@@ -57,6 +66,7 @@ mod bar;
 mod bar_more;
 // ── models: the Models view (step 6) ──
 mod models;
+mod runtime_model;
 
 use std::io::{self, BufWriter, Write};
 use std::time::{Duration, Instant};

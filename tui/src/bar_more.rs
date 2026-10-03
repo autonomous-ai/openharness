@@ -65,7 +65,7 @@ mod tests {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19789, sink, (120, 36));
         app.fleet.local_id = "local".into();
-        app.fleet.machines.push(crate::fleet::Machine { id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready });
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready });
         app
     }
 

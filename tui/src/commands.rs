@@ -84,6 +84,18 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("command-prompt", "command-prompt", "Prompt for a command"),
     ("confirm-before", "confirm", "Ask y/n before a command"),
     ("new-harness", "newh", "New harness: [engine] [@machine] [folder] — or choose"),
+    ("close-harness", "closeh", "Save and stop a harness, checking active work first (-t pane, -w window)"),
+    ("change-agent", "change-agent", "Change a harness's agent while keeping its project and pane (-t pane)"),
+    ("workspace-menu", "workspace-menu", "Workspace actions, account and appearance"),
+    ("workspace-sync", "workspace-sync", "Retry saving a pending agent replacement to the shared workspace"),
+    ("models", "models", "Choose a model or manage models on your machines"),
+    ("devices", "devices", "Manage computer connections"),
+    ("hardware-devices", "hardware-devices", "Manage physical Harness devices on your computers"),
+    ("account", "login", "Optional sign-in and your Harness account"),
+    ("appearance", "appearance", "Choose the TUI appearance"),
+    ("pane-menu", "pane-menu", "Actions for a pane (-t target)"),
+    ("window-menu", "window-menu", "Actions for a window (-t target)"),
+    ("pane-control", "pane-control", "Run an action from a captured pane or window menu"),
     ("new-terminal", "newt", "A shell on this pane's machine"),
     ("choose-command", "choosec", "Every command and setting by name (C-b Enter)"),
     ("take-control", "take", "Reclaim control of all panes across the TUI's tabs"),
@@ -1865,14 +1877,17 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 && app.options.get("@hn-look", "", None).as_deref() != Some("tmux");
             // Use the local shell service when the local daemon is unavailable.
             let machine = input::shell_machine(app, from.as_ref());
-            if app.link(&machine).is_none() { return app.error("create window failed: the daemon is not running (harness start)") }
+            let connected = app.link(&machine).is_some();
+            if !bare && !connected { return app.error("create window failed: the daemon is not running (harness start)") }
             app.new_tab_at(idx);
             if app.capture.is_some() { app.tab_mut().size = app.cli_size; }
             if bare {
                 app.tab_mut().home = true;
                 crate::new_harness::ensure_welcome(app, from.clone(), cwd.clone());
                 let tab = app.tab().id.clone();
-                input::new_shell_from(app, from, Placement::Fill(tab), cwd, command);
+                // The welcome composer works while a machine is reconnecting. Its optional
+                // backing shell must not prevent opening the tab or drafting the next task.
+                if connected { input::new_shell_from(app, from, Placement::Fill(tab), cwd, command); }
                 return;
             }
             if let Some(n) = &name { let n = expand(app, n); app.rename_tab(&n) }
@@ -3035,6 +3050,9 @@ fn run_words_in(app: &mut App, words: &[String]) {
         }
         // The client that has the session this one shows changed it, or went.
         "hn-mirror-refresh" => crate::mirror::refresh(app),
+        "hn-harness-view-event" => {
+            if let Some(event) = opt(words, "-j").and_then(|text| serde_json::from_str(&text).ok()) { crate::workspace_events::receive(app, &event); }
+        }
         "hn-hand-over" => { app.write_sessions(crate::app::Save::Leave); app.handed_over = true; app.quit = true }
         // Another client of this name takes a session this one has (it attached there).
         "hn-release-session" => {
@@ -3476,6 +3494,20 @@ fn run_words_in(app: &mut App, words: &[String]) {
             // (y/n)` (or -p's, expanded), the confirm key (-c) or Enter with -y running it.
             let command = positional(words).first().map(|w| w.strip_prefix(crate::tmuxconf::BLOCK).unwrap_or(w).to_string()).unwrap_or_default();
             if command.is_empty() { return }
+            // The shipped x / & bindings stay tmux's keys. For a Harness session, their
+            // default confirmation delegates to Desktop's inspect/save/stop contract.
+            // A custom prompt or explicit scripted kill remains exactly what it says.
+            if !app.headless && app.capture.is_none() && words.len() == 4 {
+                let prompt = opt(words, "-p");
+                if command == "kill-pane" && prompt.as_deref() == Some("kill-pane #P? (y/n)") {
+                    if let Some(p) = app.focused().filter(|p| crate::session_close::managed_pane(app, *p)) {
+                        crate::session_close::pane(app, p); return;
+                    }
+                } else if command == "kill-window" && prompt.as_deref() == Some("kill-window #W? (y/n)")
+                    && app.tab().panes().iter().any(|p| crate::session_close::managed_pane(app, *p)) {
+                    crate::session_close::tab(app, app.active); return;
+                }
+            }
             let key = opt(words, "-c").and_then(|c| { let mut it = c.chars(); match (it.next(), it.next()) { (Some(k), None) if k.is_ascii_graphic() => Some(k), _ => None } });
             let Some(key) = key.or(if opt(words, "-c").is_some() { None } else { Some('y') }) else { return app.error("invalid confirm key") };
             let name = crate::cmdparse::parse(&command, app, true).ok().and_then(|c| c.first().and_then(|c| c.args.first().cloned())).and_then(|a| match a { crate::cmdparse::Arg::Str(s) => Some(resolve(&s).to_string()), _ => None }).unwrap_or_default();
@@ -3493,6 +3525,38 @@ fn run_words_in(app: &mut App, words: &[String]) {
             crate::viewer::show(app, key, options);
         }
         "new-harness" => { if words.len() < 2 { input::run(app, "new") } else { input::new_harness_words(app, &words[1..]) } }
+        "workspace-menu" => crate::workspace_controls::workspace_menu(app, None),
+        "workspace-sync" => crate::agent_switch::retry_sync(app),
+        "account" => crate::account::open(app),
+        "change-agent" => {
+            if let Some((_, p)) = target_pane(app, words) { crate::agent_switch::open(app, p); }
+            else { app.error("can't find pane"); }
+        }
+        "pane-menu" => {
+            if let Some((_, p)) = target_pane(app, words) { crate::workspace_controls::pane_menu(app, p, None); }
+            else { app.error("can't find pane"); }
+        }
+        "window-menu" => {
+            let target = opt(words, "-t").and_then(|t| window_target(app, &t));
+            if opt(words, "-t").is_some() && target.is_none() { app.error("can't find window"); }
+            else { crate::workspace_controls::tab_menu(app, target.unwrap_or(app.active), None); }
+        }
+        "pane-control" => {
+            let args = positional(words);
+            if args.len() == 2 { crate::workspace_controls::run(app, &args[0], &args[1]); }
+        }
+        "close-harness" => {
+            if let Some(id) = opt(words, "-x") { crate::session_close::cancel(app, &id); }
+            else if let Some(id) = opt(words, "-y") { crate::session_close::confirm(app, &id); }
+            else if let Some(target) = opt(words, "-w") {
+                if let Some(tab) = window_target(app, &target) { crate::session_close::tab(app, tab); }
+                else { app.error(format!("can't find window: {target}")); }
+            } else {
+                let target = opt(words, "-t").and_then(|t| pane_target(app, &t).map(|(_, p)| p));
+                if opt(words, "-t").is_some() && target.is_none() { app.error("can't find pane"); }
+                else if let Some(pane) = target.or_else(|| app.focused()) { crate::session_close::pane(app, pane); }
+            }
+        }
         "new-terminal" => input::run(app, "terminal"),
         "choose-command" => input::run(app, "commands"),
         "take-control" => app.take_control(),

@@ -33,6 +33,9 @@ pub fn lines(app: &App, kind: &PickerKind, id: &str) -> Vec<Line<'static>> {
         PickerKind::Models => vec![Line::raw(id.rsplit(':').next().unwrap_or(id).to_string()), Line::raw(""), Line::raw("Enter switches this harness to it.")],
         // ── machines & devices ──
         PickerKind::Devices(view) => crate::devices::preview(app, *view, id),
+        PickerKind::Account => crate::account::preview(app, id),
+        PickerKind::AgentSwitch => crate::agent_switch::preview(app, id),
+        PickerKind::Hardware => crate::hardware::preview(app, id),
         _ => vec![],
     }
 }

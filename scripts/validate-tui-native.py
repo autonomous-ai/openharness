@@ -33,6 +33,7 @@ def main():
     # capacity for their PTY children; deadlines and assertions are unchanged.
     checks = [
         fixture("reconnect", "HN_RECONNECT_TEST_BINARY", "HN_RECONNECT_TEST_PORT", 19781),
+        fixture("workspace-controls", "HN_WORKSPACE_BINARY", "HN_WORKSPACE_PORT", 19920),
         fixture("layout-sync", "HN_LAYOUT_TEST_BINARY", "HN_LAYOUT_TEST_PORT", 19801),
         fixture("new-harness", "HN_NEW_UI_BINARY", "HN_NEW_UI_PORT", 19786),
         fixture("welcome", "HN_WELCOME_TEST_BINARY", "HN_WELCOME_TEST_PORT", 19787),
