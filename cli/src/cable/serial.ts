@@ -11,6 +11,11 @@ import { promisify } from 'node:util'
 
 const runFile = promisify(execFile)
 
+// Darwin's O_EXLOCK (sys/fcntl.h). Node accepts it as an open flag but does not
+// expose the constant. The kernel arbitrates competing opens across users;
+// lsof cannot see another macOS account's descriptors and also has a TOCTOU race.
+const DARWIN_O_EXLOCK = 0x20
+
 /** The SoC's own USB peripheral. The dial exposes this and nothing else — measured, see findDialPort. */
 export const DIAL_VENDOR_ID = 0x303a
 export const DIAL_PRODUCT_ID = 0x1001
@@ -189,6 +194,7 @@ export class SerialLink {
     private readonly stream: ReadStream,
     private readonly onData: (chunk: Buffer) => void,
     private readonly onClosed: (why: string) => void,
+    private readonly claimFd?: number,
   ) {
     stream.on('data', (chunk: Buffer) => {
       if (this.closed) return
@@ -212,42 +218,55 @@ export class SerialLink {
     onData: (chunk: Buffer) => void,
     onClosed: (why: string) => void,
   ): Promise<SerialLink> {
-    // Raw mode is not optional. Left in the default line discipline the tty maps CR to NL, strips the
-    // eighth bit on some paths and echoes what we write back at us — and a mangled frame is
-    // indistinguishable from a bad cable at the far end.
-    //
-    // `clocal` belongs with it: it tells the line discipline to ignore modem control lines, so losing
-    // carrier — which is what unplugging a USB serial device looks like — does not hang the port up
-    // underneath us.
-    const flag = process.platform === 'darwin' ? '-f' : '-F'
-    await runFile('stty', [flag, path, 'raw', 'clocal', '-echo', '-echoe', '-echok', '-echoctl', '-echoke', 'min', '1', 'time', '0'])
+    // Keep the claim on a separate open description: libuv reopens/replaces
+    // the stream's descriptor and would otherwise release this advisory lock.
+    // Acquire it before stty can change a port another Harness is using.
+    const claimFd = process.platform === 'darwin'
+      ? openSync(path, constants.O_RDWR | constants.O_NOCTTY | constants.O_NONBLOCK | DARWIN_O_EXLOCK)
+      : undefined
+    let retainedClaim = false
+    try {
+      // Raw mode is not optional. Left in the default line discipline the tty maps CR to NL, strips the
+      // eighth bit on some paths and echoes what we write back at us — and a mangled frame is
+      // indistinguishable from a bad cable at the far end.
+      //
+      // `clocal` belongs with it: it tells the line discipline to ignore modem control lines, so losing
+      // carrier — which is what unplugging a USB serial device looks like — does not hang the port up
+      // underneath us.
+      const flag = process.platform === 'darwin' ? '-f' : '-F'
+      await runFile('stty', [flag, path, 'raw', 'clocal', '-echo', '-echoe', '-echok', '-echoctl', '-echoke', 'min', '1', 'time', '0'])
 
-    // O_NOCTTY IS LOAD-BEARING, AND ITS ABSENCE KILLED THE DAEMON.
-    //
-    // The daemon is spawned detached, which makes it a session leader. A session leader that opens a tty
-    // without this flag ACQUIRES it as its controlling terminal — and when the USB device is unplugged the
-    // kernel sends SIGHUP to that terminal's process group. Default disposition for SIGHUP is terminate,
-    // so pulling the cable killed the process outright: no exception, no stack, nothing for the
-    // unhandledRejection guard to catch, and a log that simply stops mid-second.
-    //
-    // Measured 2026-08-24: the daemon died at the exact second the cable came out, every time, and the
-    // dial then greeted an empty room until it timed out and showed no agents.
-    // FileHandle.read either occupies a worker while idle or needs EAGAIN polling. A TTY stream
-    // uses libuv readiness instead, including short writes/backpressure, without a polling timer.
-    // ReadStream is a net.Socket; opening O_RDWR and enabling both sides makes it full duplex.
-    const fd = openSync(path, constants.O_RDWR | constants.O_NOCTTY | constants.O_NONBLOCK)
-    let stream: ReadStream
-    try { stream = new ReadStream(fd, { readable: true, writable: true }) }
-    catch (error) { closeSync(fd); throw error }
-    // On POSIX libuv normally reopens the tty and owns a duplicate. On its fallback path it owns
-    // the supplied fd itself. Check the native handle exactly once so neither path leaks a
-    // descriptor or closes it twice. The managed Node runtime's real-PTY tests cover ownership.
-    const streamFd = (stream as ReadStream & { _handle: { fd: number } })._handle.fd
-    if (streamFd !== fd) {
-      try { closeSync(fd) }
-      catch (error) { stream.destroy(); throw error }
+      // O_NOCTTY IS LOAD-BEARING, AND ITS ABSENCE KILLED THE DAEMON.
+      //
+      // The daemon is spawned detached, which makes it a session leader. A session leader that opens a tty
+      // without this flag ACQUIRES it as its controlling terminal — and when the USB device is unplugged the
+      // kernel sends SIGHUP to that terminal's process group. Default disposition for SIGHUP is terminate,
+      // so pulling the cable killed the process outright: no exception, no stack, nothing for the
+      // unhandledRejection guard to catch, and a log that simply stops mid-second.
+      //
+      // Measured 2026-08-24: the daemon died at the exact second the cable came out, every time, and the
+      // dial then greeted an empty room until it timed out and showed no agents.
+      // FileHandle.read either occupies a worker while idle or needs EAGAIN polling. A TTY stream
+      // uses libuv readiness instead, including short writes/backpressure, without a polling timer.
+      // ReadStream is a net.Socket; opening O_RDWR and enabling both sides makes it full duplex.
+      const fd = openSync(path, constants.O_RDWR | constants.O_NOCTTY | constants.O_NONBLOCK)
+      let stream: ReadStream
+      try { stream = new ReadStream(fd, { readable: true, writable: true }) }
+      catch (error) { closeSync(fd); throw error }
+      // On POSIX libuv normally reopens the tty and owns a duplicate. On its fallback path it owns
+      // the supplied fd itself. Check the native handle exactly once so neither path leaks a
+      // descriptor or closes it twice. The managed Node runtime's real-PTY tests cover ownership.
+      const streamFd = (stream as ReadStream & { _handle: { fd: number } })._handle.fd
+      if (streamFd !== fd) {
+        try { closeSync(fd) }
+        catch (error) { stream.destroy(); throw error }
+      }
+      const link = new SerialLink(path, stream, onData, onClosed, claimFd)
+      retainedClaim = true
+      return link
+    } finally {
+      if (!retainedClaim && claimFd !== undefined) closeSync(claimFd)
     }
-    return new SerialLink(path, stream, onData, onClosed)
   }
 
   /**
@@ -295,7 +314,10 @@ export class SerialLink {
     if (this.closePromise) return this.closePromise
     this.closed = true
     let finish!: () => void
-    this.closePromise = new Promise<void>((resolve) => { finish = resolve }).then(() => this.onClosed(why))
+    this.closePromise = new Promise<void>((resolve) => { finish = resolve }).then(() => {
+      try { if (this.claimFd !== undefined) closeSync(this.claimFd) }
+      finally { this.onClosed(why) }
+    })
     if (this.streamClosed) finish()
     else {
       this.stream.once('close', finish)

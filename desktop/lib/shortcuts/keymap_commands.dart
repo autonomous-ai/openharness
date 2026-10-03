@@ -29,6 +29,9 @@ class HarnessCommand {
   /// Workspace defaults come from the live shortcut table. A command cannot
   /// quietly propose different keys from the ones the user already uses.
   List<String> get keys {
+    // Cmd-Alt-T cannot collapse to Alt-T in a browser: that is New Tab.
+    // Use the companion chord already used by the other Alt-prefix platform.
+    if (kIsWeb && id == 'app.daemon_talk') return const ['alt+shift+a'];
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.linux) {
       final linux = linuxAltCommandKeys[id];
       if (linux != null) return linux;

@@ -37,6 +37,18 @@ class ReleaseWatchTests(unittest.TestCase):
             with self.assertRaisesRegex(TimeoutError, "no release-desktop.yml run appeared"):
                 watch.watch(TAG, SHA)
 
+    def test_verification_inside_publish_must_have_a_successful_step(self):
+        for conclusion in ("success", "skipped", "failure"):
+            result = dict(DONE, jobs=[dict(name="publish", status="completed", conclusion="success", steps=[
+                dict(name="Verify all public artifacts as the updater", conclusion=conclusion)
+            ])])
+            with self.subTest(conclusion=conclusion), patch.object(watch, "gh_json", side_effect=[[RUN], result]):
+                if conclusion == "success":
+                    self.assertEqual(watch.watch(TAG, SHA), RUN)
+                else:
+                    with self.assertRaises(RuntimeError):
+                        watch.watch(TAG, SHA)
+
     def test_in_progress_run_is_rechecked_without_another_validation(self):
         pending = dict(DONE, status="in_progress", conclusion="", jobs=[])
         with patch.object(watch, "gh_json", side_effect=[[RUN], pending, DONE]) as gh, patch.object(watch.time, "sleep"):

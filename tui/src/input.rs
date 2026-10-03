@@ -636,7 +636,7 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
     // Its spinner turns while what it lists is still coming in, as fzf's does while it reads.
     let busy = match kind {
         PickerKind::Store => is_loading(&format!("dsh {}", app.fleet.local_id)),
-        PickerKind::Models => crate::models::loading(app) || focused_agent(app).is_some_and(|(m, a)| is_loading(&format!("models {m} {a}"))),
+        PickerKind::Models => crate::models::loading(app),
         _ => false,
     };
     picker.busy = busy.then(|| "loading".to_string());
@@ -686,22 +686,23 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.hints = vec![("enter", "its harnesses"), ("C-t", "a session of them"), ("M-n", "new harness there")];
             picker.empty = "No projects yet.".into();
         }
-        // ── models: the Models view's sections (models.rs), then the engine's own models ──
+        // ── models: the Models view's sections, as the desktop picker lists them (models.rs) ──
         PickerKind::Models => {
-            let mut rows = crate::models::rows(app, crate::models::searched(picker));
+            let rows = crate::models::rows(app, crate::models::searched(picker));
             let in_use = crate::models::in_use_row(&rows);
-            rows.extend(modal::model_rows(app));
+            let top = rows.first().map(|r| r.id.clone());
+            let before = picker.selected_id.clone();
             // (Rebuilt in its sections each time — a model moves to where its state puts it, a
             // reply come late lands in its section — the cursor staying on its row.)
             picker.rows.clear();
             picker.set_rows(rows);
-            // Start on the model it runs — the grid model it is on, else its engine's model — so
-            // ↑/↓ are "a little more / less" from where it is.
-            if picker.query.trim() == ":" && picker.selected_id.is_none() {
-                if let Some(current) = in_use.or_else(|| focused_agent(app).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| x.model.clone()))) {
-                    if let Some(at) = picker.visible.iter().position(|(i, _)| picker.rows[*i].id == current) { picker.cursor = at; picker.selected_id = Some(current) }
-                }
+            // Start on what the harness is on — the model, the API's or its own login — else the
+            // top row, as the desktop's picker does; and follow it there as replies arrive, until a
+            // key moves the cursor elsewhere.
+            if picker.query.trim() == ":" && (before.is_none() || before == picker.placed) {
+                if let Some(want) = in_use.or(top) { picker.select(&want); picker.placed = picker.selected_id.clone() }
             }
+            picker.right_half = true;
             picker.hints = vec![("enter", "use · get"), ("C-s", "stop a local model")];
             picker.empty = if crate::models::target(app).is_none() { crate::models::no_target_why(app) } else { "Loading its models…".into() };
             picker.status = app.focused().and_then(|f| app.panes.get(&f)).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone()).unwrap_or_default();
@@ -861,16 +862,6 @@ fn prepare(app: &mut App, kind: &PickerKind) {
 fn load_models(app: &mut App) {
     // ── models: this computer's models, the grids and the saved APIs (models.rs) ──
     crate::models::open(app);
-    // (The focused pane's engine's own models — what `model_rows` lists for that pane.)
-    let Some((machine, agent)) = focused_agent(app) else { return };
-    let Some(link) = app.link(&machine) else { return };
-    let mark = loading(format!("models {machine} {agent}"), true);
-    let key = (machine, agent.clone());
-    app.spawn(async move { link.rpc("models_list", json!({ "agentId": agent }), Duration::from_secs(20)).await }, move |app, reply| {
-        loading(mark, false);
-        if let Ok(reply) = reply { app.models.insert(key, reply.get("models").and_then(|v| v.as_array()).cloned().unwrap_or_default()); }
-        refill(app);
-    });
 }
 
 /// The query changed: when its first character moved the box to another mode, rebuild it as that mode.
@@ -2790,23 +2781,8 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             fill(app, &kind, &mut picker);
             return keep(app, kind, picker);
         }
-        PickerKind::Models => {
-            // (The engine's own models: only Enter switches.)
-            if choice != Choice::Enter { return keep(app, kind, picker) }
-            let Some(model) = id else { return keep(app, kind, picker) };
-            let Some(crate::models::Target { machine, agent, .. }) = crate::models::target(app) else { return };
-            let Some(link) = app.link(&machine) else { return };
-            let label = picker.current().map(|r| r.label.clone()).unwrap_or_default();
-            app.say(format!("Switching to {label}…"), theme::SOFT);
-            app.spawn(async move { link.rpc("agent_update", json!({ "agentId": agent, "selectedModel": model }), Duration::from_secs(60)).await }, move |app, reply| match reply {
-                Ok(reply) => {
-                    if let Some(row) = reply.get("agent") { let key = (machine.clone(), row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string()); let a = crate::fleet::agent_from(&machine, row, app.fleet.agents.get(&key)); app.fleet.agents.insert(key, a); }
-                    crate::models::close(app);
-                    app.say(format!("✓ Now on {label}"), theme::ONLINE);
-                }
-                Err(e) => app.say(format!("Could not switch: {e}"), theme::DANGER),
-            });
-        }
+        // (Every row of the Models view is its own — models.rs — so nothing else is chosen here.)
+        PickerKind::Models => return keep(app, kind, picker),
         PickerKind::Layout => {
             if let Some(id) = id { app.apply_shared_preset(&id) }
         }

@@ -19,6 +19,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/model_manager_controller.dart';
 import '../companions/coding_memory_connection.dart';
 import 'harness_monitor_controller.dart';
+import 'agent_handoff_file.dart';
 import 'agent_switch_handoff.dart';
 import '../api/api_client.dart';
 import '../viewer/sign_in_browser.dart';
@@ -232,6 +233,13 @@ class _AgentChange {
   bool preservingViews = false;
   bool contextLoaded = false;
   String? handoff;
+
+  /// The handoff ran and left the new agent without a first prompt: say so once the switch is done.
+  bool handoffEmpty = false;
+
+  /// With [handoffEmpty]: the empty result came from the fallback road, so nobody confirmed the
+  /// conversation is empty. Picks the failed hint over the no-history one.
+  bool handoffFailed = false;
   String? companionTarget;
   bool launchFailed = false;
 }
@@ -3933,8 +3941,14 @@ class AppNotifier extends ChangeNotifier {
     environmentReadiness = EnvironmentReadiness.initial();
     notifyListeners();
     try {
-      // Always read-only here. Installation starts only after explicit confirmation in the wizard.
-      final result = await _runProvisioner(install: false);
+      // The probe is always read-only. What it finds missing is installed
+      // straight away when the whole plan runs in-app; only a plan that needs
+      // a password in Terminal waits on the wizard's Install action.
+      var result = await _runProvisioner(install: false);
+      if (!result.isReady && _canInstallUnattended(result, mode: null)) {
+        status = AppStatus.preparingEnvironment;
+        result = await _installUnattended(result);
+      }
       if (!result.isReady) {
         status = AppStatus.preparingEnvironment;
         notifyListeners();
@@ -3945,6 +3959,50 @@ class AppNotifier extends ChangeNotifier {
     } finally {
       _environmentSetupInFlight = false;
     }
+  }
+
+  /// Whether [probed] can be installed with nobody at the keyboard: it is a
+  /// review of what is missing, the person has not chosen manual setup, and
+  /// no step needs a password in Terminal (Linux apt). On macOS every step is
+  /// in-app, so a fresh Mac never stops on an Install button.
+  bool _canInstallUnattended(
+    EnvironmentReadiness probed, {
+    required EnvironmentSetupMode? mode,
+  }) =>
+      probed.phase == EnvironmentSetupPhase.review &&
+      (mode ?? probed.mode) != EnvironmentSetupMode.manual &&
+      !probed.plan.any((item) => item.requiresTerminal);
+
+  /// The install [startEnvironmentSetup] runs, for a caller that already holds
+  /// [_environmentSetupInFlight].
+  Future<EnvironmentReadiness> _installUnattended(
+    EnvironmentReadiness probed,
+  ) async {
+    _environmentInstallRequested = true;
+    // Straight to the install progress: the review and its Install button
+    // are never painted for a step nobody needs to approve. This is also the
+    // state the provisioner resumes from — it re-probes every step — so its
+    // first frame does not bring back the review's copy and red "Missing".
+    final planned = {for (final item in probed.plan) item.step};
+    environmentReadiness = probed.copyWith(
+      phase: EnvironmentSetupPhase.installing,
+      mode: EnvironmentSetupMode.automatic,
+      message: 'Installing only the missing required tools.',
+      steps: {
+        for (final entry in probed.steps.entries)
+          entry.key: planned.contains(entry.key)
+              ? EnvironmentStepStatus.running
+              : entry.value,
+      },
+    );
+    notifyListeners();
+    final result = await _runProvisioner(
+      resumeFrom: environmentReadiness,
+      install: true,
+      mode: EnvironmentSetupMode.automatic,
+    );
+    if (!result.isReady) _scheduleEnvironmentRecheck();
+    return result;
   }
 
   /// Shared with [_prepareEnvironment]: runs the provisioner, updates
@@ -4096,16 +4154,19 @@ class AppNotifier extends ChangeNotifier {
     await _continueAfterEnvironmentReady();
   }
 
-  /// A manual repair always returns to a read-only probe.
+  /// A manual repair always returns to a read-only probe. In automatic setup
+  /// the probe is followed by the install when it can run unattended, as at
+  /// launch.
   Future<void> retryEnvironmentSetup() async {
     if (_environmentSetupInFlight) return;
     _environmentSetupInFlight = true;
     notifyListeners();
     try {
-      final result = await _runProvisioner(
-        install: false,
-        mode: environmentReadiness.mode,
-      );
+      final mode = environmentReadiness.mode;
+      var result = await _runProvisioner(install: false, mode: mode);
+      if (!result.isReady && _canInstallUnattended(result, mode: mode)) {
+        result = await _installUnattended(result);
+      }
       if (result.isReady) await _continueAfterEnvironmentReady();
     } finally {
       _environmentSetupInFlight = false;
@@ -11484,6 +11545,10 @@ class AppNotifier extends ChangeNotifier {
   bool Function(String machineId, String agentId)? canChangeCompanionAgent;
   void Function(String machineId, String agentId)? openAgentPicker;
 
+  /// Shows the person a message once a switch is done (the handoff hints). Set by the screen on
+  /// top, which shows it as a snack bar; null when no screen is listening.
+  void Function(String message)? agentChangeNotice;
+
   List<String> agentSwitchEngines(String machineId, Agent source) {
     if (source.dsh == 'autonomous/pair') {
       return const ['opencode', 'codex', 'claude'];
@@ -11557,6 +11622,70 @@ class AppNotifier extends ChangeNotifier {
     ).whenComplete(() => change.pending = null);
   }
 
+  /// Fill [change].handoff for the new agent, or return why the switch must not go on.
+  ///
+  /// First choice: the machine writes a record of the whole conversation into the project and the
+  /// new agent is told to read it (agent_handoff_prepare). Any failure of that — an older machine,
+  /// a busy or slow one, a reply this client will not trust — falls back to the short excerpt from
+  /// agent_recent. Only when that fails too does the switch stop, with the source still running.
+  /// Both reads happen BEFORE the source is closed: a creation retry must carry the same choices.
+  /// Also sets the flags that pick the hint shown when the new agent gets no first prompt.
+  Future<String?> _loadSwitchHandoff(
+    String machineId,
+    _AgentChange change,
+    Agent source,
+    String folder,
+  ) async {
+    try {
+      final reply = await _conn(machineId).request(
+        'agent_handoff_prepare',
+        payload: {
+          'agentId': source.id,
+          'changeId': change.creation._id,
+          'targetEngine': change.engine,
+        },
+        timeout: const Duration(seconds: 6),
+      );
+      final accepted = acceptAgentHandoffReply(
+        reply,
+        agentId: source.id,
+        changeId: change.creation._id,
+        folder: folder,
+        sourceLabel: engineIdentity(source.engine).label,
+      );
+      if (accepted.accepted) {
+        change.handoff = accepted.prompt;
+        change.handoffEmpty = accepted.prompt == null;
+        change.handoffFailed = false;
+        change.contextLoaded = true;
+        return null;
+      }
+    } catch (_) {
+      // Any failure takes the excerpt road below.
+    }
+    try {
+      final recent = await _conn(machineId).request(
+        'agent_recent',
+        payload: {'agentId': source.id, 'n': 5},
+        timeout: const Duration(seconds: 4),
+      );
+      if (recent['error'] != null ||
+          (recent['agentId'] != null && recent['agentId'] != source.id)) {
+        return 'Could not read the conversation for the handoff. Try switching again.';
+      }
+      change.handoff = agentSwitchHandoff(
+        source.engine ?? 'the previous agent',
+        recent,
+      );
+      change.handoffEmpty = change.handoff == null;
+      change.handoffFailed = change.handoffEmpty;
+      change.contextLoaded = true;
+    } catch (_) {
+      return 'Could not read the conversation for the handoff. Try switching again.';
+    }
+    return null;
+  }
+
   Future<String?> _changeAgent(String machineId, _AgentChange change) async {
     final machine = stateOf(machineId);
     final source = change.source;
@@ -11576,24 +11705,8 @@ class AppNotifier extends ChangeNotifier {
     if (source.dsh != 'autonomous/pair' &&
         supportsAgentHandoff(change.engine) &&
         !change.contextLoaded) {
-      try {
-        final recent = await _conn(machineId).request(
-          'agent_recent',
-          payload: {'agentId': source.id, 'n': 5},
-          timeout: const Duration(seconds: 4),
-        );
-        if (recent['error'] != null ||
-            (recent['agentId'] != null && recent['agentId'] != source.id)) {
-          return 'Could not read the conversation for the handoff. Try switching again.';
-        }
-        change.handoff = agentSwitchHandoff(
-          source.engine ?? 'the previous agent',
-          recent,
-        );
-        change.contextLoaded = true;
-      } catch (_) {
-        return 'Could not read the conversation for the handoff. Try switching again.';
-      }
+      final error = await _loadSwitchHandoff(machineId, change, source, folder);
+      if (error != null) return error;
       if (!_machineWorkCurrent(machine, change.revision)) {
         return 'This switch is no longer active.';
       }
@@ -11739,6 +11852,15 @@ class AppNotifier extends ChangeNotifier {
           ),
         );
       }
+    }
+    if (change.handoffEmpty) {
+      final from = engineIdentity(source.engine).label;
+      final to = engineIdentity(change.engine).label;
+      agentChangeNotice?.call(
+        change.handoffFailed
+            ? agentSwitchHandoffFailedHint(from, to)
+            : agentSwitchNoHistoryHint(from, to),
+      );
     }
     return null;
   }

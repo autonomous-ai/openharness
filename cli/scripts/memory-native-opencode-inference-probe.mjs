@@ -22,6 +22,12 @@ const server = createServer(async (request, response) => {
     tools: (body.tools ?? []).map(tool => tool.function?.name ?? tool.name ?? tool.type),
     selectedCredential: request.headers.authorization === 'Bearer synthetic-memory-account',
   })
+  if (current.mode === 'provider_restricted') {
+    response.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ type: 'error', error: {
+      type: 'FreeTierError', message: "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode",
+    } }))
+    return
+  }
   const forced = current.mode !== 'text' && current.requests.length === 1
   const tool = { index: 0, id: 'call_fixture', type: 'function', function: { name: current.mode,
     arguments: JSON.stringify(current.mode === 'bash'
@@ -61,7 +67,7 @@ try {
       models: { 'memory-model': { name: 'Memory fixture', limit: { context: 128_000, output: 4096 } } },
     },
   }
-  for (const mode of ['text', 'bash', 'question']) {
+  for (const mode of ['text', 'bash', 'question', 'provider_restricted']) {
     current = { mode, requests: [], snapshotReads: 0 }
     runs.push(current)
     try {
@@ -84,11 +90,14 @@ try {
     if (mode === 'text') {
       assert.deepEqual(current.result, { text: '{"proposals":[]}' })
       assert.equal(current.snapshotReads, 3)
+    } else if (mode === 'provider_restricted') {
+      assert.equal(current.error, 'inference_provider_restricted')
+      assert.equal(current.requests.length, 1, 'The non-retryable refusal must not be retried by native OpenCode')
     } else assert.equal(current.error, 'inference_tool_or_error')
   }
   console.log(JSON.stringify({ at: new Date().toISOString(), capability, runs,
     limitations: ['Synthetic localhost responses; no personal conversations or real model inference.',
-      'Native transport only. Host account/config observation and companion wiring remain unimplemented.',
+      'Native transport only. This probe does not exercise production account/config observation or companion wiring.',
       'No claim about extraction quality, OAuth, automatic compaction or task benefit.'],
   }, null, 2))
 } finally {

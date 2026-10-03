@@ -219,7 +219,7 @@ const _nativeSmokeJourneys = {
   'Shift-Tab leaves a chooser without applying its highlight',
   'Escape closes only the chooser and returns to its control',
   'outside click closes only the chooser and returns to its control',
-  'Cmd-P and Cmd-N replace each other without losing the composer',
+  'Cmd-P and Cmd-N replace each other without reviving cancelled edits',
   'focused Cmd-P preview control owns Return',
   'Return on Close search restores terminal focus without opening a result',
 };
@@ -564,7 +564,7 @@ void main({bool nativeSmoke = false}) {
   }
 
   for (final dismissal in ['Escape', 'outside click']) {
-    journey('composer closes on $dismissal and restores its draft on reopen', (
+    journey('composer closes on $dismissal and opens with an empty task', (
       tester,
     ) async {
       await _mount(tester);
@@ -579,13 +579,13 @@ void main({bool nativeSmoke = false}) {
       }
       expect(_form, findsNothing);
       await _new(tester);
-      expect(_box(tester).task, task);
-      expect(tester.widget<TextField>(_task).controller!.text, task);
+      expect(_box(tester).task, isEmpty);
+      expect(tester.widget<TextField>(_task).controller!.text, isEmpty);
       expect(_ownsFocus(tester, _task), isTrue);
     });
   }
 
-  journey('Cmd-P and Cmd-N replace each other without losing the composer', (
+  journey('Cmd-P and Cmd-N replace each other without reviving cancelled edits', (
     tester,
   ) async {
     final workspace = await _mount(tester, withTerminal: true);
@@ -599,7 +599,7 @@ void main({bool nativeSmoke = false}) {
     await _new(tester);
     expect(_search, findsNothing);
     expect(_chooser, findsNothing);
-    expect(_box(tester).task, 'Resume after checking existing work');
+    expect(_box(tester).task, isEmpty);
     expect(_ownsFocus(tester, _task), isTrue);
     expect(workspace.input, isEmpty);
     expect(workspace.starts, isEmpty);
@@ -610,6 +610,7 @@ void main({bool nativeSmoke = false}) {
     (tester) async {
       final workspace = await _mount(tester, withTerminal: true);
       await _new(tester);
+      final defaults = _box(tester).draft;
       const task =
           'Explore the API first.\nKeep the UI simple — then discuss it.';
       await tester.enterText(_task, task);
@@ -770,7 +771,6 @@ void main({bool nativeSmoke = false}) {
         expectStableDraft();
       }
 
-      final accepted = original.draft;
       await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       await tester.pumpAndSettle();
       expect(_form, findsNothing);
@@ -779,14 +779,14 @@ void main({bool nativeSmoke = false}) {
       await key(tester, LogicalKeyboardKey.arrowDown);
       await _new(tester);
       final restored = _box(tester).draft;
-      expect(restored.task, task);
-      expect(restored.engine, accepted.engine);
-      expect(restored.machineId, accepted.machineId);
-      expect(restored.project, accepted.project);
-      expect(restored.permissionMode, accepted.permissionMode);
-      expect(restored.profile?.path, accepted.profile?.path);
-      expect(restored.worktree, accepted.worktree);
-      expect(restored.branchRef, accepted.branchRef);
+      expect(restored.task, isEmpty);
+      expect(restored.engine, defaults.engine);
+      expect(restored.machineId, defaults.machineId);
+      expect(restored.project, defaults.project);
+      expect(restored.permissionMode, defaults.permissionMode);
+      expect(restored.profile?.path, defaults.profile?.path);
+      expect(restored.worktree, defaults.worktree);
+      expect(restored.branchRef, defaults.branchRef);
       expect(_ownsFocus(tester, _task), isTrue);
       expect(_chooser, findsNothing);
       expect(_search, findsNothing);

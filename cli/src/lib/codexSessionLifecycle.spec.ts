@@ -52,6 +52,30 @@ it('requires a verified process before accepting an unused conversation', async 
   expect(confirmUnused).not.toHaveBeenCalled()
   expect(deps.connect).not.toHaveBeenCalled()
 })
+it('does not ask an unrelated shared server to identify an exited, unbound client', async () => {
+  row.sessionId = ''
+  row.processIdentity = { pid: 99, executable: 'node', startMarker: 'exited client' }
+  await stopSharedCodexSession(row, () => true, deps)
+  expect(deps.daemonIdentity).not.toHaveBeenCalled()
+  expect(deps.connect).not.toHaveBeenCalled()
+  await expect(stopSharedCodexSession(row, () => false, deps)).rejects.toThrow('cancelled')
+})
+it.each(['live', 'recycled', 'bound', 'transcript', 'resuming', 'unreadable'])('does not treat an unbound client as safely exited when %s', async state => {
+  row.sessionId = ''
+  row.processIdentity = { pid: 99, executable: 'node', startMarker: 'client' }
+  if (state === 'live' || state === 'recycled') {
+    vi.mocked(deps.rows).mockResolvedValue([
+      ...(await deps.rows())!, { ...row.processIdentity, parentPid: 1, args: 'node /bin/codex',
+        startMarker: state === 'live' ? 'client' : 'replacement' },
+    ])
+  }
+  if (state === 'bound') row.boundAt = 1
+  if (state === 'transcript') row.transcriptPath = '/history'
+  if (state === 'resuming') row.resumeOnly = true
+  if (state === 'unreadable') vi.mocked(deps.rows).mockResolvedValue(null)
+  await expect(stopSharedCodexSession(row, () => true, deps)).rejects.toThrow(state === 'unreadable' ? 'verify' : 'identify')
+  expect(deps.connect).not.toHaveBeenCalled()
+})
 it('rechecks cancellation after confirming an unused conversation', async () => {
   row.sessionId = ''
   row.processIdentity = { pid: 99, executable: 'codex', startMarker: 'born' }

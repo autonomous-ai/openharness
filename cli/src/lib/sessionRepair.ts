@@ -15,7 +15,7 @@
  */
 
 import { open, readdir, readFile, realpath, stat } from 'fs/promises'
-import { basename, dirname, join, sep } from 'path'
+import { basename, dirname, join, relative, sep } from 'path'
 import { env } from '../config/env.js'
 import { museEvent, museWorkspaceRoot } from '../engines/muse/normalizer.js'
 import type { AgentEngine } from '../engines/types.js'
@@ -77,18 +77,60 @@ async function transcripts(root: string, depth = 0): Promise<TranscriptFile[]> {
  * line one; scanning a few lines covers all three without knowing which is which.
  */
 const CWD_SCAN_LINES = 20
+const CWD_SCAN_CHARS = 256 * 1024
 
-async function readTranscriptMeta(path: string): Promise<TranscriptMeta | null> {
+/**
+ * The first `cwd` in a transcript's head and, when asked, its opening `isSidechain` flag. One bounded read
+ * (256 KB — transcripts run to hundreds of MB) shared by every file engine that declares its cwd in-file.
+ * Without `wantSide` it stops at the first cwd, exactly as it always did.
+ */
+async function readTranscriptHead(path: string, wantSide: boolean): Promise<{ cwd: string; side: boolean | undefined } | null> {
   try {
-    const head = (await readFile(path, 'utf-8')).slice(0, 256 * 1024)
+    // Preserve the existing UTF-16 character budget, including non-ASCII paths. Four
+    // UTF-8 bytes per code unit is sufficient even when the cutoff splits a surrogate
+    // pair; a byte budget equal to the character budget would silently shrink the scan.
+    const head = (await headBytes(path, CWD_SCAN_CHARS * 4)).toString('utf-8').slice(0, CWD_SCAN_CHARS)
+    let cwd = ''
+    let side: boolean | undefined
     for (const line of head.split('\n', CWD_SCAN_LINES)) {
       if (!line.trim()) continue
       let obj: Record<string, unknown>
       try { obj = JSON.parse(line) as Record<string, unknown> } catch { continue }
-      if (typeof obj.cwd === 'string' && obj.cwd) return { cwd: obj.cwd }
+      if (!cwd && typeof obj.cwd === 'string' && obj.cwd) cwd = obj.cwd
+      if (wantSide && side === undefined && typeof obj.isSidechain === 'boolean') side = obj.isSidechain
+      if (cwd && (!wantSide || side !== undefined)) break
     }
-    return null
+    return { cwd, side }
   } catch { return null }
+}
+
+async function readTranscriptMeta(path: string): Promise<TranscriptMeta | null> {
+  const head = await readTranscriptHead(path, false)
+  return head?.cwd ? { cwd: head.cwd } : null
+}
+
+/**
+ * `readTranscriptMeta` for Claude, which also refuses a SUBAGENT transcript.
+ *
+ * Claude's subagents (the Task tool, background agents) write transcripts of their own in the same project
+ * directory tree, and a scan by directory cannot tell them from a conversation. Two layouts exist:
+ *
+ *   <projects>/<proj>/<parentSession>/subagents/agent-<id>.jsonl   (current)
+ *   <projects>/<proj>/agent-<id>.jsonl                             (older builds)
+ *
+ * Both open with `{type:'user', isSidechain:true, cwd, sessionId:<parent>}` — the cwd and the PARENT's
+ * session id — whereas a main transcript carries `isSidechain:false`. Left in the scan, the youngest
+ * subagent file of a parent that is still running was picked as the session of the agent born next to it
+ * (a fork): the sweep bound the fork to its parent's subagent, and Stop capture then recorded that id.
+ * So: a path with a `subagents` segment below the projects root is out before it is read, and so is a
+ * file whose FIRST record carrying a boolean `isSidechain` says true. Later records are not consulted for
+ * the flag — a main transcript can hold sidechain records, and only its opening says what the file is.
+ */
+async function readClaudeTranscriptMeta(path: string): Promise<TranscriptMeta | null> {
+  // Relative to the projects root: the root itself may legitimately sit under a folder of that name.
+  if (relative(env.CLAUDE_PROJECTS_DIR, path).split(sep).includes('subagents')) return null
+  const head = await readTranscriptHead(path, true)
+  return head && head.side !== true && head.cwd ? { cwd: head.cwd } : null
 }
 
 /** Session id from `<id>.jsonl`, or from pi's `<timestamp>_<id>.jsonl`. */
@@ -246,7 +288,7 @@ export async function findLiveSession(
       // Native Claude publishes a PID-to-conversation record even before a hook binds it.
       // Unlike a directory scan this also identifies an old process in a busy project.
       const exact = opts?.pid ? await claudeProcessSession(opts.pid, cwd, startedAtMs) : null
-      return exact ?? fileEngineSession(env.CLAUDE_PROJECTS_DIR, cwd, startedAtMs, readTranscriptMeta, opts)
+      return exact ?? fileEngineSession(env.CLAUDE_PROJECTS_DIR, cwd, startedAtMs, readClaudeTranscriptMeta, opts)
     }
     case 'codex':
       // Codex writes no `cwd` on line one; its rollout meta carries it — and says whether the rollout
@@ -411,14 +453,19 @@ const CLAUDE_CONTINUATION_TAIL_BYTES = 4 * 1024
  *  lines of the top — the records before it are bookkeeping (mode, file history, title, agent name). */
 const CLAUDE_CONTINUATION_HEAD_BYTES = 256 * 1024
 
-async function headBytes(path: string, maxBytes: number): Promise<string> {
+async function headBytes(path: string, maxBytes: number): Promise<Buffer> {
   const handle = await open(path, 'r')
   try {
     const length = Math.min((await handle.stat()).size, maxBytes)
-    if (length <= 0) return ''
+    if (length <= 0) return Buffer.alloc(0)
     const buffer = Buffer.alloc(length)
-    await handle.read(buffer, 0, length, 0)
-    return buffer.toString('utf-8')
+    let read = 0
+    while (read < length) {
+      const { bytesRead } = await handle.read(buffer, read, length - read, read)
+      if (!bytesRead) break
+      read += bytesRead
+    }
+    return buffer.subarray(0, read)
   } finally {
     await handle.close()
   }
@@ -438,13 +485,13 @@ async function headBytes(path: string, maxBytes: number): Promise<string> {
  * these two lines and no turn.
  */
 async function hasConversationTurn(path: string): Promise<boolean> {
-  let head: string
+  let head: Buffer
   try {
     head = await headBytes(path, CLAUDE_CONTINUATION_HEAD_BYTES)
   } catch {
     return false
   }
-  for (const line of head.split('\n')) {
+  for (const line of head.toString('utf-8').split('\n')) {
     if (!line.trim() || (!line.includes('"user"') && !line.includes('"assistant"'))) continue
     try {
       const record = JSON.parse(line) as { type?: unknown }
@@ -454,6 +501,8 @@ async function hasConversationTurn(path: string): Promise<boolean> {
   // Nothing in the head, but more file than we read: a continuation can open on a `file-history-snapshot`
   // large enough to push the first turn past the bound, and the thing being ruled out is two short
   // lines. Anything this size is a conversation, so the bound must never be what refuses one.
+  // Count the bytes read, not decoded UTF-16 characters: Unicode bookkeeping must not make
+  // a read that hit the byte cap look smaller and strand the real turn beyond it.
   return head.length >= CLAUDE_CONTINUATION_HEAD_BYTES
 }
 

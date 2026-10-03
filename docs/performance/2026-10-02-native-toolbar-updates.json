@@ -1,0 +1,2748 @@
+{
+  "schema": 1,
+  "recordedAt": "2026-10-02T13:59:14.815428+00:00",
+  "baselineCommit": "ce23cf697d9fcae170bb9e43c5457832f0900365",
+  "candidateCommitBeforeFixtureOnlyEdits": "244799de82f6c0be55764453f0772b623b95ed40",
+  "sourceSha256": {
+    "desktop/lib/screens/swarm_screen.dart": "608b0ef841ebf17160e754479210ae8bebf8c19b700dc0a531282c2cf4d51bbd",
+    "desktop/lib/state/status_menu.dart": "e2463e9166d2dc2e97dbb3d1a0e9c39fc26a58af1e6cd42b4404f9d6e88c63d1",
+    "desktop/test/native_toolbar_sync_test.dart": "759d27ed31c7f061077aca0e79f5ea3dae7091a56a7ecbe80ae9a455daacb3a0",
+    "desktop/test/status_menu_test.dart": "5f5d640a896bbf455f7dc5a3880101966e5cc6efb6d5fd767bc9ff54cef01b1d",
+    "desktop/test/benchmarks/native_toolbar_sync_benchmark.dart": "023921fed1a7678c1c1f64d6722639b86481d86aca48cc70626106de88da67de",
+    "desktop/integration_test/native_workspace_e2e_test.dart": "bc4217cf101d14a4de1b9bfb9db063260b26430fa5944d3af76b1dee468a9da0",
+    "desktop/pubspec.lock": "0987d3b363535b314a292bab02ff8ec5bc51691398f8ede9406b9885925c00b7"
+  },
+  "toolchain": {
+    "frameworkVersion": "3.47.2",
+    "channel": "[user-branch]",
+    "repositoryUrl": "https://github.com/flutter/flutter.git",
+    "frameworkRevision": "d3b14c876900e553bc736ca19295fc09e3853e8e",
+    "frameworkCommitDate": "2026-08-26 16:07:51 -0700",
+    "engineRevision": "a804b261645ef8c13eb3d5c44a5c2fb0340c5539",
+    "engineCommitDate": "2026-08-26 18:46:13.000Z",
+    "engineContentHash": "1cf1c4773fb941c4c74a7f8bb144a8837596c0f4",
+    "engineBuildDate": "2026-08-26 15:23:07.677",
+    "dartSdkVersion": "3.13.2",
+    "devToolsVersion": "2.60.0",
+    "flutterVersion": "3.47.2"
+  },
+  "host": {
+    "os": "26.6.2",
+    "architecture": "arm64"
+  },
+  "method": "Sequential baseline then candidate on the same host; in-memory AppNotifier and full SwarmScreen native toolbar construction. Headless debug elapsed notification + microtask turn; no Flutter frame is pumped during the timed turn. Seven rounds, median per turn. No owned build, profiler or other test ran concurrently. Uncontrolled unrelated host activity remains possible.",
+  "scope": "Full native toolbar construction with unchanged inventory notifications; excludes Flutter frames, AppKit, transport, agents and whole-app energy.",
+  "measurements": [
+    {
+      "live": 25,
+      "saved": 64,
+      "working": 0,
+      "notificationsPerTurn": 1,
+      "warmupTurns": 20,
+      "turnsPerRound": 20,
+      "rounds": 7,
+      "beforeMedianUs": 665.55,
+      "afterMedianUs": 403.0,
+      "reductionPercent": 39.44857636541206,
+      "beforeRoundsUs": [
+        872.0,
+        793.35,
+        665.55,
+        673.5,
+        641.05,
+        656.05,
+        640.8
+      ],
+      "afterRoundsUs": [
+        625.55,
+        504.85,
+        457.9,
+        403.0,
+        379.95,
+        352.0,
+        371.45
+      ],
+      "beforeConstructions": [
+        2
+      ],
+      "afterConstructions": [
+        1
+      ],
+      "nativeMessagesBefore": 0,
+      "nativeMessagesAfter": 0,
+      "identicalFinalPayload": true,
+      "finalPayload": {
+        "enabled": true,
+        "reduceMotion": false,
+        "activeId": "fixture-tab",
+        "searchTooltip": "Open Harness \u00b7 \u2318P",
+        "storeTooltip": "Explore Harness Store \u00b7 \u2318S",
+        "devicesVisible": false,
+        "tabsFocused": false,
+        "palette": {
+          "tabBar": 4280032284,
+          "workspace": 4280821800,
+          "search": 4281084972,
+          "accent": 4290628572,
+          "foreground": 4294309365,
+          "dark": 1
+        },
+        "barStyle": {
+          "family": ".AppleSystemUIFontMonospaced",
+          "fallback": [
+            "Menlo",
+            "Monaco",
+            "Courier New",
+            "monospace"
+          ],
+          "size": 13.0,
+          "valueGapCells": 0.75,
+          "groupGapCells": 2.0,
+          "foreground": 4294309365,
+          "selection": 1304284124
+        },
+        "harnessMonitor": {
+          "text": "Harnesses 25",
+          "label": "25 open across connected machines. Click to open Harness Monitor.",
+          "detail": "25 open across connected machines. Click to open Harness Monitor.",
+          "segments": [
+            {
+              "text": "Harnesses 25"
+            }
+          ],
+          "interactive": true
+        },
+        "footerMachines": {
+          "text": "Machines 1",
+          "detail": "1 linked machines \u00b7 1 online \u00b7 0 offline.\nOpen Machines \u00b7 \u2318M",
+          "segments": [
+            {
+              "text": "Machines 1"
+            }
+          ],
+          "interactive": true
+        },
+        "footerModels": {
+          "text": "Models \u2014",
+          "detail": "Installed local models have not been read yet.\nInventory unavailable on 1 machine; showing last known models.\nOpen local models.",
+          "segments": [
+            {
+              "text": "Models \u2014"
+            }
+          ],
+          "interactive": true
+        },
+        "subscriptionUsage": {
+          "text": "Claude Code \u2014   Codex \u2014",
+          "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.\n\nCodex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+          "interactive": true,
+          "paddedFields": true,
+          "overflowFields": true,
+          "fields": [
+            {
+              "text": "\u2014",
+              "label": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:claude:Anthropic:",
+              "paneId": 0,
+              "iconEngine": "claude",
+              "iconAsset": null,
+              "iconColor": 4291591262,
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            },
+            {
+              "text": "\u2014",
+              "label": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:codex:OpenAI:",
+              "paneId": 0,
+              "iconEngine": "codex",
+              "iconAsset": "assets/engine-icons/codex.png",
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            }
+          ]
+        },
+        "footerCovered": false,
+        "footerPassive": false,
+        "focusedContext": null,
+        "pullRequest": null,
+        "canReopen": false,
+        "canFind": false,
+        "canClosePane": false,
+        "paneActions": {
+          "restartAgent": false,
+          "shareAgent": false,
+          "toggleViewer": false,
+          "toggleComposer": false
+        },
+        "canGoBack": false,
+        "canGoForward": false,
+        "closedHistory": [],
+        "attention": 0,
+        "statusMenuEntries": [],
+        "statusMenuWorkingEntries": [],
+        "unread": 0,
+        "sessionsOpen": false,
+        "machinesOpen": false,
+        "machineNotices": 0,
+        "modelNotices": 0,
+        "onboarding": "machines",
+        "modelsOpen": false,
+        "localModelReady": false,
+        "runningSessions": 25,
+        "history": [
+          {
+            "id": "swarm:fixture-tab",
+            "title": "Fixture",
+            "machineName": "",
+            "detail": "Tab \u00b7 0 harnesses",
+            "swarm": true,
+            "store": false,
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "current": true
+          }
+        ],
+        "tabs": [
+          {
+            "id": "fixture-tab",
+            "name": "Fixture",
+            "label": "Fixture",
+            "shortcutHint": "\u23181",
+            "kind": "harness",
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "attention": 0
+          }
+        ]
+      }
+    },
+    {
+      "live": 25,
+      "saved": 64,
+      "working": 0,
+      "notificationsPerTurn": 4,
+      "warmupTurns": 20,
+      "turnsPerRound": 20,
+      "rounds": 7,
+      "beforeMedianUs": 1960.15,
+      "afterMedianUs": 447.35,
+      "reductionPercent": 77.17776700762697,
+      "beforeRoundsUs": [
+        2014.1,
+        1960.15,
+        1969.75,
+        2101.55,
+        1912.6,
+        1840.0,
+        1837.45
+      ],
+      "afterRoundsUs": [
+        429.55,
+        431.0,
+        447.35,
+        449.65,
+        427.15,
+        501.0,
+        511.9
+      ],
+      "beforeConstructions": [
+        8
+      ],
+      "afterConstructions": [
+        1
+      ],
+      "nativeMessagesBefore": 0,
+      "nativeMessagesAfter": 0,
+      "identicalFinalPayload": true,
+      "finalPayload": {
+        "enabled": true,
+        "reduceMotion": false,
+        "activeId": "fixture-tab",
+        "searchTooltip": "Open Harness \u00b7 \u2318P",
+        "storeTooltip": "Explore Harness Store \u00b7 \u2318S",
+        "devicesVisible": false,
+        "tabsFocused": false,
+        "palette": {
+          "tabBar": 4280032284,
+          "workspace": 4280821800,
+          "search": 4281084972,
+          "accent": 4290628572,
+          "foreground": 4294309365,
+          "dark": 1
+        },
+        "barStyle": {
+          "family": ".AppleSystemUIFontMonospaced",
+          "fallback": [
+            "Menlo",
+            "Monaco",
+            "Courier New",
+            "monospace"
+          ],
+          "size": 13.0,
+          "valueGapCells": 0.75,
+          "groupGapCells": 2.0,
+          "foreground": 4294309365,
+          "selection": 1304284124
+        },
+        "harnessMonitor": {
+          "text": "Harnesses 25",
+          "label": "25 open across connected machines. Click to open Harness Monitor.",
+          "detail": "25 open across connected machines. Click to open Harness Monitor.",
+          "segments": [
+            {
+              "text": "Harnesses 25"
+            }
+          ],
+          "interactive": true
+        },
+        "footerMachines": {
+          "text": "Machines 1",
+          "detail": "1 linked machines \u00b7 1 online \u00b7 0 offline.\nOpen Machines \u00b7 \u2318M",
+          "segments": [
+            {
+              "text": "Machines 1"
+            }
+          ],
+          "interactive": true
+        },
+        "footerModels": {
+          "text": "Models \u2014",
+          "detail": "Installed local models have not been read yet.\nInventory unavailable on 1 machine; showing last known models.\nOpen local models.",
+          "segments": [
+            {
+              "text": "Models \u2014"
+            }
+          ],
+          "interactive": true
+        },
+        "subscriptionUsage": {
+          "text": "Claude Code \u2014   Codex \u2014",
+          "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.\n\nCodex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+          "interactive": true,
+          "paddedFields": true,
+          "overflowFields": true,
+          "fields": [
+            {
+              "text": "\u2014",
+              "label": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:claude:Anthropic:",
+              "paneId": 0,
+              "iconEngine": "claude",
+              "iconAsset": null,
+              "iconColor": 4291591262,
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            },
+            {
+              "text": "\u2014",
+              "label": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:codex:OpenAI:",
+              "paneId": 0,
+              "iconEngine": "codex",
+              "iconAsset": "assets/engine-icons/codex.png",
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            }
+          ]
+        },
+        "footerCovered": false,
+        "footerPassive": false,
+        "focusedContext": null,
+        "pullRequest": null,
+        "canReopen": false,
+        "canFind": false,
+        "canClosePane": false,
+        "paneActions": {
+          "restartAgent": false,
+          "shareAgent": false,
+          "toggleViewer": false,
+          "toggleComposer": false
+        },
+        "canGoBack": false,
+        "canGoForward": false,
+        "closedHistory": [],
+        "attention": 0,
+        "statusMenuEntries": [],
+        "statusMenuWorkingEntries": [],
+        "unread": 0,
+        "sessionsOpen": false,
+        "machinesOpen": false,
+        "machineNotices": 0,
+        "modelNotices": 0,
+        "onboarding": "machines",
+        "modelsOpen": false,
+        "localModelReady": false,
+        "runningSessions": 25,
+        "history": [
+          {
+            "id": "swarm:fixture-tab",
+            "title": "Fixture",
+            "machineName": "",
+            "detail": "Tab \u00b7 0 harnesses",
+            "swarm": true,
+            "store": false,
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "current": true
+          }
+        ],
+        "tabs": [
+          {
+            "id": "fixture-tab",
+            "name": "Fixture",
+            "label": "Fixture",
+            "shortcutHint": "\u23181",
+            "kind": "harness",
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "attention": 0
+          }
+        ]
+      }
+    },
+    {
+      "live": 25,
+      "saved": 64,
+      "working": 0,
+      "notificationsPerTurn": 16,
+      "warmupTurns": 20,
+      "turnsPerRound": 20,
+      "rounds": 7,
+      "beforeMedianUs": 6682.15,
+      "afterMedianUs": 758.9,
+      "reductionPercent": 88.64287691835712,
+      "beforeRoundsUs": [
+        6734.35,
+        6695.05,
+        6707.5,
+        6640.5,
+        6564.75,
+        6528.25,
+        6682.15
+      ],
+      "afterRoundsUs": [
+        712.9,
+        874.25,
+        906.95,
+        813.0,
+        758.9,
+        540.1,
+        489.6
+      ],
+      "beforeConstructions": [
+        32
+      ],
+      "afterConstructions": [
+        1
+      ],
+      "nativeMessagesBefore": 0,
+      "nativeMessagesAfter": 0,
+      "identicalFinalPayload": true,
+      "finalPayload": {
+        "enabled": true,
+        "reduceMotion": false,
+        "activeId": "fixture-tab",
+        "searchTooltip": "Open Harness \u00b7 \u2318P",
+        "storeTooltip": "Explore Harness Store \u00b7 \u2318S",
+        "devicesVisible": false,
+        "tabsFocused": false,
+        "palette": {
+          "tabBar": 4280032284,
+          "workspace": 4280821800,
+          "search": 4281084972,
+          "accent": 4290628572,
+          "foreground": 4294309365,
+          "dark": 1
+        },
+        "barStyle": {
+          "family": ".AppleSystemUIFontMonospaced",
+          "fallback": [
+            "Menlo",
+            "Monaco",
+            "Courier New",
+            "monospace"
+          ],
+          "size": 13.0,
+          "valueGapCells": 0.75,
+          "groupGapCells": 2.0,
+          "foreground": 4294309365,
+          "selection": 1304284124
+        },
+        "harnessMonitor": {
+          "text": "Harnesses 25",
+          "label": "25 open across connected machines. Click to open Harness Monitor.",
+          "detail": "25 open across connected machines. Click to open Harness Monitor.",
+          "segments": [
+            {
+              "text": "Harnesses 25"
+            }
+          ],
+          "interactive": true
+        },
+        "footerMachines": {
+          "text": "Machines 1",
+          "detail": "1 linked machines \u00b7 1 online \u00b7 0 offline.\nOpen Machines \u00b7 \u2318M",
+          "segments": [
+            {
+              "text": "Machines 1"
+            }
+          ],
+          "interactive": true
+        },
+        "footerModels": {
+          "text": "Models \u2014",
+          "detail": "Installed local models have not been read yet.\nInventory unavailable on 1 machine; showing last known models.\nOpen local models.",
+          "segments": [
+            {
+              "text": "Models \u2014"
+            }
+          ],
+          "interactive": true
+        },
+        "subscriptionUsage": {
+          "text": "Claude Code \u2014   Codex \u2014",
+          "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.\n\nCodex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+          "interactive": true,
+          "paddedFields": true,
+          "overflowFields": true,
+          "fields": [
+            {
+              "text": "\u2014",
+              "label": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:claude:Anthropic:",
+              "paneId": 0,
+              "iconEngine": "claude",
+              "iconAsset": null,
+              "iconColor": 4291591262,
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            },
+            {
+              "text": "\u2014",
+              "label": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:codex:OpenAI:",
+              "paneId": 0,
+              "iconEngine": "codex",
+              "iconAsset": "assets/engine-icons/codex.png",
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            }
+          ]
+        },
+        "footerCovered": false,
+        "footerPassive": false,
+        "focusedContext": null,
+        "pullRequest": null,
+        "canReopen": false,
+        "canFind": false,
+        "canClosePane": false,
+        "paneActions": {
+          "restartAgent": false,
+          "shareAgent": false,
+          "toggleViewer": false,
+          "toggleComposer": false
+        },
+        "canGoBack": false,
+        "canGoForward": false,
+        "closedHistory": [],
+        "attention": 0,
+        "statusMenuEntries": [],
+        "statusMenuWorkingEntries": [],
+        "unread": 0,
+        "sessionsOpen": false,
+        "machinesOpen": false,
+        "machineNotices": 0,
+        "modelNotices": 0,
+        "onboarding": "machines",
+        "modelsOpen": false,
+        "localModelReady": false,
+        "runningSessions": 25,
+        "history": [
+          {
+            "id": "swarm:fixture-tab",
+            "title": "Fixture",
+            "machineName": "",
+            "detail": "Tab \u00b7 0 harnesses",
+            "swarm": true,
+            "store": false,
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "current": true
+          }
+        ],
+        "tabs": [
+          {
+            "id": "fixture-tab",
+            "name": "Fixture",
+            "label": "Fixture",
+            "shortcutHint": "\u23181",
+            "kind": "harness",
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "attention": 0
+          }
+        ]
+      }
+    },
+    {
+      "live": 25,
+      "saved": 1000,
+      "working": 0,
+      "notificationsPerTurn": 1,
+      "warmupTurns": 20,
+      "turnsPerRound": 20,
+      "rounds": 7,
+      "beforeMedianUs": 13042.85,
+      "afterMedianUs": 1223.05,
+      "reductionPercent": 90.62283166639193,
+      "beforeRoundsUs": [
+        13042.85,
+        12717.9,
+        13134.9,
+        13246.85,
+        12890.1,
+        13176.2,
+        12850.05
+      ],
+      "afterRoundsUs": [
+        1302.75,
+        1227.35,
+        1200.6,
+        1212.3,
+        1223.05,
+        1241.55,
+        1198.4
+      ],
+      "beforeConstructions": [
+        2
+      ],
+      "afterConstructions": [
+        1
+      ],
+      "nativeMessagesBefore": 0,
+      "nativeMessagesAfter": 0,
+      "identicalFinalPayload": true,
+      "finalPayload": {
+        "enabled": true,
+        "reduceMotion": false,
+        "activeId": "fixture-tab",
+        "searchTooltip": "Open Harness \u00b7 \u2318P",
+        "storeTooltip": "Explore Harness Store \u00b7 \u2318S",
+        "devicesVisible": false,
+        "tabsFocused": false,
+        "palette": {
+          "tabBar": 4280032284,
+          "workspace": 4280821800,
+          "search": 4281084972,
+          "accent": 4290628572,
+          "foreground": 4294309365,
+          "dark": 1
+        },
+        "barStyle": {
+          "family": ".AppleSystemUIFontMonospaced",
+          "fallback": [
+            "Menlo",
+            "Monaco",
+            "Courier New",
+            "monospace"
+          ],
+          "size": 13.0,
+          "valueGapCells": 0.75,
+          "groupGapCells": 2.0,
+          "foreground": 4294309365,
+          "selection": 1304284124
+        },
+        "harnessMonitor": {
+          "text": "Harnesses 25",
+          "label": "25 open across connected machines. Click to open Harness Monitor.",
+          "detail": "25 open across connected machines. Click to open Harness Monitor.",
+          "segments": [
+            {
+              "text": "Harnesses 25"
+            }
+          ],
+          "interactive": true
+        },
+        "footerMachines": {
+          "text": "Machines 1",
+          "detail": "1 linked machines \u00b7 1 online \u00b7 0 offline.\nOpen Machines \u00b7 \u2318M",
+          "segments": [
+            {
+              "text": "Machines 1"
+            }
+          ],
+          "interactive": true
+        },
+        "footerModels": {
+          "text": "Models \u2014",
+          "detail": "Installed local models have not been read yet.\nInventory unavailable on 1 machine; showing last known models.\nOpen local models.",
+          "segments": [
+            {
+              "text": "Models \u2014"
+            }
+          ],
+          "interactive": true
+        },
+        "subscriptionUsage": {
+          "text": "Claude Code \u2014   Codex \u2014",
+          "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.\n\nCodex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+          "interactive": true,
+          "paddedFields": true,
+          "overflowFields": true,
+          "fields": [
+            {
+              "text": "\u2014",
+              "label": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:claude:Anthropic:",
+              "paneId": 0,
+              "iconEngine": "claude",
+              "iconAsset": null,
+              "iconColor": 4291591262,
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            },
+            {
+              "text": "\u2014",
+              "label": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:codex:OpenAI:",
+              "paneId": 0,
+              "iconEngine": "codex",
+              "iconAsset": "assets/engine-icons/codex.png",
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            }
+          ]
+        },
+        "footerCovered": false,
+        "footerPassive": false,
+        "focusedContext": null,
+        "pullRequest": null,
+        "canReopen": false,
+        "canFind": false,
+        "canClosePane": false,
+        "paneActions": {
+          "restartAgent": false,
+          "shareAgent": false,
+          "toggleViewer": false,
+          "toggleComposer": false
+        },
+        "canGoBack": false,
+        "canGoForward": false,
+        "closedHistory": [],
+        "attention": 0,
+        "statusMenuEntries": [],
+        "statusMenuWorkingEntries": [],
+        "unread": 0,
+        "sessionsOpen": false,
+        "machinesOpen": false,
+        "machineNotices": 0,
+        "modelNotices": 0,
+        "onboarding": "machines",
+        "modelsOpen": false,
+        "localModelReady": false,
+        "runningSessions": 25,
+        "history": [
+          {
+            "id": "swarm:fixture-tab",
+            "title": "Fixture",
+            "machineName": "",
+            "detail": "Tab \u00b7 0 harnesses",
+            "swarm": true,
+            "store": false,
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "current": true
+          }
+        ],
+        "tabs": [
+          {
+            "id": "fixture-tab",
+            "name": "Fixture",
+            "label": "Fixture",
+            "shortcutHint": "\u23181",
+            "kind": "harness",
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "attention": 0
+          }
+        ]
+      }
+    },
+    {
+      "live": 25,
+      "saved": 1000,
+      "working": 0,
+      "notificationsPerTurn": 4,
+      "warmupTurns": 20,
+      "turnsPerRound": 20,
+      "rounds": 7,
+      "beforeMedianUs": 51061.45,
+      "afterMedianUs": 1264.9,
+      "reductionPercent": 97.52278871829922,
+      "beforeRoundsUs": [
+        50136.1,
+        51704.35,
+        50321.45,
+        51061.45,
+        51365.75,
+        51350.95,
+        50797.15
+      ],
+      "afterRoundsUs": [
+        1249.9,
+        1288.2,
+        1236.65,
+        1266.35,
+        1225.35,
+        1266.1,
+        1264.9
+      ],
+      "beforeConstructions": [
+        8
+      ],
+      "afterConstructions": [
+        1
+      ],
+      "nativeMessagesBefore": 0,
+      "nativeMessagesAfter": 0,
+      "identicalFinalPayload": true,
+      "finalPayload": {
+        "enabled": true,
+        "reduceMotion": false,
+        "activeId": "fixture-tab",
+        "searchTooltip": "Open Harness \u00b7 \u2318P",
+        "storeTooltip": "Explore Harness Store \u00b7 \u2318S",
+        "devicesVisible": false,
+        "tabsFocused": false,
+        "palette": {
+          "tabBar": 4280032284,
+          "workspace": 4280821800,
+          "search": 4281084972,
+          "accent": 4290628572,
+          "foreground": 4294309365,
+          "dark": 1
+        },
+        "barStyle": {
+          "family": ".AppleSystemUIFontMonospaced",
+          "fallback": [
+            "Menlo",
+            "Monaco",
+            "Courier New",
+            "monospace"
+          ],
+          "size": 13.0,
+          "valueGapCells": 0.75,
+          "groupGapCells": 2.0,
+          "foreground": 4294309365,
+          "selection": 1304284124
+        },
+        "harnessMonitor": {
+          "text": "Harnesses 25",
+          "label": "25 open across connected machines. Click to open Harness Monitor.",
+          "detail": "25 open across connected machines. Click to open Harness Monitor.",
+          "segments": [
+            {
+              "text": "Harnesses 25"
+            }
+          ],
+          "interactive": true
+        },
+        "footerMachines": {
+          "text": "Machines 1",
+          "detail": "1 linked machines \u00b7 1 online \u00b7 0 offline.\nOpen Machines \u00b7 \u2318M",
+          "segments": [
+            {
+              "text": "Machines 1"
+            }
+          ],
+          "interactive": true
+        },
+        "footerModels": {
+          "text": "Models \u2014",
+          "detail": "Installed local models have not been read yet.\nInventory unavailable on 1 machine; showing last known models.\nOpen local models.",
+          "segments": [
+            {
+              "text": "Models \u2014"
+            }
+          ],
+          "interactive": true
+        },
+        "subscriptionUsage": {
+          "text": "Claude Code \u2014   Codex \u2014",
+          "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.\n\nCodex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+          "interactive": true,
+          "paddedFields": true,
+          "overflowFields": true,
+          "fields": [
+            {
+              "text": "\u2014",
+              "label": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:claude:Anthropic:",
+              "paneId": 0,
+              "iconEngine": "claude",
+              "iconAsset": null,
+              "iconColor": 4291591262,
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            },
+            {
+              "text": "\u2014",
+              "label": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:codex:OpenAI:",
+              "paneId": 0,
+              "iconEngine": "codex",
+              "iconAsset": "assets/engine-icons/codex.png",
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            }
+          ]
+        },
+        "footerCovered": false,
+        "footerPassive": false,
+        "focusedContext": null,
+        "pullRequest": null,
+        "canReopen": false,
+        "canFind": false,
+        "canClosePane": false,
+        "paneActions": {
+          "restartAgent": false,
+          "shareAgent": false,
+          "toggleViewer": false,
+          "toggleComposer": false
+        },
+        "canGoBack": false,
+        "canGoForward": false,
+        "closedHistory": [],
+        "attention": 0,
+        "statusMenuEntries": [],
+        "statusMenuWorkingEntries": [],
+        "unread": 0,
+        "sessionsOpen": false,
+        "machinesOpen": false,
+        "machineNotices": 0,
+        "modelNotices": 0,
+        "onboarding": "machines",
+        "modelsOpen": false,
+        "localModelReady": false,
+        "runningSessions": 25,
+        "history": [
+          {
+            "id": "swarm:fixture-tab",
+            "title": "Fixture",
+            "machineName": "",
+            "detail": "Tab \u00b7 0 harnesses",
+            "swarm": true,
+            "store": false,
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "current": true
+          }
+        ],
+        "tabs": [
+          {
+            "id": "fixture-tab",
+            "name": "Fixture",
+            "label": "Fixture",
+            "shortcutHint": "\u23181",
+            "kind": "harness",
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "attention": 0
+          }
+        ]
+      }
+    },
+    {
+      "live": 25,
+      "saved": 1000,
+      "working": 0,
+      "notificationsPerTurn": 16,
+      "warmupTurns": 20,
+      "turnsPerRound": 20,
+      "rounds": 7,
+      "beforeMedianUs": 203424.15,
+      "afterMedianUs": 1372.2,
+      "reductionPercent": 99.32544882207938,
+      "beforeRoundsUs": [
+        202314.65,
+        203424.15,
+        201008.75,
+        202829.7,
+        206689.55,
+        205598.95,
+        204647.45
+      ],
+      "afterRoundsUs": [
+        1388.15,
+        1363.5,
+        1378.15,
+        1372.2,
+        1419.75,
+        1352.6,
+        1325.6
+      ],
+      "beforeConstructions": [
+        32
+      ],
+      "afterConstructions": [
+        1
+      ],
+      "nativeMessagesBefore": 0,
+      "nativeMessagesAfter": 0,
+      "identicalFinalPayload": true,
+      "finalPayload": {
+        "enabled": true,
+        "reduceMotion": false,
+        "activeId": "fixture-tab",
+        "searchTooltip": "Open Harness \u00b7 \u2318P",
+        "storeTooltip": "Explore Harness Store \u00b7 \u2318S",
+        "devicesVisible": false,
+        "tabsFocused": false,
+        "palette": {
+          "tabBar": 4280032284,
+          "workspace": 4280821800,
+          "search": 4281084972,
+          "accent": 4290628572,
+          "foreground": 4294309365,
+          "dark": 1
+        },
+        "barStyle": {
+          "family": ".AppleSystemUIFontMonospaced",
+          "fallback": [
+            "Menlo",
+            "Monaco",
+            "Courier New",
+            "monospace"
+          ],
+          "size": 13.0,
+          "valueGapCells": 0.75,
+          "groupGapCells": 2.0,
+          "foreground": 4294309365,
+          "selection": 1304284124
+        },
+        "harnessMonitor": {
+          "text": "Harnesses 25",
+          "label": "25 open across connected machines. Click to open Harness Monitor.",
+          "detail": "25 open across connected machines. Click to open Harness Monitor.",
+          "segments": [
+            {
+              "text": "Harnesses 25"
+            }
+          ],
+          "interactive": true
+        },
+        "footerMachines": {
+          "text": "Machines 1",
+          "detail": "1 linked machines \u00b7 1 online \u00b7 0 offline.\nOpen Machines \u00b7 \u2318M",
+          "segments": [
+            {
+              "text": "Machines 1"
+            }
+          ],
+          "interactive": true
+        },
+        "footerModels": {
+          "text": "Models \u2014",
+          "detail": "Installed local models have not been read yet.\nInventory unavailable on 1 machine; showing last known models.\nOpen local models.",
+          "segments": [
+            {
+              "text": "Models \u2014"
+            }
+          ],
+          "interactive": true
+        },
+        "subscriptionUsage": {
+          "text": "Claude Code \u2014   Codex \u2014",
+          "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.\n\nCodex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+          "interactive": true,
+          "paddedFields": true,
+          "overflowFields": true,
+          "fields": [
+            {
+              "text": "\u2014",
+              "label": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:claude:Anthropic:",
+              "paneId": 0,
+              "iconEngine": "claude",
+              "iconAsset": null,
+              "iconColor": 4291591262,
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            },
+            {
+              "text": "\u2014",
+              "label": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:codex:OpenAI:",
+              "paneId": 0,
+              "iconEngine": "codex",
+              "iconAsset": "assets/engine-icons/codex.png",
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            }
+          ]
+        },
+        "footerCovered": false,
+        "footerPassive": false,
+        "focusedContext": null,
+        "pullRequest": null,
+        "canReopen": false,
+        "canFind": false,
+        "canClosePane": false,
+        "paneActions": {
+          "restartAgent": false,
+          "shareAgent": false,
+          "toggleViewer": false,
+          "toggleComposer": false
+        },
+        "canGoBack": false,
+        "canGoForward": false,
+        "closedHistory": [],
+        "attention": 0,
+        "statusMenuEntries": [],
+        "statusMenuWorkingEntries": [],
+        "unread": 0,
+        "sessionsOpen": false,
+        "machinesOpen": false,
+        "machineNotices": 0,
+        "modelNotices": 0,
+        "onboarding": "machines",
+        "modelsOpen": false,
+        "localModelReady": false,
+        "runningSessions": 25,
+        "history": [
+          {
+            "id": "swarm:fixture-tab",
+            "title": "Fixture",
+            "machineName": "",
+            "detail": "Tab \u00b7 0 harnesses",
+            "swarm": true,
+            "store": false,
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "current": true
+          }
+        ],
+        "tabs": [
+          {
+            "id": "fixture-tab",
+            "name": "Fixture",
+            "label": "Fixture",
+            "shortcutHint": "\u23181",
+            "kind": "harness",
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "attention": 0
+          }
+        ]
+      }
+    },
+    {
+      "live": 25,
+      "saved": 4096,
+      "working": 0,
+      "notificationsPerTurn": 1,
+      "warmupTurns": 5,
+      "turnsPerRound": 4,
+      "rounds": 7,
+      "beforeMedianUs": 195465.75,
+      "afterMedianUs": 3817.25,
+      "reductionPercent": 98.04710032320241,
+      "beforeRoundsUs": [
+        192223.5,
+        192913.25,
+        196934.25,
+        197025.25,
+        194877.5,
+        195465.75,
+        195554.25
+      ],
+      "afterRoundsUs": [
+        3843.0,
+        3817.25,
+        3854.25,
+        3765.25,
+        3717.75,
+        3910.5,
+        3755.0
+      ],
+      "beforeConstructions": [
+        2
+      ],
+      "afterConstructions": [
+        1
+      ],
+      "nativeMessagesBefore": 0,
+      "nativeMessagesAfter": 0,
+      "identicalFinalPayload": true,
+      "finalPayload": {
+        "enabled": true,
+        "reduceMotion": false,
+        "activeId": "fixture-tab",
+        "searchTooltip": "Open Harness \u00b7 \u2318P",
+        "storeTooltip": "Explore Harness Store \u00b7 \u2318S",
+        "devicesVisible": false,
+        "tabsFocused": false,
+        "palette": {
+          "tabBar": 4280032284,
+          "workspace": 4280821800,
+          "search": 4281084972,
+          "accent": 4290628572,
+          "foreground": 4294309365,
+          "dark": 1
+        },
+        "barStyle": {
+          "family": ".AppleSystemUIFontMonospaced",
+          "fallback": [
+            "Menlo",
+            "Monaco",
+            "Courier New",
+            "monospace"
+          ],
+          "size": 13.0,
+          "valueGapCells": 0.75,
+          "groupGapCells": 2.0,
+          "foreground": 4294309365,
+          "selection": 1304284124
+        },
+        "harnessMonitor": {
+          "text": "Harnesses 25",
+          "label": "25 open across connected machines. Click to open Harness Monitor.",
+          "detail": "25 open across connected machines. Click to open Harness Monitor.",
+          "segments": [
+            {
+              "text": "Harnesses 25"
+            }
+          ],
+          "interactive": true
+        },
+        "footerMachines": {
+          "text": "Machines 1",
+          "detail": "1 linked machines \u00b7 1 online \u00b7 0 offline.\nOpen Machines \u00b7 \u2318M",
+          "segments": [
+            {
+              "text": "Machines 1"
+            }
+          ],
+          "interactive": true
+        },
+        "footerModels": {
+          "text": "Models \u2014",
+          "detail": "Installed local models have not been read yet.\nInventory unavailable on 1 machine; showing last known models.\nOpen local models.",
+          "segments": [
+            {
+              "text": "Models \u2014"
+            }
+          ],
+          "interactive": true
+        },
+        "subscriptionUsage": {
+          "text": "Claude Code \u2014   Codex \u2014",
+          "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.\n\nCodex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+          "interactive": true,
+          "paddedFields": true,
+          "overflowFields": true,
+          "fields": [
+            {
+              "text": "\u2014",
+              "label": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:claude:Anthropic:",
+              "paneId": 0,
+              "iconEngine": "claude",
+              "iconAsset": null,
+              "iconColor": 4291591262,
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            },
+            {
+              "text": "\u2014",
+              "label": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:codex:OpenAI:",
+              "paneId": 0,
+              "iconEngine": "codex",
+              "iconAsset": "assets/engine-icons/codex.png",
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            }
+          ]
+        },
+        "footerCovered": false,
+        "footerPassive": false,
+        "focusedContext": null,
+        "pullRequest": null,
+        "canReopen": false,
+        "canFind": false,
+        "canClosePane": false,
+        "paneActions": {
+          "restartAgent": false,
+          "shareAgent": false,
+          "toggleViewer": false,
+          "toggleComposer": false
+        },
+        "canGoBack": false,
+        "canGoForward": false,
+        "closedHistory": [],
+        "attention": 0,
+        "statusMenuEntries": [],
+        "statusMenuWorkingEntries": [],
+        "unread": 0,
+        "sessionsOpen": false,
+        "machinesOpen": false,
+        "machineNotices": 0,
+        "modelNotices": 0,
+        "onboarding": "machines",
+        "modelsOpen": false,
+        "localModelReady": false,
+        "runningSessions": 0,
+        "history": [
+          {
+            "id": "swarm:fixture-tab",
+            "title": "Fixture",
+            "machineName": "",
+            "detail": "Tab \u00b7 0 harnesses",
+            "swarm": true,
+            "store": false,
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "current": true
+          }
+        ],
+        "tabs": [
+          {
+            "id": "fixture-tab",
+            "name": "Fixture",
+            "label": "Fixture",
+            "shortcutHint": "\u23181",
+            "kind": "harness",
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "attention": 0
+          }
+        ]
+      }
+    },
+    {
+      "live": 25,
+      "saved": 4096,
+      "working": 0,
+      "notificationsPerTurn": 4,
+      "warmupTurns": 5,
+      "turnsPerRound": 4,
+      "rounds": 7,
+      "beforeMedianUs": 776287.25,
+      "afterMedianUs": 3982.0,
+      "reductionPercent": 99.48704554918298,
+      "beforeRoundsUs": [
+        799159.75,
+        769020.5,
+        771313.0,
+        768068.75,
+        776287.25,
+        785899.75,
+        778321.75
+      ],
+      "afterRoundsUs": [
+        4304.75,
+        4115.25,
+        4001.75,
+        3981.25,
+        3776.25,
+        3762.75,
+        3982.0
+      ],
+      "beforeConstructions": [
+        8
+      ],
+      "afterConstructions": [
+        1
+      ],
+      "nativeMessagesBefore": 0,
+      "nativeMessagesAfter": 0,
+      "identicalFinalPayload": true,
+      "finalPayload": {
+        "enabled": true,
+        "reduceMotion": false,
+        "activeId": "fixture-tab",
+        "searchTooltip": "Open Harness \u00b7 \u2318P",
+        "storeTooltip": "Explore Harness Store \u00b7 \u2318S",
+        "devicesVisible": false,
+        "tabsFocused": false,
+        "palette": {
+          "tabBar": 4280032284,
+          "workspace": 4280821800,
+          "search": 4281084972,
+          "accent": 4290628572,
+          "foreground": 4294309365,
+          "dark": 1
+        },
+        "barStyle": {
+          "family": ".AppleSystemUIFontMonospaced",
+          "fallback": [
+            "Menlo",
+            "Monaco",
+            "Courier New",
+            "monospace"
+          ],
+          "size": 13.0,
+          "valueGapCells": 0.75,
+          "groupGapCells": 2.0,
+          "foreground": 4294309365,
+          "selection": 1304284124
+        },
+        "harnessMonitor": {
+          "text": "Harnesses 25",
+          "label": "25 open across connected machines. Click to open Harness Monitor.",
+          "detail": "25 open across connected machines. Click to open Harness Monitor.",
+          "segments": [
+            {
+              "text": "Harnesses 25"
+            }
+          ],
+          "interactive": true
+        },
+        "footerMachines": {
+          "text": "Machines 1",
+          "detail": "1 linked machines \u00b7 1 online \u00b7 0 offline.\nOpen Machines \u00b7 \u2318M",
+          "segments": [
+            {
+              "text": "Machines 1"
+            }
+          ],
+          "interactive": true
+        },
+        "footerModels": {
+          "text": "Models \u2014",
+          "detail": "Installed local models have not been read yet.\nInventory unavailable on 1 machine; showing last known models.\nOpen local models.",
+          "segments": [
+            {
+              "text": "Models \u2014"
+            }
+          ],
+          "interactive": true
+        },
+        "subscriptionUsage": {
+          "text": "Claude Code \u2014   Codex \u2014",
+          "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.\n\nCodex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+          "interactive": true,
+          "paddedFields": true,
+          "overflowFields": true,
+          "fields": [
+            {
+              "text": "\u2014",
+              "label": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:claude:Anthropic:",
+              "paneId": 0,
+              "iconEngine": "claude",
+              "iconAsset": null,
+              "iconColor": 4291591262,
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            },
+            {
+              "text": "\u2014",
+              "label": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:codex:OpenAI:",
+              "paneId": 0,
+              "iconEngine": "codex",
+              "iconAsset": "assets/engine-icons/codex.png",
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            }
+          ]
+        },
+        "footerCovered": false,
+        "footerPassive": false,
+        "focusedContext": null,
+        "pullRequest": null,
+        "canReopen": false,
+        "canFind": false,
+        "canClosePane": false,
+        "paneActions": {
+          "restartAgent": false,
+          "shareAgent": false,
+          "toggleViewer": false,
+          "toggleComposer": false
+        },
+        "canGoBack": false,
+        "canGoForward": false,
+        "closedHistory": [],
+        "attention": 0,
+        "statusMenuEntries": [],
+        "statusMenuWorkingEntries": [],
+        "unread": 0,
+        "sessionsOpen": false,
+        "machinesOpen": false,
+        "machineNotices": 0,
+        "modelNotices": 0,
+        "onboarding": "machines",
+        "modelsOpen": false,
+        "localModelReady": false,
+        "runningSessions": 0,
+        "history": [
+          {
+            "id": "swarm:fixture-tab",
+            "title": "Fixture",
+            "machineName": "",
+            "detail": "Tab \u00b7 0 harnesses",
+            "swarm": true,
+            "store": false,
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "current": true
+          }
+        ],
+        "tabs": [
+          {
+            "id": "fixture-tab",
+            "name": "Fixture",
+            "label": "Fixture",
+            "shortcutHint": "\u23181",
+            "kind": "harness",
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "attention": 0
+          }
+        ]
+      }
+    },
+    {
+      "live": 25,
+      "saved": 4096,
+      "working": 0,
+      "notificationsPerTurn": 16,
+      "warmupTurns": 5,
+      "turnsPerRound": 4,
+      "rounds": 7,
+      "beforeMedianUs": 3196469.75,
+      "afterMedianUs": 3918.25,
+      "reductionPercent": 99.87741945626108,
+      "beforeRoundsUs": [
+        3122903.25,
+        3196469.75,
+        3198486.25,
+        3205470.0,
+        3213471.25,
+        3109641.0,
+        3127142.5
+      ],
+      "afterRoundsUs": [
+        3944.25,
+        3922.5,
+        3894.75,
+        3918.25,
+        3795.5,
+        3929.0,
+        3904.0
+      ],
+      "beforeConstructions": [
+        32
+      ],
+      "afterConstructions": [
+        1
+      ],
+      "nativeMessagesBefore": 0,
+      "nativeMessagesAfter": 0,
+      "identicalFinalPayload": true,
+      "finalPayload": {
+        "enabled": true,
+        "reduceMotion": false,
+        "activeId": "fixture-tab",
+        "searchTooltip": "Open Harness \u00b7 \u2318P",
+        "storeTooltip": "Explore Harness Store \u00b7 \u2318S",
+        "devicesVisible": false,
+        "tabsFocused": false,
+        "palette": {
+          "tabBar": 4280032284,
+          "workspace": 4280821800,
+          "search": 4281084972,
+          "accent": 4290628572,
+          "foreground": 4294309365,
+          "dark": 1
+        },
+        "barStyle": {
+          "family": ".AppleSystemUIFontMonospaced",
+          "fallback": [
+            "Menlo",
+            "Monaco",
+            "Courier New",
+            "monospace"
+          ],
+          "size": 13.0,
+          "valueGapCells": 0.75,
+          "groupGapCells": 2.0,
+          "foreground": 4294309365,
+          "selection": 1304284124
+        },
+        "harnessMonitor": {
+          "text": "Harnesses 25",
+          "label": "25 open across connected machines. Click to open Harness Monitor.",
+          "detail": "25 open across connected machines. Click to open Harness Monitor.",
+          "segments": [
+            {
+              "text": "Harnesses 25"
+            }
+          ],
+          "interactive": true
+        },
+        "footerMachines": {
+          "text": "Machines 1",
+          "detail": "1 linked machines \u00b7 1 online \u00b7 0 offline.\nOpen Machines \u00b7 \u2318M",
+          "segments": [
+            {
+              "text": "Machines 1"
+            }
+          ],
+          "interactive": true
+        },
+        "footerModels": {
+          "text": "Models \u2014",
+          "detail": "Installed local models have not been read yet.\nInventory unavailable on 1 machine; showing last known models.\nOpen local models.",
+          "segments": [
+            {
+              "text": "Models \u2014"
+            }
+          ],
+          "interactive": true
+        },
+        "subscriptionUsage": {
+          "text": "Claude Code \u2014   Codex \u2014",
+          "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.\n\nCodex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+          "interactive": true,
+          "paddedFields": true,
+          "overflowFields": true,
+          "fields": [
+            {
+              "text": "\u2014",
+              "label": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:claude:Anthropic:",
+              "paneId": 0,
+              "iconEngine": "claude",
+              "iconAsset": null,
+              "iconColor": 4291591262,
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            },
+            {
+              "text": "\u2014",
+              "label": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:codex:OpenAI:",
+              "paneId": 0,
+              "iconEngine": "codex",
+              "iconAsset": "assets/engine-icons/codex.png",
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            }
+          ]
+        },
+        "footerCovered": false,
+        "footerPassive": false,
+        "focusedContext": null,
+        "pullRequest": null,
+        "canReopen": false,
+        "canFind": false,
+        "canClosePane": false,
+        "paneActions": {
+          "restartAgent": false,
+          "shareAgent": false,
+          "toggleViewer": false,
+          "toggleComposer": false
+        },
+        "canGoBack": false,
+        "canGoForward": false,
+        "closedHistory": [],
+        "attention": 0,
+        "statusMenuEntries": [],
+        "statusMenuWorkingEntries": [],
+        "unread": 0,
+        "sessionsOpen": false,
+        "machinesOpen": false,
+        "machineNotices": 0,
+        "modelNotices": 0,
+        "onboarding": "machines",
+        "modelsOpen": false,
+        "localModelReady": false,
+        "runningSessions": 0,
+        "history": [
+          {
+            "id": "swarm:fixture-tab",
+            "title": "Fixture",
+            "machineName": "",
+            "detail": "Tab \u00b7 0 harnesses",
+            "swarm": true,
+            "store": false,
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "current": true
+          }
+        ],
+        "tabs": [
+          {
+            "id": "fixture-tab",
+            "name": "Fixture",
+            "label": "Fixture",
+            "shortcutHint": "\u23181",
+            "kind": "harness",
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "attention": 0
+          }
+        ]
+      }
+    },
+    {
+      "live": 25,
+      "saved": 1000,
+      "working": 4,
+      "notificationsPerTurn": 1,
+      "warmupTurns": 20,
+      "turnsPerRound": 20,
+      "rounds": 7,
+      "beforeMedianUs": 13324.35,
+      "afterMedianUs": 1433.6,
+      "reductionPercent": 89.24075095595659,
+      "beforeRoundsUs": [
+        13324.35,
+        13468.65,
+        13411.5,
+        13455.25,
+        13152.8,
+        13097.15,
+        12939.15
+      ],
+      "afterRoundsUs": [
+        1380.55,
+        1383.15,
+        1420.2,
+        1439.6,
+        1482.95,
+        1434.3,
+        1433.6
+      ],
+      "beforeConstructions": [
+        2
+      ],
+      "afterConstructions": [
+        1
+      ],
+      "nativeMessagesBefore": 0,
+      "nativeMessagesAfter": 0,
+      "identicalFinalPayload": true,
+      "finalPayload": {
+        "enabled": true,
+        "reduceMotion": false,
+        "activeId": "fixture-tab",
+        "searchTooltip": "Open Harness \u00b7 \u2318P",
+        "storeTooltip": "Explore Harness Store \u00b7 \u2318S",
+        "devicesVisible": false,
+        "tabsFocused": false,
+        "palette": {
+          "tabBar": 4280032284,
+          "workspace": 4280821800,
+          "search": 4281084972,
+          "accent": 4290628572,
+          "foreground": 4294309365,
+          "dark": 1
+        },
+        "barStyle": {
+          "family": ".AppleSystemUIFontMonospaced",
+          "fallback": [
+            "Menlo",
+            "Monaco",
+            "Courier New",
+            "monospace"
+          ],
+          "size": 13.0,
+          "valueGapCells": 0.75,
+          "groupGapCells": 2.0,
+          "foreground": 4294309365,
+          "selection": 1304284124
+        },
+        "harnessMonitor": {
+          "text": "Harnesses 25",
+          "label": "25 open across connected machines. Click to open Harness Monitor.",
+          "detail": "25 open across connected machines. Click to open Harness Monitor.",
+          "segments": [
+            {
+              "text": "Harnesses 25"
+            }
+          ],
+          "interactive": true
+        },
+        "footerMachines": {
+          "text": "Machines 1",
+          "detail": "1 linked machines \u00b7 1 online \u00b7 0 offline.\nOpen Machines \u00b7 \u2318M",
+          "segments": [
+            {
+              "text": "Machines 1"
+            }
+          ],
+          "interactive": true
+        },
+        "footerModels": {
+          "text": "Models \u2014",
+          "detail": "Installed local models have not been read yet.\nInventory unavailable on 1 machine; showing last known models.\nOpen local models.",
+          "segments": [
+            {
+              "text": "Models \u2014"
+            }
+          ],
+          "interactive": true
+        },
+        "subscriptionUsage": {
+          "text": "Claude Code \u2014   Codex \u2014",
+          "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.\n\nCodex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+          "interactive": true,
+          "paddedFields": true,
+          "overflowFields": true,
+          "fields": [
+            {
+              "text": "\u2014",
+              "label": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:claude:Anthropic:",
+              "paneId": 0,
+              "iconEngine": "claude",
+              "iconAsset": null,
+              "iconColor": 4291591262,
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            },
+            {
+              "text": "\u2014",
+              "label": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:codex:OpenAI:",
+              "paneId": 0,
+              "iconEngine": "codex",
+              "iconAsset": "assets/engine-icons/codex.png",
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            }
+          ]
+        },
+        "footerCovered": false,
+        "footerPassive": false,
+        "focusedContext": null,
+        "pullRequest": null,
+        "canReopen": false,
+        "canFind": false,
+        "canClosePane": false,
+        "paneActions": {
+          "restartAgent": false,
+          "shareAgent": false,
+          "toggleViewer": false,
+          "toggleComposer": false
+        },
+        "canGoBack": false,
+        "canGoForward": false,
+        "closedHistory": [],
+        "attention": 0,
+        "statusMenuEntries": [],
+        "statusMenuWorkingEntries": [
+          {
+            "machineId": "fixture",
+            "agentId": "live-0",
+            "sessionId": null,
+            "title": "Live 0",
+            "unread": false,
+            "label": "Working",
+            "activity": {
+              "mark": "\u280b",
+              "label": "Working",
+              "working": true,
+              "color": 4279347405
+            },
+            "startedAt": null,
+            "unavailable": null,
+            "tabId": null,
+            "tabName": "Other sessions",
+            "machineName": "Fixture",
+            "readToken": null,
+            "questionId": null
+          },
+          {
+            "machineId": "fixture",
+            "agentId": "live-1",
+            "sessionId": null,
+            "title": "Live 1",
+            "unread": false,
+            "label": "Working",
+            "activity": {
+              "mark": "\u280b",
+              "label": "Working",
+              "working": true,
+              "color": 4279347405
+            },
+            "startedAt": null,
+            "unavailable": null,
+            "tabId": null,
+            "tabName": "Other sessions",
+            "machineName": "Fixture",
+            "readToken": null,
+            "questionId": null
+          },
+          {
+            "machineId": "fixture",
+            "agentId": "live-2",
+            "sessionId": null,
+            "title": "Live 2",
+            "unread": false,
+            "label": "Working",
+            "activity": {
+              "mark": "\u280b",
+              "label": "Working",
+              "working": true,
+              "color": 4279347405
+            },
+            "startedAt": null,
+            "unavailable": null,
+            "tabId": null,
+            "tabName": "Other sessions",
+            "machineName": "Fixture",
+            "readToken": null,
+            "questionId": null
+          },
+          {
+            "machineId": "fixture",
+            "agentId": "live-3",
+            "sessionId": null,
+            "title": "Live 3",
+            "unread": false,
+            "label": "Working",
+            "activity": {
+              "mark": "\u280b",
+              "label": "Working",
+              "working": true,
+              "color": 4279347405
+            },
+            "startedAt": null,
+            "unavailable": null,
+            "tabId": null,
+            "tabName": "Other sessions",
+            "machineName": "Fixture",
+            "readToken": null,
+            "questionId": null
+          }
+        ],
+        "unread": 0,
+        "sessionsOpen": false,
+        "machinesOpen": false,
+        "machineNotices": 0,
+        "modelNotices": 0,
+        "onboarding": "machines",
+        "modelsOpen": false,
+        "localModelReady": false,
+        "runningSessions": 25,
+        "history": [
+          {
+            "id": "swarm:fixture-tab",
+            "title": "Fixture",
+            "machineName": "",
+            "detail": "Tab \u00b7 0 harnesses",
+            "swarm": true,
+            "store": false,
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "current": true
+          }
+        ],
+        "tabs": [
+          {
+            "id": "fixture-tab",
+            "name": "Fixture",
+            "label": "Fixture",
+            "shortcutHint": "\u23181",
+            "kind": "harness",
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "attention": 0
+          }
+        ]
+      }
+    },
+    {
+      "live": 25,
+      "saved": 1000,
+      "working": 4,
+      "notificationsPerTurn": 4,
+      "warmupTurns": 20,
+      "turnsPerRound": 20,
+      "rounds": 7,
+      "beforeMedianUs": 52980.45,
+      "afterMedianUs": 1445.95,
+      "reductionPercent": 97.27078573322801,
+      "beforeRoundsUs": [
+        53117.0,
+        52670.0,
+        52336.05,
+        52980.45,
+        52552.85,
+        53013.9,
+        54444.0
+      ],
+      "afterRoundsUs": [
+        1429.15,
+        1445.95,
+        1460.8,
+        1451.9,
+        1439.75,
+        1442.65,
+        1460.75
+      ],
+      "beforeConstructions": [
+        8
+      ],
+      "afterConstructions": [
+        1
+      ],
+      "nativeMessagesBefore": 0,
+      "nativeMessagesAfter": 0,
+      "identicalFinalPayload": true,
+      "finalPayload": {
+        "enabled": true,
+        "reduceMotion": false,
+        "activeId": "fixture-tab",
+        "searchTooltip": "Open Harness \u00b7 \u2318P",
+        "storeTooltip": "Explore Harness Store \u00b7 \u2318S",
+        "devicesVisible": false,
+        "tabsFocused": false,
+        "palette": {
+          "tabBar": 4280032284,
+          "workspace": 4280821800,
+          "search": 4281084972,
+          "accent": 4290628572,
+          "foreground": 4294309365,
+          "dark": 1
+        },
+        "barStyle": {
+          "family": ".AppleSystemUIFontMonospaced",
+          "fallback": [
+            "Menlo",
+            "Monaco",
+            "Courier New",
+            "monospace"
+          ],
+          "size": 13.0,
+          "valueGapCells": 0.75,
+          "groupGapCells": 2.0,
+          "foreground": 4294309365,
+          "selection": 1304284124
+        },
+        "harnessMonitor": {
+          "text": "Harnesses 25",
+          "label": "25 open across connected machines. Click to open Harness Monitor.",
+          "detail": "25 open across connected machines. Click to open Harness Monitor.",
+          "segments": [
+            {
+              "text": "Harnesses 25"
+            }
+          ],
+          "interactive": true
+        },
+        "footerMachines": {
+          "text": "Machines 1",
+          "detail": "1 linked machines \u00b7 1 online \u00b7 0 offline.\nOpen Machines \u00b7 \u2318M",
+          "segments": [
+            {
+              "text": "Machines 1"
+            }
+          ],
+          "interactive": true
+        },
+        "footerModels": {
+          "text": "Models \u2014",
+          "detail": "Installed local models have not been read yet.\nInventory unavailable on 1 machine; showing last known models.\nOpen local models.",
+          "segments": [
+            {
+              "text": "Models \u2014"
+            }
+          ],
+          "interactive": true
+        },
+        "subscriptionUsage": {
+          "text": "Claude Code \u2014   Codex \u2014",
+          "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.\n\nCodex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+          "interactive": true,
+          "paddedFields": true,
+          "overflowFields": true,
+          "fields": [
+            {
+              "text": "\u2014",
+              "label": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:claude:Anthropic:",
+              "paneId": 0,
+              "iconEngine": "claude",
+              "iconAsset": null,
+              "iconColor": 4291591262,
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            },
+            {
+              "text": "\u2014",
+              "label": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:codex:OpenAI:",
+              "paneId": 0,
+              "iconEngine": "codex",
+              "iconAsset": "assets/engine-icons/codex.png",
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            }
+          ]
+        },
+        "footerCovered": false,
+        "footerPassive": false,
+        "focusedContext": null,
+        "pullRequest": null,
+        "canReopen": false,
+        "canFind": false,
+        "canClosePane": false,
+        "paneActions": {
+          "restartAgent": false,
+          "shareAgent": false,
+          "toggleViewer": false,
+          "toggleComposer": false
+        },
+        "canGoBack": false,
+        "canGoForward": false,
+        "closedHistory": [],
+        "attention": 0,
+        "statusMenuEntries": [],
+        "statusMenuWorkingEntries": [
+          {
+            "machineId": "fixture",
+            "agentId": "live-0",
+            "sessionId": null,
+            "title": "Live 0",
+            "unread": false,
+            "label": "Working",
+            "activity": {
+              "mark": "\u280b",
+              "label": "Working",
+              "working": true,
+              "color": 4279347405
+            },
+            "startedAt": null,
+            "unavailable": null,
+            "tabId": null,
+            "tabName": "Other sessions",
+            "machineName": "Fixture",
+            "readToken": null,
+            "questionId": null
+          },
+          {
+            "machineId": "fixture",
+            "agentId": "live-1",
+            "sessionId": null,
+            "title": "Live 1",
+            "unread": false,
+            "label": "Working",
+            "activity": {
+              "mark": "\u280b",
+              "label": "Working",
+              "working": true,
+              "color": 4279347405
+            },
+            "startedAt": null,
+            "unavailable": null,
+            "tabId": null,
+            "tabName": "Other sessions",
+            "machineName": "Fixture",
+            "readToken": null,
+            "questionId": null
+          },
+          {
+            "machineId": "fixture",
+            "agentId": "live-2",
+            "sessionId": null,
+            "title": "Live 2",
+            "unread": false,
+            "label": "Working",
+            "activity": {
+              "mark": "\u280b",
+              "label": "Working",
+              "working": true,
+              "color": 4279347405
+            },
+            "startedAt": null,
+            "unavailable": null,
+            "tabId": null,
+            "tabName": "Other sessions",
+            "machineName": "Fixture",
+            "readToken": null,
+            "questionId": null
+          },
+          {
+            "machineId": "fixture",
+            "agentId": "live-3",
+            "sessionId": null,
+            "title": "Live 3",
+            "unread": false,
+            "label": "Working",
+            "activity": {
+              "mark": "\u280b",
+              "label": "Working",
+              "working": true,
+              "color": 4279347405
+            },
+            "startedAt": null,
+            "unavailable": null,
+            "tabId": null,
+            "tabName": "Other sessions",
+            "machineName": "Fixture",
+            "readToken": null,
+            "questionId": null
+          }
+        ],
+        "unread": 0,
+        "sessionsOpen": false,
+        "machinesOpen": false,
+        "machineNotices": 0,
+        "modelNotices": 0,
+        "onboarding": "machines",
+        "modelsOpen": false,
+        "localModelReady": false,
+        "runningSessions": 25,
+        "history": [
+          {
+            "id": "swarm:fixture-tab",
+            "title": "Fixture",
+            "machineName": "",
+            "detail": "Tab \u00b7 0 harnesses",
+            "swarm": true,
+            "store": false,
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "current": true
+          }
+        ],
+        "tabs": [
+          {
+            "id": "fixture-tab",
+            "name": "Fixture",
+            "label": "Fixture",
+            "shortcutHint": "\u23181",
+            "kind": "harness",
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "attention": 0
+          }
+        ]
+      }
+    },
+    {
+      "live": 25,
+      "saved": 1000,
+      "working": 4,
+      "notificationsPerTurn": 16,
+      "warmupTurns": 20,
+      "turnsPerRound": 20,
+      "rounds": 7,
+      "beforeMedianUs": 214391.7,
+      "afterMedianUs": 1562.05,
+      "reductionPercent": 99.27140369706477,
+      "beforeRoundsUs": [
+        223051.85,
+        213752.05,
+        215117.0,
+        214391.7,
+        215885.15,
+        214240.65,
+        214304.65
+      ],
+      "afterRoundsUs": [
+        1551.05,
+        1595.5,
+        1534.3,
+        1562.05,
+        1654.8,
+        1563.2,
+        1511.5
+      ],
+      "beforeConstructions": [
+        32
+      ],
+      "afterConstructions": [
+        1
+      ],
+      "nativeMessagesBefore": 0,
+      "nativeMessagesAfter": 0,
+      "identicalFinalPayload": true,
+      "finalPayload": {
+        "enabled": true,
+        "reduceMotion": false,
+        "activeId": "fixture-tab",
+        "searchTooltip": "Open Harness \u00b7 \u2318P",
+        "storeTooltip": "Explore Harness Store \u00b7 \u2318S",
+        "devicesVisible": false,
+        "tabsFocused": false,
+        "palette": {
+          "tabBar": 4280032284,
+          "workspace": 4280821800,
+          "search": 4281084972,
+          "accent": 4290628572,
+          "foreground": 4294309365,
+          "dark": 1
+        },
+        "barStyle": {
+          "family": ".AppleSystemUIFontMonospaced",
+          "fallback": [
+            "Menlo",
+            "Monaco",
+            "Courier New",
+            "monospace"
+          ],
+          "size": 13.0,
+          "valueGapCells": 0.75,
+          "groupGapCells": 2.0,
+          "foreground": 4294309365,
+          "selection": 1304284124
+        },
+        "harnessMonitor": {
+          "text": "Harnesses 25",
+          "label": "25 open across connected machines. Click to open Harness Monitor.",
+          "detail": "25 open across connected machines. Click to open Harness Monitor.",
+          "segments": [
+            {
+              "text": "Harnesses 25"
+            }
+          ],
+          "interactive": true
+        },
+        "footerMachines": {
+          "text": "Machines 1",
+          "detail": "1 linked machines \u00b7 1 online \u00b7 0 offline.\nOpen Machines \u00b7 \u2318M",
+          "segments": [
+            {
+              "text": "Machines 1"
+            }
+          ],
+          "interactive": true
+        },
+        "footerModels": {
+          "text": "Models \u2014",
+          "detail": "Installed local models have not been read yet.\nInventory unavailable on 1 machine; showing last known models.\nOpen local models.",
+          "segments": [
+            {
+              "text": "Models \u2014"
+            }
+          ],
+          "interactive": true
+        },
+        "subscriptionUsage": {
+          "text": "Claude Code \u2014   Codex \u2014",
+          "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.\n\nCodex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+          "interactive": true,
+          "paddedFields": true,
+          "overflowFields": true,
+          "fields": [
+            {
+              "text": "\u2014",
+              "label": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Claude Code\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:claude:Anthropic:",
+              "paneId": 0,
+              "iconEngine": "claude",
+              "iconAsset": null,
+              "iconColor": 4291591262,
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            },
+            {
+              "text": "\u2014",
+              "label": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "detail": "Codex\nOn: This computer\nChecking usage\u2026\nChecking usage\u2026\nView subscription details.",
+              "field": "model:subscription:codex:OpenAI:",
+              "paneId": 0,
+              "iconEngine": "codex",
+              "iconAsset": "assets/engine-icons/codex.png",
+              "interactive": true,
+              "segments": [
+                {
+                  "text": "\u2014",
+                  "foreground": 4294309365
+                }
+              ]
+            }
+          ]
+        },
+        "footerCovered": false,
+        "footerPassive": false,
+        "focusedContext": null,
+        "pullRequest": null,
+        "canReopen": false,
+        "canFind": false,
+        "canClosePane": false,
+        "paneActions": {
+          "restartAgent": false,
+          "shareAgent": false,
+          "toggleViewer": false,
+          "toggleComposer": false
+        },
+        "canGoBack": false,
+        "canGoForward": false,
+        "closedHistory": [],
+        "attention": 0,
+        "statusMenuEntries": [],
+        "statusMenuWorkingEntries": [
+          {
+            "machineId": "fixture",
+            "agentId": "live-0",
+            "sessionId": null,
+            "title": "Live 0",
+            "unread": false,
+            "label": "Working",
+            "activity": {
+              "mark": "\u280b",
+              "label": "Working",
+              "working": true,
+              "color": 4279347405
+            },
+            "startedAt": null,
+            "unavailable": null,
+            "tabId": null,
+            "tabName": "Other sessions",
+            "machineName": "Fixture",
+            "readToken": null,
+            "questionId": null
+          },
+          {
+            "machineId": "fixture",
+            "agentId": "live-1",
+            "sessionId": null,
+            "title": "Live 1",
+            "unread": false,
+            "label": "Working",
+            "activity": {
+              "mark": "\u280b",
+              "label": "Working",
+              "working": true,
+              "color": 4279347405
+            },
+            "startedAt": null,
+            "unavailable": null,
+            "tabId": null,
+            "tabName": "Other sessions",
+            "machineName": "Fixture",
+            "readToken": null,
+            "questionId": null
+          },
+          {
+            "machineId": "fixture",
+            "agentId": "live-2",
+            "sessionId": null,
+            "title": "Live 2",
+            "unread": false,
+            "label": "Working",
+            "activity": {
+              "mark": "\u280b",
+              "label": "Working",
+              "working": true,
+              "color": 4279347405
+            },
+            "startedAt": null,
+            "unavailable": null,
+            "tabId": null,
+            "tabName": "Other sessions",
+            "machineName": "Fixture",
+            "readToken": null,
+            "questionId": null
+          },
+          {
+            "machineId": "fixture",
+            "agentId": "live-3",
+            "sessionId": null,
+            "title": "Live 3",
+            "unread": false,
+            "label": "Working",
+            "activity": {
+              "mark": "\u280b",
+              "label": "Working",
+              "working": true,
+              "color": 4279347405
+            },
+            "startedAt": null,
+            "unavailable": null,
+            "tabId": null,
+            "tabName": "Other sessions",
+            "machineName": "Fixture",
+            "readToken": null,
+            "questionId": null
+          }
+        ],
+        "unread": 0,
+        "sessionsOpen": false,
+        "machinesOpen": false,
+        "machineNotices": 0,
+        "modelNotices": 0,
+        "onboarding": "machines",
+        "modelsOpen": false,
+        "localModelReady": false,
+        "runningSessions": 25,
+        "history": [
+          {
+            "id": "swarm:fixture-tab",
+            "title": "Fixture",
+            "machineName": "",
+            "detail": "Tab \u00b7 0 harnesses",
+            "swarm": true,
+            "store": false,
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "current": true
+          }
+        ],
+        "tabs": [
+          {
+            "id": "fixture-tab",
+            "name": "Fixture",
+            "label": "Fixture",
+            "shortcutHint": "\u23181",
+            "kind": "harness",
+            "agentCount": 0,
+            "engine": null,
+            "iconAsset": null,
+            "attention": 0
+          }
+        ]
+      }
+    }
+  ],
+  "validation": {
+    "base": "ce23cf697d9fcae170bb9e43c5457832f0900365",
+    "recordedAt": "2026-10-02T13:46:45.692409+00:00",
+    "targetedTests": {
+      "passed": 196,
+      "initialRun": {
+        "passed": 192,
+        "runnerLoadFailures": 1
+      },
+      "isolatedRetry": {
+        "passed": 4,
+        "failed": 0
+      }
+    },
+    "nativeJourneys": {
+      "passed": 8,
+      "initialRunPassed": 6,
+      "correctedFixtureRetryPassed": 2,
+      "initialFailures": "Obsolete expectations that Cmd-N retains an ordinary dismissed draft. Current documented UX starts a fresh form. Fixture now asserts empty task and enters a reviewed task; terminal ownership and input assertions unchanged.",
+      "limitation": "Native AppKit/Flutter test window with in-memory transports. Injected Flutter keys do not prove physical AppKit keyboard/IME handling or real-engine behavior."
+    },
+    "analysis": "No issues in all six changed Dart paths",
+    "normalDebugBuildRestored": true,
+    "coverage": [
+      {
+        "file": "desktop/lib/screens/swarm_screen.dart",
+        "coveredExecutableLines": 8,
+        "totalAddedExecutableLines": 8,
+        "counts": {
+          "1804": 8,
+          "1805": 8,
+          "1809": 16,
+          "1810": 8,
+          "1811": 8,
+          "1812": 8,
+          "1816": 8,
+          "1819": 8
+        }
+      },
+      {
+        "file": "desktop/lib/state/status_menu.dart",
+        "coveredExecutableLines": 2,
+        "totalAddedExecutableLines": 2,
+        "counts": {
+          "58": 8,
+          "59": 10
+        }
+      }
+    ],
+    "limits": [
+      "No new full-suite pass is claimed.",
+      "The previous older-base 141 tests and native results are historical; current relevant checks were rerun after rebase.",
+      "Whole-app 100x energy improvement and battery-menu disappearance remain unproven."
+    ]
+  },
+  "rosterReadRegression": {
+    "rosterSize": 1001,
+    "baselineIdleReads": 503503,
+    "candidateIdleReads": 2002,
+    "candidateOneWorkingReads": 3003
+  },
+  "phaseClock": {
+    "userRequestReceivedAt": null,
+    "firstImplementationReadyApproximateUtc": "2026-10-02T05:45:00Z",
+    "currentBaseValidationStartedApproximateUtc": "2026-10-02T13:36:00Z",
+    "requiredValidationCompleteAt": "2026-10-02T13:59:14.819486+00:00",
+    "mergeAt": null,
+    "releaseTriggeredAt": null,
+    "publishedAt": null,
+    "completionReportedAt": null,
+    "unknownInterval": "The handoff has no explanation for the interval between approximately 05:52 and 13:35 UTC. It is not recorded as test runtime. Exact request-to-completion duration is unavailable.",
+    "followup": "Merge and release timestamps are recorded in the PR body after publication."
+  },
+  "limitations": [
+    "Synthetic component benchmark, not whole-app energy, battery life, GPU power, native display latency or a 100x whole-app improvement.",
+    "Single sequential baseline/candidate pair with seven rounds each; no alternating host-noise control.",
+    "No physical keyboard/IME or real-engine end-to-end pass is claimed.",
+    "No full-suite pass or whole-app 100% coverage is claimed.",
+    "macOS battery-menu removal remains unverified."
+  ]
+}

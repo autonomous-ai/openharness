@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "7dc39946c368508d49a8be43d9b2ae791f0e74679548eb456e7ab864421de878",
+  "suiteSha256": "135545eb05370bac04fbaf555c36255afd21fbcbd4190b0e21895e17d31273c3",
+  "evidence": "development_diagnostic_only",
+  "reviewer": {
+    "id": "codex-source-review",
+    "kind": "agent",
+    "independent": false
+  },
+  "coverage": {
+    "completedCases": 6,
+    "expectedCases": 6
+  },
+  "memories": {
+    "passed": 2,
+    "reviewed": 3,
+    "total": 3,
+    "rate": 0.6666666666666666
+  },
+  "recall": {
+    "passed": 2,
+    "reviewed": 3,
+    "total": 3,
+    "rate": 0.6666666666666666
+  },
+  "abstention": {
+    "passed": 7,
+    "reviewed": 7,
+    "total": 7,
+    "rate": 1
+  },
+  "cases": [
+    {
+      "id": "conditional-debugging",
+      "status": "reviewable",
+      "probes": [
+        {
+          "id": "debugging",
+          "passed": true
+        },
+        {
+          "id": "incident",
+          "passed": true
+        },
+        {
+          "id": "unclassified-task",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "id": "project-database-decision",
+      "status": "reviewable",
+      "probes": [
+        {
+          "id": "same-repository",
+          "passed": true
+        },
+        {
+          "id": "different-repository",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "id": "routine-tool-choice",
+      "status": "reviewable",
+      "probes": [
+        {
+          "id": "no-assumed-taste",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "id": "quoted-third-party",
+      "status": "reviewable",
+      "probes": [
+        {
+          "id": "no-borrowed-opinion",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "id": "unstated-rationale",
+      "status": "reviewable",
+      "probes": [
+        {
+          "id": "database-choice",
+          "passed": false
+        },
+        {
+          "id": "irrelevant-ui-task",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "id": "unbound-project-fact",
+      "status": "reviewable",
+      "probes": [
+        {
+          "id": "no-project-leak",
+          "passed": true
+        }
+      ]
+    }
+  ],
+  "taskBenefit": "not_measured",
+  "nativeDelivery": "not_measured",
+  "limitations": [
+    "Ratings are attributed judgements, not authenticated independent review.",
+    "These diagnostics do not satisfy the held-out-history or paired coding-task release gates.",
+    "Older reports without captured recall context can be reviewed for memory content but receive no recall-quality rate.",
+    "Empty, unfinished or partially reviewed denominators never receive a passing rate."
+  ],
+  "producer": {
+    "protocol": "coding-memory-quality-review-v1",
+    "node": "v22.23.2",
+    "runnerSha256": "90252c4c052d97bdbccbd794c769a25a4e123c579afebcf6d452d58ec5b7afb9",
+    "scorerSha256": "da4c153d69c6cdf26bd8135993e576bc3f60c4042fc2c11829880b2be295bea3"
+  }
+}

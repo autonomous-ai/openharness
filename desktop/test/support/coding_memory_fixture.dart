@@ -178,6 +178,7 @@ class MemoryFixture extends CodingMemoryConnection {
   final calls = <Map<String, dynamic>>[];
   Future<Map<String, dynamic>> Function(Map<String, dynamic>)? handle;
   Map<String, dynamic> record = syntheticMemory();
+  Map<String, dynamic> runtime = {'state': 'ready'};
   bool learn = true, recall = true, present = true;
   String? cursor;
   String? refuseApply;
@@ -223,7 +224,7 @@ class MemoryFixture extends CodingMemoryConnection {
       case 'status':
         return {
           'ok': true,
-          'runtime': {'state': 'ready'},
+          'runtime': runtime,
           'preferences': {'learn': learn, 'recall': recall},
           'queue': {
             'jobs': {'queued': 2, 'reviewing': 1, 'budget_deferred': 1},

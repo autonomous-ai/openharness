@@ -1,0 +1,287 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "b6f541b0ff369bd5a007705253f55b8b7c38d34721afe487916e500ff79ff34c",
+  "suiteSha256": "657aae9de4f301b660cc2c57dce0f80ae801f49e71921a2365b862ba15d0023e",
+  "reviewer": {
+    "id": "implementing-agent",
+    "kind": "agent",
+    "independent": false
+  },
+  "cases": [
+    {
+      "id": "default-with-user-override",
+      "records": [
+        {
+          "id": "6435f9a2-3e42-4163-80f6-1c1c0e948392",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "The default-only claim and future action are supported but omit the explicitly permitted manual expansion. The exact source context delivered on recall preserves that override and its current-visit limit; this does not make the stored summary complete."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "6435f9a2-3e42-4163-80f6-1c1c0e948392"
+          ],
+          "requiredIds": [
+            "6435f9a2-3e42-4163-80f6-1c1c0e948392"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The validated source-excerpt packet retains the full original qualifications for the relevant project."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        }
+      ]
+    },
+    {
+      "id": "firm-request-with-unresolved-placement",
+      "records": [
+        {
+          "id": "f13f3ad4-191c-42ef-9477-7fa992f9aff7",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Preserves the explicit build-log retention request without deciding the unresolved chooser placement or asserting a shipped implementation."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "f13f3ad4-191c-42ef-9477-7fa992f9aff7"
+          ],
+          "requiredIds": [
+            "f13f3ad4-191c-42ef-9477-7fa992f9aff7"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The validated source-excerpt packet retains the full original qualifications for the relevant project."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        }
+      ]
+    },
+    {
+      "id": "polite-request",
+      "records": [
+        {
+          "id": "b0c2bfc7-68d4-4601-8d72-6148de758cc2",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Recognizes the polite request as a project behavior and preserves focus after search without inventing a rationale or a broader personal preference."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "b0c2bfc7-68d4-4601-8d72-6148de758cc2"
+          ],
+          "requiredIds": [
+            "b0c2bfc7-68d4-4601-8d72-6148de758cc2"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The validated source-excerpt packet retains the full original qualifications for the relevant project."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        }
+      ]
+    },
+    {
+      "id": "exploratory-question",
+      "records": [],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        }
+      ]
+    },
+    {
+      "id": "tentative-number",
+      "records": [],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        }
+      ]
+    },
+    {
+      "id": "accepted-number",
+      "records": [
+        {
+          "id": "c41fe3a4-3428-4e80-a209-029d68c44c33",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Read as the explicitly agreed project policy, the claim and future action retain completed logs and the 14-day limit. This is not operational verification of implemented retention."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "c41fe3a4-3428-4e80-a209-029d68c44c33"
+          ],
+          "requiredIds": [
+            "c41fe3a4-3428-4e80-a209-029d68c44c33"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The validated source-excerpt packet retains the full original qualifications for the relevant project."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        }
+      ]
+    },
+    {
+      "id": "quoted-plan-and-user-correction",
+      "records": [
+        {
+          "id": "db7627b7-2a9c-4f6a-9786-3c24286be35c",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Keeps the user-requested visibility of failures without adopting the quoted assistant plan, setting a delay, or prohibiting an unmeasured value."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "db7627b7-2a9c-4f6a-9786-3c24286be35c"
+          ],
+          "requiredIds": [
+            "db7627b7-2a9c-4f6a-9786-3c24286be35c"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The validated source-excerpt packet retains the full original qualifications for the relevant project."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        }
+      ]
+    }
+  ]
+}

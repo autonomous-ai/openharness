@@ -1,0 +1,150 @@
+{
+  "schemaVersion": 1,
+  "suite": "memory-source-store-coding-development-v1",
+  "suiteSha256": "bac5cde1bd7be21727cdc475b165d1f0e0a53894d7acff9fb34d4c0a7603f70c",
+  "promptSha256": "3dfd8fea7ab2e6600322bf2d3e7e35152813a3fcf9a4586c121a843460f9e6e5",
+  "runnerSha256": "9ad7b3e70b3ee5f3438401dc00fef55fcc6a6f879095e8874b23accef3d06dc6",
+  "startedAt": "2026-10-02T21:32:29.571Z",
+  "status": "completed",
+  "cases": [
+    {
+      "id": "coding-4515496f4882",
+      "durationMs": 4980,
+      "promptSha256": "f148cf62cef2b19e3705796001065045facd32b2f25f67907362848bfbdad00e",
+      "answer": {
+        "text": "```json\n{\n  \"code\": \"export function focusAfter(current, event) {\\n  if (event === 'search_completed') {\\n    return 'search';\\n  }\\n  return current;\\n}\"\n}\n```",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 52,
+          "prompt_tokens": 386,
+          "total_tokens": 438,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "error": "invalid_coding_output"
+    },
+    {
+      "id": "coding-64f0ddbffda8",
+      "durationMs": 5957,
+      "promptSha256": "cba11dc712229b1907225db16dcef782966dff399904860ec56bb185d89a398d",
+      "answer": {
+        "text": "```json\n{\n  \"code\": \"export function optionsFor(context, options) {\\n  if (context === 'conflict') {\\n    return options.filter((o) => o === 'Cancel' || o === 'Save copy');\\n  }\\n  return options;\\n}\"\n}\n```",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 67,
+          "prompt_tokens": 405,
+          "total_tokens": 472,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "error": "invalid_coding_output"
+    },
+    {
+      "id": "coding-9120a8bb8d89",
+      "durationMs": 5837,
+      "promptSha256": "a12a81b85268bda95469a446269ee8ed081a4ce136e58837d4e1aa67798d9fcf",
+      "answer": {
+        "text": "{\n  \"code\": \"export function updateNetworkConfig(config) {\\n  const result = { ...config };\\n  if (config.showFailures !== undefined) {\\n    result.showFailures = true;\\n  }\\n  return result;\\n}\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 59,
+          "prompt_tokens": 464,
+          "total_tokens": 523,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "code": "export function updateNetworkConfig(config) {\n  const result = { ...config };\n  if (config.showFailures !== undefined) {\n    result.showFailures = true;\n  }\n  return result;\n}"
+      }
+    },
+    {
+      "id": "coding-b07fa86fee67",
+      "durationMs": 7035,
+      "promptSha256": "271ad5f02f262b6763a92893a29ab7dfa2b7b7745e746304cf1c3eb71dbf484e",
+      "answer": {
+        "text": "{\n  \"code\": \"export function treeState(current, event) {\\n  if (event === 'start_session') {\\n    return 'condensed';\\n  }\\n  if (event === 'expand') {\\n    return 'expanded';\\n  }\\n  if (event === 'collapse') {\\n    return 'condensed';\\n  }\\n  return current;\\n}\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 89,
+          "prompt_tokens": 381,
+          "total_tokens": 470,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "code": "export function treeState(current, event) {\n  if (event === 'start_session') {\n    return 'condensed';\n  }\n  if (event === 'expand') {\n    return 'expanded';\n  }\n  if (event === 'collapse') {\n    return 'condensed';\n  }\n  return current;\n}"
+      }
+    },
+    {
+      "id": "coding-e1557fb170e4",
+      "durationMs": 6929,
+      "promptSha256": "0ab06e2d21352f91a874f7c2e5685f0126a860280b384cc620df778cffb5c8f3",
+      "answer": {
+        "text": "{\n  \"code\": \"export function navigationState(current, event) {\\n  if (event === 'start_visit') {\\n    return 'compact';\\n  }\\n  if (event === 'expand') {\\n    return 'expanded';\\n  }\\n  if (event === 'collapse') {\\n    return 'compact';\\n  }\\n  return current;\\n}\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 87,
+          "prompt_tokens": 387,
+          "total_tokens": 474,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "code": "export function navigationState(current, event) {\n  if (event === 'start_visit') {\n    return 'compact';\n  }\n  if (event === 'expand') {\n    return 'expanded';\n  }\n  if (event === 'collapse') {\n    return 'compact';\n  }\n  return current;\n}"
+      }
+    }
+  ],
+  "inferenceCalls": 5,
+  "limits": {
+    "maxCalls": 5,
+    "perCallMs": 90000,
+    "totalMs": 480000,
+    "maxOutputTokens": 1024,
+    "contextTokens": 16384,
+    "temperature": 0,
+    "seed": 42,
+    "thinking": false,
+    "retries": 0,
+    "tools": "none",
+    "corpus": "synthetic_only"
+  },
+  "limitations": [
+    "Synthetic coding microtasks using the local reference model, not native-framework tasks.",
+    "Frozen development diagnostic, not held-out user histories.",
+    "Frozen assertions and arm/origin labels are never supplied to the model.",
+    "No live memory, selected companion model or native delivery is measured; generated code must be executed separately before any task-success claim."
+  ],
+  "model": {
+    "name": "Qwen3.8-27B-Q4_0",
+    "weightSha256": "ede16c7b36e578ca87a8c70e011e4b4633a32c831c0ce76d0f474582384e671d"
+  },
+  "networkGuard": {
+    "nonLoopbackConnectError": 1
+  },
+  "runtime": {
+    "health": {
+      "status": "ok"
+    },
+    "version": "9870 (2d973636e)"
+  },
+  "workerExit": {
+    "code": 0,
+    "signal": null
+  },
+  "finishedAt": "2026-10-02T21:33:10.105Z"
+}

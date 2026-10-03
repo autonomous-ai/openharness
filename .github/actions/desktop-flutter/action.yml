@@ -10,7 +10,8 @@ inputs:
 runs:
   using: composite
   steps:
-    # Keep upstream keys/paths so logging, internal and web builds can reuse main's caches too.
+    # Keep the upstream installation path and exact SDK identity. Desktop's
+    # smaller archive has its own key; the full SDK remains a compatible fallback.
     - id: paths
       uses: subosito/flutter-action@v2
       with:
@@ -23,7 +24,8 @@ runs:
       uses: actions/cache/restore@v4
       with:
         path: ${{ steps.paths.outputs.CACHE-PATH }}
-        key: ${{ steps.paths.outputs.CACHE-KEY }}
+        key: ${{ steps.paths.outputs.CACHE-KEY }}-desktop-v1
+        restore-keys: ${{ steps.paths.outputs.CACHE-KEY }}
     - id: pub
       uses: actions/cache/restore@v4
       with:
@@ -51,11 +53,17 @@ runs:
           flutter precache --linux
         fi
         flutter pub get
+    - name: Trim mobile artifacts before saving the Desktop SDK cache
+      if: inputs.save-cache == 'true' && steps.sdk.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: python3 "$ACTION_PATH/trim-cache.py" "$FLUTTER_ROOT"
     - uses: actions/cache/save@v4
       if: inputs.save-cache == 'true' && steps.sdk.outputs.cache-hit != 'true'
       with:
         path: ${{ steps.paths.outputs.CACHE-PATH }}
-        key: ${{ steps.paths.outputs.CACHE-KEY }}
+        key: ${{ steps.paths.outputs.CACHE-KEY }}-desktop-v1
     - uses: actions/cache/save@v4
       if: inputs.save-cache == 'true' && steps.pub.outputs.cache-hit != 'true'
       with:

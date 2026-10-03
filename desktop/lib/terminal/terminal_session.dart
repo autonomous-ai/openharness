@@ -271,7 +271,14 @@ class TerminalSession extends ChangeNotifier {
   bool _openStallRecovered = false;
   bool _disposed = false;
   int _generation = 0;
-  bool _remoteCursorVisible = true;
+  final _remoteCursorVisible = ValueNotifier(true);
+
+  /// The program's cursor visibility, independent of the local blink phase.
+  /// Views can stop their cursor clock while the program draws its own caret.
+  /// This is separate from session notifications: an escape sequence must not
+  /// rebuild the workspace or change input ownership.
+  ValueListenable<bool> get remoteCursorVisibility => _remoteCursorVisible;
+
   bool _cursorBlinkPhaseVisible = true;
   List<int> _utf8Tail = const [];
   final List<int> _inputBytes = [];
@@ -393,7 +400,6 @@ class TerminalSession extends ChangeNotifier {
     _lastRealignedTo = null;
     _resizeSeq = 0;
     _utf8Tail = const [];
-    _remoteCursorVisible = true;
     _cursorBlinkPhaseVisible = true;
     _resyncRequested = false;
     _resyncAttempts = 0;
@@ -405,6 +411,7 @@ class TerminalSession extends ChangeNotifier {
     rows = _clampRows(initialRows);
     if (!preserveTerminal) terminal = _newTerminal()..resize(cols, rows);
     status = TerminalSessionStatus.opening;
+    _remoteCursorVisible.value = true;
     _openRequestId =
         'term_${DateTime.now().microsecondsSinceEpoch}_${Random.secure().nextInt(1 << 31)}';
     notifyListeners();
@@ -774,8 +781,8 @@ class TerminalSession extends ChangeNotifier {
             cols = _clampCols(nextCols);
             rows = _clampRows(nextRows);
             _utf8Tail = decoded.tail;
-            _remoteCursorVisible = terminal.cursorVisibleMode;
             _cursorBlinkPhaseVisible = true;
+            _remoteCursorVisible.value = terminal.cursorVisibleMode;
             _expectedSeq = frame.seq + 1;
             _lastRenderedSeq = frame.seq;
             _resyncRequested = false;
@@ -893,22 +900,26 @@ class TerminalSession extends ChangeNotifier {
   /// is always parsed against [_remoteCursorVisible], so blinking cannot turn
   /// a remote DECTCEM hide/show command into terminal input or corrupt its
   /// authoritative cursor state.
-  void setCursorBlinkPhase(bool visible) {
-    if (_cursorBlinkPhaseVisible == visible) return;
+  /// Returns whether the effective cursor visibility changed and needs paint.
+  bool setCursorBlinkPhase(bool visible) {
+    if (_cursorBlinkPhaseVisible == visible) return false;
+    final wasVisible = terminal.cursorVisibleMode;
     _cursorBlinkPhaseVisible = visible;
     _applyCursorVisibility();
+    return wasVisible != terminal.cursorVisibleMode;
   }
 
   void _writeTerminalText(String text) {
-    terminal.setCursorVisibleMode(_remoteCursorVisible);
+    terminal.setCursorVisibleMode(_remoteCursorVisible.value);
     terminal.write(text);
-    _remoteCursorVisible = terminal.cursorVisibleMode;
-    _applyCursorVisibility();
+    final remoteVisible = terminal.cursorVisibleMode;
+    terminal.setCursorVisibleMode(remoteVisible && _cursorBlinkPhaseVisible);
+    _remoteCursorVisible.value = remoteVisible;
   }
 
   void _applyCursorVisibility() {
     terminal.setCursorVisibleMode(
-      _remoteCursorVisible && _cursorBlinkPhaseVisible,
+      _remoteCursorVisible.value && _cursorBlinkPhaseVisible,
     );
   }
 
@@ -1696,6 +1707,7 @@ class TerminalSession extends ChangeNotifier {
     _disposed = true;
     _generation++;
     _cancelTimers();
+    _remoteCursorVisible.dispose();
     super.dispose();
   }
 }

@@ -126,6 +126,16 @@ class DesktopVerificationTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(json.loads(receipt.read_text())["status"], "failed")
 
+    def test_internal_macos_scope_keeps_all_four_and_release_still_requires_six(self):
+        macos = tuple(key for key in verify.KEYS if key.startswith("desktop-macos"))
+        manifest = {key: self.manifest[key] for key in macos}
+        self.assertEqual(len(verify.entries_for_version(manifest, "1.2.3", keys=macos)), 4)
+        with self.assertRaises(ValueError):
+            verify.entries_for_version(manifest, "1.2.3")
+        manifest.pop(macos[-1])
+        with self.assertRaises(ValueError):
+            verify.entries_for_version(manifest, "1.2.3", keys=macos)
+
 
 if __name__ == "__main__":
     unittest.main()

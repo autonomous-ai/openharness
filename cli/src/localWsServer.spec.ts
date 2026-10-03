@@ -58,6 +58,12 @@ function onceMessage(ws: WebSocket): Promise<Frame> {
   })
 }
 
+function gate(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => { resolve = done })
+  return { promise, resolve }
+}
+
 describe('local CLI WebSocket', () => {
   let server: http.Server | null = null
   let local: LocalWsServer | null = null
@@ -277,6 +283,148 @@ describe('local CLI WebSocket', () => {
     expect(backend.sink?.sendFrame({ type: 'agents_list_result', payload: { requestId: 'r1', agents: [] } })).toBe(true)
     await expect(reply).resolves.toMatchObject({ type: 'agents_list_result' })
     ws.close()
+  })
+
+  it.each(['local binary', 'remote JSON', 'remote binary', 'route task'] as const)(
+    'keeps later messages behind an unfinished %s operation', async (kind) => {
+      const backend = new FakeBackend(), pending = gate(), entered = gate()
+      const trace: string[] = []
+      const first = async () => {
+        trace.push('first started')
+        entered.resolve()
+        await pending.promise
+        trace.push('first finished')
+      }
+      backend.handleLocalFrame = () => { trace.push('second') }
+      backend.handleLocalBinary = first
+      const remote = kind.startsWith('remote')
+      const relay = {
+        send: async (frame: Frame) => {
+          if ((frame.payload as { requestId?: string })?.requestId === 'first') await first()
+          else trace.push('second')
+        },
+        sendBinary: first,
+        detach: () => {},
+      }
+      const ws = new WebSocket(await start(backend, {
+        autonomousEnv: 'test',
+        relayPool: {
+          acquire: async (_id: string, _env: string, _select: Frame, sink: LocalClientSink) => {
+            sink.sendFrame({ type: 'connected', payload: {} })
+            return relay
+          },
+        } as unknown as LocalWsServerOptions['relayPool'],
+        async onRouteTask(this: LocalWsServerOptions) {
+          expect(this.machineId).toBe(machineId)
+          await first()
+          return { agentId: '', machineId: '', name: '', confidence: 0, reason: '', candidates: [], weighed: 0, machines: 0, via: '' }
+        },
+      }))
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: remote ? 'remote' : machineId, localProtocolVersion: 1 } }))
+      await connected
+      if (kind.endsWith('binary')) {
+        ws.send(encodeTerminalLocal({ kind: TerminalBinaryKind.input, streamId, seq: 1, bytes: new Uint8Array([97]), compressed: false })!)
+      } else {
+        ws.send(JSON.stringify({ type: kind === 'route task' ? 'route_task' : 'agents_list', payload: { requestId: 'first', text: 'route me' } }))
+      }
+      ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'second' } }))
+      await entered.promise
+      // Let the real socket deliver the queued frame while the first operation is held open.
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(trace).toEqual(['first started'])
+      pending.resolve()
+      await vi.waitFor(() => expect(trace).toEqual(['first started', 'first finished', 'second']))
+      ws.close()
+    },
+  )
+
+  it.each(['local JSON', 'local binary', 'remote JSON', 'remote binary'] as const)(
+    'closes the socket when %s dispatch fails', async (kind) => {
+      const backend = new FakeBackend()
+      backend.handleLocalFrame = () => { throw new Error('dispatch failed') }
+      backend.handleLocalBinary = async () => { throw new Error('dispatch failed') }
+      const relay = { send: async () => { throw new Error('dispatch failed') }, sendBinary: async () => { throw new Error('dispatch failed') }, detach: () => {} }
+      const ws = new WebSocket(await start(backend, {
+        autonomousEnv: 'test',
+        relayPool: {
+          acquire: async (_id: string, _env: string, _select: Frame, sink: LocalClientSink) => {
+            sink.sendFrame({ type: 'connected', payload: {} })
+            return relay
+          },
+        } as unknown as LocalWsServerOptions['relayPool'],
+      }))
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: kind.startsWith('remote') ? 'remote' : machineId, localProtocolVersion: 1 } }))
+      await connected
+      const closed = new Promise<[number, string]>((resolve) => ws.once('close', (code, reason) => resolve([code, reason.toString()])))
+      if (kind.endsWith('binary')) {
+        ws.send(encodeTerminalLocal({ kind: TerminalBinaryKind.input, streamId, seq: 1, bytes: new Uint8Array([97]), compressed: false })!)
+      } else {
+        ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'first' } }))
+      }
+      await expect(closed).resolves.toEqual([1011, 'local dispatch failed'])
+    },
+  )
+
+  it.each(['owned', 'isolated', 'shared'] as const)(
+    'queues frames during a pending %s relay handshake', async (kind) => {
+      const backend = new FakeBackend(), pending = gate(), entered = gate()
+      const frames: Frame[] = []
+      const acquire = vi.fn(async () => {
+        entered.resolve()
+        await pending.promise
+        return { send: async (frame: Frame) => { frames.push(frame) }, sendBinary: async () => {}, detach: () => {} }
+      })
+      const ws = new WebSocket(await start(backend, {
+        autonomousEnv: 'test',
+        relayPool: { acquire, acquireIsolated: acquire } as unknown as LocalWsServerOptions['relayPool'],
+        shareRelay: { acquire } as unknown as LocalWsServerOptions['shareRelay'],
+      }))
+      await onceOpen(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: {
+        machineId: 'remote', localProtocolVersion: 1,
+        ...(kind === 'shared' ? { shareId: 'share' } : {}), relayIsolation: kind === 'isolated',
+      } }))
+      ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'queued' } }))
+      await entered.promise
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(acquire).toHaveBeenCalledTimes(1)
+      expect(frames).toEqual([])
+      pending.resolve()
+      await vi.waitFor(() => expect(frames).toEqual([{ type: 'agents_list', payload: { requestId: 'queued' } }]))
+      expect(backend.frames).toEqual([])
+      ws.close()
+    },
+  )
+
+  it.each(['owned', 'shared'] as const)('detaches a late %s relay after its window disconnects', async (kind) => {
+    const backend = new FakeBackend(), pending = gate(), entered = gate(), disconnected = gate(), detach = vi.fn()
+    const acquire = async () => {
+      entered.resolve()
+      await pending.promise
+      return { send: async () => {}, sendBinary: async () => {}, detach }
+    }
+    const ws = new WebSocket(await start(backend, {
+      autonomousEnv: 'test',
+      relayPool: { acquire } as unknown as LocalWsServerOptions['relayPool'],
+      shareRelay: { acquire } as unknown as LocalWsServerOptions['shareRelay'],
+    }))
+    server!.once('connection', (socket) => socket.once('close', disconnected.resolve))
+    await onceOpen(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: {
+      machineId: 'remote', localProtocolVersion: 1, ...(kind === 'shared' ? { shareId: 'share' } : {}),
+    } }))
+    await entered.promise
+    const closed = new Promise<void>((resolve) => ws.once('close', () => resolve()))
+    ws.close()
+    await closed
+    await disconnected.promise
+    pending.resolve()
+    await vi.waitFor(() => expect(detach).toHaveBeenCalledTimes(1))
+    expect(backend.unregisters).toEqual([])
   })
 
   // A window from before it introduced itself on `terminal_open` still gets named on the far

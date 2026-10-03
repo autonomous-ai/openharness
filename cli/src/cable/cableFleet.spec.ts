@@ -49,6 +49,7 @@ function fixture() {
   }
   const logs = mkdtempSync(join(tmpdir(), 'usb-fleet-'))
   const options = {
+    canUseUsb: vi.fn(() => true),
     discover: vi.fn(async () => present), intervalMs: 60_000,
     open: vi.fn(async (path: string, onData: (chunk: Buffer) => void, onClosed: (why: string) => void) => {
       const port = new Peer(path, onData, onClosed); ports.push(port); return port
@@ -64,6 +65,55 @@ function fixture() {
 }
 
 describe('USB dial fleet', () => {
+  it('releases every dial on a macOS user switch and reconnects only when its account returns', async () => {
+    const f = fixture()
+    const scan = () => (f.fleet as unknown as { scan(): Promise<void> }).scan()
+    try {
+      f.options.canUseUsb.mockReturnValue(false)
+      f.fleet.start()
+      await scan()
+      expect(f.options.discover).not.toHaveBeenCalled()
+      expect(f.ports).toHaveLength(0)
+      f.options.canUseUsb.mockReturnValue(true)
+      await scan()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+      await f.greet(f.ports)
+      expect(f.fleet.isConnected).toBe(true)
+      f.options.canUseUsb.mockReturnValue(false)
+      await scan()
+      expect(f.ports.every(port => !port.isOpen)).toBe(true)
+      expect(f.fleet.isConnected).toBe(false)
+      const discoveries = f.options.discover.mock.calls.length
+      await scan()
+      expect(f.options.discover).toHaveBeenCalledTimes(discoveries)
+      f.options.canUseUsb.mockReturnValue(true)
+      await scan()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(4))
+      await f.greet(f.ports.slice(2))
+      expect(f.fleet.isConnected).toBe(true)
+    } finally { await f.fleet.stop() }
+  })
+
+  it('closes an opening port if the desktop account changes before open finishes', async () => {
+    const f = fixture()
+    f.setPorts([device('/dev/tim', 'AA:01')])
+    let finish!: () => void
+    f.options.open.mockImplementationOnce(async (path, onData, onClosed) => {
+      const peer = new Peer(path, onData, onClosed)
+      f.ports.push(peer)
+      await new Promise<void>(resolve => { finish = resolve })
+      return peer
+    })
+    try {
+      f.fleet.start()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+      f.options.canUseUsb.mockReturnValue(false)
+      finish()
+      await vi.waitFor(() => expect(f.ports[0].isOpen).toBe(false))
+      expect(f.fleet.isConnected).toBe(false)
+    } finally { finish?.(); await f.fleet.stop() }
+  })
+
   it('names every device on the desk, and changes the settings of ONE of them', async () => {
     /*
      * Before this the fleet picked a row and threw the rest away, so the app drew one robot however

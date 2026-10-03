@@ -6,6 +6,7 @@ import { CompanionIntelligence, type CompanionRuntime } from './intelligence.js'
 import { encodeRuntimeProfile } from '../lib/runtimeProfile.js'
 import type { OneShotOptions } from '../lib/oneshot.js'
 import { openCodeSnapshotIdentity, type OpenCodeMemorySnapshot, type OpenCodeMemoryInferenceOptions } from '../memory/opencodeInference.js'
+import { MemoryError } from '../memory/types.js'
 
 let directory: string
 beforeEach(() => { directory = mkdtempSync(join(tmpdir(), 'collection-model-')) })
@@ -121,9 +122,22 @@ describe('the collection DSH supplies its intelligence', () => {
     finish({ text: 'answer from old account' })
     expect(await pending).toBeNull()
     account = null
-    expect((await brain.extractionStatus()).state).toBe('waiting')
+    expect(await brain.extractionStatus()).toMatchObject({ state: 'waiting', reason: 'companion_account_unavailable' })
     expect(await brain.extract('evidence', { timeoutMs: 1000, signal: new AbortController().signal, contextKey: before! })).toBeNull()
     expect(w.run).toHaveBeenCalledOnce()
+  })
+
+  it('distinguishes unopened, starting, missing model and unsupported configuration without guessing credentials', async () => {
+    const w = world()
+    w.set(null)
+    expect(w.brain.status()).toEqual({ state: 'unopened', reason: 'companion_unopened' })
+    w.set({ agentId: 'collection', engine: 'claude', stopped: false, sessionId: null, profile: null })
+    expect(w.brain.status()).toMatchObject({ state: 'waiting', reason: 'companion_starting' })
+    w.set({ ...w.get(), sessionId: 'session' })
+    expect(w.brain.status()).toMatchObject({ state: 'waiting', reason: 'companion_model_unavailable' })
+    w.set({ ...w.get(), customProvider: true })
+    expect(w.brain.status()).toMatchObject({ state: 'unsupported', reason: 'companion_configuration_unsupported' })
+    expect(w.run).not.toHaveBeenCalled()
   })
 
   it('cancels while the native account lookup is pending without launching extraction', async () => {
@@ -168,6 +182,17 @@ describe('OpenCode companion request binding', () => {
     return { ...w, brain, openCodeRun: run, accountIdentity, snapshot: () => snapshot!, setSnapshot: (value: OpenCodeMemorySnapshot | null) => { snapshot = value } }
   }
 
+  it('distinguishes a stopped companion from an unobserved live connection without starting either', async () => {
+    const w = openCodeWorld()
+    w.set({ ...w.get(), stopped: true })
+    expect(await w.brain.extractionStatus()).toMatchObject({ state: 'waiting', reason: 'companion_stopped' })
+    w.set({ ...w.get(), stopped: false })
+    w.setSnapshot(null)
+    expect(await w.brain.extractionStatus()).toMatchObject({ state: 'waiting', reason: 'companion_connection_unavailable' })
+    expect(w.openCodeRun).not.toHaveBeenCalled()
+    expect(w.accountIdentity).not.toHaveBeenCalled()
+  })
+
   it('uses the foreground model/account/variant for extraction and ordinary companion intelligence', async () => {
     const w = openCodeWorld()
     expect(w.brain.status()).toMatchObject({ state: 'ready', engine: 'opencode', model: 'selected/model', effort: 'high' })
@@ -192,6 +217,47 @@ describe('OpenCode companion request binding', () => {
     expect(w.brain.status().state).toBe('waiting')
     expect(w.openCodeRun).not.toHaveBeenCalled()
     expect(w.run).not.toHaveBeenCalled()
+  })
+
+  it.each(['model', 'account', 'process', 'owner'] as const)('holds a provider refusal until the selected %s changes', async change => {
+    const w = openCodeWorld(), contextKey = (await w.brain.extractionStatus()).contextKey!
+    const options = { contextKey, timeoutMs: 1000, signal: new AbortController().signal }
+    w.openCodeRun.mockRejectedValueOnce(new MemoryError('inference_provider_restricted'))
+    await expect(w.brain.extract('synthetic evidence', options)).rejects.toThrow('inference_provider_restricted')
+    expect(await w.brain.extractionStatus()).toMatchObject({ state: 'unsupported', reason: 'inference_provider_restricted', contextKey })
+    expect(await w.brain.extract('same queued evidence', options)).toBeNull()
+    expect(await w.brain.run('background triage', options)).toBeNull()
+    const savedSnapshot = w.snapshot()
+    w.setSnapshot(null)
+    expect(w.brain.status().state).toBe('waiting')
+    w.setSnapshot(structuredClone(savedSnapshot))
+    expect(w.brain.status().state).toBe('unsupported')
+    expect(w.openCodeRun).toHaveBeenCalledOnce()
+    expect(w.run).not.toHaveBeenCalled()
+    expect(readFileSync(w.deps.stateFile, 'utf8')).not.toContain('inference_provider_restricted')
+    if (change === 'model') w.setSnapshot({ ...w.snapshot(), model: 'selected/another',
+      provider: { ...w.snapshot().provider, models: { another: { name: 'Another', limit: { context: 10000, output: 1000 } } } } })
+    if (change === 'account') w.setSnapshot({ ...w.snapshot(), auth: { type: 'api', key: 'replacement' } })
+    if (change === 'process') w.set({ ...w.get(), nativeProcessKey: 'new-process' })
+    if (change === 'owner') w.set({ ...w.get(), accountKey: 'new-owner' })
+    const next = await w.brain.extractionStatus()
+    expect(next.state).toBe('ready')
+    expect(next.contextKey).not.toBe(contextKey)
+    expect(await w.brain.extract('synthetic evidence', { ...options, contextKey: next.contextKey! })).toBe('{"proposals":[]}')
+    expect(w.openCodeRun).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not apply a late refusal to a replacement connection', async () => {
+    const w = openCodeWorld(), contextKey = (await w.brain.extractionStatus()).contextKey!
+    let fail!: (error: Error) => void
+    w.openCodeRun.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject }))
+    const pending = w.brain.extract('synthetic evidence', { contextKey, timeoutMs: 1000, signal: new AbortController().signal })
+    const assertion = expect(pending).rejects.toThrow('inference_provider_restricted')
+    await vi.waitFor(() => expect(w.openCodeRun).toHaveBeenCalledOnce())
+    w.set({ ...w.get(), nativeProcessKey: 'replacement-process' })
+    fail(new MemoryError('inference_provider_restricted'))
+    await assertion
+    expect((await w.brain.extractionStatus()).state).toBe('ready')
   })
 
   it('rejects a queued extraction after the observed account changes', async () => {

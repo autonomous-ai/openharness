@@ -53,7 +53,12 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
   @override
   void initState() {
     super.initState();
-    unawaited(controller.apis.refresh());
+    // Starting a refresh synchronously notifies the workspace's shared model
+    // catalog. This panel mounts in an overlay during layout, when the
+    // workspace cannot rebuild yet.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(controller.apis.refresh());
+    });
   }
 
   @override

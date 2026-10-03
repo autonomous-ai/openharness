@@ -17,6 +17,7 @@ import '../clipboard/native_clipboard.dart';
 import '../core/models.dart';
 import '../core/runtime_platform.dart';
 import '../state/app_state.dart';
+import '../state/harness_activity.dart';
 import '../state/model_start_watch.dart';
 
 import 'agent_drag.dart';
@@ -320,6 +321,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     WidgetsBinding.instance.addObserver(this);
     widget.session.attachViewport(this);
     widget.session.addListener(_onSessionChanged);
+    widget.session.remoteCursorVisibility.addListener(_syncCursorBlink);
     terminalFontStore.addListener(_onFontChanged);
     // Colours repaint the view in place — no relayout, no resize frame — but
     // they still need a rebuild to reach it, and this widget reads the store
@@ -411,9 +413,11 @@ class _TerminalPanelState extends State<TerminalPanel>
       _previewProgress = null;
       oldWidget.session.setCursorBlinkPhase(true);
       oldWidget.session.removeListener(_onSessionChanged);
+      oldWidget.session.remoteCursorVisibility.removeListener(_syncCursorBlink);
       oldWidget.session.detachViewport(this);
       widget.session.attachViewport(this);
       widget.session.addListener(_onSessionChanged);
+      widget.session.remoteCursorVisibility.addListener(_syncCursorBlink);
       _composerFocusPending = false;
       _cancelDialInertia();
       _controller.clearSelection();
@@ -500,6 +504,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     _observeLinkModifiers(false);
     widget.session.setCursorBlinkPhase(true);
     widget.session.removeListener(_onSessionChanged);
+    widget.session.remoteCursorVisibility.removeListener(_syncCursorBlink);
     widget.session.detachViewport(this);
     terminalFontStore.removeListener(_onFontChanged);
     terminalThemeStore.removeListener(_onFontChanged);
@@ -947,6 +952,7 @@ class _TerminalPanelState extends State<TerminalPanel>
         !widget.readOnly &&
         _focusNode.hasFocus &&
         widget.session.acceptsInput &&
+        widget.session.remoteCursorVisibility.value &&
         (_tickerMode?.value.enabled ?? false) &&
         (lifecycle == null || lifecycle == AppLifecycleState.resumed);
     if (!enabled) {
@@ -968,8 +974,9 @@ class _TerminalPanelState extends State<TerminalPanel>
   void _setCursorBlinkVisible(bool visible) {
     if (visible == _cursorBlinkVisible) return;
     _cursorBlinkVisible = visible;
-    widget.session.setCursorBlinkPhase(visible);
-    _repaintTerminalCursor();
+    if (widget.session.setCursorBlinkPhase(visible)) {
+      _repaintTerminalCursor();
+    }
   }
 
   void _repaintTerminalCursor() {
@@ -2811,10 +2818,36 @@ class _TerminalHeader extends StatelessWidget {
                     // shortened to "…" beside a short name with half the header empty.
                     constraints.maxWidth - titleRoom(),
                   );
-            // The name/status retain space while model and project text yield.
+            // Budget the title's fixed neighbours too. An activity mark and
+            // connection status must not consume the name's entire flex width
+            // when the model/agent controls share a narrow split pane.
+            final hasActivity =
+                harnessActivity(notifier, session.machineId, session.agentId) !=
+                null;
+            final activityWidth = hasActivity
+                ? workspaceBarCellSizeOf(context).width * 2
+                : 0.0;
+            final leadingWidth = leadingStatus
+                ? 34.0
+                : showIdentityMark
+                ? 27.0
+                : 0.0;
+            final statusWidth = status != null && !leadingStatus
+                ? 36.0
+                : starting != null
+                ? 8 +
+                      paneStartingChipWidth(
+                        starting,
+                        MediaQuery.textScalerOf(context),
+                        narrow: narrow,
+                      )
+                : 0.0;
+            final minimumLeftWidth = compact
+                ? 56 + leadingWidth + activityWidth + statusWidth + 8
+                : 99.0;
             final rightWidth = math.min(
               compact ? actionsWidth : desiredRightWidth,
-              math.max(0.0, constraints.maxWidth - (compact ? 56 : 99)),
+              math.max(0.0, constraints.maxWidth - minimumLeftWidth),
             );
             return Row(
               children: [
@@ -3003,6 +3036,7 @@ class _TerminalHeader extends StatelessWidget {
                             constraints: BoxConstraints(maxWidth: badgeWidth),
                             child: PullRequestBadge(
                               compact: narrow,
+                              foreground: notifier.foreground,
                               identity: (
                                 session.machineId,
                                 agent.id,

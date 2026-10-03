@@ -665,3 +665,16 @@ unmerged.
   and [Companions at 200% text](../../docs/research/2026-10-02-experimental-store/companions-light-large-text.png)
   in a narrow light window. These widget renders do not establish native VoiceOver or physical
   IME behavior. The installed desktop app was not replaced.
+
+### Companion memory recovery, 2026-10-03
+
+- A learning notice can open the existing companion terminal from Memories.
+  The action waits while opening, supports explicit retry, preserves the DSH
+  split and ignores stale owner/companion callbacks. Learn and Recall stay as set.
+- [Native fixture renders](../../docs/research/2026-10-03-memory-recovery.md)
+  cover waiting, failed resume and recovery; light/dark narrow VM renders use
+  200% text. The complete native recovery journey and synthetic key delivery
+  passed. The final native run also observed foreground focus; both cases passed.
+  Earlier foreground failures remain documented, with no established cause or
+  production focus fix. Physical AppKit input and VoiceOver remain unverified;
+  no installed app or real companion was changed.

@@ -1,4 +1,5 @@
 name: Release desktop
+run-name: Desktop ${{ inputs.prepare_only && 'candidate' || inputs.test_candidate_reuse && 'promotion check' || inputs.test_publication && 'publication check' || 'release' }} ${{ inputs.version || github.ref_name }}
 
 # Cut a release by pushing a tag:  git tag -a v1.0.51_desktop -F notes.md && git push origin v1.0.51_desktop
 # (or `make release-desktop` from the repo root, which does exactly that).
@@ -11,22 +12,11 @@ name: Release desktop
 # The Flutter project lives under desktop/: the jobs that touch the tree run with
 # working-directory: desktop, and `desktop/scripts/...` below is what `scripts/...` used to mean.
 #
-# Shape (the one autonomous-grid's release.yml uses): every platform builds IN PARALLEL, and the
-# real manifest is written exactly once at the end.
-#
-# metadata.json is a download-modify-reupload, so four jobs each merging their own key would drop
-# each other's. Rather than schedule around that — the first version of this file ran macOS and the
-# two Linux architectures one after another, ~70 minutes of wall clock — each build job is pointed
-# at its OWN scratch manifest under harness/desktop/.ci/<run id>/. Nothing collides because nothing
-# shares a file, the artifacts still go straight to their real paths, and the `publish` job merges
-# those scratch files into the real manifest in a single read-modify-write. ~25 minutes, and the
-# race cannot happen rather than being avoided.
-#
-# desktop/scripts/upload-desktop.sh and desktop/scripts/upload-desktop-linux.sh are used EXACTLY as
-# they are, with no flags this file invented: METADATA_PATH is an env override they already support.
-# macOS reaches upload-desktop.sh through desktop/scripts/publish-macos-variant.sh, which builds, pins
-# the renderer, then calls it with --no-build and that build's keys — a flag and env overrides it
-# already takes.
+# macOS and both Linux architectures build in parallel. The macOS coordinator compiles one
+# universal app, derives both renderer bundles, and packages/notarizes/uploads them in parallel.
+# Each variant writes its own scratch manifest under harness/desktop/.ci/<run id>/.
+# The publish job combines all four parts with a generation-conditional write and verifies every
+# public download while holding the publication lock. Different releases may build concurrently.
 #
 # The tag IS the version — CI never auto-bumps. The scripts bump by reading the current version out
 # of the remote metadata.json, so four jobs left to bump on their own would read the same number
@@ -48,27 +38,41 @@ name: Release desktop
 # manifest references them, but delete gs://<bucket>/harness/desktop/<dry-run-version>/ afterwards.
 
 on:
+  schedule:
+    - cron: '13 4 * * *'  # remove unused candidate packages after seven days
   push:
     tags: ['v*_desktop']
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to publish (X.Y.Z)'
+        description: 'Release or candidate version (X.Y.Z)'
         required: true
       metadata_path:
         description: 'Manifest to write. Leave as-is for a real release; metadata-test.json for a dry run.'
         required: false
         default: harness/desktop/metadata.json
+      test_publication:
+        description: 'Only test publication against disposable fixture objects; no app build or product release'
+        type: boolean
+        default: false
+      prepare_only:
+        description: 'Build and verify a candidate during final validation; publish nothing to users'
+        type: boolean
+        default: false
+      test_candidate_reuse:
+        description: 'Promote a matching candidate to disposable paths, verify and delete it; no product release'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+  actions: read     # authenticate the candidate run and its immutable receipt artifact
   id-token: write   # only used by the Workload Identity Federation variant of the auth steps below
 
 concurrency:
-  # Two releases overlapping would interleave their manifest writes. Never cancelled in progress:
-  # a half-published release leaves the manifest describing one platform's new build beside
-  # another's old one.
-  group: desktop-release
+  # Different versions build concurrently. Only publish+verification takes the
+  # shared manifest lock below; a whole-workflow lock added 4m35s to 1.2.47.
+  group: desktop-release-${{ github.ref }}-${{ inputs.version }}-${{ inputs.prepare_only }}-${{ inputs.test_candidate_reuse }}
   cancel-in-progress: false
 
 env:
@@ -89,11 +93,16 @@ jobs:
   # Resolve and validate before anything expensive starts. A malformed tag fails here in seconds
   # rather than 25 minutes into a notarized build.
   version:
+    if: ${{ github.event_name != 'schedule' && !inputs.test_publication }}
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.resolve.outputs.version }}
       metadata_path: ${{ steps.resolve.outputs.metadata_path }}
       scratch_prefix: ${{ steps.resolve.outputs.scratch_prefix }}
+      artifact_prefix: ${{ steps.resolve.outputs.artifact_prefix }}
+      artifact_base_url: ${{ steps.resolve.outputs.artifact_base_url }}
+      candidate_prefix: ${{ steps.resolve.outputs.candidate_prefix }}
+      test_prefix: ${{ steps.resolve.outputs.test_prefix }}
     steps:
       - id: resolve
         # Through env, never `${{ }}` inline in run:. Git permits quotes, backticks and $() in a
@@ -102,7 +111,14 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_METADATA_PATH: ${{ inputs.metadata_path }}
+          PREPARE_ONLY: ${{ inputs.prepare_only }}
+          TEST_REUSE: ${{ inputs.test_candidate_reuse }}
         run: |
+          set -euo pipefail
+          if [[ "$PREPARE_ONLY" = true && "$TEST_REUSE" = true ]]; then
+            echo '::error::prepare_only and test_candidate_reuse are separate runs'
+            exit 1
+          fi
           # A tag push names the ref "vX.Y.Z_desktop"; workflow_dispatch's input.version is already
           # bare. Strip both so $ver is always X.Y.Z — the suffix routes the tag to this workflow
           # and is never part of the published version.
@@ -113,16 +129,47 @@ jobs:
             exit 1
           fi
           meta="${INPUT_METADATA_PATH:-harness/desktop/metadata.json}"
+          artifact_prefix="harness/desktop/$ver"
+          artifact_base_url=https://cdn.autonomous.ai
+          candidate_prefix=""
+          test_prefix=""
+          if [[ "$PREPARE_ONLY" = true ]]; then
+            candidate_prefix="harness/desktop-candidates/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(openssl rand -hex 16)"
+            artifact_prefix="$candidate_prefix"
+            artifact_base_url="https://storage.googleapis.com/$GCS_BUCKET"
+          elif [[ "$TEST_REUSE" = true ]]; then
+            test_prefix="harness/desktop/.candidate-check/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            meta="$test_prefix/metadata.json"
+            artifact_prefix="$test_prefix/artifacts"
+            artifact_base_url="https://storage.googleapis.com/$GCS_BUCKET"
+          fi
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           echo "metadata_path=$meta" >> "$GITHUB_OUTPUT"
-          echo "scratch_prefix=harness/desktop/.ci/${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
-          echo "Publishing **$ver** to \`$meta\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "scratch_prefix=harness/desktop/.ci/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          echo "artifact_prefix=$artifact_prefix" >> "$GITHUB_OUTPUT"
+          echo "artifact_base_url=$artifact_base_url" >> "$GITHUB_OUTPUT"
+          echo "candidate_prefix=$candidate_prefix" >> "$GITHUB_OUTPUT"
+          echo "test_prefix=$test_prefix" >> "$GITHUB_OUTPUT"
+          echo "Desktop **$ver** · candidate=$PREPARE_ONLY · disposable promotion=$TEST_REUSE" >> "$GITHUB_STEP_SUMMARY"
 
-  # Uploading is the last thing each build job does, ~25 minutes in. Proving the credential now
-  # means a broken one costs seconds. Runs beside `version`, so it is free in wall clock.
+  # Reject duplicate/older versions and broken credentials before expensive builds.
   preflight:
+    needs: version
     runs-on: ubuntu-latest
+    timeout-minutes: 24  # follows an existing candidate for at most its 20-minute budget
+    outputs:
+      reused: ${{ steps.candidate.outputs.reused }}
+      candidate_prefix: ${{ steps.candidate.outputs.candidate_prefix }}
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /.github/actions/setup-gcloud/
+            /scripts/publish-desktop-manifest.py
+            /scripts/verify-desktop-release.py
+            /scripts/desktop-release-candidate.py
+            /scripts/record-ci-validation.py
+          sparse-checkout-cone-mode: false
       # GCP auth, WITHOUT a long-lived key — the same pattern release.yml and production-be-build.yaml
       # already run. A service-account JSON key is a bearer credential with no expiry: it is only as
       # safe as every place it has ever been copied to. Workload Identity Federation replaces it with
@@ -142,7 +189,19 @@ jobs:
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: ./.github/actions/setup-gcloud
+      - name: Reject a version already published or superseded
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          METADATA_PATH: ${{ needs.version.outputs.metadata_path }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "$METADATA_PATH" != harness/desktop/metadata.json ]]; then
+            args+=(--allow-initialize)
+          fi
+          python3 scripts/publish-desktop-manifest.py "$VERSION" \
+            "gs://${GCS_BUCKET}/${METADATA_PATH}" --check-only "${args[@]}"
       - name: Verify GCS write access
         run: |
           set -euo pipefail
@@ -150,29 +209,52 @@ jobs:
           echo "$GITHUB_RUN_ID" | gcloud storage cp - "$probe"
           gcloud storage rm "$probe"
 
-  # BOTH macOS builds, side by side: one universal app built twice, differing only in its renderer
-  # (Intel on Skia, Apple Silicon on Impeller — RELEASE.md, "Two macOS builds"). A macos-15 runner is
-  # Apple Silicon and neither build needs an Intel host: both are universal, and the renderer is an
-  # Info.plist key, not a compile.
+      - name: Reuse a matching verified candidate, or build normally
+        id: candidate
+        if: ${{ !inputs.prepare_only }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          DESTINATION: ${{ needs.version.outputs.artifact_prefix }}
+          SCRATCH_PREFIX: ${{ needs.version.outputs.scratch_prefix }}
+          TEST_REUSE: ${{ inputs.test_candidate_reuse }}
+        run: |
+          args=()
+          [[ "$TEST_REUSE" != true ]] || args+=(--require-candidate)
+          python3 scripts/desktop-release-candidate.py reuse --version "$VERSION" \
+            --destination "$DESTINATION" --scratch "$SCRATCH_PREFIX" "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        if: ${{ hashFiles('desktop-candidate-reuse.json') != '' }}
+        with:
+          name: desktop-candidate-reuse
+          path: desktop-candidate-reuse.json
+
+  # Compile the universal app once, then derive the two renderer bundles. Both
+  # retain arm64+x86_64; their packaging/notarization/uploads run in parallel.
   build-macos:
     needs: [version, preflight]
+    if: needs.preflight.outputs.reused != 'true'
     runs-on: macos-15
     timeout-minutes: 60   # two notarization submissions per build (zip, then dmg) — see RELEASE.md
-    strategy:
-      # Each build writes its own scratch manifest, so they cannot race — and one failing should say
-      # so on its own rather than cancel the other mid-notarization. `publish` needs both either way.
-      fail-fast: false
-      matrix:
-        variant: [intel, apple-silicon]
     env:
-      # The script's own env override, pointed at this build's scratch file instead of the real
-      # manifest. The artifacts still land on their real GCS paths; only the keys land here.
-      METADATA_PATH: ${{ needs.version.outputs.scratch_prefix }}/macos-${{ matrix.variant }}.json
+      MACOS_METADATA_PREFIX: ${{ needs.version.outputs.scratch_prefix }}
+      ARTIFACT_PREFIX: ${{ needs.version.outputs.artifact_prefix }}
+      CDN_ASSET_BASE_URL: ${{ needs.version.outputs.artifact_base_url }}
     defaults:
       run:
         working-directory: desktop
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Keep the entire Desktop component and its shared packaging helpers.
+          # The mobile lock is included only to preserve the existing pub-cache key.
+          sparse-checkout: |
+            /desktop/
+            /.github/actions/
+            /scripts/validate-change.py
+            /scripts/verify-desktop-release.py
+            /mobile/pubspec.lock
+          sparse-checkout-cone-mode: false
 
       # main prepares shared caches. A release only restores: per-tag uploads cannot
       # help the next tag and added 81s after the 1.2.51 macOS build had finished.
@@ -198,19 +280,29 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
+        with:
+          # Avoid copying the SDK into a local cache this hosted job discards.
+          skip_tool_cache: ${{ runner.environment == 'github-hosted' }}
 
       # SIGN_IDENTITY is read twice here: by publish-macos-variant.sh, re-signing the Intel build once
       # it pins the renderer, and by upload-desktop.sh, signing the dmg.
-      - name: Build, sign, notarize and upload macOS (${{ matrix.variant }})
+      - name: Build once, then sign, notarize and upload both macOS variants
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           VERSION: ${{ needs.version.outputs.version }}
-          VARIANT: ${{ matrix.variant }}
         run: |
           set -euo pipefail
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          bash scripts/publish-macos-variant.sh "$VARIANT" "$VERSION"
+          python3 scripts/build-macos-variants.py "$VERSION" \
+            --metadata-prefix "$MACOS_METADATA_PREFIX" --artifact-prefix "$ARTIFACT_PREFIX"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-build-timings
+          path: desktop/build/macos-variants/timing.json
+          if-no-files-found: ignore
 
       # Free on an ephemeral runner; the whole point the day this moves to a self-hosted Mac.
       - name: Remove the signing keychain
@@ -219,6 +311,7 @@ jobs:
 
   build-linux:
     needs: [version, preflight]
+    if: needs.preflight.outputs.reused != 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -235,11 +328,19 @@ jobs:
     env:
       TARGET_ARCH: ${{ matrix.arch }}
       METADATA_PATH: ${{ needs.version.outputs.scratch_prefix }}/linux-${{ matrix.arch }}.json
+      GCS_PATH: ${{ needs.version.outputs.artifact_prefix }}/Harness-linux-${{ matrix.arch }}.AppImage
+      CDN_ASSET_BASE_URL: ${{ needs.version.outputs.artifact_base_url }}
     defaults:
       run:
         working-directory: desktop
     steps:
       - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /desktop/
+            /.github/actions/
+            /mobile/pubspec.lock
+          sparse-checkout-cone-mode: false
 
       - name: Install the Linux desktop toolchain
         run: |
@@ -247,34 +348,17 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev
 
-      # Flutter publishes NO linux-arm64 SDK archive — releases_linux.json carries `x64` and
-      # nothing else — so flutter-action has nothing to download on ubuntu-22.04-arm and fails
-      # outright. Everything it would have unpacked does exist for arm64 (both
-      # linux-arm64/artifacts.zip and dart-sdk-linux-arm64.zip are served for this engine), so the
-      # SAME toolchain is reached by the other route: clone the SDK at the same tag and let
-      # precache pull the artifacts. x64 keeps the action for its cache.
+      # Flutter has no Linux ARM64 SDK archive. Its action installs the same
+      # pinned SDK from Git, verifies the revision, and reuses main's native cache.
       - uses: ./.github/actions/desktop-flutter
         if: matrix.arch != 'arm64'
         with:
           version: ${{ env.FLUTTER_VERSION }}
 
-      - name: Install Flutter from git (arm64 has no published archive)
+      - uses: ./.github/actions/desktop-flutter-arm64
         if: matrix.arch == 'arm64'
-        run: |
-          set -euo pipefail
-          git clone --depth 1 --branch "$FLUTTER_VERSION" \
-            https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
-          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
-
-      # x64 is prepared by the shared action. arm64 has no SDK archive/cache.
-      - name: Verify the toolchain and precache Linux artifacts
-        if: matrix.arch == 'arm64'
-        run: |
-          flutter --version
-          flutter precache --linux
-
-      - if: matrix.arch == 'arm64'
-        run: flutter pub get
+        with:
+          version: ${{ env.FLUTTER_VERSION }}
 
       # appimagetool packages the Linux bundle into the single-file .AppImage the release publishes
       # (see RELEASE.md). --appimage-extract-and-run in upload-desktop-linux.sh means the runner
@@ -295,7 +379,7 @@ jobs:
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: ./.github/actions/setup-gcloud
 
       - name: Build and upload linux-${{ matrix.arch }}
         env:
@@ -305,94 +389,59 @@ jobs:
   # The only job that touches the REAL manifest, and the only one that can, because it is the only
   # one that runs after every build has finished.
   publish:
-    needs: [version, build-macos, build-linux]
+    needs: [version, preflight, build-macos, build-linux]
+    if: ${{ always() && !inputs.prepare_only && needs.version.result == 'success' && needs.preflight.result == 'success' && (needs.preflight.outputs.reused == 'true' || (needs.build-macos.result == 'success' && needs.build-linux.result == 'success')) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 8
+    concurrency:
+      # Include verification: another release must not advance the live manifest
+      # between this publication and its six-download check. GCS's generation
+      # condition also protects against writers outside this workflow.
+      # Keep the historical group so a release already using the older workflow
+      # still serializes with this publisher during the transition.
+      group: desktop-release
+      cancel-in-progress: false
     env:
       METADATA_PATH: ${{ needs.version.outputs.metadata_path }}
       SCRATCH_PREFIX: ${{ needs.version.outputs.scratch_prefix }}
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /.github/actions/setup-gcloud/
+            /scripts/publish-desktop-manifest.py
+            /scripts/verify-desktop-release.py
+          sparse-checkout-cone-mode: false
       - name: Authenticate to GCP (workload identity federation)
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: ./.github/actions/setup-gcloud
 
       - name: Merge every platform's key into the manifest in one write
         run: |
           set -euo pipefail
           mkdir -p parts
           gcloud storage cp "gs://${GCS_BUCKET}/${SCRATCH_PREFIX}/*.json" parts/
-          echo "::group::scratch manifests"; ls -la parts; echo "::endgroup::"
-
-          src="$(mktemp)"; dst="$(mktemp)"
-          if ! gcloud storage cp "gs://${GCS_BUCKET}/${METADATA_PATH}" "$src" 2>/dev/null; then
-            echo "   (no existing manifest at ${METADATA_PATH} — creating a new one)"
-            printf '{}' > "$src"
+          args=()
+          if [[ "$METADATA_PATH" != harness/desktop/metadata.json ]]; then
+            args+=(--allow-initialize)
           fi
-          # Paths through argv, NEVER piped into this heredoc — the heredoc claims stdin, so a pipe
-          # would be silently dropped and the merge would blank the manifest.
-          python3 - "$src" "$dst" parts <<'PY'
-          import json, os, sys
-
-          src, dst, parts = sys.argv[1:4]
-          try:
-              with open(src) as f:
-                  raw = f.read()
-              data = json.loads(raw) if raw.strip() else {}
-          except (OSError, json.JSONDecodeError):
-              data = {}
-          if not isinstance(data, dict):
-              data = {}
-
-          merged = 0
-          for name in sorted(os.listdir(parts)):
-              if not name.endswith(".json"):
-                  continue
-              with open(os.path.join(parts, name)) as f:
-                  part = json.load(f)
-              if not isinstance(part, dict):
-                  sys.exit(f"error: {name} is not a JSON object")
-              for key, entry in part.items():
-                  data[key] = entry
-                  merged += 1
-                  print(f"  {key} -> {entry.get('version')}")
-
-          # An empty merge would quietly re-upload the manifest unchanged and report success, which
-          # is indistinguishable from a release that published nothing.
-          if merged == 0:
-              sys.exit("error: no manifest entries found — did the build jobs upload anything?")
-
-          with open(dst, "w") as f:
-              json.dump(data, f, indent=2)
-              f.write("\n")
-          PY
-          gcloud storage cp --content-type=application/json \
-                 --cache-control="no-cache, no-store, must-revalidate" \
-                 "$dst" "gs://${GCS_BUCKET}/${METADATA_PATH}"
+          python3 scripts/publish-desktop-manifest.py "$VERSION" \
+            "gs://${GCS_BUCKET}/${METADATA_PATH}" --parts parts "${args[@]}"
           echo "Published to \`${METADATA_PATH}\`" >> "$GITHUB_STEP_SUMMARY"
 
-  # Start as soon as the public manifest is live, beside release-page creation.
-  # A green workflow is the six-download verification receipt; do not download them
-  # all again locally just to finish the release task.
-  verify:
-    needs: [version, publish]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
+      # Same worker and publication lock: no extra runner startup and no chance
+      # of another workflow changing the live version during this verification.
       - name: Verify all public artifacts as the updater
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-          METADATA_PATH: ${{ needs.version.outputs.metadata_path }}
         run: |
           python3 scripts/verify-desktop-release.py "$VERSION" \
             --manifest-url "https://storage.googleapis.com/${GCS_BUCKET}/${METADATA_PATH}" \
             --receipt desktop-release-verification.json
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ always() && hashFiles('desktop-release-verification.json') != '' }}
         with:
           name: desktop-release-verification
           path: desktop-release-verification.json
@@ -408,7 +457,9 @@ jobs:
   # disagree with the one the app actually installs. The notes link to the real ones instead.
   github-release:
     needs: [version, publish]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    # success() also inspects skipped ancestors: an explicitly successful
+    # publisher must reach this job even when candidate reuse skipped builds.
+    if: ${{ always() && needs.version.result == 'success' && needs.publish.result == 'success' && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || inputs.test_candidate_reuse) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write   # narrower than the workflow default only here, where a release is created
@@ -416,8 +467,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 1
+          # Notes come from Git objects; no app source or artwork is needed.
+          sparse-checkout: /.github/workflows/release-desktop.yml
+          sparse-checkout-cone-mode: false
 
       - name: Take the release notes from the tag
+        if: github.event_name == 'push'
         env:
           REF_NAME: ${{ github.ref_name }}
           VERSION: ${{ needs.version.outputs.version }}
@@ -475,7 +530,12 @@ jobs:
           EOF
           echo "::group::RELEASE_NOTES.md"; cat RELEASE_NOTES.md; echo "::endgroup::"
 
+      - name: Confirm promotion reaches the release-page stage
+        if: inputs.test_candidate_reuse
+        run: echo 'Promoted packages passed public verification; product Release creation is disabled for this disposable check.'
+
       - uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push'
         with:
           # Three products release from this repo; a raw "v1.2.3_desktop" title reads worse than this.
           name: Harness Desktop ${{ needs.version.outputs.version }}
@@ -485,17 +545,136 @@ jobs:
   # precisely when scratch manifests are left behind — the builds that DID succeed have already
   # written theirs. `if: always()` here means the prefix is cleared whatever happened upstream.
   cleanup:
-    needs: [version, build-macos, build-linux, publish]
-    if: always()
+    needs: [version, preflight, build-macos, build-linux, candidate, publish]
+    if: ${{ always() && needs.version.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /.github/actions/setup-gcloud/
+            /scripts/desktop-release-candidate.py
+            /scripts/record-ci-validation.py
+            /scripts/publish-desktop-manifest.py
+            /scripts/verify-desktop-release.py
+          sparse-checkout-cone-mode: false
       - name: Authenticate to GCP (workload identity federation)
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: ./.github/actions/setup-gcloud
       - name: Remove the scratch manifests
         env:
           SCRATCH_PREFIX: ${{ needs.version.outputs.scratch_prefix }}
         run: gcloud storage rm -r "gs://${GCS_BUCKET}/${SCRATCH_PREFIX}" || true
+      - name: Remove failed or consumed candidate packages and disposable promotion objects
+        env:
+          OWN_CANDIDATE: ${{ needs.version.outputs.candidate_prefix }}
+          REUSED_CANDIDATE: ${{ needs.preflight.outputs.candidate_prefix }}
+          CANDIDATE_RESULT: ${{ needs.candidate.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          TEST_PREFIX: ${{ needs.version.outputs.test_prefix }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$OWN_CANDIDATE" && "$CANDIDATE_RESULT" != success ]]; then
+            python3 scripts/desktop-release-candidate.py remove --prefix "$OWN_CANDIDATE" || true
+          fi
+          if [[ -n "$REUSED_CANDIDATE" && "$PUBLISH_RESULT" = success ]]; then
+            python3 scripts/desktop-release-candidate.py remove --prefix "$REUSED_CANDIDATE"
+          fi
+          if [[ -n "$TEST_PREFIX" ]]; then
+            [[ "$TEST_PREFIX" = "harness/desktop/.candidate-check/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" ]]
+            gcloud storage rm --recursive "gs://${GCS_BUCKET}/${TEST_PREFIX}/"
+          fi
+
+  # Same build/signing path and production updater settings. Only the storage
+  # destination differs. A successful receipt binds six verified generations to
+  # its full producer source tree, Desktop build inputs, version, run and attempt.
+  candidate:
+    needs: [version, build-macos, build-linux]
+    if: ${{ inputs.prepare_only }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /.github/actions/setup-gcloud/
+            /scripts/desktop-release-candidate.py
+            /scripts/record-ci-validation.py
+            /scripts/publish-desktop-manifest.py
+            /scripts/verify-desktop-release.py
+          sparse-checkout-cone-mode: false
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: ./.github/actions/setup-gcloud
+      - name: Verify all six candidate downloads and seal their source identity
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          PREFIX: ${{ needs.version.outputs.candidate_prefix }}
+          SCRATCH_PREFIX: ${{ needs.version.outputs.scratch_prefix }}
+        run: |
+          mkdir -p parts
+          gcloud storage cp "gs://${GCS_BUCKET}/${SCRATCH_PREFIX}/*.json" parts/
+          python3 scripts/desktop-release-candidate.py seal --version "$VERSION" --prefix "$PREFIX" --parts parts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-release-candidate-${{ github.run_attempt }}
+          path: desktop-release-candidate.json
+          if-no-files-found: error
+          retention-days: 7
+
+  expire-candidates:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /.github/actions/setup-gcloud/
+            /scripts/desktop-release-candidate.py
+            /scripts/record-ci-validation.py
+            /scripts/publish-desktop-manifest.py
+            /scripts/verify-desktop-release.py
+          sparse-checkout-cone-mode: false
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: ./.github/actions/setup-gcloud
+      - run: python3 scripts/desktop-release-candidate.py expire
+
+  # This mode exercises actual GCS generation preconditions using tiny fixture
+  # artifacts under its own run prefix. All product build/publish jobs are skipped.
+  publication-test:
+    if: ${{ inputs.test_publication }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /.github/actions/setup-gcloud/
+            /scripts/publish-desktop-manifest.py
+            /scripts/verify-desktop-release.py
+            /scripts/check-desktop-publication-gcs.py
+            /scripts/check-desktop-candidate-gcs.py
+            /scripts/desktop-release-candidate.py
+            /scripts/record-ci-validation.py
+            /scripts/tests/desktop_publication_fixture.py
+            /desktop/scripts/upload-desktop.sh
+            /desktop/scripts/upload-desktop-linux.sh
+          sparse-checkout-cone-mode: false
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: ./.github/actions/setup-gcloud
+      - name: Exercise publication against a disposable GCS prefix
+        run: python3 scripts/check-desktop-publication-gcs.py "$GCS_BUCKET"
+      - name: Exercise candidate sealing, promotion and expiration against disposable objects
+        run: python3 scripts/check-desktop-candidate-gcs.py

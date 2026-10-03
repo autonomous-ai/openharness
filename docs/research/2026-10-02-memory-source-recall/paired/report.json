@@ -1,0 +1,285 @@
+{
+  "schemaVersion": 1,
+  "suite": "memory-evidence-coding-development-v1",
+  "suiteSha256": "ae8cfbe0c3af568f068825df8c056e34c7eaf8280359e19abb6df1634ab03362",
+  "promptSha256": "3dfd8fea7ab2e6600322bf2d3e7e35152813a3fcf9a4586c121a843460f9e6e5",
+  "runnerSha256": "b7ef954b5cf5fee5e1e8628e4b252cdd0ade7ec6388df8b3e2ee4b4f33868d98",
+  "startedAt": "2026-10-02T20:17:40.066Z",
+  "status": "completed",
+  "cases": [
+    {
+      "id": "coding-01823b564b7e",
+      "durationMs": 6546,
+      "promptSha256": "10d691b64a3a736c5128e88c8b67a039f929f0501e2a0cbc5224f07cdc11778f",
+      "answer": {
+        "text": "{\n  \"code\": \"export function updateNetworkConfig(config) {\\n  const updated = { ...config };\\n  if (config.showFailures !== undefined) {\\n    updated.showFailures = true;\\n  }\\n  return updated;\\n}\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 59,
+          "prompt_tokens": 597,
+          "total_tokens": 656,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "code": "export function updateNetworkConfig(config) {\n  const updated = { ...config };\n  if (config.showFailures !== undefined) {\n    updated.showFailures = true;\n  }\n  return updated;\n}"
+      }
+    },
+    {
+      "id": "coding-0aab4f1b2f23",
+      "durationMs": 5137,
+      "promptSha256": "4df1d5e73e9b7185cf2777dd3a798c1a5a4d2d41b5c6f8cc157f10dd3b1b9ec1",
+      "answer": {
+        "text": "```json\n{\n  \"code\": \"export function focusAfter(current, event) {\\n  if (event === 'search_completed') {\\n    return 'search';\\n  }\\n  return current;\\n}\"\n}\n```",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 52,
+          "prompt_tokens": 407,
+          "total_tokens": 459,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "error": "invalid_coding_output"
+    },
+    {
+      "id": "coding-2386fe805c36",
+      "durationMs": 6420,
+      "promptSha256": "b87cf1096ddc4a3ac7005102739c0a951f1548f11b39e9e92a50daf80187f2fb",
+      "answer": {
+        "text": "```json\n{\n  \"code\": \"export function optionsFor(context, options) {\\n  if (context === 'conflict') {\\n    return options.filter((option) => option === 'Cancel' || option === 'Save copy');\\n  }\\n  return [...options];\\n}\"\n}\n```",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 69,
+          "prompt_tokens": 480,
+          "total_tokens": 549,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "error": "invalid_coding_output"
+    },
+    {
+      "id": "coding-3c3e3566608d",
+      "durationMs": 5438,
+      "promptSha256": "dc51b4a3c83c4b02cf1396cc3a1e84dc964cde20c4af99e590002cffab97b353",
+      "answer": {
+        "text": "{\n  \"code\": \"export function navigationState(current, event) {\\n  if (event === 'expand') return 'expanded';\\n  if (event === 'collapse') return 'compact';\\n  return current;\\n}\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 54,
+          "prompt_tokens": 430,
+          "total_tokens": 484,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "code": "export function navigationState(current, event) {\n  if (event === 'expand') return 'expanded';\n  if (event === 'collapse') return 'compact';\n  return current;\n}"
+      }
+    },
+    {
+      "id": "coding-4f8ac504c866",
+      "durationMs": 5299,
+      "promptSha256": "71c5d5be0a23a44c6777cbb71b40a7d0898ed2cda094871856d19af11704331b",
+      "answer": {
+        "text": "```json\n{\n  \"code\": \"export function focusAfter(current, event) {\\n  if (event === 'search_completed') {\\n    return 'search';\\n  }\\n  return current;\\n}\"\n}\n```",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 52,
+          "prompt_tokens": 431,
+          "total_tokens": 483,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "error": "invalid_coding_output"
+    },
+    {
+      "id": "coding-76aba95c6c16",
+      "durationMs": 6169,
+      "promptSha256": "3cfc873799f9dddf589dec628201bf61d573dbf0d05c7d843f6e9ef34ce5ff5d",
+      "answer": {
+        "text": "```json\n{\n  \"code\": \"export function optionsFor(context, options) {\\n  if (context === 'conflict') {\\n    return options.filter((o) => o === 'Cancel' || o === 'Save copy');\\n  }\\n  return options;\\n}\"\n}\n```",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 67,
+          "prompt_tokens": 440,
+          "total_tokens": 507,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "error": "invalid_coding_output"
+    },
+    {
+      "id": "coding-80eef5fd73cd",
+      "durationMs": 8059,
+      "promptSha256": "fcc44adaf2c53beb305a1b6ae251b9276f7d982b45371b564a2e428e2d7504cb",
+      "answer": {
+        "text": "```json\n{\n  \"code\": \"export function keepLog(log, nowMs) {\\n  if (!log.completed) {\\n    return log;\\n  }\\n  const ageMs = nowMs - log.completedAtMs;\\n  const retentionMs = 14 * 86400000;\\n  if (ageMs >= retentionMs) {\\n    return null;\\n  }\\n  return log;\\n}\"\n}\n```",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 101,
+          "prompt_tokens": 433,
+          "total_tokens": 534,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "error": "invalid_coding_output"
+    },
+    {
+      "id": "coding-860dc5243256",
+      "durationMs": 7469,
+      "promptSha256": "6311680c4b22704275439f09715efae3808a305d00c8371bbd9afcd20c4a3b6e",
+      "answer": {
+        "text": "```json\n{\n  \"code\": \"export function updateNetworkConfig(config) {\\n  const updated = { ...config };\\n\\n  if (config.showFailures !== undefined) {\\n    updated.showFailures = true;\\n  }\\n\\n  return updated;\\n}\"\n}\n```",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 66,
+          "prompt_tokens": 690,
+          "total_tokens": 756,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "error": "invalid_coding_output"
+    },
+    {
+      "id": "coding-9b94deb0ddb6",
+      "durationMs": 5867,
+      "promptSha256": "8fcd5c0d7d867c02d5fa5eaa4db2ce077719a29714328a2f21dd6e43cbb6850b",
+      "answer": {
+        "text": "{\n  \"code\": \"export function treeState(current, event) {\\n  if (event === 'start_session') return 'condensed';\\n  if (event === 'expand') return 'expanded';\\n  if (event === 'collapse') return 'condensed';\\n  return current;\\n}\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 71,
+          "prompt_tokens": 340,
+          "total_tokens": 411,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "code": "export function treeState(current, event) {\n  if (event === 'start_session') return 'condensed';\n  if (event === 'expand') return 'expanded';\n  if (event === 'collapse') return 'condensed';\n  return current;\n}"
+      }
+    },
+    {
+      "id": "coding-bb9161f47b4a",
+      "durationMs": 6628,
+      "promptSha256": "4da7184423f313f6c22430a0ed1749976028c274f879d9b00bce0dc738afa7de",
+      "answer": {
+        "text": "{\n  \"code\": \"export function treeState(current, event) {\\n  if (event === 'start_session') return 'condensed';\\n  if (event === 'expand') return 'expanded';\\n  if (event === 'navigate') return 'condensed';\\n  if (event === 'collapse') return 'condensed';\\n  return current;\\n}\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 86,
+          "prompt_tokens": 308,
+          "total_tokens": 394,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "code": "export function treeState(current, event) {\n  if (event === 'start_session') return 'condensed';\n  if (event === 'expand') return 'expanded';\n  if (event === 'navigate') return 'condensed';\n  if (event === 'collapse') return 'condensed';\n  return current;\n}"
+      }
+    },
+    {
+      "id": "coding-bedd962b7b5b",
+      "durationMs": 5529,
+      "promptSha256": "8c6e1066de8d47e5bd283d569d36513f845763dbadf904025d26471ef172df0e",
+      "answer": {
+        "text": "```json\n{\n  \"code\": \"export function navigationState(current, event) {\\n  if (event === 'expand') return 'expanded';\\n  if (event === 'collapse') return 'compact';\\n  return current;\\n}\"\n}\n```",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 59,
+          "prompt_tokens": 395,
+          "total_tokens": 454,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "error": "invalid_coding_output"
+    },
+    {
+      "id": "coding-cd8f4f5057d9",
+      "durationMs": 7435,
+      "promptSha256": "f06af6bfb8b6923ba6ca24674c6f35598fc041f2d566b8d3b354c502f0225e91",
+      "answer": {
+        "text": "```json\n{\n  \"code\": \"export function keepLog(log, nowMs) {\\n  if (!log.completed) {\\n    return log;\\n  }\\n  const ageMs = nowMs - log.completedAtMs;\\n  if (ageMs >= 14 * 86400000) {\\n    return null;\\n  }\\n  return log;\\n}\"\n}\n```",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 92,
+          "prompt_tokens": 403,
+          "total_tokens": 495,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "error": "invalid_coding_output"
+    }
+  ],
+  "inferenceCalls": 12,
+  "limits": {
+    "maxCalls": 12,
+    "perCallMs": 90000,
+    "totalMs": 480000,
+    "maxOutputTokens": 1024,
+    "contextTokens": 16384,
+    "temperature": 0,
+    "seed": 42,
+    "thinking": false,
+    "retries": 0,
+    "tools": "none",
+    "corpus": "synthetic_only"
+  },
+  "limitations": [
+    "Synthetic coding microtasks using the local reference model, not native-framework tasks.",
+    "Frozen development diagnostic, not held-out user histories.",
+    "Frozen assertions and arm/origin labels are never supplied to the model.",
+    "No live memory, selected companion model or native delivery is measured; generated code must be executed separately before any task-success claim."
+  ],
+  "model": {
+    "name": "Qwen3.8-27B-Q4_0",
+    "weightSha256": "ede16c7b36e578ca87a8c70e011e4b4633a32c831c0ce76d0f474582384e671d"
+  },
+  "networkGuard": {
+    "nonLoopbackConnectError": 1
+  },
+  "runtime": {
+    "health": {
+      "status": "ok"
+    },
+    "version": "9870 (2d973636e)"
+  },
+  "workerExit": {
+    "code": 0,
+    "signal": null
+  },
+  "finishedAt": "2026-10-02T20:19:06.602Z"
+}

@@ -52,7 +52,7 @@ import { terminalActivity } from './cable/terminalActivity.js'
 import { MachineListCache, machineListCachePath, withStaleMarker } from './device/machineList.js'
 import { DeviceLink } from './device/deviceLink.js'
 import { DeviceFleet } from './device/deviceFleet.js'
-import { registry, projectDisplayName, sessionDisplayTitle, type RegisteredSession } from './lib/registry.js'
+import { registry, projectDisplayName, sessionDisplayTitle, validTranscriptPath, type RegisteredSession } from './lib/registry.js'
 import { engineSessionTitle } from './lib/sessionTitle.js'
 import { installAmpPlugin, installCodexHooks, installCommandCodeHooks, installCursorHooks, installDevinHooks, installGrokHooks, installAgyHooks, installCopilotHooks, installHermesHooks, installKiloPlugin, installOpencodePlugin, installPiExtension, installSessionHooks } from './lib/hooks.js'
 import { PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
@@ -139,7 +139,8 @@ import { tmuxSupportsSessionEnv, TMUX_SESSION_ENV_MIN } from './lib/tmuxVersion.
 import { clearDeleted, isRecentlyDeleted, markDeleted } from './lib/deletedSessions.js'
 import { terminateDeletedAgent, checkPidRuntime } from './lib/deleteAgentFallback.js'
 import { AgentRestartCoordinator, bypassPermissionFor, restartAgent, type RestartAgentDeps } from './lib/restartAgent.js'
-import { claudeContinuation, findLiveSession, findResumedTranscript } from './lib/sessionRepair.js'
+import { claudeContinuation, claudeProcessSession, findLiveSession, findResumedTranscript } from './lib/sessionRepair.js'
+import { handoffProviderDeps } from './lib/handoffDiscovery.js'
 import { TmuxBackend } from './lib/tmuxBackend.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from './lib/hostTheme.js'
 import { describeAgentCreateFailure, summarizePaneOutput } from './lib/agentCreateDiagnosis.js'
@@ -154,6 +155,7 @@ import { PurgeAgentService } from './lib/purgeAgentService.js'
 import { sessionCheckpoints } from './lib/sessionCheckpoint.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
+import { prepareAgentHandoff } from './lib/agentHandoff.js'
 import { SessionSearchIndex, folderWords, type SearchSource } from './lib/sessionSearch/indexer.js'
 import { ExternalSessions, OpenSessions, processAlive, stopSessionOwner, type SessionOwner } from './lib/sessionSearch/external.js'
 import { externalProviders } from './lib/sessionSearch/externals/index.js'
@@ -264,7 +266,8 @@ import { updateManagedTui } from './tui/manage.js'
 import { startTuiUpdater } from './tui/update.js'
 import { ensureHnLauncher, ensureLauncher, ensureManagedGrid, ensureManagedRuntime, startGridPinRecheck } from './lib/runtimeInstall.js'
 import { readdir, stat } from 'fs/promises'
-import { CodexNormalizer, codexTaskError, lastCodexTurnText } from './engines/codex/normalizer.js'
+import { CodexNormalizer, codexTaskError } from './engines/codex/normalizer.js'
+import { readLastCodexTurnText } from './engines/codex/lastTurn.js'
 import { TurnActivity, type ActivityFrame } from './lib/turnActivity.js'
 import { CodexActivityReader, RuntimeActivityReader, activityRuntimeKey } from './lib/runtimeActivity.js'
 import { codexSubagentResolverFor } from './engines/codex/subagent.js'
@@ -3091,8 +3094,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (s.engine === 'hermes') return lastHermesTurnText(await readHermesMessages(await hermesDbForSession(s), sessionId))
       if (s.engine === 'devin') return lastDevinTurnText(await readDevinMessages(DEVIN_DB, sessionId))
       if (!s.transcriptPath) return null
+      if (s.engine === 'codex') return readLastCodexTurnText(s.transcriptPath)
       const lines = await tailFile(s.transcriptPath, Infinity)
-      if (s.engine === 'codex') return lastCodexTurnText(lines)
       if (s.engine === 'cursor') return lastCursorTurnText(lines)
       if (s.engine === 'muse') return lastMuseTurnText(lines)
       if (s.engine === 'amp') return lastAmpTurnText(lines)
@@ -3127,6 +3130,26 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       default: return undefined
     }
   }
+
+  // "Change agent": the desktop asks for the structured handoff file (lib/agentHandoff.ts) before it
+  // closes the old engine; the new one is then told to read it.
+  // Built ONCE: its discovery keeps "one search per agent" across requests.
+  const handoffDeps = handoffProviderDeps({
+    registry,
+    stopped: {
+      get: (id) => stoppedAgents.get(id),
+      // Every saved record, readable or not (the store's own `list()` skips an unreadable one), so ownership fails closed.
+      ids: () => stoppedAgents.ids(),
+    },
+    mirror,
+    databaseHistory,
+    findLiveSession,
+    claudeProcessSession,
+    isRecentlyDeleted,
+    findResumedTranscript,
+    validTranscriptPath,
+  })
+  backend.handoffProvider = (req) => prepareAgentHandoff(handoffDeps, req)
 
   // Session search: every turn of every conversation on this machine, live and stopped, indexed from
   // its transcript and searched by `session_search` (lib/sessionSearch/). Nothing leaves the machine
@@ -4940,7 +4963,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   backend.pairControl = pairControl
   // THE PAIR HARNESS (pair/pairHarness.ts): the daemon as a conversation, started or resumed when you talk
-  // to it, stopped when idle. Automatic approvals, scoped harnessd MCP, a fresh token every launch.
+  // to it, stopped when idle unless coding memory still uses it. Automatic approvals, scoped harnessd
+  // MCP, a fresh token every launch.
   const pairHarness = new PairHarness({
     pairedDaemon: () => pairSensor.pairedDaemon(),
     pairedName: () => pairSensor.pairedName(),
@@ -4994,6 +5018,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const sessionId = registry.resolve(agentId)?.sessionId
       return !!sessionId && mirror.isBusy(sessionId)
     },
+    backgroundInUse: (agentId): boolean => agentId === pairHarness.agentId() && !!codingMemory?.needsCompanion(),
     now: Date.now,
   })
   pairTalk = (text, uid) => pairHarness.talk(text, uid)
@@ -6604,7 +6629,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       permissionMode: source.permissionMode ?? null,
       defaultName: name ?? forkName(sourceName),
       label: dshLabel,
-      forkedFrom: { agentId: source.agentId, name: sourceName },
+      // The session being forked from, so a Change agent right after the fork reads exactly that conversation.
+      forkedFrom: {
+        agentId: source.agentId, name: sourceName,
+        ...(source.sessionId ? { sessionId: source.sessionId, ...(source.transcriptPath ? { transcriptPath: source.transcriptPath } : {}) } : {}),
+      },
     })
     if (!result.ok) return { ok: false, error: result.error, detail: result.detail }
     const { spawned, pending } = result

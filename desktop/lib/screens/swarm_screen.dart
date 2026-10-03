@@ -583,6 +583,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.changeCompanionAgent = _changeCompanionAgent;
     app.canChangeCompanionAgent = _canChangeCompanionAgent;
     app.openAgentPicker = _openPaneAgents;
+    app.agentChangeNotice = _showPaneActionHint;
     _keymap.addListener(_keymapChanged);
     app.hasNavigationRail = false;
     app.railFocused = false;
@@ -801,6 +802,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       app.canChangeCompanionAgent = null;
     }
     if (app.openAgentPicker == _openPaneAgents) app.openAgentPicker = null;
+    if (app.agentChangeNotice == _showPaneActionHint) {
+      app.agentChangeNotice = null;
+    }
     linuxTitleBarActions.detach(this);
     _closeDaemonHint();
     app.foreground.removeListener(_daemonEnvironmentChanged);
@@ -841,7 +845,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _unregisterHatch?.call();
     _hatchOverlay?.remove();
     _hatchOverlay?.dispose();
-    _dismissMachinePrompt();
     _unregisterModels?.call();
     _modelsOverlay?.remove();
     _modelsOverlay?.dispose();
@@ -898,6 +901,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       unawaited(_menuBus.send('update', {'tabs': [], 'enabled': false}));
     }
     if (widget.projectStore == null) _projects.dispose();
+    // Dismissing notifies app listeners. Detach our views and catalogs first so
+    // that notification cannot rebuild an element already being unmounted.
+    _dismissMachinePrompt();
     super.dispose();
   }
 
@@ -1798,7 +1804,25 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (widget.chrome?.showsKeyHints != false) ?_keymap.hint(command),
   ].join(' · ');
 
+  bool _nativeSyncQueued = false;
+
   void _syncNative() {
+    if (_nativeSyncQueued) return;
+    _nativeSyncQueued = true;
+    // One app change can notify the workspace, monitor, and notices together.
+    // Read the latest state once after those synchronous listeners finish;
+    // don't wait for a frame or slow terminal input with a debounce timer.
+    scheduleMicrotask(() {
+      _nativeSyncQueued = false;
+      if (!mounted) return;
+      _flushNative();
+    });
+  }
+
+  void _flushNative() {
+    // Another listener may have captured rows before the last inventory change
+    // in this turn. This payload must consistently describe the final state.
+    _sessionsThisTick = null;
     _syncMachines();
     final monitor = _harnessMonitor;
     final focused = WorkspacePaneContext.focused(app);
@@ -1880,7 +1904,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
           ],
         },
       'footerCovered':
-          !_showWorkspaceFooter ||
           (!_routeIsCurrent && !_footerPreviewCurrent) ||
           (_newHarnessOverlay != null && !_newHarnessHidden) ||
           _searchOverlay != null,
@@ -4191,6 +4214,31 @@ class _SwarmScreenState extends State<SwarmScreen> {
     return result;
   }
 
+  bool get _canOpenCompanionTerminal =>
+      mounted &&
+      _creatureEnabled &&
+      _zoo.loaded &&
+      !_zoo.isPreview &&
+      _zoo.paired != null &&
+      _brain.active &&
+      _companionOpeningKey == null;
+
+  VoidCallback? _companionConversationAction() {
+    if (!_canOpenCompanionTerminal) return null;
+    final key = '${_zoo.scope}:${_zoo.paired!.uid}';
+    final machineId = app.localMachineState?.machine.machineId;
+    return () {
+      if (!_canOpenCompanionTerminal ||
+          key != '${_zoo.scope}:${_zoo.paired?.uid}' ||
+          machineId != app.localMachineState?.machine.machineId) {
+        return;
+      }
+      _companionAttemptedKey = null;
+      _focusCompanionTerminal = true;
+      _scheduleCompanionWorkspace();
+    };
+  }
+
   Widget _companionViewer(BuildContext context) => !_zoo.loaded
       ? const Center(child: Text('Opening your collection…'))
       : CompanionHome(
@@ -4207,13 +4255,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
               (_companionOpeningKey != null
                   ? 'Opening your companion’s terminal…'
                   : null),
-          onOpenConversation: _companionTerminalError == null
-              ? null
-              : () {
-                  _companionAttemptedKey = null;
-                  _focusCompanionTerminal = true;
-                  _scheduleCompanionWorkspace();
-                },
+          onOpenConversation: _companionConversationAction(),
+          openingConversation: _companionOpeningKey != null,
           dial: app.dial,
           onDeviceSettings: app.setDeviceSettings,
         );
@@ -7093,15 +7136,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
                         ],
                       ),
                     ),
-                    if (_showWorkspaceFooter)
-                      MediaQuery.withNoTextScaling(
-                        child: _native
-                            ? SizedBox(
-                                key: const ValueKey('workspace-status-bar'),
-                                height: _statusBarHeight,
-                              )
-                            : _statusBar(),
-                      ),
+                    MediaQuery.withNoTextScaling(
+                      child: _native
+                          ? SizedBox(
+                              key: const ValueKey('workspace-status-bar'),
+                              height: _statusBarHeight,
+                            )
+                          : _statusBar(),
+                    ),
                   ],
                 ),
               ),
@@ -7211,18 +7253,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   // Include the pane's former bottom gutter in this row, so its controls sit
   // halfway between the pane edge and window bottom. Pane height is unchanged.
-  bool get _showWorkspaceFooter =>
-      !newHarnessOpensInBox ||
-      _harnessMonitor.live.isNotEmpty ||
-      app.panes.isNotEmpty ||
-      app.activeSwarm.isStore ||
-      app.activeSwarm.isDevices ||
-      app.activeSwarm.isOrchestrator ||
-      _footerPreviewCurrent;
-
-  double get _statusBarHeight => _showWorkspaceFooter
-      ? workspaceBarControlHeight(context) + kWorkspaceInset
-      : 0;
+  // Keep inventory controls discoverable on the first, empty welcome screen.
+  double get _statusBarHeight =>
+      workspaceBarControlHeight(context) + kWorkspaceInset;
 
   Widget _statusBar() {
     final compactFooter = widget.chrome?.compactFooter;

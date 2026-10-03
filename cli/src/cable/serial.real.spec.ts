@@ -11,6 +11,20 @@ import { expect, it } from 'vitest'
 
 const hasPty = process.platform !== 'win32' && spawnSync('python3', ['-c', 'import pty']).status === 0
 
+it.skipIf(!hasPty || process.platform !== 'darwin')('arbitrates competing macOS serial owners and releases the claim after a crash', async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'serial-claim-'))
+  try {
+    const worker = join(scratch, 'serial-claim.mjs')
+    await build({
+      entryPoints: [fileURLToPath(new URL('./__fixtures__/serialClaim.ts', import.meta.url))],
+      outfile: worker, bundle: true, platform: 'node', format: 'esm', target: 'node20',
+    })
+    const driver = fileURLToPath(new URL('./__fixtures__/serialClaim.py', import.meta.url))
+    const { stdout } = await promisify(execFile)('python3', [driver, process.execPath, worker], { timeout: 12000 })
+    expect(stdout).toContain('exclusive claim, orderly handoff and crash recovery passed')
+  } finally { await rm(scratch, { recursive: true, force: true }) }
+}, 15000)
+
 it.skipIf(!hasPty)('keeps DNS and file I/O working across repeated silent tty closes with one worker', async () => {
   const scratch = await mkdtemp(join(tmpdir(), 'serial-idle-'))
   // The master stays open and sends nothing. This exercises the real kernel tty and native reads,

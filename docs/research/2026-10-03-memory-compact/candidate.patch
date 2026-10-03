@@ -1,0 +1,141 @@
+diff --git a/cli/src/memory/extractionEvidence.spec.ts b/cli/src/memory/extractionEvidence.spec.ts
+index 6cadadb5c..54a0aff4c 100644
+--- a/cli/src/memory/extractionEvidence.spec.ts
++++ b/cli/src/memory/extractionEvidence.spec.ts
+@@ -1,7 +1,7 @@
+ import { expect, it } from 'vitest'
+ import { extractionSources, resolveExtractionProposals } from './extractionEvidence.js'
+ import { admission } from './admission.js'
+-import { MemoryError, type MemoryDraft, type SourceEvent } from './types.js'
++import { draftSchema, MemoryError, type MemoryDraft, type SourceEvent } from './types.js'
+
+ const source: SourceEvent = { id: 'source', profileId: 'owner', projectId: 'project', engine: 'codex',
+   sessionId: 'session', nativeEventId: 'event', role: 'user', eligibility: 'coding', observedAt: 1,
+@@ -15,6 +15,39 @@ const draft: MemoryDraft = { scope: { profileId: 'owner', projectId: 'project' }
+ const reference = { ref: 's0p0', paths: draft.evidence[0].paths }
+ const answer = (evidence: unknown[] = [reference]) => ({ proposals: [{ ...draft, evidence }] })
+
++it('expands omitted empty fields only in the reference response, keeping stored records complete', () => {
++  const { rationale: _rationale, exceptions: _exceptions, validity: _validity, ...compact } = draft
++  const [resolved] = resolveExtractionProposals({ proposals: [{ ...compact, evidence: [reference] }] }, [source])
++  expect(resolved).toEqual(draft)
++  expect(admission(resolved, new Map([[source.id, source]]))).toBeDefined()
++  expect(draftSchema.safeParse(compact).success).toBe(false)
++  expect(() => resolveExtractionProposals({ proposals: [compact] }, [source])).toThrow(MemoryError)
++})
++
++it('keeps supplied reasons, conditions, exceptions and validity subject to evidence coverage', () => {
++  const conditional = { ...draft, rationale: 'Keep deployments simple.', applicability: { taskType: 'new_service' },
++    exceptions: [{ when: { taskType: 'embedded' }, reason: 'Use SQLite for embedded services.' }],
++    validity: { validFrom: 1, validUntil: 100, recheckWhen: ['When the deployment target changes.'] } }
++  const paths = [...reference.paths, '/rationale', '/exceptions', '/validity']
++  const [resolved] = resolveExtractionProposals({ proposals: [{ ...conditional, evidence: [{ ...reference, paths }] }] }, [source])
++  expect(resolved).toEqual({ ...conditional, evidence: [{ ...draft.evidence[0], paths }] })
++  // Structural coverage is necessary but does not certify this fixture's semantic claims.
++  expect(admission(resolved, new Map([[source.id, source]]))).toBeDefined()
++  expect(() => admission({ ...resolved, evidence: draft.evidence }, new Map([[source.id, source]])))
++    .toThrow(new MemoryError('evidence_coverage'))
++})
++
++it.each(['scope', 'applicability', 'futureAction', 'evidence'] as const)('does not default missing %s', field => {
++  const incomplete = { ...draft, evidence: [reference] } as Record<string, unknown>
++  delete incomplete[field]
++  expect(() => resolveExtractionProposals({ proposals: [incomplete] }, [source])).toThrow(MemoryError)
++})
++
++it.each([{ exceptions: null }, { validity: null }, { rationale: '' }])('rejects invalid optional values: %j', override => {
++  expect(() => resolveExtractionProposals({ proposals: [{ ...draft, evidence: [reference], ...override }] }, [source]))
++    .toThrow(MemoryError)
++})
++
+ it.each([
+   source.text,
+   'a'.repeat(3999) + '🌱' + 'b'.repeat(4001),
+diff --git a/cli/src/memory/extractionEvidence.ts b/cli/src/memory/extractionEvidence.ts
+index 08bf14fa6..c219c6c53 100644
+--- a/cli/src/memory/extractionEvidence.ts
++++ b/cli/src/memory/extractionEvidence.ts
+@@ -8,11 +8,18 @@ const referenceSchema = z.object({
+
+ // References are an inference format only. Resolve them before applying every persisted-draft
+ // refinement and the queue's existing source, coverage, role and authorization checks.
+-const referenceDraft = z.object({ ...draftSchema.shape, evidence: z.array(referenceSchema).min(1).max(16) }).strict()
++const referenceDraft = z.object({ ...draftSchema.shape,
++  rationale: draftSchema.shape.rationale.optional(),
++  exceptions: draftSchema.shape.exceptions.optional(),
++  validity: draftSchema.shape.validity.optional(),
++  evidence: z.array(referenceSchema).min(1).max(16),
++}).strict()
+ export const extractionOutputSchema = z.object({ proposals: z.array(referenceDraft).max(8) }).strict()
+-const answerSchema = z.object({ proposals: z.array(z.object({ ...draftSchema.shape,
++// Previously supported exact quotes and mixed evidence retain the full field contract.
++const legacyDraft = z.object({ ...draftSchema.shape,
+   evidence: z.array(z.union([referenceSchema, evidenceSchema])).min(1).max(16),
+-}).strict()).max(8) }).strict()
++}).strict()
++const answerSchema = z.object({ proposals: z.array(z.union([referenceDraft, legacyDraft])).max(8) }).strict()
+
+ /** Keep source text byte-for-byte, including separators, and never split a UTF-16 surrogate pair. */
+ function excerpts(text: string): string[] {
+@@ -48,6 +55,11 @@ export function resolveExtractionProposals(answer: unknown, sources: readonly So
+   }] as const)))
+   const result = parse(answerSchema, answer)
+   return result.proposals.map(proposal => parse(draftSchema, { ...proposal,
++    // Only empty/unknown values may be omitted from the inference format. Conditions and
++    // their evidence coverage remain mandatory; supplied material fields are never removed.
++    rationale: proposal.rationale ?? null,
++    exceptions: proposal.exceptions ?? [],
++    validity: proposal.validity ?? { validFrom: null, validUntil: null, recheckWhen: [] },
+     evidence: proposal.evidence.map(evidence => {
+       // Preserve strict exact-quote admission for previously supported raw evidence as well.
+       if (!('ref' in evidence)) return evidence
+diff --git a/cli/src/memory/learner.spec.ts b/cli/src/memory/learner.spec.ts
+index 8fa61f628..fc48caafa 100644
+--- a/cli/src/memory/learner.spec.ts
++++ b/cli/src/memory/learner.spec.ts
+@@ -173,6 +173,17 @@ it('does not relax exact-quote matching for legacy model answers', async () => {
+   expect(store.list(access)).toEqual([])
+ })
+
++it('stores a compact reference answer with full defaults while preserving the supplied reason and conditions', async () => {
++  const { exceptions: _exceptions, validity: _validity, ...compact } = proposal
++  const provider = inference(JSON.stringify({ proposals: [{ ...compact,
++    evidence: [{ ref: 's0p0', paths: proposal.evidence[0].paths }] }] }))
++  expect(await new MemoryLearner(memory, provider).tick()).toEqual({ state: 'learned', learned: 1 })
++  const [record] = store.list(access)
++  expect(record).toMatchObject(proposal)
++  expect(record.evidence[0].quote).toBe(event.text)
++  expect(store.learning.status().callsLastHour).toBe(1)
++})
++
+ it('rejects an unknown reference atomically, retaining sources without saving earlier valid proposals', async () => {
+   const answer = [proposal, { ...proposal, evidence: [{ ref: 's9p0', paths: proposal.evidence[0].paths }] }]
+   expect(await new MemoryLearner(memory, inference(JSON.stringify({ proposals: answer }))).tick())
+diff --git a/cli/src/memory/learner.ts b/cli/src/memory/learner.ts
+index 56aa12ec1..62124111f 100644
+--- a/cli/src/memory/learner.ts
++++ b/cli/src/memory/learner.ts
+@@ -8,7 +8,7 @@ import { extractionOutputSchema, extractionSources, resolveExtractionProposals }
+ import { inferenceWaitReason } from './inferenceStatus.js'
+
+ const outputSchema = JSON.stringify(z.toJSONSchema(extractionOutputSchema, { io: 'input' }))
+-export const EXTRACTION_PROMPT_VERSION = 'coding-memory-v6'
++export const EXTRACTION_PROMPT_VERSION = 'coding-memory-v9'
+ export const NOTEBOOK_PROMPT_VERSION = 'coding-notebook-v1'
+ const notebookOutputSchema = JSON.stringify(z.toJSONSchema(notebookProposalSchema, { io: 'input' }))
+ export interface MemoryInferenceRunOptions {
+@@ -45,10 +45,11 @@ ${lease.access.projectIds.length === 0 ? 'No project is bound. Keep only explici
+ Field contract:
+ - scope: copy authorized IDs; omit unknown optional IDs. Do not return record id, revision, schemaVersion, state, createdAt, updatedAt, authority or confidence. conflictKey IS required: a short stable topic identifier, reusing an existing one for the same decision or preference.
+ - claim: the supported statement. futureAction: a nonempty string describing the supported future behavior. Preserve defaults and exceptions; a preference is not an absolute requirement.
+-- rationale: only the stated reason for the choice, otherwise null. A scope, exception or request to remember is not a reason.
++- rationale: include the stated reason for the choice; otherwise omit (Harness fills null). A scope, exception or request to remember is not a reason.
+ - applicability: {} unless the quoted text explicitly limits when the memory applies. A coding topic is not a task condition. Do not insert implementation as a default task type. A repository-wide decision needs only project scope, not an extra taskType condition.
+-- exceptions: [] unless the source states a conditional exception. Project scope is not an exception.
+-- validity: {"validFrom":null,"validUntil":null,"recheckWhen":[]} unless the text establishes dates or recheck conditions. observedAt is a capture timestamp, not the start of a preference.
++- exceptions: include every conditional exception stated by the source; otherwise omit (Harness fills []). Project scope is not an exception.
++- validity: include {"validFrom":null,"validUntil":null,"recheckWhen":[]} with any dates or recheck conditions established by the text; otherwise omit (Harness fills that empty value). observedAt is a capture timestamp, not the start of a preference.
++- Omit only empty/unknown rationale, exceptions and validity. Never omit a supported reason, condition, exception or validity limit to shorten the response. applicability and its evidence coverage remain required even when {}.
+ - details is optional; omit unknown fields. Verification comes only from supplied source metadata, never an invented check.
+ - evidence: select supplied excerpt refs using {"ref":"s0p0","paths":["/claim","/futureAction","/applicability"]}. Harness copies the exact original text, source ID and any captured verification. Do not copy or rewrite quotes, source IDs or verification into evidence. Excerpt boundaries do not change the source's role or scope. Read the surrounding excerpts and cite all passages needed to preserve conditions and exceptions.
+ - evidence[].paths: JSON pointers into THIS PROPOSED MEMORY, never into the source. Each proposal needs /claim, /futureAction and /applicability coverage (including {}), plus /rationale when not null and /exceptions, /details or /validity when material. Never use /text or /root. Each selected excerpt must support the fields it cites.

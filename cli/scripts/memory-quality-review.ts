@@ -29,9 +29,10 @@ try {
   const result = files.has('--review') ? scoreEvaluationReview(suite, report, await read(files.get('--review')!))
     : prepareEvaluationReview(suite, report)
   const hash = async (url: URL) => createHash('sha256').update(await read(fileURLToPath(url))).digest('hex')
-  const producer = { protocol: 'coding-memory-quality-review-v1', node: process.version,
+  const producer = { protocol: 'coding-memory-quality-review-v2', node: process.version,
     runnerSha256: await hash(new URL(import.meta.url)),
-    scorerSha256: await hash(new URL('../src/memory/evaluationReview.ts', import.meta.url)) }
+    scorerSha256: await hash(new URL('../src/memory/evaluationReview.ts', import.meta.url)),
+    contextValidatorSha256: await hash(new URL('../src/memory/evaluationContext.ts', import.meta.url)) }
   // Never overwrite an earlier result or print source conversations to the terminal.
   await writeFile(files.get('--output')!, `${JSON.stringify({ ...result, producer }, null, 2)}\n`, { mode: 0o600, flag: 'wx' })
   console.log(JSON.stringify({ status: 'written', kind: files.has('--review') ? 'review_scores' : 'review_packet',

@@ -1,0 +1,65 @@
+{
+  "engine": "claude",
+  "version": "2.1.287 (Claude Code)",
+  "code": 0,
+  "interactive": false,
+  "nativeContextVerified": true,
+  "exactContextVerified": true,
+  "contextSha256": "2c873249e1a88de798f235852549eaef02b6ee3129049016b6d2c7fb125a8877",
+  "contextType": "coding_memory_sources",
+  "hooks": [
+    {
+      "route": "/api/hook/session-start",
+      "event": "UserPromptSubmit",
+      "engine": "claude",
+      "receipt": false
+    },
+    {
+      "route": "/api/hook/memory-emitted",
+      "engine": "claude",
+      "receipt": true
+    }
+  ],
+  "requests": [
+    {
+      "route": "/v1/messages",
+      "contextReceived": true,
+      "exactContextReceived": true,
+      "contextRoles": [
+        "user"
+      ],
+      "promptReceived": true,
+      "tools": []
+    }
+  ],
+  "events": [
+    {
+      "type": "system",
+      "subtype": "hook_started"
+    },
+    {
+      "type": "system",
+      "subtype": "hook_response"
+    },
+    {
+      "type": "system",
+      "subtype": "init"
+    },
+    {
+      "type": "assistant"
+    },
+    {
+      "type": "system",
+      "subtype": "informational"
+    },
+    {
+      "type": "result",
+      "subtype": "success"
+    }
+  ],
+  "diagnostics": {
+    "stdioCaptured": true,
+    "hookTrustNeeded": false,
+    "stderrPresent": false
+  }
+}

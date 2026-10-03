@@ -1,0 +1,148 @@
+{
+  "schemaVersion": 1,
+  "suite": "memory-source-only-coding-development-v1",
+  "suiteSha256": "6749c1751b864f83f9f769a5fcb838a7807acdd4aaca81de9d178728a5bc1511",
+  "promptSha256": "3dfd8fea7ab2e6600322bf2d3e7e35152813a3fcf9a4586c121a843460f9e6e5",
+  "runnerSha256": "08e42aa37b95b470fe317706f0c7c506e5a191680d4cb076e2d5e058791b03e7",
+  "startedAt": "2026-10-02T20:26:17.173Z",
+  "status": "completed",
+  "cases": [
+    {
+      "id": "coding-01064a1f9325",
+      "durationMs": 5789,
+      "promptSha256": "c27404c1f23c1273cd007f04dd6bc8d66efb4eb5105f50bd75d99ff5c10c4d25",
+      "answer": {
+        "text": "```json\n{\n  \"code\": \"export function optionsFor(context, options) {\\n  if (context === 'conflict') {\\n    return options.filter((o) => o === 'Cancel' || o === 'Save copy');\\n  }\\n  return options;\\n}\"\n}\n```",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 67,
+          "prompt_tokens": 367,
+          "total_tokens": 434,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "error": "invalid_coding_output"
+    },
+    {
+      "id": "coding-0e52209298ff",
+      "durationMs": 5563,
+      "promptSha256": "b67306e51f090d2d2d534e36d12963f6e040b26b1876bea9a8d7512bf09749d9",
+      "answer": {
+        "text": "{\n  \"code\": \"export function treeState(current, event) {\\n  if (event === 'start_session') return 'condensed';\\n  if (event === 'expand') return 'expanded';\\n  if (event === 'collapse') return 'condensed';\\n  return current;\\n}\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 71,
+          "prompt_tokens": 287,
+          "total_tokens": 358,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "code": "export function treeState(current, event) {\n  if (event === 'start_session') return 'condensed';\n  if (event === 'expand') return 'expanded';\n  if (event === 'collapse') return 'condensed';\n  return current;\n}"
+      }
+    },
+    {
+      "id": "coding-10df35bf881b",
+      "durationMs": 6310,
+      "promptSha256": "c9398fb15d71e029408fef77966325c16ab0e65e0a7616dd5945591404f0dc3a",
+      "answer": {
+        "text": "```json\n{\n  \"code\": \"export function updateNetworkConfig(config) {\\n  const updated = { ...config };\\n  if (config.showFailures !== undefined) {\\n    updated.showFailures = true;\\n  }\\n  return updated;\\n}\"\n}\n```",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 64,
+          "prompt_tokens": 506,
+          "total_tokens": 570,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "error": "invalid_coding_output"
+    },
+    {
+      "id": "coding-5178789fad4b",
+      "durationMs": 6432,
+      "promptSha256": "e015d307d3c8b5d08d11ab5fa31fa7a2f9f526e478758ea20d13907275e386ef",
+      "answer": {
+        "text": "{\n  \"code\": \"export function navigationState(current, event) {\\n  if (event === 'start_visit') return 'compact';\\n  if (event === 'expand') return 'expanded';\\n  if (event === 'collapse') return 'compact';\\n  if (event === 'navigate') return current;\\n  return current;\\n}\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 81,
+          "prompt_tokens": 349,
+          "total_tokens": 430,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "code": "export function navigationState(current, event) {\n  if (event === 'start_visit') return 'compact';\n  if (event === 'expand') return 'expanded';\n  if (event === 'collapse') return 'compact';\n  if (event === 'navigate') return current;\n  return current;\n}"
+      }
+    },
+    {
+      "id": "coding-684f8bce121a",
+      "durationMs": 4848,
+      "promptSha256": "2f75d4af8a3df6a9bdba3581816673c0f071992720c23c8f405292e5dd08f4ed",
+      "answer": {
+        "text": "```json\n{\n  \"code\": \"export function focusAfter(current, event) {\\n  if (event === 'search_completed') {\\n    return 'search';\\n  }\\n  return current;\\n}\"\n}\n```",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 52,
+          "prompt_tokens": 347,
+          "total_tokens": 399,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "error": "invalid_coding_output"
+    }
+  ],
+  "inferenceCalls": 5,
+  "limits": {
+    "maxCalls": 5,
+    "perCallMs": 90000,
+    "totalMs": 480000,
+    "maxOutputTokens": 1024,
+    "contextTokens": 16384,
+    "temperature": 0,
+    "seed": 42,
+    "thinking": false,
+    "retries": 0,
+    "tools": "none",
+    "corpus": "synthetic_only"
+  },
+  "limitations": [
+    "Synthetic coding microtasks using the local reference model, not native-framework tasks.",
+    "Frozen development diagnostic, not held-out user histories.",
+    "Frozen assertions and arm/origin labels are never supplied to the model.",
+    "No live memory, selected companion model or native delivery is measured; generated code must be executed separately before any task-success claim."
+  ],
+  "model": {
+    "name": "Qwen3.8-27B-Q4_0",
+    "weightSha256": "ede16c7b36e578ca87a8c70e011e4b4633a32c831c0ce76d0f474582384e671d"
+  },
+  "networkGuard": {
+    "nonLoopbackConnectError": 1
+  },
+  "runtime": {
+    "health": {
+      "status": "ok"
+    },
+    "version": "9870 (2d973636e)"
+  },
+  "workerExit": {
+    "code": 0,
+    "signal": null
+  },
+  "finishedAt": "2026-10-02T20:26:55.963Z"
+}

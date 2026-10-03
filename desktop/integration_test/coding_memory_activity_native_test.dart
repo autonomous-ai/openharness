@@ -30,7 +30,7 @@ void main() {
 
   for (final brightness in [Brightness.dark, Brightness.light]) {
     testWidgets(
-      'native activity ${brightness.name} rates a selection and removes it after empty recall',
+      'native memory ${brightness.name} rates recall and explains stalled learning',
       (tester) async {
         final connection = MemoryFixture()..recalls.add(syntheticRecall());
         final library = CodingMemoryLibrary(connection);
@@ -114,6 +114,73 @@ void main() {
           find.text('No memories were selected for the last recorded request.'),
           findsOneWidget,
         );
+        connection.runtime = {
+          'state': 'ready',
+          'learning': {'state': 'waiting_for_model'},
+          'capture': {'state': 'unavailable', 'reason': 'memory_backlog_full'},
+        };
+        await library.refresh();
+        await tester.pumpAndSettle();
+        expect(find.text('Learning needs attention'), findsOneWidget);
+        final review = find.text('Review learning');
+        await tester.ensureVisible(review);
+        Focus.of(tester.element(review)).requestFocus();
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(find.text('Learn from coding sessions'), findsOneWidget);
+        expect(find.textContaining('queue is full'), findsOneWidget);
+        expect(
+          connection.calls.where((p) => p['action'] == 'apply'),
+          hasLength(1),
+        );
+        if (directory != null) {
+          final shot =
+              await (boundary.currentContext!.findRenderObject()
+                      as RenderRepaintBoundary)
+                  .toImage(pixelRatio: 1);
+          try {
+            final bytes = await shot.toByteData(format: ui.ImageByteFormat.png);
+            await File('$directory/learning-native-${brightness.name}.png')
+                .writeAsBytes(bytes!.buffer.asUint8List());
+          } finally {
+            shot.dispose();
+          }
+        }
+        connection.runtime = {
+          'state': 'ready',
+          'learning': {
+            'state': 'waiting_for_model',
+            'reason': 'inference_provider_restricted',
+          },
+        };
+        await library.refresh();
+        await tester.pumpAndSettle();
+        expect(
+          find.textContaining('provider declined background learning'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('Choose another model'), findsOneWidget);
+        expect(connection.learn, isTrue);
+        expect(connection.recall, isTrue);
+        expect(
+          connection.calls.where((p) => p['action'] == 'apply'),
+          hasLength(1),
+        );
+        if (directory != null) {
+          final shot =
+              await (boundary.currentContext!.findRenderObject()
+                      as RenderRepaintBoundary)
+                  .toImage(pixelRatio: 1);
+          try {
+            final bytes = await shot.toByteData(format: ui.ImageByteFormat.png);
+            await File(
+              '$directory/provider-refusal-native-${brightness.name}.png',
+            ).writeAsBytes(bytes!.buffer.asUint8List());
+          } finally {
+            shot.dispose();
+          }
+        }
         expect(tester.takeException(), isNull);
       },
     );

@@ -17,6 +17,7 @@ trap 'rm -rf "$out"' EXIT
 python3 "$here/../scripts/gen_cable_vectors.py" --check
 python3 "$here/../scripts/gen_tux_moods.py" --check
 python3 "$here/../scripts/gen_pets.py" --check
+python3 "$here/../scripts/gen_arc_geometry.py" --check
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
    -o "$out/test_character" "$here/test_character.c" \
@@ -58,16 +59,19 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bou
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
    -o "$out/test_arc_pixels" "$here/test_arc_pixels.c" \
+   "$here/../main/ui/habitat/focus_faces.c" "$here/../main/ui/habitat/lvgl_fonts.c" \
    "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
 "$out/test_arc_pixels"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
    -I "$here/../main/ui/habitat" -o "$out/test_arc_storage" "$here/test_arc_storage.c" \
-   "$here/reference79/terminal_ref.c" "$here/../main/ui/habitat/fonts.c"
+   "$here/reference79/terminal_ref.c" "$here/../main/ui/habitat/fonts.c" \
+   "$here/../main/ui/habitat/focus_faces.c" "$here/../main/ui/habitat/lvgl_fonts.c"
 "$out/test_arc_storage"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" -DDEVICE_LAYOUT_BENCH=1 \
    -o "$out/test_arc_bounds" "$here/test_arc_bounds.c" \
+   "$here/../main/ui/habitat/focus_faces.c" "$here/../main/ui/habitat/lvgl_fonts.c" \
    "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
 "$out/test_arc_bounds"
 

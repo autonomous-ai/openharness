@@ -55,13 +55,13 @@ def read_manifest(url, timeout):
     return json.loads(result.stdout), hashlib.sha256(result.stdout).hexdigest()
 
 
-def entries_for_version(manifest, version):
+def entries_for_version(manifest, version, keys=KEYS):
     if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
         raise ValueError("expected version must be X.Y.Z")
     if not isinstance(manifest, dict):
         raise ValueError("manifest must be an object")
     entries = []
-    for key in KEYS:
+    for key in keys:
         entry = manifest.get(key)
         if not isinstance(entry, dict) or entry.get("version") != version:
             raise ValueError(f"{key}: missing entry or version differs from {version}")

@@ -2,7 +2,8 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { canonical } from './admission.js'
-import { conditionsSchema, draftSchema, MemoryError } from './types.js'
+import { conditionsSchema, draftSchema, MemoryError, sourceSchema } from './types.js'
+import { reviewRecallContext } from './evaluationContext.js'
 
 const id = z.string().min(1).max(200).regex(/^[A-Za-z0-9_.:-]+$/)
 const hash = z.string().regex(/^[a-f0-9]{64}$/)
@@ -11,6 +12,7 @@ const source = z.object({ role: z.enum(['user', 'assistant', 'tool', 'reference'
 const probe = z.object({ id, query: z.string().max(4_000), projectIds: z.array(id), conditions: conditionsSchema,
   expected: z.enum(['recall', 'abstain']) })
 const fixture = z.object({ id, projectId: id.nullable(), sources: z.array(source).min(1).optional(),
+  boundary: z.enum(['complete', 'bounded']).optional(),
   episodes: z.array(z.object({ id, sources: z.array(source).min(1) })).min(1).max(4).optional(),
   expected: z.object({ review: z.array(z.string().max(2_000)) }), probes: z.array(probe) })
   .refine(row => !!row.sources !== !!row.episodes, 'choose sources or episodes')
@@ -18,9 +20,10 @@ const suiteSchema = z.object({ schemaVersion: z.literal(1), suite: id, cases: z.
 const recordSchema = draftSchema.safeExtend({ schemaVersion: z.literal(1), id, revision: count.positive(),
   state: z.enum(['active', 'tentative', 'needs_verification', 'superseded', 'archived']), createdAt: count, updatedAt: count })
 const contextSchema = z.object({ text: z.string().max(16_000), bytes: count, maxBytes: count.max(16_000), estimatedTokens: count })
-const packetSchema = z.object({ type: z.literal('coding_memory_context'), items: z.array(z.object({ id, revision: count.positive() })).max(6) })
 const resultSchema = z.object({ id, outcome: z.object({ state: z.string() }),
-  episodes: z.object({ expected: count, reviewed: count, jobs: z.record(z.string(), count) }).optional(),
+  recallFormat: z.enum(['summary', 'source_excerpts']).optional(), capturedSources: z.array(sourceSchema).max(512).optional(),
+  episodes: z.object({ expected: count, reviewed: count, jobs: z.record(z.string(), count),
+    boundary: z.enum(['complete', 'bounded']).optional() }).optional(),
   checks: z.array(z.object({ name: z.string(), passed: z.boolean().nullable() })),
   records: z.array(recordSchema).max(100),
   probes: z.array(probe.extend({ status: z.string(), returnedIds: z.array(id).max(6), passed: z.boolean().nullable(),
@@ -56,8 +59,17 @@ export function prepareEvaluationReview(suiteText: string, reportText: string) {
     unique(f.probes.map(p => p.id))
     const episodes = f.episodes ?? [{ id: f.id, sources: f.sources! }]
     unique(episodes.map(e => e.id))
+    const originals = episodes.flatMap(e => e.sources.map((s, index) => ({
+      id: `${f.id}${f.episodes ? `-${e.id}` : ''}-${index}`, projectId: f.projectId,
+      episode: e.id, boundary: f.boundary ?? 'complete', ...s })))
     const result = report.cases.find(row => row.id === f.id)
+    const formats = new Map<string, 'summary' | 'source_excerpts' | null>()
     if (result) {
+      // Older diagnostics always captured complete episodes. A bounded fixture must have an
+      // explicit matching observation; do not grade it as if omitted context had been supplied.
+      if ((result.episodes?.boundary ?? 'complete') !== (f.boundary ?? 'complete')) {
+        throw new MemoryError('evaluation_boundary_changed')
+      }
       unique(result.records.map(record => record.id)); unique(result.probes.map(p => p.id))
       for (const p of result.probes) {
         const expected = f.probes.find(original => original.id === p.id)
@@ -65,7 +77,10 @@ export function prepareEvaluationReview(suiteText: string, reportText: string) {
         unique(p.returnedIds)
         if (p.returnedIds.some(id => !result.records.some(record => record.id === id))) throw new MemoryError('unknown_recalled_memory')
         if (p.context) {
-          const sent = p.context.text ? decode(packetSchema, p.context.text).items : []
+          const reviewed = reviewRecallContext({ text: p.context.text, records: result.records,
+            declaredFormat: result.recallFormat, capturedSources: result.capturedSources, originals })
+          const sent = reviewed.items
+          formats.set(p.id, reviewed.format)
           if (p.context.bytes !== Buffer.byteLength(p.context.text, 'utf8') || p.context.bytes > p.context.maxBytes
             || canonical(sent.map(item => item.id)) !== canonical(p.returnedIds)
             || sent.some(item => !result.records.some(record => record.id === item.id && record.revision === item.revision))) {
@@ -81,11 +96,12 @@ export function prepareEvaluationReview(suiteText: string, reportText: string) {
       && result.checks.some(check => check.name === 'completed_extraction' && check.passed === true)
       && result.probes.every(p => p.status === 'ok')
     return { id: f.id, projectId: f.projectId, completed, criteria: f.expected.review,
-      sources: episodes.flatMap(e => e.sources.map((s, index) => ({
-        id: `${f.id}${f.episodes ? `-${e.id}` : ''}-${index}`, episode: e.id, ...s }))),
-      records: result?.records ?? [], probes: f.probes.map(p => ({ ...p,
-        returnedIds: result?.probes.find(actual => actual.id === p.id)?.returnedIds ?? [],
-        context: result?.probes.find(actual => actual.id === p.id)?.context ?? null })),
+      sources: originals,
+      records: result?.records ?? [], probes: f.probes.map(p => {
+        const actual = result?.probes.find(actual => actual.id === p.id)
+        return { ...p, returnedIds: actual?.returnedIds ?? [],
+          context: actual?.context ? { ...actual.context, format: formats.get(p.id) ?? null } : null }
+      }),
       mechanicalFailures: result?.checks.filter(check => check.passed === false).map(check => check.name) ?? [] }
   })
   return { schemaVersion: 1 as const, reportSha256, suiteSha256, suite: suite.suite,
@@ -148,10 +164,12 @@ export function scoreEvaluationReview(suiteText: string, reportText: string, rev
   })
   return { schemaVersion: 1, reportSha256: packet.reportSha256, suiteSha256: packet.suiteSha256,
     evidence: packet.evidence, reviewer: review.reviewer,
+    contextFormats: [...new Set(packet.cases.flatMap(row => row.probes.flatMap(p => p.context?.format ? [p.context.format] : [])))],
     coverage: { completedCases: packet.cases.filter(row => row.completed).length, expectedCases: packet.cases.length },
     memories: metric(memories, packet.completed), recall: metric(recalls, packet.completed), abstention: metric(abstentions, packet.completed),
     cases, taskBenefit: 'not_measured', nativeDelivery: 'not_measured',
     limitations: ['Ratings are attributed judgements, not authenticated independent review.',
+      'Exact source and metadata checks do not establish faithful meaning or complete surrounding context.',
       'These diagnostics do not satisfy the held-out-history or paired coding-task release gates.',
       'Older reports without captured recall context can be reviewed for memory content but receive no recall-quality rate.',
       'Empty, unfinished or partially reviewed denominators never receive a passing rate.'] }

@@ -1,0 +1,2525 @@
+{
+  "schema": 1,
+  "recordedAt": "2026-10-02T15:02:26.997510+00:00",
+  "scope": "Synthetic headless Debug parsing and terminal picture recording; not app CPU, native input latency, GPU energy, or battery life.",
+  "source": {
+    "candidateBase": "f537725295864d8150d439289dc24cf4f870e226",
+    "baseline": "a5b233d8ebf2ea9d3026da5c8547530af5cc93c0",
+    "baselineCacheSha256": "ab0b640b5e3ff62bf7c520a730e64e354b8b34856df492f5d214ec1264e93d85",
+    "candidateFiles": {
+      "desktop/third_party/xterm/lib/src/ui/line_picture_cache.dart": "4746146d0e0d2254ed3c184ff36f5757e07e7ea9e7748a648961f01f995f55a4",
+      "desktop/test/terminal_rewritten_line_test.dart": "c83b78ed52cc2b4552e3d2b9280e5683effeaad92d20c099cd85ad3d0a0aaa58",
+      "desktop/test/support/terminal_redraw_pixels.dart": "63962f3e6d0c8999e6c465a33ceac0da0a2dfad61cde64be1be1962b55f9a880",
+      "desktop/test/benchmarks/terminal_line_redraw_benchmark.dart": "fecfc9c1cb72a0b41beaf128ad53bece57c2784416401bb0bc0a2c5b38d8d17a",
+      "desktop/integration_test/terminal_redraw_native_test.dart": "d8296609f412ae58c45a557bd8548f027cda8461c80f2c19de10bf3b5c110741",
+      "desktop/pubspec.lock": "0987d3b363535b314a292bab02ff8ec5bc51691398f8ede9406b9885925c00b7"
+    },
+    "xtermSourceComparison": "All xterm Dart library sources match apart from line_picture_cache.dart; pubspec.lock identical."
+  },
+  "toolchain": {
+    "flutter": "3.47.2",
+    "dart": "3.13.2",
+    "flutterFrameworkCommit": "d3b14c876900e553bc736ca19295fc09e3853e8e",
+    "platform": "macOS arm64"
+  },
+  "design": {
+    "roundsPerTrial": 7,
+    "framesPerRound": 40,
+    "warmupFrames": 40,
+    "trialsPerVariant": 3,
+    "ordering": "baseline/candidate, candidate/baseline, baseline/candidate",
+    "rows": 30,
+    "columns": 120,
+    "snapshotCellBytesPerTerminal": 61440,
+    "snapshotCellBytesFourTerminals": 245760,
+    "snapshotMemoryLimit": "Only rows retained by last painted frame; raw cell bytes exclude object overhead.",
+    "timed": "ANSI parser plus picture recording/replay; excludes image rasterization/display and external processes",
+    "comparison": "Median of 21 round means per variant/scenario; all observations retained."
+  },
+  "summary": [
+    {
+      "terminals": 1,
+      "mode": "overwrite_identical",
+      "baseline": {
+        "parseUs": 92.45,
+        "paintUs": 26.425,
+        "totalUs": 119.175
+      },
+      "candidate": {
+        "parseUs": 93.825,
+        "paintUs": 29.7,
+        "totalUs": 122.275
+      },
+      "totalReductionPercent": -2.601216698133002
+    },
+    {
+      "terminals": 1,
+      "mode": "erase_identical",
+      "baseline": {
+        "parseUs": 97.025,
+        "paintUs": 159.525,
+        "totalUs": 256.15
+      },
+      "candidate": {
+        "parseUs": 93.975,
+        "paintUs": 32.075,
+        "totalUs": 124.9
+      },
+      "totalReductionPercent": 51.23950810072222
+    },
+    {
+      "terminals": 1,
+      "mode": "one_changed",
+      "baseline": {
+        "parseUs": 91.225,
+        "paintUs": 141.9,
+        "totalUs": 233.825
+      },
+      "candidate": {
+        "parseUs": 89.925,
+        "paintUs": 36.925,
+        "totalUs": 127.15
+      },
+      "totalReductionPercent": 45.621725649524215
+    },
+    {
+      "terminals": 1,
+      "mode": "all_changed",
+      "baseline": {
+        "parseUs": 91.4,
+        "paintUs": 135.725,
+        "totalUs": 227.9
+      },
+      "candidate": {
+        "parseUs": 92.35,
+        "paintUs": 167.4,
+        "totalUs": 258.65
+      },
+      "totalReductionPercent": -13.492759982448433
+    },
+    {
+      "terminals": 4,
+      "mode": "overwrite_identical",
+      "baseline": {
+        "parseUs": 327.725,
+        "paintUs": 60.0,
+        "totalUs": 392.175
+      },
+      "candidate": {
+        "parseUs": 327.325,
+        "paintUs": 61.85,
+        "totalUs": 389.675
+      },
+      "totalReductionPercent": 0.6374705169885919
+    },
+    {
+      "terminals": 4,
+      "mode": "erase_identical",
+      "baseline": {
+        "parseUs": 363.85,
+        "paintUs": 549.575,
+        "totalUs": 938.375
+      },
+      "candidate": {
+        "parseUs": 362.3,
+        "paintUs": 119.075,
+        "totalUs": 483.425
+      },
+      "totalReductionPercent": 48.48274943386173
+    },
+    {
+      "terminals": 4,
+      "mode": "one_changed",
+      "baseline": {
+        "parseUs": 356.275,
+        "paintUs": 545.675,
+        "totalUs": 923.2
+      },
+      "candidate": {
+        "parseUs": 363.9,
+        "paintUs": 136.4,
+        "totalUs": 498.7
+      },
+      "totalReductionPercent": 45.981369150779905
+    },
+    {
+      "terminals": 4,
+      "mode": "all_changed",
+      "baseline": {
+        "parseUs": 363.475,
+        "paintUs": 591.95,
+        "totalUs": 953.275
+      },
+      "candidate": {
+        "parseUs": 371.925,
+        "paintUs": 583.375,
+        "totalUs": 959.9
+      },
+      "totalReductionPercent": -0.694972594476928
+    }
+  ],
+  "trials": [
+    {
+      "label": "baseline",
+      "pair": 1,
+      "startedAt": "2026-10-02T14:54:25.709391+00:00",
+      "endedAt": "2026-10-02T14:54:30.391701+00:00",
+      "exit": 0,
+      "observations": {
+        "schema": 1,
+        "scope": "headless_debug_parse_and_picture_recording",
+        "completedAt": "2026-10-02T14:54:30.325116Z",
+        "warmupFrames": 40,
+        "rounds": 7,
+        "framesPerRound": 40,
+        "results": [
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "overwrite_identical",
+            "rounds": [
+              {
+                "parseUs": 113.6,
+                "paintUs": 51.05,
+                "totalUs": 164.65
+              },
+              {
+                "parseUs": 103.2,
+                "paintUs": 35.575,
+                "totalUs": 138.775
+              },
+              {
+                "parseUs": 100.175,
+                "paintUs": 36.1,
+                "totalUs": 136.275
+              },
+              {
+                "parseUs": 92.45,
+                "paintUs": 26.425,
+                "totalUs": 118.875
+              },
+              {
+                "parseUs": 90.775,
+                "paintUs": 21.35,
+                "totalUs": 112.125
+              },
+              {
+                "parseUs": 79.7,
+                "paintUs": 19.9,
+                "totalUs": 99.6
+              },
+              {
+                "parseUs": 83.2,
+                "paintUs": 20.175,
+                "totalUs": 103.375
+              }
+            ],
+            "medianParseUs": 92.45,
+            "medianPaintUs": 26.425,
+            "medianTotalUs": 118.875
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "erase_identical",
+            "rounds": [
+              {
+                "parseUs": 108.225,
+                "paintUs": 239.375,
+                "totalUs": 347.6
+              },
+              {
+                "parseUs": 96.875,
+                "paintUs": 170.125,
+                "totalUs": 267.0
+              },
+              {
+                "parseUs": 113.95,
+                "paintUs": 165.2,
+                "totalUs": 279.15
+              },
+              {
+                "parseUs": 99.325,
+                "paintUs": 164.575,
+                "totalUs": 263.9
+              },
+              {
+                "parseUs": 89.9,
+                "paintUs": 153.875,
+                "totalUs": 243.775
+              },
+              {
+                "parseUs": 94.35,
+                "paintUs": 160.225,
+                "totalUs": 254.575
+              },
+              {
+                "parseUs": 96.9,
+                "paintUs": 156.075,
+                "totalUs": 252.975
+              }
+            ],
+            "medianParseUs": 96.9,
+            "medianPaintUs": 164.575,
+            "medianTotalUs": 263.9
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "one_changed",
+            "rounds": [
+              {
+                "parseUs": 89.475,
+                "paintUs": 148.525,
+                "totalUs": 238.0
+              },
+              {
+                "parseUs": 90.85,
+                "paintUs": 147.2,
+                "totalUs": 238.05
+              },
+              {
+                "parseUs": 101.55,
+                "paintUs": 132.275,
+                "totalUs": 233.825
+              },
+              {
+                "parseUs": 100.825,
+                "paintUs": 131.8,
+                "totalUs": 232.625
+              },
+              {
+                "parseUs": 87.875,
+                "paintUs": 141.55,
+                "totalUs": 229.425
+              },
+              {
+                "parseUs": 89.825,
+                "paintUs": 145.425,
+                "totalUs": 235.25
+              },
+              {
+                "parseUs": 89.4,
+                "paintUs": 140.45,
+                "totalUs": 229.85
+              }
+            ],
+            "medianParseUs": 89.825,
+            "medianPaintUs": 141.55,
+            "medianTotalUs": 233.825
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "all_changed",
+            "rounds": [
+              {
+                "parseUs": 88.375,
+                "paintUs": 139.225,
+                "totalUs": 227.6
+              },
+              {
+                "parseUs": 86.95,
+                "paintUs": 136.675,
+                "totalUs": 223.625
+              },
+              {
+                "parseUs": 99.625,
+                "paintUs": 128.85,
+                "totalUs": 228.475
+              },
+              {
+                "parseUs": 101.225,
+                "paintUs": 125.9,
+                "totalUs": 227.125
+              },
+              {
+                "parseUs": 89.225,
+                "paintUs": 142.05,
+                "totalUs": 231.275
+              },
+              {
+                "parseUs": 88.775,
+                "paintUs": 139.025,
+                "totalUs": 227.8
+              },
+              {
+                "parseUs": 89.675,
+                "paintUs": 140.875,
+                "totalUs": 230.55
+              }
+            ],
+            "medianParseUs": 89.225,
+            "medianPaintUs": 139.025,
+            "medianTotalUs": 227.8
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "overwrite_identical",
+            "rounds": [
+              {
+                "parseUs": 342.625,
+                "paintUs": 62.925,
+                "totalUs": 405.55
+              },
+              {
+                "parseUs": 319.05,
+                "paintUs": 61.325,
+                "totalUs": 380.375
+              },
+              {
+                "parseUs": 333.625,
+                "paintUs": 60.55,
+                "totalUs": 394.175
+              },
+              {
+                "parseUs": 340.575,
+                "paintUs": 62.25,
+                "totalUs": 402.825
+              },
+              {
+                "parseUs": 335.2,
+                "paintUs": 61.075,
+                "totalUs": 396.275
+              },
+              {
+                "parseUs": 319.275,
+                "paintUs": 61.425,
+                "totalUs": 380.7
+              },
+              {
+                "parseUs": 316.85,
+                "paintUs": 74.675,
+                "totalUs": 391.525
+              }
+            ],
+            "medianParseUs": 333.625,
+            "medianPaintUs": 61.425,
+            "medianTotalUs": 394.175
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "erase_identical",
+            "rounds": [
+              {
+                "parseUs": 370.675,
+                "paintUs": 588.6,
+                "totalUs": 959.275
+              },
+              {
+                "parseUs": 362.175,
+                "paintUs": 576.2,
+                "totalUs": 938.375
+              },
+              {
+                "parseUs": 385.9,
+                "paintUs": 558.05,
+                "totalUs": 943.95
+              },
+              {
+                "parseUs": 400.0,
+                "paintUs": 542.9,
+                "totalUs": 942.9
+              },
+              {
+                "parseUs": 386.675,
+                "paintUs": 572.975,
+                "totalUs": 959.65
+              },
+              {
+                "parseUs": 360.175,
+                "paintUs": 591.375,
+                "totalUs": 951.55
+              },
+              {
+                "parseUs": 362.05,
+                "paintUs": 589.875,
+                "totalUs": 951.925
+              }
+            ],
+            "medianParseUs": 370.675,
+            "medianPaintUs": 576.2,
+            "medianTotalUs": 951.55
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "one_changed",
+            "rounds": [
+              {
+                "parseUs": 357.875,
+                "paintUs": 588.1,
+                "totalUs": 945.975
+              },
+              {
+                "parseUs": 356.1,
+                "paintUs": 587.275,
+                "totalUs": 943.375
+              },
+              {
+                "parseUs": 354.375,
+                "paintUs": 576.675,
+                "totalUs": 931.05
+              },
+              {
+                "parseUs": 357.05,
+                "paintUs": 585.65,
+                "totalUs": 942.7
+              },
+              {
+                "parseUs": 356.275,
+                "paintUs": 580.0,
+                "totalUs": 936.275
+              },
+              {
+                "parseUs": 413.1,
+                "paintUs": 545.675,
+                "totalUs": 958.775
+              },
+              {
+                "parseUs": 408.525,
+                "paintUs": 547.3,
+                "totalUs": 955.825
+              }
+            ],
+            "medianParseUs": 357.05,
+            "medianPaintUs": 580.0,
+            "medianTotalUs": 943.375
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "all_changed",
+            "rounds": [
+              {
+                "parseUs": 435.25,
+                "paintUs": 668.75,
+                "totalUs": 1104.0
+              },
+              {
+                "parseUs": 413.45,
+                "paintUs": 552.375,
+                "totalUs": 965.825
+              },
+              {
+                "parseUs": 404.6,
+                "paintUs": 526.65,
+                "totalUs": 931.25
+              },
+              {
+                "parseUs": 383.6,
+                "paintUs": 550.425,
+                "totalUs": 934.025
+              },
+              {
+                "parseUs": 353.4,
+                "paintUs": 598.475,
+                "totalUs": 951.875
+              },
+              {
+                "parseUs": 355.1,
+                "paintUs": 591.95,
+                "totalUs": 947.05
+              },
+              {
+                "parseUs": 353.875,
+                "paintUs": 594.675,
+                "totalUs": 948.55
+              }
+            ],
+            "medianParseUs": 383.6,
+            "medianPaintUs": 591.95,
+            "medianTotalUs": 948.55
+          }
+        ]
+      }
+    },
+    {
+      "label": "candidate",
+      "pair": 1,
+      "startedAt": "2026-10-02T14:54:30.392395+00:00",
+      "endedAt": "2026-10-02T14:54:34.175482+00:00",
+      "exit": 0,
+      "observations": {
+        "schema": 1,
+        "scope": "headless_debug_parse_and_picture_recording",
+        "completedAt": "2026-10-02T14:54:34.082899Z",
+        "warmupFrames": 40,
+        "rounds": 7,
+        "framesPerRound": 40,
+        "results": [
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "overwrite_identical",
+            "rounds": [
+              {
+                "parseUs": 116.475,
+                "paintUs": 44.5,
+                "totalUs": 160.975
+              },
+              {
+                "parseUs": 99.0,
+                "paintUs": 34.6,
+                "totalUs": 133.6
+              },
+              {
+                "parseUs": 96.925,
+                "paintUs": 32.05,
+                "totalUs": 128.975
+              },
+              {
+                "parseUs": 93.825,
+                "paintUs": 27.8,
+                "totalUs": 121.625
+              },
+              {
+                "parseUs": 87.35,
+                "paintUs": 20.675,
+                "totalUs": 108.025
+              },
+              {
+                "parseUs": 79.475,
+                "paintUs": 19.3,
+                "totalUs": 98.775
+              },
+              {
+                "parseUs": 85.85,
+                "paintUs": 20.375,
+                "totalUs": 106.225
+              }
+            ],
+            "medianParseUs": 93.825,
+            "medianPaintUs": 27.8,
+            "medianTotalUs": 121.625
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "erase_identical",
+            "rounds": [
+              {
+                "parseUs": 92.3,
+                "paintUs": 29.7,
+                "totalUs": 122.0
+              },
+              {
+                "parseUs": 146.675,
+                "paintUs": 30.35,
+                "totalUs": 177.025
+              },
+              {
+                "parseUs": 93.225,
+                "paintUs": 29.55,
+                "totalUs": 122.775
+              },
+              {
+                "parseUs": 94.9,
+                "paintUs": 29.0,
+                "totalUs": 123.9
+              },
+              {
+                "parseUs": 88.225,
+                "paintUs": 28.85,
+                "totalUs": 117.075
+              },
+              {
+                "parseUs": 88.0,
+                "paintUs": 29.3,
+                "totalUs": 117.3
+              },
+              {
+                "parseUs": 94.375,
+                "paintUs": 32.375,
+                "totalUs": 126.75
+              }
+            ],
+            "medianParseUs": 93.225,
+            "medianPaintUs": 29.55,
+            "medianTotalUs": 122.775
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "one_changed",
+            "rounds": [
+              {
+                "parseUs": 98.0,
+                "paintUs": 39.925,
+                "totalUs": 137.925
+              },
+              {
+                "parseUs": 89.575,
+                "paintUs": 37.575,
+                "totalUs": 127.15
+              },
+              {
+                "parseUs": 95.6,
+                "paintUs": 38.35,
+                "totalUs": 133.95
+              },
+              {
+                "parseUs": 89.925,
+                "paintUs": 36.875,
+                "totalUs": 126.8
+              },
+              {
+                "parseUs": 95.225,
+                "paintUs": 36.525,
+                "totalUs": 131.75
+              },
+              {
+                "parseUs": 89.225,
+                "paintUs": 37.15,
+                "totalUs": 126.375
+              },
+              {
+                "parseUs": 89.825,
+                "paintUs": 36.925,
+                "totalUs": 126.75
+              }
+            ],
+            "medianParseUs": 89.925,
+            "medianPaintUs": 37.15,
+            "medianTotalUs": 127.15
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "all_changed",
+            "rounds": [
+              {
+                "parseUs": 102.8,
+                "paintUs": 188.65,
+                "totalUs": 291.45
+              },
+              {
+                "parseUs": 90.2,
+                "paintUs": 167.4,
+                "totalUs": 257.6
+              },
+              {
+                "parseUs": 99.9,
+                "paintUs": 162.925,
+                "totalUs": 262.825
+              },
+              {
+                "parseUs": 92.35,
+                "paintUs": 162.725,
+                "totalUs": 255.075
+              },
+              {
+                "parseUs": 94.2,
+                "paintUs": 170.05,
+                "totalUs": 264.25
+              },
+              {
+                "parseUs": 93.85,
+                "paintUs": 171.475,
+                "totalUs": 265.325
+              },
+              {
+                "parseUs": 101.9,
+                "paintUs": 148.55,
+                "totalUs": 250.45
+              }
+            ],
+            "medianParseUs": 94.2,
+            "medianPaintUs": 167.4,
+            "medianTotalUs": 262.825
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "overwrite_identical",
+            "rounds": [
+              {
+                "parseUs": 326.075,
+                "paintUs": 62.0,
+                "totalUs": 388.075
+              },
+              {
+                "parseUs": 342.325,
+                "paintUs": 65.6,
+                "totalUs": 407.925
+              },
+              {
+                "parseUs": 331.7,
+                "paintUs": 64.1,
+                "totalUs": 395.8
+              },
+              {
+                "parseUs": 324.375,
+                "paintUs": 59.5,
+                "totalUs": 383.875
+              },
+              {
+                "parseUs": 314.2,
+                "paintUs": 58.5,
+                "totalUs": 372.7
+              },
+              {
+                "parseUs": 326.075,
+                "paintUs": 62.2,
+                "totalUs": 388.275
+              },
+              {
+                "parseUs": 322.1,
+                "paintUs": 71.85,
+                "totalUs": 393.95
+              }
+            ],
+            "medianParseUs": 326.075,
+            "medianPaintUs": 62.2,
+            "medianTotalUs": 388.275
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "erase_identical",
+            "rounds": [
+              {
+                "parseUs": 372.5,
+                "paintUs": 116.85,
+                "totalUs": 489.35
+              },
+              {
+                "parseUs": 353.625,
+                "paintUs": 122.4,
+                "totalUs": 476.025
+              },
+              {
+                "parseUs": 368.95,
+                "paintUs": 123.525,
+                "totalUs": 492.475
+              },
+              {
+                "parseUs": 367.225,
+                "paintUs": 123.425,
+                "totalUs": 490.65
+              },
+              {
+                "parseUs": 361.6,
+                "paintUs": 120.6,
+                "totalUs": 482.2
+              },
+              {
+                "parseUs": 352.975,
+                "paintUs": 118.025,
+                "totalUs": 471.0
+              },
+              {
+                "parseUs": 362.4,
+                "paintUs": 120.575,
+                "totalUs": 482.975
+              }
+            ],
+            "medianParseUs": 362.4,
+            "medianPaintUs": 120.6,
+            "medianTotalUs": 482.975
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "one_changed",
+            "rounds": [
+              {
+                "parseUs": 366.7,
+                "paintUs": 131.775,
+                "totalUs": 498.475
+              },
+              {
+                "parseUs": 365.875,
+                "paintUs": 144.775,
+                "totalUs": 510.65
+              },
+              {
+                "parseUs": 367.775,
+                "paintUs": 140.05,
+                "totalUs": 507.825
+              },
+              {
+                "parseUs": 365.75,
+                "paintUs": 138.5,
+                "totalUs": 504.25
+              },
+              {
+                "parseUs": 355.875,
+                "paintUs": 138.5,
+                "totalUs": 494.375
+              },
+              {
+                "parseUs": 359.85,
+                "paintUs": 135.025,
+                "totalUs": 494.875
+              },
+              {
+                "parseUs": 362.65,
+                "paintUs": 142.475,
+                "totalUs": 505.125
+              }
+            ],
+            "medianParseUs": 365.75,
+            "medianPaintUs": 138.5,
+            "medianTotalUs": 504.25
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "all_changed",
+            "rounds": [
+              {
+                "parseUs": 356.375,
+                "paintUs": 593.7,
+                "totalUs": 950.075
+              },
+              {
+                "parseUs": 356.6,
+                "paintUs": 619.0,
+                "totalUs": 975.6
+              },
+              {
+                "parseUs": 359.175,
+                "paintUs": 607.025,
+                "totalUs": 966.2
+              },
+              {
+                "parseUs": 357.9,
+                "paintUs": 627.9,
+                "totalUs": 985.8
+              },
+              {
+                "parseUs": 355.075,
+                "paintUs": 600.875,
+                "totalUs": 955.95
+              },
+              {
+                "parseUs": 359.5,
+                "paintUs": 628.75,
+                "totalUs": 988.25
+              },
+              {
+                "parseUs": 377.475,
+                "paintUs": 591.925,
+                "totalUs": 969.4
+              }
+            ],
+            "medianParseUs": 357.9,
+            "medianPaintUs": 607.025,
+            "medianTotalUs": 969.4
+          }
+        ]
+      }
+    },
+    {
+      "label": "candidate",
+      "pair": 2,
+      "startedAt": "2026-10-02T14:54:34.182072+00:00",
+      "endedAt": "2026-10-02T14:54:38.059706+00:00",
+      "exit": 0,
+      "observations": {
+        "schema": 1,
+        "scope": "headless_debug_parse_and_picture_recording",
+        "completedAt": "2026-10-02T14:54:37.990269Z",
+        "warmupFrames": 40,
+        "rounds": 7,
+        "framesPerRound": 40,
+        "results": [
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "overwrite_identical",
+            "rounds": [
+              {
+                "parseUs": 111.25,
+                "paintUs": 49.925,
+                "totalUs": 161.175
+              },
+              {
+                "parseUs": 99.55,
+                "paintUs": 37.625,
+                "totalUs": 137.175
+              },
+              {
+                "parseUs": 97.4,
+                "paintUs": 36.075,
+                "totalUs": 133.475
+              },
+              {
+                "parseUs": 92.35,
+                "paintUs": 29.925,
+                "totalUs": 122.275
+              },
+              {
+                "parseUs": 87.275,
+                "paintUs": 23.325,
+                "totalUs": 110.6
+              },
+              {
+                "parseUs": 82.825,
+                "paintUs": 22.825,
+                "totalUs": 105.65
+              },
+              {
+                "parseUs": 84.2,
+                "paintUs": 20.3,
+                "totalUs": 104.5
+              }
+            ],
+            "medianParseUs": 92.35,
+            "medianPaintUs": 29.925,
+            "medianTotalUs": 122.275
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "erase_identical",
+            "rounds": [
+              {
+                "parseUs": 90.825,
+                "paintUs": 28.875,
+                "totalUs": 119.7
+              },
+              {
+                "parseUs": 126.875,
+                "paintUs": 38.275,
+                "totalUs": 165.15
+              },
+              {
+                "parseUs": 99.75,
+                "paintUs": 53.7,
+                "totalUs": 153.45
+              },
+              {
+                "parseUs": 97.325,
+                "paintUs": 33.15,
+                "totalUs": 130.475
+              },
+              {
+                "parseUs": 91.225,
+                "paintUs": 32.475,
+                "totalUs": 123.7
+              },
+              {
+                "parseUs": 95.35,
+                "paintUs": 32.95,
+                "totalUs": 128.3
+              },
+              {
+                "parseUs": 96.475,
+                "paintUs": 33.25,
+                "totalUs": 129.725
+              }
+            ],
+            "medianParseUs": 96.475,
+            "medianPaintUs": 33.15,
+            "medianTotalUs": 129.725
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "one_changed",
+            "rounds": [
+              {
+                "parseUs": 96.325,
+                "paintUs": 35.1,
+                "totalUs": 131.425
+              },
+              {
+                "parseUs": 88.775,
+                "paintUs": 36.175,
+                "totalUs": 124.95
+              },
+              {
+                "parseUs": 94.275,
+                "paintUs": 37.5,
+                "totalUs": 131.775
+              },
+              {
+                "parseUs": 89.15,
+                "paintUs": 36.425,
+                "totalUs": 125.575
+              },
+              {
+                "parseUs": 91.925,
+                "paintUs": 36.85,
+                "totalUs": 128.775
+              },
+              {
+                "parseUs": 89.75,
+                "paintUs": 38.925,
+                "totalUs": 128.675
+              },
+              {
+                "parseUs": 88.45,
+                "paintUs": 36.675,
+                "totalUs": 125.125
+              }
+            ],
+            "medianParseUs": 89.75,
+            "medianPaintUs": 36.675,
+            "medianTotalUs": 128.675
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "all_changed",
+            "rounds": [
+              {
+                "parseUs": 95.7,
+                "paintUs": 199.125,
+                "totalUs": 294.825
+              },
+              {
+                "parseUs": 92.5,
+                "paintUs": 174.425,
+                "totalUs": 266.925
+              },
+              {
+                "parseUs": 89.2,
+                "paintUs": 169.45,
+                "totalUs": 258.65
+              },
+              {
+                "parseUs": 88.55,
+                "paintUs": 154.85,
+                "totalUs": 243.4
+              },
+              {
+                "parseUs": 98.1,
+                "paintUs": 148.875,
+                "totalUs": 246.975
+              },
+              {
+                "parseUs": 91.175,
+                "paintUs": 157.2,
+                "totalUs": 248.375
+              },
+              {
+                "parseUs": 90.95,
+                "paintUs": 157.9,
+                "totalUs": 248.85
+              }
+            ],
+            "medianParseUs": 91.175,
+            "medianPaintUs": 157.9,
+            "medianTotalUs": 248.85
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "overwrite_identical",
+            "rounds": [
+              {
+                "parseUs": 328.7,
+                "paintUs": 61.625,
+                "totalUs": 390.325
+              },
+              {
+                "parseUs": 330.95,
+                "paintUs": 63.725,
+                "totalUs": 394.675
+              },
+              {
+                "parseUs": 330.55,
+                "paintUs": 63.95,
+                "totalUs": 394.5
+              },
+              {
+                "parseUs": 325.675,
+                "paintUs": 60.475,
+                "totalUs": 386.15
+              },
+              {
+                "parseUs": 321.225,
+                "paintUs": 63.8,
+                "totalUs": 385.025
+              },
+              {
+                "parseUs": 328.775,
+                "paintUs": 62.05,
+                "totalUs": 390.825
+              },
+              {
+                "parseUs": 325.0,
+                "paintUs": 61.175,
+                "totalUs": 386.175
+              }
+            ],
+            "medianParseUs": 328.7,
+            "medianPaintUs": 62.05,
+            "medianTotalUs": 390.325
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "erase_identical",
+            "rounds": [
+              {
+                "parseUs": 370.85,
+                "paintUs": 117.675,
+                "totalUs": 488.525
+              },
+              {
+                "parseUs": 357.0,
+                "paintUs": 118.4,
+                "totalUs": 475.4
+              },
+              {
+                "parseUs": 370.325,
+                "paintUs": 119.775,
+                "totalUs": 490.1
+              },
+              {
+                "parseUs": 371.325,
+                "paintUs": 121.75,
+                "totalUs": 493.075
+              },
+              {
+                "parseUs": 366.65,
+                "paintUs": 118.5,
+                "totalUs": 485.15
+              },
+              {
+                "parseUs": 356.475,
+                "paintUs": 126.85,
+                "totalUs": 483.325
+              },
+              {
+                "parseUs": 355.575,
+                "paintUs": 118.45,
+                "totalUs": 474.025
+              }
+            ],
+            "medianParseUs": 366.65,
+            "medianPaintUs": 118.5,
+            "medianTotalUs": 485.15
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "one_changed",
+            "rounds": [
+              {
+                "parseUs": 368.825,
+                "paintUs": 133.175,
+                "totalUs": 502.0
+              },
+              {
+                "parseUs": 366.8,
+                "paintUs": 137.075,
+                "totalUs": 503.875
+              },
+              {
+                "parseUs": 368.5,
+                "paintUs": 143.25,
+                "totalUs": 511.75
+              },
+              {
+                "parseUs": 367.625,
+                "paintUs": 136.725,
+                "totalUs": 504.35
+              },
+              {
+                "parseUs": 354.275,
+                "paintUs": 133.4,
+                "totalUs": 487.675
+              },
+              {
+                "parseUs": 365.875,
+                "paintUs": 135.725,
+                "totalUs": 501.6
+              },
+              {
+                "parseUs": 368.3,
+                "paintUs": 136.45,
+                "totalUs": 504.75
+              }
+            ],
+            "medianParseUs": 367.625,
+            "medianPaintUs": 136.45,
+            "medianTotalUs": 503.875
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "all_changed",
+            "rounds": [
+              {
+                "parseUs": 386.3,
+                "paintUs": 583.375,
+                "totalUs": 969.675
+              },
+              {
+                "parseUs": 389.875,
+                "paintUs": 570.025,
+                "totalUs": 959.9
+              },
+              {
+                "parseUs": 382.925,
+                "paintUs": 612.325,
+                "totalUs": 995.25
+              },
+              {
+                "parseUs": 396.325,
+                "paintUs": 581.575,
+                "totalUs": 977.9
+              },
+              {
+                "parseUs": 397.7,
+                "paintUs": 566.25,
+                "totalUs": 963.95
+              },
+              {
+                "parseUs": 360.075,
+                "paintUs": 621.875,
+                "totalUs": 981.95
+              },
+              {
+                "parseUs": 356.6,
+                "paintUs": 603.1,
+                "totalUs": 959.7
+              }
+            ],
+            "medianParseUs": 386.3,
+            "medianPaintUs": 583.375,
+            "medianTotalUs": 969.675
+          }
+        ]
+      }
+    },
+    {
+      "label": "baseline",
+      "pair": 2,
+      "startedAt": "2026-10-02T14:54:38.060259+00:00",
+      "endedAt": "2026-10-02T14:54:42.351796+00:00",
+      "exit": 0,
+      "observations": {
+        "schema": 1,
+        "scope": "headless_debug_parse_and_picture_recording",
+        "completedAt": "2026-10-02T14:54:42.263455Z",
+        "warmupFrames": 40,
+        "rounds": 7,
+        "framesPerRound": 40,
+        "results": [
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "overwrite_identical",
+            "rounds": [
+              {
+                "parseUs": 111.5,
+                "paintUs": 42.825,
+                "totalUs": 154.325
+              },
+              {
+                "parseUs": 96.15,
+                "paintUs": 30.95,
+                "totalUs": 127.1
+              },
+              {
+                "parseUs": 99.825,
+                "paintUs": 27.75,
+                "totalUs": 127.575
+              },
+              {
+                "parseUs": 91.075,
+                "paintUs": 28.1,
+                "totalUs": 119.175
+              },
+              {
+                "parseUs": 87.3,
+                "paintUs": 21.675,
+                "totalUs": 108.975
+              },
+              {
+                "parseUs": 81.825,
+                "paintUs": 20.775,
+                "totalUs": 102.6
+              },
+              {
+                "parseUs": 83.875,
+                "paintUs": 20.125,
+                "totalUs": 104.0
+              }
+            ],
+            "medianParseUs": 91.075,
+            "medianPaintUs": 27.75,
+            "medianTotalUs": 119.175
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "erase_identical",
+            "rounds": [
+              {
+                "parseUs": 155.425,
+                "paintUs": 192.7,
+                "totalUs": 348.125
+              },
+              {
+                "parseUs": 94.7,
+                "paintUs": 165.075,
+                "totalUs": 259.775
+              },
+              {
+                "parseUs": 105.325,
+                "paintUs": 170.7,
+                "totalUs": 276.025
+              },
+              {
+                "parseUs": 93.95,
+                "paintUs": 157.775,
+                "totalUs": 251.725
+              },
+              {
+                "parseUs": 97.55,
+                "paintUs": 147.4,
+                "totalUs": 244.95
+              },
+              {
+                "parseUs": 91.4,
+                "paintUs": 154.275,
+                "totalUs": 245.675
+              },
+              {
+                "parseUs": 105.975,
+                "paintUs": 150.175,
+                "totalUs": 256.15
+              }
+            ],
+            "medianParseUs": 97.55,
+            "medianPaintUs": 157.775,
+            "medianTotalUs": 256.15
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "one_changed",
+            "rounds": [
+              {
+                "parseUs": 91.225,
+                "paintUs": 149.85,
+                "totalUs": 241.075
+              },
+              {
+                "parseUs": 91.475,
+                "paintUs": 149.6,
+                "totalUs": 241.075
+              },
+              {
+                "parseUs": 91.2,
+                "paintUs": 141.45,
+                "totalUs": 232.65
+              },
+              {
+                "parseUs": 93.0,
+                "paintUs": 145.375,
+                "totalUs": 238.375
+              },
+              {
+                "parseUs": 92.15,
+                "paintUs": 142.65,
+                "totalUs": 234.8
+              },
+              {
+                "parseUs": 90.8,
+                "paintUs": 141.925,
+                "totalUs": 232.725
+              },
+              {
+                "parseUs": 102.075,
+                "paintUs": 133.15,
+                "totalUs": 235.225
+              }
+            ],
+            "medianParseUs": 91.475,
+            "medianPaintUs": 142.65,
+            "medianTotalUs": 235.225
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "all_changed",
+            "rounds": [
+              {
+                "parseUs": 93.475,
+                "paintUs": 158.275,
+                "totalUs": 251.75
+              },
+              {
+                "parseUs": 91.425,
+                "paintUs": 148.725,
+                "totalUs": 240.15
+              },
+              {
+                "parseUs": 90.275,
+                "paintUs": 142.6,
+                "totalUs": 232.875
+              },
+              {
+                "parseUs": 91.4,
+                "paintUs": 144.125,
+                "totalUs": 235.525
+              },
+              {
+                "parseUs": 89.75,
+                "paintUs": 148.825,
+                "totalUs": 238.575
+              },
+              {
+                "parseUs": 102.7,
+                "paintUs": 127.3,
+                "totalUs": 230.0
+              },
+              {
+                "parseUs": 104.325,
+                "paintUs": 127.875,
+                "totalUs": 232.2
+              }
+            ],
+            "medianParseUs": 91.425,
+            "medianPaintUs": 144.125,
+            "medianTotalUs": 235.525
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "overwrite_identical",
+            "rounds": [
+              {
+                "parseUs": 346.05,
+                "paintUs": 60.85,
+                "totalUs": 406.9
+              },
+              {
+                "parseUs": 316.375,
+                "paintUs": 58.825,
+                "totalUs": 375.2
+              },
+              {
+                "parseUs": 331.9,
+                "paintUs": 58.05,
+                "totalUs": 389.95
+              },
+              {
+                "parseUs": 324.1,
+                "paintUs": 78.95,
+                "totalUs": 403.05
+              },
+              {
+                "parseUs": 327.725,
+                "paintUs": 57.45,
+                "totalUs": 385.175
+              },
+              {
+                "parseUs": 315.325,
+                "paintUs": 56.775,
+                "totalUs": 372.1
+              },
+              {
+                "parseUs": 321.75,
+                "paintUs": 57.25,
+                "totalUs": 379.0
+              }
+            ],
+            "medianParseUs": 324.1,
+            "medianPaintUs": 58.05,
+            "medianTotalUs": 385.175
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "erase_identical",
+            "rounds": [
+              {
+                "parseUs": 405.275,
+                "paintUs": 549.575,
+                "totalUs": 954.85
+              },
+              {
+                "parseUs": 365.675,
+                "paintUs": 598.5,
+                "totalUs": 964.175
+              },
+              {
+                "parseUs": 369.125,
+                "paintUs": 603.775,
+                "totalUs": 972.9
+              },
+              {
+                "parseUs": 363.85,
+                "paintUs": 584.275,
+                "totalUs": 948.125
+              },
+              {
+                "parseUs": 348.575,
+                "paintUs": 549.95,
+                "totalUs": 898.525
+              },
+              {
+                "parseUs": 345.375,
+                "paintUs": 533.3,
+                "totalUs": 878.675
+              },
+              {
+                "parseUs": 368.175,
+                "paintUs": 522.0,
+                "totalUs": 890.175
+              }
+            ],
+            "medianParseUs": 365.675,
+            "medianPaintUs": 549.95,
+            "medianTotalUs": 948.125
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "one_changed",
+            "rounds": [
+              {
+                "parseUs": 347.525,
+                "paintUs": 534.65,
+                "totalUs": 882.175
+              },
+              {
+                "parseUs": 343.875,
+                "paintUs": 526.55,
+                "totalUs": 870.425
+              },
+              {
+                "parseUs": 391.925,
+                "paintUs": 517.825,
+                "totalUs": 909.75
+              },
+              {
+                "parseUs": 398.525,
+                "paintUs": 524.675,
+                "totalUs": 923.2
+              },
+              {
+                "parseUs": 369.825,
+                "paintUs": 527.275,
+                "totalUs": 897.1
+              },
+              {
+                "parseUs": 351.25,
+                "paintUs": 548.4,
+                "totalUs": 899.65
+              },
+              {
+                "parseUs": 344.25,
+                "paintUs": 536.975,
+                "totalUs": 881.225
+              }
+            ],
+            "medianParseUs": 351.25,
+            "medianPaintUs": 527.275,
+            "medianTotalUs": 897.1
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "all_changed",
+            "rounds": [
+              {
+                "parseUs": 380.675,
+                "paintUs": 722.05,
+                "totalUs": 1102.725
+              },
+              {
+                "parseUs": 346.45,
+                "paintUs": 546.2,
+                "totalUs": 892.65
+              },
+              {
+                "parseUs": 358.125,
+                "paintUs": 581.425,
+                "totalUs": 939.55
+              },
+              {
+                "parseUs": 350.2,
+                "paintUs": 546.75,
+                "totalUs": 896.95
+              },
+              {
+                "parseUs": 345.475,
+                "paintUs": 536.475,
+                "totalUs": 881.95
+              },
+              {
+                "parseUs": 361.45,
+                "paintUs": 606.725,
+                "totalUs": 968.175
+              },
+              {
+                "parseUs": 419.5,
+                "paintUs": 542.6,
+                "totalUs": 962.1
+              }
+            ],
+            "medianParseUs": 358.125,
+            "medianPaintUs": 546.75,
+            "medianTotalUs": 939.55
+          }
+        ]
+      }
+    },
+    {
+      "label": "baseline",
+      "pair": 3,
+      "startedAt": "2026-10-02T14:54:42.352219+00:00",
+      "endedAt": "2026-10-02T14:54:47.301234+00:00",
+      "exit": 0,
+      "observations": {
+        "schema": 1,
+        "scope": "headless_debug_parse_and_picture_recording",
+        "completedAt": "2026-10-02T14:54:47.220865Z",
+        "warmupFrames": 40,
+        "rounds": 7,
+        "framesPerRound": 40,
+        "results": [
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "overwrite_identical",
+            "rounds": [
+              {
+                "parseUs": 115.525,
+                "paintUs": 40.075,
+                "totalUs": 155.6
+              },
+              {
+                "parseUs": 99.925,
+                "paintUs": 37.475,
+                "totalUs": 137.4
+              },
+              {
+                "parseUs": 99.175,
+                "paintUs": 35.975,
+                "totalUs": 135.15
+              },
+              {
+                "parseUs": 94.2,
+                "paintUs": 25.75,
+                "totalUs": 119.95
+              },
+              {
+                "parseUs": 87.15,
+                "paintUs": 20.55,
+                "totalUs": 107.7
+              },
+              {
+                "parseUs": 81.7,
+                "paintUs": 19.325,
+                "totalUs": 101.025
+              },
+              {
+                "parseUs": 84.15,
+                "paintUs": 19.05,
+                "totalUs": 103.2
+              }
+            ],
+            "medianParseUs": 94.2,
+            "medianPaintUs": 25.75,
+            "medianTotalUs": 119.95
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "erase_identical",
+            "rounds": [
+              {
+                "parseUs": 115.825,
+                "paintUs": 228.65,
+                "totalUs": 344.475
+              },
+              {
+                "parseUs": 93.725,
+                "paintUs": 166.75,
+                "totalUs": 260.475
+              },
+              {
+                "parseUs": 106.075,
+                "paintUs": 159.525,
+                "totalUs": 265.6
+              },
+              {
+                "parseUs": 93.775,
+                "paintUs": 158.6,
+                "totalUs": 252.375
+              },
+              {
+                "parseUs": 97.025,
+                "paintUs": 141.9,
+                "totalUs": 238.925
+              },
+              {
+                "parseUs": 88.2,
+                "paintUs": 147.65,
+                "totalUs": 235.85
+              },
+              {
+                "parseUs": 102.975,
+                "paintUs": 146.85,
+                "totalUs": 249.825
+              }
+            ],
+            "medianParseUs": 97.025,
+            "medianPaintUs": 158.6,
+            "medianTotalUs": 252.375
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "one_changed",
+            "rounds": [
+              {
+                "parseUs": 89.775,
+                "paintUs": 141.05,
+                "totalUs": 230.825
+              },
+              {
+                "parseUs": 91.825,
+                "paintUs": 141.9,
+                "totalUs": 233.725
+              },
+              {
+                "parseUs": 92.8,
+                "paintUs": 146.6,
+                "totalUs": 239.4
+              },
+              {
+                "parseUs": 93.625,
+                "paintUs": 145.375,
+                "totalUs": 239.0
+              },
+              {
+                "parseUs": 87.775,
+                "paintUs": 136.65,
+                "totalUs": 224.425
+              },
+              {
+                "parseUs": 86.85,
+                "paintUs": 134.3,
+                "totalUs": 221.15
+              },
+              {
+                "parseUs": 99.025,
+                "paintUs": 126.75,
+                "totalUs": 225.775
+              }
+            ],
+            "medianParseUs": 91.825,
+            "medianPaintUs": 141.05,
+            "medianTotalUs": 230.825
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "all_changed",
+            "rounds": [
+              {
+                "parseUs": 96.9,
+                "paintUs": 122.475,
+                "totalUs": 219.375
+              },
+              {
+                "parseUs": 92.175,
+                "paintUs": 135.725,
+                "totalUs": 227.9
+              },
+              {
+                "parseUs": 88.775,
+                "paintUs": 135.175,
+                "totalUs": 223.95
+              },
+              {
+                "parseUs": 88.375,
+                "paintUs": 132.975,
+                "totalUs": 221.35
+              },
+              {
+                "parseUs": 86.175,
+                "paintUs": 132.15,
+                "totalUs": 218.325
+              },
+              {
+                "parseUs": 94.225,
+                "paintUs": 121.0,
+                "totalUs": 215.225
+              },
+              {
+                "parseUs": 99.075,
+                "paintUs": 126.4,
+                "totalUs": 225.475
+              }
+            ],
+            "medianParseUs": 92.175,
+            "medianPaintUs": 132.15,
+            "medianTotalUs": 221.35
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "overwrite_identical",
+            "rounds": [
+              {
+                "parseUs": 351.925,
+                "paintUs": 59.875,
+                "totalUs": 411.8
+              },
+              {
+                "parseUs": 324.825,
+                "paintUs": 58.2,
+                "totalUs": 383.025
+              },
+              {
+                "parseUs": 337.15,
+                "paintUs": 56.025,
+                "totalUs": 393.175
+              },
+              {
+                "parseUs": 324.35,
+                "paintUs": 67.825,
+                "totalUs": 392.175
+              },
+              {
+                "parseUs": 337.725,
+                "paintUs": 59.0,
+                "totalUs": 396.725
+              },
+              {
+                "parseUs": 322.75,
+                "paintUs": 59.95,
+                "totalUs": 382.7
+              },
+              {
+                "parseUs": 345.775,
+                "paintUs": 60.0,
+                "totalUs": 405.775
+              }
+            ],
+            "medianParseUs": 337.15,
+            "medianPaintUs": 59.875,
+            "medianTotalUs": 393.175
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "erase_identical",
+            "rounds": [
+              {
+                "parseUs": 390.225,
+                "paintUs": 508.475,
+                "totalUs": 898.7
+              },
+              {
+                "parseUs": 355.55,
+                "paintUs": 522.475,
+                "totalUs": 878.025
+              },
+              {
+                "parseUs": 353.875,
+                "paintUs": 535.475,
+                "totalUs": 889.35
+              },
+              {
+                "parseUs": 362.075,
+                "paintUs": 549.2,
+                "totalUs": 911.275
+              },
+              {
+                "parseUs": 354.775,
+                "paintUs": 545.575,
+                "totalUs": 900.35
+              },
+              {
+                "parseUs": 348.125,
+                "paintUs": 521.4,
+                "totalUs": 869.525
+              },
+              {
+                "parseUs": 374.3,
+                "paintUs": 524.575,
+                "totalUs": 898.875
+              }
+            ],
+            "medianParseUs": 355.55,
+            "medianPaintUs": 524.575,
+            "medianTotalUs": 898.7
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "one_changed",
+            "rounds": [
+              {
+                "parseUs": 352.15,
+                "paintUs": 541.125,
+                "totalUs": 893.275
+              },
+              {
+                "parseUs": 354.1,
+                "paintUs": 568.85,
+                "totalUs": 922.95
+              },
+              {
+                "parseUs": 402.825,
+                "paintUs": 544.975,
+                "totalUs": 947.8
+              },
+              {
+                "parseUs": 400.625,
+                "paintUs": 526.9,
+                "totalUs": 927.525
+              },
+              {
+                "parseUs": 381.15,
+                "paintUs": 551.85,
+                "totalUs": 933.0
+              },
+              {
+                "parseUs": 348.85,
+                "paintUs": 528.525,
+                "totalUs": 877.375
+              },
+              {
+                "parseUs": 353.525,
+                "paintUs": 552.075,
+                "totalUs": 905.6
+              }
+            ],
+            "medianParseUs": 354.1,
+            "medianPaintUs": 544.975,
+            "medianTotalUs": 922.95
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "all_changed",
+            "rounds": [
+              {
+                "parseUs": 384.65,
+                "paintUs": 740.775,
+                "totalUs": 1125.425
+              },
+              {
+                "parseUs": 363.475,
+                "paintUs": 600.8,
+                "totalUs": 964.275
+              },
+              {
+                "parseUs": 364.925,
+                "paintUs": 612.425,
+                "totalUs": 977.35
+              },
+              {
+                "parseUs": 363.9,
+                "paintUs": 608.425,
+                "totalUs": 972.325
+              },
+              {
+                "parseUs": 361.275,
+                "paintUs": 592.0,
+                "totalUs": 953.275
+              },
+              {
+                "parseUs": 359.05,
+                "paintUs": 577.175,
+                "totalUs": 936.225
+              },
+              {
+                "parseUs": 423.675,
+                "paintUs": 569.525,
+                "totalUs": 993.2
+              }
+            ],
+            "medianParseUs": 363.9,
+            "medianPaintUs": 600.8,
+            "medianTotalUs": 972.325
+          }
+        ]
+      }
+    },
+    {
+      "label": "candidate",
+      "pair": 3,
+      "startedAt": "2026-10-02T14:54:47.301704+00:00",
+      "endedAt": "2026-10-02T14:54:51.203980+00:00",
+      "exit": 0,
+      "observations": {
+        "schema": 1,
+        "scope": "headless_debug_parse_and_picture_recording",
+        "completedAt": "2026-10-02T14:54:51.115317Z",
+        "warmupFrames": 40,
+        "rounds": 7,
+        "framesPerRound": 40,
+        "results": [
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "overwrite_identical",
+            "rounds": [
+              {
+                "parseUs": 118.625,
+                "paintUs": 47.05,
+                "totalUs": 165.675
+              },
+              {
+                "parseUs": 96.025,
+                "paintUs": 32.175,
+                "totalUs": 128.2
+              },
+              {
+                "parseUs": 102.725,
+                "paintUs": 29.725,
+                "totalUs": 132.45
+              },
+              {
+                "parseUs": 94.275,
+                "paintUs": 29.7,
+                "totalUs": 123.975
+              },
+              {
+                "parseUs": 89.475,
+                "paintUs": 22.775,
+                "totalUs": 112.25
+              },
+              {
+                "parseUs": 78.8,
+                "paintUs": 21.75,
+                "totalUs": 100.55
+              },
+              {
+                "parseUs": 85.3,
+                "paintUs": 21.425,
+                "totalUs": 106.725
+              }
+            ],
+            "medianParseUs": 94.275,
+            "medianPaintUs": 29.7,
+            "medianTotalUs": 123.975
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "erase_identical",
+            "rounds": [
+              {
+                "parseUs": 92.425,
+                "paintUs": 32.075,
+                "totalUs": 124.5
+              },
+              {
+                "parseUs": 116.6,
+                "paintUs": 36.3,
+                "totalUs": 152.9
+              },
+              {
+                "parseUs": 120.8,
+                "paintUs": 30.825,
+                "totalUs": 151.625
+              },
+              {
+                "parseUs": 93.975,
+                "paintUs": 33.05,
+                "totalUs": 127.025
+              },
+              {
+                "parseUs": 88.275,
+                "paintUs": 30.3,
+                "totalUs": 118.575
+              },
+              {
+                "parseUs": 92.325,
+                "paintUs": 30.775,
+                "totalUs": 123.1
+              },
+              {
+                "parseUs": 92.55,
+                "paintUs": 32.35,
+                "totalUs": 124.9
+              }
+            ],
+            "medianParseUs": 92.55,
+            "medianPaintUs": 32.075,
+            "medianTotalUs": 124.9
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "one_changed",
+            "rounds": [
+              {
+                "parseUs": 96.925,
+                "paintUs": 38.525,
+                "totalUs": 135.45
+              },
+              {
+                "parseUs": 90.2,
+                "paintUs": 36.525,
+                "totalUs": 126.725
+              },
+              {
+                "parseUs": 93.875,
+                "paintUs": 38.375,
+                "totalUs": 132.25
+              },
+              {
+                "parseUs": 87.725,
+                "paintUs": 36.85,
+                "totalUs": 124.575
+              },
+              {
+                "parseUs": 93.1,
+                "paintUs": 36.275,
+                "totalUs": 129.375
+              },
+              {
+                "parseUs": 88.6,
+                "paintUs": 37.8,
+                "totalUs": 126.4
+              },
+              {
+                "parseUs": 88.975,
+                "paintUs": 37.15,
+                "totalUs": 126.125
+              }
+            ],
+            "medianParseUs": 90.2,
+            "medianPaintUs": 37.15,
+            "medianTotalUs": 126.725
+          },
+          {
+            "terminals": 1,
+            "rows": 30,
+            "columns": 120,
+            "mode": "all_changed",
+            "rounds": [
+              {
+                "parseUs": 90.1,
+                "paintUs": 188.5,
+                "totalUs": 278.6
+              },
+              {
+                "parseUs": 91.25,
+                "paintUs": 168.9,
+                "totalUs": 260.15
+              },
+              {
+                "parseUs": 88.65,
+                "paintUs": 168.4,
+                "totalUs": 257.05
+              },
+              {
+                "parseUs": 90.35,
+                "paintUs": 166.45,
+                "totalUs": 256.8
+              },
+              {
+                "parseUs": 103.975,
+                "paintUs": 159.475,
+                "totalUs": 263.45
+              },
+              {
+                "parseUs": 98.9,
+                "paintUs": 171.925,
+                "totalUs": 270.825
+              },
+              {
+                "parseUs": 91.1,
+                "paintUs": 162.6,
+                "totalUs": 253.7
+              }
+            ],
+            "medianParseUs": 91.1,
+            "medianPaintUs": 168.4,
+            "medianTotalUs": 260.15
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "overwrite_identical",
+            "rounds": [
+              {
+                "parseUs": 329.425,
+                "paintUs": 61.55,
+                "totalUs": 390.975
+              },
+              {
+                "parseUs": 331.85,
+                "paintUs": 60.45,
+                "totalUs": 392.3
+              },
+              {
+                "parseUs": 320.2,
+                "paintUs": 59.95,
+                "totalUs": 380.15
+              },
+              {
+                "parseUs": 330.875,
+                "paintUs": 62.0,
+                "totalUs": 392.875
+              },
+              {
+                "parseUs": 318.6,
+                "paintUs": 61.85,
+                "totalUs": 380.45
+              },
+              {
+                "parseUs": 328.3,
+                "paintUs": 61.375,
+                "totalUs": 389.675
+              },
+              {
+                "parseUs": 327.325,
+                "paintUs": 59.6,
+                "totalUs": 386.925
+              }
+            ],
+            "medianParseUs": 328.3,
+            "medianPaintUs": 61.375,
+            "medianTotalUs": 389.675
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "erase_identical",
+            "rounds": [
+              {
+                "parseUs": 369.575,
+                "paintUs": 119.075,
+                "totalUs": 488.65
+              },
+              {
+                "parseUs": 352.95,
+                "paintUs": 116.25,
+                "totalUs": 469.2
+              },
+              {
+                "parseUs": 366.1,
+                "paintUs": 117.775,
+                "totalUs": 483.875
+              },
+              {
+                "parseUs": 362.3,
+                "paintUs": 117.575,
+                "totalUs": 479.875
+              },
+              {
+                "parseUs": 356.225,
+                "paintUs": 113.975,
+                "totalUs": 470.2
+              },
+              {
+                "parseUs": 356.4,
+                "paintUs": 127.025,
+                "totalUs": 483.425
+              },
+              {
+                "parseUs": 360.05,
+                "paintUs": 123.375,
+                "totalUs": 483.425
+              }
+            ],
+            "medianParseUs": 360.05,
+            "medianPaintUs": 117.775,
+            "medianTotalUs": 483.425
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "one_changed",
+            "rounds": [
+              {
+                "parseUs": 363.9,
+                "paintUs": 134.8,
+                "totalUs": 498.7
+              },
+              {
+                "parseUs": 361.2,
+                "paintUs": 134.25,
+                "totalUs": 495.45
+              },
+              {
+                "parseUs": 358.325,
+                "paintUs": 136.4,
+                "totalUs": 494.725
+              },
+              {
+                "parseUs": 359.075,
+                "paintUs": 135.225,
+                "totalUs": 494.3
+              },
+              {
+                "parseUs": 349.15,
+                "paintUs": 134.775,
+                "totalUs": 483.925
+              },
+              {
+                "parseUs": 360.775,
+                "paintUs": 135.225,
+                "totalUs": 496.0
+              },
+              {
+                "parseUs": 361.275,
+                "paintUs": 136.875,
+                "totalUs": 498.15
+              }
+            ],
+            "medianParseUs": 360.775,
+            "medianPaintUs": 135.225,
+            "medianTotalUs": 495.45
+          },
+          {
+            "terminals": 4,
+            "rows": 30,
+            "columns": 120,
+            "mode": "all_changed",
+            "rounds": [
+              {
+                "parseUs": 382.9,
+                "paintUs": 567.65,
+                "totalUs": 950.55
+              },
+              {
+                "parseUs": 386.975,
+                "paintUs": 557.9,
+                "totalUs": 944.875
+              },
+              {
+                "parseUs": 371.925,
+                "paintUs": 575.925,
+                "totalUs": 947.85
+              },
+              {
+                "parseUs": 386.25,
+                "paintUs": 550.825,
+                "totalUs": 937.075
+              },
+              {
+                "parseUs": 384.525,
+                "paintUs": 553.825,
+                "totalUs": 938.35
+              },
+              {
+                "parseUs": 353.675,
+                "paintUs": 564.925,
+                "totalUs": 918.6
+              },
+              {
+                "parseUs": 353.15,
+                "paintUs": 576.025,
+                "totalUs": 929.175
+              }
+            ],
+            "medianParseUs": 382.9,
+            "medianPaintUs": 564.925,
+            "medianTotalUs": 938.35
+          }
+        ]
+      }
+    }
+  ],
+  "validation": {
+    "sourceReceipt": {
+      "commit": "f537725295864d8150d439289dc24cf4f870e226",
+      "tree": "885e4c0fc11f7cbef5038aba9392802a3a0d12c8",
+      "working_changes_sha256": "a679e62bc33fc71c667b939dcceb12d8ebd0883581cfafbb919ecda7416bba6b",
+      "dirty": true
+    },
+    "sourceUnchangedDuringChecks": true,
+    "checks": [
+      {
+        "name": "terminal-regressions",
+        "started_at": "2026-10-02T14:59:03.209799+00:00",
+        "finished_at": "2026-10-02T14:59:22.117722+00:00",
+        "status": "passed",
+        "duration_seconds": 18.907,
+        "exit_code": 0
+      },
+      {
+        "name": "analyze-redraw",
+        "started_at": "2026-10-02T14:59:22.172795+00:00",
+        "finished_at": "2026-10-02T14:59:24.107814+00:00",
+        "status": "passed",
+        "duration_seconds": 1.935,
+        "exit_code": 0
+      },
+      {
+        "name": "native-redraw",
+        "started_at": "2026-10-02T14:59:03.207851+00:00",
+        "finished_at": "2026-10-02T14:59:49.682691+00:00",
+        "status": "passed",
+        "duration_seconds": 46.474,
+        "exit_code": 0
+      }
+    ],
+    "unitWidgetTestsPassed": 143,
+    "nativeTestsPassed": 3,
+    "exactPixelPairsPerRenderer": 42,
+    "cacheExecutableLineCoverage": {
+      "hit": 42,
+      "total": 42
+    },
+    "nativeLimit": "Native Flutter rendering and injected framework input; does not establish physical keyboard/IME/display latency. Flutter launcher reported failure to foreground; tests connected and passed, so no foreground timing claim.",
+    "initialFixtureCorrection": "Unsupported circular-buffer .first getter fixed to [0]. The first check failed compilation; the final plan passed.",
+    "normalBuildFirstAttempt": "Failed before build because flutter was absent from PATH; rerun uses pinned SDK.",
+    "normalReviewBuild": "Passed with pinned Flutter; Impeller selected and strict bundle signature verified.",
+    "normalReviewBuildCheckedAt": "2026-10-02T15:04:28.381764+00:00"
+  },
+  "limits": [
+    "Actual live workload differs from this fixture. No whole-app energy improvement or battery-menu clearance measured.",
+    "All-changed single-terminal control increased 30.75 microseconds (13.5%) for parse plus recording; four-terminal control increased 6.625 microseconds (0.7%). Snapshots are a bounded tradeoff, not a universal speedup.",
+    "The current machine runs other real apps and agents; owned benchmarks ran sequentially without concurrent owned builds/tests/profilers."
+  ]
+}

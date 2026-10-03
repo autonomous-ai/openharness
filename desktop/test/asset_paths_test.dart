@@ -78,6 +78,10 @@ void main() {
         .join('\n');
     final manifest = File('assets/store/covers/sources.json')
         .readAsStringSync();
+    // Thousands of animation frames share this one directory expression.
+    final namesDaemonArt = source.contains(
+      r"assets/daemon-art/${slot ? 'slot' : 'portrait'}",
+    );
 
     bool named(String name) => source.contains(name) || manifest.contains(name);
     bool attribution(String name) =>
@@ -97,7 +101,7 @@ void main() {
       // These two directories are selected by the literal slot/portrait ternary.
       if ((dir == 'assets/daemon-art/slot/' ||
               dir == 'assets/daemon-art/portrait/') &&
-          source.contains(r"assets/daemon-art/${slot ? 'slot' : 'portrait'}")) {
+          namesDaemonArt) {
         continue;
       }
       if (attribution(name) || named(name)) continue;

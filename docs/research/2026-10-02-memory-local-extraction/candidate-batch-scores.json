@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "7cfb33ace5493fe88a9f777a1e3018f46fa509e5960d4368a509aa5baa662a2b",
+  "suiteSha256": "4ef4d98a8a628390b729f9a0b5a4c7ff2a9ff83995e398a48144a4c94a617059",
+  "evidence": "development_diagnostic_only",
+  "reviewer": {
+    "id": "codex-source-review",
+    "kind": "agent",
+    "independent": false
+  },
+  "coverage": {
+    "completedCases": 1,
+    "expectedCases": 2
+  },
+  "memories": {
+    "passed": 2,
+    "reviewed": 2,
+    "total": 2,
+    "rate": null
+  },
+  "recall": {
+    "passed": 2,
+    "reviewed": 2,
+    "total": 2,
+    "rate": null
+  },
+  "abstention": {
+    "passed": 3,
+    "reviewed": 3,
+    "total": 3,
+    "rate": null
+  },
+  "cases": [
+    {
+      "id": "personal-mixed-episodes",
+      "status": "reviewable",
+      "probes": [
+        {
+          "id": "debugging",
+          "passed": true
+        },
+        {
+          "id": "incident",
+          "passed": true
+        },
+        {
+          "id": "database-default",
+          "passed": true
+        },
+        {
+          "id": "no-borrowed-opinion",
+          "passed": true
+        },
+        {
+          "id": "no-unbound-project-fact",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "id": "separate-conversation-acceptance",
+      "status": "not_reviewable",
+      "probes": []
+    }
+  ],
+  "taskBenefit": "not_measured",
+  "nativeDelivery": "not_measured",
+  "limitations": [
+    "Ratings are attributed judgements, not authenticated independent review.",
+    "These diagnostics do not satisfy the held-out-history or paired coding-task release gates.",
+    "Older reports without captured recall context can be reviewed for memory content but receive no recall-quality rate.",
+    "Empty, unfinished or partially reviewed denominators never receive a passing rate."
+  ],
+  "producer": {
+    "protocol": "coding-memory-quality-review-v1",
+    "node": "v22.23.2",
+    "runnerSha256": "90252c4c052d97bdbccbd794c769a25a4e123c579afebcf6d452d58ec5b7afb9",
+    "scorerSha256": "da4c153d69c6cdf26bd8135993e576bc3f60c4042fc2c11829880b2be295bea3"
+  }
+}

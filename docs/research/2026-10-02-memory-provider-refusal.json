@@ -1,0 +1,108 @@
+{
+  "at": "2026-10-02T15:09:23.275Z",
+  "capability": {
+    "supported": true,
+    "version": "1.18.34"
+  },
+  "runs": [
+    {
+      "mode": "text",
+      "requests": [
+        {
+          "route": "/v1/chat/completions",
+          "model": "memory-model",
+          "tools": [],
+          "selectedCredential": true
+        }
+      ],
+      "snapshotReads": 3,
+      "result": {
+        "text": "{\"proposals\":[]}"
+      },
+      "forbiddenFileExists": false,
+      "privateStorageRemoved": true
+    },
+    {
+      "mode": "bash",
+      "requests": [
+        {
+          "route": "/v1/chat/completions",
+          "model": "memory-model",
+          "tools": [],
+          "selectedCredential": true
+        },
+        {
+          "route": "/v1/chat/completions",
+          "model": "memory-model",
+          "tools": [],
+          "selectedCredential": true
+        }
+      ],
+      "snapshotReads": 2,
+      "error": "inference_tool_or_error",
+      "forbiddenFileExists": false,
+      "privateStorageRemoved": true
+    },
+    {
+      "mode": "question",
+      "requests": [
+        {
+          "route": "/v1/chat/completions",
+          "model": "memory-model",
+          "tools": [],
+          "selectedCredential": true
+        },
+        {
+          "route": "/v1/chat/completions",
+          "model": "memory-model",
+          "tools": [],
+          "selectedCredential": true
+        }
+      ],
+      "snapshotReads": 2,
+      "error": "inference_tool_or_error",
+      "forbiddenFileExists": false,
+      "privateStorageRemoved": true
+    },
+    {
+      "mode": "provider_restricted",
+      "requests": [
+        {
+          "route": "/v1/chat/completions",
+          "model": "memory-model",
+          "tools": [],
+          "selectedCredential": true
+        }
+      ],
+      "snapshotReads": 2,
+      "error": "inference_provider_restricted",
+      "forbiddenFileExists": false,
+      "privateStorageRemoved": true
+    }
+  ],
+  "limitations": [
+    "Synthetic localhost responses; no personal conversations or real model inference.",
+    "Native transport only. This probe does not exercise production account/config observation or companion wiring.",
+    "No claim about extraction quality, OAuth, automatic compaction or task benefit."
+  ],
+  "provenance": {
+    "input": "Synthetic extraction and localhost responses only; no real accounts or conversations.",
+    "script": "cli/scripts/memory-native-opencode-inference-probe.mjs",
+    "scriptSha256": "efbfb7dac25818e04f1928301508e6a4b4149d7e84669c58d50eb03bf74ea9d9",
+    "adapterSha256": "e5fe3c6194718e9e388248ca907cf85f48a0a02904beea9879488618a28c7471",
+    "fixture": "cli/src/memory/__fixtures__/opencode-1.18.34-provider-refusal.json",
+    "fixtureSource": "Native 1.18.34 error recorded on 2026-10-02 at 14:48 UTC during a synthetic READY request to the saved public free model. Headers, route and identifiers omitted.",
+    "qualityCredit": false
+  },
+  "observedExternalDiagnostic": {
+    "at": "2026-10-02T14:48:18Z",
+    "engine": "opencode",
+    "nativeVersion": "1.18.34",
+    "model": "opencode/muse-spark-1.3-contributor-free",
+    "input": "Synthetic READY request in disposable storage; public native credential only.",
+    "statusCode": 403,
+    "errorType": "FreeTierError",
+    "completedExtractionCases": 0,
+    "qualityCredit": false
+  }
+}

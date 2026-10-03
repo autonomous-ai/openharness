@@ -104,7 +104,8 @@ describe('the package', () => {
 })
 
 describe('talking to it', () => {
-  function world(opts: { engine?: 'claude' | 'codex' | 'opencode' | null; pair?: string | null } = {}) {
+  function world(opts: { engine?: 'claude' | 'codex' | 'opencode' | null; pair?: string | null;
+    backgroundInUse?: (agentId: string) => boolean } = {}) {
     let pair = opts.pair === undefined ? 'tim' : opts.pair
     const rows: PairHarnessRow[] = []
     let working = false
@@ -124,6 +125,7 @@ describe('talking to it', () => {
       stop: vi.fn<PairHarnessDeps['stop']>(async (agentId) => { rows.find((r) => r.agentId === agentId)!.status = 'stopped' }),
       send: vi.fn(),
       working: () => working,
+      backgroundInUse: opts.backgroundInUse,
       now: Date.now,
     }
     const harness = new PairHarness(deps)
@@ -237,6 +239,38 @@ describe('talking to it', () => {
     w.harness.activity('pair-1')
     await vi.advanceTimersByTimeAsync(PAIR_IDLE_MS + 60_000)
     expect(w.deps.stop).toHaveBeenCalledWith('pair-1')
+  })
+
+  it.each(['claude', 'codex', 'opencode'] as const)('keeps the %s model connection available while background learning is enabled', async engine => {
+    let learning = true
+    const backgroundInUse = vi.fn((id: string) => id === 'pair-1' && learning)
+    const w = world({ engine, backgroundInUse })
+    expect(await w.harness.open(undefined, engine)).toMatchObject({ ok: true, started: true })
+    w.rows[0]!.hasConversation = true
+    await vi.advanceTimersByTimeAsync(PAIR_IDLE_MS * 3)
+    expect(w.rows[0]!.status).toBe('live')
+    expect(w.deps.stop).not.toHaveBeenCalled()
+    expect(w.deps.send).not.toHaveBeenCalled()
+    expect(w.deps.resume).not.toHaveBeenCalled()
+    expect(w.deps.create).toHaveBeenCalledOnce()
+    expect(w.deps.create.mock.calls[0]?.[0].prompt).toBe('')
+    learning = false
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(w.rows[0]!.status).toBe('stopped')
+    expect(w.deps.stop).toHaveBeenCalledExactlyOnceWith('pair-1')
+  })
+
+  it('still honors explicit off and never reopens a stopped companion for background learning', async () => {
+    const w = world({ backgroundInUse: () => true })
+    await w.harness.open()
+    w.rows[0]!.hasConversation = true
+    await w.harness.off()
+    expect(w.rows[0]!.status).toBe('stopped')
+    await vi.advanceTimersByTimeAsync(PAIR_IDLE_MS * 3)
+    expect(await w.harness.idleCheck()).toBe(false)
+    expect(w.deps.stop).toHaveBeenCalledOnce()
+    expect(w.deps.resume).not.toHaveBeenCalled()
+    expect(w.deps.send).not.toHaveBeenCalled()
   })
 
   it('a new paired daemon keeps the collection conversation and does not interrupt its terminal', async () => {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -18,7 +19,64 @@ import 'swarm_attention_test.dart' show waitingQuestion;
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 
+class _CountingAgents extends ListBase<Agent> {
+  _CountingAgents(this.values);
+  final List<Agent> values;
+  int reads = 0;
+  @override
+  int get length => values.length;
+  @override
+  set length(int value) => values.length = value;
+  @override
+  Agent operator [](int index) {
+    reads++;
+    return values[index];
+  }
+
+  @override
+  void operator []=(int index, Agent value) => values[index] = value;
+}
+
 void main() {
+  test('saved history does not cause a roster search per working-menu candidate', () {
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    final machine = app.stateOf('m')!;
+    final agents = _CountingAgents([
+      for (var i = 0; i < 1000; i++)
+        Agent(
+          id: 'saved-$i',
+          name: 'Saved $i',
+          engine: 'codex',
+          status: 'stopped',
+        ),
+      const Agent(
+        id: 'live',
+        name: 'Working',
+        engine: 'codex',
+        terminalAvailable: true,
+      ),
+    ]);
+    machine.agents = agents;
+    for (final agent in agents) {
+      app.rememberOpenedHarness('m', agent.id);
+    }
+    agents.reads = 0;
+    expect(statusMenuWorkingEntries(app), isEmpty);
+    expect(agents.reads, lessThan(10 * agents.length));
+    final idleReads = agents.reads;
+
+    agents.reads = 0;
+    machine.processingAgentIds.add('live');
+    final rows = statusMenuWorkingEntries(app);
+    expect(rows.single['agentId'], 'live');
+    expect(rows.single['label'], 'Working');
+    expect(agents.reads, lessThan(10 * agents.length));
+    debugPrint(
+      'WORKING_MENU_ROSTER_READS idle=$idleReads oneWorking=${agents.reads} roster=${agents.length}',
+    );
+  });
+
   test('lists every unread harness and excludes recent sessions without notifications', () {
     final app = createApp(connected: true);
     addTearDown(app.dispose);

@@ -97,6 +97,17 @@ export async function stopSharedCodexSession(session: RegisteredSession, current
   const home = session.codexHome || env.CODEX_HOME
   const rows = await deps.rows()
   if (!rows) throw new Error('Could not verify the Codex server before stopping')
+  const guard = () => { if (!current()) throw new Error('The close request was cancelled or the session changed') }
+  // Close can beat discovery's exit reconciliation: the client has already
+  // returned to its shell, with no conversation ever bound. Its checkpoint is
+  // saved, and an unrelated shared server is not a reason to keep that pane.
+  // Missing/recycled process identity and previously bound conversations still
+  // need the normal verification below.
+  if (session.processIdentity && !rows.some(row => row.pid === session.processIdentity!.pid)
+    && !session.sessionId && !session.transcriptPath && session.boundAt == null && !session.resumeOnly) {
+    guard()
+    return
+  }
   const owner = rows.find(row => row.pid === session.processIdentity?.pid && row.startMarker === session.processIdentity?.startMarker && row.executable === session.processIdentity?.executable)
   if (owner) {
     const args = argvTokens(owner.args)
@@ -114,7 +125,6 @@ export async function stopSharedCodexSession(session: RegisteredSession, current
   if (!daemon) return // Older/process-owned Codex has no detached writer.
   const normalize = (value: string) => value.trim().replace(/\s+/g, ' ')
   if (!rows.some(row => row.pid === daemon.pid && normalize(row.startMarker) === normalize(daemon.processStartTime))) return
-  const guard = () => { if (!current()) throw new Error('The close request was cancelled or the session changed') }
   if (!session.sessionId) {
     // An unused TUI has no conversation to unload. Close supplies fresh proof
     // of its empty composer after saving the screen; Pause and uncertain

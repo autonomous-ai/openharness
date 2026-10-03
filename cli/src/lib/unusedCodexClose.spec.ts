@@ -9,7 +9,9 @@ import { CloseAgentService, inspectCloseActivity } from './closeAgentService.js'
 import { createStopAgentService } from './stopAgentService.js'
 import { SessionCheckpointStore } from './sessionCheckpoint.js'
 import { processRows } from './tmux.js'
-import { terminateDeletedAgent } from './deleteAgentFallback.js'
+import { checkPidRuntime, terminateDeletedAgent } from './deleteAgentFallback.js'
+import { TmuxBackend } from './tmuxBackend.js'
+import { isolatedTmux } from '../testing/isolatedTmux.js'
 
 vi.mock('./tmux.js', async importOriginal => ({
   ...await importOriginal<typeof import('./tmux.js')>(),
@@ -25,7 +27,7 @@ let row: RegisteredSession
 let service: CloseAgentService
 let screen: string | null
 let checkpointDirectory: string
-const killPane = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
+const killPane = vi.fn<TmuxBackend['kill']>(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -94,3 +96,58 @@ it.each(['working', 'draft', 'unreadable', 'bound', 'resuming'] as const)('does 
   expect(killPane).not.toHaveBeenCalled()
   expect(registry.byAgent(row.agentId)).toBe(row)
 })
+
+it('closes the saved shell when an unbound Codex client exits before discovery catches up', async () => {
+  screen = '$ codex\n$ '
+  vi.mocked(processRows).mockResolvedValue((await processRows())!.filter(process => process.pid !== row.processIdentity!.pid))
+  vi.mocked(terminateDeletedAgent).mockResolvedValue('gone')
+  const request = { agentId: row.agentId, sessionId: '', createdAt: new Date(row.registeredAt).toISOString() }
+  expect(await service.request({ ...request, mode: 'inspect' })).toEqual({ activity: 'unknown' })
+  expect(await service.request({ ...request, mode: 'idle' })).toMatchObject({ error: 'SESSION_NOT_IDLE' })
+  expect(await service.request({ ...request, mode: 'now' })).toEqual({ closed: true })
+  expect(killPane).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%500' })
+  expect(registry.byAgent(row.agentId)).toBeUndefined()
+  const manifest = JSON.parse(readFileSync(join(checkpointDirectory, readdirSync(checkpointDirectory).find(file => /^[a-f0-9]{64}\.json$/.test(file))!), 'utf8'))
+  expect(JSON.parse(readFileSync(join(checkpointDirectory, manifest.file), 'utf8')).screen).toBe(screen)
+})
+
+it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('closes only the exited client pane in a real private tmux server', async () => {
+  const server = await isolatedTmux()
+  const actualTmux = await vi.importActual<typeof import('./tmux.js')>('./tmux.js')
+  const actualStop = await vi.importActual<typeof import('./deleteAgentFallback.js')>('./deleteAgentFallback.js')
+  vi.stubEnv('TMUX', undefined)
+  vi.stubEnv('TMUX_PANE', undefined)
+  vi.stubEnv('TMUX_TMPDIR', server.root)
+  vi.mocked(processRows).mockImplementation(actualTmux.processRows)
+  vi.mocked(checkPidRuntime).mockImplementation(actualStop.checkPidRuntime)
+  vi.mocked(terminateDeletedAgent).mockImplementation(actualStop.terminateDeletedAgent)
+  killPane.mockImplementation(runtime => new TmuxBackend().kill(runtime))
+  try {
+    const sibling = await server.run('new-session', '-d', '-P', '-F', '#{pane_id}', '-s', 'close-fixture', 'sleep 600')
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
+    const script = 'console.log("fixture Codex client"); setInterval(() => {}, 1000)'
+    const pane = await server.run('split-window', '-h', '-P', '-F', '#{pane_id}', '-t', sibling,
+      `${quote(process.execPath)} -e ${quote(script)}; exec /bin/sh`)
+    const shellPid = Number(await server.run('display-message', '-p', '-t', pane, '#{pane_pid}'))
+    await vi.waitFor(async () => {
+      const child = (await processRows())?.find(process => process.parentPid === shellPid && process.args.includes('fixture Codex client'))
+      expect(child).toBeDefined()
+      row.processIdentity = { pid: child!.pid, executable: child!.executable, startMarker: child!.startMarker }
+    })
+    row.runtimes = [{ backend: 'tmux', paneId: pane }]
+    const unrelatedServer = (await processRows())!.find(row => row.pid === process.pid)!
+    writeFileSync(join(row.codexHome!, 'app-server-daemon', 'daemon.pid'), JSON.stringify({ pid: unrelatedServer.pid, processStartTime: unrelatedServer.startMarker }))
+    // Signal only this fixture child; terminal Ctrl-C also reaches its shell.
+    process.kill(row.processIdentity!.pid, 'SIGTERM')
+    await vi.waitFor(async () => expect((await processRows())!.some(process => process.pid === row.processIdentity!.pid)).toBe(false))
+    screen = await server.run('capture-pane', '-p', '-t', pane)
+    const result = await service.request({ agentId: row.agentId, sessionId: '', createdAt: new Date(row.registeredAt).toISOString(), mode: 'now' })
+    expect(result).toEqual({ closed: true })
+    expect(await server.run('list-panes', '-t', 'close-fixture', '-F', '#{pane_id}')).toBe(sibling)
+    expect(await server.run('display-message', '-p', '-t', sibling, '#{pane_dead}')).toBe('0')
+    expect((await processRows())!.some(row => row.pid === unrelatedServer.pid)).toBe(true)
+  } finally {
+    await server.close()
+    vi.unstubAllEnvs()
+  }
+}, 15_000)

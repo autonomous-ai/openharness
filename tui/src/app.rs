@@ -555,8 +555,6 @@ pub struct App {
     pub dsh: HashMap<String, Vec<Value>>,
     /// A dismissed New Harness draft, including any pending creation receipt.
     pub new_harness_draft: Option<Box<crate::new_harness::Form>>,
-    /// Each harness's selectable models (`models_list`), for ⌥I.
-    pub models: HashMap<(String, String), Vec<Value>>,
     /// ── models: the Models view's replies (local models, grids, APIs) and a Use under way ──
     pub models_view: crate::models::Models,
     /// Each machine's last measured round trip (the live roster request), for `@`.
@@ -1016,7 +1014,6 @@ impl App {
             daemon_down: false,
             dsh: HashMap::new(),
             new_harness_draft: None,
-            models: HashMap::new(),
             models_view: Default::default(),
             rtt: HashMap::new(),
             homes: HashMap::new(),

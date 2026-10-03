@@ -36,6 +36,7 @@ class CompanionHome extends StatefulWidget {
     required this.onHatch,
     required this.onOpenControls,
     this.onOpenConversation,
+    this.openingConversation = false,
     this.terminalStatus,
     this.dial,
     this.onDeviceSettings,
@@ -46,6 +47,7 @@ class CompanionHome extends StatefulWidget {
   final ValueChanged<ZooEgg> onHatch;
   final ValueChanged<String> onOpenControls;
   final VoidCallback? onOpenConversation;
+  final bool openingConversation;
   final String? terminalStatus;
   final DialState? dial;
   final void Function(String, Map<String, Object?>)? onDeviceSettings;
@@ -283,9 +285,10 @@ class _CompanionHomeState extends State<CompanionHome> {
                   child: switch (_section) {
                     'Collection' => _collection(),
                     'Memories' => _memories(),
-                    _ => zoo.zoo.daemons.isEmpty && _previewSpecies == null
-                        ? _nest()
-                        : _story(),
+                    _ =>
+                      zoo.zoo.daemons.isEmpty && _previewSpecies == null
+                          ? _nest()
+                          : _story(),
                   },
                 ),
               ),
@@ -812,7 +815,12 @@ class _CompanionHomeState extends State<CompanionHome> {
           style: ink(15, AppColors.textSoft),
         ),
         const SizedBox(height: 28),
-        if (_codingMemory != null) CodingMemoryView(library: _codingMemory!),
+        if (_codingMemory != null)
+          CodingMemoryView(
+            library: _codingMemory!,
+            onOpenCompanion: widget.onOpenConversation,
+            openingCompanion: widget.openingConversation,
+          ),
         if (widget.brain.active && _codingMemory?.available != true) ...[
           _memoryCard(
             AppIcons.history,

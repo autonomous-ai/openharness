@@ -5,10 +5,10 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { useBundledCli } from './__fixtures__/bundledCli.js'
 
 const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
-const CLI_SOURCE = join(CLI_ROOT, 'src', 'cli.ts')
-const TSX = join(CLI_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs')
+const cli = useBundledCli()
 const DAY = 86_400_000
 const dirs: string[] = []
 let rebaseConflict = false
@@ -95,7 +95,7 @@ function cliEnv(port: number): NodeJS.ProcessEnv {
 
 function run(port: number, args: string[]): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [TSX, CLI_SOURCE, 'devices', ...args], { cwd: CLI_ROOT, env: cliEnv(port) })
+    const child = spawn(process.execPath, [cli(), 'devices', ...args], { cwd: CLI_ROOT, env: cliEnv(port) })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (c: Buffer) => { stdout += c.toString() })
@@ -113,7 +113,7 @@ const HAS_SCRIPT = (process.platform === 'darwin' || process.platform === 'linux
  *  question, as a person would. `pipeOut` sends its stdout to a pipe, so only stdin is a terminal.
  *  Returns everything the terminal showed. */
 function runAtTerminal(port: number, args: string[], answer: string, pipeOut = false): Promise<{ status: number | null; screen: string }> {
-  const cmd = [process.execPath, TSX, CLI_SOURCE, 'devices', ...args].map(quote).join(' ') + (pipeOut ? ' | cat; exit "${PIPESTATUS[0]:-$?}"' : '')
+  const cmd = [process.execPath, cli(), 'devices', ...args].map(quote).join(' ') + (pipeOut ? ' | cat; exit "${PIPESTATUS[0]:-$?}"' : '')
   const shell = pipeOut ? `bash -c ${quote(cmd)}` : cmd
   // The keyboard is a FIFO piped in by cat: BSD script refuses a socket or a FIFO as stdin, not a pipe.
   const dir = mkdtempSync(join(tmpdir(), 'harness-cli-tty-'))

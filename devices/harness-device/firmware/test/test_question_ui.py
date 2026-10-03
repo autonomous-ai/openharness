@@ -102,6 +102,16 @@ static bool cable_client_answer_reviewed(const char *id,const char *fetch,const 
 #define SEL ht_rgb(HT_THEME_SELECTION)
 #define COPY(dst,src) copy(dst,sizeof(dst),src)
 '''
+# The production helpers are skin-aware; this harness has no Focus skin, so they are the mono calls.
+code += '''
+static bool focus_skin(void){return false;}
+static const ht_font_t *focus_face_for(const ht_font_t *m){return m;}
+static void focus_put(ht_scene_t *f,int x,int y,int w,const ht_font_t *font,uint16_t ink,uint16_t bg,const char *t,bool c){(void)c;ht_text(f,x,y,w,font,ink,bg,t);}
+static void text_in(ht_scene_t *f,int x,int y,int w,const ht_font_t *m,const char *t,uint16_t c,bool centred){(void)centred;ht_text(f,x,y,w,m,c,BG,t);}
+static int ui_rows(const char *t,const ht_font_t *f,int w){return ht_text_rows(t,f,w);}
+static bool ui_can_display(const char *t,const ht_font_t *f,int w,int l){return ht_can_display(t,f,w,l);}
+static int ui_wrap(ht_scene_t *s,int x,int y,int w,int n,int skip,const ht_font_t *f,uint16_t fg,const char *t){return ht_wrap(s,x,y,w,n,skip,f,fg,t);}
+'''
 for name in ['notice_sync_view','copy','control','text','center','heading','question_view','question_rows',
              'question_text','render_question','render_choices','render_answer_review',
              'open_question','question_answer','question_move','send_answer',

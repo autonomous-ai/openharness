@@ -640,6 +640,9 @@ describe('hook notify terminal scope', () => {
     "import sys, runpy; sys.path.insert(0, '/opt/custom'); runpy.run_module('hermes_cli.main', run_name='__main__')",
     "import os, re, sys; sys.path.insert(0, '/opt/custom'); import hermes_bootstrap; from hermes_cli.main import main; sys.exit(main())",
     "import os, sys, runpy; os.environ.pop('PYTHONHOME', None); sys.path.insert(0, '/opt/custom'); os.environ['HERMES_HOME'] = os.environ.get('HERMES_HOME') or '/home/demo/.hermes'; import hermes_bootstrap; runpy.run_module('hermes_cli.main', run_name='__main__', alter_sys=True)",
+    // 0.21.5's multi-line launcher as macOS `ps` prints it: every newline as the four characters `\012`.
+    ["import os, re, sys", "os.environ.pop('PYTHONHOME', None)", "sys.path.insert(0, '/opt/custom')",
+      'import hermes_bootstrap', 'from hermes_cli.main import main', 'sys.exit(main())'].join('\\012') + '\\012',
   ])('offline Hermes discovery follows a managed Python bootstrap: %s', async (source) => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-hermes-launcher-'))
     tmpDirs.push(dir)

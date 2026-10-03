@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "experiment": "dedicated-nli-memory-fields",
+  "createdAt": "2026-10-03T04:17:29.224316+00:00",
+  "suite": "../2026-10-02-memory-source-audit/cases.json",
+  "suiteSha256": "d9b1cd4c9a50327935dde45115afc23e7550a8a1a33c61c1ee0d9a0d3889e430",
+  "expectedCases": 16,
+  "model": "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
+  "revision": "6f5cf0a2b59cabb106aca4c287eed12e357e90eb",
+  "weightsSha256": "06d6fd89edd4f97816831626daafbdb0b029cf63bae8edc0bccab1d64e2e7707",
+  "packages": {
+    "torch": "2.9.1",
+    "transformers": "4.57.3",
+    "sentencepiece": "0.2.1",
+    "safetensors": "0.6.2",
+    "tokenizers": "0.22.2",
+    "numpy": "2.5.3"
+  },
+  "device": "cpu",
+  "dtype": "float32",
+  "threads": 2,
+  "seed": 42,
+  "maxPairTokens": 512,
+  "inferenceDeadlineSeconds": 120,
+  "retries": 0,
+  "fields": [
+    "claim",
+    "futureAction",
+    "rationale"
+  ],
+  "primaryArm": "scoped_source",
+  "arms": [
+    "scoped_source",
+    "raw_source"
+  ],
+  "premiseConstruction": {
+    "scoped_source": "Capture boundary: <episode.context>. Project: <comma-joined authorized project IDs>.\n<source.role>: <source.text>\n repeated in original episode/source order.",
+    "raw_source": "Source text joined with a newline in original episode/source order; metadata omitted only for this ablation."
+  },
+  "hypothesisConstruction": "Each nonempty claim, futureAction and rationale string verbatim, evaluated separately. No generated paraphrase or hand-written decomposition.",
+  "decision": "Accept a proposal only if entailment is the argmax label for every tested field. Neutral and contradiction both withhold acceptance; retain their separate probabilities.",
+  "acceptance": "All 16 cases must complete in the predeclared scoped_source primary arm, with all 10 supported proposals accepted and all 6 unsupported proposals withheld. The raw_source arm is a formatting ablation, not a replacement winning criterion.",
+  "limitations": [
+    "This tests necessary textual support only; it cannot replace scope, authorization, provenance, memory usefulness or all structured-field admission checks.",
+    "Known synthetic development cases with implementing-agent labels, not independent human review or held-out histories.",
+    "English reference model; no private sources, provider inference, live memory or production dependency changes.",
+    "Argmax scores are not calibrated probabilities of truth or an automatic publication guarantee."
+  ]
+}

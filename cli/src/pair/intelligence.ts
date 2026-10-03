@@ -12,6 +12,7 @@ import { memoryAccountIdentity } from '../memory/account.js'
 import type { MemoryInference, MemoryInferenceRunOptions } from '../memory/learner.js'
 import type { MemoryInferenceOptions } from '../memory/inferenceProcess.js'
 import { MemoryError } from '../memory/types.js'
+import type { InferenceWaitReason } from '../memory/inferenceStatus.js'
 import { openCodeSnapshotIdentity, runOpenCodeMemoryInference,
   type OpenCodeMemorySnapshot, type OpenCodeMemoryInferenceOptions } from '../memory/opencodeInference.js'
 
@@ -36,6 +37,7 @@ export interface IntelligenceStatus {
   model?: string
   effort?: string
   contextKey?: string
+  reason?: InferenceWaitReason
 }
 
 interface IntelligenceDeps {
@@ -53,6 +55,8 @@ interface IntelligenceDeps {
 export class CompanionIntelligence {
   private saved: Record<string, { sessionId: string; profile: string }> | null = null
   private readonly calls = new Set<AbortController>()
+  /** Volatile refusal for one observed connection. No credentials or policy failures are persisted. */
+  private restrictedContext: string | null = null
 
   constructor(private readonly deps: IntelligenceDeps) {}
 
@@ -73,17 +77,19 @@ export class CompanionIntelligence {
     opts.signal?.addEventListener('abort', abort, { once: true })
     if (opts.signal?.aborted) controller.abort()
     this.calls.add(controller)
+    let target: ReturnType<CompanionIntelligence['target']> | undefined
     try {
       const bound = extraction || this.deps.current()?.engine === 'opencode'
-      const target = bound ? await this.extractionTarget() : this.target()
+      target = bound ? await this.extractionTarget() : this.target()
       if (controller.signal.aborted || !target.profile || !target.runtime || target.status.state !== 'ready') return null
       if (extraction && (!('contextKey' in opts) || opts.contextKey !== target.status.contextKey)) throw new MemoryError('inference_context_changed')
+      const selected = target
       const { runtime, profile } = target
       const engine = runtime.engine as 'claude' | 'codex' | 'opencode'
       const assertAuthorized = (): void => {
         if (controller.signal.aborted) throw new MemoryError('inference_cancelled')
         if ('assertAuthorized' in opts) opts.assertAuthorized?.()
-        if (this.target().status.contextKey !== target.runtimeContextKey) throw new MemoryError('inference_context_changed')
+        if (this.target().status.contextKey !== selected.runtimeContextKey) throw new MemoryError('inference_context_changed')
       }
       if (bound) assertAuthorized()
       mkdirSync(this.deps.directory, { recursive: true, mode: 0o700 })
@@ -94,7 +100,7 @@ export class CompanionIntelligence {
         timeoutMs: opts.timeoutMs, signal: controller.signal,
         ...(bound ? { assertAuthorized, beforeRun: async () => {
           const current = await this.extractionTarget()
-          if (current.status.state !== 'ready' || current.status.contextKey !== target.status.contextKey) throw new MemoryError('inference_context_changed')
+          if (current.status.state !== 'ready' || current.status.contextKey !== selected.status.contextKey) throw new MemoryError('inference_context_changed')
         } } : {}),
       }
       const run = this.deps.run ?? ((engine, options) => engine === 'claude' ? extraction ? runClaudeMemoryInference(options) : runClaudeOneShot(options)
@@ -112,6 +118,13 @@ export class CompanionIntelligence {
         (!runtime.sessionId && current.runtime?.startup?.processKey !== runtime.startup?.processKey) ||
         current.runtime?.codexHome !== runtime.codexHome || current.status.contextKey !== target.status.contextKey) return null
       return result.text
+    } catch (error) {
+      if (error instanceof MemoryError && error.code === 'inference_provider_restricted'
+        && !controller.signal.aborted && target?.runtime?.engine === 'opencode'
+        && target.runtimeContextKey && this.target().status.contextKey === target.runtimeContextKey) {
+        this.restrictedContext = target.runtimeContextKey
+      }
+      throw error
     } finally {
       opts.signal?.removeEventListener('abort', abort)
       this.calls.delete(controller)
@@ -124,7 +137,9 @@ export class CompanionIntelligence {
     if (target.runtime.engine === 'opencode') return target
     const identity = target.runtime.accountKey ?? await (this.deps.accountIdentity ?? memoryAccountIdentity)(target.runtime)
     const current = this.target()
-    if (current.status.contextKey !== target.status.contextKey || !identity) return { status: { ...current.status, state: 'waiting' } }
+    if (current.status.contextKey !== target.status.contextKey) return current.status.state !== 'ready' ? current
+      : { status: { ...current.status, state: 'waiting', reason: 'inference_context_changed' } }
+    if (!identity) return { status: { ...current.status, state: 'waiting', reason: 'companion_account_unavailable' } }
     return { ...target, status: { ...target.status,
       contextKey: createHash('sha256').update(JSON.stringify([target.status.contextKey, identity])).digest('hex') } }
   }
@@ -133,14 +148,21 @@ export class CompanionIntelligence {
     openCodeSnapshot?: OpenCodeMemorySnapshot } {
     if (!this.deps.enabled()) return { status: { state: 'off' } }
     const runtime = this.deps.current()
-    if (!runtime) return { status: { state: 'unopened' } }
+    if (!runtime) return { status: { state: 'unopened', reason: 'companion_unopened' } }
     const status: IntelligenceStatus = { state: 'waiting', agentId: runtime.agentId, engine: runtime.engine }
     // Custom provider credentials must not silently fall back to the local subscription.
-    if (!['claude', 'codex', 'opencode'].includes(runtime.engine) || (runtime.customProvider && runtime.engine !== 'opencode')) return { status: { ...status, state: 'unsupported' } }
+    if (!['claude', 'codex', 'opencode'].includes(runtime.engine) || (runtime.customProvider && runtime.engine !== 'opencode')) {
+      return { status: { ...status, state: 'unsupported', reason: 'companion_configuration_unsupported' } }
+    }
     const openCodeSnapshot = runtime.engine === 'opencode' ? this.deps.openCodeSnapshot?.(runtime) ?? undefined : undefined
-    if (runtime.engine === 'opencode' && (!runtime.sessionId || runtime.stopped || !runtime.nativeProcessKey
-      || !runtime.accountKey || !openCodeSnapshot)) return { status }
-    if (!runtime.sessionId && (runtime.stopped || !runtime.startup)) return { status }
+    if (runtime.engine === 'opencode') {
+      if (runtime.stopped) return { status: { ...status, reason: 'companion_stopped' } }
+      if (!runtime.sessionId || !runtime.nativeProcessKey) return { status: { ...status, reason: 'companion_starting' } }
+      if (!runtime.accountKey || !openCodeSnapshot) return { status: { ...status, reason: 'companion_connection_unavailable' } }
+    }
+    if (!runtime.sessionId && (runtime.stopped || !runtime.startup)) {
+      return { status: { ...status, reason: runtime.stopped ? 'companion_stopped' : 'companion_starting' } }
+    }
     this.load()
     const cached = this.saved![runtime.agentId]
     const value = runtime.sessionId
@@ -151,8 +173,10 @@ export class CompanionIntelligence {
     const efforts = runtime.engine === 'claude'
       ? ['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode']
       : runtime.engine === 'opencode' ? ['auto'] : ['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
-    if (!profile || profile.sessionId !== runtime.agentId || profile.engine !== runtime.engine || !efforts.includes(profile.effort)) return { status }
-    if (openCodeSnapshot && openCodeSnapshot.model !== profile.model) return { status }
+    if (!profile || profile.sessionId !== runtime.agentId || profile.engine !== runtime.engine || !efforts.includes(profile.effort)) {
+      return { status: { ...status, reason: 'companion_model_unavailable' } }
+    }
+    if (openCodeSnapshot && openCodeSnapshot.model !== profile.model) return { status: { ...status, reason: 'inference_context_changed' } }
     // Pre-conversation readiness is live evidence, never a durable substitute for a conversation ID.
     if (runtime.sessionId && (cached?.profile !== profile.id || cached.sessionId !== runtime.sessionId)) {
       this.saved![runtime.agentId] = { sessionId: runtime.sessionId, profile: profile.id }
@@ -164,8 +188,11 @@ export class CompanionIntelligence {
     const contextKey = createHash('sha256').update(JSON.stringify([runtime.agentId, runtime.sessionId,
       runtime.sessionId ? null : runtime.startup?.processKey, runtime.engine, profile.id, runtime.codexHome ?? null, runtime.accountKey ?? null,
       runtime.nativeProcessKey ?? null, openCodeSnapshot ? openCodeSnapshotIdentity(openCodeSnapshot) : null])).digest('hex')
+    if (this.restrictedContext !== contextKey) this.restrictedContext = null
     return { runtime, profile, openCodeSnapshot, runtimeContextKey: contextKey,
-      status: { ...status, state: 'ready', model: profile.model, effort: openCodeSnapshot?.variant ?? profile.effort, contextKey } }
+      status: { ...status, state: this.restrictedContext ? 'unsupported' : 'ready',
+        ...(this.restrictedContext ? { reason: 'inference_provider_restricted' as const } : {}),
+        model: profile.model, effort: openCodeSnapshot?.variant ?? profile.effort, contextKey } }
   }
 
   private load(): void {

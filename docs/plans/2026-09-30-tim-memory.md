@@ -1,6 +1,12 @@
 # Coding memory across agent frameworks
 
-Status: experimental implementation available for review, 2026-10-01; quality validation remains incomplete. The memory core, native transcript reader, durable learning loop, restricted inference adapters, worker isolation and owner library have executable tests. Opt-in host capture, scoped collection recall, native prompt adapters and the desktop Memories viewer are connected. Synthetic native probes cover next-user-prompt delivery after resume, manual compaction and a model change in Claude 2.1.286 and trusted interactive Codex 0.159.3. The older Codex 0.159.0 prompt certificate remains. Local synthetic recall performance has been measured; real extraction quality, full native lifecycles and production integration remain unverified. The [sequential review log](2026-09-30-coding-memory-review-log.md) records findings, fixes, and remaining completion evidence.
+Current delivery milestone: the user explicitly scoped a
+[two-hour personal-memory MVP](2026-10-03-personal-memory-mvp.md) on October 3.
+The broader research and rollout gates below remain a later roadmap, rather than
+prerequisites for that bounded review milestone. Its evidence and consent rules
+still apply; deferred checks must not be described as completed.
+
+Status: experimental implementation available for review, 2026-10-01; quality validation remains incomplete. The memory core, native transcript reader, durable learning loop, restricted inference adapters, worker isolation and owner library have executable tests. Opt-in host capture, scoped collection recall, native prompt adapters and the desktop Memories viewer are connected. Synthetic native probes cover next-user-prompt delivery after resume, manual compaction and a model change in Claude 2.1.286/2.1.287 and trusted interactive Codex 0.159.3. The older Codex 0.159.0 prompt certificate remains. Local synthetic recall performance has been measured; real extraction quality, full native lifecycles and production integration remain unverified. The [sequential review log](2026-09-30-coding-memory-review-log.md) records findings, fixes, and remaining completion evidence.
 
 Codex **0.159.3 prompt delivery and background extraction have separate status**. Its trusted prompt
 hook can receive existing memory, but its restricted extraction command remains uncertified. Local
@@ -281,7 +287,7 @@ Scope and identity are bound by Harness to the authenticated local session; tool
 
 | Adapter | Capture | Automatic recall | Initial support commitment |
 | --- | --- | --- | --- |
-| Claude Code | Existing normalized reader plus lifecycle events and authoritative user-role attribution. | Opt-in UserPromptSubmit task recall is certified for 2.1.286. | Synthetic print-mode probes observed fresh context on the next user prompt after resume, manual compaction and a model change. Automatic mid-turn compaction, profile changes and other TUI paths remain unverified. |
+| Claude Code | Existing normalized reader plus lifecycle events and authoritative user-role attribution. | Opt-in UserPromptSubmit task recall is certified for 2.1.286 and 2.1.287. | Synthetic print-mode probes observed fresh context on the next user prompt after resume, manual compaction and a model change. Automatic mid-turn compaction, profile changes and other TUI paths remain unverified. |
 | Codex | Existing normalized reader; supported hook events identify prompt/turn boundaries. | Opt-in UserPromptSubmit recall supports tested 0.159.0 and 0.159.3. Native folder and hook trust remain required. | Trusted interactive 0.159.3 probes observed developer-role context on the next user prompt after resume, manual compaction and a model change. Additional unidentified requests omitted the marker. Automatic mid-turn compaction and profile changes remain unverified; extraction is still certified only for 0.159.0. |
 | Other Harness engines | Existing readers where available. | CLI/MCP and the existing runtime context bootstrap; native hooks added individually. | Search/manual recall only until automatic delivery is demonstrated. No blanket compatibility claim. |
 

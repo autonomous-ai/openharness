@@ -56,7 +56,7 @@ void main() {
   late ExperimentalFeaturesStore experiments;
   late List<(String, Map<String, dynamic>)> frames;
 
-  setUp(() {
+  setUp(() async {
     app = createApp();
     app.currentUser = const CurrentUserProfile(
       id: 'u1',
@@ -77,6 +77,8 @@ void main() {
     preview = ValueNotifier(false);
     preferences = MemoryStore();
     experiments = MemoryExperimentalFeaturesStore(storage: preferences);
+    // Finish the real-zone read before testWidgets enters its fake clock.
+    await experiments.refresh();
   });
   tearDown(() {
     app.dispose();

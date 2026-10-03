@@ -99,7 +99,7 @@
 // All three follow from ONE number: the body is 136px here (y 166 -> the 302 clamp), and everything
 // below is what fits in it. They are not preferences.
 //
-// RECAP_MAX_CHARS is two lines of geist_med_28 across SAFE_CONTENT_W, and the comment at the card says
+// RECAP_MAX_CHARS is two lines of the retired LVGL card face (Geist 28; Focus now sets its recap in Inter 30) across SAFE_CONTENT_W, and the comment at the card says
 // why it is a cap at all: forty glyphs is what fits without the card touching the action arc.
 // How many lines the recap card is pinned to. Two, and the cap above follows from it: a third would reach the action arc at y=322.
 #define RECAP_LINES         2

@@ -48,7 +48,7 @@ it.each(['command_execution', 'mcp_tool_call', 'error'])('refuses a %s item even
     .rejects.toThrow('inference_tool_or_error')
 })
 
-it.each(['0.159.3', '0.999.0'])('does not invoke uncertified extraction release %s or silently select a different provider', async version => {
+it.each(['0.159.3', '0.160.0', '0.999.0'])('does not invoke uncertified extraction release %s or silently select a different provider', async version => {
   program('throw new Error("must not run inference")', version)
   expect(await codexMemoryCapability()).toEqual({ supported: false, version })
   await expect(runCodexMemoryInference({ cwd: directory, prompt: 'evidence', model: 'selected-model' })).rejects.toThrow('codex_version_uncertified')

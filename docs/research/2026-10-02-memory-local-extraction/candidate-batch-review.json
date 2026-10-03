@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "7cfb33ace5493fe88a9f777a1e3018f46fa509e5960d4368a509aa5baa662a2b",
+  "suiteSha256": "4ef4d98a8a628390b729f9a0b5a4c7ff2a9ff83995e398a48144a4c94a617059",
+  "reviewer": {
+    "id": "codex-source-review",
+    "kind": "agent",
+    "independent": false
+  },
+  "cases": [
+    {
+      "id": "personal-mixed-episodes",
+      "records": [
+        {
+          "id": "01b1d55d-5f11-4d80-9f1f-2a52b3630970",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "The record preserves a default rather than a requirement, leaves rationale unknown, uses unconditional applicability and cites only its own database-default episode. Current project constraints still take precedence under the recall contract."
+        },
+        {
+          "id": "81be7192-d3dd-42eb-82fb-98bcf83bffac",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "The record preserves the debugging-only preference and production-incident exception, uses its own user quotation, and invents no reason or incident workflow."
+        }
+      ],
+      "probes": [
+        {
+          "id": "debugging",
+          "relevantIds": [
+            "81be7192-d3dd-42eb-82fb-98bcf83bffac"
+          ],
+          "requiredIds": [
+            "81be7192-d3dd-42eb-82fb-98bcf83bffac"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The packet preserves the applicable source-supported memory, including scope, reasons, unknowns and exceptions."
+        },
+        {
+          "id": "incident",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "This negative probe correctly receives no context."
+        },
+        {
+          "id": "database-default",
+          "relevantIds": [
+            "01b1d55d-5f11-4d80-9f1f-2a52b3630970"
+          ],
+          "requiredIds": [
+            "01b1d55d-5f11-4d80-9f1f-2a52b3630970"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The packet preserves the applicable source-supported memory, including scope, reasons, unknowns and exceptions."
+        },
+        {
+          "id": "no-borrowed-opinion",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "This negative probe correctly receives no context."
+        },
+        {
+          "id": "no-unbound-project-fact",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "This negative probe correctly receives no context."
+        }
+      ]
+    }
+  ]
+}

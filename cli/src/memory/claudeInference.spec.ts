@@ -17,7 +17,7 @@ process.stdin.on('end', () => { ${body} });
 const emit = (event: unknown) => `console.log(${JSON.stringify(JSON.stringify(event))});`
 const success = emit({ type: 'result', subtype: 'success', is_error: false, result: '{"proposals":[]}' })
 
-it.each(['2.1.285', '2.1.286'])('uses a fresh %s native process with the selected model/effort and an empty tool catalog', async version => {
+it.each(['2.1.285', '2.1.286', '2.1.287'])('uses a fresh %s native process with the selected model/effort and an empty tool catalog', async version => {
   const capture = join(directory, 'launch.json')
   program(`require('node:fs').writeFileSync(${JSON.stringify(capture)}, JSON.stringify({args:process.argv.slice(2),
     foreignToken:process.env.ANTHROPIC_AUTH_TOKEN, tmux:process.env.TMUX, prompt:input}));

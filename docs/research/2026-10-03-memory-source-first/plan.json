@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-10-03T03:44:56.216363+00:00",
+  "experiment": "source-first-field-review",
+  "purpose": "Check whether candidate-hidden source interpretation plus field-level judgments rejects known interpretation errors without rejecting faithful memories.",
+  "corpus": "../2026-10-02-memory-source-audit/cases.json",
+  "corpusSha256": "d9b1cd4c9a50327935dde45115afc23e7550a8a1a33c61c1ee0d9a0d3889e430",
+  "expectedCases": 16,
+  "model": "Qwen3.8-27B-Q4_0",
+  "weightSha256": "ede16c7b36e578ca87a8c70e011e4b4633a32c831c0ce76d0f474582384e671d",
+  "runtime": "llama.cpp 9870 (2d973636e)",
+  "temperature": 0,
+  "seed": 42,
+  "thinking": false,
+  "contextTokens": 16384,
+  "sourceOutputTokens": 1536,
+  "reviewOutputTokens": 2048,
+  "callDeadlineMs": 90000,
+  "totalDeadlineMs": 900000,
+  "maxCalls": 32,
+  "retries": 0,
+  "sourceDeduplication": "Exact source-only input JSON hash; all source interpretations finish before any candidate is shown.",
+  "labels": "Frozen implementing-agent judgments; withheld from both model stages. Not independent or held-out.",
+  "acceptance": "A diagnostic candidate only if all 16 complete, both previously missed unsupported proposals are rejected, no unsupported proposal is accepted, and every supported proposal is accepted. Invalid, incomplete or unclear outputs receive no success credit.",
+  "followup": "No production changes from this diagnostic. If it passes, test separately frozen source/proposal contrasts and existing consented private excerpts before considering production budgets and leases.",
+  "limits": [
+    "Synthetic source/proposal pairs only; no private text, selected-provider call or live memory write.",
+    "Same reference model for both stages and the earlier extractor; correlated errors remain possible.",
+    "No claim of actual participation or endorsement by the programmers whose published principles inform the design."
+  ]
+}

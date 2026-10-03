@@ -122,6 +122,10 @@ pub struct Agent {
     pub grid_base_url: String,
     pub grid_state: String,
     pub grid_note: Option<(String, String, String)>,
+    /// The tmux pane it runs in on its machine (`tmuxPane`), kept once the daemon no longer says it: a
+    /// harness whose engine exited is retired with its conversation, and the shell left in that pane
+    /// goes on under a new id (`releaseEngine`) — this is how a pane still on the old one finds it.
+    pub tmux_pane: String,
 }
 
 /// `grid.note`, read as the desktop reads it: a reason it does not know, or one missing the names
@@ -289,6 +293,8 @@ pub fn agent_from(machine_id: &str, row: &Value, previous: Option<&Agent>) -> Ag
         if agent.session_id != s(row, "sessionId") && agent.activity.older(&row["activity"]) { return agent.clone() }
     }
     let activity = previous.map(|p| p.activity.clone()).unwrap_or_default();
+    // (The pane outlives the engine's session: kept across one, and after the row no longer says it.)
+    let last_pane = previous.map(|p| p.tmux_pane.clone()).unwrap_or_default();
     let previous = previous.filter(|agent| agent.session_id == s(row, "sessionId"));
     let project = row.get("project").cloned().unwrap_or(Value::Null);
     let launch = row.get("launch").cloned().unwrap_or(Value::Null);
@@ -351,6 +357,7 @@ pub fn agent_from(machine_id: &str, row: &Value, previous: Option<&Agent>) -> Ag
         grid_base_url: s(&row["grid"], "baseUrl"),
         grid_state: s(&row["grid"], "state"),
         grid_note: grid_note(&row["grid"]["note"]),
+        tmux_pane: { let pane = s(row, "tmuxPane"); if pane.is_empty() { last_pane } else { pane } },
     };
     if let Some(working) = agent.activity.accept(&row["activity"], Instant::now()) { agent.working = working; }
     if matches!(agent.status.as_str(), "stopped" | "offline") { agent.working = false; agent.activity.unknown = false; }

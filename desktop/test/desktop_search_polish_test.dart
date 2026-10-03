@@ -785,7 +785,11 @@ void main() {
     'native scopes put machines first and keep typed words and focus',
     (tester) async {
       final palette = await mount(tester);
-      expect(find.byType(DesktopPill), findsNWidgets(6));
+      expect(find.byType(DesktopPill), findsNWidgets(7));
+      expect(
+        find.byKey(const ValueKey('search-category-Agents')),
+        findsOneWidget,
+      );
       expect(
         find.byKey(const ValueKey('search-category-Harnesses')),
         findsOneWidget,

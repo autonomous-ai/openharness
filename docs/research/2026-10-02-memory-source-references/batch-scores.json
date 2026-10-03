@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "783a51311b8dc2dfc0985f584dfe0a71a85d42983932350381d58409f9eec8c6",
+  "suiteSha256": "4ef4d98a8a628390b729f9a0b5a4c7ff2a9ff83995e398a48144a4c94a617059",
+  "evidence": "development_diagnostic_only",
+  "reviewer": {
+    "id": "codex-source-review",
+    "kind": "agent",
+    "independent": false
+  },
+  "coverage": {
+    "completedCases": 2,
+    "expectedCases": 2
+  },
+  "memories": {
+    "passed": 3,
+    "reviewed": 3,
+    "total": 3,
+    "rate": 1
+  },
+  "recall": {
+    "passed": 3,
+    "reviewed": 3,
+    "total": 3,
+    "rate": 1
+  },
+  "abstention": {
+    "passed": 5,
+    "reviewed": 5,
+    "total": 5,
+    "rate": 1
+  },
+  "cases": [
+    {
+      "id": "personal-mixed-episodes",
+      "status": "reviewable",
+      "probes": [
+        {
+          "id": "debugging",
+          "passed": true
+        },
+        {
+          "id": "incident",
+          "passed": true
+        },
+        {
+          "id": "database-default",
+          "passed": true
+        },
+        {
+          "id": "no-borrowed-opinion",
+          "passed": true
+        },
+        {
+          "id": "no-unbound-project-fact",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "id": "separate-conversation-acceptance",
+      "status": "reviewable",
+      "probes": [
+        {
+          "id": "same-repository",
+          "passed": true
+        },
+        {
+          "id": "different-repository",
+          "passed": true
+        },
+        {
+          "id": "no-cross-conversation-approval",
+          "passed": true
+        }
+      ]
+    }
+  ],
+  "taskBenefit": "not_measured",
+  "nativeDelivery": "not_measured",
+  "limitations": [
+    "Ratings are attributed judgements, not authenticated independent review.",
+    "These diagnostics do not satisfy the held-out-history or paired coding-task release gates.",
+    "Older reports without captured recall context can be reviewed for memory content but receive no recall-quality rate.",
+    "Empty, unfinished or partially reviewed denominators never receive a passing rate."
+  ],
+  "producer": {
+    "protocol": "coding-memory-quality-review-v1",
+    "node": "v22.23.2",
+    "runnerSha256": "90252c4c052d97bdbccbd794c769a25a4e123c579afebcf6d452d58ec5b7afb9",
+    "scorerSha256": "da4c153d69c6cdf26bd8135993e576bc3f60c4042fc2c11829880b2be295bea3"
+  }
+}

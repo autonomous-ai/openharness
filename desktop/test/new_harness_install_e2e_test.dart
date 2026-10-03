@@ -152,6 +152,9 @@ void main() {
     // This machine's Git is read from disk, which a widget test cannot wait
     // on; the folder is not a checkout, so start has no branch to check.
     app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+    // This fixture installs a harness whose manifest supports Claude and Codex.
+    // Choose its supported engine explicitly; a fresh app defaults to OpenCode.
+    await app.agentPreference.remember('claude');
     final box = NewHarnessController(
       app,
       machineId: 'm',

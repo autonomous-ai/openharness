@@ -1,0 +1,395 @@
+{
+  "schema": 1,
+  "purpose": "Diagnose continued rendering despite native hidden status; these are smoke diagnostics, not improvement measurements.",
+  "findings": [
+    "Native app/window occlusion was false from startup; app never became active.",
+    "Flutter lifecycle stayed null, frame scheduling stayed enabled, and hidden active output drew frames.",
+    "Native AppDelegate conformed to FlutterAppLifecycleProvider before engine initialization and afterwards; missing delegate wiring was not established.",
+    "The normal benchmark now requires matching native/framework visibility and rejects this condition before sampling."
+  ],
+  "boundary": "No product visibility change made. A production-versus-launcher cause has not been established. Previous background comparisons lack the framework observations needed to establish normal hidden-app behavior.",
+  "runs": [
+    {
+      "root": "/private/tmp/harness-connected-visibility-diagnostic-20261003",
+      "startedAt": "2026-10-03T01:30:22Z",
+      "resultSha256": "fad45e502886d4a2021a18e83ce766ee5398c74af35a93054a919e5b7910042f",
+      "app": "/private/tmp/harness-native-benchmark-5b81ad27/desktop/build/macos/Build/Products/Release/Harness Benchmark.app",
+      "buildIdentity": {
+        "sourceRevision": "1a87d2e89cc93883d7914824dd0b299ddee2abb2",
+        "productionDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source": "/Users/ab/harnesses/worktrees/autonomous-harness/noble-tiger/desktop",
+        "app": "/private/tmp/harness-native-benchmark-5b81ad27/desktop/build/macos/Build/Products/Release/Harness Benchmark.app",
+        "connectedResource": true,
+        "flutter": "/Users/ab/development/flutter-3.47.2",
+        "developerDirectory": "/Applications/Xcode.app/Contents/Developer",
+        "toolingSha256": {
+          "summarize_results.py": "3ad86c3d25505bd473987e17e3a621f9d88e12608ad807e3fc44e47d1cf48d98",
+          "flutter_driver.dart": "0868e8dcbbd7de94d1ff0b3a9d55351e0569dba8b565a02d9e8ae39109ee2720",
+          "isolation.py": "091a9b9eb763f682fc9a35281f5bcf186d7746b82ba7ec5d87ca6259db0de121",
+          "run.py": "9eedafd9dca662205f2fe4d767d104f700f02f546351c02cf69fe4cc65f13280",
+          "ConnectedResourceHost.swift": "b3e4b566d393ccadc75c3433a69348cee7eff8bdabc267fb5a87868144c4268e",
+          "NativeBenchmark.swift": "016345213e41a0d4209b6c14c2086ec259dc95384051cddea10b82dd43aea3c8",
+          "core_driver.dart": "6fe30381f8d931b6bf8d765ca2ccc633d9f44b054614b958d169a00d2375e68a",
+          "process_forest_usage.swift": "12ff20fad3158acaf428f72b42b2f2c0f53107796a09edd1800bd59d54da8f47",
+          "connected_stack.mjs": "819ed8941fa33d05bedc732461e9753f69fba9c5796f915909b6c3c1e1f663fe",
+          "main.dart": "6044977011173127cc7a837a0628bb5662c609b84852bd54379bd6745b491376",
+          "README.md": "42e8c0d3fbac38b39902ef1cea7e7ada1c5c6b1aa3c415f1d141c8f39029817e",
+          "test_process_usage.py": "fb1f310e71eb46058f7abe99a92f60b72f764c65855923e6e5efea6b169bb294",
+          "test_process_forest_usage.py": "279e2abdfeea64695f527e64f7fc6a09de5d5eb2c41948ae89872408122c7813",
+          "connected_run.py": "853cea7815edd5d665b0cce4df366c33dd906ffa1fbc26380a7662026d115094",
+          "test_connected_stack.py": "6b3ad71494a393b9f6befb484bf848af087231d215d8faa2e60351f1cff09027",
+          "test_isolation.py": "25c4431bd64a3984f3c331f7e1c1fbc7d1fb51c6de81529a42793929f5c9c082",
+          "process_usage.swift": "996bdaef9acb5d7a1214cdabe309052178923a8a651259dcbab44c768f3c8541",
+          "connected_main.dart": "198e8db9add41447d6f5d30f5c7a69398b40a570d355c38798bdd7438a2a325e",
+          "prepare.py": "fff150961f37d81938ab7adca67c6ab3a30f3447c9392d071cf313677e70032c",
+          "connected_worker.mjs": "3456923d6b9f6ff8628c7f84dd2540cb55adf4a83950e6970ace506a1a98295e"
+        }
+      },
+      "toolingSha256": {
+        "connected_run.py": "853cea7815edd5d665b0cce4df366c33dd906ffa1fbc26380a7662026d115094",
+        "connected_stack.mjs": "819ed8941fa33d05bedc732461e9753f69fba9c5796f915909b6c3c1e1f663fe",
+        "connected_worker.mjs": "3456923d6b9f6ff8628c7f84dd2540cb55adf4a83950e6970ace506a1a98295e",
+        "harness-connected-forest-counters-20261003": "eb53258301fd6008bad4a3cbbde6a0429fc8ed6f11cb89599172618800e53031"
+      },
+      "initial": {
+        "native": {
+          "height": 800.0,
+          "miniaturized": false,
+          "scale": 2.0,
+          "active": false,
+          "appOcclusionVisible": false,
+          "focusLosses": 0,
+          "hidden": false,
+          "key": false,
+          "visible": true,
+          "windowOcclusionVisible": false,
+          "width": 1280.0
+        },
+        "framework": {
+          "lifecycle": null,
+          "framesEnabled": true,
+          "drawnFrames": 47,
+          "lifecycleChanges": []
+        }
+      },
+      "phases": [
+        {
+          "label": "background-idle-hidden",
+          "before": {
+            "native": {
+              "height": 800.0,
+              "miniaturized": false,
+              "scale": 2.0,
+              "active": false,
+              "appOcclusionVisible": false,
+              "focusLosses": 0,
+              "hidden": true,
+              "key": false,
+              "visible": false,
+              "windowOcclusionVisible": false,
+              "width": 1280.0
+            },
+            "framework": {
+              "lifecycle": null,
+              "framesEnabled": true,
+              "drawnFrames": 49,
+              "lifecycleChanges": []
+            }
+          },
+          "after": {
+            "native": {
+              "height": 800.0,
+              "miniaturized": false,
+              "scale": 2.0,
+              "active": false,
+              "appOcclusionVisible": false,
+              "focusLosses": 0,
+              "hidden": true,
+              "key": false,
+              "visible": false,
+              "windowOcclusionVisible": false,
+              "width": 1280.0
+            },
+            "framework": {
+              "lifecycle": null,
+              "framesEnabled": true,
+              "drawnFrames": 49,
+              "lifecycleChanges": []
+            }
+          },
+          "drawnFrames": 0
+        },
+        {
+          "label": "background-active",
+          "before": {
+            "native": {
+              "height": 800.0,
+              "miniaturized": false,
+              "scale": 2.0,
+              "active": false,
+              "appOcclusionVisible": false,
+              "focusLosses": 0,
+              "hidden": true,
+              "key": false,
+              "visible": false,
+              "windowOcclusionVisible": false,
+              "width": 1280.0
+            },
+            "framework": {
+              "lifecycle": null,
+              "framesEnabled": true,
+              "drawnFrames": 209,
+              "lifecycleChanges": []
+            }
+          },
+          "after": {
+            "native": {
+              "height": 800.0,
+              "miniaturized": false,
+              "scale": 2.0,
+              "active": false,
+              "appOcclusionVisible": false,
+              "focusLosses": 0,
+              "hidden": true,
+              "key": false,
+              "visible": false,
+              "windowOcclusionVisible": false,
+              "width": 1280.0
+            },
+            "framework": {
+              "lifecycle": null,
+              "framesEnabled": true,
+              "drawnFrames": 552,
+              "lifecycleChanges": []
+            }
+          },
+          "drawnFrames": 343
+        }
+      ],
+      "thenExistingValidationSuccess": true,
+      "cleanup": {
+        "success": true,
+        "errors": [],
+        "daemonExit": 0,
+        "daemonSignal": null,
+        "isolatedSocket": "/private/tmp/harness-connected-visibility-diagnostic-20261003/tmux.sock",
+        "finishedAt": "2026-10-03T01:30:59.109Z"
+      }
+    },
+    {
+      "root": "/private/tmp/harness-connected-delegate-diagnostic-20261003",
+      "startedAt": "2026-10-03T01:35:51Z",
+      "resultSha256": "b5281f56a395f97c8b80cddb464f170ed55425e78018b4e61e65be97c97fbe1b",
+      "app": "/private/tmp/harness-native-benchmark-aqwt4fzq/desktop/build/macos/Build/Products/Release/Harness Benchmark.app",
+      "buildIdentity": {
+        "sourceRevision": "1a87d2e89cc93883d7914824dd0b299ddee2abb2",
+        "productionDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source": "/Users/ab/harnesses/worktrees/autonomous-harness/noble-tiger/desktop",
+        "app": "/private/tmp/harness-native-benchmark-aqwt4fzq/desktop/build/macos/Build/Products/Release/Harness Benchmark.app",
+        "connectedResource": true,
+        "flutter": "/Users/ab/development/flutter-3.47.2",
+        "developerDirectory": "/Applications/Xcode.app/Contents/Developer",
+        "toolingSha256": {
+          "summarize_results.py": "3ad86c3d25505bd473987e17e3a621f9d88e12608ad807e3fc44e47d1cf48d98",
+          "flutter_driver.dart": "0868e8dcbbd7de94d1ff0b3a9d55351e0569dba8b565a02d9e8ae39109ee2720",
+          "isolation.py": "091a9b9eb763f682fc9a35281f5bcf186d7746b82ba7ec5d87ca6259db0de121",
+          "run.py": "9eedafd9dca662205f2fe4d767d104f700f02f546351c02cf69fe4cc65f13280",
+          "ConnectedResourceHost.swift": "99e15533f2dc089d78ff54775a3ad11a42c411cd4a0982106f043d66e6e7ae66",
+          "NativeBenchmark.swift": "016345213e41a0d4209b6c14c2086ec259dc95384051cddea10b82dd43aea3c8",
+          "core_driver.dart": "6fe30381f8d931b6bf8d765ca2ccc633d9f44b054614b958d169a00d2375e68a",
+          "process_forest_usage.swift": "12ff20fad3158acaf428f72b42b2f2c0f53107796a09edd1800bd59d54da8f47",
+          "connected_stack.mjs": "819ed8941fa33d05bedc732461e9753f69fba9c5796f915909b6c3c1e1f663fe",
+          "main.dart": "6044977011173127cc7a837a0628bb5662c609b84852bd54379bd6745b491376",
+          "README.md": "42e8c0d3fbac38b39902ef1cea7e7ada1c5c6b1aa3c415f1d141c8f39029817e",
+          "test_process_usage.py": "fb1f310e71eb46058f7abe99a92f60b72f764c65855923e6e5efea6b169bb294",
+          "test_process_forest_usage.py": "279e2abdfeea64695f527e64f7fc6a09de5d5eb2c41948ae89872408122c7813",
+          "connected_run.py": "853cea7815edd5d665b0cce4df366c33dd906ffa1fbc26380a7662026d115094",
+          "test_connected_stack.py": "6b3ad71494a393b9f6befb484bf848af087231d215d8faa2e60351f1cff09027",
+          "test_isolation.py": "25c4431bd64a3984f3c331f7e1c1fbc7d1fb51c6de81529a42793929f5c9c082",
+          "process_usage.swift": "996bdaef9acb5d7a1214cdabe309052178923a8a651259dcbab44c768f3c8541",
+          "connected_main.dart": "198e8db9add41447d6f5d30f5c7a69398b40a570d355c38798bdd7438a2a325e",
+          "prepare.py": "fff150961f37d81938ab7adca67c6ab3a30f3447c9392d071cf313677e70032c",
+          "connected_worker.mjs": "3456923d6b9f6ff8628c7f84dd2540cb55adf4a83950e6970ace506a1a98295e"
+        }
+      },
+      "toolingSha256": {
+        "connected_run.py": "853cea7815edd5d665b0cce4df366c33dd906ffa1fbc26380a7662026d115094",
+        "connected_stack.mjs": "819ed8941fa33d05bedc732461e9753f69fba9c5796f915909b6c3c1e1f663fe",
+        "connected_worker.mjs": "3456923d6b9f6ff8628c7f84dd2540cb55adf4a83950e6970ace506a1a98295e",
+        "harness-connected-forest-counters-20261003": "eb53258301fd6008bad4a3cbbde6a0429fc8ed6f11cb89599172618800e53031"
+      },
+      "initial": {
+        "native": {
+          "appOcclusionVisible": false,
+          "miniaturized": false,
+          "width": 1280.0,
+          "focusLosses": 0,
+          "scale": 2.0,
+          "delegateBeforeEngine": {
+            "class": "AppDelegate",
+            "lifecycleProvider": true
+          },
+          "visible": true,
+          "height": 800.0,
+          "key": false,
+          "hidden": false,
+          "windowOcclusionVisible": false,
+          "active": false,
+          "delegateCurrent": {
+            "lifecycleProvider": true,
+            "class": "AppDelegate"
+          }
+        },
+        "framework": {
+          "lifecycle": null,
+          "framesEnabled": true,
+          "drawnFrames": 47,
+          "lifecycleChanges": []
+        }
+      },
+      "phases": [
+        {
+          "label": "background-idle-hidden",
+          "before": {
+            "native": {
+              "appOcclusionVisible": false,
+              "miniaturized": false,
+              "width": 1280.0,
+              "focusLosses": 0,
+              "scale": 2.0,
+              "delegateBeforeEngine": {
+                "class": "AppDelegate",
+                "lifecycleProvider": true
+              },
+              "visible": false,
+              "height": 800.0,
+              "key": false,
+              "hidden": true,
+              "windowOcclusionVisible": false,
+              "active": false,
+              "delegateCurrent": {
+                "lifecycleProvider": true,
+                "class": "AppDelegate"
+              }
+            },
+            "framework": {
+              "lifecycle": null,
+              "framesEnabled": true,
+              "drawnFrames": 49,
+              "lifecycleChanges": []
+            }
+          },
+          "after": {
+            "native": {
+              "appOcclusionVisible": false,
+              "miniaturized": false,
+              "width": 1280.0,
+              "focusLosses": 0,
+              "scale": 2.0,
+              "delegateBeforeEngine": {
+                "class": "AppDelegate",
+                "lifecycleProvider": true
+              },
+              "visible": false,
+              "height": 800.0,
+              "key": false,
+              "hidden": true,
+              "windowOcclusionVisible": false,
+              "active": false,
+              "delegateCurrent": {
+                "lifecycleProvider": true,
+                "class": "AppDelegate"
+              }
+            },
+            "framework": {
+              "lifecycle": null,
+              "framesEnabled": true,
+              "drawnFrames": 49,
+              "lifecycleChanges": []
+            }
+          },
+          "drawnFrames": 0
+        },
+        {
+          "label": "background-active",
+          "before": {
+            "native": {
+              "active": false,
+              "key": false,
+              "appOcclusionVisible": false,
+              "delegateCurrent": {
+                "class": "AppDelegate",
+                "lifecycleProvider": true
+              },
+              "height": 800.0,
+              "windowOcclusionVisible": false,
+              "width": 1280.0,
+              "scale": 2.0,
+              "miniaturized": false,
+              "delegateBeforeEngine": {
+                "class": "AppDelegate",
+                "lifecycleProvider": true
+              },
+              "focusLosses": 0,
+              "hidden": true,
+              "visible": false
+            },
+            "framework": {
+              "lifecycle": null,
+              "framesEnabled": true,
+              "drawnFrames": 206,
+              "lifecycleChanges": []
+            }
+          },
+          "after": {
+            "native": {
+              "height": 800.0,
+              "focusLosses": 0,
+              "windowOcclusionVisible": false,
+              "delegateCurrent": {
+                "class": "AppDelegate",
+                "lifecycleProvider": true
+              },
+              "scale": 2.0,
+              "visible": false,
+              "hidden": true,
+              "appOcclusionVisible": false,
+              "miniaturized": false,
+              "width": 1280.0,
+              "key": false,
+              "active": false,
+              "delegateBeforeEngine": {
+                "class": "AppDelegate",
+                "lifecycleProvider": true
+              }
+            },
+            "framework": {
+              "lifecycle": null,
+              "framesEnabled": true,
+              "drawnFrames": 402,
+              "lifecycleChanges": []
+            }
+          },
+          "drawnFrames": 196
+        }
+      ],
+      "thenExistingValidationSuccess": true,
+      "cleanup": {
+        "success": true,
+        "errors": [],
+        "daemonExit": 0,
+        "daemonSignal": null,
+        "isolatedSocket": "/private/tmp/harness-connected-delegate-diagnostic-20261003/tmux.sock",
+        "finishedAt": "2026-10-03T01:36:18.504Z"
+      }
+    }
+  ],
+  "guardValidation": {
+    "success": true,
+    "purpose": "Expected rejection of uninitialized framework lifecycle before sampling, followed by successful owned-process cleanup",
+    "fixtureExitCode": 1,
+    "error": "RuntimeError('background phase requires Flutter hidden; got None')",
+    "root": "/private/tmp/harness-connected-lifecycle-rejection-20261003",
+    "finishedAt": "2026-10-03T01:40:03.468584+00:00"
+  }
+}

@@ -299,8 +299,11 @@ reuses `StatusLine`, honoring the selected wording, machine/project/branch
 visibility and status font, but omitting ANSI colors and segment backplates.
 It is never a second renderer with a hard-coded dot separator.
 A new user with no history sees the composer
-without an empty recents section; initial project guidance is neutral. Empty
-tabs hide the workspace footer, which returns when there is work to describe.
+without an empty recents section; initial project guidance is neutral. Keep the
+workspace footer visible on empty tabs so inventory controls are discoverable
+from first launch, including zero counts. Leave the right-side context blank on
+Welcome and New Tab; machine/project/branch context appears when a harness is
+open. Model inventory shows `—` until its first reading.
 Before a creation machine is available, show “Harness anything”, a short next
 step and a natural-width “Choose a machine” action. Keep that action available
 while finding machines. While saved defaults load, show “Preparing your harness…”

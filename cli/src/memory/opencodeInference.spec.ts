@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { lstat } from 'node:fs/promises'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import providerRefusal from './__fixtures__/opencode-1.18.34-provider-refusal.json' with { type: 'json' }
 import { openCodeSnapshotIdentity, opencodeMemoryCapability, runOpenCodeMemoryInference, type OpenCodeMemorySnapshot } from './opencodeInference.js'
 
 vi.mock('node:fs/promises', async importOriginal => {
@@ -110,6 +111,22 @@ it.each([
 it('combines complete native text parts without duplicating repeated full snapshots', async () => {
   program(emit([start, text('{"pro'), text('{"proposals":'), event('text', { type: 'text', id: 'second', text: '[]}' }), finish]))
   expect(await runOpenCodeMemoryInference(options())).toEqual({ text: '{"proposals":[]}' })
+})
+
+it('identifies the recorded provider restriction without treating it as a transient outage', async () => {
+  program(emit([providerRefusal]))
+  await expect(runOpenCodeMemoryInference(options())).rejects.toThrow('inference_provider_restricted')
+  expect(readdirSync(directory)).toEqual(['opencode-fixture'])
+})
+
+it.each([
+  { ...providerRefusal.error.data, statusCode: 429 },
+  { ...providerRefusal.error.data, isRetryable: true },
+  { ...providerRefusal.error.data, responseBody: 'unrecognized provider response' },
+  { ...providerRefusal.error.data, responseBody: '{"error":{"type":"FreeTierError","message":"Another free tier error"}}' },
+])('does not turn other provider failures into a permanent restriction', async data => {
+  program(emit([{ type: 'error', error: { name: 'APIError', data } }]))
+  await expect(runOpenCodeMemoryInference(options())).rejects.toThrow('inference_unavailable')
 })
 
 it('retains only native usage and cost, leaving the provider-resolved model unknown', async () => {

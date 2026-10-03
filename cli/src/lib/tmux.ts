@@ -16,6 +16,7 @@ import {
 } from './engineBin.js'
 import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } from './engineLaunch.js'
 import { psEnv } from './childLocale.js'
+import { nativeProcessImages } from './nativeProcessImages.js'
 export { captureTmuxPane, tmuxCaptureArgs } from './tmuxCapture.js'
 
 function cleanPaneTitle(title: string): string | null {
@@ -156,8 +157,14 @@ function hasCursorPackageEntrypoint(args: string): boolean {
  * or run it through runpy. Require that executable prefix and actual code, never a script argument
  * or a quoted mention. argv[0] is authoritative here: macOS can truncate an absolute `comm` path.
  * Keep the standalone hook's copy in sync. */
+/** macOS `ps` prints argv through vis(3): a newline as `\\012`, a backslash as `\\\\`. Read those back
+ * so a multi-line `-c` source is the source it runs. Linux `ps` prints argv as it is, without them. */
+function unvisArgs(args: string): string {
+  return args.replace(/\\([0-7]{3}|\\)/g, (_, code: string) => code === '\\' ? '\\' : String.fromCharCode(parseInt(code, 8)))
+}
+
 function hermesInlineLauncher(row: Pick<ProcessRow, 'args'>): boolean {
-  const args = row.args.trim()
+  const args = unvisArgs(row.args).trim()
   if (!/^python(?:\d+(?:\.\d+)*)?$/.test(basename(argvPrefix(args)() ?? '').toLowerCase())) return false
   const prefix = /^(?:"[^"]+"|'[^']+'|\S+)(?:\s+-(?:I|E|s|S|u|B|O{1,2}|q))*\s+-c\s+/.exec(args)
   if (!prefix) return false
@@ -310,26 +317,68 @@ function execText(command: string, args: string[], timeout: number): Promise<str
   })
 }
 
-/** macOS has no /proc; one lsof call resolves every collision candidate's executable image. */
-async function darwinProcessImages(pids: readonly number[]): Promise<Map<number, string>> {
-  if (!pids.length) return new Map()
-  const stdout = await execText('lsof', ['-a', '-p', pids.join(','), '-d', 'txt', '-Fn'], 3000)
+function parseDarwinProcessImages(stdout: string | null): Map<number, string> {
   const images = new Map<number, string>()
   if (stdout === null) return images
+  const seen = new Set<number>()
   let pid: number | null = null
   let textFile = false
-  for (const line of stdout.split('\n')) {
+  // A killed/buffer-limited helper may end halfway through a path.
+  for (const line of stdout.slice(0, stdout.lastIndexOf('\n') + 1).split('\n')) {
     if (/^p\d+$/.test(line)) {
       pid = Number(line.slice(1))
       textFile = false
     } else if (line === 'ftxt') {
       textFile = true
-    } else if (textFile && pid && line.startsWith('n') && !images.has(pid)) {
-      images.set(pid, line.slice(1))
+    } else if (textFile && pid && line.startsWith('n')) {
+      // The first text region is the executable. An error record must not let
+      // a later dylib masquerade as it; incomplete probes use the fallback.
+      if (!seen.has(pid) && line.startsWith('n/')) images.set(pid, line.slice(1))
+      seen.add(pid)
       textFile = false
     }
   }
   return images
+}
+
+/** macOS has no /proc. Prefer the bundled read-only kernel image probe; retain
+ * both lsof readers for missing paths, inside the same total 3s budget.
+ * Never cache by PID: exec can replace an image without changing its birth. */
+async function darwinProcessImages(rows: readonly ProcessRow[]): Promise<{
+  images: Map<number, string>; stale: Set<number>
+}> {
+  const images = new Map<number, string>()
+  const stale = new Set<number>()
+  if (!rows.length) return { images, stale }
+  const deadline = performance.now() + 3000
+  const pids = rows.map(row => row.pid)
+  const native = await nativeProcessImages(pids, 500)
+  const normalizeStart = (marker: string) => marker.trim().split(/\s+/)
+    .map((part, index) => index === 2 ? String(Number(part)) : part).join(' ')
+  for (const row of rows) {
+    const image = native.get(row.pid)
+    if (!image) continue
+    if (normalizeStart(image.startMarker) === normalizeStart(row.startMarker)) images.set(row.pid, image.path)
+    // The PID changed owners since ps. Do not combine the new executable with
+    // old ancestry/arguments, or let the fallback reintroduce that stale row.
+    else stale.add(row.pid)
+  }
+  const args = (selected: readonly number[]) => ['-a', '-p', selected.join(','), '-d', 'txt', '-Fn']
+  let missing = pids.filter(pid => !images.has(pid) && !stale.has(pid))
+  let remaining = Math.floor(deadline - performance.now())
+  if (missing.length && remaining > 0) {
+    for (const [pid, path] of parseDarwinProcessImages(
+      await execText('lsof', ['-b', ...args(missing)], Math.min(1000, remaining)),
+    )) images.set(pid, path)
+  }
+  missing = missing.filter(pid => !images.has(pid))
+  remaining = Math.floor(deadline - performance.now())
+  if (missing.length && remaining > 0) {
+    for (const [pid, path] of parseDarwinProcessImages(await execText('lsof', args(missing), remaining))) {
+      images.set(pid, path)
+    }
+  }
+  return { images, stale }
 }
 
 /**
@@ -346,6 +395,7 @@ export async function enrichProcessRows(
   if (!candidates.length) return rows
   const imagePaths = new Map<number, string>()
   const imageIdentities = new Map<number, ReturnType<typeof executableFileIdentity>>()
+  let stale = new Set<number>()
   if (platform() === 'linux') {
     await Promise.all(candidates.map(async (row) => {
       const procImage = `/proc/${row.pid}/exe`
@@ -358,13 +408,15 @@ export async function enrichProcessRows(
       }
     }))
   } else if (platform() === 'darwin') {
-    for (const [pid, path] of await darwinProcessImages(candidates.map((row) => row.pid))) {
+    const result = await darwinProcessImages(candidates)
+    stale = result.stale
+    for (const [pid, path] of result.images) {
       imagePaths.set(pid, path)
       imageIdentities.set(pid, executableFileIdentity(path.replace(/ \(deleted\)$/, '')))
     }
   }
 
-  return rows.map((row) => {
+  return rows.filter(row => !stale.has(row.pid)).map((row) => {
     if (!selectedPids.has(row.pid)) return row
     const imagePath = imagePaths.get(row.pid)
     const image = imageIdentities.get(row.pid) ?? null

@@ -42,7 +42,7 @@ A harness can have views in several swarms, with one view per swarm; closing a p
 The view closes immediately, without a minimize animation.
 
 Cmd-P opens an empty search field. Cmd-O inserts an editable `#` for projects.
-Type `&` to choose a different agent for the focused harness. The pane header's agent name opens the same picker. Switching saves the old session, keeps the project and pane in place, and passes recent requests and saved answers to agents that accept an initial message (OpenCode, Codex, Claude Code and Hermes). This is a bounded handoff, not the full original transcript; the original session remains saved.
+Type `&` to choose a different agent for the focused harness. The pane header's agent name opens the same picker. Switching saves the old session, keeps the project and pane in place, and hands off to agents that accept an initial message (OpenCode, Codex, Claude Code and Hermes). Harness writes a handoff record to `.harness/handoff/` in the project, kept out of git: your requests, the last answer, git state, the commands already run, and a readable transcript, with secrets redacted. The new agent is asked to read it and wait for you. A fork that has not answered yet hands off the conversation it was forked from, up to the fork. If the record cannot be written, it gets your recent requests and saved answers instead. When there is nothing to hand off, a notice says the new agent started without history. The original session remains saved.
 Delete the prefix to return to harness search. These fields use a thin caret and
 no separate prompt character.
 

@@ -17,10 +17,23 @@ make release-desktop ARGS="--dry-run"      # print the version it would cut and 
 make release-desktop ARGS="--minor"        # bump the MINOR version, per the usual semver convention
 make release-desktop ARGS="1.3.0"          # release an explicit version
 make release-desktop ARGS="--notes-file notes.md"   # hand-written release notes
+make release-desktop ARGS="--prepare"      # package the final pushed PR head during tests/review; publish nothing
+make release-desktop ARGS="--wait"         # release, then follow this exact tag through public verification
 ```
 
-Nothing is built locally and no GCS credentials are needed: the only things the script touches are
-git and a public HTTPS read of the manifest.
+Nothing is built locally and no GCS credentials are needed. The script uses Git and a public
+HTTPS read of the manifest; `--prepare` and `--wait` also need the authenticated `gh` CLI.
+
+For an authorized release, run `--prepare` once the final implementation is pushed to its PR
+branch, while the required tests and review run. It selects the next version by the same rules
+as a release, builds/signs/notarizes all platforms in CI, and verifies all six downloads at an
+isolated candidate path. It creates neither a release tag nor a product manifest/Release page.
+After checks pass, merge and release that same version normally. CI reuses the candidate only
+when the Desktop build inputs and version match; unrelated component merges and a clean
+squash are supported. Changed build inputs or version require a new build.
+Candidate packaging does not replace application
+tests or authorize publication. See the [validation guide](../docs/validation-and-release.md#package-desktop-while-final-checks-run)
+for identity checks, bounded waiting, expiration and disposable promotion validation.
 
 **Why the version comes from two places.** `scripts/release-desktop.sh` takes the highest of the last
 git tag and the highest version in the live `metadata.json`, across every `desktop-*` key. Publishing
@@ -142,8 +155,28 @@ commit, differing in one Info.plist key, `FLTEnableImpeller` — which renderer 
 | Intel | Skia (`FLTEnableImpeller = false`) | `desktop-macos`, `desktop-macos-dmg` | `Harness-macos.{zip,dmg}` | Intel Macs, **every install from before the split on either CPU**, and the website download |
 | Apple Silicon | Impeller (the engine default) | `desktop-macos-arm64`, `desktop-macos-arm64-dmg` | `Harness-macos-arm64.{zip,dmg}` | Apple Silicon Macs whose updater knows the key |
 
-`scripts/publish-macos-variant.sh intel|apple-silicon <version>` builds and publishes one of them;
-`release-desktop.yml` runs both side by side.
+CI calls `scripts/build-macos-variants.py <version> --metadata-prefix <run-prefix>`.
+It compiles one universal app, copies it into separate directories, pins and verifies each
+renderer, then packages, notarizes and uploads both variants in parallel. Version/build-number,
+arm64/x86_64 slices, signatures and hardened runtime are checked before publication. Each variant
+still receives both app and DMG notarization, with the stapled app inside the DMG. Separate scratch
+manifests are combined only after all macOS and Linux builds succeed, followed by verification of
+all six public downloads. `macos-build-timings` records the bounded build and per-variant phases.
+App copies and DMG staging use independent APFS clones when available. The temporary
+notarization ZIP uses faster compression; the downloadable ZIP retains normal compression
+and is rebuilt from the stapled app while DMG notarization runs. Compression failures stop
+publication; uploads wait for both artifacts and their checks. Packaging phase timings are
+printed in the build log. Signing and both notarization checks remain the same.
+
+`scripts/publish-macos-variant.sh intel|apple-silicon <version>` remains the single-variant entry
+point. With `--no-build`, `APP_BUNDLE` selects an existing bundle; the uploader's `OUTPUT_DIR`
+keeps parallel archives separate. These overrides do not permit rebuilding an arbitrary path.
+Without `--metadata-prefix`, the coordinator only builds and verifies local bundles.
+
+To validate workflow changes with real signing and notarization, dispatch
+`desktop-internal-build.yml` on the candidate branch with `test_build=true`. It builds both
+renderers, verifies all four internal downloads, records timings, and deletes only that run's
+random artifact prefix. It does not update release tags or the live updater manifest.
 
 **Why.** Intel users report the app stuttering; Apple Silicon users do not. Flutter renders macOS with
 Impeller by default, and the one thing that differs between those two users running the same universal
@@ -227,10 +260,10 @@ For one macOS build, `publish-macos-variant.sh`:
    publishing anything.
 6. Packages the `.app` with `ditto -c -k --sequesterRsrc --keepParent` (keeps the bundle structure and
    extended attributes intact — a plain `zip` does not).
-7. Notarizes the zip, staples the ticket into the `.app`, re-zips from the stapled bundle, and
-   asserts Gatekeeper accepts it (`spctl`).
+7. Notarizes the zip, staples the ticket into the `.app`, and asserts Gatekeeper accepts it (`spctl`).
 8. Packages a `.dmg` from that same stapled bundle — a staging folder holding `Harness.app` plus an
    `/Applications` symlink, imaged with `hdiutil` — then signs, notarizes and staples the image too.
+   The final ZIP is rebuilt during DMG notarization; both artifacts must finish and pass their checks.
 9. Uploads **both** artifacts with a year-long immutable `Cache-Control` (see "GCS layout").
 10. Download-merge-reuploads `metadata.json` in a single write, touching only that build's two keys.
 

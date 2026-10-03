@@ -50,7 +50,19 @@ def watch(tag, sha, timeout=1800, appear_timeout=180):
             if detail["status"] == "completed":
                 if detail["conclusion"] != "success":
                     raise RuntimeError(f"release {detail['conclusion']}: {run['url']}")
-                if not any(job["name"] == "verify" and job["conclusion"] == "success" for job in detail["jobs"]):
+                # Older releases used a separate verify job. Newer ones verify
+                # inside publish's lock, so require that exact step to pass.
+                verified = any(
+                    job["conclusion"] == "success" and (
+                        job["name"] == "verify" or (
+                            job["name"] == "publish" and any(
+                                step["name"] == "Verify all public artifacts as the updater" and step["conclusion"] == "success"
+                                for step in job.get("steps", [])
+                            )
+                        )
+                    ) for job in detail["jobs"]
+                )
+                if not verified:
                     raise RuntimeError("run has no successful public-download verification; use verify-desktop-release.py for older releases")
                 release_url = run["url"].split("/actions/runs/", 1)[0] + "/releases/tag/" + tag
                 print(f"Published and verified: {release_url}", flush=True)

@@ -135,8 +135,8 @@ function openCodeMemoryDecoder(): (event: Record<string, unknown>) => InferenceF
   const text = new Map<string, string>()
   return event => {
     if (event.type === 'tool_use') return { error: 'inference_tool_or_error' }
-    if (event.type === 'error') return { error: /rate.?limit|quota|usage limit/i.test(JSON.stringify(event.error))
-      ? 'inference_usage_limit' : 'inference_unavailable' }
+    if (event.type === 'error') return { error: providerRestricted(event.error) ? 'inference_provider_restricted'
+      : /rate.?limit|quota|usage limit/i.test(JSON.stringify(event.error)) ? 'inference_usage_limit' : 'inference_unavailable' }
     const part = event.part as Record<string, unknown> | undefined
     if (!part || typeof part !== 'object' || !['step_start', 'text', 'step_finish'].includes(String(event.type))) return { error: 'inference_protocol_changed' }
     if (event.type === 'step_start') {
@@ -161,4 +161,19 @@ function openCodeMemoryDecoder(): (event: Record<string, unknown>) => InferenceF
       ...(typeof part.cost === 'number' && Number.isFinite(part.cost) && part.cost >= 0 ? { reportedCostUsd: part.cost } : {}),
     } }
   }
+}
+
+// Match the recorded non-retryable policy refusal only. An arbitrary 403, free-tier error,
+// or quoted message must not permanently disable learning for this connection.
+const restrictionSchema = z.object({ name: z.literal('APIError'), data: z.object({
+  statusCode: z.literal(403), isRetryable: z.literal(false), responseBody: z.string().max(64_000),
+}) })
+function providerRestricted(error: unknown): boolean {
+  const result = restrictionSchema.safeParse(error)
+  if (!result.success) return false
+  try {
+    const body = JSON.parse(result.data.data.responseBody)
+    return body?.type === 'error' && body?.error?.type === 'FreeTierError'
+      && body.error.message === "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode"
+  } catch { return false }
 }

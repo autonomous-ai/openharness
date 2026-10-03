@@ -1900,8 +1900,11 @@ void main() {
         });
         await tester.pump();
         expect(
-          find.text(
-            'Install Claude Code or Codex to talk with your companion.',
+          find.descendant(
+            of: find.byKey(const ValueKey('companion-conversation-setup')),
+            matching: find.text(
+              'Install OpenCode, Codex, or Claude Code to talk with your companion.',
+            ),
           ),
           findsOneWidget,
         );

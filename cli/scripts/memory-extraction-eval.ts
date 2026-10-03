@@ -1,5 +1,6 @@
 // Dry run: node --import tsx scripts/memory-extraction-eval.ts
 // Add --batch for the frozen multi-episode suite. Native run: --run-native --output <report.json>.
+// Recall uses source excerpts by default; --recall-format summary selects the older comparison arm.
 // At most six calls, no retries/fallback.
 // Synthetic data only. Reads selected companion metadata; never writes the production memory DB.
 import { execFile } from 'node:child_process'
@@ -16,26 +17,36 @@ import { evaluateExtractionCase, type ExtractionScenario } from '../src/memory/e
 import { EXTRACTION_PROMPT_VERSION } from '../src/memory/learner.js'
 import { MEMORY_CONTEXT_VERSION } from '../src/memory/context.js'
 import type { MemoryInferenceObservation, MemoryInferenceOptions } from '../src/memory/inferenceProcess.js'
-import { MemoryError } from '../src/memory/types.js'
+import { MemoryError, type RecallRequest } from '../src/memory/types.js'
 
 const exec = promisify(execFile)
 const cli = fileURLToPath(new URL('..', import.meta.url))
 const root = dirname(cli)
 const digest = (value: string) => createHash('sha256').update(value).digest('hex')
 const args = process.argv.slice(2)
-const batch = args.includes('--batch')
+const options = new Map<string, string | true>()
+for (let index = 0; index < args.length; index++) {
+  const key = args[index]
+  if (options.has(key)) throw new Error('Duplicate diagnostic option')
+  if (['--batch', '--run-native'].includes(key)) options.set(key, true)
+  else if (['--output', '--recall-format'].includes(key) && args[index + 1] && !args[index + 1].startsWith('--')) {
+    options.set(key, args[++index])
+  } else throw new Error('Use --batch, --run-native --output <report.json>, and/or --recall-format source_excerpts|summary')
+}
+const recallFormat = options.get('--recall-format') ?? 'source_excerpts'
+if (recallFormat !== 'summary' && recallFormat !== 'source_excerpts') throw new MemoryError('invalid_evaluation_recall_format')
+const batch = options.has('--batch')
 const suitePath = join(root, batch ? 'docs/research/2026-09-30-memory-batch-extraction-cases.json' : 'docs/research/2026-09-30-memory-extraction-cases.json')
-const native = args.includes('--run-native')
-const outputIndex = args.indexOf('--output')
-const output = outputIndex < 0 ? null : resolve(args[outputIndex + 1] ?? '')
-const allowed = new Set(['--batch', '--run-native', '--output', ...(outputIndex < 0 ? [] : [args[outputIndex + 1]])])
-if (args.some(arg => !allowed.has(arg)) || (native && (!output || !args[outputIndex + 1]))) throw new Error('Use --run-native --output <report.json>')
+const native = options.has('--run-native')
+const output = options.has('--output') ? resolve(options.get('--output') as string) : null
+if (native && !output) throw new Error('Use --run-native --output <report.json>')
 const suiteText = await readFile(suitePath, 'utf8')
 const suite = JSON.parse(suiteText) as { suite: string; cases: ExtractionScenario[] }
 if (!Array.isArray(suite.cases) || suite.cases.length > 6) throw new Error('At most six frozen cases per diagnostic run')
 if (!native) {
   console.log(JSON.stringify({ suite: suite.suite, sha256: digest(suiteText), cases: suite.cases.map(row => row.id),
-    nativeCalls: 0, status: 'not_run', instructions: `Use ${batch ? '--batch ' : ''}--run-native --output <report.json> with the current companion model.` }, null, 2))
+    recallFormat, nativeCalls: 0, status: 'not_run',
+    instructions: `Use ${batch ? '--batch ' : ''}--recall-format ${recallFormat} --run-native --output <report.json> with the current companion model.` }, null, 2))
 } else {
   try { await run() } catch (error) {
     console.error(JSON.stringify({ status: 'not_run', error: error instanceof MemoryError ? error.code : 'evaluation_unavailable' }))
@@ -88,11 +99,11 @@ async function run() {
   // A diagnostic rerun must use a new path; preserve the evidence from earlier attempts.
   try { await (await open(output!, 'wx', 0o600)).close() } catch { throw new MemoryError('evaluation_report_unavailable_or_exists') }
   const temporary = await mkdtemp(join(tmpdir(), 'memory-extraction-eval-'))
-  const sourceFiles = ['learner.ts', 'context.ts', 'types.ts', 'admission.ts', 'store.ts', 'queue.ts', 'evaluation.ts',
+  const sourceFiles = ['learner.ts', 'context.ts', 'types.ts', 'admission.ts', 'store.ts', 'recallSources.ts', 'queue.ts', 'evaluation.ts',
     'account.ts', 'claudeInference.ts', 'inference.ts', 'inferenceProcess.ts']
   const sourceHashes = Object.fromEntries(await Promise.all(sourceFiles.map(async name => [name, digest(await readFile(join(cli, 'src/memory', name), 'utf8'))])))
   const report: Record<string, any> = { schemaVersion: 1, suite: suite.suite, suiteSha256: digest(suiteText),
-    promptVersion: EXTRACTION_PROMPT_VERSION, contextVersion: MEMORY_CONTEXT_VERSION,
+    promptVersion: EXTRACTION_PROMPT_VERSION, contextVersion: MEMORY_CONTEXT_VERSION, recallFormat,
     runnerSha256: digest(await readFile(fileURLToPath(import.meta.url), 'utf8')),
     sourceHashes, startedAt: new Date().toISOString(), status: 'running',
     selected: { engine: selected.engine, model: selected.model, effort: selected.effort, nativeVersion: selected.nativeVersion },
@@ -116,6 +127,7 @@ async function run() {
       const observations: MemoryInferenceObservation[] = []
       let promptSha256: string | null = null
       const result = await evaluateExtractionCase({ fixture, directory: join(temporary, fixture.id), engine: selected.engine,
+        recallFormat: recallFormat as RecallRequest['format'],
         inference: {
           target: async () => {
             const current = await selection()

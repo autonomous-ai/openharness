@@ -283,11 +283,8 @@ void main() {
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     expect(find.byType(NewHarnessForm), findsOneWidget);
-    // Search can temporarily replace the page without discarding the retry.
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
-    expect(find.byType(NewHarnessForm), findsNothing);
-    await key(tester, LogicalKeyboardKey.escape);
-    await tester.pumpAndSettle();
+    // A confirmed failure remains retryable while its form is open. Closing
+    // an ordinary form discards it; only uncertain receipts survive dismissal.
     app.creation = null;
     expect(
       tester

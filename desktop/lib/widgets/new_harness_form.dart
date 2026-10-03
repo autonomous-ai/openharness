@@ -153,7 +153,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       box.useDesktopChoices(widget.desktop);
       if (box.checking) _row = _Row.start;
       _syncField();
-      (widget.desktop ? _desktopDefaultFocus : _focus).requestFocus();
+      // Restoring the successful agent can replace an unfocusable Terminal
+      // editor and its attachment wrappers. Let that rebuild finish first.
+      _focusEditor();
     });
   }
 

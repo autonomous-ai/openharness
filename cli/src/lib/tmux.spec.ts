@@ -277,6 +277,29 @@ describe('tmux process primitives', () => {
     expect(engineProcessMatchScore({ executable: comm, args: `${python} -m hermes_cli.main` }, 'hermes')).toBe(2)
   })
 
+  it('reads Hermes out of its launcher as macOS `ps` really prints it, newlines as \\012', () => {
+    // 0.21.5's launcher is a multi-line `-c` script, and macOS `ps` writes argv through vis(3): each
+    // newline arrives as the four characters `\012`, a backslash as `\\`. Matching that text as Python
+    // found no statement separator after `import os, re, sys`, so a running Hermes scored 0 — its pane
+    // was restored as a terminal, and every hook it sent was "not a descendant of that engine process".
+    const python = '/Users/demo/.hermes/tools/python-3.14.7+20260901-darwin-arm64/bin/python3'
+    const source = [
+      'import os, re, sys',
+      "os.environ.pop('PYTHONHOME', None)",
+      "os.environ.pop('PYTHONPATH', None)",
+      "sys.path.insert(0, '/Users/demo/.hermes/hermes-agent')",
+      "if sys.argv[1:2] == ['--print-runtime-command']: sys.dont_write_bytecode = True",
+      'from hermes_constants import get_default_hermes_root',
+      "os.environ['HERMES_HOME'] = os.environ.get('HERMES_HOME') or str(get_default_hermes_root())",
+      'import hermes_bootstrap',
+      "sys.exit('a path with a \\\\ in it') if False else None",
+      'from hermes_cli.main import main',
+      'sys.exit(main())',
+    ].join('\\012') + '\\012'
+    expect(engineProcessMatchScore({ executable: '/Users/demo', args: `${python} -I -c ${source}` }, 'hermes')).toBe(2)
+    expect(engineProcessMatchScore({ executable: '/Users/demo', args: `${python} -I -c ${source.replace('hermes_cli.main', 'acp_adapter.entry')}` }, 'hermes')).toBe(0)
+  })
+
   it('recognizes managed Hermes runpy launchers without relying on their install directory', () => {
     const bootstrap = "import os, sys, runpy; os.environ.pop('PYTHONHOME', None); os.environ.pop('PYTHONPATH', None); os.environ.pop('VIRTUAL_ENV', None); sys.path.insert(0, '/opt/custom install'); os.environ['HERMES_HOME'] = os.environ.get('HERMES_HOME') or str(__import__('hermes_constants').get_default_hermes_root()); import hermes_bootstrap; runpy.run_module('hermes_cli.main', run_name='__main__', alter_sys=True)"
     const old = "import sys, runpy; sys.path.insert(0, '/opt/hermes-agent'); runpy.run_module('hermes_cli.main', run_name='__main__')"

@@ -722,6 +722,26 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets('Cmd-N focuses the task after restoring the successful agent', (
+    tester,
+  ) async {
+    await mount(tester, store: false);
+    await app.agentPreference.selectLaunch('terminal');
+    await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+    await tester.pumpAndSettle();
+    expect(box(tester).engine, 'codex');
+    final task = tester.widget<TextField>(
+      find.byKey(const ValueKey('new-harness-task')),
+    );
+    expect(task.focusNode!.hasPrimaryFocus, isTrue);
+    tester.testTextInput.enterText('Type immediately after Cmd-N');
+    await tester.pump();
+    expect(box(tester).task, 'Type immediately after Cmd-N');
+    expect(connections.values.expand((c) => c.starts), isEmpty);
+    await dismiss(tester);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets(
     'Cmd-N follows the focused project and discards cancelled task edits',
     (tester) async {

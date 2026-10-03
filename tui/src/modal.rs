@@ -431,24 +431,6 @@ pub fn project_rows(app: &App) -> Vec<Row> {
     rows.into_iter().map(|(_, r)| r).collect()
 }
 
-/// `:`, after the Models view's sections (models.rs): the focused harness's engine's own models
-/// and efforts (`agent_update selectedModel`), the one it runs marked — headed by the engine, so
-/// they read as its own section.
-pub fn model_rows(app: &App) -> Vec<Row> {
-    let Some((machine, agent)) = app.focused().and_then(|f| app.panes.get(&f)).map(|p| (p.machine_id.clone(), p.agent_id.clone())) else { return vec![] };
-    let (current, engine) = app.fleet.agent(&machine, &agent).map(|a| (a.model.clone(), engine_label(&a.engine).to_string())).unwrap_or_default();
-    let list = app.models.get(&(machine, agent)).cloned().unwrap_or_default();
-    list.iter().filter_map(|m| {
-        let id = m.get("id")?.as_str()?.to_string();
-        let name = m.get("displayName").and_then(Value::as_str).unwrap_or(&id).to_string();
-        let (family, effort) = name.split_once(" / ").map(|(a, b)| (a.to_string(), b.to_string())).unwrap_or((name.clone(), String::new()));
-        let on = id == current;
-        Some(Row::new(id, name.clone()).group(format!("{engine} · {family}")).extra(effort)
-            .lead(vec![span(if on { "✓ " } else { "  " }, fg(theme::ONLINE))])
-            .right(if on { "current".to_string() } else { String::new() }))
-    }).collect()
-}
-
 /// `?`: what the box does, one prefix per line, then every key.
 pub fn mode_rows(app: &App) -> Vec<Row> {
     let hint = |c: &str| app.keymap.hint(c).unwrap_or_default();

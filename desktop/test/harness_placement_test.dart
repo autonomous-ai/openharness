@@ -225,6 +225,8 @@ void main() {
         var box = tester
             .widget<NewHarnessForm>(find.byType(NewHarnessForm))
             .controller;
+        final defaults = box.draft;
+        final selectedProject = app.projectHistory.selected('m');
         box.setFolder('/work/source');
         await tester.pump();
         final input = find.byKey(const ValueKey('new-harness-query'));
@@ -284,17 +286,13 @@ void main() {
           box = tester
               .widget<NewHarnessForm>(find.byType(NewHarnessForm))
               .controller;
-          expect(
-            box.task,
-            '  Review before changing anything\nKeep the patch small  ',
-          );
-          expect(box.mode, 'readOnly');
-          expect(box.profileLabel, profile);
-          expect(
-            box.project.repository?.url,
-            'https://github.com/acme/terminal-tools.git',
-          );
-          expect(app.projectHistory.selected('m'), '/work/source');
+          expect(box.task, isEmpty);
+          expect(box.draft.permissionMode, defaults.permissionMode);
+          expect(box.draft.profile?.path, defaults.profile?.path);
+          expect(box.project.folder, defaults.project.folder);
+          expect(box.project.repository, isNull);
+          expect(box.projectFolderRequest!.isGenerated, isTrue);
+          expect(app.projectHistory.selected('m'), selectedProject);
           expect(connection.requests, isEmpty);
           await tester.pumpWidget(const SizedBox());
           return;
@@ -790,7 +788,8 @@ void main() {
       final box = tester
           .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
-      expect(box.task, 'fix the login regression');
+      expect(box.task, isEmpty, reason: 'Search text is not a new task.');
+      box.setTask('fix the login regression');
       expect(box.placement, HarnessPlacement.currentTab);
       box.setFolder('/work/project');
       await tester.pump();

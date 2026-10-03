@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "2e200908efdde0f15039561975782170fe97ca5b",
+  "suite": "../2026-10-02-memory-meaning-cases.json",
+  "suiteSha256": "657aae9de4f301b660cc2c57dce0f80ae801f49e71921a2365b862ba15d0023e",
+  "evidence": "adaptive synthetic diagnostic; one run per arm; implementing-agent review; not held-out",
+  "publication": "Raw model answers, sources, records, counters and outcomes are unchanged. Process stderr and local paths for the earlier adaptive plan/baseline are omitted from public reports. Review bindings and scores are regenerated for the published bytes. Private material is never copied.",
+  "arms": [
+    {
+      "id": "disabled",
+      "originalReportSha256": "f071e1c7f4eab6cbc6fe7b77b727c76351fb22505afcc9086b4c5a4bde047a69",
+      "publishedReportSha256": "b6f541b0ff369bd5a007705253f55b8b7c38d34721afe487916e500ff79ff34c",
+      "omittedFields": [
+        "diagnosticStderr"
+      ],
+      "calls": 8,
+      "coverage": {
+        "completedCases": 7,
+        "expectedCases": 8
+      },
+      "memories": {
+        "passed": 5,
+        "reviewed": 5,
+        "total": 5,
+        "rate": null
+      },
+      "recall": {
+        "passed": 5,
+        "reviewed": 5,
+        "total": 5,
+        "rate": null
+      },
+      "abstention": {
+        "passed": 16,
+        "reviewed": 16,
+        "total": 16,
+        "rate": null
+      },
+      "medianAttemptMs": 29055.0,
+      "maxAttemptMs": 33572,
+      "startedAt": "2026-10-03T00:43:34.337Z",
+      "finishedAt": "2026-10-03T00:47:23.088Z",
+      "workerExit": {
+        "code": 0,
+        "signal": null
+      },
+      "runnerSha256": "9c5b46cdf93e96467347112e33ba5ec466b615c2f0663414b9eb91653653e06e"
+    },
+    {
+      "id": "reasoning1024",
+      "originalReportSha256": "3ea8359565addd164b59ffa4cfc40a1a311b8862f9d4bbf1342de47f2886daaf",
+      "publishedReportSha256": "a95f6ce4eab789be5447360ed48fdb901e1ed1b34f1634ea76ce644866167a22",
+      "omittedFields": [
+        "diagnosticStderr"
+      ],
+      "calls": 2,
+      "coverage": {
+        "completedCases": 1,
+        "expectedCases": 8
+      },
+      "memories": {
+        "passed": 1,
+        "reviewed": 1,
+        "total": 1,
+        "rate": null
+      },
+      "recall": {
+        "passed": 1,
+        "reviewed": 1,
+        "total": 1,
+        "rate": null
+      },
+      "abstention": {
+        "passed": 2,
+        "reviewed": 2,
+        "total": 2,
+        "rate": null
+      },
+      "medianAttemptMs": 89572.5,
+      "maxAttemptMs": 90023,
+      "startedAt": "2026-10-03T00:47:23.089Z",
+      "finishedAt": "2026-10-03T00:50:33.773Z",
+      "workerExit": {
+        "code": 0,
+        "signal": null
+      },
+      "runnerSha256": "9c5b46cdf93e96467347112e33ba5ec466b615c2f0663414b9eb91653653e06e"
+    },
+    {
+      "id": "reasoning512",
+      "originalReportSha256": "3e6410085eb90e91b34b3b091ead497bd2bf51050d974d8f41db04e69773ee32",
+      "publishedReportSha256": "a5cec77cfe76b84b79d34eeb529aad5da7da8ed24e2821bbad8a64714d8eb1ed",
+      "omittedFields": [
+        "limits.adaptive_followup_to",
+        "limits.baseline_evidence"
+      ],
+      "calls": 8,
+      "coverage": {
+        "completedCases": 8,
+        "expectedCases": 8
+      },
+      "memories": {
+        "passed": 6,
+        "reviewed": 6,
+        "total": 6,
+        "rate": 1
+      },
+      "recall": {
+        "passed": 6,
+        "reviewed": 6,
+        "total": 6,
+        "rate": 1
+      },
+      "abstention": {
+        "passed": 18,
+        "reviewed": 18,
+        "total": 18,
+        "rate": 1
+      },
+      "medianAttemptMs": 57835.0,
+      "maxAttemptMs": 66082,
+      "startedAt": "2026-10-03T00:52:53.888Z",
+      "finishedAt": "2026-10-03T01:00:24.842Z",
+      "workerExit": {
+        "code": 0,
+        "signal": null
+      },
+      "runnerSha256": "9c5b46cdf93e96467347112e33ba5ec466b615c2f0663414b9eb91653653e06e"
+    }
+  ],
+  "privateFollowup": {
+    "calls": 1,
+    "expectedCases": 5,
+    "completedCases": 0,
+    "unrunCases": 4,
+    "outcome": "inference_timeout",
+    "deadlineMs": 90000,
+    "semanticQuality": "unmeasured",
+    "originalsUnchanged": true,
+    "externalNetworking": "denied by OS sandbox",
+    "productionWrites": false,
+    "dataPublished": false
+  },
+  "runnerSnapshotSha256": "9c5b46cdf93e96467347112e33ba5ec466b615c2f0663414b9eb91653653e06e"
+}

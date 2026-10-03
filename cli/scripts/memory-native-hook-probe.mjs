@@ -1,9 +1,11 @@
-// Manual native transport probe: node cli/scripts/memory-native-hook-probe.mjs [--codex] [--interactive]
+// Manual native transport probe: node cli/scripts/memory-native-hook-probe.mjs [--codex] [--interactive] [--context-file synthetic.json]
 // Isolated synthetic configuration and fake credentials; model/adapter endpoints are loopback-only.
 // Native trust prompts are preserved. Do not bypass them or reuse a real user's config for this test.
 // This checks transport with a mock model, not extraction fidelity, task quality or every native lifecycle.
 import { createServer } from 'node:http'
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -12,8 +14,16 @@ const engine = process.argv.includes('--codex') ? 'codex' : 'claude'
 const interactive = process.argv.includes('--interactive')
 const fixture = await mkdtemp(join(tmpdir(), 'native-memory-hooks-'))
 const marker = 'coding-memory-probe-8bd9c6d4'
-const additionalContext = JSON.stringify({ type: 'coding_memory_context', notice: 'Synthetic historical context; current instructions take precedence.',
+const contextArgument = process.argv.indexOf('--context-file')
+const contextFile = contextArgument < 0 ? null : process.argv[contextArgument + 1]
+assert.ok(contextArgument < 0 || (contextFile && !contextFile.startsWith('--')), 'A synthetic context file is required')
+const additionalContext = contextFile ? (await readFile(contextFile, 'utf8')).trim() : JSON.stringify({ type: 'coding_memory_context', notice: 'Synthetic historical context; current instructions take precedence.',
   items: [{ claim: `For coding review, prefer a tiny failing test first. ${marker}` }] })
+if (contextFile) {
+  assert.equal(JSON.parse(additionalContext).type, 'coding_memory_sources')
+  assert.ok(additionalContext.includes(marker))
+}
+const strings = value => typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.values(value).flatMap(strings) : []
 const receiptId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
 const requests = [], hooks = []
 const provider = createServer(async (req, res) => {
@@ -25,6 +35,7 @@ const provider = createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' }).end('{}'); return
   }
   requests.push({ route: req.url.split('?')[0], contextReceived: JSON.stringify(body).includes(marker),
+    exactContextReceived: strings(body).some(value => value.includes(additionalContext)),
     contextRoles: (body.messages ?? body.input ?? []).filter(item => JSON.stringify(item).includes(marker)).map(item => item.role),
     promptReceived: JSON.stringify(body).includes('Synthetic coding review request'), tools: (body.tools ?? []).map(tool => tool.name ?? tool.type) })
   res.writeHead(200, { 'content-type': 'text/event-stream' })
@@ -51,7 +62,11 @@ const provider = createServer(async (req, res) => {
 const adapter = createServer(async (req, res) => {
   const chunks = []
   for await (const chunk of req) chunks.push(chunk)
-  const body = JSON.parse(Buffer.concat(chunks))
+  let body
+  try { body = JSON.parse(Buffer.concat(chunks)) } catch {
+    hooks.push({ route: req.url, method: req.method, rejected: 'invalid_json' })
+    res.writeHead(400, { 'content-type': 'application/json' }).end('{"error":"invalid_json"}'); return
+  }
   hooks.push({ route: req.url, event: body.hookEvent, engine: body.engine, receipt: body.memoryReceiptId === receiptId })
   res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, additionalContext, memoryReceiptId: receiptId }))
 })
@@ -96,10 +111,14 @@ try {
   const code=await new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',resolve)})
   clearTimeout(timer)
   const events=stdout.split('\n').flatMap(line=>{try{return [JSON.parse(line)]}catch{return []}})
-  console.log(JSON.stringify({engine,version,code,interactive,nativeContextVerified:requests.some(request=>request.contextReceived),hooks,requests,
+  const nativeContextVerified = requests.some(request=>request.contextReceived)
+  const exactContextVerified = requests.some(request=>request.exactContextReceived)
+  console.log(JSON.stringify({engine,version,code,interactive,nativeContextVerified,exactContextVerified,
+    contextSha256:createHash('sha256').update(additionalContext).digest('hex'),contextType:JSON.parse(additionalContext).type,hooks,requests,
     events:events.map(event=>({type:event.type,subtype:event.subtype})),
     diagnostics:{stdioCaptured:!interactive,hookTrustNeeded:interactive ? null : /hook.*trust|hook.*review/i.test(stderr),
       stderrPresent:interactive ? null : !!stderr}},null,2))
+  if (contextFile) assert.ok(code === 0 && nativeContextVerified && exactContextVerified, 'Exact synthetic source context was not verified in the native model request')
 } finally {
   for(const server of [provider,adapter]) { server.closeAllConnections();await new Promise(resolve=>server.close(resolve)) }
   await rm(fixture,{recursive:true,force:true})

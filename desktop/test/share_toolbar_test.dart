@@ -76,13 +76,15 @@ void main() {
   // Initialize the icon library before the deep viewer build stack in Chrome.
   setUpAll(() => expect(AppIcons.refreshCw.codePoint, greaterThan(0)));
 
-  setUp(() {
+  setUp(() async {
     connection = _SharingConnection();
     app = createApp(connectionForTest: (_) => connection);
     app.stateOf('m')!.nodeOnline = true;
     keymap = MemoryKeymap();
     preferences = MemoryStore();
     experiments = MemoryExperimentalFeaturesStore(storage: preferences);
+    // Finish the real-zone read before testWidgets enters its fake clock.
+    await experiments.refresh();
     input.clear();
   });
   tearDown(() {

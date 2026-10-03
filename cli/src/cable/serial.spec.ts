@@ -20,11 +20,13 @@ function port(nativeFd = 43) {
   return stream
 }
 const tick = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
+const claimsPort = process.platform === 'darwin'
 
 describe('event-driven serial link', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     io.open.mockReturnValue(42)
+    if (claimsPort) io.open.mockReturnValueOnce(41)
     io.configure.mockImplementation((_cmd, _args, callback) => callback(null, '', ''))
   })
   afterEach(() => { vi.useRealTimers(); vi.resetAllMocks() })
@@ -52,28 +54,62 @@ describe('event-driven serial link', () => {
     const link = await SerialLink.open('/dev/fake', vi.fn(), vi.fn())
     expect(io.close).not.toHaveBeenCalled()
     await link.close()
-    expect(io.close).not.toHaveBeenCalled()
+    if (claimsPort) expect(io.close).toHaveBeenCalledExactlyOnceWith(41)
+    else expect(io.close).not.toHaveBeenCalled()
     expect(stream.destroy).toHaveBeenCalledTimes(1)
   })
 
   it('closes the descriptor if native stream construction fails', async () => {
     io.stream.mockImplementation(function () { throw new Error('TTY unavailable') })
     await expect(SerialLink.open('/dev/fake', vi.fn(), vi.fn())).rejects.toThrow('TTY unavailable')
-    expect(io.close).toHaveBeenCalledExactlyOnceWith(42)
+    expect(io.close.mock.calls).toEqual(claimsPort ? [[42], [41]] : [[42]])
   })
 
   it('releases the native stream if closing the original descriptor fails', async () => {
     const stream = port()
     io.close.mockImplementation(() => { throw new Error('close failed') })
     await expect(SerialLink.open('/dev/fake', vi.fn(), vi.fn())).rejects.toThrow('close failed')
-    expect(io.close).toHaveBeenCalledTimes(1)
+    expect(io.close).toHaveBeenCalledTimes(claimsPort ? 2 : 1)
     expect(stream.destroy).toHaveBeenCalledTimes(1)
   })
 
   it('does not open a port that could not be configured raw', async () => {
     io.configure.mockImplementation((_cmd, _args, callback) => callback(new Error('stty failed')))
     await expect(SerialLink.open('/dev/fake', vi.fn(), vi.fn())).rejects.toThrow('stty failed')
-    expect(io.open).not.toHaveBeenCalled()
+    if (claimsPort) {
+      expect(io.open).toHaveBeenCalledTimes(1)
+      expect(io.close).toHaveBeenCalledExactlyOnceWith(41)
+    } else expect(io.open).not.toHaveBeenCalled()
+    expect(io.stream).not.toHaveBeenCalled()
+  })
+
+  it.skipIf(!claimsPort)('refuses a competing claim before stty can touch the port', async () => {
+    io.open.mockReset().mockImplementation(() => { throw Object.assign(new Error('busy'), { code: 'EAGAIN' }) })
+    await expect(SerialLink.open('/dev/fake', vi.fn(), vi.fn())).rejects.toMatchObject({ code: 'EAGAIN' })
+    expect(io.configure).not.toHaveBeenCalled()
+    expect(io.stream).not.toHaveBeenCalled()
+    expect(io.close).not.toHaveBeenCalled()
+  })
+
+  it.skipIf(!claimsPort)('holds the kernel claim until the native stream has actually closed', async () => {
+    const stream = port()
+    stream.destroy.mockImplementation(() => stream)
+    const link = await SerialLink.open('/dev/fake', vi.fn(), vi.fn())
+    expect(io.open.mock.calls[0]).toEqual(['/dev/fake', constants.O_RDWR | constants.O_NOCTTY | constants.O_NONBLOCK | 0x20])
+    const closing = link.close()
+    await tick()
+    expect(io.close.mock.calls).toEqual([[42]])
+    stream.emit('close')
+    await closing
+    expect(io.close.mock.calls).toEqual([[42], [41]])
+    await link.close()
+    expect(io.close.mock.calls).toEqual([[42], [41]])
+  })
+
+  it.skipIf(!claimsPort)('releases the claim if opening the stream descriptor fails', async () => {
+    io.open.mockReset().mockReturnValueOnce(41).mockImplementationOnce(() => { throw new Error('port disappeared') })
+    await expect(SerialLink.open('/dev/fake', vi.fn(), vi.fn())).rejects.toThrow('port disappeared')
+    expect(io.close).toHaveBeenCalledExactlyOnceWith(41)
     expect(io.stream).not.toHaveBeenCalled()
   })
 

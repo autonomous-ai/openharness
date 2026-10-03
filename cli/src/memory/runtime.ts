@@ -116,6 +116,11 @@ export class CodingMemoryRuntime {
     return !this.stopped && context.experimental ? context.profileId : null
   }
 
+  /** Learning is a continuing use of the collection's model, even with an empty or deferred queue. */
+  needsCompanion(): boolean {
+    return !!this.active?.ready && this.authorized(this.active) && this.active.preferences.learn
+  }
+
   /** Explicit owner controls remain usable with watching/learning/recall off. No capture is started. */
   async libraryStatus(owner: string) {
     return this.withOwner(owner, async port => ({ runtime: this.status(),
@@ -253,7 +258,7 @@ export class CodingMemoryRuntime {
   async recallCollection(agentId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
     const request = parse(toolRecallSchema, input)
     if (this.session(agentId)?.scope !== 'profile') throw new MemoryError('scope_denied')
-    const result = await this.recallBound(agentId, request, 'mcp')
+    const result = await this.recallBound(agentId, { ...request, format: 'source_excerpts' }, 'mcp')
     return { ok: true, status: result.packet.status, context: result.packet.text,
       receipt: result.receipt ? { id: result.receipt.id, delivery: result.receipt.delivery } : null }
   }
@@ -268,11 +273,11 @@ export class CodingMemoryRuntime {
     // These releases demonstrated additionalContext in an outgoing native model request.
     // An extraction certificate or a successful stdout write does not certify hook delivery.
     // Manual recall remains available; add native releases after the same isolated transport check.
-    const tested = session?.engine === 'claude' ? version === '2.1.286'
-      : session?.engine === 'codex' ? ['0.159.0', '0.159.3'].includes(version ?? '')
+    const tested = session?.engine === 'claude' ? ['2.1.286', '2.1.287'].includes(version ?? '')
+      : session?.engine === 'codex' ? ['0.159.0', '0.159.3', '0.160.0'].includes(version ?? '')
       : session?.engine === 'opencode' && version === '1.18.34'
     if (!tested) return { packet: empty('unavailable'), receipt: null }
-    return this.recallBound(agentId, request, 'prompt_hook')
+    return this.recallBound(agentId, { ...request, format: 'source_excerpts' }, 'prompt_hook')
   }
 
   /** A verified adapter handed context to the native prompt path; not proof of model consumption. */

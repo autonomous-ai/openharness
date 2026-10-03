@@ -1,0 +1,167 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "2f36970b0c760d860c69b6454388656a3d276cc839935595175d99e9a30e9ed2",
+  "suiteSha256": "135545eb05370bac04fbaf555c36255afd21fbcbd4190b0e21895e17d31273c3",
+  "reviewer": {
+    "id": "codex-source-review",
+    "kind": "agent",
+    "independent": false
+  },
+  "cases": [
+    {
+      "id": "conditional-debugging",
+      "records": [
+        {
+          "id": "77a188d1-7937-48e5-a6fd-f7f0838bdc13",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Preserves the debugging-only preference, its production-incident exception, and unknown rationale. The test-first workflow stays conditional; no incident workflow is invented."
+        }
+      ],
+      "probes": [
+        {
+          "id": "debugging",
+          "relevantIds": [
+            "77a188d1-7937-48e5-a6fd-f7f0838bdc13"
+          ],
+          "requiredIds": [
+            "77a188d1-7937-48e5-a6fd-f7f0838bdc13"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The returned packet preserves the supported claim, scope, rationale, applicability and exceptions."
+        },
+        {
+          "id": "incident",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The negative probe correctly receives no memory context."
+        },
+        {
+          "id": "unclassified-task",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The negative probe correctly receives no memory context."
+        }
+      ]
+    },
+    {
+      "id": "project-database-decision",
+      "records": [
+        {
+          "id": "2c9a18ab-b8e0-4f7f-949b-51af355743c1",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Preserves the adopted SQLite choice and its stated single-file/no-server reason within desktop-repo. No personal default, performance claim, or extra task condition is added."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-repository",
+          "relevantIds": [
+            "2c9a18ab-b8e0-4f7f-949b-51af355743c1"
+          ],
+          "requiredIds": [
+            "2c9a18ab-b8e0-4f7f-949b-51af355743c1"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The returned packet preserves the supported claim, scope, rationale, applicability and exceptions."
+        },
+        {
+          "id": "different-repository",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The negative probe correctly receives no memory context."
+        }
+      ]
+    },
+    {
+      "id": "routine-tool-choice",
+      "records": [],
+      "probes": [
+        {
+          "id": "no-assumed-taste",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The negative probe correctly receives no memory context."
+        }
+      ]
+    },
+    {
+      "id": "quoted-third-party",
+      "records": [],
+      "probes": [
+        {
+          "id": "no-borrowed-opinion",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The negative probe correctly receives no memory context."
+        }
+      ]
+    },
+    {
+      "id": "unstated-rationale",
+      "records": [
+        {
+          "id": "ae35aa23-07a1-4115-aedd-8b8e09137d2a",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Preserves the PostgreSQL default with empty applicability and null rationale. Unlike v5, it does not invent an implementation-only restriction. Current explicit instructions can override the default."
+        }
+      ],
+      "probes": [
+        {
+          "id": "database-choice",
+          "relevantIds": [
+            "ae35aa23-07a1-4115-aedd-8b8e09137d2a"
+          ],
+          "requiredIds": [
+            "ae35aa23-07a1-4115-aedd-8b8e09137d2a"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The returned packet preserves the supported claim, scope, rationale, applicability and exceptions."
+        },
+        {
+          "id": "irrelevant-ui-task",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The negative probe correctly receives no memory context."
+        }
+      ]
+    },
+    {
+      "id": "unbound-project-fact",
+      "records": [],
+      "probes": [
+        {
+          "id": "no-project-leak",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The negative probe correctly receives no memory context."
+        }
+      ]
+    }
+  ]
+}

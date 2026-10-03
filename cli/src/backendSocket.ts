@@ -763,6 +763,12 @@ export class BackendSocket {
   recentProvider: RecentProvider | null = null
   /** The person's own last questions for an agent, newest first. See the `agent_recent` case. */
   recentAsksProvider: ((agentId: string, n: number) => string[]) | null = null
+  /** Writes the structured handoff file for an agent whose engine is about to change (the
+   *  `agent_handoff_prepare` case; cli.ts wires lib/agentHandoff.ts). It resolves with where the file is,
+   *  never with text for the next engine (the desktop words that prompt itself). A `HandoffError`'s `code`
+   *  is the error reply; any other failure replies `INTERNAL`. */
+  handoffProvider: ((req: { agentId: string; changeId: string; targetEngine: string }) =>
+    Promise<{ file: string | null; gitRepo: boolean; cwd: string; degraded: string[] }>) | null = null
   monitorActivityProvider: ((sessionId: string) => MonitorActivity) | null = null
   private readonly monitorCompletions = new MonitorCompletions()
   /** Answers `session_search` from this machine's transcript index (lib/sessionSearch/). Null when
@@ -1652,7 +1658,7 @@ export class BackendSocket {
     const resultType = rpcResultType(type)
     if (connId && deviceDump.enabled && this.e2ee.sessionRole(connId) === 'device') deviceDump.record('out', 'legacy', connId, { type: resultType, payload: { requestId, ...payload } })
     // Before the E2EE wrap: an RPC reply is only readable here.
-    if (env.LOG_FRAMES && !TEAM_REQUEST_TYPES.has(type) && !OWNER_COMMAND_TYPES.has(type) && !type.startsWith('viewer_') && type !== 'phone_pair' && type !== 'api_connections' && type !== 'orchestrator' && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
+    if (env.LOG_FRAMES && !TEAM_REQUEST_TYPES.has(type) && !OWNER_COMMAND_TYPES.has(type) && !type.startsWith('viewer_') && type !== 'phone_pair' && type !== 'api_connections' && type !== 'orchestrator' && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'agent_handoff_prepare' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
     if (this.localClients.has(connId)) {
       this.sendTo(connId, { type: resultType, payload: { requestId, ...payload } })
       return
@@ -1848,7 +1854,7 @@ export class BackendSocket {
     // than as an opaque __e2e envelope.
     // Terminal frames contain raw keystrokes, paste text and screen bytes after
     // unwrap. Never pass them to the frame logger, even in diagnostic mode.
-    if (env.LOG_FRAMES && !TEAM_REQUEST_TYPES.has(type) && !OWNER_COMMAND_TYPES.has(type) && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'orchestrator' && type !== 'api_connections' && type !== 'phone_pair' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) {
+    if (env.LOG_FRAMES && !TEAM_REQUEST_TYPES.has(type) && !OWNER_COMMAND_TYPES.has(type) && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'agent_handoff_prepare' && type !== 'orchestrator' && type !== 'api_connections' && type !== 'phone_pair' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => this.emitReply(connId, t, rid, p)
@@ -2667,6 +2673,40 @@ export class BackendSocket {
           // reaches the router with nothing but its name.
           const asks = this.recentAsksProvider ? this.recentAsksProvider(projectId, n) : []
           reply(type, requestId, { agentId: projectId, events, asks })
+          return
+        }
+
+        case 'agent_handoff_prepare': {
+          // "Change agent": before the engine is swapped, write what the old one did into the project
+          // (`.harness/handoff/`) so the new one can read it. It writes into the user's folder and runs
+          // git there, so only the owner may ask: the loopback window, or a sealed `web` session. A
+          // `device` (the dial) and a shared viewer never do.
+          if (!local && this.e2ee.sessionRole(connId) !== 'web') { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
+          const agentId = payload.agentId
+          if (typeof agentId !== 'string' || agentId.length === 0 || agentId.length > 200) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
+          const changeId = payload.changeId
+          if (typeof changeId !== 'string' || !/^[0-9a-f]{32}$/.test(changeId)) { reply(type, requestId, { error: 'BAD_CHANGE_ID' }); return }
+          const targetEngine = payload.targetEngine
+          if (typeof targetEngine !== 'string' || !(ENGINES as readonly string[]).includes(targetEngine)) { reply(type, requestId, { error: 'BAD_ENGINE' }); return }
+          const provider = this.handoffProvider
+          if (!provider) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+          // DETACHED from this connection's ordered RPC chain, like `engines_probe`: it reads a whole
+          // session and runs git, and a window's next request must not queue behind it. The reply names
+          // fixed fields only; whatever else the provider returned stays here.
+          // Called inside the executor so a provider that throws before returning its promise lands in
+          // the same catch (and the same message-free log) as one that rejects.
+          void new Promise<Awaited<ReturnType<typeof provider>>>((resolve) => resolve(provider({ agentId, changeId, targetEngine })))
+            .then((r) => reply(type, requestId, { agentId, file: r.file, gitRepo: r.gitRepo, cwd: r.cwd, degraded: r.degraded }))
+            .catch((e: unknown) => {
+              // Only a HandoffError's code goes on the wire, and only code-shaped: the reply never carries
+              // a message or anything else the provider put in it.
+              const code = typeof e === 'object' && e !== null ? (e as { code?: unknown }).code : undefined
+              const known = (e as { name?: unknown } | null)?.name === 'HandoffError' && typeof code === 'string' && /^[A-Z][A-Z_]{0,39}$/.test(code)
+              // Name and errno code only: a message can quote the project path or, from a parser, a
+              // slice of the transcript it choked on.
+              if (!known) console.error(`[handoff] prepare failed: ${e instanceof Error ? e.name : typeof e}${typeof code === 'string' && /^[A-Z0-9_]{1,40}$/.test(code) ? ` ${code}` : ''}`)
+              reply(type, requestId, { error: known ? code : 'INTERNAL' })
+            })
           return
         }
 

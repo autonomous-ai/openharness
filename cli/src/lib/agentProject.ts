@@ -76,9 +76,9 @@ async function projectConfig(cwd: string, branch: string | null) {
   return { remote: values.get('remote.origin.url') ?? null, pending: marker !== null && values.get(marker) === 'placeholder' }
 }
 
-/** One discovery process for both paths. Absolute output preserves linked
- * worktree names even when cwd is a subdirectory or a symlink. */
-async function repositoryPaths(cwd: string): Promise<{ root: string; common: string | null } | null> {
+/** Read paths and a resolved branch in one process. Absolute output preserves
+ * linked worktree names even when cwd is a subdirectory or a symlink. */
+async function repositoryPaths(cwd: string): Promise<{ root: string; common: string | null; branch?: string | null } | null> {
   try {
     if (!(await stat(cwd)).isDirectory()) return null
   } catch (error) {
@@ -86,10 +86,26 @@ async function repositoryPaths(cwd: string): Promise<{ root: string; common: str
     // failures still defer to Git rather than asserting that a checkout is gone.
     if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return null
   }
-  const output = await git(cwd, ['rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir'])
+  let output: string | null
+  let resolved = true
+  try {
+    output = await runGit(cwd, ['rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir', '--abbrev-ref=loose', 'HEAD'])
+  } catch (error) {
+    const failed = error as { code?: number | string; stdout?: string }
+    // An unborn HEAD exits 128 after printing the two valid paths and HEAD.
+    // Keep those paths, then let symbolic-ref read the unborn branch as before.
+    output = failed.code === 128 && typeof failed.stdout === 'string' ? failed.stdout.trim() || null : null
+    resolved = false
+  }
   if (!output) return null
   const paths = output.split('\n')
-  if (paths.length === 2 && paths.every(isAbsolute)) return { root: paths[0], common: paths[1] }
+  // Ambiguous HEAD names can omit the ref while still exiting successfully.
+  if (resolved && paths.length === 2 && paths.every(isAbsolute)) return { root: paths[0], common: paths[1] }
+  if (paths.length === 3 && paths.slice(0, 2).every(isAbsolute) && (resolved || paths[2] === 'HEAD')) {
+    // A resolved literal HEAD is detached; undefined means symbolic-ref is
+    // still needed (unborn, ambiguous, or the compatibility path below).
+    return { root: paths[0], common: paths[1], ...(resolved ? { branch: paths[2] === 'HEAD' ? null : paths[2] } : {}) }
+  }
   // Older Git prints an unrecognised --path-format flag literally. Ambiguous
   // output (including a newline in a physical path) retains the separate reads.
   const root = await git(cwd, ['rev-parse', '--show-toplevel'])
@@ -107,7 +123,8 @@ async function inspect(cwd: string): Promise<AgentProject> {
     if (!paths) return { name: basename(cwd) || cwd, cwd, root: null, remote: null, branch: null }
     const { root, common } = paths
     // A checkout on no branch still says where it is, as the desktop's own reader does.
-    const branch = await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])
+    const branch = (paths.branch === undefined
+      ? await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']) : paths.branch)
       ?? await git(cwd, ['rev-parse', '--short', 'HEAD']).then(sha => sha && `Detached ${sha}`)
     const { remote, pending } = await projectConfig(cwd, branch)
     // A linked worktree is named for its repository, not its folder.

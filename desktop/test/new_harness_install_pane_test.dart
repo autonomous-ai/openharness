@@ -202,6 +202,10 @@ void main() {
     double width = 900,
     VoidCallback? onClose,
   }) async {
+    // Installation journeys use a supported engine from the fixture manifest.
+    if (notifier.agentPreference.successfulLaunch == null) {
+      await notifier.agentPreference.remember('claude');
+    }
     final box = controller(notifier);
     final keymap = MemoryKeymap();
     await tester.pumpWidget(
@@ -260,10 +264,10 @@ void main() {
     );
 
     test(
-      'with no history, Claude Code leads and every harness is listed',
+      'with no history, OpenCode leads and every harness is listed',
       () async {
         final ids = harnessList(controller(await app()));
-        expect(ids.first, 'claude');
+        expect(ids.first, 'opencode');
         expect(
           ids,
           containsAllInOrder([
@@ -297,12 +301,12 @@ void main() {
   });
 
   group('what the form opens on', () {
-    test('Code and Claude Code when nothing was used before', () async {
+    test('Code and OpenCode when nothing was used before', () async {
       final box = controller(await app());
       await Future<void>.delayed(Duration.zero);
       expect(box.harnessId, isNull);
       expect(box.harnessLabel, 'Code');
-      expect(box.engine, 'claude');
+      expect(box.engine, 'opencode');
     });
 
     test('the last harness, with the agent last used on it', () async {

@@ -186,7 +186,7 @@ void main() {
     },
   );
 
-  testWidgets('Cmd-P round trip restores the tab draft and chosen options', (
+  testWidgets('Cmd-P round trip opens a fresh form with successful defaults', (
     tester,
   ) async {
     await setup(tester);
@@ -201,13 +201,14 @@ void main() {
     );
     await key(tester, LogicalKeyboardKey.keyN, cmd: true);
     await tester.pumpAndSettle();
-    expect(box(tester).task, 'Keep my page draft');
-    expect(box(tester).project.folder, '/work/selected');
+    expect(box(tester).task, isEmpty);
+    expect(box(tester).projectFolderRequest!.isGenerated, isTrue);
+    expect(app.projectHistory.selected('m'), '/work/openharness');
     expect(tester.widget<TextField>(task).focusNode!.hasFocus, isTrue);
     expect(connection.starts, isEmpty);
   });
 
-  testWidgets('each new tab keeps its own draft after switching', (
+  testWidgets('switching new tabs discards ordinary edits without starting', (
     tester,
   ) async {
     await setup(tester);
@@ -221,10 +222,10 @@ void main() {
     await tester.enterText(task, 'Second draft');
     app.selectSwarm(first);
     await tester.pumpAndSettle();
-    expect(box(tester).task, 'First draft');
+    expect(box(tester).task, isEmpty);
     app.selectSwarm(second);
     await tester.pumpAndSettle();
-    expect(box(tester).task, 'Second draft');
+    expect(box(tester).task, isEmpty);
     expect(connection.starts, isEmpty);
   });
 
@@ -255,9 +256,14 @@ void main() {
       await setup(tester);
       final tab = app.activeSwarmId;
       final tabs = app.swarms.length;
+      box(tester).setFolder('/work/openharness');
+      await tester.pumpAndSettle();
       await tester.enterText(task, 'Build the page');
+      expect(tester.widget<TextField>(task).focusNode!.hasFocus, isTrue);
+      expect(box(tester).requiredChoice, isNull);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump(const Duration(milliseconds: 100));
+      expect(box(tester).error, isNull);
       expect(connection.starts, hasLength(1));
       expect(connection.starts.single['prompt'], 'Build the page');
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
@@ -274,14 +280,16 @@ void main() {
     },
   );
 
-  testWidgets('Escape from search restores the embedded draft', (tester) async {
+  testWidgets('Escape from search opens the embedded form with an empty task', (
+    tester,
+  ) async {
     await setup(tester);
     await tester.enterText(task, 'Back from search');
     await key(tester, LogicalKeyboardKey.keyP, cmd: true);
     await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
-    expect(box(tester).task, 'Back from search');
+    expect(box(tester).task, isEmpty);
   });
 
   for (final brightness in Brightness.values) {
@@ -423,12 +431,28 @@ void main() {
           for (final machine in app.machineStates.values) {
             machine.agents = [];
           }
+          app.machineStates.removeWhere((id, _) => id != 'm');
+          app.machines = [app.machineStates['m']!.machine];
+          app.modelManager
+            ..loaded = true
+            ..inventoryAvailable = true;
           await tester.pumpWidget(const SizedBox());
           await tester.pumpWidget(preview);
           await tester.pumpAndSettle();
           expect(find.byKey(const ValueKey('welcome-sessions')), findsNothing);
           expect(
             find.byKey(const ValueKey('workspace-status-bar')),
+            findsOneWidget,
+          );
+          for (final control in [
+            'workspace-harness-monitor',
+            'workspace-machines',
+            'workspace-models',
+          ]) {
+            expect(find.byKey(ValueKey(control)).hitTestable(), findsOneWidget);
+          }
+          expect(
+            find.byKey(const ValueKey('workspace-pane-context')),
             findsNothing,
           );
           expect(tester.widget<TextField>(task).focusNode!.hasFocus, isTrue);
@@ -439,17 +463,31 @@ void main() {
   }
 
   testWidgets(
-    'native footer exposes live sessions on an empty tab and hides with no work',
+    'native footer keeps zero inventory visible on the empty welcome screen',
     (tester) async {
       await setup(tester, mac: true);
       expect(updates.last['footerCovered'], isFalse);
       expect(updates.last['harnessMonitor']['text'], startsWith('Harnesses 2'));
+      expect(updates.last['focusedContext'], isNull);
       for (final machine in app.machineStates.values) {
         machine.agents = [];
       }
+      app.machineStates.removeWhere((id, _) => id != 'm');
+      app.machines = [app.machineStates['m']!.machine];
       app.notifyListeners();
       await tester.pumpAndSettle();
-      expect(updates.last['footerCovered'], isTrue);
+      expect(updates.last['footerCovered'], isFalse);
+      expect(updates.last['harnessMonitor']['text'], 'Harnesses 0');
+      expect(updates.last['footerMachines']['text'], 'Machines 1');
+      expect(updates.last['footerModels']['text'], 'Models —');
+      expect(updates.last['focusedContext'], isNull);
+      app.modelManager
+        ..loaded = true
+        ..inventoryAvailable = true;
+      app.notifyListeners();
+      await tester.pumpAndSettle();
+      expect(updates.last['footerModels']['text'], 'Models 0');
+      expect(updates.last['footerCovered'], isFalse);
       app.adoptSessionForTest(terminal('a0', []));
       app.notifyListeners();
       await tester.pumpAndSettle();
