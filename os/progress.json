@@ -257,7 +257,7 @@
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
     "Physical ThinkPad boot, installation, Wi-Fi, suspend and hardware verification; user will test manually"
   ],
-  "last_updated_utc": "2026-10-03T10:38:15.965197+00:00",
+  "last_updated_utc": "2026-10-03T10:45:19.143501+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -922,7 +922,7 @@
   "usb_first_use_revision": {
     "request_received_utc": null,
     "first_recorded_utc": "2026-10-03T08:28:25.074631+00:00",
-    "status": "Fresh image/native build and full CLI validation are running on 67958156d; preview 4 remains unpublished.",
+    "status": "Verified runtime/image reused; correct the first-use test cleanup before rerunning full installation and default-model workflows.",
     "implementation_complete_utc": "2026-10-03T09:23:12.711637+00:00",
     "validation_complete_utc": null,
     "publication_utc": null,
@@ -1040,12 +1040,20 @@
         "source_commit": "06e268bc38b564aa79b6800f1507d5737a3e53da",
         "image_run_id": 37115159220,
         "result": "Both VMs failed at the same model-check cwd error; DSH acceptance did not run."
+      },
+      {
+        "run_id": 37116595898,
+        "source_commit": "67958156da30d2983daee22ddab48c43970fa244",
+        "result": "Both VMs failed only at first-use cleanup: the test incorrectly required OpenCode 2 shared service to exit along with the TUI.",
+        "passed": "Live executable identities no longer conflate Bash/Python with agents; actual OpenCode TUI starts without the plugin error; both default clean-profile model calls returned 42. Both screenshots show return to the USB welcome after closing the TUI.",
+        "remedy": "Verify disappearance of the exact interactive pane, not every process named opencode. Test-only correction; reuse the verified image/runtime."
       }
     ],
     "isolation_revision_ready_utc": "2026-10-03T09:11:28.017223+00:00",
     "positioning": "Harness is built around agents as the primary interface: conversation directs work; terminal output, diffs and browser make results inspectable. Programmers first; broader uses later. Product name remains Harness.",
     "post_build_source_changes": [
-      "Test-only: operate the visible default OpenCode TUI through virtual keyboard input and require its reply; publication guard now requires that evidence. Runtime and image source remain 67958156d."
+      "Test-only: operate the visible default OpenCode TUI through virtual keyboard input and require its reply; publication guard now requires that evidence. Runtime and image source remain 67958156d.",
+      "Test-only cleanup uses the exact interactive pane id; preserves the real OpenCode 2 shared service lifecycle. Portable 51 tests/syntax passed."
     ],
     "post_build_local_checks": "31 installer tests passed; changed Python files compile and git diff --check passed. Native terminal regression and updated machine journey require the new source build.",
     "native_validation_complete_utc": null,
@@ -1087,8 +1095,8 @@
       }
     },
     "next_step": "Follow CI 37116593867 and OS 37116595898; inspect fresh first-use screens and both complete USB install/unlock/recovery journeys. Then run default-model workload and DSH acceptance separately on the same exact image before publication.",
-    "last_recorded_utc": "2026-10-03T10:38:15.965197+00:00",
-    "first_use_visual_review": "Reviewed actual BIOS and UEFI screenshots from run 37112874271: Harness wordmark, Install Harness primary action, Try without installing secondary action, and harness hostname appear. This only covers the welcome screen, not subsequent first-use journeys.",
+    "last_recorded_utc": "2026-10-03T10:45:19.143501+00:00",
+    "first_use_visual_review": "Inspected BIOS 01d-bundled-opencode.png and failure.png from run 37116595898: upstream-default Fledge Alpha Free is shown without a plugin warning; after Ctrl+C twice, the clean Harness Install/Try welcome is visible. Both firmware JSONL replies are 42. The retained process in each is /usr/bin/opencode serve --service.",
     "revision_ready_utc": "2026-10-03T10:29:26.198461+00:00",
     "development_acceptance_revision": {
       "status": "prepared; syntax and fixture generation passed; real guest runs pending",
@@ -1107,9 +1115,13 @@
     },
     "native_validation": "Run 37115159220 passed CLI typecheck, 89 affected CLI tests (1 skipped), 337 Rust tests (1 ignored), all 10 native fixtures, image assembly and SquashFS inspection. Both VM journeys failed at the default chat test before installation.",
     "last_image": {
-      "run_id": 37115159220,
+      "run_id": 37116595898,
+      "source_commit": "67958156da30d2983daee22ddab48c43970fa244",
       "iso_bytes": 1612300288,
-      "iso_sha256": "1a0312c8a0f94fdc3700e2cf2f05d156fb05b0be3a5d044c6bf00019aa1a5784",
+      "iso_sha256": "52c14dd1aab5498141e260915798dd59c6f4d525115d86fd1fad8e9ffdaa328f",
+      "package_count": 405,
+      "native_validation": "337 Rust tests (1 ignored), 89 affected CLI tests (1 skipped), all 10 native TUI fixtures, portable tests, workflow lint and actual SquashFS inspection passed. Full CLI suite passed separately on the same runtime source.",
+      "manifest_from_log": "os/work/preview4-build-37116595898/manifest-from-build-log.json",
       "publishable": false
     },
     "current_validation_plan": [
@@ -1129,8 +1141,8 @@
         "Repository process checks",
         "Linux and macOS native serial/login-shell matrix on Node 20.19.0 and 22.23.2"
       ],
-      "completed_utc": "2026-10-03T10:35:29Z",
-      "result": "8761 full-suite tests passed, 62 skipped; 40 separately scheduled fuzz tests passed. Supported Linux/macOS Node matrix, release bundle migration and updater coverage checks passed; updater coverage reports 100%. No second full local suite required."
+      "result": "8761 full-suite tests passed, 62 skipped; 40 separately scheduled fuzz tests passed. Supported Linux/macOS Node matrix, release bundle migration and updater coverage checks passed; updater coverage reports 100%. No second full local suite required.",
+      "typecheck_test_job_completed_utc": "2026-10-03T10:35:28Z"
     },
     "browser_visual_review": {
       "attempted_utc": "2026-10-03T10:38:15.965197+00:00",
@@ -1139,6 +1151,14 @@
       "url": "http://127.0.0.1:18092/",
       "reason": "Browser Use rejected the exact previously authorized URL because of a saved user permission setting. No alternate browser, raw CDP, or rendering workaround attempted.",
       "impact": "Landing-page visual and interactive checks remain unverified; static source review and separate authorized CI guest VM work continue."
+    },
+    "low_memory_run": {
+      "run_id": 37117247900,
+      "image_run_id": 37116595898,
+      "test_source_commit": "e79f94fcb7e6a78e8250eea46da51c80017af8bf",
+      "memory_mib": 1024,
+      "started_utc": "2026-10-03T10:41:33Z",
+      "status": "in progress when last checked; includes actual keyboard conversation but precedes cleanup correction"
     }
   },
   "previous_goal_turn_classification": {

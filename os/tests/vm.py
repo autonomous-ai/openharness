@@ -373,6 +373,9 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     screen, _ = vm.command(user('hn capture-pane -p'))
     (folder / 'bundled-opencode-screen.txt').write_text(screen)
     assert 'Plugin failed:' not in screen and 'plugin failed /plugins' not in screen, 'Bundled OpenCode must open without a plugin error'
+    output, _ = vm.command(user('hn display-message -p "HN_FIRST_AGENT=#{pane_id}"'))
+    agent_pane = re.search(r'HN_FIRST_AGENT=(%\d+)', output)
+    assert agent_pane, 'The visible OpenCode must identify its actual pane'
     # Exercise what a first-time user actually does after choosing Try: type
     # into the visible agent and receive its answer, without a CLI/API shortcut.
     vm.type_probe('what is six times seven reply with digits only')
@@ -407,7 +410,11 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     vm.keys('ctrl', 'c')
     time.sleep(.3)
     vm.keys('ctrl', 'c')
-    vm.command('for n in $(seq 1 15); do ! pgrep -u 1000 -x opencode >/dev/null && exit 0; sleep 1; done; exit 1', timeout=20)
+    # OpenCode 2 keeps `opencode serve --service` alive after its TUI exits.
+    # The user's pane must close; the vendor's shared service is not a window.
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 60); do '
+        'hn list-panes -a -F "#{pane_id}" | grep -Fx ' + shlex.quote(agent_pane.group(1)) +
+        ' >/dev/null || exit 0; sleep .25; done; exit 1')), timeout=20)
 
 
 def install_interactively(vm, config, folder):
