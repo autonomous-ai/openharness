@@ -363,6 +363,37 @@ Report the combined coverage and any retries explicitly. This is not an
 uninterrupted passing suite, and it is not permission to retry assertion failures
 until they disappear.
 
+## Merge an already-reviewed PR
+
+Once code review and required non-CI checks are complete and merging is authorized,
+start this command while the selected CI run is still running:
+
+```bash
+make merge-pr ARGS="PR_NUMBER --run RUN_ID --scope SCOPE --reviewed-head HEAD_SHA --reviewed-base MAIN_SHA --merge"
+```
+
+Use full commit SHAs. The clean local checkout must be the reviewed head and include
+that reviewed `main` commit. Prepare the PR description with its check scope and CI
+run link first. The command waits for that attempt, verifies the same jobs/artifacts
+as the evidence collector, then rechecks the PR and the live `main` ref before one
+squash-merge request. GitHub must report the PR ready; the request includes the exact
+reviewed head and does not bypass branch rules or enable auto-merge/queueing.
+
+Omit `--merge` for a read-only preview. Logs, CI evidence, per-phase timings and the
+merge outcome are saved under `.harness/validation/*-merge-*/`. `--wait-timeout`
+defaults to 900s; `--timeout` gives preflight and post-CI operations 90s each. The
+command records its intended mutation before sending it. If a response is lost, it
+inspects the same PR without replaying the merge request.
+
+A changed head, dirty checkout, moved main, failed CI or blocked merge stops the
+command. Review new source differences and reuse only applicable evidence, as above;
+the command does not decide that impact or replace native checks and code review.
+After a merge, it verifies the actual Git tree against the tested tree. A different
+tree is recorded as `merged_source_review_required` (exit 3), so resolve that source
+review before release. An unconfirmed write is recorded as `merge_not_confirmed`;
+inspect the same PR before further action. This command does not create release tags
+or dispatch release workflows.
+
 ## Complete the authorized release
 
 Once required checks pass, merge, verify the resulting source, and tag that source

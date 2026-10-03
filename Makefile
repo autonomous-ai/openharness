@@ -4,12 +4,17 @@
 #   make install-cli ARGS="--no-restart"
 #   make release-cli ARGS="--dry-run"
 
-.PHONY: validate desktop-test cli-test install-cli upload-cli-install-sh release-cli release-backend release-desktop release-web remote-machine upload-circle device-test
+.PHONY: validate merge-pr desktop-test cli-test install-cli upload-cli-install-sh release-cli release-backend release-desktop release-web remote-machine upload-circle device-test
 
 ## validate: bounded independent checks with logs and a source/timing receipt.
 ## See docs/validation-and-release.md. ARGS="path/to/plan.json".
 validate:
 	python3 scripts/validate-change.py $(ARGS)
+
+## merge-pr: wait for required CI and verify an already-reviewed PR; add --merge to squash it.
+## See docs/validation-and-release.md for reviewed source arguments and non-CI checks.
+merge-pr:
+	python3 scripts/merge-validated-pr.py $(ARGS)
 
 ## desktop-test: bounded VM tests, host-sized workers and recorded startup recovery.
 ## ARGS="test/affected_test.dart --workers 2"; omit paths for the full VM suite.
