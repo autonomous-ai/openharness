@@ -90,6 +90,21 @@ python3 os/tests/local_ai_vm.py --iso os/dist/IMAGE.iso --probe local-ai
 python3 os/tests/local_ai_vm.py --iso os/dist/IMAGE.iso --probe nvidia
 ```
 
+The **Harness OS runtime memory assessment** workflow compares Node flags in one
+installed 1 GiB VM. It alternates two default and two candidate rounds, samples
+RSS/PSS and local status latency with four persistent terminal streams, records
+CPU time, then restores the packaged command and checks graphical keyboard input.
+This measures daemon behavior, not model performance or full agent throughput.
+
+In [the October 3 comparison](https://github.com/autonomous-ai/openharness/actions/runs/37154644789),
+the installed Node was 22.23.3. Median process RSS was 117.4/129.2 MiB in the two
+default rounds and 126.1/145.2 MiB with `--optimize-for-size
+--max-semi-space-size=1`. Each round made 200 status requests; p95 response times
+were 1.19–1.25 ms. Memory drifted across this short interleaved run, so it does not
+establish a precise causal difference. It provides no evidence for a saving from
+these flags; the shipped defaults remain unchanged. Retain raw per-round data
+and use representative long-running agent work before adopting a memory limit.
+
 ## The feedback loop
 
 | Work being tested | Best environment | What it proves |
