@@ -350,15 +350,23 @@ def restart(cli_changed):
 def screen_ready(target):
     """Wait for an attached client executing the selected binary, not just foot."""
     deadline = time.monotonic() + 30
+    observed = {}
     while time.monotonic() < deadline:
         try:
-            clients = run('/usr/bin/hn', 'list-clients', '-F', '#{client_pid}', timeout=3)
+            # list-clients deliberately includes the backing tmux connections.
+            # hn-list-clients identifies hn's own rendering clients instead.
+            clients = run('/usr/bin/hn', 'hn-list-clients', '-F', '#{client_pid}', timeout=3)
             for pid in clients.splitlines():
-                if pid.isdigit() and (Path('/proc') / pid / 'exe').samefile(target / 'harness-tui'):
-                    return
+                if pid.isdigit():
+                    executable = Path('/proc') / pid / 'exe'
+                    observed[pid] = str(executable.resolve())
+                    if executable.samefile(target / 'harness-tui'):
+                        write(STATE / 'screen.json', {'pid': int(pid), 'executable': observed[pid], 'target': str(target)})
+                        return
         except (OSError, subprocess.SubprocessError):
             pass
         time.sleep(.25)
+    write(STATE / 'screen.json', {'target': str(target), 'observed': observed, 'status': 'failed'})
     raise ValueError('The new hn screen did not become ready. Restoring the previous build.')
 
 

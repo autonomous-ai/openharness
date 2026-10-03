@@ -105,6 +105,10 @@ class ReleaseChannel(unittest.TestCase):
         self.manifest['upgrades_from'] = [self.base]
         self.publish()
         self.assertTrue(update.discover(self.url + '/metadata.json')['available'])
+        self.manifest['upgrades_from'] = []
+        self.publish()
+        with patch.object(update.subprocess, 'check_output', side_effect=['harness-os 0.1.0pre6-1', '-1']):
+            self.assertFalse(update.discover(self.url + '/metadata.json')['available'])
 
     def fake_updater(self):
         config = self.root / 'pacman.conf'

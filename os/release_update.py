@@ -84,12 +84,13 @@ def discover(feed=FEED):
     value = package.get('version', '')
     if not isinstance(value, str) or not re.fullmatch(r'[0-9A-Za-z.+_-]+', value):
         raise ValueError('Invalid system package version.')
-    base = json.loads(LOCK.read_text())
-    load_runtime_updater().validate_base(manifest, base)
     current = subprocess.check_output(['pacman', '-Q', 'harness-os'], text=True).strip().split()
     if len(current) != 2 or current[0] != 'harness-os' or not re.fullmatch(r'[0-9A-Za-z.+_-]+', current[1]):
         raise ValueError('Cannot identify the installed Harness system package.')
     newer = int(subprocess.check_output(['vercmp', value, current[1]], text=True)) > 0
+    if newer:
+        base = json.loads(LOCK.read_text())
+        load_runtime_updater().validate_base(manifest, base)
     return {'available': newer, 'version': value, 'manifest': manifest, 'assets': metadata, 'feed': feed}
 
 
