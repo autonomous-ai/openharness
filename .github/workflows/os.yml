@@ -29,6 +29,12 @@ on:
         description: 'Optional: reuse the generated projects from this workload run; finish its game agent and rerun all acceptance checks'
         required: false
         type: string
+      memory_mib:
+        description: 'VM RAM; 1024 exercises an older, constrained machine'
+        required: false
+        default: '2048'
+        type: choice
+        options: ['2048', '1024']
   push:
     branches: ['os/**']
     paths: ['os/**', 'tui/**', 'cli/**', '.github/workflows/os.yml']
@@ -38,7 +44,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: programmer-os-${{ github.ref }}-${{ inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
+  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
   cancel-in-progress: false
 
 jobs:
@@ -156,7 +162,8 @@ jobs:
       - name: Boot, operate, install and reboot the real image
         env:
           OS_WORKLOAD_SOURCE_RUN: ${{ inputs.workload_seed_run_id }}
-        run: python3 os/tests/vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ (inputs.workloads || inputs.workload_seed_run_id != '') && matrix.firmware == 'bios' && '--workloads' || '' }} ${{ inputs.dsh && matrix.firmware == 'bios' && '--dsh' || '' }} ${{ inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-seed os/work/workload-seed' || '' }}
+          OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
+        run: python3 os/tests/vm.py --iso os/dist/*.iso --memory "$OS_MEMORY_MIB" --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ (inputs.workloads || inputs.workload_seed_run_id != '') && matrix.firmware == 'bios' && '--workloads' || '' }} ${{ inputs.dsh && matrix.firmware == 'bios' && '--dsh' || '' }} ${{ inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-seed os/work/workload-seed' || '' }}
       - name: Show machine failure diagnostics
         if: failure()
         run: |
