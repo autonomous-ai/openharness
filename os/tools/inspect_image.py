@@ -57,7 +57,11 @@ def inspect(iso):
         assert read(str(Path(kernel['path']).with_name('pkgbase'))).strip() == b'linux-lts'
         packages = read('usr/share/harness-os/packages.txt').decode()
         assert packages == (iso.parent / 'packages.txt').read_text(), 'Package inventory mismatch'
-        names = {row.split()[0] for row in packages.splitlines()}
+        inventory = dict(row.split(maxsplit=1) for row in packages.splitlines())
+        names = set(inventory)
+        version = json.loads(read('usr/share/harness-os/lock.json'))['version']
+        assert version == manifest['version'], 'Image version differs from the build manifest'
+        assert inventory['harness-os'] == version.replace('-preview.', 'pre') + '-1', 'OS package version differs from the image version'
         wanted = {row.strip() for row in (source / 'packages.x86_64').read_text().splitlines() if row.strip() and not row.startswith('#')}
         assert wanted.issubset(names), f'Missing packages: {wanted - names}'
         config = read('etc/pacman.conf').decode()

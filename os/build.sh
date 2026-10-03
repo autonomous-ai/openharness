@@ -11,6 +11,8 @@ SOURCE_ROOT=$(cd "$OS_DIR/.." && pwd)
 }
 export HARNESS_OS_SOURCE_SHA=${HARNESS_OS_SOURCE_SHA:-$(git -c safe.directory="$SOURCE_ROOT" -C "$SOURCE_ROOT" rev-parse HEAD)}
 VERSION=$(python3 -c 'import json; print(json.load(open("lock.json"))["version"])')
+# Pacman orders 0.1.0pre2 before 0.1.0; a dotted suffix would sort after it.
+PACKAGE_VERSION=${VERSION/-preview./pre}
 SNAPSHOT=$(python3 -c 'import json; print(json.load(open("lock.json"))["arch_snapshot"])')
 BUILD_DIR=${HARNESS_OS_BUILD_DIR:-$OS_DIR/work}
 RUNTIME_DIR=${HARNESS_OS_RUNTIME_DIR:-$OS_DIR/work/runtime}
@@ -73,7 +75,7 @@ chown -R 0:0 "$BUILD_DIR/package"
 cat > "$BUILD_DIR/package/.PKGINFO" <<EOF
 pkgname = harness-os
 pkgbase = harness-os
-pkgver = 0.1.0-1
+pkgver = $PACKAGE_VERSION-1
 pkgdesc = Programmer OS session and verified Harness runtime
 url = https://github.com/autonomous-ai/openharness
 builddate = ${SOURCE_DATE_EPOCH:-$(date +%s)}
@@ -86,7 +88,7 @@ depend = tmux
 depend = foot
 depend = labwc
 EOF
-bsdtar --zstd -cf "$BUILD_DIR/repo/harness-os-0.1.0-1-x86_64.pkg.tar.zst" -C "$BUILD_DIR/package" .PKGINFO etc usr
+bsdtar --zstd -cf "$BUILD_DIR/repo/harness-os-$PACKAGE_VERSION-1-x86_64.pkg.tar.zst" -C "$BUILD_DIR/package" .PKGINFO etc usr
 repo-add "$BUILD_DIR/repo/harness-build.db.tar.gz" "$BUILD_DIR/repo/"*.pkg.tar.zst
 cp -a live/. "$PROFILE/airootfs/"
 mkdir -p "$PROFILE/airootfs/root" "$PROFILE/airootfs/etc/pacman.d/hooks"

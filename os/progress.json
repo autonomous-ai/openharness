@@ -6,7 +6,7 @@
   "merge_utc": null,
   "publication_utc": "2026-10-03T02:03:47Z",
   "completion_utc": null,
-  "status": "Verified public preview and standalone landing page published to the OS branch. Native x86 tests pass. Mac runtime/examples retained; background emulation reboot checks failed and unproven launcher changes were discarded.",
+  "status": "Preview 1 remains published and verified. Continued work prepares preview 2 with failed-update protection; native candidate checks pending. Local visual checks still await saved permission changes.",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -254,9 +254,10 @@
   ],
   "remaining": [
     "Landing-page visual and keyboard validation: user approved, but saved browser permission still blocks localhost access",
-    "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely"
+    "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
+    "Build and validate preview 2 update failure/retry behavior in disposable native x86 machines"
   ],
-  "last_updated_utc": "2026-10-03T03:33:35.279197+00:00",
+  "last_updated_utc": "2026-10-03T04:13:24.219808+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -360,5 +361,39 @@
     "computer_use": "Renewed explicit user approval received. VM launched once, but native computer-use tool still denied Programmer OS VM. VM stopped safely; no alternate observation path attempted."
   },
   "review_url": "https://github.com/autonomous-ai/openharness/pull/669",
-  "handoff_prepared_utc": "2026-10-03T03:33:35.279197+00:00"
+  "handoff_prepared_utc": "2026-10-03T03:33:35.279197+00:00",
+  "continued_work": {
+    "request_started_utc": null,
+    "request": "User asked to keep working while postponing local visual permission changes.",
+    "implementation_started_utc": null,
+    "implementation_ready_utc": "2026-10-03T04:13:24.219808+00:00",
+    "candidate_version": "0.1.0-preview.2",
+    "published_version": "0.1.0-preview.1",
+    "changes": [
+      "Persist incomplete full-update state before repository or package changes.",
+      "Block ordinary package transactions until a full-update retry succeeds.",
+      "Retain the original recovery checkpoint across failed and interrupted retries.",
+      "Identify the OS package with the candidate image version using pacman prerelease ordering."
+    ],
+    "validation_plan": [
+      "Portable installer/recovery/publication/protocol tests and source syntax checks.",
+      "Build a fresh candidate ISO and inspect its exact payload, package version and manifest.",
+      "Native BIOS/plain and UEFI/encrypted installation, update failure and successful retry, original checkpoint retention, package hook, offline recovery and reboot.",
+      "Existing hn/CLI lifecycle, compiler and applicable agent executable checks in the native workflow."
+    ],
+    "local_validation": {
+      "system_unit_tests": "10 passed during implementation",
+      "portable_checks": "22 passed during implementation",
+      "final_script_syntax_and_diff_check": "passed",
+      "validated_runtime_sha256": {
+        "os/system.py": "5e04e3f213cf0276df6cd7724af734d6f52f59f8aa1a7dce057347805c81c05b",
+        "os/tests/test_system.py": "3e5f226ef656c0a830ec8ee6904b359b516dea009acfe9cc147feefec13908df"
+      }
+    },
+    "native_validation_started_utc": null,
+    "native_validation_completed_utc": null,
+    "merge_utc": null,
+    "publication_utc": null,
+    "limitations": "Previous image and workload evidence still identifies preview 1. Preview 2 has not yet passed machine validation. Username, hostname and encryption installer changes are discussion only."
+  }
 }

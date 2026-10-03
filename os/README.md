@@ -4,7 +4,7 @@ Boot into `hn`. Talk to agents in their own terminal panes. Review their diffs,
 tests and output there. The browser opens only when requested. Development
 toolchains are installed by the agents as needed.
 
-**Preview status:** the actual image passes BIOS/plain and UEFI/encrypted
+**Published preview 1:** the actual image passes BIOS/plain and UEFI/encrypted
 installation, reboot, recovery, compiler and four-agent executable checks.
 Real OpenCode agents and shared DSH viewers have also run inside the installed OS.
 Physical ThinkPad, Wi-Fi, suspend and NVIDIA hardware remain unverified.
@@ -12,6 +12,10 @@ The release's `validation.json` identifies the exact image and coverage.
 
 [Download the verified preview](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.1)
 or [run the standalone HTML/CSS landing page](site/README.md).
+
+The branch is preparing preview 2 with interrupted-update protection. Its image
+and machine checks are pending; the published download and measurements below
+remain preview 1.
 
 ## Design
 
@@ -119,6 +123,13 @@ snapshot at or after the current one. Packages remain signed by Arch; the OS doe
 run an updater or download anything on a schedule.
 The bundled hn and OS integration are pinned to this preview's source build;
 this command updates Arch packages, not the bundled Harness runtime.
+
+In the preview 2 candidate, a failed or interrupted update blocks ordinary package
+transactions until `sudo hn-os update` completes successfully. Fix the reported
+cause and retry; it keeps the original recovery checkpoint, including across
+reboots. If the installed system cannot complete the update, recover that
+checkpoint from the live USB. This guard applies to updates run through `hn-os`;
+custom package-manager workflows remain the owner's responsibility.
 
 Every package transaction also saves a checkpoint. It contains Btrfs root and a
 checksummed copy of `/boot`, so the package database, kernel, modules and initramfs

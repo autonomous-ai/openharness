@@ -16,6 +16,10 @@ import subprocess
 import tempfile
 import uuid
 
+PACMAN_CONFIG = Path('/etc/pacman.conf')
+UPDATE_RECEIPT = Path('/var/lib/harness-os/update.json')
+CHECKPOINTS = Path('/.snapshots')
+
 
 def run(*args, capture=False):
     return subprocess.run([str(a) for a in args], check=True, text=True,
@@ -27,7 +31,31 @@ def read_json(path):
 
 
 def write_json(path, data):
-    path.write_text(json.dumps(data, indent=2) + '\n')
+    temporary = path.with_suffix(path.suffix + '.new')
+    with temporary.open('w') as handle:
+        handle.write(json.dumps(data, indent=2) + '\n')
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(path)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def pending_update():
+    if not UPDATE_RECEIPT.exists():
+        return None
+    receipt = read_json(UPDATE_RECEIPT)
+    if not isinstance(receipt, dict):
+        raise ValueError('Invalid system-update receipt; inspect it before changing packages.')
+    if receipt.get('exit_status') == 0:
+        return None
+    if not isinstance(receipt.get('snapshot'), str) or not isinstance(receipt.get('checkpoint'), str):
+        raise ValueError('Incomplete system-update receipt; use the live USB to inspect recovery checkpoints.')
+    checkpoint_name(receipt['checkpoint'])
+    return receipt
 
 
 def snapshot_date(value):
@@ -103,11 +131,13 @@ def installed():
 
 
 def checkpoint(reason='manual', pacman_hook=False):
+    if pacman_hook and pending_update():
+        raise ValueError('A full system update did not finish. Run sudo hn-os update to complete it before changing packages, or recover its checkpoint from the live USB.')
     info = installed()
     if Path('/var/lib/pacman/db.lck').exists() and not pacman_hook:
         raise ValueError('Wait for the active package transaction before making a checkpoint.')
     name = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:8]
-    base = Path('/.snapshots')
+    base = CHECKPOINTS
     pending = base / ('.' + name + '.pending')
     pending.mkdir(mode=0o700)
     try:
@@ -144,19 +174,33 @@ def advance_snapshot(config, date):
 def update(date):
     # Pin every repository to the same date, and perform a full upgrade. Never mix
     # a newly synced package database with an intentionally old installed base.
-    config = Path('/etc/pacman.conf')
+    config = PACMAN_CONFIG
     advanced = advance_snapshot(config.read_text(), date)
-    previous = checkpoint('before-update')
+    pending = pending_update()
+    if pending:
+        # A retry must retain the original good system, not replace its recovery
+        # point with a snapshot of a potentially half-upgraded root.
+        previous = pending['checkpoint']
+        saved = CHECKPOINTS / previous
+        validate_checkpoint(read_json(saved / 'checkpoint.json'), installed()['root_uuid'])
+        if not (saved / 'root').is_dir():
+            raise ValueError('The original update checkpoint is missing; use the live USB for recovery.')
+    else:
+        previous = checkpoint('before-update')
+    receipt = {'snapshot': date, 'checkpoint': previous,
+               'started_at': datetime.now(timezone.utc).isoformat(), 'exit_status': None}
+    # Persist before changing repositories or invoking pacman. A crash or Ctrl-C
+    # leaves this guard in place until a complete upgrade succeeds.
+    write_json(UPDATE_RECEIPT, receipt)
     temporary = config.with_suffix('.hn-next')
     temporary.write_text(advanced)
     temporary.chmod(stat.S_IMODE(config.stat().st_mode))
     temporary.replace(config)
     result = subprocess.run(['pacman', '-Syyu'])
-    receipt = {'snapshot': date, 'checkpoint': previous,
-               'finished_at': datetime.now(timezone.utc).isoformat(), 'exit_status': result.returncode}
-    write_json(Path('/var/lib/harness-os/update.json'), receipt)
+    receipt.update(finished_at=datetime.now(timezone.utc).isoformat(), exit_status=result.returncode)
+    write_json(UPDATE_RECEIPT, receipt)
     if result.returncode:
-        raise ValueError(f'Update did not complete. Checkpoint {previous} is available from the live USB; see hn-os help.')
+        raise ValueError(f'Update did not complete. Run sudo hn-os update to retry before changing packages. Checkpoint {previous} is available from the live USB; see hn-os help.')
     print('Update completed. Reboot to use the updated kernel. The previous system is retained in ' + previous)
 
 

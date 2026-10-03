@@ -20,6 +20,10 @@ then N → Terminal.
 - `sudo hn-os update` makes a checkpoint, advances all Arch repositories to
   yesterday's complete snapshot, and performs a full upgrade. It asks through
   pacman before the package transaction. Reboot after kernel/driver upgrades.
+  If it fails or is interrupted, resolve the reported cause and rerun
+  `sudo hn-os update` before changing individual packages. Ordinary package
+  transactions are blocked until that full update succeeds; retry preserves
+  the original recovery checkpoint. Use the live USB to recover if needed.
 - Package transactions also create checkpoints automatically. A checkpoint
   includes the root filesystem, package database, kernel, initramfs and bootloader
   files. `/home` and its projects are separate and are not rolled back.

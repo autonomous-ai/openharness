@@ -310,6 +310,15 @@ def main():
         # A disposable failure exercises actual root + boot restoration, including
         # an encrypted root in the UEFI row. The project's separate subvolume survives.
         vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+        update_script = base64.b64encode(Path(__file__).with_name('updates.sh').read_bytes()).decode()
+        vm.command(': > /tmp/hn-os-updates.b64')
+        for offset in range(0, len(update_script), 2000):
+            vm.command('printf %s ' + update_script[offset:offset + 2000] + ' >> /tmp/hn-os-updates.b64')
+        vm.command('base64 -d /tmp/hn-os-updates.b64 > /tmp/hn-os-updates.sh')
+        output, status = vm.command('sudo bash /tmp/hn-os-updates.sh', timeout=300, check=False)
+        (folder / 'update-retry.log').write_text(output)
+        assert status == 0, 'Full-update failure/retry check failed; see update-retry.log'
+        result['checks'].append('Failed full update blocks package changes; successful retry upgrades a local fixture and retains the original recovery checkpoint')
         # A local package exercises the actual pacman PreTransaction hook while
         # networking is unavailable. Its checkpoint includes the active db.lck.
         package_script = '''set -eu
