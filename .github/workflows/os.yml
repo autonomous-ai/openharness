@@ -25,7 +25,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: programmer-os-${{ github.ref }}
+  group: programmer-os-${{ github.ref }}-${{ inputs.workloads && 'workloads' || 'image' }}
   cancel-in-progress: false
 
 jobs:
@@ -64,6 +64,10 @@ jobs:
           make -C os runtime
       - name: Validate hn session behavior and native terminal lifecycle
         run: |
+          npm --prefix cli run typecheck
+          cd cli
+          timeout 3m npx vitest run src/lib/engineInstall.spec.ts src/lib/engineLaunch.spec.ts --maxWorkers=2
+          cd ..
           timeout 8m cargo test --manifest-path tui/Cargo.toml --locked --release --target x86_64-unknown-linux-musl
           python3 scripts/validate-tui-native.py tui/target/x86_64-unknown-linux-musl/release/harness-tui
       - name: Build offline BIOS and UEFI image

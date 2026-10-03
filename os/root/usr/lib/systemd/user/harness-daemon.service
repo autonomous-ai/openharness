@@ -4,6 +4,7 @@ Description=Harness agent runtime
 [Service]
 Type=exec
 Environment=ADAPTER_UPDATE_DISABLE=true
+Environment=HARNESS_OS=1
 Environment=HARNESS_TUI_BIN=/usr/lib/harness/hn
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
 Environment=npm_config_prefix=%h/.local

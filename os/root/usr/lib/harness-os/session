@@ -10,6 +10,12 @@ export npm_config_prefix="$HOME/.local"
 export HARNESS_OS=1
 export HARNESS_TUI_NOTIFY=off
 export HARNESS_TUI_TMUX_CONF=/usr/share/harness-os/tmux.conf
+# A 2D virtio display has no GPU acceleration. Using Mesa's software GL there
+# wastes CPU and memory. Keep wlroots' normal renderer on physical/3D GPUs and
+# honor an explicit WLR_RENDERER setting.
+if [ -z "${WLR_RENDERER:-}" ] && /usr/lib/harness-os/virtio-2d; then
+    export WLR_RENDERER=pixman
+fi
 mkdir -p "$HOME/.local/bin" "$HOME/Projects" "$HOME/.local/state/harness-os"
 # Use the systemd user's existing bus so activation and the compositor share one
 # environment. A second dbus-run-session bus would split those services.

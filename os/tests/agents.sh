@@ -6,11 +6,13 @@ REPORT_DIR="$HOME/.local/state/harness-os/agent-check"
 mkdir -p "$REPORT_DIR"
 trap 'printf "%s\n" "$?" > "$REPORT_DIR/status"' EXIT
 test "$(npm prefix -g)" = "$HOME/.local"
-for row in 'claude @anthropic-ai/claude-code' 'codex @openai/codex' 'opencode opencode-ai'; do
+for row in 'claude @anthropic-ai/claude-code' 'codex @openai/codex'; do
     read -r executable package <<< "$row"
     npm install --global --no-audit --no-fund "$package"
     "$executable" --version | tee "$REPORT_DIR/$executable.txt"
 done
+curl -fsSL https://opencode.ai/install | bash
+"$HOME/.opencode/bin/opencode" --version | tee "$REPORT_DIR/opencode.txt"
 npm install --global --ignore-scripts --no-audit --no-fund @earendil-works/pi-coding-agent
 pi --version | tee "$REPORT_DIR/pi.txt"
 npm ls --global --depth=0 --json > "$REPORT_DIR/packages.json"

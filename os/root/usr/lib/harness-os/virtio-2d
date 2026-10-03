@@ -1,0 +1,19 @@
+#!/bin/sh
+# Succeed only when every DRM card is a virtio GPU without VIRGL (feature 0).
+# The card's device can be the virtio device itself or its PCI parent.
+set -eu
+found=false
+for card in /sys/class/drm/card[0-9] /sys/class/drm/card[0-9][0-9]; do
+    [ -e "$card/device" ] || continue
+    matched=false
+    for features in "$card/device/features" "$card"/device/virtio*/features; do
+        [ -r "$features" ] || continue
+        driver=$(readlink -f "${features%/features}/driver")
+        [ "${driver##*/}" = virtio_gpu ] || continue
+        IFS= read -r bits < "$features"
+        case "$bits" in 0*) matched=true ;; *) exit 1 ;; esac
+    done
+    "$matched" || exit 1
+    found=true
+done
+"$found"

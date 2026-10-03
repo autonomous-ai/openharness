@@ -54,7 +54,9 @@ export const ENGINE_INSTALL: Readonly<Record<ProcessEngine, EngineInstallRecipe>
     executable: { names: ['cursor-agent'], homeRelativePaths: ['.local/bin/cursor-agent'] },
   },
   opencode: {
-    command: 'npm install -g opencode-ai',
+    // The native installer downloads one matching binary. npm installs both the
+    // baseline and AVX2 Linux packages, doubling the installed footprint.
+    command: 'curl -fsSL https://opencode.ai/install | bash',
     source: 'https://opencode.ai/docs',
     executable: { names: ['opencode'], npmGlobal: true, homeRelativePaths: ['.opencode/bin/opencode'] },
   },

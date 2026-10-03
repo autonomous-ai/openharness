@@ -295,6 +295,10 @@ def main():
         (folder / 'installed-measurement.txt').write_text(output)
         vm.screenshot('04-installed-hn')
         result['checks'].append('Installed disk boots to hn with intended account permissions and no browser')
+        # Let boot jobs settle before calling a sample "idle". Keep all three
+        # measurements, including CPU, rather than selecting the smallest one.
+        output, _ = vm.command('sleep 45; for n in 1 2 3; do hn-os measure; done', timeout=65)
+        (folder / 'installed-idle-measurements.txt').write_text(output)
         # A disposable failure exercises actual root + boot restoration, including
         # an encrypted root in the UEFI row. The project's separate subvolume survives.
         vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')

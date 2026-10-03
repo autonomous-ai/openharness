@@ -5282,6 +5282,9 @@ impl App {
         if self.shell_asked || !self.desk_answered || self.capture.is_some() { return }
         // A headless client makes only the sessions it is asked for.
         if self.headless { self.shell_asked = true; return }
+        // The OS opens on the agent launcher. An explicit `hn new ...` still gets
+        // its requested shell; reconnecting to existing work is handled by the desk.
+        if self.os_session && self.start_session.is_none() { self.shell_asked = true; return }
         // `hn new -s work` (a session besides the desk's): made here, with its shell.
         if self.start_session.as_ref().map(|s| s.create && self.session_alias.as_deref() != s.name.as_deref()).unwrap_or(false) {
             if self.link(&self.fleet.local_id).is_none() { return }
@@ -6029,6 +6032,20 @@ mod scroll_settle_tests {
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn os_starts_at_the_agent_launcher_without_creating_an_unused_shell() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (80, 24));
+        app.handed_over = true;
+        app.os_session = true;
+        app.desk_answered = true;
+        app.maybe_start_shell();
+        assert!(app.shell_asked);
+        assert!(app.starting_shell.is_none());
+        assert!(app.tabs.iter().all(|tab| tab.root.is_none()));
+        assert!(!app.quit);
+    }
 
     #[tokio::test]
     async fn os_surface_stays_home_after_its_last_session_closes() {

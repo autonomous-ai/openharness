@@ -628,7 +628,7 @@ export function buildTerminalLaunchArgv(
   const cwdPrelude = opts.cwd
     ? `if ! cd -- "$1"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; fi\n`
     : ''
-  const hintPrelude = opts.terminalHint
+  const hintPrelude = opts.terminalHint && process.env.HARNESS_OS !== '1'
     ? `printf '%s\\n' ${terminalHintLines(opts.terminalHint.machineName).map(shellSingleQuote).join(' ')}\n`
     : ''
   return [path, '-c', RAISE_OPEN_FILES_SH + clearEnvPrelude(opts.clearEnv) + cwdPrelude + hintPrelude + 'shift\nexec "$@"', 'harness-terminal', opts.cwd ?? '', path, ...loginArgs]

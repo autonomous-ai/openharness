@@ -5,6 +5,7 @@ INPUTS=$(cd -- "$(dirname -- "$0")" && pwd)
 WORK="$HOME/Projects/os-workloads"
 REPORT="$HOME/.local/state/harness-os/workloads"
 MODEL=${HN_TEST_MODEL:-opencode/big-pickle}
+export PATH="$HOME/.opencode/bin:$PATH"
 case "$MODEL" in opencode/big-pickle|opencode/*-free) ;; *) echo 'Use an explicitly free OpenCode model.' >&2; exit 2 ;; esac
 mkdir -p "$WORK" "$REPORT"
 trap 'printf "%s\n" "$?" > "$REPORT/status"' EXIT
