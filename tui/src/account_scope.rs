@@ -29,9 +29,11 @@ impl App {
     pub(crate) fn saved_identity(&self) -> Value { json!(self.daemon_identity) }
 
     pub(super) fn reconcile_account_machines(&mut self, rows: &[Value], stale: bool) {
+        // An older outage cache cannot prove a removal or undo a confirmed one.
+        // Keep live views until a fresh inventory supplies the authoritative list.
+        if stale { return }
         let ids: HashSet<_> = rows.iter().filter_map(|r| r["machineId"].as_str()).collect();
-        // A cache used during a backend outage cannot undo a confirmed removal.
-        if !stale { self.removed_machines.retain(|id| !ids.contains(id.as_str())); }
+        self.removed_machines.retain(|id| !ids.contains(id.as_str()));
         let removed: Vec<_> = self.fleet.machines.iter().filter(|m| !m.local && !crate::local::is_local(&m.id) && !ids.contains(m.id.as_str())).map(|m| m.id.clone()).collect();
         for machine in removed { self.forget_account_machine(&machine); }
     }
@@ -391,6 +393,26 @@ mod tests {
         assert_eq!(crate::agent_switch::merge_saved_placements(&peer, &doc, true).as_array().unwrap().len(), 1);
         peer.close_pane(1);
         assert_eq!(crate::agent_switch::merge_saved_placements(&peer, &doc, true), json!([]), "a view closed after recovery cannot reappear on another restart");
+    }
+
+    #[tokio::test]
+    async fn cached_inventory_absence_keeps_a_live_remote_workspace() {
+        let mut app = app("account-a", true);
+        app.fleet.machines.push(Machine { id:"remote-old".into(), name:"Remote computer".into(), local:false, shared:false, status:"online".into(), reach:Reach::Ready });
+        app.active = 1;
+        let panes = app.tab().panes();
+        let focus = app.focused();
+        let operations = app.desk_pending.clone();
+        let before = crate::workspace_resources::counts(&app).machines;
+        // An outage may return a disk cache from before this computer joined.
+        // Missing from that list is not a revocation or a user-requested removal.
+        app.reconcile_account_machines(&[json!({"machineId":"account-a"})], true);
+        assert!(app.fleet.machine("remote-old").is_some());
+        assert!(!app.removed_machines.contains("remote-old"));
+        assert_eq!(app.tab().panes(), panes);
+        assert_eq!(app.focused(), focus);
+        assert_eq!(crate::workspace_resources::counts(&app).machines, before);
+        assert_eq!(app.desk_pending, operations);
     }
 
     #[tokio::test]

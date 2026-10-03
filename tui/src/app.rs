@@ -1256,8 +1256,8 @@ impl App {
             let Ok(reply) = reply else { return };
             let Some(rows) = reply.get("machines").and_then(Value::as_array) else { return };
             let local = app.fleet.local_id.clone();
-            // A successful response is the full inventory, including offline computers.
-            // Removed computers must not retain live links or keep contributing resources.
+            // Only a fresh response is authoritative for removals. Outage caches may
+            // predate a connected computer, so their omissions must retain its views.
             app.reconcile_account_machines(rows, reply["stale"] == true);
             for row in rows {
                 let id = row.get("machineId").and_then(Value::as_str).unwrap_or("").to_string();

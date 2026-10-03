@@ -386,7 +386,17 @@ try:
     wait(lambda: 'Search devices and computers' not in screen(), 'close Devices')
     print('PASS workspace: stable model target, deduplicated counts, device acknowledgement and timeout', flush=True)
 
-    # A full machine-list push removes a computer and its views without stopping its sessions.
+    # An outage cache that predates the remote computer cannot remove its live view.
+    api({'action': 'machines', 'remote': False, 'stale': True})
+    wait(lambda: value('#{local_machine}') == 'Studio cached', 'cached inventory applied')
+    assert 'Remote' in hn('list-windows', '-F', '#{window_name}')
+    assert remote in api()['peers']
+    hn('workspace-menu')
+    shown('Machines  2')
+    shown('Harnesses  3')
+    keys('Escape')
+
+    # A fresh full machine list removes a computer and its views without stopping its sessions.
     # A delayed desk response must not revive the removed computer; a fresh inventory can.
     close_requests = len(requests('agent_close'))
     api({'action': 'machines', 'remote': False})
