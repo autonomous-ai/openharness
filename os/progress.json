@@ -257,7 +257,7 @@
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
     "Physical ThinkPad boot, installation, Wi-Fi, suspend and hardware verification; user will test manually"
   ],
-  "last_updated_utc": "2026-10-03T10:03:53.212354+00:00",
+  "last_updated_utc": "2026-10-03T10:29:26.198461+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -922,7 +922,7 @@
   "usb_first_use_revision": {
     "request_received_utc": null,
     "first_recorded_utc": "2026-10-03T08:28:25.074631+00:00",
-    "status": "Preview 4 source corrections ready for a fresh native build; publication remains gated on full machine journeys.",
+    "status": "First-use corrections passed targeted local validation; fresh native image and full CLI CI are next.",
     "implementation_complete_utc": "2026-10-03T09:23:12.711637+00:00",
     "validation_complete_utc": null,
     "publication_utc": null,
@@ -951,7 +951,18 @@
       "Explicit normal hn / installed OS / live USB render and action regressions, including stray live flag and modified keys"
     ],
     "waiting": [],
-    "local_validation": "45 portable tests plus Python/JSON/XML/shell syntax and git diff --check passed. Native TUI and image/machine validation pending.",
+    "local_validation": {
+      "completed_utc": "2026-10-03T10:29:26.198461+00:00",
+      "toolchain": "Node 22.23.2, tmux 3.7c on macOS arm64",
+      "affected_cli": "273 passed, 1 Linux-only test skipped; 10 test files.",
+      "real_tmux": "20 passed, 9 unavailable/non-agent rows skipped; Claude Code 2.1.287, Codex 0.160.0, OpenCode 1.18.34, pi 0.85.1, Hermes 0.18.0 and Grok 1.0.44 discovered; Grok agent alias, restart and shell lifecycle passed. No model turns.",
+      "portable_os": "51 tests plus Python/JSON/XML/shell syntax and git diff --check passed. Three disposable DSH manifests generated with no --agent or model override.",
+      "initial_receipt": ".harness/validation/20261003T102725.582029Z-2586/receipt.json",
+      "initial_failure": "Typecheck rejected a possibly undefined Stats mock value; guarded it. Product runtime sources unchanged after passed affected and real tmux checks.",
+      "followup_receipt": ".harness/validation/20261003T102818.737073Z-15548/receipt.json",
+      "followup": "Typecheck and exact-inode regression passed (3 tests, 1 Linux-only skip).",
+      "limitations": "OpenCode 2 plugin startup and OverlayFS behavior still require fresh Linux image verification; full CLI CI pending."
+    },
     "implemented_in_source": [
       "Install-first live welcome and direct system shortcuts",
       "Harness branding and me@harness live identity",
@@ -1009,6 +1020,26 @@
         "result": "Both machine journeys stopped after Ctrl+B T / Ctrl+D: the shortcut used the generic agent launch path and left a closed-terminal card. Try never received its key, so OpenCode did not launch.",
         "passed": "Image build and inspection; native CLI/TUI checks including all ten fixtures. Both VMs passed live identity, offline bundled OpenCode version (including Nehalem), disconnected Try/network UI, offline Install/cancel and physical input in a new terminal.",
         "remedy": "Use the owned shell path for the New terminal shortcut, matching the chooser. Add native stream-exit regression and an actual VM pane-disappearance assertion. Also retain interactive installer errors until acknowledgement."
+      },
+      {
+        "run_id": 37115159220,
+        "source_commit": "5445fe1ff1ba178c276735a05a79046a09db1a1f",
+        "result": "Both VMs failed: model check inherited /root, which me cannot enter. Earlier first-use steps passed; screenshots also exposed an incompatible OpenCode 1 plugin.",
+        "passed": "Live identity, bundled OpenCode on Nehalem, disconnected Try/network setup, offline Install/cancel, retained installer error, direct terminal input and Ctrl+D pane removal, actual OpenCode 2 TUI with upstream default model.",
+        "remedy": "Run model acceptance from ~/Projects. Select discovery plugins by OpenCode major version and remove only Harness-owned incompatible legacy files."
+      },
+      {
+        "run_id": 37115791048,
+        "source_commit": "06e268bc38b564aa79b6800f1507d5737a3e53da",
+        "image_run_id": 37115159220,
+        "result": "Both VMs failed at the same model-check cwd error; workload acceptance did not run. Diagnostics confirmed rounded OverlayFS inode IDs map Bash/Python to OpenCode.",
+        "remedy": "Use bigint stat and unsigned 64-bit inode keys. Assert no agent appears before one has been started."
+      },
+      {
+        "run_id": 37115793973,
+        "source_commit": "06e268bc38b564aa79b6800f1507d5737a3e53da",
+        "image_run_id": 37115159220,
+        "result": "Both VMs failed at the same model-check cwd error; DSH acceptance did not run."
       }
     ],
     "isolation_revision_ready_utc": "2026-10-03T09:11:28.017223+00:00",
@@ -1018,9 +1049,9 @@
     "native_validation_complete_utc": null,
     "isolation_validation": "Normal hn (including a stray live flag), installed OS and live USB UI/action regression tests passed in run 37112220215. The native terminal lifecycle validation step, including all ten fixtures, passed on source 0b3073e6ad6dc5a25858b48a088bbf9c19b4770e.",
     "pending_source_changes": [
-      "New terminal shortcut uses the same owned-shell launch path as the Terminal chooser, closes its pane on exit, and inherits the focused working directory.",
-      "Interactive installer errors remain visible until Enter; unattended and piped errors exit immediately. Completion screen remains in source.",
-      "Native regression checks both terminal launch paths; VM covers retained installer errors and Ctrl+D pane removal. Failure diagnostics retain full process command lines."
+      "Exact bigint executable identities on live OverlayFS; recorded real-inode collision regression.",
+      "OpenCode version-aware plugin migration; refresh before managed launch, preserve foreign files/model settings, defer legacy plugin until confirmed v1.",
+      "VM model check starts in ~/Projects; retain JSONL events; check discovery and plugin startup errors."
     ],
     "branding_review": {
       "status": "approved and documented",
@@ -1053,17 +1084,18 @@
         "publication_utc": null
       }
     },
-    "next_step": "Follow exact-source build 37115159220. Inspect native terminal exit regressions, both first-use journeys, default OpenCode replies and encrypted unlock/retry before publication.",
-    "last_recorded_utc": "2026-10-03T10:08:06.230343+00:00",
+    "next_step": "Run targeted local checks, then commit/push and trigger full CLI CI alongside the fresh OS build.",
+    "last_recorded_utc": "2026-10-03T10:29:26.198461+00:00",
     "first_use_visual_review": "Reviewed actual BIOS and UEFI screenshots from run 37112874271: Harness wordmark, Install Harness primary action, Try without installing secondary action, and harness hostname appear. This only covers the welcome screen, not subsequent first-use journeys.",
-    "revision_ready_utc": "2026-10-03T10:03:53.212354+00:00",
+    "revision_ready_utc": "2026-10-03T10:29:26.198461+00:00",
     "development_acceptance_revision": {
       "status": "prepared; syntax and fixture generation passed; real guest runs pending",
       "reason": "The bundled OpenCode first-use route must also support the requested programmer and DSH workflows with upstream model defaults.",
       "changes": [
         "Removed hardcoded model arguments/configuration from the disposable workload and DSH fixtures; kept their task permissions and independent acceptance checks.",
         "Prepared a preview 4 manual installation guide at os/work/preview4-INSTALL.md; current public guide remains preview 3 until publication.",
-        "Added read-only live file-identity and registry diagnostics to investigate terminal rows appearing as OpenCode before an agent is launched. No discovery change is made without evidence."
+        "Added read-only live file-identity and registry diagnostics to investigate terminal rows appearing as OpenCode before an agent is launched. No discovery change is made without evidence.",
+        "Removed the unused custom primary agent and unsupported OpenCode 2 interactive --agent flag from DSH fixtures; test permissions remain scoped to the disposable guest."
       ],
       "required_checks": [
         "Bash/Python syntax and disposable DSH fixture generation",
@@ -1071,7 +1103,19 @@
       ],
       "validation_started_utc": "2026-10-03T10:13:49.119774+00:00"
     },
-    "native_validation": "Native CLI/TUI validation including all ten terminal fixtures passed in run 37115159220; image assembly is still running."
+    "native_validation": "Run 37115159220 passed CLI typecheck, 89 affected CLI tests (1 skipped), 337 Rust tests (1 ignored), all 10 native fixtures, image assembly and SquashFS inspection. Both VM journeys failed at the default chat test before installation.",
+    "last_image": {
+      "run_id": 37115159220,
+      "iso_bytes": 1612300288,
+      "iso_sha256": "1a0312c8a0f94fdc3700e2cf2f05d156fb05b0be3a5d044c6bf00019aa1a5784",
+      "publishable": false
+    },
+    "current_validation_plan": [
+      "Pinned Node 22.23.2 typecheck and affected discovery, launch, hooks, plugin and version tests.",
+      "Private tmux 3.7c real discovery/restart/login-shell fixtures on this Mac; unavailable engines recorded as skipped.",
+      "Portable OS tests/syntax, workflow lint in image CI, full CLI CI including supported OS/Node matrix.",
+      "Fresh exact-source ISO and native TUI checks; both full USB machine journeys, then separate workload/DSH default-model acceptance against the same image."
+    ]
   },
   "previous_goal_turn_classification": "progress: exact-source native terminal checks passed; prepared updated manual guide and default-model programmer/DSH acceptance with live process diagnostics."
 }

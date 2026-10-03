@@ -6415,6 +6415,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // fires no hook at all (no SessionStart/UserPromptSubmit/Stop) and never streams a single event.
     // Idempotent, so paying this on every create against an already-set-up profile is free.
     if (codexHome && !env.DISABLE_HOOK_INSTALL) installCodexHooks(hookPort, codexHome)
+    // OpenCode may have upgraded from 1.x to 2.x while this daemon was running. Its new TUI must
+    // not discover our old server plugin; the cached version probe changes with the executable.
+    if (engine === 'opencode' && !env.DISABLE_HOOK_INSTALL) installOpencodePlugin(hookPort)
     // Do not start a second interactive login shell merely to ask whether the engine is installed.
     // The pane's own shell performs the same check before exec, and installs only when necessary.
     // This removes ~1s of shell startup from the click-to-terminal critical path.

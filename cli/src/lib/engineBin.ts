@@ -161,13 +161,16 @@ export function executableFileIdentity(path: string): ExecutableFileIdentity | n
     // Stat through the supplied path first. `/proc/<pid>/exe` keeps the running inode reachable even
     // after an auto-updater replaces its pathname; realpath may then end in "(deleted)" and be
     // unstatable despite the process image still being valid.
-    const stat = statSync(path)
+    // OverlayFS (including a live USB) can assign 64-bit inode numbers above
+    // Number.MAX_SAFE_INTEGER. Rounded Numbers made unrelated executables
+    // share one owner, so a shell could be promoted to an installed agent.
+    const stat = statSync(path, { bigint: true })
     if (!stat.isFile()) return null
     let realPath: string
     try { realPath = realpathSync(path) } catch {
       try { realPath = readlinkSync(path) } catch { realPath = normalize(path) }
     }
-    return { path: normalize(path), realPath, fileKey: `${String(stat.dev)}:${String(stat.ino)}` }
+    return { path: normalize(path), realPath, fileKey: `${stat.dev}:${BigInt.asUintN(64, stat.ino)}` }
   } catch {
     return null
   }

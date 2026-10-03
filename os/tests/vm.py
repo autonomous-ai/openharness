@@ -342,8 +342,9 @@ def check_first_use(vm, user, folder):
     vm.keys('ret')
     vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 20); do hn capture-pane -p | grep -qx terminal-ready && exit 0; sleep 1; done; exit 1')), timeout=30)
     vm.screenshot('01c-direct-terminal')
-    # Retain exact file identities to diagnose a live-overlay shell being
-    # misidentified as an agent, without relying on rounded JS inode numbers.
+    # Allow a full discovery cycle, then ensure a live-overlay shell or
+    # installer has not been promoted to an agent by rounded file identities.
+    vm.command('sleep 6')
     identity_probe = '''const fs = require('node:fs');
 for (const path of ['/usr/bin/opencode', '/usr/bin/bash', '/usr/bin/python3', '/usr/bin/nmtui', '/usr/bin/sudo']) {
     const numeric = fs.statSync(path), exact = fs.statSync(path, {bigint: true});
@@ -351,9 +352,11 @@ for (const path of ['/usr/bin/opencode', '/usr/bin/bash', '/usr/bin/python3', '/
 }
 const rows = JSON.parse(fs.readFileSync('/home/me/.harness/cli/data/registry.json', 'utf8'));
 for (const row of rows) console.log(JSON.stringify({agentId: row.agentId, engine: row.engine, active: row.active, processIdentity: row.processIdentity}));
+if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell or installer was misidentified as an agent');
 '''
-    output, _ = vm.command(user('node -e ' + shlex.quote(identity_probe)))
+    output, identity_status = vm.command(user('node -e ' + shlex.quote(identity_probe)), check=False)
     (folder / 'live-process-identities.txt').write_text(output)
+    assert identity_status == 0, 'Live USB executable discovery must distinguish shells and installers from agents'
     output, _ = vm.command(user('hn display-message -p "HN_FIRST_TERMINAL=#{pane_id}"'))
     pane = re.search(r'HN_FIRST_TERMINAL=(%\d+)', output)
     assert pane, 'New terminal must identify its actual pane'
@@ -366,10 +369,14 @@ for (const row of rows) console.log(JSON.stringify({agentId: row.agentId, engine
     vm.command('for n in $(seq 1 90); do pgrep -u 1000 -x opencode >/dev/null && exit 0; sleep 1; done; exit 1', timeout=100)
     time.sleep(5)
     vm.screenshot('01d-bundled-opencode')
+    vm.command('test ! -e /home/me/.config/opencode/plugin/launcher-register.js && test -s /home/me/.config/opencode/plugins/launcher-register/tui.js')
+    screen, _ = vm.command(user('hn capture-pane -p'))
+    (folder / 'bundled-opencode-screen.txt').write_text(screen)
+    assert 'Plugin failed:' not in screen and 'plugin failed /plugins' not in screen, 'Bundled OpenCode must open without a plugin error'
     # No model flag/config, API key, account, or installer. Validate a real
     # upstream-default reply; preserve all events rather than just the exit code.
     prompt = 'What is six times seven? Reply with only the decimal number. Do not use tools.'
-    command = 'timeout 120 /usr/bin/opencode run --format json ' + shlex.quote(prompt) + ' > /tmp/hn-first-chat.jsonl 2>/tmp/hn-first-chat.err'
+    command = 'cd "$HOME/Projects" && timeout 120 /usr/bin/opencode run --format json ' + shlex.quote(prompt) + ' > /tmp/hn-first-chat.jsonl 2>/tmp/hn-first-chat.err'
     _, status = vm.command(user('sh -c ' + shlex.quote(command)), timeout=140, check=False)
     output, _ = vm.command('cat /tmp/hn-first-chat.jsonl')
     errors, _ = vm.command('cat /tmp/hn-first-chat.err')

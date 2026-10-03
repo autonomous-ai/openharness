@@ -18,15 +18,13 @@ def write(folder, name, text):
 
 def manifest(name, title, viewer=None):
     # A disposable guest has no provider credentials. Leave model selection to
-    # upstream defaults, including for this package's custom primary agent.
-    config = {'agent': {'os-check': {'description': 'Disposable OS acceptance task',
-              'mode': 'primary'}},
-              'permission': {'question': 'deny', 'task': 'deny'}}
+    # upstream defaults. OpenCode 2's interactive command rejects --agent;
+    # these tasks need no custom primary agent, only bounded test permissions.
+    config = {'permission': {'question': 'deny', 'task': 'deny'}}
     result = {'spec': 1, 'id': f'os-lab/{name}', 'name': title, 'category': 'OS acceptance',
               'author': 'Harness OS test', 'engine': 'opencode',
               'workspace': {'template': 'template', 'marker': 'TASK.txt'},
               'agent': {'instructions': 'AGENTS.md',
-                        'args': ['--agent', 'os-check'],
                         'env': {'DSH_PERMISSION_MODE': 'auto', 'OPENCODE_CONFIG_CONTENT': json.dumps(config)}}}
     if viewer:
         result['viewer'] = {'use': viewer}

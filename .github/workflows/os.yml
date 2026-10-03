@@ -187,6 +187,7 @@ jobs:
             os/test-results/**/*.log
             os/test-results/**/*.txt
             os/test-results/**/*.json
+            os/test-results/**/*.jsonl
             os/test-results/**/workloads/**
             os/test-results/**/dsh/**
           retention-days: 14
