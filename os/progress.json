@@ -4,9 +4,9 @@
   "implementation_complete_utc": "2026-10-03T01:54:40.607222+00:00",
   "validation_complete_utc": "2026-10-03T01:49:00Z",
   "merge_utc": null,
-  "publication_utc": null,
+  "publication_utc": "2026-10-03T02:03:47Z",
   "completion_utc": null,
-  "status": "Public preview explicitly approved; publishing prepared ISO, examples and evidence. Mac VM update continues.",
+  "status": "Public preview published; all nine public assets verified. Landing page static checks and Mac VM refresh continue.",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -187,6 +187,26 @@
       "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37086919917",
       "image_source_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
       "limitations": "No concurrent live model workload at 1 GiB; physical devices remain unverified."
+    },
+    {
+      "scope": "Public preview publication and all nine public downloads",
+      "result": "passed",
+      "release_url": "https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.1",
+      "source_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
+      "verified_assets": [
+        "boot-layout.txt",
+        "inspection.json",
+        "machine-evidence.zip",
+        "manifest.json",
+        "packages.txt",
+        "programmer-examples.zip",
+        "programmer-os-0.1.0-preview.1-x86_64.iso",
+        "programmer-os-0.1.0-preview.1-x86_64.iso.sha256",
+        "validation.json"
+      ],
+      "iso_sha256": "51e3315843440bcdd445ead6b55d281dd1ae40685f3399c084ac5cf33cf5bce6",
+      "finished_at_utc": "2026-10-03T02:06:57.675352+00:00",
+      "method": "Same guarded publisher run locally with authorized gh authentication; Actions run 37087917557 could not create release (403 Resource not accessible by integration). Receipt reused; no duplicate download cycle."
     }
   ],
   "waiting": [
@@ -208,11 +228,11 @@
     }
   ],
   "remaining": [
-    "Verify published preview checksums",
+    "Finish standalone landing page and record browser preview permission denial",
     "Refresh installed Mac VM and preserve generated projects",
     "Continue focused experience checks through requested work window"
   ],
-  "last_updated_utc": "2026-10-03T01:55:13.285215+00:00",
+  "last_updated_utc": "2026-10-03T02:15:13.412990+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -283,5 +303,13 @@
   },
   "publication_prepared_utc": "2026-10-03T01:54:40.607222+00:00",
   "publication_approved_utc": "2026-10-03T01:55:13.285215+00:00",
-  "publication_trigger_utc": "2026-10-03T01:55:13.285215+00:00"
+  "publication_trigger_utc": "2026-10-03T01:55:13.285215+00:00",
+  "publication_verified_utc": "2026-10-03T02:06:57.675352+00:00",
+  "landing_page": {
+    "path": "os/site",
+    "implementation": "Plain HTML/CSS, local WOFF fonts, actual OS and generated-game screenshots",
+    "initial_asset_bytes_before_compression": 156557,
+    "validation": "Static assets, fragment references, fonts, image dimensions and verified release asset names passed",
+    "browser_validation": "Blocked: browser approval denied http://127.0.0.1:18092; no alternate access attempted"
+  }
 }

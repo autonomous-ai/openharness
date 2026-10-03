@@ -10,6 +10,9 @@ Real OpenCode agents and shared DSH viewers have also run inside the installed O
 Physical ThinkPad, Wi-Fi, suspend and NVIDIA hardware remain unverified.
 The release's `validation.json` identifies the exact image and coverage.
 
+[Download the verified preview](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.1)
+or [run the standalone HTML/CSS landing page](site/README.md).
+
 ## Design
 
 - Arch Linux, glibc, systemd and the LTS kernel. User space is rolling; LTS here
