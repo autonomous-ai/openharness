@@ -869,5 +869,24 @@
       "recorded_utc": "2026-10-03T08:03:04.680531+00:00",
       "result": "Passed local HTML/CSS assets and fonts, fragment targets, PNG dimensions, public asset names, Markdown file links/fences, JSON and git diff --check. Current BIOS screenshot inspected. Full local page visual/keyboard validation remains unverified."
     }
+  },
+  "keyboard_readiness_audit": {
+    "started_utc": "2026-10-03T08:05:05Z",
+    "previous_goal_turn": "progress: preview 3 USB fix published and all public assets verified; user confirmed successful physical installation and internal-disk boot with USB removed.",
+    "requirement": "Boot into a usable hn surface; test keyboard input through the graphical session rather than only service/process readiness.",
+    "finding": "hn displays Finding your harnesses for the first three seconds on an empty initial session. Earlier installed/recovered screenshots can catch this or the initial tmux notice. No persistent UI failure is established by those captures.",
+    "image_source_commit": "bbf6442d9c62fc8a4e9ad9acf5668159f35c99f0",
+    "image_run_id": 37106807986,
+    "implementation_ready_utc": "2026-10-03T08:10:55.937569+00:00",
+    "test_script_sha256": "af7981eac1f5e3a39bdac751df44fb83547e2dd66261e8c6057f1e3850e9a049",
+    "validation_plan": [
+      "Portable tests and syntax/whitespace for test-runner change",
+      "Reuse the exact published preview 3 ISO in one BIOS/plain and UEFI/encrypted writable-USB machine workflow; no runtime rebuild or redundant Rust/CLI suite",
+      "Type a unique echo command through the physical VM keyboard after installed and recovered boot; verify standalone response in the hn pane, capture its framebuffer, close the shell through Ctrl+D and capture returned home",
+      "Record process readiness and keyboard-confirmed readiness separately, including automated typing overhead; inspect final screenshots"
+    ],
+    "local_validation": "39 portable tests and Python/JSON/XML/shell syntax passed; git diff --check passed",
+    "native_status": "not yet dispatched",
+    "remaining_physical_work": "ThinkPad issue details promised by user; Wi-Fi, suspend and GPU evidence still unavailable."
   }
 }

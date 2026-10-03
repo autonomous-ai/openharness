@@ -177,6 +177,14 @@ class VM:
         self.monitor('send-key', keys=[{'type': 'qcode', 'data': key} for key in keys], **{'hold-time': 100})
         time.sleep(0.12)  # Release each key, including repeated password characters.
 
+    def type_probe(self, text):
+        # Send display keyboard events, not hn's CLI input path. Probe commands
+        # deliberately need only these unshifted US-layout characters.
+        if not re.fullmatch(r'[a-z0-9 -]+', text):
+            raise ValueError('Keyboard probe contains unsupported characters.')
+        for char in text:
+            self.keys({' ': 'spc', '-': 'minus'}.get(char, char))
+
     def stop(self):
         if self.process and self.process.poll() is None:
             try:
@@ -192,6 +200,39 @@ class VM:
             if handle:
                 handle.close()
         self.serial = self.qmp_file = self.qmp = None
+
+
+def check_graphical_keyboard(vm, name):
+    """Prove the installed graphical surface accepts input and renders output."""
+    started = time.monotonic()
+    vm.command('pgrep -x labwc >/dev/null && pgrep -x foot >/dev/null')
+    marker = 'keyboard-' + name + '-ready'
+    vm.type_probe('echo ' + marker)
+    vm.keys('ret')
+    output, _ = vm.command(
+        'for n in $(seq 1 60); do hn capture-pane -p 2>/dev/null | '
+        'grep -Fx ' + shlex.quote(marker) +
+        ' >/dev/null && break; sleep 0.25; done; '
+        'hn capture-pane -p | grep -Fx ' + shlex.quote(marker) +
+        '; hn display-message -p "HN_KEYBOARD_PANE=#{pane_id}"; hn capture-pane -p')
+    pane = re.search(r'HN_KEYBOARD_PANE=(%\d+)', output)
+    if not pane:
+        raise RuntimeError('Keyboard probe did not identify its actual hn pane.')
+    # Require the standalone response, not merely the echoed command text.
+    if not re.search(r'(?m)^' + re.escape(marker) + r'\r?$', output):
+        raise RuntimeError('Graphical keyboard input did not produce shell output.')
+    confirmed = time.monotonic()
+    (vm.folder / (name + '-keyboard.txt')).write_text(output)
+    vm.screenshot(name + '-keyboard')
+    vm.keys('ctrl', 'd')
+    vm.command('for n in $(seq 1 60); do '
+               'if ! hn list-panes -a -F "#{pane_id}" | grep -Fx ' +
+               shlex.quote(pane.group(1)) + '; then exit 0; fi; '
+               'sleep 0.25; done; exit 1')
+    vm.command('systemctl --user is-active --quiet hn-screen && pgrep -x "hn|harness-tui" >/dev/null')
+    time.sleep(0.25)  # Let the frame following the pane-close event paint.
+    return {'confirmed_seconds_since_boot': round(confirmed - vm.started, 3),
+            'probe_seconds_including_automated_typing': round(confirmed - started, 3)}
 
 
 def check_console_fallback(vm, user, folder):
@@ -423,6 +464,8 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         if unlock_delay:
             result['checks'].append('Encrypted disk still unlocks after waiting more than the default device timeout')
         result['installed_hn_ready_seconds_including_test_login'] = round(time.monotonic() - vm.started, 3)
+        result['installed_keyboard_readiness'] = check_graphical_keyboard(vm, 'installed')
+        result['checks'].append('Installed graphical hn accepts physical-keyboard shell input, returns output and returns home after closing the pane')
         vm.command('test "$(id -un)" = ' + shlex.quote(config['username']) +
                    ' && test "$HOME" = ' + shlex.quote('/home/' + config['username']) +
                    ' && test "$(uname -n)" = ' + shlex.quote(config['hostname']))
@@ -486,6 +529,8 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
         vm.login_installed(config)
         vm.command('test ! -e /etc/hn-os-recovery-probe && test -x /usr/lib/harness/harness-tui && test "$(cat ~/Projects/recovery-probe.txt)" = keep-my-project')
         vm.command('test ! -e /var/lib/pacman/db.lck && ! pacman -Q hn-os-recovery-probe')
+        result['recovered_keyboard_readiness'] = check_graphical_keyboard(vm, 'recovered')
+        result['checks'].append('Recovered graphical hn accepts physical-keyboard shell input, returns output and returns home after closing the pane')
         vm.screenshot('05-recovered-hn')
         result['checks'].append('Recovered disk boots to hn; system and package database reverted, stale lock cleared and project preserved')
         if args.agents:
