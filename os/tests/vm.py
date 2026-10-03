@@ -173,6 +173,18 @@ class VM:
             raise RuntimeError(f'Guest command failed ({status}): {command}\n{output[-2000:]}')
         return output[:match.start()], status
 
+    def read_file(self, path, timeout=90):
+        """Read exact guest bytes without serial prompt or shell-integration codes."""
+        marker = 'HN_FILE_' + uuid.uuid4().hex
+        output, _ = self.command(
+            'hn_file_data=$(base64 < ' + shlex.quote(str(path)) + ') && '
+            f"printf '\\n{marker}:begin\\n%s\\n{marker}:end\\n' \"$hn_file_data\"",
+            timeout=timeout)
+        match = re.search(r'\r?\n' + marker + r':begin\r?\n(.*?)\r?\n' + marker + r':end\r?\n', output, re.S)
+        if not match:
+            raise RuntimeError(f'Guest file transfer is incomplete: {path}')
+        return base64.b64decode(''.join(match.group(1).splitlines()), validate=True)
+
     def login_installed(self, config, unlock_delay=0):
         if config['encrypt']:
             self.unlock_count += 1
@@ -426,10 +438,11 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     prompt = 'What is six times seven? Reply with only the decimal number. Do not use tools.'
     command = 'cd "$HOME/Projects" && timeout 120 /usr/bin/opencode run --format json ' + shlex.quote(prompt) + ' > /tmp/hn-first-chat.jsonl 2>/tmp/hn-first-chat.err'
     _, status = vm.command(user('sh -c ' + shlex.quote(command)), timeout=140, check=False)
-    output, _ = vm.command('cat /tmp/hn-first-chat.jsonl')
-    errors, _ = vm.command('cat /tmp/hn-first-chat.err')
-    (folder / 'first-opencode-chat.jsonl').write_text(output)
-    (folder / 'first-opencode-chat.stderr.txt').write_text(errors)
+    raw = vm.read_file('/tmp/hn-first-chat.jsonl')
+    errors = vm.read_file('/tmp/hn-first-chat.err')
+    (folder / 'first-opencode-chat.jsonl').write_bytes(raw)
+    (folder / 'first-opencode-chat.stderr.txt').write_bytes(errors)
+    output = raw.decode('utf-8')
     events = []
     for line in output.splitlines():
         try:
