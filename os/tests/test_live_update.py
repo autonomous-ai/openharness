@@ -25,6 +25,7 @@ class FastUpdates(unittest.TestCase):
             (self.bundled / name).write_bytes(('old ' + name).encode())
         self.patches = [patch.object(update, 'STATE', self.state), patch.object(update, 'BUNDLED', self.bundled),
                         patch.object(update, 'BASE_ID', self.base),
+                        patch.object(update, 'screen_ready'),
                         patch.object(update, 'notice'), patch.object(update, 'versions', side_effect=self.versions)]
         for item in self.patches:
             item.start()
@@ -142,6 +143,39 @@ class FastUpdates(unittest.TestCase):
             update.check()
             update.apply()
         self.assertNotEqual(update.selected(), self.bundled)
+
+    def test_old_downloads_are_removed_but_unknown_files_are_preserved(self):
+        with self.feed():
+            update.check()
+        builds = self.state / 'builds'
+        for name in ['a' * 64, '.download-interrupted', 'user-notes']:
+            (builds / name).mkdir()
+        with update.locked():
+            update.prune()
+        self.assertFalse((builds / ('a' * 64)).exists())
+        self.assertFalse((builds / '.download-interrupted').exists())
+        self.assertTrue((builds / 'user-notes').is_dir())
+        self.assertTrue(update.prepared().exists())
+
+    def test_interrupted_selection_recovers_before_another_background_check(self):
+        with self.feed():
+            update.check()
+        target = update.prepared()
+        update.write(self.state / 'transaction.json', {'status': 'applying', 'previous': str(self.bundled), 'target': str(target)})
+        update.select(target)
+        with self.feed(), patch.object(update, 'restart') as restart:
+            update.check()
+        restart.assert_called_once_with(True)
+        self.assertEqual(update.selected(), self.bundled)
+        self.assertEqual(update.read(self.state / 'transaction.json')['status'], 'interrupted')
+
+    def test_ready_service_with_no_attached_client_rolls_back(self):
+        with self.feed():
+            update.check()
+        with patch.object(update, 'screen_ready', side_effect=ValueError('No attached client')), patch.object(update, 'restart'):
+            with self.assertRaisesRegex(ValueError, 'No attached client'):
+                update.apply()
+        self.assertEqual(update.selected(), self.bundled)
 
 
 if __name__ == '__main__':

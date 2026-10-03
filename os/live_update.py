@@ -49,6 +49,14 @@ def read(path, default=None):
     return json.loads(path.read_text()) if path.exists() else default
 
 
+def sync_directory(path):
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def write(path, data):
     with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as handle:
         temporary = Path(handle.name)
@@ -58,6 +66,7 @@ def write(path, data):
             handle.flush()
             os.fsync(handle.fileno())
             temporary.replace(path)
+            sync_directory(path.parent)
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -186,8 +195,28 @@ def notice(message):
         pass  # A stopped screen will receive the notice on the next check.
 
 
+def prune():
+    # Retain only the active, previous and ready builds. Check/apply own the lock,
+    # so a half-download here can only be left by an interrupted earlier check.
+    keep = {path.resolve() for path in (selected(), prepared()) if path is not None}
+    receipt = read(STATE / 'applied.json', {})
+    if receipt.get('previous'):
+        keep.add(Path(receipt['previous']).resolve())
+    transaction = read(STATE / 'transaction.json', {})
+    if transaction.get('status') == 'applying' and transaction.get('previous'):
+        keep.add(Path(transaction['previous']).resolve())
+    folder = STATE / 'builds'
+    if folder.exists():
+        for path in folder.iterdir():
+            if path.resolve() not in keep and not path.is_symlink() and path.is_dir() and (
+                re.fullmatch(r'[a-f0-9]{64}', path.name) or path.name.startswith('.download-')
+            ):
+                shutil.rmtree(path)
+
+
 def check(feeds=None, progress=lambda _: None):
     with locked():
+        recover_interrupted()
         current = selected()
         running = versions(current)
         ready = prepared()
@@ -227,8 +256,12 @@ def check(feeds=None, progress=lambda _: None):
                     else:
                         shutil.copyfile(base / name, folder / name)
                     (folder / name).chmod(0o755 if name == 'harness-tui' else 0o644)
+                    with (folder / name).open('rb') as handle:
+                        os.fsync(handle.fileno())
                 (folder / 'hn').symlink_to('harness-tui')
                 shutil.copyfile(BASE_ID, folder / 'base.json')
+                with (folder / 'base.json').open('rb') as handle:
+                    os.fsync(handle.fileno())
                 record = {'versions': target_versions, 'files': {name: {
                     'sha256': digest(folder / name), 'bytes': (folder / name).stat().st_size
                 } for name in FILES}}
@@ -239,10 +272,12 @@ def check(feeds=None, progress=lambda _: None):
                 if not ready.exists():
                     # TemporaryDirectory can safely clean its now-missing old name.
                     folder.rename(ready)
+                    sync_directory(builds)
                 write(STATE / 'ready.json', {'id': identity})
         write(STATE / 'check.json', {'checked_at': time.time(), 'errors': errors})
         available = ready is not None and ready != current
         notice('Update ready · Super+U' if available else '')
+        prune()
         if errors and not available:
             raise ValueError('Could not check for updates. Connect to the internet and try again.')
         return available
@@ -252,11 +287,13 @@ def select(folder):
     pointer = STATE / 'current'
     if folder == BUNDLED:
         pointer.unlink(missing_ok=True)
+        sync_directory(STATE)
         return
     temporary = STATE / '.current-next'
     temporary.unlink(missing_ok=True)
     temporary.symlink_to(folder.relative_to(STATE))
     temporary.replace(pointer)
+    sync_directory(STATE)
 
 
 def restart(cli_changed):
@@ -268,16 +305,59 @@ def restart(cli_changed):
     run('systemctl', '--user', 'is-active', '--quiet', 'hn-screen.service')
 
 
+def screen_ready(target):
+    """Wait for an attached client executing the selected binary, not just foot."""
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            clients = run('/usr/bin/hn', 'list-clients', '-F', '#{client_pid}', timeout=3)
+            for pid in clients.splitlines():
+                if pid.isdigit() and (Path('/proc') / pid / 'exe').samefile(target / 'harness-tui'):
+                    return
+        except (OSError, subprocess.SubprocessError):
+            pass
+        time.sleep(.25)
+    raise ValueError('The new hn screen did not become ready. Restoring the previous build.')
+
+
+def recovery_target(value):
+    target = Path(value)
+    if target == BUNDLED:
+        return target
+    if target.parent.resolve() != (STATE / 'builds').resolve() or not re.fullmatch(r'[a-f0-9]{64}', target.name):
+        raise ValueError('Invalid runtime recovery path.')
+    if (target / 'base.json').read_bytes() != BASE_ID.read_bytes():
+        return BUNDLED
+    verify(target)
+    return target
+
+
+def recover_interrupted():
+    transaction = read(STATE / 'transaction.json', {})
+    if transaction.get('status') != 'applying':
+        return
+    previous = recovery_target(transaction['previous'])
+    select(previous)
+    # Holding the update lock proves the previous activation is no longer alive.
+    # Restore its known runtime even if a power cut lost its final receipt.
+    restart(True)
+    screen_ready(previous)
+    write(STATE / 'transaction.json', {'status': 'interrupted', 'previous': str(previous)})
+
+
 def apply(rollback=False):
     with locked():
+        recover_interrupted()
         previous = selected()
         receipt = read(STATE / 'applied.json', {})
         target = (Path(receipt['previous']) if rollback and receipt.get('previous') else None) if rollback else prepared()
         if target is None or target == previous:
             raise ValueError('No update to roll back.' if rollback else 'Harness is up to date.')
         if target != BUNDLED:
-            if target.parent != STATE / 'builds' or not re.fullmatch(r'[a-f0-9]{64}', target.name):
+            if target.parent.resolve() != (STATE / 'builds').resolve() or not re.fullmatch(r'[a-f0-9]{64}', target.name):
                 raise ValueError('Invalid runtime recovery path.')
+            if (target / 'base.json').read_bytes() != BASE_ID.read_bytes():
+                raise ValueError('That runtime belongs to an earlier OS package.')
             candidate = verify(target)['versions']
         else:
             candidate = versions(BUNDLED)
@@ -286,10 +366,11 @@ def apply(rollback=False):
         select(target)
         try:
             restart(candidate['cli'] != old['cli'])
+            screen_ready(target)
         except BaseException:
             select(previous)
-            restart(candidate['cli'] != old['cli'])
             write(STATE / 'transaction.json', {'status': 'failed', 'previous': str(previous)})
+            restart(candidate['cli'] != old['cli'])
             notice('Update failed · Super+U')
             raise
         write(STATE / 'applied.json', {'previous': str(previous), 'current': str(target), 'at': time.time()})
@@ -298,6 +379,7 @@ def apply(rollback=False):
         write(STATE / 'transaction.json', {'status': 'applied'})
         (STATE / 'ready.json').unlink(missing_ok=True)
         notice('')
+        prune()
 
 
 def screen(window):
