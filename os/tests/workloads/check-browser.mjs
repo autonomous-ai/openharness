@@ -79,6 +79,16 @@ try {
       await available('http://127.0.0.1:18883');
       await page.goto('http://127.0.0.1:18883');
       await page.waitForFunction(() => window.harnessGame?.stats);
+      for (const viewport of [{ width: 1024, height: 768 }, { width: 1280, height: 800 }]) {
+        await page.setViewportSize(viewport);
+        assert.ok(await page.evaluate(() => {
+          const board = document.querySelector('canvas').getBoundingClientRect();
+          const legend = document.querySelector('.legend').getBoundingClientRect();
+          return board.width > 200 && board.height > 200 && board.top >= 0 &&
+            board.bottom <= innerHeight && legend.bottom <= innerHeight &&
+            document.documentElement.scrollHeight <= innerHeight + 1;
+        }), 'The whole game and keyboard legend fit the laptop viewport');
+      }
       await page.keyboard.press('Enter');
       await page.screenshot({ path: join(report, 'game.png') });
       let moved = false;

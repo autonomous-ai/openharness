@@ -32,10 +32,14 @@ EOF
             (cd "$project" && npm ci --no-audit --no-fund) || exit 1
         fi
     else
+      prompt='Read TASK.txt, implement the complete task, run its tests, and fix failures. Work now without questions or subagents. Browser acceptance runs separately with sandboxed system Chromium; finish after your unit tests and do not launch a browser or long-running server.'
+      if [[ -d "$INPUTS/seed" ]]; then
+          prompt='The existing Signal Run game already passes its unit tests and independent keyboard/pause/restart/state checks. Perform ONE remaining task: adjust styles.css so the entire canvas and compact keyboard legend fit within a 1280x800 or 1024x768 browser viewport without vertical scrolling. Let the stage shrink into the remaining viewport height. Preserve simulation and bridge behavior. Do not rewrite the game, broaden features, audit edge cases, or add test frameworks. Run node --test test.mjs once, fix only regressions from your CSS change, then give your final answer and stop. A separate browser tester will verify layout. No questions or subagents.'
+      fi
       (
         cd "$project" || exit 1
         timeout --signal=TERM --kill-after=15s 12m opencode run --model "$MODEL" --format json \
-            'Read TASK.txt, implement the complete task, run its tests, and fix failures. Work now without questions or subagents. If a project already exists, finish and verify it. Browser acceptance runs separately with sandboxed system Chromium; finish after your unit tests and do not launch a browser or long-running server.' \
+            "$prompt" \
             > "$REPORT/$scenario-agent.jsonl" 2>&1
     )
       status=$?
