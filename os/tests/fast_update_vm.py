@@ -15,10 +15,11 @@ def wait_text(vm, text, name):
 
 def exercise(vm, fixture, host_url):
     vm.command('sudo nmcli networking on')
+    vm.command('nm-online -q --timeout=30', timeout=35)
     vm.command('mkdir -p /tmp/fast-updates')
     for path in fixture.iterdir():
         if path.is_file():
-            vm.command('curl --fail --silent --show-error --retry 2 --max-time 90 ' +
+            vm.command('curl --fail --silent --show-error --retry 2 --retry-connrefused --max-time 90 ' +
                 shlex.quote(host_url + '/fast/' + path.name) + ' -o ' + shlex.quote('/tmp/fast-updates/' + path.name), timeout=100)
     vm.command('systemd-run --user --collect --unit=harness-test-feed python3 -m http.server 19447 '
                '--bind 127.0.0.1 --directory /tmp/fast-updates')

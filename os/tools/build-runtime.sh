@@ -11,12 +11,17 @@ mkdir -p os/work/runtime
 cp tui/target/x86_64-unknown-linux-musl/release/harness-tui os/work/runtime/
 cp cli/dist/cli.js cli/dist/notify.mjs os/work/runtime/
 python3 - <<'PY'
-import json, pathlib, subprocess
+import json, pathlib, subprocess, tomllib
 def output(*args):
     return subprocess.check_output(args, text=True).strip()
 data = {'source_commit': output('git', 'rev-parse', 'HEAD'),
         'dirty': bool(output('git', 'status', '--porcelain', '--untracked-files=no')),
         'node': output('node', '--version'), 'rust': output('rustc', '--version'),
         'target': 'x86_64-unknown-linux-musl'}
+expected_hn = tomllib.loads(pathlib.Path('tui/Cargo.toml').read_text())['package']['version']
+expected_cli = json.loads(pathlib.Path('cli/package.json').read_text())['version']
+assert output('os/work/runtime/harness-tui', '--version').startswith('hn ' + expected_hn + ' ')
+assert output('node', 'cli/dist/cli.js', 'version') == expected_cli
+data['versions'] = {'hn': expected_hn, 'cli': expected_cli}
 pathlib.Path('os/work/runtime/source.json').write_text(json.dumps(data, indent=2) + '\n')
 PY
