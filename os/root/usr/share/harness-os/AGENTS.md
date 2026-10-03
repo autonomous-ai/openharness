@@ -46,6 +46,14 @@ is required.
 
 ## Network and hardware
 
+- `harness hardware` reports the model, CPU baseline, PCI devices, bound drivers
+  and backlights. It does not collect serial numbers, Wi-Fi names, MAC addresses
+  or passwords. Use actual device IDs when diagnosing hardware.
+- The USB carries a prebuilt wl module and signed offline packages for selected
+  BCM4331/BCM4360 radios. The installer adds DKMS and matching LTS headers only
+  where needed, so future kernel upgrades can rebuild the driver. Other Broadcom
+  families keep their native drivers. Do not apply a blanket Broadcom blacklist.
+  Driver build/load checks are not evidence of physical radio or suspend support.
 - Ethernet uses NetworkManager automatically. For Wi-Fi, use
   `hn-os wifi`, which opens NetworkManager’s keyboard interface.
   Keep passwords out of shell arguments and transcripts.

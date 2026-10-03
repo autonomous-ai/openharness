@@ -45,6 +45,7 @@ def stage(source, runtime, destination, commit):
         'os/runtime_update.py': 'usr/lib/harness-os/runtime_update.py',
         'os/live_update.py': 'usr/lib/harness-os/live_update.py',
         'os/release_update.py': 'usr/lib/harness-os/release_update.py',
+        'os/hardware.py': 'usr/lib/harness-os/hardware.py',
         'os/tools/hn-os': 'usr/bin/hn-os',
         'os/lock.json': 'usr/share/harness-os/lock.json',
     }

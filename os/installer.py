@@ -230,7 +230,7 @@ def install(config, source, target, progress=None):
         # The live image is immutable. No live passwords, SSH keys or sessions are copied.
         for path in ['etc/sudoers.d/10-live', 'etc/mkinitcpio.conf.d/archiso.conf',
                      'etc/systemd/system/serial-getty@ttyS0.service.d/live.conf',
-                     'etc/pacman.d/hooks/99-harness-live.hook', 'root/setup-live.sh', 'etc/harness-live']:
+                     'etc/pacman.d/hooks/99-harness-live.hook', 'root/setup-live.sh']:
             (target / path).unlink(missing_ok=True)
         for path in ['etc/systemd/system/getty@tty1.service.d', 'root/.ssh']:
             shutil.rmtree(target / path, ignore_errors=True)
@@ -295,6 +295,10 @@ def install(config, source, target, progress=None):
         chroot(target, 'systemctl', 'disable', 'sshd.service')
         report('Preparing startup and recovery…')
         chroot(target, '/usr/lib/harness-os/init-keyring')
+        # Keep the live marker through this initial optional package transaction,
+        # so recovery hooks do not checkpoint an unfinished installation.
+        run('/usr/bin/python3', '/usr/lib/harness-os/hardware.py', 'configure-install', target)
+        (target / 'etc/harness-live').unlink()
         chroot(target, 'mkinitcpio', '-P')
         chroot(target, 'grub-install', '--target=i386-pc', '--recheck', disk)
         chroot(target, 'grub-install', '--target=x86_64-efi', '--efi-directory=/boot', '--boot-directory=/boot', '--removable', '--no-nvram')

@@ -25,6 +25,9 @@ if all((root / path).is_file() for path in [
     capabilities.append('runtime-updates')
 if (root / 'usr/lib/harness-os/release_update.py').is_file():
     capabilities.append('system-updates')
+hardware = root / 'usr/share/harness-os/hardware/broadcom/manifest.json'
+if hardware.is_file():
+    capabilities.append('broadcom-offline')
 manifest = {
     'version': lock['version'], 'architecture': 'x86_64',
     'source_commit': os.environ.get('HARNESS_OS_SOURCE_SHA') or subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
@@ -33,5 +36,6 @@ manifest = {
     'capabilities': capabilities,
     'package_version': dict(row.split(maxsplit=1) for row in packages.splitlines())['harness-os'],
     'harness_inputs': json.loads((root / 'usr/share/harness-os/runtime.json').read_text()), 'validation': 'pending',
+    'hardware': {'broadcom': json.loads(hardware.read_text())} if hardware.is_file() else {},
 }
 (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')

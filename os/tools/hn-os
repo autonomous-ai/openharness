@@ -57,6 +57,8 @@ def main():
     if command == 'try':
         try_harness()
         return
+    if command == 'hardware':
+        os.execv('/usr/bin/python3', ['python3', '/usr/lib/harness-os/hardware.py', 'report', *args])
     if command in ['checkpoint', 'update', 'recover']:
         os.execv('/usr/bin/python3', ['python3', '/usr/lib/harness-os/system.py', command, *args])
     if command == 'status':
@@ -79,7 +81,7 @@ def main():
                 'processes_rss_kib_and_lifetime_cpu': capture('ps', '-eo', 'comm,rss,pcpu', '--sort=-rss')}
         print(json.dumps(data, indent=2))
         return
-    raise SystemExit('Usage: hn-os [status | try | wifi | install | browser [URL] | measure | checkpoint | update [--snapshot YYYY/MM/DD] | recover ROOT_DEVICE [CHECKPOINT]]')
+    raise SystemExit('Usage: hn-os [status | hardware | try | wifi | install | browser [URL] | measure | checkpoint | update [--snapshot YYYY/MM/DD] | recover ROOT_DEVICE [CHECKPOINT]]')
 
 
 if __name__ == '__main__':

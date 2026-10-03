@@ -35,6 +35,7 @@ def inspect(iso):
                       'usr/lib/harness-os/runtime_update.py': source / 'runtime_update.py',
                       'usr/lib/harness-os/live_update.py': source / 'live_update.py',
                       'usr/lib/harness-os/release_update.py': source / 'release_update.py',
+                      'usr/lib/harness-os/hardware.py': source / 'hardware.py',
                       'usr/bin/hn-os': source / 'tools/hn-os',
                       'usr/share/harness-os/lock.json': source / 'lock.json'})
         for path, expected in files.items():
@@ -69,7 +70,20 @@ def inspect(iso):
         expected_version = re.escape(version.replace('-preview.', 'pre')) + r'\.r\d+\.g' + manifest['source_commit'][:10] + '-1'
         assert re.fullmatch(expected_version, package_version), 'OS package version differs from the image source'
         assert package_version == manifest['package_version'], 'OS package version differs from the manifest'
-        assert set(manifest['capabilities']) == {'runtime-updates', 'system-updates'}, 'Update capabilities are missing from the manifest'
+        assert set(manifest['capabilities']) == {'runtime-updates', 'system-updates', 'broadcom-offline'}, 'Image capabilities differ from the manifest'
+        hardware_root = 'usr/share/harness-os/hardware/broadcom/'
+        hardware = json.loads(read(hardware_root + 'manifest.json'))
+        assert hardware == manifest['hardware']['broadcom'], 'Hardware manifest differs from the payload'
+        assert hardware['kernel'] == Path(kernel['path']).parent.name, 'Wi-Fi module targets a different kernel'
+        assert hardware['arch_snapshot'] == manifest['arch_snapshot']
+        assert all(inventory.get(name) == version for name, version in hardware['base_packages'].items())
+        assert not names & {'gcc', 'make', 'dkms', 'broadcom-wl-dkms', 'linux-lts-headers'}, 'Optional Wi-Fi build tools entered the default image'
+        for name, expected in hardware['files'].items():
+            assert not Path(name).is_absolute() and '..' not in Path(name).parts
+            path = hardware_root + name
+            data = read(path)
+            assert len(data) == expected['bytes'] and hashlib.sha256(data).hexdigest() == expected['sha256'], f'Hardware bundle mismatch: {name}'
+            assert owners.get(path) == '0/0', f'Hardware file is not root-owned: {name}'
         wanted = {row.strip() for row in (source / 'packages.x86_64').read_text().splitlines() if row.strip() and not row.startswith('#')}
         assert wanted.issubset(names), f'Missing packages: {wanted - names}'
         config = read('etc/pacman.conf').decode()

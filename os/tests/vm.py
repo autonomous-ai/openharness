@@ -688,6 +688,13 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
                    ' && test "$HOME" = ' + shlex.quote('/home/' + config['username']) +
                    ' && test "$(uname -n)" = ' + shlex.quote(config['hostname']))
         vm.command('test ! -e /etc/sudoers.d/10-live && test ! -e /etc/harness-live && ! sudo -n true')
+        if 'broadcom-offline' in manifest.get('capabilities', []):
+            vm.command('test ! -e /usr/share/harness-os/hardware/broadcom && '
+                       'for name in gcc dkms broadcom-wl-dkms linux-lts-headers; '
+                       'do if pacman -Q "$name"; then exit 1; fi; done')
+            vm.command('python3 -c ' + shlex.quote('import json; assert json.load(open('
+                       '"/var/lib/harness-os/hardware.json")) == {"drivers": [], "devices": []}'))
+            result['checks'].append('Unrelated hardware receives no optional Wi-Fi packages and retains no USB driver cache')
         vm.command('! pgrep -x chromium')
         vm.command('test "$(npm prefix -g)" = "$HOME/.local"')
         vm.command('findmnt -n -o FSTYPE / | grep -qx btrfs')

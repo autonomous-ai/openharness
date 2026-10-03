@@ -1,0 +1,2 @@
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x14e4", ATTR{device}=="0x4331", TAG+="systemd", ENV{SYSTEMD_WANTS}+="harness-broadcom@%k.service"
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x14e4", ATTR{device}=="0x43a0", TAG+="systemd", ENV{SYSTEMD_WANTS}+="harness-broadcom@%k.service"

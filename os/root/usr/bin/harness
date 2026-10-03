@@ -1,4 +1,8 @@
 #!/bin/sh
+if [ "${1:-}" = hardware ]; then
+    shift
+    exec /usr/bin/python3 /usr/lib/harness-os/hardware.py report "$@"
+fi
 if [ "${1:-}" = install ]; then
     shift
     exec /usr/bin/python3 /usr/lib/harness-os/install.py "$@"

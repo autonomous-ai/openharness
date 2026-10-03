@@ -46,6 +46,9 @@ EOF
 # installation should not immediately be offered this identical build again.
 python3 tools/build-package.py --runtime "$RUNTIME_DIR" --output "$BUILD_DIR/repo" --development
 repo-add "$BUILD_DIR/repo/harness-build.db.tar.gz" "$BUILD_DIR/repo/"*.pkg.tar.gz
+python3 tools/build-hardware.py --config "$PROFILE/pacman.conf" \
+    --work "$BUILD_DIR/hardware-build" \
+    --output "$PROFILE/airootfs/usr/share/harness-os/hardware/broadcom"
 cp -a live/. "$PROFILE/airootfs/"
 mkdir -p "$PROFILE/airootfs/root" "$PROFILE/airootfs/etc/pacman.d/hooks"
 cp tools/customize-live.sh "$PROFILE/airootfs/root/setup-live.sh"
