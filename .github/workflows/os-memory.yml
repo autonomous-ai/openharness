@@ -8,6 +8,9 @@ on:
         type: string
         default: '37149350400'
         required: true
+  push:
+    branches: ['os-polish/runtime-memory']
+    paths: ['os/tests/memory_*.py', '.github/workflows/os-memory.yml']
 
 permissions:
   contents: read
@@ -23,7 +26,7 @@ jobs:
         with:
           name: programmer-os-x86_64
           path: os/dist
-          run-id: ${{ inputs.image_run_id }}
+          run-id: ${{ inputs.image_run_id || '37149350400' }}
           github-token: ${{ github.token }}
       - name: Check the fixture and install VM tools
         run: |
