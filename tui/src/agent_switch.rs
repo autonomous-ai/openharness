@@ -52,6 +52,7 @@ pub struct State {
     selection: Option<Selection>,
     changes: HashMap<String, Change>,
     placements: HashMap<String, Placement>,
+    recovered_placements: HashSet<String>,
     #[cfg(test)]
     pub sent: Vec<(String, String, Value)>,
 }
@@ -60,6 +61,7 @@ pub struct State {
 /// replacement's local views until the latter arrives; retrying these writes never launches
 /// or stops another process.
 struct Placement {
+    receipt: String,
     owner: String,
     machine: String,
     agent: String,
@@ -71,7 +73,10 @@ struct Placement {
 }
 
 fn placement_views(app: &App, placement: &Placement) -> Vec<(String, u64)> {
-    if placement.owner != app.fleet.local_id { return vec![] }
+    let identity = app.saved_identity();
+    let owner = identity["machine"].as_str().unwrap_or(&app.fleet.local_id);
+    if placement.owner != owner { return vec![] }
+    if app.fleet.agent(&placement.machine, &placement.agent).is_some_and(|a| a.status == "stopped") { return vec![] }
     placement.views.iter().filter(|(tab, id)| {
         app.panes.get(id).is_some_and(|p| p.machine_id == placement.machine && p.agent_id == placement.agent)
             && app.tabs.iter().chain(app.sessions.iter().flat_map(|s| s.tabs.iter())).any(|t| t.on_desk && &t.id == tab && t.panes().contains(id))
@@ -83,8 +88,93 @@ pub fn retain_placement(app: &mut App, machine: &str, agent: &str, ops: &[Value]
     let views = app.tabs.iter().filter(|t| t.on_desk).flat_map(|t| t.panes().into_iter().map(move |p| (t.id.clone(), p)))
         .filter(|(_, id)| app.panes.get(id).is_some_and(|p| p.machine_id == machine && p.agent_id == agent)).collect::<Vec<_>>();
     if views.is_empty() { return }
-    app.agent_switch.placements.insert(format!("{machine}:{agent}"), Placement { owner:app.fleet.local_id.clone(), machine:machine.into(), agent:agent.into(), views,
+    app.agent_switch.placements.insert(format!("{machine}:{agent}"), Placement { receipt:uuid::Uuid::new_v4().to_string(), owner:app.fleet.local_id.clone(), machine:machine.into(), agent:agent.into(), views,
         ops:ops.to_vec(), retry:None, attempts:0, failed:false });
+    // The process already exists. Include its view in this event batch's session snapshot.
+    app.sessions_sig.clear();
+}
+
+/// Only the unacknowledged pane placement is durable here, never a process-launch request.
+/// Keep it beside the existing session snapshots, under the same file lock and account scope.
+pub fn saved_placements(app: &App) -> Vec<Value> {
+    let mut rows = Vec::new();
+    for p in app.agent_switch.placements.values() {
+        let views = placement_views(app, p);
+        if views.is_empty() { continue }
+        let windows: Vec<_> = std::iter::once((app.session_desk, &app.tabs, &app.nums)).chain(app.sessions.iter().map(|s| (s.desk, &s.tabs, &s.nums)))
+            .filter(|(desk, _, _)| *desk).flat_map(|(_, tabs, nums)| tabs.iter().enumerate().filter(|(_, t)| views.iter().any(|(id, _)| id == &t.id)).map(|(index, tab)| {
+                let mut win = app.window_json(tab, nums.get(&tab.id).copied());
+                win["sharedLayout"] = tab.layout.clone(); win["index"] = json!(index); win
+            })).collect();
+        rows.push(json!({"id":p.receipt, "harnessIdentity":app.saved_identity(), "machine":p.machine, "agent":p.agent, "ops":p.ops, "windows":windows}));
+    }
+    rows.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    rows
+}
+
+pub fn merge_saved_placements(app: &App, doc: &Value, leave: bool) -> Value {
+    if app.forget_sessions { return json!([]) }
+    let me = crate::ipc::here().map(|p| p.display().to_string());
+    let ours = saved_placements(app);
+    let mut rows: Vec<_> = doc["pending_workspace"].as_array().into_iter().flatten().filter(|row| {
+        row["owner"].as_str() != me.as_deref()
+            && !row["id"].as_str().is_some_and(|id| app.agent_switch.recovered_placements.contains(id))
+            && !ours.iter().any(|ours| ours["id"] == row["id"])
+    }).cloned().collect();
+    for mut row in ours {
+        row["owner"] = if leave { Value::Null } else { json!(me) };
+        rows.push(row);
+    }
+    json!(rows)
+}
+
+/// Called while the session file is locked. Another live client keeps its pending writes;
+/// the first client restoring an orphan claims it without issuing any create/stop RPC.
+pub fn restore_placements(app: &mut App, doc: &Value) {
+    if app.desk_mode != crate::app::DeskMode::Sync { return }
+    let identity = app.saved_identity();
+    let Some(owner) = identity["machine"].as_str() else { return };
+    let me = crate::ipc::here().map(|p| p.display().to_string());
+    let back = app.session_id;
+    if !app.session_desk {
+        let Some(desk) = app.sessions.iter().find(|s| s.desk).map(|s| s.id) else { return };
+        app.swap_session(desk);
+    }
+    for row in doc["pending_workspace"].as_array().into_iter().flatten() {
+        if row["harnessIdentity"] != identity || crate::app::live_owner(row).is_some_and(|client| Some(&client) != me.as_ref()) { continue }
+        let (Some(receipt), Some(machine), Some(agent), Some(ops), Some(windows)) =
+            (row["id"].as_str(), row["machine"].as_str(), row["agent"].as_str(), row["ops"].as_array(), row["windows"].as_array()) else { continue };
+        if receipt.is_empty() || machine.is_empty() || agent.is_empty() { continue }
+        let mut views = Vec::new();
+        for win in windows {
+            if win["harnessIdentity"] != identity { continue }
+            let Some(win) = app.scoped_window(win) else { continue };
+            let win = &win;
+            let Some(id) = win["id"].as_str() else { continue };
+            if !win["panes"].as_array().is_some_and(|panes| panes.iter().any(|p| p[0] == machine && p[1] == agent)) { continue }
+            if !app.tabs.iter().any(|t| t.id == id && t.root.is_some()) {
+                let Some((mut tab, num)) = app.tab_from_json(win) else { continue };
+                tab.on_desk = true; tab.layout = win["sharedLayout"].clone(); tab.desk_layout = tab.layout.clone();
+                crate::ids::desk_set(crate::ids::Kind::Window, &tab.id, tab.wid());
+                if let Some(num) = num { app.nums.insert(tab.id.clone(), num); }
+                let at = win["index"].as_u64().unwrap_or(app.tabs.len() as u64) as usize;
+                app.tabs.insert(at.min(app.tabs.len()), tab);
+            }
+            if let Some(tab) = app.tabs.iter().find(|t| t.id == id) {
+                for pane in tab.panes().into_iter().filter(|id| app.panes.get(id).is_some_and(|p| p.machine_id == machine && p.agent_id == agent)) {
+                    crate::ids::desk_set(crate::ids::Kind::Pane, &format!("{machine}:{agent}"), pane);
+                    views.push((id.into(), pane));
+                }
+            }
+        }
+        app.agent_switch.recovered_placements.insert(receipt.into());
+        if views.is_empty() { continue }
+        app.agent_switch.placements.insert(format!("{machine}:{agent}"), Placement { receipt:receipt.into(), owner:owner.into(), machine:machine.into(), agent:agent.into(), views,
+            ops:ops.clone(), retry:Some(Instant::now() + Duration::from_secs(2)), attempts:0, failed:true });
+    }
+    if app.tabs.iter().any(|t| t.on_desk) { app.tabs.retain(|t| t.root.is_some() || t.on_desk); }
+    app.active = app.desk_active_saved.unwrap_or(app.active).min(app.tabs.len().saturating_sub(1));
+    if back != app.session_id { app.swap_session(back); }
 }
 
 /// Read the unmodified server document, before retained local views are overlaid onto it.
@@ -96,7 +186,9 @@ pub fn desk_observed(app: &mut App, desk: &Value) {
             && r["panes"].as_array().is_some_and(|panes| panes.iter().any(|a| a["machineId"] == p.machine && a["agentId"] == p.agent)))));
         (views.is_empty() || confirmed).then(|| key.clone())
     }).collect();
+    let changed = !done.is_empty();
     for key in done { app.agent_switch.placements.remove(&key); }
+    if changed { app.sessions_sig.clear(); }
     crate::workspace_controls::refresh_workspace(app);
 }
 
@@ -147,6 +239,7 @@ fn retry_placements(app: &mut App) {
     }
     for key in keys {
         let p = &app.agent_switch.placements[&key];
+        if p.owner != app.fleet.local_id || app.link(&p.owner).is_none() { continue }
         let tabs: HashSet<_> = placement_views(app, p).into_iter().map(|(t, _)| t).collect();
         let mut ops = Vec::new();
         for original in &p.ops {

@@ -3115,6 +3115,7 @@ impl App {
         // …and each session's options and environment (set-environment from the other client).
         sig.push_str(&format!("{:?}{:?}{:?}{:?}{}", self.options.session, self.session_env, self.session_group, self.lastw, self.session_alerts(self.session_id)));
         for s in self.sessions.iter().filter(|s| !s.desk && s.mirror.is_none()) { sig.push_str(&format!("{:?}{:?}{:?}{:?}{}", s.options, s.env, s.group, s.lastw, self.session_alerts(s.id))) }
+        sig.push_str(&json!(crate::agent_switch::saved_placements(self)).to_string());
         if sig != self.sessions_sig { self.sessions_sig = sig; self.save_sessions() }
     }
 
@@ -3190,7 +3191,8 @@ impl App {
         let current = if self.forget_sessions { Value::Null }
             else if how == Save::Stay || how == Save::Leave { if self.session_desk { Value::Null } else { json!(self.session_name()) } }
             else { doc.get("current").cloned().unwrap_or(Value::Null) };
-        let doc = json!({ "current": current, "harnessIdentity": self.saved_identity(), "sessions": rows });
+        let pending = crate::agent_switch::merge_saved_placements(self, &doc, how == Save::Leave);
+        let doc = json!({ "current": current, "harnessIdentity": self.saved_identity(), "sessions": rows, "pending_workspace": pending });
         if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
         let temp = path.with_extension(format!("json.{}.tmp", std::process::id()));
         if std::fs::write(&temp, doc.to_string()).is_ok() { let _ = std::fs::rename(temp, &path); }
@@ -3404,6 +3406,7 @@ impl App {
             let id = row.get("id").and_then(Value::as_u64).map(|i| i as u32).filter(|i| *i != self.session_id && !self.sessions.iter().any(|s| s.id == *i)).unwrap_or_else(|| self.remote_id(&name));
             if let Some(stash) = self.stash_from_row(&row, id) { self.sessions.push(stash) }
         }
+        crate::agent_switch::restore_placements(self, &doc);
         self.write_sessions_held(Save::Stay);
         drop(lock);
         self.remote.borrow_mut().stamp = None;
