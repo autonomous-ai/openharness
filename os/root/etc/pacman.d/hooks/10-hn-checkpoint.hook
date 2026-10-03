@@ -6,7 +6,7 @@ Type = Package
 Target = *
 
 [Action]
-Description = Saving Programmer OS root and matching boot files
+Description = Saving Harness root and matching boot files
 When = PreTransaction
 Exec = /usr/bin/python3 /usr/lib/harness-os/system.py checkpoint --pacman-hook
 AbortOnFail

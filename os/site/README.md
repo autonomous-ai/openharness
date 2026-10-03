@@ -1,4 +1,4 @@
-# Programmer OS landing page
+# Harness landing page
 
 A standalone page: HTML, CSS, local fonts, and two real screenshots. No JavaScript,
 framework, package installation, analytics, or build step. This directory is not

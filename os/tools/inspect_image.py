@@ -42,7 +42,8 @@ def inspect(iso):
         for line in listing.splitlines():
             fields = line.split(maxsplit=5)
             if len(fields) == 6 and fields[1].count('/') == 1 and fields[5].startswith('squashfs-root'):
-                owners[fields[5].removeprefix('squashfs-root').lstrip('/')] = fields[1]
+                path = fields[5].split(' -> ', 1)[0] if fields[0].startswith('l') else fields[5]
+                owners[path.removeprefix('squashfs-root').lstrip('/')] = fields[1]
         for path in [*files, '', 'etc', 'usr', 'usr/bin', 'usr/lib/harness-os', 'usr/share/harness-os']:
             assert owners.get(path) == '0/0', f'Packaged system path is not owned by root: {path}'
         runtime = json.loads(read('usr/share/harness-os/runtime.json'))
@@ -73,7 +74,8 @@ def inspect(iso):
         assert b'--autologin me' in read('etc/systemd/system/getty@tty1.service.d/autologin.conf')
         assert read('etc/hostname').strip() == b'harness'
         assert 'etc/harness-live' in owners, 'Live welcome marker is missing'
-        assert 'usr/bin/opencode' in owners and 'usr/bin/nmtui-connect' in owners
+        for executable in ['usr/bin/opencode', 'usr/bin/nmtui', 'usr/bin/nmtui-connect']:
+            assert owners.get(executable) == '0/0', f'Missing or non-root-owned executable: {executable}'
         receipt = {'status': 'passed', 'scope': 'ISO boot entries, exact SquashFS configuration, runtime and offline kernel hashes, live account and package inventory',
                    'source_commit': manifest['source_commit'], 'iso_sha256': manifest['iso']['sha256'],
                    'payload_sha256': sha256(payload), 'package_count': len(names), 'source_files_compared': checked,

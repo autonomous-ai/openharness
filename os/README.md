@@ -1,8 +1,13 @@
-# Programmer OS
+# Harness
 
-Boot into `hn`. Talk to agents in their own terminal panes. Review their diffs,
-tests and output there. The browser opens only when requested. Development
-toolchains are installed by the agents as needed.
+An operating system built around agents. Boot into `hn`, describe the work,
+and let an agent use the tools it needs. Review its diffs, tests and output in
+the terminal; open the browser when the work needs a visual surface.
+
+Programmers are the first audience. Claude Code, Codex, OpenCode and pi are the
+primary interface. Compilers, databases and other software are installed when
+a task needs them. The product is Harness; “programmer OS” describes its initial
+audience, not its name.
 
 **Preview 3:** the installer finds its offline image after USB boot copies it into
 RAM, and excludes the boot USB even when it has been unmounted. Both optical-media
@@ -53,7 +58,7 @@ updates and recovery. These are completion gates, not optional follow-up work.
 
 ## Build
 
-The GitHub **Programmer OS** workflow builds on an isolated x86 Linux runner.
+The GitHub **Harness OS** workflow builds on an isolated x86 Linux runner.
 Local equivalent on an x86 Arch build host:
 
 ```sh
@@ -258,7 +263,7 @@ system Chromium with its sandbox enabled. Project source, screenshots and
 receipts are retained as workflow artifacts; none of these projects, testing
 tools, or downloaded agent binaries is preinstalled in the ISO.
 
-Dispatch the **Programmer OS** workflow with `image_run_id=37083780202` and either
+Dispatch the **Harness OS** workflow at the preview 1 source with `image_run_id=37083780202` and either
 `workloads=true` or `dsh=true` to repeat the corresponding exercise. These use
 network-accessible free models and may fail or exceed their bounded deadline;
 agent exits and independent checks are reported separately. `memory_mib=1024`

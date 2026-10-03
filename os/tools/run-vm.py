@@ -96,7 +96,7 @@ def main():
         (folder / 'running.json').write_text(json.dumps(state, indent=2) + '\n')
         print(f'Virtual disk: {disk} (24 GiB capacity; grows only as used)', flush=True)
         print(f'Guest: {args.memory} MiB RAM, 2 CPUs, {accel}; control: {control}', flush=True)
-        print('Install inside hn with: sudo hn-os install (choose /dev/vda).', flush=True)
+        print('Press Enter on the Harness welcome screen to install (choose /dev/vda), or T to try it.', flush=True)
         print('After shutdown: python3 os/tools/run-vm.py --installed', flush=True)
         try:
             with (folder / 'qemu.log').open('ab') as log:

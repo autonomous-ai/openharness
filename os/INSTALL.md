@@ -1,4 +1,4 @@
-# Install Programmer OS on a ThinkPad
+# Install Harness on a ThinkPad
 
 These instructions are for **0.1.0-preview.3**, using a Mac to prepare the USB.
 The USB boots a live system first. It changes the ThinkPad's disk only after you

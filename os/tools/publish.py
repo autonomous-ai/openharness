@@ -12,6 +12,9 @@ import time
 import zipfile
 
 REQUIRED_CHECKS = ['Live hn ready;', 'Wayland clipboard round trip',
+                   'USB Enter opens Install offline;',
+                   'Bundled OpenCode starts offline and its upstream-default clean-profile conversation',
+                   'Keyboard disk selection, encryption checkbox, masked password entry and a single Install action',
                    'Browser starts only on shortcut', 'Dated package repositories are queryable',
                    'Closing the last terminal and immediately opening another',
                    'An hn terminal pane inherits', 'OS surface refuses detach',
@@ -45,7 +48,9 @@ def validate_receipts(manifest, receipts):
         checks = receipt.get('checks', [])
         if any(not any(check.startswith(prefix) for check in checks) for prefix in REQUIRED_CHECKS):
             raise ValueError('A required live, installation or recovery check is absent.')
-    if not any(check.startswith('Real Claude Code, Codex, OpenCode and pi install') for check in rows[('bios', False)]['checks']):
+    if not any(check.startswith('Harness unlock screen renders, masks input, accepts a retry') for check in rows[('uefi', True)]['checks']):
+        raise ValueError('The encrypted graphical unlock and retry checks have not passed.')
+    if not any(check.startswith('Claude Code, Codex and pi install on demand; bundled OpenCode') for check in rows[('bios', False)]['checks']):
         raise ValueError('Real agent executable compatibility has not passed.')
     if not any(check.startswith('On-demand gcc/make installation') for check in rows[('bios', False)]['checks']):
         raise ValueError('The real compiler and local web development check has not passed.')

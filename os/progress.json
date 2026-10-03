@@ -922,8 +922,8 @@
   "usb_first_use_revision": {
     "request_received_utc": null,
     "first_recorded_utc": "2026-10-03T08:28:25.074631+00:00",
-    "status": "fixing native fixture and adding ordinary hn isolation regression coverage",
-    "implementation_complete_utc": "2026-10-03T08:55:37.599357+00:00",
+    "status": "image inspection symlink fix ready; rebuilding",
+    "implementation_complete_utc": "2026-10-03T09:23:12.711637+00:00",
     "validation_complete_utc": null,
     "publication_utc": null,
     "requirements": [
@@ -969,10 +969,10 @@
       "Visual review of welcome, network, installer, terminal and masked unlock/retry screenshots",
       "Update release/download documentation and publish only after required evidence passes"
     ],
-    "native_run_id": 37111342650,
-    "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37111342650",
-    "source_commit": "11a8010acc9491356eaa3a45d295638277660627",
-    "native_validation_started_utc": "2026-10-03T08:56:02Z",
+    "native_run_id": 37112220215,
+    "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37112220215",
+    "source_commit": "0b3073e6ad6dc5a25858b48a088bbf9c19b4770e",
+    "native_validation_started_utc": "2026-10-03T09:11:39Z",
     "validation_attempts": [
       {
         "run_id": 37111342650,
@@ -982,8 +982,22 @@
         "result": "failed: native New Harness fixture looked for literal Agent|Harness because field_position escaped its regular expression",
         "passed": "45 portable tests, workflow lint, exact runtime build, CLI typecheck, 89 affected CLI tests (1 skipped), 336 Rust tests (1 ignored), 9 of 10 native fixtures",
         "remedy": "Use the same field pattern convention in field_position and field_at; rerun affected native behavior as part of image validation"
+      },
+      {
+        "run_id": 37112220215,
+        "source_commit": "0b3073e6ad6dc5a25858b48a088bbf9c19b4770e",
+        "started_utc": "2026-10-03T09:11:39Z",
+        "failed_utc": "2026-10-03T09:20:31Z",
+        "result": "ISO generated but artifact inspection failed: symbolic-link target text was included in the ownership-map path for nmtui-connect",
+        "passed": "45 portable tests, workflow lint, exact runtime build, CLI typecheck, 89 affected CLI tests (1 skipped), 337 Rust tests (1 ignored), all 10 native fixtures",
+        "remedy": "Parse the link path separately from its target. Confirmed nmtui-connect -> nmtui in the exact snapshot NetworkManager package, whose SHA-256 matches the snapshot database. Still require root ownership and both target and alias. Includes pending hook branding and publication-guard updates in the next source."
       }
     ],
-    "isolation_revision_ready_utc": "2026-10-03T09:11:28.017223+00:00"
+    "isolation_revision_ready_utc": "2026-10-03T09:11:28.017223+00:00",
+    "positioning": "Harness is built around agents as the primary interface: conversation directs work; terminal output, diffs and browser make results inspectable. Programmers first; broader uses later. Product name remains Harness.",
+    "post_build_source_changes": [],
+    "post_build_local_checks": "Publication guard tests (3) and syntax passed; landing assets/fragment references passed; visual website review remains unverified.",
+    "native_validation_complete_utc": "2026-10-03T09:16:55Z",
+    "isolation_validation": "Normal hn (including a stray live flag), installed OS and live USB UI/action regression tests passed in run 37112220215. The native terminal lifecycle validation step, including all ten fixtures, passed on source 0b3073e6ad6dc5a25858b48a088bbf9c19b4770e."
   }
 }

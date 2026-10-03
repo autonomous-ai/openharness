@@ -57,7 +57,8 @@ class PublicationGuards(unittest.TestCase):
         manifest = {'source_commit': 'source-one', 'iso': {'sha256': 'image-one'}}
         receipts = [dict(firmware=fw, encrypted=encrypted, status='passed', iso_sha256='image-one',
                          image_source_commit='source-one', checks=publish.REQUIRED_CHECKS +
-                         ['Real Claude Code, Codex, OpenCode and pi install and start',
+                         ['Harness unlock screen renders, masks input, accepts a retry after a wrong password',
+                          'Claude Code, Codex and pi install on demand; bundled OpenCode and all four agents report versions',
                           'On-demand gcc/make installation and local preview passed'])
                     for fw, encrypted in [('bios', False), ('uefi', True)]]
         publish.validate_receipts(manifest, receipts)
@@ -73,6 +74,11 @@ class PublicationGuards(unittest.TestCase):
         incomplete[0]['checks'] = [row for row in incomplete[0]['checks'] if not row.startswith('On-demand')]
         with self.assertRaises(ValueError):
             publish.validate_receipts(manifest, incomplete)
+        for prefix, index in [('USB Enter', 0), ('Bundled OpenCode', 0), ('Harness unlock', 1), ('Claude Code', 0)]:
+            incomplete = copy.deepcopy(receipts)
+            incomplete[index]['checks'] = [row for row in incomplete[index]['checks'] if not row.startswith(prefix)]
+            with self.subTest(missing=prefix), self.assertRaises(ValueError):
+                publish.validate_receipts(manifest, incomplete)
 
 
 if __name__ == '__main__':
