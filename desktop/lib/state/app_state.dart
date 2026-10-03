@@ -386,6 +386,12 @@ class MachineState {
   // distinct from `connectionStatus`, which only reflects OUR websocket to
   // the backend. null = not seen yet (initial connect).
   bool? nodeOnline;
+  // Captured only after machine selection succeeds, including the remote
+  // handshake. Merely opening the socket to the local service is not enough.
+  WsConn? _selectedConnection;
+  bool get _selectedConnectionReady =>
+      connectionStatus == ConnectionStatus.connected &&
+      _selectedConnection?.isReady == true;
   // The agent the user selected while the Harness adapter was offline. Keep
   // this separate from activeAgentId so the UI can show a join guide without
   // opening a terminal stream against an unavailable node.
@@ -442,22 +448,16 @@ class MachineState {
 
   /// Whether this machine can be given work right now.
   ///
-  /// Two witnesses, and neither is always right. [nodeOnline] is what has been
-  /// heard ABOUT the far end — but it is also set hopefully, the moment our
-  /// own socket connects (`_onMachineConnected`), and that socket only reaches
-  /// the LOCAL daemon: it proves nothing about a computer on the other side of
-  /// the relay. The machine list is the backend's own view, and a computer it
-  /// calls `offline` is one that stopped heartbeating to it.
-  ///
-  /// So the list's `offline` counts even against a hopeful `nodeOnline`, and
-  /// the one machine exempt is this one — the computer the app is running on
-  /// is not offline, whatever a stale row says about it. Erring this way is
-  /// deliberate: the cost of being wrong is a machine that looks unavailable
-  /// for a few seconds longer, against starting work on a computer that is
-  /// not there and finding out a minute later.
+  /// An explicit offline report always wins. A saved or hopeful [nodeOnline]
+  /// value cannot override the inventory either. A successfully selected,
+  /// still-ready connection is stronger evidence: the local relay acknowledges
+  /// selection only after its handshake with the remote machine succeeds.
+  /// This computer also remains usable when its backend inventory is stale.
   bool get isOffline =>
       nodeOnline == false ||
-      (!isLocalMachine && machine.reportedOnline == false);
+      (!isLocalMachine &&
+          machine.reportedOnline == false &&
+          !(nodeOnline == true && _selectedConnectionReady));
 
   AgentProject? projectOf(Agent agent) =>
       agent.displayProject ??
@@ -3315,6 +3315,8 @@ class AppNotifier extends ChangeNotifier {
   /// What a machine hears the moment its socket is up — first connect, or a
   /// reconnect after its daemon restarted, which has forgotten all of it.
   void _onMachineConnected(String machineId, MachineState machine) {
+    machine._selectedConnection =
+        connectionForTest?.call(machineId) ?? _pool?[machineId];
     _rereadDevicesAfterDaemonReconnect(machineId);
     // A viewer build keeps its own trust group (a CLI build's daemon keeps one for it): any session
     // that comes up is the moment to compare it with this machine.
@@ -6094,7 +6096,7 @@ class AppNotifier extends ChangeNotifier {
       if (!state.isLocalMachine &&
           reportedOnline != null &&
           (state.nodeOnline == null || state.nodeOnline != reportedOnline)) {
-        unawaited(_applyNodeStatus(state, reportedOnline));
+        unawaited(_applyInventoryNodeStatus(state, reportedOnline));
       }
     }
     // A list that arrived but does not name this computer (a stale copy from before this computer
@@ -7271,7 +7273,7 @@ class AppNotifier extends ChangeNotifier {
       final reportedOnline = latest.first.reportedOnline;
       if (reportedOnline == null) return;
       machine.machine = latest.first;
-      await _applyNodeStatus(machine, reportedOnline);
+      await _applyInventoryNodeStatus(machine, reportedOnline);
     } catch (error) {
       debugPrint('offline node retry failed: $machineId: $error');
     } finally {
@@ -12237,6 +12239,21 @@ class AppNotifier extends ChangeNotifier {
     }
     notifyListeners();
     return true;
+  }
+
+  /// An inventory snapshot can predate a successful remote selection. Keep its
+  /// offline status from taking a live connection down; socket failures and
+  /// explicit node_status pushes still go through _applyNodeStatus directly.
+  Future<void> _applyInventoryNodeStatus(
+    MachineState machine,
+    bool online,
+  ) async {
+    if (!online &&
+        machine.nodeOnline == true &&
+        machine._selectedConnectionReady) {
+      return;
+    }
+    await _applyNodeStatus(machine, online, why: 'machine inventory');
   }
 
   Future<void> _applyNodeStatus(
