@@ -6,7 +6,7 @@
   "merge_utc": null,
   "publication_utc": "2026-10-03T02:03:47Z",
   "completion_utc": null,
-  "status": "Preview 1 remains published and verified. Preparing preview 2 with interrupted-update protection and me@harness installer defaults. Corrected a native update-test fixture failure; fresh candidate validation required. Local visual permissions still pending.",
+  "status": "Preview 1 remains published and verified. Preview 2 keyboard installer and update-retry guard are implemented; 34 portable checks passed. Fresh ISO and native BIOS/UEFI installation validation follow before publication. Local visual access is still blocked.",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -257,7 +257,7 @@
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
     "Build and validate preview 2 update failure/retry behavior in disposable native x86 machines"
   ],
-  "last_updated_utc": "2026-10-03T04:28:01.749594+00:00",
+  "last_updated_utc": "2026-10-03T05:44:11.773434+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -320,7 +320,14 @@
   "computer_use": {
     "status": "User explicitly approved local landing-page and native VM visual checks. Both tools still rejected access; no workaround used.",
     "browser": "Saved user permission blocks http://127.0.0.1:18092. Asked user to change the saved setting.",
-    "native_vm": "Local app launched successfully after renewed approval. cua.getApp(local.programmer-os.vm) refused computer use. Stopped that VM through its own QMP control socket; preserved disk and projects."
+    "native_vm": "Local app launched successfully after renewed approval. cua.getApp(local.programmer-os.vm) refused computer use. Stopped that VM through its own QMP control socket; preserved disk and projects.",
+    "latest_retry": {
+      "at_utc": "2026-10-03T05:44:11.773434+00:00",
+      "user_confirmed": "Any App and Chrome enabled; exact http://127.0.0.1:18092 Browsing rule says Always allow.",
+      "browser": "Exact open Chrome Dee tab still refused: saved permission setting blocks this action.",
+      "native_vm": "cua.getApp(local.programmer-os.vm) still returned Computer Use was not approved.",
+      "next_step": "User may restart Chrome/ChatGPT to refresh connection or permission state. No bypass attempted."
+    }
   },
   "additional_work_window": {
     "started_utc": "2026-10-02T23:33:00Z",
@@ -403,15 +410,15 @@
       }
     },
     "native_validation_started_utc": "2026-10-03T04:13:46Z",
-    "native_validation_completed_utc": null,
+    "native_validation_completed_utc": "2026-10-03T04:53:50Z",
     "merge_utc": null,
     "publication_utc": null,
-    "limitations": "Preview 1 remains the published image. Both preview 2 images built and inspected successfully; machine checks failed in test fixtures. Rerun the corrected machine check against the exact second ISO without rebuilding. Installer interaction design is still being discussed; local CLI prompt changes are not part of that ISO.",
+    "limitations": "The prior me@harness/update-retry candidate passed both native machine rows. The new interactive form changes that source and requires a fresh image and machine validation. Preview 1 remains the public download until this candidate passes and is published.",
     "implementation_revised_utc": "2026-10-03T04:28:01.749594+00:00",
     "installer_defaults": {
       "username": "me",
       "hostname": "harness",
-      "editable": true,
+      "editable": "Account and hostname overrides remain on the command line; encryption is editable in the main form.",
       "encryption_default": true,
       "selection_recorded_utc": "2026-10-03T04:28:01.749594+00:00"
     },
@@ -442,9 +449,54 @@
           "os/test-results/ci-37096639763-bios/bios-plain/receipt.json",
           "os/test-results/ci-37096639763-uefi/uefi-encrypted/receipt.json"
         ]
+      },
+      {
+        "run_id": 37097681222,
+        "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37097681222",
+        "source_commit": "147b7458f1974c1bebadf275cfdfa6a02a2fe510",
+        "image_source_commit": "7a64753b25819b833d5b20f39862f9fab8d97e2a",
+        "image_run_id": 37096639763,
+        "iso_sha256": "6c8ee5a89ae8dda35c133276d50fa22635c1e726c96ced94ee82505e7ec2985c",
+        "started_utc": "2026-10-03T04:47:00Z",
+        "status": "passed",
+        "scope": "Reuse the unchanged inspected ISO; rerun BIOS/plain and UEFI/encrypted machine checks with corrected hostname assertion. Uncommitted interactive installer changes are excluded.",
+        "completed_utc": "2026-10-03T04:53:50Z",
+        "bios": "passed",
+        "uefi": "passed"
       }
     ],
     "test_fixture_revised_utc": "2026-10-03T04:46:52.305584+00:00",
-    "installer_ux_proposal": "A keyboard-selectable disk list, visible encryption checkbox enabled by default, password twice, and explicit Erase and install confirmation. No typed device path. Proposed after user feedback; not implemented or validated."
+    "installer_ux_proposal": "Approved and implemented: disk picker, encryption checked directly below the disk, password twice, Continue, separate Back/Erase and install confirmation. Back is initially selected. No device-path typing or first-boot account wizard.",
+    "installer_experience": {
+      "request_started_utc": "2026-10-03T05:20:11Z",
+      "request_time_basis": "First implementation action after explicit approval; design discussion and prior draft started earlier.",
+      "implementation_ready_utc": "2026-10-03T05:44:11.773434+00:00",
+      "required_validation_started_utc": "2026-10-03T05:44:11.852041+00:00",
+      "required_validation_completed_utc": null,
+      "merge_utc": null,
+      "publication_utc": null,
+      "publication_requested": "User will wait for the new public download, then write it to USB and install on a ThinkPad.",
+      "validation_plan": [
+        "Portable installer/recovery/publication/serial tests and syntax with a bounded source receipt",
+        "Fresh source ISO build and exact payload/manifest inspection",
+        "Real guest terminal disk picker, encryption toggle, password entry, Back/Esc and explicit confirmation feeding the actual installer",
+        "BIOS/plain and UEFI/encrypted offline installation, reboot to me@harness, update failure/retry, recovery, browser/clipboard/terminal lifecycle and applicable compiler/agent executable checks",
+        "Prepare and publish the verified preview; verify each public asset size and SHA-256"
+      ],
+      "local_results": [
+        "19 installer tests passed during implementation",
+        "Real macOS PTY with fixture-only disk inventory: disk picker, encryption toggle, masked passwords, Back/Esc and explicit confirmation returned the expected config; no real disk was exposed"
+      ],
+      "limitations": "Local computer-use review of the page and VM remains blocked. Native guest terminal and machine behavior will be validated in CI. No new real-model project or DSH generation is required for this installer-only change; historical results remain tied to preview 1.",
+      "local_validation_receipt": {
+        "path": ".harness/validation/20261003T054411.851664Z-23170/receipt.json",
+        "status": "passed",
+        "tests": 34,
+        "base_commit": "147b7458f1974c1bebadf275cfdfa6a02a2fe510",
+        "working_changes_sha256": "0875172f2f8736a8289199158f01d918cd134039e9b8d900e4d0f4b74373e086",
+        "finished_at_utc": "2026-10-03T05:44:12.850298+00:00",
+        "coverage": "All runtime and test edits in this commit; only progress metadata changed after the receipt."
+      }
+    }
   }
 }

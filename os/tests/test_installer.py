@@ -1,5 +1,7 @@
 import importlib.util
+from contextlib import ExitStack, redirect_stdout
 import hashlib
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -77,6 +79,174 @@ class DiskSafety(unittest.TestCase):
                        dict(username=None), dict(password=123456789), dict(hostname='bad-')]:
             with self.subTest(change=change), self.assertRaises(ValueError):
                 installer.validate_config(dict(good, **change))
+
+
+class Screen:
+    """Capture drawn text and supply keys; never expose a real disk or terminal."""
+    def __init__(self):
+        self.keys, self.frames, self.drawn = [], [], []
+        self.size = (24, 80)
+
+    def getmaxyx(self):
+        return self.size
+
+    def erase(self):
+        self.drawn = []
+
+    clear = erase
+
+    def addnstr(self, row, column, text, length, attr):
+        self.drawn.append(text[:length])
+
+    def addstr(self, row, column, text, attr):
+        self.drawn.append(text)
+
+    def refresh(self):
+        self.frames.append('\n'.join(self.drawn))
+
+    def keypad(self, enabled):
+        pass
+
+    def move(self, row, column):
+        assert 0 <= row < self.size[0] and 0 <= column < self.size[1]
+
+    def get_wch(self):
+        if not self.keys:
+            raise AssertionError('The form requested another key after the test finished.')
+        return self.keys.pop(0)
+
+
+class InteractiveInstall(unittest.TestCase):
+    def setUp(self):
+        context = ExitStack()
+        self.addCleanup(context.close)
+        self.output = io.StringIO()
+        context.enter_context(redirect_stdout(self.output))
+        self.argv = ['install.py']
+        context.enter_context(patch.object(installer.sys, 'argv', self.argv))
+        context.enter_context(patch.object(installer.os, 'geteuid', return_value=0))
+        self.disk = dict(name='/dev/vda', type='disk', ro=False, size=32 * 1024**3,
+                         model='Test SSD', mountpoints=[None], serial='HN_TEST', children=[])
+        self.inventory = context.enter_context(patch.object(installer, 'inventory', return_value=[self.disk]))
+        self.screen = Screen()
+        self.wrapper = context.enter_context(patch.object(installer.curses, 'wrapper', side_effect=lambda fn: fn(self.screen)))
+        context.enter_context(patch.object(installer.curses, 'curs_set'))
+        context.enter_context(patch.object(installer.curses, 'set_escdelay'))
+        context.enter_context(patch.object(installer.sys.stdin, 'isatty', return_value=True))
+        context.enter_context(patch.object(self.output, 'isatty', return_value=True))
+        self.install = context.enter_context(patch.object(installer, 'install'))
+        self.secret = 'test-password-123'
+
+    def fill_passwords(self):
+        # Disk -> encryption -> password -> repeat -> Continue via Enter.
+        self.screen.keys.extend(['\t', '\t', *self.secret, '\n', *self.secret, '\n'])
+
+    def confirm(self):
+        self.screen.keys.extend(['\t', '\n'])  # Back -> Erase and install.
+
+    def test_normal_install_masks_password_and_confirms_selected_disk(self):
+        self.fill_passwords()
+        self.confirm()
+        installer.main()
+        config = self.install.call_args.args[0]
+        self.assertEqual((config['username'], config['hostname'], config['encrypt']), ('me', 'harness', True))
+        self.assertEqual(config['confirm_erase'], '/dev/vda')
+        self.assertEqual(config['expected_serial'], 'HN_TEST')
+        self.assertEqual(config['password'], self.secret)
+        self.assertIn('[x] Encrypt disk', self.screen.frames[0])
+        for frame in self.screen.frames:
+            self.assertNotIn(self.secret, frame)
+            if 'All data on this disk' in frame:
+                self.assertNotIn('Encrypt disk', frame)
+
+    def test_command_line_keeps_explicit_unencrypted_and_custom_account_installation(self):
+        self.argv.extend(['--no-encryption', '--username', 'sam', '--hostname', 'workbox'])
+        self.fill_passwords()
+        self.confirm()
+        installer.main()
+        config = self.install.call_args.args[0]
+        self.assertEqual((config['username'], config['hostname'], config['encrypt']), ('sam', 'workbox', False))
+        self.assertIn('[ ] Encrypt disk', self.screen.frames[0])
+
+    def test_main_form_checkbox_can_disable_encryption(self):
+        self.screen.keys.extend(['\t', ' ', '\t', *self.secret, '\n', *self.secret, '\n'])
+        self.confirm()
+        installer.main()
+        self.assertFalse(self.install.call_args.args[0]['encrypt'])
+
+    def test_enter_defaults_to_back_and_escape_returns_without_installing(self):
+        self.fill_passwords()
+        self.screen.keys.extend(['\n', '\n', '\x1b', '\x1b'])
+        with self.assertRaises(KeyboardInterrupt):
+            installer.main()
+        self.install.assert_not_called()
+        reviews = [f for f in self.screen.frames if 'All data on this disk' in f]
+        self.assertEqual(len(reviews), 2)
+
+    def test_back_allows_selecting_another_disk_and_requires_its_confirmation(self):
+        self.inventory.return_value.append(dict(self.disk, name='/dev/vdb', serial='SECOND_DISK'))
+        self.fill_passwords()
+        self.screen.keys.extend(['\n', '\t', '\n', installer.curses.KEY_DOWN, '\n', installer.curses.KEY_BTAB, '\n'])
+        self.confirm()
+        installer.main()
+        config = self.install.call_args.args[0]
+        self.assertEqual((config['disk'], config['confirm_erase'], config['expected_serial']),
+                         ('/dev/vdb', '/dev/vdb', 'SECOND_DISK'))
+
+    def test_escaping_disk_picker_preserves_original_selection(self):
+        self.inventory.return_value.append(dict(self.disk, name='/dev/vdb', serial='SECOND_DISK'))
+        self.screen.keys.extend(['\n', installer.curses.KEY_DOWN, '\x1b'])
+        self.fill_passwords()
+        self.confirm()
+        installer.main()
+        self.assertEqual(self.install.call_args.args[0]['disk'], '/dev/vda')
+
+    def test_password_mismatch_can_be_corrected_without_restarting(self):
+        self.screen.keys.extend(['\t', '\t', *self.secret, '\n', *'different', '\n', '\x15', *self.secret, '\n'])
+        self.confirm()
+        installer.main()
+        self.assertTrue(any('Passwords do not match.' in frame for frame in self.screen.frames))
+        self.assertEqual(self.install.call_args.args[0]['password'], self.secret)
+
+    def test_live_usb_is_excluded_from_picker(self):
+        self.inventory.return_value.insert(0, dict(self.disk, name='/dev/sda', mountpoints=['/run/archiso/bootmnt']))
+        self.screen.keys.extend(['\n', '\n'])
+        self.fill_passwords()
+        self.confirm()
+        installer.main()
+        self.assertEqual(self.install.call_args.args[0]['disk'], '/dev/vda')
+        self.assertFalse(any('/dev/sda' in frame for frame in self.screen.frames))
+
+    def test_disk_replacement_after_selection_never_reaches_confirmation(self):
+        self.inventory.side_effect = [[self.disk], [dict(self.disk, serial='REPLACED')]]
+        self.fill_passwords()
+        self.screen.keys.append('\x1b')
+        with self.assertRaises(KeyboardInterrupt):
+            installer.main()
+        self.install.assert_not_called()
+        self.assertTrue(any('Disk serial does not match' in frame for frame in self.screen.frames))
+        self.assertFalse(any('All data on this disk' in frame for frame in self.screen.frames))
+
+    def test_small_terminal_can_cancel_without_starting_installation(self):
+        self.screen.size = (12, 40)
+        self.screen.keys.append('\x1b')
+        with self.assertRaises(KeyboardInterrupt):
+            installer.main()
+        self.install.assert_not_called()
+
+    def test_no_eligible_disk_stops_before_password_entry(self):
+        self.inventory.return_value = [dict(self.disk, ro=True)]
+        with self.assertRaisesRegex(ValueError, 'No unmounted'):
+            installer.main()
+        self.install.assert_not_called()
+        self.wrapper.assert_not_called()
+
+    def test_configuration_file_cannot_silently_conflict_with_command_line_overrides(self):
+        self.argv.extend(['--config', '/unused.json', '--no-encryption', '--yes-erase-disk'])
+        with self.assertRaisesRegex(ValueError, 'set account names and encryption in that file'):
+            installer.main()
+        self.install.assert_not_called()
+        self.wrapper.assert_not_called()
 
 
 if __name__ == '__main__':

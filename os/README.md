@@ -13,8 +13,9 @@ The release's `validation.json` identifies the exact image and coverage.
 [Download the verified preview](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.1)
 or [run the standalone HTML/CSS landing page](site/README.md).
 
-The branch is preparing preview 2 with interrupted-update protection and shorter
-installer defaults: username `me` and computer name `harness`, both editable.
+The branch is preparing preview 2 with interrupted-update protection and a simpler
+installer: `me@harness`, a keyboard disk picker, encryption checked by default,
+password twice, and a separate erase confirmation.
 Candidate machine checks are pending; the published download and measurements
 below remain preview 1.
 
@@ -105,14 +106,28 @@ Inside hn, open a Terminal pane and run:
 sudo hn-os install
 ```
 
-The installer lists disks, asks for an account/password and encryption choice,
-and requires the exact target disk name before erasing it. It currently performs
-a **whole-disk installation**; it does not resize another operating system.
+The preview 2 installer uses `me@harness`. Select the disk from a keyboard list;
+the encryption checkbox sits directly underneath and starts checked. Enter your
+password twice, then choose **Continue** to review the disk. **Back** is selected
+initially; choose **Erase and install** to begin. Selecting a disk or continuing
+does not write to it. Tab moves between fields, Space toggles encryption, and
+Esc returns from the picker or confirmation (or cancels from the main form).
+No username, computer-name or disk-path typing is needed. The published preview 1
+still uses the older prompts, including a typed disk-path confirmation.
+Both versions perform a **whole-disk installation**;
+they do not resize another operating system.
 The live USB and disks with mounted filesystems are rejected. Installation itself
 works offline; agent installation and cloud authentication require networking.
 
+You can uncheck encryption for a disposable VM or unattended machine.
+`sudo hn-os install --no-encryption` starts the form with that choice unchecked.
+`--username NAME` and `--hostname NAME` override the defaults. With an unattended
+`--config` file, set `username`, `hostname` and `encrypt` there instead.
+
 Remove the USB after shutting down. An encrypted install asks for its disk
 password and then enters hn. An unencrypted install requires console login.
+The installation password initially protects both the account and, when enabled,
+the encrypted disk. There is no first-boot account wizard.
 `Super+L` locks the session. Recovery remains possible through another console
 or the USB; the machine's owner retains normal Linux administrator control.
 
@@ -169,7 +184,9 @@ owner. System guidance for agents lives at `/usr/share/harness-os/AGENTS.md`.
 3. Boot the ISO under BIOS and UEFI; verify hn is visible and Chromium is absent
    until requested. Test browser toggle, clipboard, terminal input, reconnect,
    last-pane behavior and frontend restart without terminating agent work.
-4. Install from the offline image to disposable VM disks, encrypted and plain;
+4. Operate the real installer form on a guest terminal: disk picker, encryption
+   toggle, masked passwords, Back/Esc, and explicit erase confirmation.
+   Install from the offline image to disposable VM disks, encrypted and plain;
    reboot from each disk, verify accounts/permissions/bootloaders and defaults.
 5. Exercise real agent executables, dependency installation, parallel panes and
    ordinary development work. Report credential-dependent rows separately.

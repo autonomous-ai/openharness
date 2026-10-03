@@ -141,11 +141,17 @@ def main():
     identities = {p.name: {'sha256': digest(p), 'bytes': p.stat().st_size} for p in assets}
     tag = 'os-v' + version
     notes = root / 'release-notes.md'
+    interactive_install = all(any(c.startswith('Keyboard disk selection, encryption checkbox') for c in r['checks']) for r in receipts)
+    update_retry = all(any(c.startswith('Failed full update blocks package changes') for c in r['checks']) for r in receipts)
     notes.write_text(f'''Boot directly into hn. Open agents with Ctrl+B, then N. Super+B opens Chromium or returns to hn.
 
 Arch Linux with the LTS kernel, labwc, foot, and an on-demand browser. No desktop panels or preinstalled development stacks.
 
 To try it: verify the ISO's SHA-256, write the whole ISO to a USB stick, and boot an x86-64 PC with Secure Boot disabled. In an hn Terminal pane, run `sudo hn-os install`. This preview's installer erases the entire selected disk; it does not resize another OS. Encryption is enabled by default.
+
+{'The installer uses a keyboard disk picker, an encryption checkbox under the disk, and two password fields. Continue opens a separate confirmation with Back selected initially. Choose Erase and install to begin; no device-path typing is needed. The account is me@harness. The password initially protects both the local account and, when enabled, the encrypted disk. There is no first-boot account wizard.' if interactive_install else ''}
+
+{'Interrupted full OS updates now block ordinary package transactions until a full retry succeeds. Retrying keeps the original recovery checkpoint. This was exercised with a real failed repository refresh, blocked package upgrade, successful retry, and offline recovery. The bundled Harness runtime remains pinned to this preview; hn-os update updates Arch packages.' if update_retry else ''}
 
 BIOS/plain and UEFI/encrypted VM boot, clipboard, browser switching, offline installation and package-checkpoint recovery passed. The BIOS VM also installed a compiler on demand, built C, served a local Node preview, and installed and started the four agent executables. See `validation.json` and `machine-evidence.zip` for the exact checks and measurements.
 

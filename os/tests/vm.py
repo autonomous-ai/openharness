@@ -181,6 +181,56 @@ class VM:
         self.serial = self.qmp_file = self.qmp = None
 
 
+def install_interactively(vm, config, folder):
+    # The shipped form and installer run on a real guest TTY. The only test
+    # addition is serial-console boot output, needed to observe the next boot.
+    bootstrap = f'''import importlib.util
+from pathlib import Path
+spec = importlib.util.spec_from_file_location('installer', '/usr/lib/harness-os/install.py')
+installer = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(installer)
+expected = {config!r}
+installer.selected_disk(expected)
+actual = installer.interactive()
+assert actual == {{k: v for k, v in expected.items() if k != 'serial_console'}}, 'Interactive installation choices differ from test input'
+actual['serial_console'] = True
+installer.install(actual, Path('/run/archiso/bootmnt/arch/x86_64/airootfs.sfs'), Path('/mnt/harness-os'))
+'''
+    encoded = base64.b64encode(bootstrap.encode()).decode()
+    assert len(encoded) < 3000, 'Keep serial-console commands below the line discipline limit.'
+    vm.command(f"printf %s {shlex.quote(encoded)} | base64 -d > /run/hn-interactive-test.py; chmod 600 /run/hn-interactive-test.py")
+    vm.command('stty rows 24 cols 80')
+    marker = 'HN_INTERACTIVE_' + uuid.uuid4().hex
+    vm.send('(TERM=xterm-256color python3 /run/hn-interactive-test.py); '
+            f"hn_status=$?; printf '\\n{marker}:%s\\n' \"$hn_status\"\n")
+    transcript = []
+    def wait(pattern, timeout=30):
+        output = vm.wait(pattern, timeout)
+        transcript.append(output)
+        return output
+    try:
+        wait('Esc cancel')
+        vm.send('\n')
+        wait('Enter choose   Esc back')
+        vm.send('\n')
+        wait('Esc cancel')
+        vm.send('\t' + ('' if config['encrypt'] else ' ') + '\t')
+        vm.send(config['password'] + '\n' + config['password'] + '\n')
+        wait('Enter confirm   Esc back')
+        # The default button is Back. Both Enter and Esc return without erasing.
+        for back in ('\n', '\x1b'):
+            vm.send(back)
+            wait('Esc cancel')
+            vm.send('\n')
+            wait('Enter confirm   Esc back')
+        vm.send('\t\n')
+        output = wait(r'\r?\n' + marker + r':\d+\r?\n', timeout=900)
+        status = int(re.search(r'\r?\n' + marker + r':(\d+)\r?\n', output).group(1))
+        assert status == 0, 'Interactive installation failed; see installer-ui.log'
+    finally:
+        (folder / 'installer-ui.log').write_text(''.join(transcript))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--iso', required=True, type=Path)
@@ -279,11 +329,10 @@ def main():
         config = dict(disk='/dev/vda', expected_serial='HN_OS_TEST', confirm_erase='/dev/vda',
                       username='me', hostname='harness', password='test-password-123',
                       encrypt=args.encrypt, serial_console=True)
-        encoded = base64.b64encode(json.dumps(config).encode()).decode()
-        vm.command(f"printf %s {shlex.quote(encoded)} | base64 -d > /run/hn-install-test.json; chmod 600 /run/hn-install-test.json")
         # Installation must work with the NIC down, using the ISO's immutable payload.
         vm.command('nmcli networking off')
-        vm.command('hn-os install --config /run/hn-install-test.json --yes-erase-disk', timeout=900)
+        install_interactively(vm, config, folder)
+        result['checks'].append('Keyboard disk selection, encryption checkbox, password entry, Back and Esc, and explicit erase confirmation work on the guest terminal')
         result['checks'].append('Offline installer completed on disposable disk')
         vm.command('sync')
         vm.stop()

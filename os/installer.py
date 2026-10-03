@@ -2,8 +2,8 @@
 """Offline full-disk installer. Nothing is erased until the exact disk is confirmed."""
 from __future__ import annotations
 import argparse
+import curses
 from datetime import datetime, timezone
-import getpass
 import hashlib
 import json
 import os
@@ -256,57 +256,251 @@ def selected_size(config):
     return next(int(d['size']) for d in inventory() if d['name'] == config['disk'])
 
 
-def interactive():
-    print('Programmer OS — offline installation\n')
-    candidates = []
-    for d in inventory():
+def display_text(value):
+    # Device metadata must not inject terminal controls or extra form rows.
+    return ''.join(c if c.isprintable() else '?' for c in str(value or '')).strip()
+
+
+def disk_label(disk):
+    size = f"{int(disk['size']) / 1_000_000_000:.1f}".removesuffix('.0')
+    return f"{display_text(disk.get('model')) or 'Disk'} - {size} GB"
+
+
+class InstallForm:
+    """Small keyboard form using the Python/ncurses already in the image."""
+    def __init__(self, screen, candidates, username, hostname, encrypt):
+        self.screen, self.disks = screen, candidates
+        self.username, self.hostname, self.encrypt = username, hostname, encrypt
+        self.selected, self.focus = 0, 0
+        self.passwords, self.positions = ['', ''], [0, 0]
+        self.error = ''
+        self.title = None
+        self.cursor_visible = None
+
+    def line(self, row, text, active=False, bold=False):
+        height, width = self.screen.getmaxyx()
+        if row >= height or width < 5:
+            return
+        attr = curses.A_REVERSE if active else curses.A_BOLD if bold else curses.A_NORMAL
+        self.screen.addnstr(row, 2, text, width - 4, attr)
+
+    def cursor(self, visible):
+        if visible == self.cursor_visible:
+            return
         try:
-            validate_disk(d)
+            curses.curs_set(int(visible))
+        except curses.error:
+            pass  # Some serial terminals cannot change cursor visibility.
+        self.cursor_visible = visible
+
+    def begin(self, title):
+        if title != self.title:
+            self.screen.clear()
+            self.title = title
+        else:
+            self.screen.erase()
+        height, width = self.screen.getmaxyx()
+        if height < 22 or width < 60:
+            self.cursor(False)
+            self.line(0, 'Resize terminal to at least 60 columns and 22 rows.')
+            self.line(2, 'Esc cancels. No disk has been changed.')
+            self.screen.refresh()
+            if self.key() == '\x1b':
+                raise KeyboardInterrupt('Cancelled.')
+            return False
+        self.line(1, title, bold=True)
+        self.line(2, f'{self.username}@{self.hostname}')
+        return True
+
+    def key(self):
+        key = self.screen.get_wch()
+        if key == '\x03':
+            raise KeyboardInterrupt('Cancelled.')
+        return key
+
+    @staticmethod
+    def enter(key):
+        return key in ('\n', '\r', curses.KEY_ENTER)
+
+    def pick_disk(self):
+        selected = self.selected
+        while True:
+            if not self.begin('Select disk'):
+                continue
+            height, _ = self.screen.getmaxyx()
+            count = max(1, (height - 10) // 2)
+            start = (selected // count) * count
+            for index in range(start, min(start + count, len(self.disks))):
+                disk = self.disks[index]
+                row = 5 + (index - start) * 2
+                self.line(row, ('> ' if index == selected else '  ') + disk_label(disk), index == selected)
+                self.line(row + 1, f"  {disk['name']}  {display_text(disk.get('serial'))}")
+            self.line(height - 4, f'Disk {selected + 1} of {len(self.disks)}')
+            self.line(height - 2, 'Up/Down select   Enter choose   Esc back')
+            self.cursor(False)
+            self.screen.refresh()
+            key = self.key()
+            if key == '\x1b':
+                return
+            if self.enter(key):
+                self.selected = selected
+                return
+            if key in (curses.KEY_UP, curses.KEY_BTAB):
+                selected = (selected - 1) % len(self.disks)
+            elif key in (curses.KEY_DOWN, '\t'):
+                selected = (selected + 1) % len(self.disks)
+
+    def edit_password(self, index, key):
+        value, position = self.passwords[index], self.positions[index]
+        if key in (curses.KEY_BACKSPACE, '\x7f', '\b') and position:
+            value, position = value[:position - 1] + value[position:], position - 1
+        elif key == curses.KEY_DC:
+            value = value[:position] + value[position + 1:]
+        elif key == '\x15':  # Ctrl+U clears a hidden field without revealing it.
+            value, position = '', 0
+        elif key == curses.KEY_LEFT:
+            position = max(0, position - 1)
+        elif key == curses.KEY_RIGHT:
+            position = min(len(value), position + 1)
+        elif key == curses.KEY_HOME:
+            position = 0
+        elif key == curses.KEY_END:
+            position = len(value)
+        elif isinstance(key, str) and key.isprintable() and len(value) < 4096:
+            value, position = value[:position] + key + value[position:], position + len(key)
+        self.passwords[index], self.positions[index] = value, position
+        self.error = ''
+
+    def review(self, config, disk):
+        focus = 0  # Back. Repeated Enter must never consent to erasing a disk.
+        while True:
+            if not self.begin('Install Harness on this disk?'):
+                continue
+            self.line(5, disk_label(disk), bold=True)
+            self.line(6, f"{disk['name']}  {display_text(disk.get('serial'))}")
+            self.line(8, 'All data on this disk will be erased.')
+            self.line(12, '[ Back ]', focus == 0)
+            self.screen.addstr(12, 14, '[ Erase and install ]', curses.A_REVERSE if focus == 1 else curses.A_NORMAL)
+            self.line(20, 'Tab/Arrows choose   Enter confirm   Esc back')
+            self.cursor(False)
+            self.screen.refresh()
+            key = self.key()
+            if key == '\x1b' or self.enter(key) and focus == 0:
+                return None
+            if self.enter(key) and focus == 1:
+                config['confirm_erase'] = disk['name']
+                return config
+            if key in ('\t', curses.KEY_BTAB, curses.KEY_UP, curses.KEY_DOWN,
+                       curses.KEY_LEFT, curses.KEY_RIGHT):
+                focus = 1 - focus
+
+    def run(self):
+        self.screen.keypad(True)
+        while True:
+            if not self.begin('Install Harness'):
+                continue
+            disk = self.disks[self.selected]
+            self.line(5, f"{'Disk':18}[ {disk_label(disk)} ]", self.focus == 0)
+            self.line(6, f"{'':18}{disk['name']}  {display_text(disk.get('serial'))}")
+            self.line(8, f"{'':18}[{'x' if self.encrypt else ' '}] Encrypt disk", self.focus == 1)
+            capacity = self.screen.getmaxyx()[1] - 24
+            for index, label in enumerate(('Password', 'Repeat password')):
+                position = self.positions[index]
+                offset = max(0, position - capacity + 1)
+                mask = '*' * len(self.passwords[index][offset:offset + capacity])
+                self.line(11 + index * 2, f'{label:<18}[{mask:<{capacity}}]', self.focus == index + 2)
+            self.line(15, 'Use at least eight characters.')
+            self.line(16, self.error)
+            self.line(18, f"{'':18}[ Continue ]", self.focus == 4)
+            self.line(20, 'Tab move   Space toggle   Enter continue   Esc cancel')
+            self.cursor(self.focus in (2, 3))
+            if self.focus in (2, 3):
+                position = self.positions[self.focus - 2]
+                self.screen.move(11 + (self.focus - 2) * 2, 21 + min(position, capacity - 1))
+            self.screen.refresh()
+            key = self.key()
+            if key == '\x1b':
+                raise KeyboardInterrupt('Cancelled.')
+            if key in ('\t', curses.KEY_DOWN):
+                self.focus = (self.focus + 1) % 5
+            elif key in (curses.KEY_BTAB, curses.KEY_UP):
+                self.focus = (self.focus - 1) % 5
+            elif key == ' ' and self.focus == 1:
+                self.encrypt = not self.encrypt
+            elif self.enter(key):
+                if self.focus == 0:
+                    self.pick_disk()
+                elif self.focus == 1:
+                    self.encrypt = not self.encrypt
+                elif self.focus == 2:
+                    self.focus = 3
+                else:
+                    config = dict(disk=disk['name'], username=self.username, hostname=self.hostname,
+                                  encrypt=self.encrypt, password=self.passwords[0],
+                                  expected_serial=str(disk.get('serial') or '').strip())
+                    try:
+                        validate_config(config)
+                        if self.passwords[0] != self.passwords[1]:
+                            raise ValueError('Passwords do not match.')
+                        selected_disk(config)
+                    except ValueError as error:
+                        self.error = str(error)
+                        continue
+                    confirmed = self.review(config, disk)
+                    if confirmed:
+                        return confirmed
+                    self.focus = 4
+            elif self.focus in (2, 3):
+                self.edit_password(self.focus - 2, key)
+
+
+def interactive(username='me', hostname='harness', encrypt=True):
+    candidates = []
+    for disk in inventory():
+        try:
+            validate_disk(disk)
         except ValueError:
             continue
-        candidates.append(d)
-        print(f"{d['name']:16} {int(d['size']) / 1024**3:7.1f} GiB  {d.get('model') or ''}  {d.get('serial') or ''}")
+        candidates.append(disk)
     if not candidates:
         raise ValueError('No unmounted, writable whole disk of at least 12 GiB is available.')
-    config = {'disk': input('\nInstall to whole disk: ').strip(),
-              'username': input('Username [me]: ').strip() or 'me',
-              'hostname': input('Computer name [harness]: ').strip() or 'harness',
-              'encrypt': input('Encrypt the disk? [Y/n]: ').strip().lower() != 'n'}
-    config['password'] = getpass.getpass('Account and disk-unlock password: ' if config['encrypt'] else 'Account password: ')
-    if getpass.getpass('Repeat password: ') != config['password']:
-        raise ValueError('Passwords do not match.')
-    validate_config(config)
-    disk = selected_disk(config)
-    if disk.get('serial'):
-        config['expected_serial'] = disk['serial'].strip()
-    identity = ', '.join(str(disk.get(key) or '').strip() for key in ['model', 'serial'] if disk.get(key))
-    print(f"\nAll data on {disk['name']}" + (f' ({identity})' if identity else '') + ' will be erased.')
-    config['confirm_erase'] = input(f"Type {disk['name']} to erase and install: ").strip()
-    return config
+    validate_config(dict(username=username, hostname=hostname, encrypt=encrypt,
+                         disk=candidates[0]['name'], password='validation-only'))
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise ValueError('Interactive installation needs a terminal. Use --config for unattended installation.')
+    curses.set_escdelay(25)
+    return curses.wrapper(lambda screen: InstallForm(screen, candidates, username, hostname, encrypt).run())
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path)
+    parser.add_argument('--username', help='Override the default local account name (me)')
+    parser.add_argument('--hostname', help='Override the default computer name (harness)')
+    parser.add_argument('--no-encryption', action='store_true', help='Explicitly install without disk encryption')
     parser.add_argument('--yes-erase-disk', action='store_true')
     parser.add_argument('--source', type=Path, default=Path('/run/archiso/bootmnt/arch/x86_64/airootfs.sfs'))
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit('Run sudo hn-os install from the live USB.')
     if args.config:
+        if args.username is not None or args.hostname is not None or args.no_encryption:
+            raise ValueError('With --config, set account names and encryption in that file instead of command-line overrides.')
         config = json.loads(args.config.read_text())
         if not args.yes_erase_disk or not config.get('expected_serial'):
             raise ValueError('Unattended installs require --yes-erase-disk and an exact expected_serial.')
     else:
         if args.yes_erase_disk:
             raise ValueError('--yes-erase-disk requires a configuration file.')
-        config = interactive()
+        config = interactive(username=args.username if args.username is not None else 'me',
+                             hostname=args.hostname if args.hostname is not None else 'harness',
+                             encrypt=not args.no_encryption)
     install(config, args.source, Path('/mnt/harness-os'))
 
 
 if __name__ == '__main__':
     try:
         main()
-    except (ValueError, subprocess.CalledProcessError, KeyboardInterrupt) as error:
+    except (ValueError, curses.error, subprocess.CalledProcessError, KeyboardInterrupt) as error:
         print(f'Installation stopped: {error}', file=sys.stderr)
         sys.exit(1)
