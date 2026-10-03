@@ -1089,3 +1089,20 @@ unchanged, external networking was blocked, and all private artifacts stay local
 No production prompt, model/effort selection, deadline, admission rule or live
 memory changed. Lower extraction overhead is the next investigation; stronger
 reasoning by itself is not a verified live-learning fix.
+
+### Reject optional empty fields as an efficiency fix — October 3
+
+A [compact-response candidate](../research/2026-10-03-memory-compact.md) allowed
+the model to omit only unknown rationale, empty exceptions and empty validity.
+Harness expanded them before the unchanged full record and admission checks.
+Typecheck and 115 focused tests passed. On the same eight synthetic examples,
+all cases completed; the attributed development review found six supported/useful
+records, six correct positive recalls and eighteen abstentions.
+
+The response saved only 42 completion tokens while adding 448 input tokens.
+Average attempt time was 55.35 seconds versus 55.07 for the earlier control;
+the slightly lower median did not establish a reliable improvement from one run.
+The candidate was rejected and archived with its exact patch and evidence.
+Production remains v6. No further private model call, native setting change,
+release or installation followed. This closes the compact-defaults experiment,
+not the live-learning blockage or the broader memory quality gates.
