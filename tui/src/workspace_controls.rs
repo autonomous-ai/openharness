@@ -136,6 +136,11 @@ fn status_action(app: &App, x: u16, y: u16) -> Option<Action> {
     }
 }
 
+pub fn begin_press(app: &mut App, button: MouseButton) {
+    crate::mouse::cancel_clicks(app);
+    app.controls.pressed = Some(button);
+}
+
 /// Before modal routing: consume only the matching release/drag of a press we handled.
 pub fn finish_press(app: &mut App, mouse: &MouseEvent) -> bool {
     let Some(button) = app.controls.pressed else { return false };
@@ -155,21 +160,31 @@ pub fn mouse(app: &mut App, mouse: &MouseEvent) -> bool {
     let action = app.controls.hits.borrow().iter().rev().find(|(r, _)| inside(r)).map(|(_, a)| a.clone())
         .or_else(|| status_action(app, mouse.column, mouse.row));
     let at = Some((mouse.column, mouse.row.saturating_add(1)));
-    let place = if matches!(action, Some(Action::Header(_) | Action::PaneMenu(_) | Action::Agent(_) | Action::Model(_) | Action::Close(_))) { "Border" } else { "Status" };
+    // A title is a border in line layouts and a pane's first row in boxed layouts.
+    // Either explicit binding takes precedence over the added header controls.
+    let places: &[&str] = if matches!(action, Some(Action::Header(_) | Action::PaneMenu(_) | Action::Agent(_) | Action::Model(_) | Action::Close(_))) { &["Border", "Pane"] } else { &["Status"] };
     if let MouseEventKind::Down(button @ (MouseButton::Left | MouseButton::Right)) = mouse.kind {
-        let key = crate::keys::parse(&format!("MouseDown{}{place}", if button == MouseButton::Left { 1 } else { 3 })).unwrap();
         let defaults = crate::keys::Keymap::tmux_defaults();
-        if app.keymap.root_command(&key).map(|b| &b.command) != defaults.root_command(&key).map(|b| &b.command) { return false }
+        for place in places {
+            let key = crate::keys::parse(&format!("MouseDown{}{place}", if button == MouseButton::Left { 1 } else { 3 })).unwrap();
+            if app.keymap.root_command(&key).map(|b| &b.command) != defaults.root_command(&key).map(|b| &b.command) { return false }
+        }
     }
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => if let Some(action) = action {
-            app.controls.pressed = Some(MouseButton::Left);
+            if let Action::Header(pane) = action {
+                if crate::mouse::over_resize_border(app, mouse.column, mouse.row) {
+                    select_pane(app, pane);
+                    return false;
+                }
+            }
+            begin_press(app, MouseButton::Left);
             activate(app, action, at);
             return true;
         },
         MouseEventKind::Down(MouseButton::Right) => {
             let pane = match action { Some(Action::Header(p) | Action::PaneMenu(p) | Action::Agent(p) | Action::Model(p) | Action::Close(p)) => Some(p), _ => None };
-            if let Some(pane) = pane { app.controls.pressed = Some(MouseButton::Right); pane_menu(app, pane, at); return true; }
+            if let Some(pane) = pane { begin_press(app, MouseButton::Right); pane_menu(app, pane, at); return true; }
             let tab = crate::bar::hit_at(app, mouse.column, mouse.row).and_then(|hit| match hit { crate::bar::Hit::Window(i) => Some(i), _ => None }).or_else(|| {
                 let top = if app.status_top { 0 } else { app.size.1.saturating_sub(app.status_lines()) };
                 app.status_ranges.iter().find_map(|(row, hit)| {
@@ -177,8 +192,8 @@ pub fn mouse(app: &mut App, mouse: &MouseEvent) -> bool {
                     if let RangeKind::Window(number) = hit.kind { (0..app.tabs.len()).find(|i| app.win_num(*i) as u64 == number) } else { None }
                 })
             });
-            if let Some(tab) = tab { app.controls.pressed = Some(MouseButton::Right); tab_menu(app, tab, at); return true; }
-            if action.is_some() { app.controls.pressed = Some(MouseButton::Right); workspace_menu(app, at); return true; }
+            if let Some(tab) = tab { begin_press(app, MouseButton::Right); tab_menu(app, tab, at); return true; }
+            if action.is_some() { begin_press(app, MouseButton::Right); workspace_menu(app, at); return true; }
         }
         _ => {}
     }
@@ -378,6 +393,90 @@ mod tests {
 
     fn hit(app: &App, wanted: Action) -> Rect {
         app.controls.hits.borrow().iter().find(|(_, action)| *action == wanted).unwrap_or_else(|| panic!("missing {wanted:?}")).0
+    }
+
+    #[tokio::test]
+    async fn ui_controls_end_pending_terminal_clicks_before_focus_moves() {
+        for control in ["terminal", "header", "dialog", "sidebar"] {
+            let mut app = app(140);
+            app.tabs.truncate(1);
+            app.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Horizontal);
+            if control == "sidebar" {
+                app.options.set("@hn-status-bar", Some("left"), &crate::options::SetFlags { global:true, ..Default::default() }, "", 0).unwrap();
+            }
+            app.fit_panes();
+            let (sink, mut events) = tokio::sync::mpsc::unbounded_channel();
+            app.sink = sink;
+            crate::commands::execute(&mut app, "bind-key -n DoubleClick1Pane 'set -g @late-click fired'");
+            render(&mut app);
+            let body = app.rects.iter().find(|(id, _)| *id == 1).unwrap().1;
+            click(&mut app, MouseButton::Left, body.x + 4, body.y + 4);
+            click(&mut app, MouseButton::Left, body.x + 4, body.y + 4);
+            match control {
+                "header" => {
+                    let agent = hit(&app, Action::Agent(1));
+                    click(&mut app, MouseButton::Left, agent.x + 1, agent.y);
+                }
+                "dialog" => {
+                    crate::account::open(&mut app); render(&mut app);
+                    click(&mut app, MouseButton::Left, 0, 0);
+                }
+                "sidebar" => { click(&mut app, MouseButton::Left, 2, 10); }
+                _ => {}
+            }
+            if control != "terminal" {
+                crate::input::handle(&mut app, Event::Key(crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Esc, KeyModifiers::NONE)));
+            }
+            crate::commands::execute(&mut app, &format!("select-pane -t {}", crate::pane::tag(2)));
+            for _ in 0..2 {
+                if let crate::event::Event::Apply(apply) = tokio::time::timeout(
+                    std::time::Duration::from_secs(1), events.recv()).await.unwrap().unwrap() { apply(&mut app); }
+            }
+            assert_eq!(app.options.get("@late-click", "", None).is_some(), control == "terminal",
+                "UI controls end the click sequence; ordinary terminal double-clicks still run ({control})");
+            assert_eq!(app.focused(), Some(2));
+        }
+    }
+
+    #[tokio::test]
+    async fn plain_pane_titles_keep_divider_drag_behavior() {
+        for top in [false, true] {
+            let mut outcomes = Vec::new();
+            for controls in [false, true] {
+                let mut app = app(100);
+                app.tabs.truncate(1);
+                app.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Vertical);
+                app.status_top = top;
+                app.options.set("@hn-border", Some("line"), &crate::options::SetFlags { global:true, ..Default::default() }, "", 0).unwrap();
+                app.fit_panes(); render(&mut app);
+                let title = hit(&app, Action::Header(2));
+                let before = app.tab().root.as_ref().unwrap().to_tmux();
+                if !controls { app.controls.hits.borrow_mut().clear(); }
+                for (kind, row) in [(MouseEventKind::Down(MouseButton::Left), title.y),
+                    (MouseEventKind::Drag(MouseButton::Left), title.y + 3), (MouseEventKind::Up(MouseButton::Left), title.y + 3)] {
+                    crate::input::handle(&mut app, Event::Mouse(MouseEvent { kind, column:title.x + 3, row, modifiers:KeyModifiers::NONE }));
+                }
+                let after = app.tab().root.as_ref().unwrap().to_tmux();
+                assert_ne!(after, before, "plain title must keep its resize drag (controls={controls}, top={top})");
+                outcomes.push(after);
+            }
+            assert_eq!(outcomes[0], outcomes[1], "header controls preserve tmux's divider geometry");
+        }
+    }
+
+    #[tokio::test]
+    async fn header_controls_preserve_custom_pane_mouse_bindings() {
+        for (button, key) in [(MouseButton::Left, "MouseDown1Pane"), (MouseButton::Right, "MouseDown3Pane")] {
+            let mut app = app(100);
+            crate::commands::execute(&mut app, &format!("bind-key -n {key} 'set -g @header-click custom'"));
+            render(&mut app);
+            let control = hit(&app, Action::Close(1));
+            click(&mut app, button, control.x + 1, control.y);
+            assert_eq!(app.options.get("@header-click", "", None).as_deref(), Some("custom"));
+            assert!(app.session_close.sent.is_empty(), "custom binding owns the click");
+            assert!(app.modal.is_none());
+        }
     }
 
     #[tokio::test]

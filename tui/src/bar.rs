@@ -528,6 +528,7 @@ pub fn mouse(app: &mut App, ev: &MouseEvent) -> bool {
     let inside = ev.column >= bar.x && ev.column < bar.right() && ev.row >= bar.y && ev.row < bar.bottom();
     if !inside { return false }
     if app.mouse_state.drag.is_some() && matches!(ev.kind, MouseEventKind::Drag(_) | MouseEventKind::Up(_)) { return false }
+    if matches!(ev.kind, MouseEventKind::Down(_)) { crate::mouse::cancel_clicks(app); }
     let hit = hit_at(app, ev.column, ev.row);
     match ev.kind {
         MouseEventKind::Down(MouseButton::Left) => match hit {

@@ -285,10 +285,11 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
     if matches!(mouse.kind, MouseEventKind::Moved) && !app.wants_motion() { return }
     // hn's lists and prompts keep the mouse as they have it; copy mode and a menu are tmux's.
     if app.modal.is_some() && !matches!(app.modal, Some(Modal::Copy { .. }) | Some(Modal::Menu(_))) {
+        if matches!(mouse.kind, MouseEventKind::Down(_)) { crate::mouse::cancel_clicks(app); }
         modal_mouse(app, mouse);
         // A panel may close on the press. Its release still belongs to the panel, not to
         // the program revealed beneath it. While it stays open, keep its scrollbar drags.
-        if app.modal.is_none() { if let MouseEventKind::Down(button) = mouse.kind { app.controls.pressed = Some(button); } }
+        if app.modal.is_none() { if let MouseEventKind::Down(button) = mouse.kind { crate::workspace_controls::begin_press(app, button); } }
         return;
     }
     // A menu over an empty window owns its click too; the welcome form underneath must not
@@ -297,7 +298,7 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
         // Harness menus choose/dismiss on the press; ordinary tmux display-menu keeps its
         // own release semantics. Neither a menu action nor dismissal may leak a half-click.
         if matches!(&app.modal, Some(Modal::Menu(menu)) if menu.responsive.is_some()) {
-            if let MouseEventKind::Down(button) = mouse.kind { app.controls.pressed = Some(button); }
+            if let MouseEventKind::Down(button) = mouse.kind { crate::workspace_controls::begin_press(app, button); }
         }
         return crate::mouse::on_event(app, mouse);
     }

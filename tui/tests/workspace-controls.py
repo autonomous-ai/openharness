@@ -285,6 +285,29 @@ def overlay_dismiss_journey(alpha):
     print('PASS workspace: overlay dismissal and pane actions consume the complete mouse click', flush=True)
 
 
+def title_drag_journey(alpha, beta):
+    original = value('#{window_layout}')
+    border = hn('show', '-gv', '@hn-border', ok=False)
+    hn('set', '-g', '@hn-border', 'line')
+    hn('select-layout', 'even-vertical')
+    x, top = map(int, value('#{pane_left} #{pane_top}', beta).split())
+    wait(lambda: 'Beta task' in screen().splitlines()[top - 1], 'lower title is painted at its divider')
+    before = len(api()['inputs'])
+    for code, row, ending in [(0, top - 1, 'M'), (32, top + 1, 'M'), (0, top + 1, 'm')]:
+        raw = f'\x1b[<{code};{x + 5};{row + 1}{ending}'.encode()
+        tmux('send-keys', '-H', '-t', TARGET, *[f'{b:02x}' for b in raw])
+    wait(lambda: int(value('#{pane_top}', beta)) == top + 2, 'dragging the plain title resizes its divider')
+    assert len(api()['inputs']) == before, 'title drag must not reach the terminal program'
+    hn('select-layout', original)
+    if border:
+        hn('set', '-g', '@hn-border', border)
+    else:
+        hn('set', '-gu', '@hn-border')
+    hn('select-pane', '-t', alpha)
+    wait(lambda: value('#{window_layout}') == original, 'restore layout after title drag')
+    print('PASS workspace: plain title divider drags retain tmux resize behavior', flush=True)
+
+
 mock = None
 started = False
 try:
@@ -325,6 +348,10 @@ try:
     if '--mouse-dismiss' in sys.argv:
         api({'action': 'terminal-mouse'})
         overlay_dismiss_journey(alpha)
+        sys.exit(0)
+    if '--title-drag' in sys.argv:
+        api({'action': 'terminal-mouse'})
+        title_drag_journey(alpha, beta)
         sys.exit(0)
 
     # Local use is complete before any sign-in. The tiny footer entry explains the benefit,
@@ -477,6 +504,7 @@ try:
     # own press/release pair without leaking either into the terminal stream.
     api({'action': 'terminal-mouse'})
     overlay_dismiss_journey(alpha)
+    title_drag_journey(alpha, beta)
     x, y = map(int, value('#{pane_left} #{pane_top}', alpha).split())
     before = len(api()['inputs'])
     click(x + 4, y + 4)
@@ -505,7 +533,10 @@ try:
     tmux('send-keys', '-l', '-t', 'test', 'Claude')
     shown('› Claude')
     click_text('Claude Code', before=85)
+    wait(lambda: any(r['payload']['agentId'] == 'alpha' for r in requests('agent_handoff_prepare')),
+         'the mouse selection starts its handoff before changing focus')
     hn('select-pane', '-t', beta)
+    wait(lambda: value('#{pane_id}') == beta, 'focus changes while the original pane is switching')
     wait(lambda: len(requests('agent_create')) == 1, 'agent replacement is launched once')
     wait(lambda: value('#{pane_current_command}', alpha) == 'claude', 'replacement attaches in the same pane')
     new_id = next(a['id'] for a in api()['agents'][local] if a['id'] not in ('alpha', 'beta'))
