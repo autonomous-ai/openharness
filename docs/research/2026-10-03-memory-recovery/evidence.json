@@ -8,20 +8,23 @@
     "desktop/lib/screens/swarm_screen.dart": "6269670b2bf3de3ecb89f41e0750ab8c01a4b474eaba4c1c0b22c48622301d6c",
     "desktop/test/coding_memory_view_test.dart": "aed8930292ec1935043b25cae03b67d30bdf6081779593024f30d53be71f23ea",
     "desktop/test/memory_companion_recovery_test.dart": "441de7376b04275ba225351e1a31bfa5177df3fbdf09d28eb59f8e4d8ef6c176",
-    "desktop/integration_test/native_memory_companion_recovery_test.dart": "28cdc717fb7cd7f42957de577700b4dd1c49e0871e7b37741afc06a50d9df9a6"
+    "desktop/integration_test/native_memory_companion_recovery_test.dart": "50dd759d3e65e22dcd8280ec1ba3a8240993b03e5ff1347bfc773a9d3286dd9c"
   },
   "images": {
     "native-waiting.png": {
       "sha256": "08eacee52c2323eac3d575497f8285ef2504a6b67454f0e2c6cb116d01f86c3c",
-      "surface": "macOS native fixture"
+      "surface": "macOS native fixture",
+      "receipt": "20261003T025115.842925Z-50706"
     },
     "native-retry.png": {
       "sha256": "282e5f547cc49300146360d796cafdeb29b687c0cca498855a3326c234c1d7c5",
-      "surface": "macOS native fixture"
+      "surface": "macOS native fixture",
+      "receipt": "20261003T025115.842925Z-50706"
     },
     "native-resumed.png": {
       "sha256": "3f27b0b592a20172d2b22dcd04fb481d85206bf2f50de1b58c37d7b9b57c30c7",
-      "surface": "macOS native fixture"
+      "surface": "macOS native fixture",
+      "receipt": "20261003T025115.842925Z-50706"
     },
     "dark-large-text.png": {
       "sha256": "cf372b49f0f7585c08746e2425ab8525dc2888214b965907234686e0f6eb9762",
@@ -44,6 +47,24 @@
       "scope": "Final VM fixture, including keyboard delivery and in-memory persistence."
     },
     "native": {
+      "status": "passed",
+      "passed": 2,
+      "failed": 0,
+      "receipt": "20261003T025115.842925Z-50706",
+      "log": "native-memory-focus-review.log",
+      "elapsedSeconds": 52.176,
+      "passedCases": [
+        "native recovery test window has foreground focus",
+        "Memories reopens the same companion after failure without duplicate requests or changing its DSH"
+      ],
+      "focusReviewEnabled": true,
+      "focusObservedWithinFirstSecond": true,
+      "manualAppControlAction": false,
+      "launcherWarning": "Failed to foreground app; open returned 1",
+      "limitation": "Earlier foreground failures are preserved. Their intermittent cause is not established."
+    },
+    "analysis": "Production and VM analysis passed previously; final native wrapper analysis passed with the final native command.",
+    "previousNative": {
       "status": "failed",
       "passed": 1,
       "failed": 1,
@@ -53,13 +74,21 @@
       "receipt": "20261003T022209.491128Z-33644",
       "elapsedSeconds": 46.5
     },
-    "analysis": "Changed production files passed initial analysis; final VM fixture and native wrapper passed analysis in the final native attempt."
+    "readinessAttempt": {
+      "status": "failed",
+      "passed": 1,
+      "failed": 1,
+      "receipt": "20261003T024613.986749Z-14439",
+      "log": "native-memory-focus-readiness.log",
+      "elapsedSeconds": 53.785,
+      "failure": "After first frame and three seconds, visible=true and minimized=false but native focus=false."
+    }
   },
   "limitations": [
     "Native functional journey and synthetic key dispatch do not establish physical AppKit keyboard/IME or VoiceOver behavior.",
-    "Explicit native foreground activation remains failed; earlier narrower native pass is not a passing final native suite.",
+    "Earlier native startup focus assertions failed; final assertion passed without manual activation. Intermittent cause remains unestablished.",
     "No learning-quality, native inference, framework account change or provider-recovery claim.",
     "No release or installation."
   ],
-  "recordedAt": "2026-10-03T02:25:58.122596+00:00"
+  "recordedAt": "2026-10-03T02:52:08.380385+00:00"
 }

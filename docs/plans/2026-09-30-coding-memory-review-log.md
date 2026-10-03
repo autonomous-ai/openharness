@@ -1117,7 +1117,11 @@ selection, setup and trust remain in the real terminal.
 
 The [recovery review](../research/2026-10-03-memory-recovery.md) records layout,
 identity, retry, ownership and synthetic key-delivery checks. The native recovery
-journey passed, but the separate native foreground check failed, so the final
-native command remains failed. Physical input and the actual live model still
-need verification. This supplies a missing user action without claiming that
-the installed stopped conversation or its provider refusal was resolved.
+journey passed across native attempts. Earlier foreground checks failed even
+after mounting a first frame and waiting three seconds. The final native command
+passed both cases, observing focus within its first second without a manual
+click; it allowed a bounded native review but needed no app-control action.
+The intermittent startup-focus cause remains unestablished. Physical input and
+the actual live model still need verification. This supplies a missing user
+action without claiming that the installed stopped conversation or its provider
+refusal was resolved.

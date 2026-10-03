@@ -26,13 +26,24 @@ and 200% text. These contain only fixture data.
 
 Changed-file analysis and 143 affected VM tests passed. After adding explicit
 keyboard assertions, the targeted VM journey passed again. The final native
-command is **failed: one case passed and one failed**. The complete recovery
-journey, including synthetic keyboard dispatch, passed. The separate foreground
-check failed because `windowManager.isFocused()` returned false after show/focus;
-the cause is unestablished. An earlier narrower native pass does not supersede
-this result. Physical AppKit keyboard/IME and VoiceOver behavior remain
-unverified. The [evidence manifest](2026-10-03-memory-recovery/evidence.json)
-binds the images, source and local receipts without turning that failure green.
+command **passed both cases**: the native window reported foreground focus,
+and the complete recovery journey passed, including synthetic keyboard dispatch.
+The native images above come from that final run.
+
+Earlier native commands failed the separate foreground assertion while the
+recovery journey passed. Mounting a first frame and allowing three seconds did
+not resolve the failure: the window was visible and not minimized, but not
+focused. The final run enabled `HARNESS_NATIVE_FOCUS_REVIEW=1`, which permits a
+reviewer to activate the exact synthetic window within 60 seconds while keeping
+the assertion required. Focus was observed within the first second, without a
+manual click or any app-control action. Flutter still printed its launcher
+warning, `Failed to foreground app; open returned 1`.
+
+The earlier failures remain failed; the intermittent startup-focus cause is
+unestablished. This is not a production focus fix or proof that launcher
+activation is reliable. Physical AppKit keyboard/IME and VoiceOver behavior
+remain unverified. The [evidence manifest](2026-10-03-memory-recovery/evidence.json)
+binds the final images and source, and retains the separate outcomes.
 
 The native fixture uses `FLUTTER_TEST=1`, `HARNESS_TEST=true`, in-memory persistence
 and fake memory/agent transports. It does not read real conversations or launch

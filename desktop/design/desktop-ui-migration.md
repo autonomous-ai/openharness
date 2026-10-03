@@ -674,6 +674,7 @@ unmerged.
 - [Native fixture renders](../../docs/research/2026-10-03-memory-recovery.md)
   cover waiting, failed resume and recovery; light/dark narrow VM renders use
   200% text. The complete native recovery journey and synthetic key delivery
-  passed, but the separate foreground-activation check failed. The combined
-  native command is failed, not fully verified. Physical AppKit input and
-  VoiceOver remain unverified; no installed app or real companion was changed.
+  passed. The final native run also observed foreground focus; both cases passed.
+  Earlier foreground failures remain documented, with no established cause or
+  production focus fix. Physical AppKit input and VoiceOver remain unverified;
+  no installed app or real companion was changed.
