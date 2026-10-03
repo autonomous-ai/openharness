@@ -162,6 +162,10 @@ const desk = DEMO ? { revision: 1, tabs: [
 const dial = { said: {}, replies: [], messages: [] }
 // How many of each request the windows made (GET /test/counts), for tests of what hn asks.
 const counts = {}
+const welcomeTest = process.env.MOCK_WELCOME === '1'
+if (welcomeTest && !(port >= 19780 && port <= 19789)) throw new Error('unsafe welcome test port')
+const welcome = { history: 'loading', delay: 0, searches: [] }
+if (welcomeTest) { agents[LOCAL] = []; agents[REMOTE] = [] }
 const windows = new Set()
 // Opt-in faults for reconnect.py. No real daemon or agent is involved.
 // Controlled desk latency/failures for layout reconciliation tests, on private ports only.
@@ -183,6 +187,13 @@ let demoAsked = false
 
 const json = (res, body) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ success: true, data: body })) }
 const server = http.createServer((req, res) => {
+  if (welcomeTest && req.url === '/test/welcome') {
+    if (req.method === 'GET') return json(res, welcome)
+    let body = ''
+    req.on('data', (part) => { body += part })
+    req.on('end', () => { const update = JSON.parse(body); Object.assign(welcome, update); json(res, welcome) })
+    return
+  }
   if (layoutTest && req.url === '/test/layout') {
     if (req.method === 'GET') return json(res, layoutFaults)
     let body = ''
@@ -412,7 +423,15 @@ wss.on('connection', (ws) => {
       // The e2e reads which harnesses were deleted (a killed pane's shell goes with it).
       case 'agent_delete': dial.deleted = [...(dial.deleted || []), payload.agentId]; return reply({ agent: agents[machine][0], deleted: true })
       case 'agent_update': case 'agent_resume': case 'agent_restart': return reply({ agent: agents[machine][0], deleted: true })
-      case 'session_search': return reply({ hits: searchHits(machine, payload.query, payload.from, payload.to), indexed: 12, pending: 0, tookMs: 3 })
+      case 'session_search': {
+        if (welcomeTest) {
+          welcome.searches.push({ machine, ...payload })
+          if (welcome.history === 'failed') return reply({ error: 'INDEX_UNAVAILABLE' })
+          if (welcome.history === 'loading') return reply({ hits: [], indexed: 0, pending: 0, ready: false, tookMs: 1 })
+          if (welcome.history === 'empty') return reply({ hits: [], indexed: 0, pending: 0, ready: true, tookMs: 1 })
+        }
+        return reply({ hits: searchHits(machine, payload.query, payload.from, payload.to), indexed: 12, pending: 0, ready: true, tookMs: 3 })
+      }
       case 'session_tail': {
         const x = EXTERNAL.find((e) => e.sessionId === payload.sessionId)
         const a = (agents[machine] || []).find((e) => e.sessionId === payload.sessionId)
@@ -464,11 +483,13 @@ wss.on('connection', (ws) => {
           return reply({ agent: resumed })
         }
         const created = agent(randomUUID(), `Mock ${payload.engine}`, payload.engine)
+        if (welcomeTest && payload.cwd) created.project = { name: payload.cwd.split('/').pop(), cwd: payload.cwd, root: payload.cwd, branch: 'main' }
         agents[machine].push(created)
         if (process.env.MOCK_NEW_UI === '1') {
           const outcome = { state: 'created', agent: created }
           creationReceipts.set(receiptKey, { fingerprint, outcome, pendingChecks: payload.projectName === 'lose-reply' ? 1 : 0 })
           if (payload.projectName === 'lose-reply') return ws.terminate()
+          if (welcomeTest && welcome.delay && payload.engine !== 'terminal') return setTimeout(() => reply({ creationId: payload.creationId, ...outcome }), welcome.delay)
           return reply({ creationId: payload.creationId, ...outcome })
         }
         return reply({ agent: created })

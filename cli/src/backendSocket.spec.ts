@@ -811,7 +811,7 @@ describe('BackendSocket outbound queue', () => {
     const asked: Array<[string, number | undefined]> = []
     socket.sessionSearchProvider = (query, options) => {
       asked.push([query, options.limit])
-      return { hits: [], indexed: 3, pending: 0, tookMs: 1 }
+      return { hits: [], indexed: 3, pending: 0, ready: true, tookMs: 1 }
     }
     socket.connect()
     const ws = wsMock.instances[0]
@@ -825,7 +825,7 @@ describe('BackendSocket outbound queue', () => {
     unwrap.mockReturnValueOnce({ type: 'session_search', payload: { requestId: 's-1', query: 'dial scroll', limit: 12 } })
     ws.message({ t: 'down', connId: 'web-1', frame: { type: 'session_search', payload: envelope } })
     await vi.waitFor(() => {
-      expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_search_result', 's-1', { hits: [], indexed: 3, pending: 0, tookMs: 1 })
+      expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_search_result', 's-1', { hits: [], indexed: 3, pending: 0, ready: true, tookMs: 1 })
     })
     expect(asked).toEqual([['dial scroll', 12]])
 

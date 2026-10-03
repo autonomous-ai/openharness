@@ -53,7 +53,7 @@ def state(route='dial'):
 def screen(): return tmux('capture-pane', '-p', '-t', 'test')
 def form_bounds(lines):
     width, height = max(map(len, lines), default=0), len(lines) - 1
-    form_w, form_h = min(60, max(0, width - 4)), min(17, max(5, height - 2))
+    form_w, form_h = min(60, max(0, width - 4)), min(19, max(5, height - 2))
     return (width - form_w) // 2, max(0, (height - form_h) // 2), form_w, form_h
 def form_screen():
     lines = screen().splitlines()
@@ -197,10 +197,10 @@ try:
     assert create_count() == before, 'searching projects across machines only changes the draft'
     print('PASS New Harness: short local machine name and remote folders after a large local history', flush=True)
     # Moving over a field previews its choices beside the stationary form.
-    keys('Down'); shows('Search agents and harnesses')
+    keys('Down', 'Tab'); shows('Search agents and harnesses')
     assert field_position('Task') == anchor, 'a preview must not move or hide the form'
     assert any(line.find('Search agents and harnesses') > anchor[0] + 50 for line in screen().splitlines())
-    keys('Tab'); shows('Search agents and harnesses')
+    keys('Right'); shows('Search agents and harnesses')
     assert field_position('Task') == anchor, 'entering a chooser keeps the form visible'
     assert 'Blender' in screen(), 'the agent chooser lists the harnesses'
     snapshot('new-harness-agent')
@@ -218,12 +218,12 @@ try:
     assert not re.search(field_at('Options|Machine'), form_screen()), 'settings are direct fields; machine belongs in Project'
     choose_field('Approvals', 'read only'); shows('Read only')
     task_text = 'Fix café login.\n\nKeep 界 and 🦀 intact.\nAdd a regression test.'
-    field('Task'); shows('Task (optional)')
+    field('Task'); shows('Enter start')
     assert field_position('Task') == anchor, 'the task editor keeps the form visible and fixed'
     raw('\x1b[200~Fix café login.\r\n\r\nKeep 界 and 🦀 intact.\x1b[201~')
     shows('Keep 界 and 🦀 intact.')
-    keys('M-Enter'); type_text('Add a regression test.'); keys('Enter')
-    assert create_count() == before, 'accepting a task returns to the form without launching'
+    keys('M-Enter'); type_text('Add a regression test.'); keys('BTab')
+    assert create_count() == before, 'leaving the task editor does not launch'
     snapshot('new-harness-settings')
     keys('Enter', 'Enter'); shows('Fixture launch failure')
     assert create_count() == before + 1, 'busy popup prevents double submission'
@@ -314,10 +314,10 @@ try:
     shows('autonomous-harness @ local'); shows('[x]')
     tmux('resize-window', '-t', 'test', '-x', '150', '-y', '42'); settle_ui()
     snapshot('new-harness-flat')
-    field('Task'); shows('Task (optional)')
+    field('Task'); shows('Enter start')
     raw('\x1b[200~Improve the New Harness keyboard flow.\nKeep the launch settings visible.\x1b[201~')
     shows('Keep the launch settings visible.'); snapshot('new-harness-task')
-    keys('Escape', 'Escape'); new_form(); shows('Improve the New Harness keyboard flow.')
+    keys('Escape'); new_form(); shows('Improve the New Harness keyboard flow.')
     snapshot('new-harness-flat-task')
     tmux('resize-window', '-t', 'test', '-x', '80', '-y', '24'); settle_ui()
     snapshot('new-harness-flat-narrow')
@@ -329,10 +329,10 @@ try:
     assert request['engine'] == 'terminal' and 'prompt' not in request and 'command' not in request, request
     count += 1
     new_form(); shows('Improve the New Harness keyboard flow.')
-    field('Task'); keys('C-a', 'C-k', 'Enter'); choose_field('Agent|Harness', 'claude')
+    field('Task'); keys('C-Home', 'C-k', 'C-k', 'C-k', 'C-k', 'Tab'); choose_field('Agent|Harness', 'claude')
     field('Task'); type_text('x' * 2001); keys('Enter'); field('Start Claude Code'); shows('Task is too long')
     assert create_count() == count, 'an overlong task is rejected before creating a harness'
-    field('Task'); keys('C-a', 'C-k', 'Enter')
+    field('Task'); keys('C-Home', 'C-k', 'BTab')
     tmux('resize-window', '-t', 'test', '-x', '150', '-y', '42'); settle_ui()
     # Supply actual terminal palette replies, as a light terminal would.
     raw('\x1b]10;rgb:2020/2020/2020\x1b\\\x1b]11;rgb:ffff/ffff/ffff\x1b\\')

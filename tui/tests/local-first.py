@@ -108,7 +108,7 @@ try:
     assert second['machineId'] == 'b' * 32 and second['signedIn'] is False
     assert second['config']['port'] != first['config']['port']
     assert status(a)['pid'] == first['pid']
-    wait(lambda: 'Nothing running.' in (s := screen()) or 'Terminal on ' in s, 'guest home or local terminal')
+    wait(lambda: 'Welcome to Harness' in (s := screen()) or 'New Window' in s or 'Terminal on ' in s, 'guest home or local terminal')
     assert 'OTHER_ACCOUNT_PRIVATE' not in screen()
     assert not (b / 'browser-opened').exists()
     assert not (b / 'auth/session.json').exists()

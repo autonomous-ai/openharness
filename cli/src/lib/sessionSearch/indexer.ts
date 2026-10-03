@@ -84,6 +84,10 @@ export interface SessionSearchResult {
   /** Sessions in the index, and sessions still waiting for their first pass. */
   indexed: number
   pending: number
+  /** False until discovery and its queued first passes have finished. */
+  ready: boolean
+  /** A scan failed; any cached hits are still usable and a later search retries it. */
+  discoveryError?: boolean
   tookMs: number
 }
 
@@ -135,6 +139,10 @@ export class SessionSearchIndex {
   private stopped = false
   private sweepTimer: NodeJS.Timeout | null = null
   private sliceStart = 0
+  private initialized = false
+  private discovering = false
+  private discoveryFailed = false
+  private discoveryStartedAt: number | undefined
   /** Callers waiting for a session's next pass (`tail`). */
   private readonly waiters = new Map<string, Array<() => void>>()
 
@@ -191,14 +199,28 @@ export class SessionSearchIndex {
 
   /** Queue every known session, newest first; drop sessions whose agent no longer exists. */
   sweep(): void {
-    if (this.stopped) return
+    if (this.stopped || this.discovering) return
+    this.discovering = true
+    this.discoveryFailed = false
+    this.discoveryStartedAt = Date.now()
+    const finish = (failed = false) => {
+      if (this.stopped) { this.discovering = false; return }
+      this.discoveryFailed = failed
+      try { this.sweepSources() }
+      catch (error) {
+        this.discoveryFailed = true
+        this.opts.log?.(`[search] source discovery failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      this.initialized = true
+      this.discovering = false
+    }
     if (this.opts.discover) {
       // Which of them are open, looked at now: a search reads it without waiting.
       void this.opts.openSessions?.fresh().catch(() => undefined)
-      void this.opts.discover().catch(() => undefined).then(() => this.sweepSources())
+      void Promise.resolve().then(() => this.opts.discover!()).then(() => finish(), () => finish(true))
       return
     }
-    this.sweepSources()
+    finish()
   }
 
   private sweepSources(): void {
@@ -218,6 +240,10 @@ export class SessionSearchIndex {
 
   search(query: string, options: { limit?: number; from?: number; to?: number } = {}): SessionSearchResult {
     const started = performance.now()
+    // Opening welcome/search is an explicit demand for history. Start the first scan now,
+    // without blocking this request or waiting for the daemon's deferred boot sweep.
+    if ((!this.initialized || this.discoveryFailed) && !this.discovering &&
+        (this.discoveryStartedAt === undefined || Date.now() - this.discoveryStartedAt >= 1_000)) this.sweep()
     const hits = this.opts.store.search(query, options)
     // Whether a terminal still has it, as last looked: a search never waits for a process table.
     if (hits.some((hit) => hit.external) && this.opts.openSessions) {
@@ -230,7 +256,10 @@ export class SessionSearchIndex {
       }
     }
     const indexed = this.opts.store.counts().sessions
-    return { hits, indexed, pending: this.queue.size, tookMs: Math.round((performance.now() - started) * 10) / 10 }
+    return { hits, indexed, pending: this.queue.size,
+      ready: this.initialized && !this.discovering && !this.discoveryFailed && !this.running && this.queue.size === 0,
+      ...(this.discoveryFailed ? { discoveryError: true } : {}),
+      tookMs: Math.round((performance.now() - started) * 10) / 10 }
   }
 
   /**

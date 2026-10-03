@@ -53,8 +53,10 @@ wait_eq() { # wait_eq <what> <expected> <command…>: until the command prints w
   echo "✓ $what"
 }
 
-# As tmux starts: window 0 is a shell on this computer.
-expect "starts in a shell, as tmux does" "Mock terminal (mock)" 5000
+# The first window is ready for a task; Open Terminal is an explicit keyboard action.
+expect "starts with the task-first welcome" "Welcome to Harness" 5000
+tmux_ send-keys -t t Tab Tab Tab Tab Tab Tab Tab Tab Enter
+expect "Open Terminal opens a shell here" "Mock terminal (mock)" 5000
 status_tabs() { screen | tail -n 1 | grep -q '^ 0:' && echo yes; }
 wait_eq "status line starts with window tabs, without a session label" yes status_tabs
 expect "status line quotes the local machine's app name" '"mock-local"'
@@ -212,14 +214,13 @@ tmux_ send-keys -t t q
 tmux_ send-keys -t t C-b x
 expect "C-b x asks first" "(y/n)"
 tmux_ send-keys -t t n
-# C-b c: a new window on the home page (its recent harnesses and conversations; typing starts a shell there).
+# C-b c: the same task-first composer, with recent sessions below it.
 before=$(dial "(d.deleted || []).length")
 tmux_ send-keys -t t C-b c
 expect "C-b c: another new window" "2:"
-expect "C-b c: the home page, a conversation Harness did not start in it" "Continue NFC device chat"
-# Its shell (a key typed there makes it, as after tmux's C-b c), killed with its window (C-b &),
-# goes with it, as tmux kills the pane's shell.
-tmux_ send-keys -t t Enter
+expect "C-b c: the creation form and secondary session browser" "Browse All Sessions"
+# Explicitly opening its terminal reuses the backing shell; C-b & kills it with the window.
+tmux_ send-keys -t t Tab Tab Tab Tab Tab Tab Tab Tab Enter
 sleep 1
 tmux_ send-keys -t t C-b '&'
 expect "C-b & asks first" "(y/n)"
@@ -260,7 +261,7 @@ tmux_ has-session -t t 2>/dev/null && screen | grep -q "Mock" && fail "C-b d did
 echo "✓ C-b d detaches"
 # The last window closed ends hn, as the session's end ends tmux's client.
 tmux_ new-session -d -s u -x 120 -y 32 "env -u TMUX -u TMUX_PANE -u HN_SOCKET HN_SOCKET_NAME=$client-2 HOME=$home PORT=$port HARNESS_TUI_DESK=off HARNESS_TUI_NOTIFY=off HN_DESKTOP=off '$bin' -L '$client-2' --port '$port'; sleep 5"
-waited=0; until tmux_ capture-pane -p -t u | grep -qF "Mock terminal (mock)"; do sleep 0.05; waited=$((waited + 50)); [ "$waited" -ge 5000 ] && fail "a second hn started no shell"; done
+waited=0; until tmux_ capture-pane -p -t u | grep -qF "New Window"; do sleep 0.05; waited=$((waited + 50)); [ "$waited" -ge 5000 ] && fail "a second hn showed no new-window form"; done
 tmux_ send-keys -t u C-b '&'
 sleep 0.3
 tmux_ send-keys -t u y

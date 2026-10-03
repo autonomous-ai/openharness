@@ -515,7 +515,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         if let Some(event) = first { apply(&mut app, event, &mut refill, &mut startup_input); need_draw = true }
         // Everything else already waiting goes into the same frame.
         while let Ok(event) = rx.try_recv() { apply(&mut app, event, &mut refill, &mut startup_input); need_draw = true }
-        if !input_ready && (app.focused().is_some() || app.shell_asked && app.starting_shell.is_none()) {
+        if !input_ready && (app.focused().is_some() || app.tab().home || app.shell_asked && app.starting_shell.is_none()) {
             input_ready = true;
             while let Some(event) = startup_input.pop_front() { input::handle(&mut app, event); refill = true; }
         }
@@ -558,7 +558,9 @@ async fn run(config: config::Config) -> io::Result<()> {
         let all = app.mouse && app.wants_motion();
         if all != mouse_all { execute!(term.backend_mut(), term_out::Mouse(if all { 2 } else { 1 }))?; mouse_all = all }
         app.flush_acks();
-        if refill && matches!(app.modal, Some(modal::Modal::Picker { .. } | modal::Modal::NewHarness(_))) { input::refill(&mut app) }
+        // Welcome forms also need connection and catalog updates, including drafts in
+        // background windows. Refill leaves unrelated overlays alone.
+        if refill { input::refill(&mut app) }
         // A scroll that has rested: every row of the screen written again, once — row by row over
         // what is there, not after erasing it, so it never flashes.
         let settle = app::scroll_settle_in(app.scrolled_at, Instant::now()) == Some(Duration::ZERO);

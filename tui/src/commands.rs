@@ -1869,7 +1869,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             if app.capture.is_some() { app.tab_mut().size = app.cli_size; }
             if bare {
                 app.tab_mut().home = true;
-                app.home_from = from.clone();
+                crate::new_harness::ensure_welcome(app, from.clone(), cwd.clone());
                 let tab = app.tab().id.clone();
                 input::new_shell_from(app, from, Placement::Fill(tab), cwd, command);
                 return;
@@ -2213,13 +2213,17 @@ fn run_words_in(app: &mut App, words: &[String]) {
             // tmux's paste-buffer [-dpr] [-s separator] [-b buffer-name] [-t target-pane]: the
             // buffer (the newest automatic one without -b) into the pane — its newlines as -s, a
             // newline with -r, else a carriage return; -p bracketed; -d the buffer then deleted.
-            let Some((_, pane)) = target_pane(app, words) else { return };
             let name = match opt(words, "-b") {
                 Some(b) => { if app.paste.get(&b).is_none() { return app.error(format!("no buffer {b}")) } Some(b) }
                 None => app.paste.top().map(|b| b.name.clone()),
             };
             let Some(name) = name else { return };
             let text = app.paste.get(&name).map(|b| b.data.clone()).unwrap_or_default();
+            if app.capture.is_none() && opt(words, "-t").is_none() && input::paste_form(app, &text) {
+                if flag(words, "-d") { app.paste.free(&name) }
+                return;
+            }
+            let Some((_, pane)) = target_pane(app, words) else { return };
             let sep = opt(words, "-s").unwrap_or_else(|| if flag(words, "-r") { "\n".into() } else { "\r".into() });
             input::paste_into(app, pane, &text, &sep, flag(words, "-p"));
             if flag(words, "-d") { app.paste.free(&name) }

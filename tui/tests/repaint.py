@@ -30,7 +30,7 @@ ENV.update(HOME=str(BASE), HN_TMPDIR=str(BASE), HN_SOCKET_NAME=PREFIX, PORT=str(
            HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off', HARNESS_TUI_ASK_TERMINAL='off',
            HARNESS_TUI_KITTY_KEYS='off')
 CONF = BASE / 'tmux.conf'
-CONF.write_text('set -g automatic-rename off\nset -g status-right "REPAINT_IDLE"\n'
+CONF.write_text('set -g @hn-new-window shell\nset -g automatic-rename off\nset -g status-right "REPAINT_IDLE"\n'
                 'set -g set-titles-string "REPAINT_TITLE"\n')
 COMMAND = [str(HN), '-L', PREFIX, '--port', str(PORT), '-f', str(CONF)]
 OUTER = [TMUX, '-L', PREFIX + '-outer', '-f', '/dev/null']

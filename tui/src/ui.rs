@@ -16,13 +16,11 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::fleet::ago;
-use crate::format::clip_middle;
 use crate::keys;
 use crate::modal::{Modal, PickerKind, PromptKind};
 use crate::pane::{Pane, Phase};
 use crate::picker::Picker;
-use crate::theme::{self, bold, fg, engine_mark, state_mark};
-use crate::input::{home_rows, HomeRow};
+use crate::theme::{self, bold, fg};
 
 /// Time-dependent content asks for its next repaint; a static surface asks for
 /// none. Hints and messages are deadlines, independent of reduced motion.
@@ -184,7 +182,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // (The settings panel is not one: it floats over the panes, as the New Harness form does.)
     let full_screen = matches!(&app.modal, Some(Modal::Picker { kind, .. }) if theme::fzf_opts().height.is_none() && !crate::settings::is_panel(kind));
     if !full_screen {
-        if app.tab().home || app.tab().root.is_none() { empty_window(buf, app, body) }
+        if app.tab().home || app.tab().root.is_none() { cursor = empty_window(buf, app, body); themed_home(buf, body); }
         else { cursor = window(buf, app, body) }
     }
     // Panes in clock mode: the time over each (its cursor hidden).
@@ -580,110 +578,11 @@ fn box_style(app: &App, id: u64) -> Style {
     if app.marked == Some(id) { style.add_modifier(Modifier::BOLD) } else { style }
 }
 
-/// A window with no harness in it: the harnesses you were just with, one key away.
 const WORDMARK: [&str; 2] = ["█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀", "█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█"];
 
-fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
-    if crate::input::os_home(app) { os_welcome(buf, app, area); return }
-    let rows = home_rows(app);
-    let (_, theme_fg, _) = crate::theme::palette();
-    let width = area.width.min(84).saturating_sub(4);
-    let left = area.x + (area.width.saturating_sub(width)) / 2;
-    let compact = area.height < 22;
-    let mut lines: Vec<Line> = Vec::new();
-    if !compact { for w in WORDMARK { lines.push(Line::styled(w, fg(theme::accent()))) } lines.push(Line::raw("")) }
-    else { lines.push(Line::styled("harness", bold(theme::accent()))) }
-    let local = app.fleet.local_machine_name();
-    let up = app.fleet.visible_machines().filter(|m| m.usable()).count();
-    let total = app.fleet.visible_machines().count();
-    let sub = if total > 1 { format!("{local} · {up}/{total} machines connected") } else { local };
-    lines.push(Line::styled(sub, fg(theme::MUTED)));
-    lines.push(Line::raw(""));
-    let centered = lines.len();
-    if app.daemon_down {
-        lines.push(Line::styled("The Harness daemon is not running here.", bold(theme::DANGER)));
-        lines.push(Line::styled("Run `harness start` — this screen connects by itself.", fg(theme::SOFT)));
-    } else if app.fleet.agents.is_empty() && app.started.elapsed().as_secs() < 3 {
-        lines.push(Line::styled(format!("{} Finding your harnesses…", theme::spinner(app.tick)), fg(theme::SOFT)));
-    } else if rows.is_empty() {
-        lines.push(Line::styled("Nothing running.", fg(theme::SOFT)));
-        let hint = |c: &str| app.keymap.hint(c).unwrap_or_default();
-        lines.push(Line::from(vec![Span::styled(hint("new-harness"), bold(theme::accent())), Span::styled(" starts a harness · ", fg(theme::MUTED)), Span::styled(hint("choose-tree -Zs"), bold(theme::accent())), Span::styled(" opens a paused one", fg(theme::MUTED))]));
-    } else {
-        let many = up > 1;
-        for (index, row) in rows.iter().enumerate() {
-            // A harness as its state says; a conversation Harness did not start as a paused one
-            // would be (nothing running), its folder where the project goes.
-            let (m, dot, color, engine, title, recency, detail) = match row {
-                HomeRow::Harness(m, a) => {
-                    let Some(agent) = app.fleet.agent(m, a) else { continue };
-                    let (dot, _, color) = state_mark(app.fleet.state_of(agent), app.tick);
-                    let detail = agent.question.as_ref().map(|q| (q.prompt.clone(), theme::ATTENTION)).unwrap_or((if agent.project.is_empty() { agent.cwd.clone() } else { agent.project.clone() }, theme::MUTED));
-                    (m.clone(), dot, color, agent.engine.clone(), agent.name.clone(), agent.recency(), detail)
-                }
-                HomeRow::External(x) => {
-                    let (dot, _, color) = state_mark(crate::fleet::State::Paused, app.tick);
-                    let folder = x.cwd.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
-                    (x.machine.clone(), dot, color, x.engine.clone(), if x.title.is_empty() { folder.clone() } else { x.title.clone() }, x.last_at, (folder, theme::MUTED))
-                }
-            };
-            let m = &m;
-            let (mark, mark_color) = engine_mark(&engine);
-            // Narrow: the machine goes before the title gives way (then the age).
-            let right = if width < 56 { String::new() } else { format!("{}{}", if many && width >= 70 { format!("{}  ", app.fleet.machine_name(m)) } else { String::new() }, ago(recency)) };
-            let name_w = if width < 56 { (width as usize).saturating_sub(10).min(28) } else { 28 };
-            // Widths are display widths: a CJK or emoji title keeps the columns straight.
-            let name = clip_middle(&title, name_w);
-            let name = format!("{name}{}", " ".repeat(name_w.saturating_sub(name.width())));
-            let detail_room = (width as usize).saturating_sub(name_w + right.width() + 12);
-            let detail_text = clip(&detail.0, detail_room);
-            let used = 2 + 2 + 2 + name_w + 2 + detail_text.width();
-            let pad = (width as usize).saturating_sub(used + right.width());
-            let selected = app.home_moved && index == app.home_cursor;
-            // The chosen row as fzf draws its current line (reverse video where there is no colour).
-            let bg = match (selected, theme::fzf().bw) { (true, true) => Style::default().add_modifier(Modifier::REVERSED), (true, false) => Style::default().bg(theme::fzf().bg_plus), _ => Style::default() };
-            let tint = |c: Color| if c == theme::MUTED || c == theme::SOFT { bg.fg(theme::paint(theme_fg)).add_modifier(Modifier::DIM) } else { bg.fg(theme::paint(c)) };
-            lines.push(Line::from(vec![
-                Span::styled(format!("{} ", index + 1), tint(theme::accent())),
-                Span::styled(format!("{dot} "), tint(color)),
-                Span::styled(format!("{mark} "), tint(mark_color)),
-                Span::styled(format!("{name}  "), bg.fg(theme::paint(theme_fg)).add_modifier(Modifier::BOLD)),
-                Span::styled(detail_text, tint(detail.1)),
-                Span::styled(" ".repeat(pad), bg),
-                Span::styled(right, tint(theme::MUTED)),
-            ]));
-        }
-    }
-    lines.push(Line::raw(""));
-    // Typing here is a shell's (as after tmux's C-b c); the rows by number, or the arrows and Enter;
-    // the rest on the prefix's keys, as everywhere.
-    let hint = |c: &str| app.keymap.hint(c).unwrap_or_default();
-    let keys: Vec<(String, &str)> = vec![("1-9".into(), "open"), ("↑↓ enter".into(), "choose"), ("type".into(), "a shell here"), (hint("new-terminal"), "new terminal"), (hint("choose-tree -Zs"), "harnesses"), (hint("new-harness"), "new agent"), (hint("choose-tree -a"), "waiting"), (hint("choose-tree -m"), "machines")];
-    let keys: Vec<(String, &str)> = keys.into_iter().filter(|(k, _)| !k.is_empty()).collect();
-    let mut row: Vec<Span> = Vec::new();
-    let mut row_w = 0;
-    for (k, w) in keys {
-        let piece_w = k.width() + w.width() + 4;
-        if row_w + piece_w > width as usize { lines.push(Line::from(std::mem::take(&mut row))); row_w = 0 }
-        row.push(Span::styled(k.clone(), bold(theme::accent())));
-        row.push(Span::styled(format!(" {w}   "), fg(theme::SOFT)));
-        row_w += piece_w;
-    }
-    if !row.is_empty() { lines.push(Line::from(row)) }
-    lines.push(Line::raw(""));
-    let prefix = crate::keys::name(&app.keymap.prefix);
-    let (key, description) = if app.os_session { ("Super+B".into(), " browser · Super+Enter terminal") }
-        else { (format!("{prefix} d"), " detach — everything keeps running") };
-    lines.push(Line::from(vec![Span::styled(format!("{prefix} ?"), bold(theme::accent())), Span::styled(" every key   ", fg(theme::SOFT)), Span::styled(key, bold(theme::accent())), Span::styled(description, fg(theme::SOFT))]));
-    let top = area.y + area.height.saturating_sub(lines.len() as u16) / 2;
-    for (index, line) in lines.iter().enumerate() {
-        let y = top + index as u16;
-        if y >= area.y + area.height { break }
-        let w = line.width() as u16;
-        let x = if index < centered { area.x + area.width.saturating_sub(w) / 2 } else { left };
-        buf.set_line(x, y, line, area.width.saturating_sub(x - area.x));
-    }
-    themed_home(buf, area);
+fn empty_window(buf: &mut Buffer, app: &mut App, area: Rect) -> Option<Position> {
+    if crate::input::os_home(app) { os_welcome(buf, app, area); None }
+    else { crate::new_harness::draw_welcome(buf, app, area) }
 }
 
 fn os_welcome(buf: &mut Buffer, app: &App, area: Rect) {
@@ -718,8 +617,8 @@ fn os_welcome(buf: &mut Buffer, app: &App, area: Rect) {
 mod os_welcome_tests {
     use super::*;
 
-    #[test]
-    fn ordinary_hn_installed_os_and_live_usb_have_separate_homes() {
+    #[tokio::test]
+    async fn ordinary_hn_installed_os_and_live_usb_have_separate_homes() {
         for (width, height) in [(80, 24), (60, 18), (120, 40)] {
             let (sink, _) = tokio::sync::mpsc::unbounded_channel();
             let mut app = App::new(19789, sink, (width, height));
@@ -729,13 +628,13 @@ mod os_welcome_tests {
                 app.os_live = live;
                 let area = Rect::new(0, 0, width, height);
                 let mut buf = Buffer::empty(area);
-                empty_window(&mut buf, &app, area);
+                empty_window(&mut buf, &mut app, area);
                 let text = (0..height).map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect::<Vec<_>>().join("\n");
                 if !os {
-                    for action in ["Install Harness", "Try without installing", "Start OpenCode", "Wi-Fi", "Super+B"] {
+                    for action in ["Install Harness", "Try without installing", "Wi-Fi", "Super+B"] {
                         assert!(!text.contains(action), "ordinary hn must not offer {action}: {text}");
                     }
-                    assert!(text.contains("detach"), "{text}");
+                    assert!(text.contains("Task"), "{text}");
                 } else if live {
                     assert!(text.contains("Enter  Install Harness"), "{text}");
                     assert!(text.contains("T      Try without installing"), "{text}");
@@ -3074,7 +2973,7 @@ mod theme_render_tests {
         assert_eq!(buf[(2, 0)].fg, Color::Rgb(1, 2, 3));
     }
 
-    /// The home screen follows a chosen theme: the wordmark in its accent, the screen on its
+    /// The home screen follows a chosen theme: the task pointer in its accent, the screen on its
     /// background; with no theme, the terminal's own background stays.
     #[test]
     fn the_home_screen_follows_the_theme() {
@@ -3084,7 +2983,7 @@ mod theme_render_tests {
             let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(150, 42)).unwrap();
             term.draw(|f| draw(f, app)).unwrap();
             let buf = term.backend().buffer().clone();
-            (buf[(1, 1)].bg, (0..42).flat_map(|y| (0..150).map(move |x| (x, y))).find(|p| buf[*p].symbol() == "█").map(|p| buf[p].fg))
+            (buf[(1, 1)].bg, (0..42).flat_map(|y| (0..150).map(move |x| (x, y))).find(|p| buf[*p].symbol() == "›").map(|p| buf[p].fg))
         };
         let (plain, _) = bg_at(&mut app);
         assert_eq!(plain, Color::Reset, "no theme: the terminal's own background");
@@ -3092,7 +2991,7 @@ mod theme_render_tests {
         let t = crate::terminal_themes::TERMINAL_THEMES.iter().find(|t| t.name == "Adwaita Dark").unwrap();
         let (themed, logo) = bg_at(&mut app);
         assert_eq!(themed, theme::depth_fit(Color::Rgb(t.background[0], t.background[1], t.background[2])));
-        assert_eq!(logo, Some(theme::depth_fit(theme::accent())), "the wordmark in the theme's accent");
+        assert_eq!(logo, Some(theme::depth_fit(theme::accent())), "the task pointer in the theme's accent");
         let _ = app.set_look("theme", "");
     }
 
@@ -3306,6 +3205,7 @@ mod theme_render_tests {
         use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
         let mut app = app();
         app.keymap.prefix = crate::keys::parse("`").unwrap();
+        app.tab_mut().root = Some(crate::layout::Node::new(0, 150, 41));
         let key = |app: &mut App, code: KeyCode, mods: KeyModifiers| crate::input::handle(app, Event::Key(KeyEvent::new(code, mods)));
         key(&mut app, KeyCode::Char('`'), KeyModifiers::NONE);
         assert!(app.prefix, "over the panes, ` is the prefix");

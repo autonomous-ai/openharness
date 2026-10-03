@@ -518,19 +518,10 @@ pub struct App {
     /// When the prefix was pressed: a pause after it shows the keys (which-key).
     pub prefix_at: Option<Instant>,
     pub tick: u64,
-    pub home_cursor: usize,
-    /// The home page's selection moved by you (until then Enter, like any key, starts a shell).
-    pub home_moved: bool,
     /// More commands of the same line or binding wait behind the one running.
     pub chain_follows: bool,
-    /// The Claude Code and Codex conversations Harness did not start that the home page offers
-    /// (each machine's session index, asked once each time the page shows), and the machines
-    /// asked so far.
+    /// Saved conversations discovered on connected machines for the welcome composer.
     pub home_external: Vec<External>,
-    pub home_asked: HashSet<String>,
-    home_shown: bool,
-    /// The pane C-b c was pressed from: the machine and folder the home page's shell (t) takes.
-    pub home_from: Option<(String, String)>,
     /// C-b s's search by what was said (each machine's session_search): the query wanted and when
     /// to ask (a moment after the last key), the query the hits answer, and the hits.
     pub said_want: String,
@@ -555,6 +546,7 @@ pub struct App {
     pub dsh: HashMap<String, Vec<Value>>,
     /// A dismissed New Harness draft, including any pending creation receipt.
     pub new_harness_draft: Option<Box<crate::new_harness::Form>>,
+    pub welcome: crate::new_harness::Welcome,
     /// ── models: the Models view's replies (local models, grids, APIs) and a Use under way ──
     pub models_view: crate::models::Models,
     /// Each machine's last measured round trip (the live roster request), for `@`.
@@ -987,13 +979,8 @@ impl App {
             hup_parent: false,
             prefix: false,
             tick: 0,
-            home_cursor: 0,
-            home_moved: false,
             chain_follows: false,
             home_external: Vec::new(),
-            home_asked: HashSet::new(),
-            home_shown: false,
-            home_from: None,
             said_want: String::new(),
             said_due: None,
             said_pending: 0,
@@ -1014,6 +1001,7 @@ impl App {
             daemon_down: false,
             dsh: HashMap::new(),
             new_harness_draft: None,
+            welcome: Default::default(),
             models_view: Default::default(),
             rtt: HashMap::new(),
             homes: HashMap::new(),
@@ -4784,8 +4772,6 @@ impl App {
         let at = self.tabs.iter().position(|t| self.nums.get(&t.id).map(|m| *m > n).unwrap_or(false)).unwrap_or(self.tabs.len());
         self.tabs.insert(at, tab);
         self.active = at;
-        self.home_cursor = 0;
-        self.home_moved = false;
         self.home_order.borrow_mut().clear();
         self.fit_panes();
     }
@@ -4812,7 +4798,6 @@ impl App {
         let at = self.tabs.iter().position(|t| self.nums.get(&t.id).map(|m| *m > n).unwrap_or(false)).unwrap_or(self.tabs.len());
         self.tabs.insert(at, tab);
         self.active = at;
-        self.home_cursor = 0;
         self.home_order.borrow_mut().clear();
         self.fit_panes();
     }
@@ -5299,8 +5284,16 @@ impl App {
         // The desk's first shell: where hn was started (-c: where it was asked to), running what
         // `hn new` asked for.
         let start = self.start_session.take().unwrap_or_default();
+        let welcome = start.command.is_none() && start.cwd.is_none() && start.window.is_none()
+            && !start.create && self.options.get("@hn-new-window", "", None).as_deref() != Some("shell")
+            && self.options.get("@hn-look", "", None).as_deref() != Some("tmux");
         let cwd = start.cwd.or_else(|| std::env::current_dir().ok().map(|d| d.display().to_string()));
-        crate::input::new_shell_from(self, None, Placement::Auto(None), cwd, start.command);
+        if welcome {
+            self.tab_mut().home = true;
+            crate::new_harness::ensure_welcome(self, None, cwd.clone());
+            let tab = self.tab().id.clone();
+            crate::input::new_shell_from(self, None, Placement::Fill(tab), cwd, start.command);
+        } else { crate::input::new_shell_from(self, None, Placement::Auto(None), cwd, start.command); }
     }
 
     fn fetch_desk(&mut self) {
@@ -5687,31 +5680,6 @@ impl App {
     /// The home page is on screen: a window with nothing in it, nothing over it.
     pub fn home_visible(&self) -> bool { self.modal.is_none() && self.tabs.get(self.active).map(|t| t.home || t.root.is_none()).unwrap_or(false) }
 
-    /// The home page's conversations Harness did not start: each connected machine asked once
-    /// while the page shows (`session_search` with a time and no words: the last 30 days), as the
-    /// desktop's welcome page asks; one that connects meanwhile is asked too. Read afresh the next
-    /// time the page shows.
-    fn ask_home_external(&mut self) {
-        let shown = self.home_visible();
-        if shown && !self.home_shown { self.home_asked.clear(); self.home_external.clear() }
-        self.home_shown = shown;
-        if !shown { return }
-        let now = fleet::now_ms();
-        let machines: Vec<String> = self.fleet.machines.iter().filter(|m| m.usable() && !self.home_asked.contains(&m.id)).map(|m| m.id.clone()).collect();
-        for machine in machines {
-            let Some(link) = self.link(&machine) else { continue };
-            self.home_asked.insert(machine.clone());
-            let payload = json!({ "query": "", "from": now.saturating_sub(30 * 86_400_000), "to": now, "limit": 30 });
-            self.spawn(async move { link.rpc("session_search", payload, Duration::from_secs(10)).await }, move |app, reply| {
-                // (A daemon without session search has none to offer.)
-                let Ok(reply) = reply else { return };
-                for x in externals(&machine, &reply) {
-                    if !x.open && !app.home_external.iter().any(|y| y.machine == x.machine && y.session_id == x.session_id) { app.home_external.push(x) }
-                }
-            });
-        }
-    }
-
     /// C-b s's query, a moment after its last key: every connected machine asked what was said
     /// (its hits kept while the query is still the one they answer; the list filled again).
     fn ask_said(&mut self) {
@@ -5779,7 +5747,7 @@ impl App {
 
     pub fn on_tick(&mut self) {
         self.run_start_then();
-        self.ask_home_external();
+        crate::new_harness::welcome_tick(self);
         self.ask_said();
         self.ask_tails();
         self.tick += 1;

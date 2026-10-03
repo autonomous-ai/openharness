@@ -39,6 +39,54 @@ function setup(initial: string, agents?: () => string[]) {
 }
 
 describe('SessionSearchIndex', () => {
+  it('discovers on first search and distinguishes an unfinished scan from empty history', async () => {
+    const store = SessionSearchStore.open(':memory:')!
+    let finish!: () => void
+    const discover = vi.fn(() => new Promise<void>((resolve) => { finish = resolve }))
+    const index = new SessionSearchIndex({ store, sources: () => [], discover })
+    cleanups.push(() => { index.stop(); store.close() })
+    index.start(60_000)
+    expect(index.search('')).toMatchObject({ hits: [], ready: false, pending: 0 })
+    await Promise.resolve()
+    expect(discover).toHaveBeenCalledTimes(1)
+    index.search('')
+    index.sweep()
+    expect(discover).toHaveBeenCalledTimes(1)
+    finish()
+    await vi.waitFor(() => expect(index.search('')).toMatchObject({ hits: [], ready: true }))
+  })
+
+  it('keeps readiness false through the final indexing pass, then returns discovered history', async () => {
+    const store = SessionSearchStore.open(':memory:')!
+    let finish!: (events: LiveEvent[]) => void
+    const index = new SessionSearchIndex({ store, sources: () => [{
+      agentId: '', sessionId: 'existing-codex', engine: 'codex', transcriptPath: null,
+      header: '', changedAt: Date.now(), external: { cwd: '/repo', origin: 'terminal', title: 'Existing work' },
+      readHistory: () => new Promise<LiveEvent[]>((resolve) => { finish = resolve }),
+    }] })
+    cleanups.push(() => { index.stop(); store.close() })
+    expect(index.search('')).toMatchObject({ ready: false, pending: 0 })
+    finish([{ type: 'user_message', payload: { content: 'fix welcome' } }])
+    await vi.waitFor(() => {
+      const result = index.search('', { from: 0, to: Date.now() + 1 })
+      expect(result.ready).toBe(true)
+      expect(result.hits[0]).toMatchObject({ sessionId: 'existing-codex', external: { title: 'Existing work' } })
+    })
+  })
+
+  it('reports discovery failure and lets a later search retry without overlapping scans', async () => {
+    const store = SessionSearchStore.open(':memory:')!
+    const discover = vi.fn().mockRejectedValueOnce(new Error('not ready')).mockResolvedValue(undefined)
+    const index = new SessionSearchIndex({ store, sources: () => [], discover })
+    cleanups.push(() => { index.stop(); store.close() })
+    index.search('')
+    await vi.waitFor(() => expect(index.search('')).toMatchObject({ ready: false, discoveryError: true }))
+    expect(discover).toHaveBeenCalledTimes(1)
+    index.sweep()
+    await vi.waitFor(() => expect(index.search('').ready).toBe(true))
+    expect(discover).toHaveBeenCalledTimes(2)
+  })
+
   it('does not resurrect deleted conversation history from an in-flight pass or stale source list', async () => {
     const { index, found, settle, store } = setup(prompt('purge search history', 0) + answer('sensitive fixture', 1))
     await settle()
