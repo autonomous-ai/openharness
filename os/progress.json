@@ -257,7 +257,7 @@
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
     "Physical ThinkPad boot, installation, Wi-Fi, suspend and hardware verification; user will test manually"
   ],
-  "last_updated_utc": "2026-10-03T10:45:19.143501+00:00",
+  "last_updated_utc": "2026-10-03T10:48:06.598341+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -922,7 +922,7 @@
   "usb_first_use_revision": {
     "request_received_utc": null,
     "first_recorded_utc": "2026-10-03T08:28:25.074631+00:00",
-    "status": "Verified runtime/image reused; correct the first-use test cleanup before rerunning full installation and default-model workflows.",
+    "status": "Exact image and full CLI CI passed; actual first keyboard chat passed at 1 GiB. Corrected full installation, recovery, workload and DSH journeys are running.",
     "implementation_complete_utc": "2026-10-03T09:23:12.711637+00:00",
     "validation_complete_utc": null,
     "publication_utc": null,
@@ -1094,8 +1094,8 @@
         "publication_utc": null
       }
     },
-    "next_step": "Follow CI 37116593867 and OS 37116595898; inspect fresh first-use screens and both complete USB install/unlock/recovery journeys. Then run default-model workload and DSH acceptance separately on the same exact image before publication.",
-    "last_recorded_utc": "2026-10-03T10:45:19.143501+00:00",
+    "next_step": "Follow the three exact-image runs, inspect any failure and unlock/retry/completion screenshots. Preserve full CLI/native evidence because subsequent changes are test-only. Update public guide and publish preview 4 only after required complete receipts and examples pass.",
+    "last_recorded_utc": "2026-10-03T10:48:06.598341+00:00",
     "first_use_visual_review": "Inspected BIOS 01d-bundled-opencode.png and failure.png from run 37116595898: upstream-default Fledge Alpha Free is shown without a plugin warning; after Ctrl+C twice, the clean Harness Install/Try welcome is visible. Both firmware JSONL replies are 42. The retained process in each is /usr/bin/opencode serve --service.",
     "revision_ready_utc": "2026-10-03T10:29:26.198461+00:00",
     "development_acceptance_revision": {
@@ -1158,8 +1158,44 @@
       "test_source_commit": "e79f94fcb7e6a78e8250eea46da51c80017af8bf",
       "memory_mib": 1024,
       "started_utc": "2026-10-03T10:41:33Z",
-      "status": "in progress when last checked; includes actual keyboard conversation but precedes cleanup correction"
-    }
+      "status": "failed at the known shared-service cleanup assertion; both actual keyboard conversations and independent JSONL replies passed before that assertion",
+      "visual_review": "Inspected BIOS and UEFI 01e-first-agent-reply.png: typed question and 42 reply are visible, upstream default free model, no plugin warning. This proves first-use chat at 1 GiB, not full installation or parallel project workloads."
+    },
+    "active_machine_runs": [
+      {
+        "scope": "four programmer projects plus complete BIOS/UEFI USB journey",
+        "run_id": 37117491184,
+        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37117491184",
+        "started_utc": "2026-10-03T10:46:10Z",
+        "memory_mib": 4096,
+        "image_run_id": 37116595898,
+        "image_source_commit": "67958156da30d2983daee22ddab48c43970fa244",
+        "test_source_commit": "5001600ca051e07152be9000b2470512ebddb5c4",
+        "status": "in progress"
+      },
+      {
+        "scope": "three DSH exercises plus complete BIOS/UEFI USB journey",
+        "run_id": 37117493096,
+        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37117493096",
+        "started_utc": "2026-10-03T10:46:12Z",
+        "memory_mib": 4096,
+        "image_run_id": 37116595898,
+        "image_source_commit": "67958156da30d2983daee22ddab48c43970fa244",
+        "test_source_commit": "5001600ca051e07152be9000b2470512ebddb5c4",
+        "status": "in progress"
+      },
+      {
+        "scope": "constrained complete BIOS/UEFI USB journey and bundled default-model chat",
+        "run_id": 37117494883,
+        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37117494883",
+        "started_utc": "2026-10-03T10:46:14Z",
+        "memory_mib": 1024,
+        "image_run_id": 37116595898,
+        "image_source_commit": "67958156da30d2983daee22ddab48c43970fa244",
+        "test_source_commit": "5001600ca051e07152be9000b2470512ebddb5c4",
+        "status": "in progress"
+      }
+    ]
   },
   "previous_goal_turn_classification": {
     "classification": "progress",
