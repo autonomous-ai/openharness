@@ -257,7 +257,7 @@
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
     "Physical ThinkPad boot, installation, Wi-Fi, suspend and hardware verification; user will test manually"
   ],
-  "last_updated_utc": "2026-10-03T07:09:06.191273+00:00",
+  "last_updated_utc": "2026-10-03T07:19:35.550371+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -644,5 +644,28 @@
       "validation.json"
     ],
     "receipt": "os/work/release-preview2/publication.json"
+  },
+  "physical_thinkpad": {
+    "live_boot": {
+      "status": "passed by user report",
+      "reported_utc": "2026-10-03T07:19:35.550371+00:00",
+      "evidence": "User: ok i boot sucessfully and now in hn",
+      "model": "not yet provided",
+      "scope": "USB reaches hn on a physical ThinkPad; installation, encrypted disk boot, network and suspend not yet verified"
+    },
+    "installation": "User received the disk picker, password, erase confirmation, poweroff and USB removal instructions."
+  },
+  "resumed_goal_audit": {
+    "started_utc": "2026-10-03T07:19:35.550371+00:00",
+    "previous_turn_classification": "progress: preview 2 published and every public asset verified; complete manual guide delivered; Etcher startup failure diagnosed and official workaround downloaded",
+    "status": "completion unproven; physical USB boot is now reported successful; graphics-failure fallback still needs a real runtime check",
+    "next_work": "Force compositor startup failure in a disposable native VM using the unchanged released ISO; verify hn owns tty1, keyboard input reaches a terminal pane, existing work survives, and normal graphics can be restored.",
+    "validation_plan": [
+      "Python and shell syntax for the test-only change",
+      "Native BIOS/plain and UEFI/encrypted machine workflow reusing image run 37101103529; no new ISO/runtime build or duplicate application unit suite"
+    ],
+    "runtime_source_unchanged": "a155a16850438e04315a1959b1bfd1c387d8bf99",
+    "new_runtime_verification_started_utc": null,
+    "new_runtime_verification_completed_utc": null
   }
 }

@@ -181,6 +181,46 @@ class VM:
         self.serial = self.qmp_file = self.qmp = None
 
 
+def check_console_fallback(vm, user, folder):
+    """Break graphics in the live overlay, then type through hn on a real VT."""
+    # The payload and session launcher remain unchanged. An invalid wlroots
+    # backend forces the compositor to fail through its normal startup path.
+    override = '/etc/profile.d/00-hn-test-broken-graphics.sh'
+    vm.command('printf %s ' + shlex.quote('export WLR_BACKENDS=hn-test-missing\n') +
+               ' > ' + override + '; systemctl restart getty@tty1.service')
+    try:
+        vm.command('for n in $(seq 1 60); do '
+                   'for p in $(pgrep -u 1000 -x "hn|harness-tui"); do '
+                   'if test "$(readlink /proc/$p/fd/0)" = /dev/tty1; then '
+                   'printf "HN_CONSOLE_PID=%s\\n" "$p"; exit 0; fi; done; '
+                   'sleep 1; done; exit 1', timeout=75)
+        vm.command('! pgrep -u 1000 -x labwc && ! pgrep -u 1000 -x foot')
+        vm.command(user('/usr/lib/harness-os/wait-runtime'), timeout=160)
+        vm.command('kill -0 "$(cat /tmp/hn-survivor.pid)"')
+        probe = ('printf "Console input ready\\n"; touch /tmp/hn-console-input-ready; '
+                 'read -r answer; test "$answer" = ready && '
+                 'touch /tmp/hn-console-input-passed; exec sleep 1800')
+        vm.command(user('hn new-window -n console-input ' + shlex.quote(probe)))
+        vm.command('for n in $(seq 1 15); do test -e /tmp/hn-console-input-ready && '
+                   'exit 0; sleep 1; done; exit 1', timeout=20)
+        for key in ['r', 'e', 'a', 'd', 'y', 'ret']:
+            vm.keys(key)
+        vm.command('for n in $(seq 1 15); do test -e /tmp/hn-console-input-passed && '
+                   'exit 0; sleep 1; done; exit 1', timeout=20)
+        vm.screenshot('03a-console-fallback')
+    finally:
+        output, _ = vm.command('cat /home/programmer/.local/state/harness-os/display.log; '
+                               'ps -u programmer -o pid,ppid,tty,comm; cat /dev/vcs1', check=False)
+        (folder / 'console-fallback.log').write_text(output)
+        vm.command('rm -f ' + override + '; systemctl restart getty@tty1.service')
+    vm.command(user("sh -c 'for n in $(seq 1 60); do systemctl --user is-active --quiet hn-screen && "
+                    "pgrep -x labwc >/dev/null && pgrep -x foot >/dev/null && exit 0; "
+                    "sleep 1; done; exit 1'"), timeout=75)
+    vm.command('kill -0 "$(cat /tmp/hn-survivor.pid)"')
+    vm.command(user('/usr/lib/harness-os/wait-runtime'), timeout=160)
+    vm.screenshot('03b-graphics-restored')
+
+
 def install_interactively(vm, config, folder):
     # The shipped form and installer run on a real guest TTY. The only test
     # addition is serial-console boot output, needed to observe the next boot.
@@ -323,6 +363,9 @@ def main():
         vm.command(user('systemctl --user restart hn-screen'))
         vm.command('sleep 3; kill -0 "$(cat /tmp/hn-survivor.pid)"')
         result['checks'].append('Terminal process survives screen restart')
+        check_console_fallback(vm, user, folder)
+        result['checks'].append('Graphics startup failure falls back to hn on tty1; physical-keyboard input reaches a terminal pane and existing work survives')
+        result['checks'].append('Restoring graphics returns to the fullscreen hn service without losing the terminal process')
         if args.live_only:
             result['status'] = 'passed'
             return
