@@ -130,12 +130,12 @@ try {
       assert.equal((await request('/api/issues', 'POST', { title: '' })).status, 400);
       assert.equal((await request('/api/issues/9999999', 'PATCH', { status: 'done' })).status, 404);
       await page.goto(url);
-      await page.locator('#issue-title').focus(); await page.keyboard.type('Built on Programmer OS');
+      await page.locator('#issue-title').focus(); await page.keyboard.type('Built on Harness');
       await page.locator('#issue-body').fill('Created through the real keyboard-accessible frontend.');
       await page.locator('#create-issue').focus(); await page.keyboard.press('Enter');
-      await page.getByText('Built on Programmer OS', { exact: true }).waitFor();
+      await page.getByText('Built on Harness', { exact: true }).waitFor();
       const list = await (await request('/api/issues')).json();
-      const item = list.find(issue => issue.title === 'Built on Programmer OS');
+      const item = list.find(issue => issue.title === 'Built on Harness');
       assert.ok(item?.id); assert.equal(item.status, 'open');
       assert.equal((await request(`/api/issues/${item.id}`, 'PATCH', { status: 'invalid' })).status, 400);
       assert.ok((await request(`/api/issues/${item.id}`, 'PATCH', { status: 'done' })).ok);

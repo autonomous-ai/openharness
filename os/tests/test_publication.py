@@ -11,6 +11,15 @@ spec.loader.exec_module(publish)
 
 
 class PublicationGuards(unittest.TestCase):
+    def test_installation_guide_cannot_name_an_older_release_or_image(self):
+        manifest = {'version': '0.1.0-preview.4', 'iso': {'name': 'harness-0.1.0-preview.4-x86_64.iso'}}
+        guide = 'These instructions are for **0.1.0-preview.4**. Download harness-0.1.0-preview.4-x86_64.iso.'
+        publish.validate_install_guide(manifest, guide)
+        for old in [guide.replace('**0.1.0-preview.4**', '**0.1.0-preview.3**'),
+                    guide.replace('harness-0.1.0-preview.4-x86_64.iso', 'programmer-os-0.1.0-preview.3-x86_64.iso')]:
+            with self.subTest(guide=old), self.assertRaises(ValueError):
+                publish.validate_install_guide(manifest, old)
+
     def test_failed_or_incomplete_project_work_cannot_be_published_as_passed(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

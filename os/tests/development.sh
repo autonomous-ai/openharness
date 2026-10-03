@@ -8,18 +8,18 @@ cd "$HOME/Projects/os-validation"
 git init -q
 cat > main.c <<'C'
 #include <stdio.h>
-int main(void) { puts("programmer-os-compiled-ok"); return 0; }
+int main(void) { puts("harness-compiled-ok"); return 0; }
 C
 printf 'hello: main.c\n\t$(CC) -Wall -Wextra -Werror -O2 main.c -o hello\n' > Makefile
 make
-test "$(./hello)" = programmer-os-compiled-ok
+test "$(./hello)" = harness-compiled-ok
 git add main.c Makefile
 git diff --cached --check
 cat > server.mjs <<'JS'
 import http from 'node:http';
 http.createServer((request, response) => {
   response.writeHead(200, {'content-type': 'text/html'});
-  response.end('<!doctype html><title>Programmer OS preview</title><h1>Local development works.</h1><p>Served by Node from an hn terminal pane.</p>');
+  response.end('<!doctype html><title>Harness preview</title><h1>Local development works.</h1><p>Served by Node from an hn terminal pane.</p>');
 }).listen(18781, '127.0.0.1');
 JS
 printf '%s\n' 'Compiled and ran C, checked a Git diff, and prepared a local Node preview.'

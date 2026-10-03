@@ -37,6 +37,12 @@ def read(path):
     return json.loads(path.read_text())
 
 
+def validate_install_guide(manifest, guide):
+    if (f'These instructions are for **{manifest["version"]}**' not in guide or
+            manifest['iso']['name'] not in guide):
+        raise ValueError('The installation guide must match the release version and ISO filename.')
+
+
 def validate_receipts(manifest, receipts):
     rows = {(r['firmware'], r['encrypted']): r for r in receipts}
     if set(rows) != {('bios', False), ('uefi', True)} or len(receipts) != 2:
@@ -129,13 +135,17 @@ def main():
     (folder / 'validation.json').write_text(json.dumps(validation, indent=2) + '\n')
     manifest['validation'] = {'status': 'passed', 'receipt': 'validation.json', 'machine_run': run['html_url'], 'limitations': limitations}
     (folder / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    guide = (Path(__file__).resolve().parents[1] / 'INSTALL.md').read_text()
+    validate_install_guide(manifest, guide)
+    (folder / 'INSTALL.md').write_text(guide)
     with zipfile.ZipFile(folder / 'machine-evidence.zip', 'w', compression=zipfile.ZIP_DEFLATED) as archive:
         for directory in ['machines', 'dsh-machines']:
             for path in sorted((root / directory).rglob('*')):
-                if path.is_file() and path.suffix in {'.png', '.json', '.txt', '.jsonl'} and 'Projects' not in path.relative_to(root / directory).parts:
+                include = path.suffix in {'.png', '.json', '.txt', '.jsonl'} or path.name.endswith('-boot-journal.log')
+                if path.is_file() and include and 'Projects' not in path.relative_to(root / directory).parts:
                     archive.write(path, path.relative_to(root))
     if examples:
-        with zipfile.ZipFile(folder / 'programmer-examples.zip', 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+        with zipfile.ZipFile(folder / 'harness-examples.zip', 'w', compression=zipfile.ZIP_DEFLATED) as archive:
             for directory, kind in [('machines', 'workloads'), ('dsh-machines', 'dsh')]:
                 if kind not in examples:
                     continue
@@ -153,7 +163,7 @@ def main():
 
 Arch Linux with the LTS kernel, labwc, foot, and an on-demand browser. No desktop panels or preinstalled development stacks.
 
-To try it: verify the ISO's SHA-256, write the whole ISO to a USB stick, and boot an x86-64 PC with Secure Boot disabled. On the USB welcome screen, press Enter to install or T to try Harness. Try opens Wi-Fi setup when needed, then bundled OpenCode with its upstream default settings. Ctrl+B then T opens a terminal directly; Ctrl+B then I opens the installer from a live session. This preview's installer erases the entire selected disk; it does not resize another OS. Encryption is enabled by default.
+To try it: follow the included `INSTALL.md` for Mac → USB → ThinkPad instructions. Verify the ISO's SHA-256, write the whole ISO to a USB stick, and boot an x86-64 PC with Secure Boot disabled. On the USB welcome screen, press Enter to install or T to try Harness. Try opens Wi-Fi setup when needed, then bundled OpenCode with its upstream default settings. Ctrl+B then T opens a terminal directly; Ctrl+B then I opens the installer from a live session. This preview's installer erases the entire selected disk; it does not resize another OS. Encryption is enabled by default.
 
 {'The installer has four aligned fields: disk, encryption, password, repeat password. Disk choices fit on one line. Activate Install to begin; there is no second confirmation screen or minimum password length. Empty passwords are rejected. The account is me@harness. The password initially protects both the local account and, when enabled, the encrypted disk. There is no first-boot account wizard.' if interactive_install else ''}
 
@@ -161,7 +171,7 @@ To try it: verify the ISO's SHA-256, write the whole ISO to a USB stick, and boo
 
 BIOS/plain and UEFI/encrypted VM boot, clipboard, browser switching, offline installation and package-checkpoint recovery passed. The BIOS VM uses a Nehalem CPU profile without AVX2, starts bundled OpenCode, installs the other agent executables, installs a compiler on demand, builds C, and serves a local Node preview. See `validation.json` and `machine-evidence.zip` for the exact checks and measurements.
 
-{'Real free OpenCode agents built a Python CLI, a conference website, a keyboard game and a Fastify/SQLite application. Their unit tests and independent browser/API checks passed. The retained projects are in `programmer-examples.zip`, separate from the minimal ISO.' if 'workloads' in examples else ''}
+{'Real free OpenCode agents built a Python CLI, a conference website, a keyboard game and a Fastify/SQLite application. Their unit tests and independent browser/API checks passed. The retained projects are in `harness-examples.zip`, separate from the minimal ISO.' if 'workloads' in examples else ''}
 
 {'Three DSHs also passed: a live HTML greeting, a terminal CSV tool, and a game using the existing shared viewers, including keyboard play, pause and standalone export.' if 'dsh' in examples else ''}
 
