@@ -64,7 +64,8 @@ def main():
         (folder / 'probe.log').write_text(output)
         assert status == 0, 'Optional package/inference probe failed; see probe.log'
         marker = 'HN_LOCAL_AI_PROBE='
-        result['guest'] = json.loads(next(line.split(marker, 1)[1] for line in output.splitlines() if line.startswith(marker)))
+        # sudo may prepend a shell-integration OSC sequence on the same line.
+        result['guest'] = json.loads(next(line.split(marker, 1)[1] for line in output.splitlines() if marker in line))
         assert result['guest']['status'] == 'passed'
         if args.probe == 'local-ai':
             vm.keys('ctrl', 'b')
@@ -93,7 +94,7 @@ def main():
             result['generic_browser_after_driver_reboot'] = 'passed; virtual GPU only'
         result['status'] = 'passed'
     except BaseException as error:
-        result.update(status='failed', error=str(error))
+        result.update(status='failed', error=repr(error))
         try:
             vm.screenshot('failure')
         except Exception:
