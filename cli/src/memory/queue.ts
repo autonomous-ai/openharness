@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { digest } from './admission.js'
 import { memoryCallAllowance, reserveMemoryCall, MEMORY_CALL_PURPOSE_SCHEMA } from './budget.js'
 import type { Database } from './database.js'
+import { inferenceWaitReason, type InferenceWaitReason } from './inferenceStatus.js'
 import { MemoryError, parse, sourceSchema, type MemoryAccess, type MemoryDraft, type MemoryRecord, type SourceEvent } from './types.js'
 
 export const QUEUE_SCHEMA = `
@@ -60,8 +61,8 @@ export interface InferenceTarget {
   state: 'ready' | 'waiting' | 'off' | 'unsupported'
   /** Opaque host-derived identity of the selected account, collection, model, and effort. */
   key?: string
-  /** A recognized provider refusal, never raw provider output. */
-  reason?: 'inference_provider_restricted'
+  /** Recognized availability code, never raw native/provider output. */
+  reason?: InferenceWaitReason
   foregroundBusy?: boolean
 }
 export interface LearningLease {
@@ -71,7 +72,7 @@ export interface LearningLease {
   episodes: Array<{ jobId: string; sourceIds: string[]; context: 'complete' | 'bounded' }>
 }
 export type ClaimResult = { state: 'claimed'; lease: LearningLease }
-  | { state: 'idle' | 'learning_off' | 'foreground_busy' | 'waiting_for_model' | 'budget_deferred' | 'source_incomplete'; retryAt?: number }
+  | { state: 'idle' | 'learning_off' | 'foreground_busy' | 'waiting_for_model' | 'budget_deferred' | 'source_incomplete'; retryAt?: number; reason?: InferenceWaitReason }
 export type FinishResult = { state: 'learned' | 'no_useful_memory'; records: MemoryRecord[] }
   | { state: 'stale' | 'failed'; reason: string }
 
@@ -165,6 +166,18 @@ export class MemoryQueue {
     return this.nextJob() ? 'ready' : 'idle'
   }
 
+  /** A deferred job is still waiting, not an empty queue. No native probes or source text. */
+  waitingForModel(): { state: 'waiting_for_model'; reason?: InferenceWaitReason } | null {
+    if (!this.deps.controls().learn) return null
+    const row = this.deps.db.prepare(`SELECT j.last_error FROM memory_jobs j
+      WHERE j.state='waiting_for_model' AND j.created_at>?
+      AND (j.project_id IS NULL OR j.project_id IN (SELECT id FROM projects WHERE included=1))
+      ORDER BY j.priority DESC,j.created_at,j.id LIMIT 1`).get(this.deps.now() - PENDING_RETENTION_MS)
+    if (!row) return null
+    const reason = inferenceWaitReason(row.last_error)
+    return { state: 'waiting_for_model', ...(reason ? { reason } : {}) }
+  }
+
   private nextJob(): Record<string, unknown> | undefined {
     return this.readyJobs(1)[0]
   }
@@ -194,8 +207,9 @@ export class MemoryQueue {
       if (!job) return { state: 'idle' as const }
       const jobId = String(job.id)
       if (target.state !== 'ready' || !target.key) {
-        this.release(jobId, 'waiting_for_model', target.state === 'unsupported' ? 'model_unsupported' : 'model_unavailable', now() + 60_000)
-        return { state: 'waiting_for_model' as const }
+        const reason = inferenceWaitReason(target.reason)
+        this.release(jobId, 'waiting_for_model', reason ?? (target.state === 'unsupported' ? 'model_unsupported' : 'model_unavailable'), now() + 60_000)
+        return { state: 'waiting_for_model' as const, ...(reason ? { reason } : {}) }
       }
       const usage = memoryCallAllowance(db, now())
       if (usage.retryAt !== null) {

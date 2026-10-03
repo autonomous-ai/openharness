@@ -1189,6 +1189,86 @@ void main() {
     });
   }
 
+  for (final reason in [
+    ('companion_unopened', 'Start your companion'),
+    ('companion_stopped', 'Reopen its conversation'),
+    ('companion_starting', 'finish starting'),
+    ('companion_model_unavailable', 'Choose a model'),
+    ('companion_connection_unavailable', 'current model connection'),
+    ('companion_account_unavailable', 'could not verify'),
+    ('companion_configuration_unsupported', 'agent or provider configuration'),
+    ('claude_version_uncertified', 'this version of your selected agent'),
+    ('codex_version_uncertified', 'this version of your selected agent'),
+    ('opencode_version_uncertified', 'this version of your selected agent'),
+    ('inference_context_changed', 'will check the new selection'),
+    (
+      'unknown-private-provider-text',
+      'Check that its terminal beside this viewer',
+    ),
+  ]) {
+    testWidgets('learning shows a recovery step for ${reason.$1}', (
+      tester,
+    ) async {
+      transport.runtime = {
+        'state': 'ready',
+        'learning': {'state': 'waiting_for_model', 'reason': reason.$1},
+      };
+      await mount(tester);
+      expect(find.textContaining(reason.$2), findsOneWidget);
+      expect(
+        find.textContaining('unknown-private-provider-text'),
+        findsNothing,
+      );
+      await tap(tester, 'Review learning');
+      expect(find.textContaining(reason.$2), findsOneWidget);
+      expect(transport.learn, isTrue);
+      expect(transport.recall, isTrue);
+      expect(
+        transport.calls.any((p) => ['preview', 'apply'].contains(p['action'])),
+        isFalse,
+      );
+      expect(tester.takeException(), isNull);
+
+      transport.runtime = {
+        'state': 'ready',
+        'learning': {'state': 'learned', 'learned': 1},
+      };
+      await library.refresh();
+      await tester.pumpAndSettle();
+      expect(find.textContaining(reason.$2), findsNothing);
+      expect(find.textContaining('saved new memories'), findsOneWidget);
+    });
+  }
+
+  for (final brightness in [Brightness.dark, Brightness.light]) {
+    testWidgets(
+      'stopped companion and backlog fit ${brightness.name} at large text',
+      (tester) async {
+        transport.runtime = {
+          'state': 'ready',
+          'learning': {
+            'state': 'waiting_for_model',
+            'reason': 'companion_stopped',
+          },
+          'capture': {'state': 'unavailable', 'reason': 'memory_backlog_full'},
+        };
+        await mount(
+          tester,
+          brightness: brightness,
+          scale: 2,
+          size: const Size(440, 1100),
+        );
+        expect(find.textContaining('Reopen its conversation'), findsOneWidget);
+        expect(find.textContaining('queue is full'), findsOneWidget);
+        await capture(
+          tester,
+          'companion-stopped-${brightness.name}-large-text',
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
   for (final brightness in [Brightness.dark, Brightness.light]) {
     for (final scale in [1.0, 2.0]) {
       testWidgets(

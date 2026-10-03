@@ -8,6 +8,7 @@ import { CodingMemoryStore } from './store.js'
 import { MemoryLearner } from './learner.js'
 import { QUEUE_OPERATIONS, type MemoryPort, type Operation, type Arguments, type Result } from './operations.js'
 import { MemoryError } from './types.js'
+import type { InferenceWaitReason } from './inferenceStatus.js'
 
 it('waits for a certified selected Codex runtime and preserves foreground priority', async () => {
   const intelligence = { extractionStatus: async () => ({ state: 'ready' as const, agentId: 'companion', engine: 'codex', contextKey: 'selected' }),
@@ -16,7 +17,7 @@ it('waits for a certified selected Codex runtime and preserves foreground priori
   let busy = true
   const foreground = vi.fn((id: string) => id === 'companion' && busy)
   const inference = companionMemoryInference(intelligence, foreground, capability)
-  expect(await inference.target()).toEqual({ state: 'unsupported' })
+  expect(await inference.target()).toEqual({ state: 'unsupported', reason: 'codex_version_uncertified' })
   expect(intelligence.extract).not.toHaveBeenCalled()
   capability.mockResolvedValue({ supported: true, version: '0.159.0' })
   expect(await inference.target()).toEqual({ state: 'ready', key: 'selected', foregroundBusy: true })
@@ -48,10 +49,29 @@ it('checks OpenCode native compatibility without probing a different engine', as
   const opencode = vi.fn(async () => ({ supported: false, version: '2.0.0' }))
   const inference = companionMemoryInference({ extractionStatus: async () => ({ state: 'ready', agentId: 'companion',
     engine: 'opencode', contextKey: 'native-binding' }), extract: async () => null }, () => false, codex, claude, opencode)
-  expect(await inference.target()).toEqual({ state: 'unsupported' })
+  expect(await inference.target()).toEqual({ state: 'unsupported', reason: 'opencode_version_uncertified' })
   opencode.mockResolvedValue({ supported: true, version: '1.18.34' })
   expect(await inference.target()).toEqual({ state: 'ready', key: 'native-binding', foregroundBusy: false })
   expect(codex).not.toHaveBeenCalled(); expect(claude).not.toHaveBeenCalled()
+})
+
+it.each<InferenceWaitReason>(['companion_unopened', 'companion_stopped', 'companion_starting',
+  'companion_connection_unavailable', 'companion_model_unavailable', 'companion_account_unavailable',
+  'companion_configuration_unsupported', 'inference_context_changed'])(
+  'preserves %s without probing native versions or running extraction', async reason => {
+    const capability = vi.fn(), extract = vi.fn()
+    const inference = companionMemoryInference({ extractionStatus: async () => ({ state: 'waiting', reason }), extract },
+      () => false, capability, capability, capability)
+    expect(await inference.target()).toEqual({ state: 'waiting', reason })
+    expect(capability).not.toHaveBeenCalled()
+    expect(extract).not.toHaveBeenCalled()
+  })
+
+it('reports an unsupported Claude version as compatibility, not missing setup', async () => {
+  const capability = vi.fn(async () => ({ supported: false, version: 'unverified' }))
+  const inference = companionMemoryInference({ extractionStatus: async () => ({ state: 'ready', agentId: 'companion',
+    engine: 'claude', contextKey: 'binding' }), extract: vi.fn() }, () => false, vi.fn(), capability, vi.fn())
+  expect(await inference.target()).toEqual({ state: 'unsupported', reason: 'claude_version_uncertified' })
 })
 
 it('preserves queued evidence and stops calls and native probes after a refusal, then resumes on a new connection', async () => {

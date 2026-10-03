@@ -5,6 +5,7 @@ import type { InferenceTarget, LearningLease } from './queue.js'
 import { MEMORY_CONTEXT_GUIDE } from './context.js'
 import { notebookProposalSchema, type NotebookLease } from './notebook.js'
 import { extractionOutputSchema, extractionSources, resolveExtractionProposals } from './extractionEvidence.js'
+import { inferenceWaitReason } from './inferenceStatus.js'
 
 const outputSchema = JSON.stringify(z.toJSONSchema(extractionOutputSchema, { io: 'input' }))
 export const EXTRACTION_PROMPT_VERSION = 'coding-memory-v6'
@@ -126,7 +127,11 @@ export class MemoryLearner {
       const notebook = await this.memory.request('notebookPending', [])
       assertActive(controller.signal)
       const buildNotebook = notebook.state === 'ready' && (pending !== 'ready' || notebook.prefer)
-      if (!buildNotebook && pending !== 'ready') return { state: notebook.state === 'idle' ? pending : notebook.state }
+      if (!buildNotebook && pending !== 'ready') {
+        const waiting = await this.memory.request('waitingForModel', [])
+        assertActive(controller.signal)
+        return waiting ?? { state: notebook.state === 'idle' ? pending : notebook.state }
+      }
       target ??= await this.inference.target()
       if (controller.signal.aborted) return { state: controller.signal.reason === 'foreground_activity' ? 'waiting_for_quiet' : 'cancelled' }
       if (target.reason === 'inference_provider_restricted') {
@@ -134,9 +139,11 @@ export class MemoryLearner {
         return { state: 'waiting_for_model', reason: target.reason }
       }
       const timeoutMs = Math.max(1, Math.min(this.timeoutMs, 90_000))
+      const waitReason = inferenceWaitReason(target.reason)
       if (buildNotebook) {
         const claim = await this.memory.request('notebookClaim', [target])
-        if (claim.state !== 'claimed') return { state: claim.state }
+        if (claim.state !== 'claimed') return { state: claim.state,
+          ...(claim.state === 'waiting_for_model' && waitReason ? { reason: waitReason } : {}) }
         notebookLease = claim.lease
         assertActive(controller.signal)
         const answer = await infer(this.inference, notebookPrompt(notebookLease), controller, timeoutMs, target.key!)
@@ -152,7 +159,7 @@ export class MemoryLearner {
         return { state: committed.state === 'ready' ? 'notebook_updated' : committed.state === 'empty' ? 'notebook_empty' : 'stale' }
       }
       const claim = await this.memory.request('claim', [target])
-      if (claim.state !== 'claimed') return { state: claim.state }
+      if (claim.state !== 'claimed') return { state: claim.state, ...(claim.reason ? { reason: claim.reason } : {}) }
       lease = claim.lease
       assertActive(controller.signal)
       const existing = await this.memory.request('list', [lease.access, 100])

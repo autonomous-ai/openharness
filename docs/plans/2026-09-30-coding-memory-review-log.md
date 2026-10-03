@@ -1044,3 +1044,28 @@ error can surface as `waiting_for_model / inference_unavailable`. That classific
 needs a focused follow-up; it does not explain the live provider blockage without
 additional evidence. Live automatic learning, wider native lifecycles and the
 planned quality/benefit gates remain unfinished.
+
+### Explain why continuous learning is waiting — October 3
+
+The collection now carries bounded availability reasons from its observed runtime
+through the memory adapter, queue and Memories viewer. A stopped or unopened
+companion, incomplete startup, unavailable model/account connection, unsupported
+configuration and unverified native version have distinct recovery explanations.
+An unavailable account observation does not claim the user is signed out. Native
+version refusal remains separate from model quality and provider refusal.
+
+Extraction jobs retain their last recognized reason in existing queue metadata.
+During the retry delay, an idle check no longer describes that deferred work as an
+empty queue. This survives store/learner restart without another account lookup,
+version probe or inference call. Learning-off, excluded/private sources and expired
+work suppress the notice; a successful later review clears it. Only fixed reason
+codes are retained or shown, never native/provider error text. Notebook claim
+failures forward the current reason, but notebook-only delay metadata still lacks
+the durable per-job reason used by extraction jobs.
+
+The Desktop points to the existing companion terminal and model controls. Reading
+or reviewing the explanation does not reopen an agent or change Learn/Recall.
+This improves recovery diagnosis; it does not unblock the installed stopped
+conversation, change the selected provider, or establish successful real-user
+learning. The separate in-process diagnostic storage-error classification and the
+two unsupported private-example memories remain open.

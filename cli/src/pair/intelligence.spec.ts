@@ -122,9 +122,22 @@ describe('the collection DSH supplies its intelligence', () => {
     finish({ text: 'answer from old account' })
     expect(await pending).toBeNull()
     account = null
-    expect((await brain.extractionStatus()).state).toBe('waiting')
+    expect(await brain.extractionStatus()).toMatchObject({ state: 'waiting', reason: 'companion_account_unavailable' })
     expect(await brain.extract('evidence', { timeoutMs: 1000, signal: new AbortController().signal, contextKey: before! })).toBeNull()
     expect(w.run).toHaveBeenCalledOnce()
+  })
+
+  it('distinguishes unopened, starting, missing model and unsupported configuration without guessing credentials', async () => {
+    const w = world()
+    w.set(null)
+    expect(w.brain.status()).toEqual({ state: 'unopened', reason: 'companion_unopened' })
+    w.set({ agentId: 'collection', engine: 'claude', stopped: false, sessionId: null, profile: null })
+    expect(w.brain.status()).toMatchObject({ state: 'waiting', reason: 'companion_starting' })
+    w.set({ ...w.get(), sessionId: 'session' })
+    expect(w.brain.status()).toMatchObject({ state: 'waiting', reason: 'companion_model_unavailable' })
+    w.set({ ...w.get(), customProvider: true })
+    expect(w.brain.status()).toMatchObject({ state: 'unsupported', reason: 'companion_configuration_unsupported' })
+    expect(w.run).not.toHaveBeenCalled()
   })
 
   it('cancels while the native account lookup is pending without launching extraction', async () => {
@@ -168,6 +181,17 @@ describe('OpenCode companion request binding', () => {
     const brain = new CompanionIntelligence({ ...w.deps, openCodeSnapshot: () => snapshot, runOpenCode: run, accountIdentity })
     return { ...w, brain, openCodeRun: run, accountIdentity, snapshot: () => snapshot!, setSnapshot: (value: OpenCodeMemorySnapshot | null) => { snapshot = value } }
   }
+
+  it('distinguishes a stopped companion from an unobserved live connection without starting either', async () => {
+    const w = openCodeWorld()
+    w.set({ ...w.get(), stopped: true })
+    expect(await w.brain.extractionStatus()).toMatchObject({ state: 'waiting', reason: 'companion_stopped' })
+    w.set({ ...w.get(), stopped: false })
+    w.setSnapshot(null)
+    expect(await w.brain.extractionStatus()).toMatchObject({ state: 'waiting', reason: 'companion_connection_unavailable' })
+    expect(w.openCodeRun).not.toHaveBeenCalled()
+    expect(w.accountIdentity).not.toHaveBeenCalled()
+  })
 
   it('uses the foreground model/account/variant for extraction and ordinary companion intelligence', async () => {
     const w = openCodeWorld()

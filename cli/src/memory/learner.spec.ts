@@ -6,6 +6,7 @@ import { CodingMemoryStore } from './store.js'
 import { MemoryLearner, type MemoryInference } from './learner.js'
 import { QUEUE_OPERATIONS, type MemoryPort, type Operation, type Arguments, type Result } from './operations.js'
 import { MemoryError, type MemoryAccess, type MemoryDraft, type SourceEvent } from './types.js'
+import { PENDING_RETENTION_MS } from './queue.js'
 
 const access: MemoryAccess = { profileId: 'owner', projectIds: ['project'], includeProfile: false }
 const event: SourceEvent = { id: 'first', profileId: 'owner', projectId: 'project', engine: 'codex', sessionId: 'session',
@@ -58,6 +59,50 @@ function promptSources(prompt: string): Array<Omit<SourceEvent, 'text'> & { exce
 function originalSources(prompt: string): SourceEvent[] {
   return promptSources(prompt).map(({ excerpts, ...metadata }) => ({ ...metadata, text: excerpts.map(part => part.text).join('') }))
 }
+
+it('keeps the model wait reason across retry delays and restart without extra probes or losing queued evidence', async () => {
+  const provider = inference()
+  provider.target = vi.fn(async () => ({ state: 'waiting' as const, reason: 'companion_stopped' as const }))
+  const waiting = { state: 'waiting_for_model', reason: 'companion_stopped' }
+  const learner = new MemoryLearner(memory, provider)
+  expect(await learner.tick()).toEqual(waiting)
+  expect(await learner.tick()).toEqual(waiting)
+  expect(provider.target).toHaveBeenCalledOnce()
+  expect(provider.run).not.toHaveBeenCalled()
+  expect(store.learning.status().callsLastHour).toBe(0)
+  expect(store.source(event.id, access)).toEqual(event)
+
+  store.close()
+  const reopened = CodingMemoryStore.open({ directory, profileId: 'owner', now: () => now })
+  if (!reopened.ok) throw new Error(reopened.reason)
+  store = reopened.store
+  const restarted = new MemoryLearner(memory, provider)
+  expect(await restarted.tick()).toEqual(waiting)
+  expect(provider.target).toHaveBeenCalledOnce()
+  now += 60_001
+  provider.target = vi.fn(async () => ({ state: 'ready' as const, key: 'new-selected-connection' }))
+  expect(await restarted.tick()).toEqual({ state: 'learned', learned: 1 })
+  expect(store.learning.waitingForModel()).toBeNull()
+  expect(store.list(access)[0].evidence[0].quote).toBe(event.text)
+  expect(provider.run).toHaveBeenCalledOnce()
+})
+
+it.each(['off', 'excluded', 'private', 'expired'] as const)('does not retain a model-wait notice for %s work', async change => {
+  const provider = inference()
+  provider.target = async () => ({ state: 'waiting', reason: 'companion_account_unavailable' })
+  expect((await new MemoryLearner(memory, provider).tick()).reason).toBe('companion_account_unavailable')
+  if (change === 'off') store.setControls({ learn: false, recall: true })
+  if (change === 'excluded') store.setProjectIncluded('project', false)
+  if (change === 'private') store.setSessionIncluded('codex', 'session', false)
+  if (change === 'expired') now += PENDING_RETENTION_MS
+  expect(store.learning.waitingForModel()).toBeNull()
+})
+
+it('never persists or exposes a raw provider error as an availability reason', () => {
+  const target = { state: 'unsupported' as const, reason: 'secret-provider-response' as 'companion_stopped' }
+  expect(store.learning.claim(target)).toEqual({ state: 'waiting_for_model' })
+  expect(store.learning.waitingForModel()).toEqual({ state: 'waiting_for_model' })
+})
 
 it('extracts scoped knowledge through one selected target and retains its exact evidence', async () => {
   const provider = inference()
@@ -177,7 +222,7 @@ it('records a no-useful-memory result separately from unavailable intelligence',
   expect(await learner.tick()).toEqual({ state: 'waiting_for_model' })
   expect(store.learning.status().jobs.no_useful_memory).toBeUndefined()
   expect(store.learning.status().jobs.waiting_for_model).toBe(1)
-  expect((await learner.tick()).state).toBe('idle')
+  expect((await learner.tick()).state).toBe('waiting_for_model')
   expect(provider.target).toHaveBeenCalledOnce()
   now += 60_001
   provider.run = vi.fn(async () => '{"proposals":[]}')

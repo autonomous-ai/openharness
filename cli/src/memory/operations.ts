@@ -9,7 +9,7 @@ export type MemoryOperations = Pick<CodingMemoryStore,
   | 'libraryPage' | 'libraryProjects' | 'libraryActivity' | 'libraryDetail' | 'libraryCorrect' | 'libraryForget' | 'libraryPreview' | 'libraryApply'
   | 'notebookPending' | 'notebookClaim' | 'notebookFinish' | 'notebookDefer' | 'libraryNotebooks' | 'libraryNotebook'
   | 'prepareRecall' | 'recallEmitted' | 'recallReceipts' | 'putTopic' | 'topic' | 'forget'>
-  & Pick<MemoryQueue, 'capture' | 'checkpoint' | 'pendingReview' | 'claim' | 'finish' | 'defer' | 'cursor' | 'episodeOpen' | 'status'>
+  & Pick<MemoryQueue, 'capture' | 'checkpoint' | 'pendingReview' | 'waitingForModel' | 'claim' | 'finish' | 'defer' | 'cursor' | 'episodeOpen' | 'status'>
 export type Operation = keyof MemoryOperations
 export type Arguments<K extends Operation> = Parameters<MemoryOperations[K]>
 export type Result<K extends Operation> = ReturnType<MemoryOperations[K]>
@@ -21,4 +21,4 @@ export const STORE_OPERATIONS = ['controls', 'setControls', 'preferences', 'setP
   'libraryPage', 'libraryProjects', 'libraryActivity', 'libraryDetail', 'libraryCorrect', 'libraryForget', 'libraryPreview', 'libraryApply',
   'notebookPending', 'notebookClaim', 'notebookFinish', 'notebookDefer', 'libraryNotebooks', 'libraryNotebook',
   'prepareRecall', 'recallEmitted', 'recallReceipts', 'putTopic', 'topic', 'forget'] as const
-export const QUEUE_OPERATIONS = ['capture', 'checkpoint', 'pendingReview', 'claim', 'finish', 'defer', 'cursor', 'episodeOpen', 'status'] as const
+export const QUEUE_OPERATIONS = ['capture', 'checkpoint', 'pendingReview', 'waitingForModel', 'claim', 'finish', 'defer', 'cursor', 'episodeOpen', 'status'] as const

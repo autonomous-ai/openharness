@@ -310,10 +310,7 @@ class _CodingMemoryViewState extends State<CodingMemoryView> {
       : 'Some recent work could not be read for learning. Your existing memories are still available.';
   final state = learning['state'];
   final message = switch (state) {
-    'waiting_for_model'
-        when learning['reason'] == 'inference_provider_restricted' =>
-      'Your selected model’s provider declined background learning. Choose another model in the companion terminal to continue. Existing memories are still available.',
-    'waiting_for_model' => 'Waiting for your companion’s model. Check that its terminal beside this viewer is running with a model selected, and complete any setup shown there.',
+    'waiting_for_model' => _modelWaitMessage(learning['reason']),
     'foreground_busy' =>
       'Your companion is working. Learning waits until it is free.',
     'waiting_for_quiet' =>
@@ -344,6 +341,22 @@ class _CodingMemoryViewState extends State<CodingMemoryView> {
         ].contains(state),
   );
 }
+
+String _modelWaitMessage(Object? reason) => switch (reason) {
+  'companion_unopened' => 'Start your companion in the terminal beside this viewer to begin learning. Saved memories remain available.',
+  'companion_stopped' => 'Your companion is stopped. Reopen its conversation to continue learning. Saved memories remain available.',
+  'companion_starting' => 'Waiting for your companion’s agent to finish starting. Complete any setup shown in its terminal.',
+  'companion_model_unavailable' => 'Choose a model in the companion terminal so it can review your coding work.',
+  'companion_connection_unavailable' => 'Waiting for the companion’s current model connection. Check its terminal and complete any connection or sign-in setup shown there.',
+  'companion_account_unavailable' => 'Harness could not verify the selected agent’s sign-in for background learning. Check the companion terminal and complete sign-in if needed.',
+  'companion_configuration_unsupported' => 'Background learning is unavailable for this agent or provider configuration. Choose a supported agent in the companion terminal. Saved memories remain available.',
+  'claude_version_uncertified' ||
+  'codex_version_uncertified' ||
+  'opencode_version_uncertified' => 'Background learning is not yet supported with this version of your selected agent. Choose a supported agent in the companion terminal, or wait for a Harness update. Saved memories remain available.',
+  'inference_context_changed' => 'Your companion’s model or connection changed. Learning will check the new selection before reviewing more work.',
+  'inference_provider_restricted' => 'Your selected model’s provider declined background learning. Choose another model in the companion terminal to continue. Existing memories are still available.',
+  _ => 'Waiting for your companion’s model. Check that its terminal beside this viewer is running with a model selected, and complete any setup shown there.',
+};
 
 Widget _text(String value, {bool small = false}) => Text(
   value,
