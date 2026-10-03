@@ -92,6 +92,9 @@ def wireless(vm, result):
     vm.command('! ip route show default | grep -v "dev $(cat /run/harness-station)"')
     vm.command(USER_ENV + 'hn new-window -n Wi-Fi ' + shlex.quote('hn-os wifi'))
     wait_screen(vm, ['harness-test'], 'wifi-01-networks')
+    # nmtui lists saved Ethernet profiles even when their device is unmanaged.
+    # The first row is Wired connection 1; select the scanned wireless row.
+    vm.keys('down')
     vm.keys('ret')
     wait_screen(vm, ['password'], 'wifi-02-password')
     vm.type_probe(PASSWORD)
