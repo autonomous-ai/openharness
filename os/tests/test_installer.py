@@ -29,6 +29,13 @@ class DiskSafety(unittest.TestCase):
             with self.assertRaises(ValueError):
                 installer.validate_disk(disk)
 
+    def test_unmounted_programmer_usb_is_rejected_after_copy_to_ram(self):
+        image = dict(fstype='iso9660', label='HN_OS', mountpoints=[None])
+        for changes in [image, dict(children=[image])]:
+            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, 'booted into RAM'):
+                installer.validate_disk(self.disk(**changes))
+        installer.validate_disk(self.disk(fstype='btrfs', label='HNROOT'))
+
     def test_requires_writable_whole_disk_with_space(self):
         for changes in [{'ro': True}, {'type': 'part'}, {'type': 'loop'}, {'size': 1024}]:
             with self.subTest(changes=changes), self.assertRaises(ValueError):
@@ -79,6 +86,31 @@ class DiskSafety(unittest.TestCase):
                        dict(username=None), dict(password=123456789), dict(hostname='bad-')]:
             with self.subTest(change=change), self.assertRaises(ValueError):
                 installer.validate_config(dict(good, **change))
+
+
+class LivePayload(unittest.TestCase):
+    def test_usb_ram_copy_and_mounted_media_are_both_supported(self):
+        with tempfile.TemporaryDirectory() as temp:
+            ram, media = Path(temp) / 'copytoram.sfs', Path(temp) / 'bootmnt.sfs'
+            with patch.object(installer, 'LIVE_PAYLOADS', (ram, media)):
+                with self.assertRaisesRegex(ValueError, 'Live system payload is missing'):
+                    installer.live_payload()
+                media.touch()
+                self.assertEqual(installer.live_payload(), media)
+                ram.touch()
+                self.assertEqual(installer.live_payload(), ram)
+                media.unlink()
+                self.assertEqual(installer.live_payload(), ram)
+
+    def test_explicit_source_is_honored_and_never_silently_replaced(self):
+        with tempfile.TemporaryDirectory() as temp:
+            available, explicit = Path(temp) / 'available.sfs', Path(temp) / 'explicit.sfs'
+            available.touch()
+            with patch.object(installer, 'LIVE_PAYLOADS', (available,)):
+                with self.assertRaisesRegex(ValueError, 'explicit.sfs'):
+                    installer.live_payload(explicit)
+                explicit.touch()
+                self.assertEqual(installer.live_payload(explicit), explicit)
 
 
 class Screen:
@@ -135,6 +167,7 @@ class InteractiveInstall(unittest.TestCase):
         context.enter_context(patch.object(installer.sys.stdin, 'isatty', return_value=True))
         context.enter_context(patch.object(self.output, 'isatty', return_value=True))
         self.install = context.enter_context(patch.object(installer, 'install'))
+        self.payload = context.enter_context(patch.object(installer, 'live_payload', return_value=Path('/test-live.sfs')))
         self.secret = 'test-password-123'
 
     def fill_passwords(self):
@@ -216,6 +249,21 @@ class InteractiveInstall(unittest.TestCase):
         installer.main()
         self.assertEqual(self.install.call_args.args[0]['disk'], '/dev/vda')
         self.assertFalse(any('/dev/sda' in frame for frame in self.screen.frames))
+
+    def test_ram_boot_usb_is_excluded_from_picker(self):
+        self.inventory.return_value.insert(0, dict(self.disk, name='/dev/sda',
+                                                  fstype='iso9660', label='HN_OS'))
+        self.fill_passwords()
+        self.confirm()
+        installer.main()
+        self.assertEqual(self.install.call_args.args[0]['disk'], '/dev/vda')
+
+    def test_missing_live_payload_stops_before_password_entry(self):
+        self.payload.side_effect = ValueError('Live system payload is missing')
+        with self.assertRaisesRegex(ValueError, 'Live system payload is missing'):
+            installer.main()
+        self.install.assert_not_called()
+        self.wrapper.assert_not_called()
 
     def test_disk_replacement_after_selection_never_reaches_confirmation(self):
         self.inventory.side_effect = [[self.disk], [dict(self.disk, serial='REPLACED')]]

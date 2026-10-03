@@ -25,8 +25,9 @@ import uuid
 
 
 class VM:
-    def __init__(self, folder, iso, firmware, memory):
+    def __init__(self, folder, iso, firmware, memory, live_transport='cdrom'):
         self.folder, self.iso, self.firmware, self.memory = folder, iso, firmware, memory
+        self.live_transport = live_transport
         self.process = None
         self.serial = None
         self.qmp = None
@@ -38,6 +39,11 @@ class VM:
         self.stderr = (folder / 'qemu.log').open('ab', buffering=0)
         self.disk = folder / 'target.qcow2'
         subprocess.run(['qemu-img', 'create', '-f', 'qcow2', str(self.disk), '24G'], check=True)
+        if live_transport == 'usb':
+            self.usb = folder / 'live-usb.qcow2'
+            subprocess.run(['qemu-img', 'create', '-f', 'qcow2', '-F', 'raw', '-b',
+                            str(iso), str(self.usb)], check=True)
+            subprocess.run(['qemu-img', 'resize', str(self.usb), '16G'], check=True)
         if firmware == 'uefi':
             self.code = Path('/usr/share/OVMF/OVMF_CODE_4M.fd')
             self.vars = folder / 'OVMF_VARS.fd'
@@ -60,8 +66,15 @@ class VM:
         if live:
             # UEFI remembers the installed disk in NVRAM. Explicit device boot
             # indices are needed to select the recovery ISO again on later boots.
-            args += ['-drive', f'file={self.iso},format=raw,media=cdrom,if=none,id=live',
-                     '-device', 'ide-cd,drive=live,bootindex=1']
+            if self.live_transport == 'usb':
+                # A private overlay exposes a full-sized writable USB while
+                # preserving the verified host ISO, including on test failure.
+                args += ['-device', 'qemu-xhci,id=usb',
+                         '-drive', f'file={self.usb},format=qcow2,if=none,id=live',
+                         '-device', 'usb-storage,bus=usb.0,drive=live,serial=HN_OS_LIVE,removable=on,bootindex=1']
+            else:
+                args += ['-drive', f'file={self.iso},format=raw,media=cdrom,if=none,id=live',
+                         '-device', 'ide-cd,drive=live,bootindex=1']
         if self.firmware == 'uefi':
             args += ['-drive', f'if=pflash,format=raw,readonly=on,file={self.code}',
                      '-drive', f'if=pflash,format=raw,file={self.vars}']
@@ -234,7 +247,7 @@ installer.selected_disk(expected)
 actual = installer.interactive()
 assert actual == {{k: v for k, v in expected.items() if k != 'serial_console'}}, 'Interactive installation choices differ from test input'
 actual['serial_console'] = True
-installer.install(actual, Path('/run/archiso/bootmnt/arch/x86_64/airootfs.sfs'), Path('/mnt/harness-os'))
+installer.install(actual, installer.live_payload(), Path('/mnt/harness-os'))
 '''
     encoded = base64.b64encode(bootstrap.encode()).decode()
     assert len(encoded) < 3000, 'Keep serial-console commands below the line discipline limit.'
@@ -277,6 +290,7 @@ def main():
     parser.add_argument('--firmware', choices=['bios', 'uefi'], default='bios')
     parser.add_argument('--encrypt', action='store_true')
     parser.add_argument('--memory', type=int, default=2048)
+    parser.add_argument('--live-transport', choices=['cdrom', 'usb'], default='cdrom')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--agents', action='store_true', help='Install and start real agent executables after recovery; no accounts/API calls')
     parser.add_argument('--workloads', action='store_true', help='Opt in to real free-model project builds and browser acceptance after --agents')
@@ -295,6 +309,7 @@ def main():
     folder = (args.output or Path(__file__).resolve().parents[1] / 'test-results' / (args.firmware + ('-encrypted' if args.encrypt else '-plain'))).resolve()
     folder.mkdir(parents=True, exist_ok=False)
     result = {'firmware': args.firmware, 'encrypted': args.encrypt, 'memory_mib': args.memory,
+              'live_transport': args.live_transport,
               'scope': 'live session only' if args.live_only else 'live session, offline installation and recovery',
               'started_at_unix': time.time(), 'checks': [], 'status': 'running'}
     manifest = json.loads((args.iso.parent / 'manifest.json').read_text())
@@ -306,13 +321,35 @@ def main():
     result['image_source_commit'] = manifest['source_commit']
     result['test_source_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     result['test_script_sha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-    vm = VM(folder, args.iso.resolve(), args.firmware, args.memory)
+    vm = VM(folder, args.iso.resolve(), args.firmware, args.memory, args.live_transport)
     user = lambda cmd: 'runuser -u programmer -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus ' + cmd
     try:
         vm.start(live=True)
         vm.wait(r'root@[^\r\n]*[#] ')
         vm.shell_ready = True
         vm.command('stty -echo')
+        if args.live_transport == 'usb' and args.memory >= 4096:
+            vm.command('test -f /run/archiso/copytoram/airootfs.sfs && test ! -e /run/archiso/bootmnt')
+            result['checks'].append('Real USB boot automatically copies the payload into RAM and unmounts the boot medium')
+            # The unmounted writable boot USB must still be rejected, even
+            # though its size otherwise makes it an eligible target.
+            probe = '''import importlib.util
+s = importlib.util.spec_from_file_location('installer', '/usr/lib/harness-os/install.py')
+i = importlib.util.module_from_spec(s)
+s.loader.exec_module(i)
+d = next(d for d in i.inventory() if d.get('serial') == 'HN_OS_LIVE')
+assert not d['ro'] and d['size'] >= i.MIN_DISK_BYTES
+try:
+    i.validate_disk(d)
+except ValueError as e:
+    assert 'booted into RAM' in str(e), str(e)
+else:
+    raise AssertionError('The unmounted boot USB was offered as a target')
+assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
+'''
+            encoded = base64.b64encode(probe.encode()).decode()
+            vm.command('printf %s ' + encoded + ' | base64 -d | python3')
+            result['checks'].append('The unmounted writable Programmer OS USB is rejected as an installation target in RAM mode')
         vm.command('foot --check-config --config=/usr/share/harness-os/foot.ini')
         vm.command(user("sh -c 'for n in $(seq 1 90); do systemctl --user is-active --quiet hn-screen && pgrep -u 1000 -x \"hn|harness-tui\" >/dev/null && exit 0; sleep 1; done; systemctl --user --no-pager status hn-screen harness-daemon; exit 1'"), timeout=110)
         vm.command(user('/usr/lib/harness-os/wait-runtime'), timeout=160)

@@ -9,6 +9,11 @@ installation, reboot, update retry and recovery checks. The form has a disk pick
 encryption on by default, password twice, and a separate erase confirmation.
 The installed account is `me@harness`.
 
+Preview 2 has a confirmed USB installation issue when Archiso copies its image
+into RAM. Use the [documented source-path workaround](INSTALL.md#5-install).
+The branch prepares preview 3 with automatic image detection and protection for
+the now-unmounted boot USB. The corrected image still needs native USB validation.
+
 [Download preview 2](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.2)
 · [Mac → USB → ThinkPad installation guide](INSTALL.md)
 · [Standalone HTML/CSS landing page](site/README.md)

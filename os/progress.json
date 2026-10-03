@@ -6,7 +6,7 @@
   "merge_utc": null,
   "publication_utc": "2026-10-03T02:03:47Z",
   "completion_utc": null,
-  "status": "Preview 2 published; all eight public downloads verified by full SHA-256 and size. New installer and both native machine paths passed. Local computer-use and physical ThinkPad checks remain unverified. USB flashing is a manual handoff after macOS disk denial and Etcher 2.1.7 helper crash.",
+  "status": "Preview 2 is published. User booted the physical ThinkPad into hn, then exposed a RAM-copy source-path bug before any disk erase. A --source workaround was supplied. Preview 3 source fix and real writable-USB regression checks are being validated.",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -257,7 +257,7 @@
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
     "Physical ThinkPad boot, installation, Wi-Fi, suspend and hardware verification; user will test manually"
   ],
-  "last_updated_utc": "2026-10-03T07:19:35.550371+00:00",
+  "last_updated_utc": "2026-10-03T07:34:37.125072+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -653,7 +653,7 @@
       "model": "not yet provided",
       "scope": "USB reaches hn on a physical ThinkPad; installation, encrypted disk boot, network and suspend not yet verified"
     },
-    "installation": "User received the disk picker, password, erase confirmation, poweroff and USB removal instructions."
+    "installation": "User reported: Live system payload is missing. Diagnostic find located /run/archiso/copytoram/airootfs.sfs. Installer guard stopped before any disk write. Supplied sudo hn-os install --source /run/archiso/copytoram/airootfs.sfs; result pending."
   },
   "resumed_goal_audit": {
     "started_utc": "2026-10-03T07:19:35.550371+00:00",
@@ -665,7 +665,53 @@
       "Native BIOS/plain and UEFI/encrypted machine workflow reusing image run 37101103529; no new ISO/runtime build or duplicate application unit suite"
     ],
     "runtime_source_unchanged": "a155a16850438e04315a1959b1bfd1c387d8bf99",
-    "new_runtime_verification_started_utc": null,
-    "new_runtime_verification_completed_utc": null
+    "new_runtime_verification_started_utc": "2026-10-03T07:20:27Z",
+    "new_runtime_verification_completed_utc": "2026-10-03T07:26:14.932472+00:00",
+    "console_fallback_run": {
+      "url": "https://github.com/autonomous-ai/openharness/actions/runs/37106021765",
+      "status": "passed",
+      "test_source_commit": "89836662a54e27d01aaf01d1f27b9d68fd7e68d5",
+      "image_source_commit": "a155a16850438e04315a1959b1bfd1c387d8bf99",
+      "scope": "Both firmware paths: forced compositor failure, real tty1 keyboard input through hn, original work survives, graphics restored; all existing installation/recovery and applicable agent checks also passed.",
+      "visual_review": "Inspected BIOS tty1 screenshot with typed ready input, and UEFI restored fullscreen hn screenshot; both show working terminal surfaces."
+    }
+  },
+  "ram_copy_installer_fix": {
+    "recorded_utc": "2026-10-03T07:32:02.276978+00:00",
+    "request_started_utc": null,
+    "request_time_basis": "User reported the physical USB error in the active turn; exact message timestamp unavailable.",
+    "implementation_ready_utc": "2026-10-03T07:34:37.125072+00:00",
+    "source_version": "0.1.0-preview.3",
+    "published_version": "0.1.0-preview.2",
+    "cause": "Archiso 73 automatically copies a USB root image into RAM when it has enough free memory, then removes bootmnt. The installer only knew the bootmnt path. Previous native tests used virtual optical discs, where automatic RAM copying is disabled.",
+    "changes": [
+      "Detect both copytoram and bootmnt before collecting passwords; explicit missing source fails without fallback.",
+      "Reject the HN_OS ISO medium even after RAM boot unmounts it.",
+      "Test a 16 GiB writable virtual USB backed by a private qcow2 overlay, at 4 GiB guest memory, so actual automatic RAM boot and boot-device exclusion are exercised."
+    ],
+    "validation_plan": [
+      "24 affected installer tests, portable syntax and diff checks",
+      "Pinned actionlint in the fresh image workflow",
+      "Fresh source image build, payload inspection and original BIOS/plain plus UEFI/encrypted machine gates",
+      "Reuse that exact image for both firmware modes booted from a writable virtual USB at 4096 MiB; require RAM payload, excluded live medium, actual offline installation/reboot/recovery",
+      "Publish immutable preview 3 only after all required gates pass and public assets verify"
+    ],
+    "local_installer_tests": "24 passed",
+    "native_validation_started_utc": null,
+    "native_validation_completed_utc": null,
+    "merge_utc": null,
+    "publication_utc": null,
+    "local_validation": {
+      "result": "39 portable tests and Python/JSON/XML/shell syntax passed; git diff --check passed",
+      "recorded_utc": "2026-10-03T07:34:37.125072+00:00",
+      "source_sha256": {
+        "os/installer.py": "ac844e24cf50256b43bf7ec5aa9cdd6a54bc2bcba8ab174c120a830c76800578",
+        "os/tests/test_installer.py": "a50a5a7bee2c9c0f2b9ec3d2775c89a9d89ed0826c2acd9deb9cdc4d56f96f07",
+        "os/tests/vm.py": "bf6828befe0a8f5945471207178507958ee989e771c3d50755ee7ac845179920",
+        ".github/workflows/os.yml": "3a47cdb4695facdef02e74b0b825d49de8dd893498387c2e30d394e8f18f783b",
+        "os/lock.json": "55dbc169ebc74eadd4a99c83839b3c9f92c84238a46aa7fd8f689c8365c89399"
+      },
+      "coverage": "Installer/unit source unchanged since the passed run; final QEMU removable-device flag is verified against local device help and requires the native USB run. Workflow actionlint runs in the build job."
+    }
   }
 }

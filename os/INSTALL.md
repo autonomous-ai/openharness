@@ -72,6 +72,17 @@ Run:
 sudo hn-os install
 ```
 
+**Preview 2 workaround:** if this reports `Live system payload is missing` after
+booting the USB, the live image may have been copied into RAM. Run:
+
+```sh
+sudo hn-os install --source /run/archiso/copytoram/airootfs.sfs
+```
+
+Use this path only when that file exists. In preview 2's RAM mode, the USB can
+also appear in the disk list: select the ThinkPad's internal disk by model and
+capacity. The pending preview 3 detects both locations and excludes the boot USB.
+
 The live session does not need an account password. In the form:
 
 1. Press **Enter** on Disk, use the arrow keys to choose the ThinkPad's internal

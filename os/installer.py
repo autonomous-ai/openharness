@@ -15,6 +15,8 @@ import sys
 import time
 
 MIN_DISK_BYTES = 12 * 1024**3
+LIVE_PAYLOADS = (Path('/run/archiso/copytoram/airootfs.sfs'),
+                 Path('/run/archiso/bootmnt/arch/x86_64/airootfs.sfs'))
 
 
 def run(*args, input=None, capture=False):
@@ -55,13 +57,29 @@ def validate_disk(device, expected_serial=None):
         return any(node.get('mountpoints') or []) or any(mounted(c) for c in node.get('children', []))
     if mounted(device):
         raise ValueError('The disk has mounted filesystems. The live USB and active disks cannot be erased.')
+    def live_medium(node):
+        return (node.get('fstype') == 'iso9660' and node.get('label') == 'HN_OS') or any(
+            live_medium(c) for c in node.get('children', []))
+    if live_medium(device):
+        raise ValueError('The Programmer OS USB cannot be an installation target, even when booted into RAM.')
     if expected_serial is not None and str(device.get('serial') or '').strip() != expected_serial:
         raise ValueError('Disk serial does not match the unattended installation configuration.')
 
 
 def inventory():
     return json.loads(run('lsblk', '--json', '--bytes', '--paths', '--output',
-                          'NAME,TYPE,SIZE,RO,RM,MOUNTPOINTS,MODEL,SERIAL', capture=True))['blockdevices']
+                          'NAME,TYPE,SIZE,RO,RM,MOUNTPOINTS,MODEL,SERIAL,FSTYPE,LABEL', capture=True))['blockdevices']
+
+
+def live_payload(source=None):
+    # Archiso automatically copies USB media to RAM when enough memory is free,
+    # then unmounts bootmnt. Prefer that running image over any removable copy.
+    candidates = (source,) if source is not None else LIVE_PAYLOADS
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    checked = ', '.join(str(path) for path in candidates)
+    raise ValueError(f'Live system payload is missing (checked {checked}); boot the Programmer OS USB.')
 
 
 def selected_disk(config):
@@ -479,7 +497,7 @@ def main():
     parser.add_argument('--hostname', help='Override the default computer name (harness)')
     parser.add_argument('--no-encryption', action='store_true', help='Explicitly install without disk encryption')
     parser.add_argument('--yes-erase-disk', action='store_true')
-    parser.add_argument('--source', type=Path, default=Path('/run/archiso/bootmnt/arch/x86_64/airootfs.sfs'))
+    parser.add_argument('--source', type=Path, help='Override the automatically detected live system image')
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit('Run sudo hn-os install from the live USB.')
@@ -489,13 +507,17 @@ def main():
         config = json.loads(args.config.read_text())
         if not args.yes_erase_disk or not config.get('expected_serial'):
             raise ValueError('Unattended installs require --yes-erase-disk and an exact expected_serial.')
+        source = live_payload(args.source)
     else:
         if args.yes_erase_disk:
             raise ValueError('--yes-erase-disk requires a configuration file.')
+        # Fail before collecting passwords if neither supported boot mode has
+        # an image. An explicit missing --source never falls back silently.
+        source = live_payload(args.source)
         config = interactive(username=args.username if args.username is not None else 'me',
                              hostname=args.hostname if args.hostname is not None else 'harness',
                              encrypt=not args.no_encryption)
-    install(config, args.source, Path('/mnt/harness-os'))
+    install(config, source, Path('/mnt/harness-os'))
 
 
 if __name__ == '__main__':
