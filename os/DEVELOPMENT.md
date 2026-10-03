@@ -90,13 +90,6 @@ python3 os/tests/local_ai_vm.py --iso os/dist/IMAGE.iso --probe local-ai
 python3 os/tests/local_ai_vm.py --iso os/dist/IMAGE.iso --probe nvidia
 ```
 
-Evidence includes the original failed attempts. The initial fixture expected a
-JSON support table, but Arch ships `supportedchips.html`; the small model showed
-the correct equation rather than only the number. A second attempt completed
-both guest probes but stopped when terminal integration escapes preceded the
-JSON receipt. Those fixture corrections keep the actual answer, package,
-kernel, reboot and keyboard requirements intact.
-
 ## The feedback loop
 
 | Work being tested | Best environment | What it proves |
