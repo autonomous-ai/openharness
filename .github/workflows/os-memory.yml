@@ -1,0 +1,47 @@
+name: Harness OS runtime memory assessment
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_run_id:
+        description: 'Exact existing image artifact to assess'
+        type: string
+        default: '37149350400'
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  memory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id }}
+          github-token: ${{ github.token }}
+      - name: Check the fixture and install VM tools
+        run: |
+          python3 -m py_compile os/tests/memory_guest.py os/tests/memory_vm.py
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os-memory.yml
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+      - name: Measure alternating profiles on the installed 1 GiB system
+        run: python3 os/tests/memory_vm.py --iso os/dist/*.iso
+      - name: Retain measured evidence without disks
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-memory
+          path: |
+            os/test-results/memory/
+            !os/test-results/memory/*.qcow2
+            !os/test-results/memory/OVMF_VARS.fd
+          retention-days: 14
+          compression-level: 0
