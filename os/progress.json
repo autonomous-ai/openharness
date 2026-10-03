@@ -922,7 +922,7 @@
   "usb_first_use_revision": {
     "request_received_utc": null,
     "first_recorded_utc": "2026-10-03T08:28:25.074631+00:00",
-    "status": "rebuilding after correcting symlink inspection; branding inventory and hardware context under discussion",
+    "status": "Image and native checks passed; first-use VM identity assertion failed because the minimal image has no hostname utility. Fixed test to use coreutils uname -n; next exact image also includes installer completion screen.",
     "implementation_complete_utc": "2026-10-03T09:23:12.711637+00:00",
     "validation_complete_utc": null,
     "publication_utc": null,
@@ -991,6 +991,15 @@
         "result": "ISO generated but artifact inspection failed: symbolic-link target text was included in the ownership-map path for nmtui-connect",
         "passed": "45 portable tests, workflow lint, exact runtime build, CLI typecheck, 89 affected CLI tests (1 skipped), 337 Rust tests (1 ignored), all 10 native fixtures",
         "remedy": "Parse the link path separately from its target. Confirmed nmtui-connect -> nmtui in the exact snapshot NetworkManager package, whose SHA-256 matches the snapshot database. Still require root ownership and both target and alias. Includes pending hook branding and publication-guard updates in the next source."
+      },
+      {
+        "run_id": 37112874271,
+        "source_commit": "7fc8c9c2294254b608fadb7a1060f5a749f090ae",
+        "started_utc": "2026-10-03T09:23:17Z",
+        "failed_utc": "2026-10-03T09:37:17Z",
+        "result": "Both machine journeys stopped at first-use identity assertion: hostname command is absent from the minimal image. Serial prompt already shows harness, but remaining identity assertions and first-use journeys did not run.",
+        "passed": "Image job including portable checks, native CLI/TUI checks, all native fixtures, ISO build and SquashFS inspection.",
+        "remedy": "Read kernel hostname with existing coreutils uname -n; no package added. Rebuild latest source to include separately added installer completion screen, then rerun BIOS/plain and UEFI/encrypted journeys."
       }
     ],
     "isolation_revision_ready_utc": "2026-10-03T09:11:28.017223+00:00",
@@ -1022,6 +1031,8 @@
         "Device variant names and exact integration scope",
         "Local-model out-of-box claim requires tested drivers, inference engine and model provisioning; these are not currently bundled in the minimal ISO"
       ]
-    }
+    },
+    "next_step": "Build and test current source including completion screen and corrected machine identity check; inspect first-use and unlock screenshots before publication.",
+    "last_recorded_utc": "2026-10-03T09:41:12.744184+00:00"
   }
 }

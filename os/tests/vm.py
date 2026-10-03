@@ -308,7 +308,7 @@ def check_console_fallback(vm, user, folder):
 
 def check_first_use(vm, user, folder):
     """Operate the actual USB front door without a terminal command from the user."""
-    vm.command('test "$(hostname)" = harness && test "$(id -nu 1000)" = me && test -f /etc/harness-live')
+    vm.command('test "$(uname -n)" = harness && test "$(id -nu 1000)" = me && test -f /etc/harness-live')
     vm.command('nmcli networking off')
     version, _ = vm.command(user('/usr/bin/opencode --version'))
     (folder / 'bundled-opencode-version.txt').write_text(version)
