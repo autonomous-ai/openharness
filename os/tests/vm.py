@@ -549,6 +549,7 @@ def main():
     parser.add_argument('--workloads', action='store_true', help='Opt in to real free-model project builds and browser acceptance after --agents')
     parser.add_argument('--dsh', action='store_true', help='Exercise three real DSH agents and shared viewers after --agents')
     parser.add_argument('--workload-seed', type=Path, help='Previous workload artifact: preserve its generated projects and rerun acceptance')
+    parser.add_argument('--workload-repair-game', action='store_true', help='With a seed, explicitly ask the agent to repair game layout before rechecking')
     parser.add_argument('--live-only', action='store_true', help='Development probe: stop after the live-session checks, without installing')
     args = parser.parse_args()
     if args.workloads and not args.agents:
@@ -559,6 +560,8 @@ def main():
         parser.error('Run the two long model suites separately.')
     if args.workload_seed and not args.workloads:
         parser.error('--workload-seed requires --workloads')
+    if args.workload_repair_game and not args.workload_seed:
+        parser.error('--workload-repair-game requires --workload-seed')
     folder = (args.output or Path(__file__).resolve().parents[1] / 'test-results' / (args.firmware + ('-encrypted' if args.encrypt else '-plain'))).resolve()
     folder.mkdir(parents=True, exist_ok=False)
     result = {'firmware': args.firmware, 'encrypted': args.encrypt, 'memory_mib': args.memory,
@@ -806,6 +809,11 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
                     for name in ['terminal-tool', 'website', 'game', 'fullstack']:
                         archive.add(seeds[0] / name, arcname='workloads/seed/' + name)
                     result['workload_project_source_run_id'] = os.environ.get('OS_WORKLOAD_SOURCE_RUN')
+                    if args.workload_repair_game:
+                        marker = tarfile.TarInfo('workloads/repair-game')
+                        marker.size = 0
+                        archive.addfile(marker, io.BytesIO())
+                    result['workload_game_repair_requested'] = args.workload_repair_game
             encoded = base64.b64encode(package.getvalue()).decode()
             vm.command(': > /tmp/hn-workloads.b64')
             for offset in range(0, len(encoded), 2000):
@@ -825,6 +833,18 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
                 archive.extractall(destination, filter='data')
             (destination / '.local/state/harness-os/workloads').rename(destination / 'reports')
             vm.command('test "$(cat ~/.local/state/harness-os/workloads/status)" = 0')
+            # Validate what the player sees, including canvas-rendered labels.
+            # Tesseract is on the test host; no OCR package enters the guest/ISO.
+            for size in ['1024x768', '1280x800']:
+                frame = destination / 'reports' / f'game-{size}.png'
+                visible = subprocess.check_output(['tesseract', str(frame), 'stdout', '--psm', '11'],
+                    text=True, stderr=subprocess.DEVNULL, timeout=15)
+                frame.with_suffix('.txt').write_text(visible)
+                words = visible.lower()
+                required = ['move', 'space', 'pause', 'restart', 'enter', 'start']
+                missing = [word for word in required if not re.search(r'\b' + word + r'\b', words)]
+                if missing:
+                    raise RuntimeError(f'Game controls are not readable at {size}: {missing}; inspect {frame}')
             result['checks'].append('Free OpenCode built four projects; independent CLI, keyboard browser, game and persistent API checks passed')
         if args.dsh:
             package = io.BytesIO()

@@ -26,7 +26,7 @@ on:
         default: false
         type: boolean
       workload_seed_run_id:
-        description: 'Optional: reuse the generated projects from this workload run; finish its game agent and rerun all acceptance checks'
+        description: 'Reuse generated projects and rerun acceptance; also enable workloads to ask the game agent to repair its layout'
         required: false
         type: string
       memory_mib:
@@ -191,7 +191,7 @@ jobs:
           OS_WORKLOAD_SOURCE_RUN: ${{ inputs.workload_seed_run_id }}
           OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
           OS_LIVE_TRANSPORT: ${{ inputs.live_transport || 'cdrom' }}
-        run: python3 os/tests/vm.py --iso os/dist/*.iso --memory "$OS_MEMORY_MIB" --live-transport "$OS_LIVE_TRANSPORT" --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ matrix.cpu }} ${{ (inputs.workloads || inputs.workload_seed_run_id != '') && matrix.firmware == 'bios' && '--workloads' || '' }} ${{ inputs.dsh && matrix.firmware == 'bios' && '--dsh' || '' }} ${{ inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-seed os/work/workload-seed' || '' }}
+        run: python3 os/tests/vm.py --iso os/dist/*.iso --memory "$OS_MEMORY_MIB" --live-transport "$OS_LIVE_TRANSPORT" --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ matrix.cpu }} ${{ (inputs.workloads || inputs.workload_seed_run_id != '') && matrix.firmware == 'bios' && '--workloads' || '' }} ${{ inputs.dsh && matrix.firmware == 'bios' && '--dsh' || '' }} ${{ inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-seed os/work/workload-seed' || '' }} ${{ inputs.workloads && inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-repair-game' || '' }}
       - name: Exercise password lock and actual suspend/resume
         if: ${{ inputs.checks == 'session' }}
         run: python3 os/tests/session_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --session-file os/root/usr/lib/harness-os/session --theme-directory os/root/usr/share/plymouth/themes/harness

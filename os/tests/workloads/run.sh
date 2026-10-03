@@ -9,7 +9,7 @@ REPORT="$HOME/.local/state/harness-os/workloads"
 mkdir -p "$WORK" "$REPORT"
 if [[ -d "$INPUTS/seed" ]]; then
     cp -a "$INPUTS/seed/." "$WORK/"
-    printf '%s\n' 'Reusing previously generated projects; only the interrupted game agent runs again.' > "$REPORT/reuse.txt"
+    printf '%s\n' 'Reusing previously generated projects; acceptance runs again. The game agent runs only when explicitly requested.' > "$REPORT/reuse.txt"
 fi
 trap 'printf "%s\n" "$?" > "$REPORT/status"' EXIT
 /usr/bin/opencode --version > "$REPORT/opencode-version.txt" || exit 1
@@ -23,7 +23,7 @@ for scenario in terminal-tool website game fullstack; do
 {"permission":{"question":"deny","task":"deny","external_directory":{"*":"deny","$HOME/Projects/**":"allow","/tmp/opencode/**":"allow","/usr/share/harness-os/**":"allow"}}}
 EOF
     printf '\nChecking %s with the upstream default model\n' "$scenario"
-    if [[ -d "$INPUTS/seed" && "$scenario" != game ]]; then
+    if [[ -d "$INPUTS/seed" && ( "$scenario" != game || ! -e "$INPUTS/repair-game" ) ]]; then
         status=0
         printf '%s\n' 'Prior completed model turn reused; project checks run again.' > "$REPORT/$scenario-agent-reused.txt"
         # Dependencies are deliberately absent from the retained source artifact.
@@ -33,7 +33,7 @@ EOF
     else
       prompt='Read TASK.txt, implement the complete task, run its tests, and fix failures. Work now without questions or subagents. Browser acceptance runs separately with sandboxed system Chromium; finish after your unit tests and do not launch a browser or long-running server.'
       if [[ -d "$INPUTS/seed" ]]; then
-          prompt='The existing Signal Run game already passes its unit tests and independent keyboard/pause/restart/state checks. Perform ONE remaining task: adjust styles.css so the entire canvas and compact keyboard legend fit within a 1280x800 or 1024x768 browser viewport without vertical scrolling. Let the stage shrink into the remaining viewport height. Preserve simulation and bridge behavior. Do not rewrite the game, broaden features, audit edge cases, or add test frameworks. Run node --test test.mjs once, fix only regressions from your CSS change, then give your final answer and stop. A separate browser tester will verify layout. No questions or subagents.'
+          prompt='Read TASK.txt and the existing game. Perform ONE task: make the entire game and a compact, readable keyboard legend fit within both 1280x800 and 1024x768 viewports without scrolling or clipping. The legend may be drawn in the canvas or HTML; ensure all move, Space pause, R restart and Enter start controls are visible. Change only the layout or drawing necessary for that result. Preserve simulation and bridge behavior. Do not rewrite the game, broaden features, audit unrelated edge cases, or add test frameworks. Run node --test test.mjs, fix regressions from your change, then give your final answer and stop. An independent browser and rendered-pixel checker verifies layout. No questions or subagents.'
       fi
       (
         cd "$project" || exit 1

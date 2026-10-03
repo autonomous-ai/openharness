@@ -79,23 +79,20 @@ try {
       await available('http://127.0.0.1:18883');
       await page.goto('http://127.0.0.1:18883');
       await page.waitForFunction(() => window.harnessGame?.stats);
+      await page.keyboard.press('Enter');
       for (const viewport of [{ width: 1024, height: 768 }, { width: 1280, height: 800 }]) {
         await page.setViewportSize(viewport);
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        await page.screenshot({ path: join(report, `game-${viewport.width}x${viewport.height}.png`) });
         assert.ok(await page.evaluate(() => {
           const board = document.querySelector('canvas').getBoundingClientRect();
-          // TASK.txt requires a visible keyboard legend, not a CSS class name.
-          // Find its smallest containing element using the required controls.
-          const controls = element => /space/i.test(element.textContent) &&
-            /pause/i.test(element.textContent) && /restart/i.test(element.textContent);
-          const element = [...document.querySelectorAll('body *')].find(element =>
-            controls(element) && ![...element.children].some(controls));
-          if (!element) return false;
-          const legend = element.getBoundingClientRect();
+          // The legend may be drawn in the canvas. The host independently
+          // reads the saved pixels with OCR instead of requiring HTML text.
           return board.width > 200 && board.height > 200 && board.top >= 0 &&
-            board.bottom <= innerHeight && legend.width > 0 && legend.height > 0 &&
-            legend.top >= 0 && legend.bottom <= innerHeight &&
-            document.documentElement.scrollHeight <= innerHeight + 1;
-        }), 'The whole game and keyboard legend fit the laptop viewport');
+            board.left >= 0 && board.right <= innerWidth && board.bottom <= innerHeight &&
+            document.documentElement.scrollHeight <= innerHeight + 1 &&
+            document.documentElement.scrollWidth <= innerWidth + 1;
+        }), 'The whole game fits the laptop viewport');
       }
       await page.keyboard.press('Enter');
       await page.screenshot({ path: join(report, 'game.png') });
