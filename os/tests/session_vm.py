@@ -36,7 +36,7 @@ def put(vm, path, data):
     vm.command(': > ' + scratch)
     for start in range(0, len(encoded), 1800):
         vm.command('printf %s ' + encoded[start:start + 1800] + ' >> ' + scratch)
-    vm.command('base64 -d ' + scratch + ' > ' + shlex.quote(path) + '; rm ' + scratch)
+    vm.command('base64 -d ' + scratch + ' > ' + shlex.quote(path) + ' && rm ' + scratch)
 
 
 def screen_text(vm, name):
@@ -148,6 +148,18 @@ def installed_session(vm, config, result):
     vm.screenshot('sleep-suspended')
     vm.monitor('system_wakeup')
     resumed = time.monotonic()
+    # QMP acknowledges CPU wake before the guest UART is ready. Do not send a
+    # command into its short hardware FIFO while the serial driver is resuming.
+    # Only blank lines are retried; a real shell prompt acknowledges input.
+    deadline = time.monotonic() + 30
+    while True:
+        vm.send('\n')
+        try:
+            vm.wait(r'\[me@harness [^\r\n]*\]\$ ', timeout=2)
+            break
+        except TimeoutError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError('The guest serial console did not resume within 30 seconds')
     vm.command('true', timeout=60)
     unlock('resume')
     result['resume_check_seconds_including_wrong_password_and_automated_typing'] = round(time.monotonic() - resumed, 3)
@@ -218,6 +230,7 @@ def main():
             result['candidate_session'] = {'path': str(args.session_file), 'sha256': hashlib.sha256(candidate).hexdigest(),
                 'scope': 'Only /usr/lib/harness-os/session replaced in disposable installed guest; other files are the verified base image'}
             put(vm, '/tmp/session-candidate', candidate.decode())
+            vm.command('test "$(sha256sum /tmp/session-candidate | cut -d " " -f 1)" = ' + shlex.quote(result['candidate_session']['sha256']))
             vm.command('sudo install -o root -g root -m 755 /tmp/session-candidate /usr/lib/harness-os/session; sync')
             vm.stop()
             vm.start(live=False)
