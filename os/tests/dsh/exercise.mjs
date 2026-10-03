@@ -104,7 +104,9 @@ try {
         assert.equal(await frame.evaluate(() => window.harnessGame.stats().score), 0);
         assert.deepEqual(await frame.evaluate(() => window.harnessGame.stats().player), { x: 1, y: 1 });
         await page.locator('#pause').focus(); await page.keyboard.press('Enter');
-        assert.equal(await frame.evaluate(() => window.harnessGame.stats().paused), true);
+        // The toolbar sends a postMessage to the game. Input delivery and the
+        // iframe's receipt are separate browser tasks.
+        await until('pause reaches game frame', () => frame.evaluate(() => window.harnessGame.stats().paused), 10_000);
         await page.locator('#details').focus(); await page.keyboard.press('Enter');
         await page.locator('#export').focus(); await page.keyboard.press('Enter');
         await until('standalone game export', () => existsSync(join(cwd, 'out')) && readdirSync(join(cwd, 'out')).some(name => name.startsWith('game-') && existsSync(join(cwd, 'out', name, 'index.html'))));
@@ -112,7 +114,7 @@ try {
       if (name !== 'logs') await page.screenshot({ path: join(report, `${name}-viewer.png`), fullPage: true });
       results.push({ name, status: 'passed', agentId: agent.id, seconds: (Date.now() - started) / 1000 });
     } catch (error) {
-      results.push({ name, status: 'failed', error: String(error), seconds: (Date.now() - started) / 1000 });
+      results.push({ name, status: 'failed', error: error.stack || String(error), seconds: (Date.now() - started) / 1000 });
       await page.screenshot({ path: join(report, `${name}-failure.png`) }).catch(() => {});
     } finally {
       if (agent?.tmuxPane) {

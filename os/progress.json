@@ -6,7 +6,7 @@
   "merge_utc": null,
   "publication_utc": null,
   "completion_utc": null,
-  "status": "Testing real developer workflows in installed Mac VM; reducing live image duplication and fixing actual daemon readiness.",
+  "status": "Smaller image passes complete BIOS/plain and UEFI/encrypted gates. Four free-agent projects built; completing the game turn, corrected backend DELETE acceptance, and three DSH exercises.",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -90,6 +90,76 @@
       "source_commit": "f0b3c0488c6709ce7afc49224659d5890d9c2584",
       "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37077942258",
       "limitations": "Visual review found the screen can appear before daemon discovery is ready. Readiness and timing checks strengthened for the next image. No model calls in this suite."
+    },
+    {
+      "scope": "Runtime readiness, live scratch capacity and delayed encrypted unlock",
+      "result": "passed",
+      "image_source_commit": "a19a4de6127b94ecd6ea14a5076e470ec3978af4",
+      "test_source_commit": "2cc57da13dee90c84e8b6a4c668d1d820c46f1da",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37082675625",
+      "limitations": "Whole run failed two additional workload gates: interrupted game agent and malformed DELETE request in acceptance code."
+    },
+    {
+      "scope": "Four real free OpenCode project builds inside installed OS",
+      "result": "partial",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37082675625",
+      "projects": [
+        "Python logscope CLI",
+        "Terminal Days conference website",
+        "Signal Run keyboard game",
+        "Fastify/SQLite Patchboard fullstack app"
+      ],
+      "unit_tests_passed": 94,
+      "independent_checks_passed": [
+        "CLI file/stdin/malformed/filter/empty",
+        "Website keyboard search/day filter/help/mobile layout",
+        "Game movement/pause/restart/snapshot restore",
+        "Backend create/update/validation and persistence after restart"
+      ],
+      "remaining": [
+        "Game agent exceeded 12-minute limit after writing code and passing 23 tests",
+        "DELETE acceptance sent content-type JSON with no body; corrected test is running against retained projects"
+      ],
+      "reported_model_cost": 0
+    },
+    {
+      "scope": "CLI typecheck, affected engine launch/install unit tests, full hn unit suite and native terminal fixtures",
+      "result": "passed",
+      "source_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37083780202",
+      "cli_unit_tests_passed": 89,
+      "cli_unit_tests_skipped": 1,
+      "tui_unit_tests_passed": 335,
+      "tui_unit_tests_ignored": 1,
+      "native_fixtures_passed": 10
+    },
+    {
+      "scope": "Smaller ISO; complete BIOS/plain and UEFI/encrypted installation/recovery; real four-agent executable and compiler checks",
+      "result": "passed",
+      "source_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37083780202",
+      "iso_bytes": 1525678080,
+      "iso_sha256": "51e3315843440bcdd445ead6b55d281dd1ae40685f3399c084ac5cf33cf5bce6",
+      "bios_install_seconds": 36.512,
+      "bios_ready_seconds_including_test_login": 19.3,
+      "uefi_ready_seconds_including_test_login_and_deliberate_100s_unlock_wait": 110.953,
+      "settled_idle_mib": [
+        397.59,
+        397.32,
+        397.32,
+        399.3,
+        396.62,
+        400.62
+      ],
+      "settled_cpu_percent_2s_samples": [
+        0.75,
+        0,
+        0,
+        0.25,
+        0.75,
+        0
+      ],
+      "limitations": "2-vCPU/2-GiB x86 VMs; measurements include the measurement process. Physical ThinkPad, Wi-Fi, suspend and RTX compute remain unverified."
     }
   ],
   "waiting": [
@@ -103,13 +173,13 @@
     }
   ],
   "remaining": [
-    "Validate runtime readiness, smaller live initramfs and usable live scratch space",
-    "Complete requested real-agent workloads and DSH checks",
-    "Profile installed idle resource use and remove unnecessary image/runtime work",
-    "Publish final verified preview and document physical hardware limitations"
+    "Complete existing-project acceptance and real DSH checks",
+    "Refresh installed Mac VM to the verified image runtime and leave examples available",
+    "Publish verified preview with exact evidence and hardware limitations",
+    "Continue resource and user-experience checks through the requested work window"
   ],
-  "last_updated_utc": "2026-10-03T00:07:25.569329+00:00",
-  "remote_build_commit": "f0b3c0488c6709ce7afc49224659d5890d9c2584",
+  "last_updated_utc": "2026-10-03T01:14:21.341082+00:00",
+  "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
     {
@@ -171,5 +241,10 @@
   "computer_use": {
     "status": "Local browser VM viewer access denied by browser approval policy; no alternate browser route attempted",
     "continued": "Automated guest CLI tests and framebuffer screenshot inspection"
+  },
+  "additional_work_window": {
+    "started_utc": "2026-10-02T23:33:00Z",
+    "requested_hours": 4,
+    "expected_user_return_utc": "2026-10-03T03:33:00Z"
   }
 }
