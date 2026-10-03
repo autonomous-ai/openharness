@@ -17,9 +17,10 @@ def git(root, *args):
 
 
 def verify_checkout(root, scope, subset=False):
-    if git(root, "config", "--bool", "core.sparseCheckout") != "true":
+    if git(root, "config", "--bool", "--default=false", "core.sparseCheckout") != "true":
         raise ValueError("CI source inputs require a sparse checkout")
-    if git(root, "config", "--bool", "core.sparseCheckoutCone") != "false":
+    # actions/checkout leaves this unset in non-cone mode (Git defaults false).
+    if git(root, "config", "--bool", "--default=false", "core.sparseCheckoutCone") != "false":
         raise ValueError("CI source inputs require literal non-cone patterns")
     declared = set(ci.SOURCE_INPUTS[scope])
     patterns = set(git(root, "sparse-checkout", "list").splitlines())

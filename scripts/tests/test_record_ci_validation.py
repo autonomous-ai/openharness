@@ -227,6 +227,22 @@ class EvidenceTests(unittest.TestCase):
         (self.root / "uncommitted.txt").write_text("unreviewed")
         self.assertEqual(self.collect(scope="process", with_pr=True)["status"], "source_review_required")
 
+    def test_partial_rerun_keeps_the_receipt_bound_to_its_successful_process_job(self):
+        self.input_fixture("desktop")
+        self.run["run_attempt"] = 2
+        for job in self.jobs:
+            if job["name"] != "process-checks":
+                job["run_attempt"] = 2
+        self.change_source("docs/guide.md")
+        self.assertEqual(self.collect(scope="desktop")["status"], "passed")
+        for job in self.jobs:
+            job["run_attempt"] = 2
+        with self.assertRaisesRegex(ValueError, "another source/run/attempt"):
+            self.collect(scope="desktop")
+        self.input_summary["run_attempt"] = 2
+        self.input_archive()
+        self.assertEqual(self.collect(scope="desktop")["status"], "passed")
+
     def desktop_fixture(self):
         self.jobs = [dict(self.jobs[0], id=i, name=name) for i, name in
                      enumerate(sorted(recorder.DESKTOP_JOBS | {"process-checks"}), 1)]

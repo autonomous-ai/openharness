@@ -76,14 +76,14 @@ def check_input_jobs(jobs, scope):
                 raise ValueError(f"CI input checkout was not verified: {job['name']}")
 
 
-def read_input_summary(artifact, archive, run, root, scope):
+def read_input_summary(artifact, archive, run, root, scope, process_attempt):
     summary = summary_contents(artifact, archive, run, "ci-source-inputs")
     if (type(summary.get("schema")) is not int or summary["schema"] != 1
             or summary.get("kind") != "ci-source-inputs" or summary.get("status") != "recorded"
             or summary.get("source_sha") != run["head_sha"] or summary.get("dirty") is not False
             or not isinstance(summary.get("scopes"), dict)
-            or any(type(summary.get(key)) is not int or summary[key] != run[field]
-                   for key, field in [("run_id", "id"), ("run_attempt", "run_attempt")])):
+            or type(summary.get("run_id")) is not int or summary["run_id"] != run["id"]
+            or type(summary.get("run_attempt")) is not int or summary["run_attempt"] != process_attempt):
         raise ValueError("CI input receipt has another source/run/attempt")
     tree = subprocess.check_output(["git", "rev-parse", f"{run['head_sha']}^{{tree}}"],
                                    cwd=root, stderr=subprocess.PIPE, timeout=10).decode().strip()
@@ -332,8 +332,11 @@ def collect(client, root, run_id, scope, target, output, pr_number=None, expecte
             if artifact.get("size_in_bytes", 65537) > 65536:
                 raise ValueError("CI input artifact is unexpectedly large")
             archive = client.command("api", f"repos/{client.repository}/actions/artifacts/{artifact['id']}/zip", binary=True)
-            tested_inputs = read_input_summary(artifact, archive, run, root, scope)
             check_input_jobs(jobs, scope)
+            # Rerunning failed jobs can retain an earlier successful process job.
+            # Bind the artifact to that job's actual attempt, not a later shard's.
+            process_attempt = next(job["run_attempt"] for job in jobs if job["name"] == "process-checks")
+            tested_inputs = read_input_summary(artifact, archive, run, root, scope, process_attempt)
             target_inputs = input_snapshot(root, source["target_sha"], scope)
             record["scope_reuse"] = dict(scope=scope, paths=sorted(SOURCE_INPUTS[scope]),
                                          tested_sha256=tested_inputs["sha256"], target_sha256=target_inputs["sha256"],

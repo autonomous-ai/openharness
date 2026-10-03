@@ -62,6 +62,14 @@ class SourceInputTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 inputs.verify_checkout(self.root, "process")
 
+    def test_checkout_actions_default_non_cone_mode_is_supported(self):
+        self.sparse(inputs.ci.SOURCE_INPUTS["process"])
+        self.git("config", "--worktree", "--unset", "core.sparseCheckoutCone")
+        inputs.verify_checkout(self.root, "process")
+        self.git("config", "--worktree", "core.sparseCheckoutCone", "true")
+        with self.assertRaisesRegex(ValueError, "non-cone"):
+            inputs.verify_checkout(self.root, "process")
+
     def test_populated_undeclared_file_and_dirty_source_are_rejected(self):
         self.sparse(inputs.ci.SOURCE_INPUTS["process"])
         path = self.root / "cli/main.ts"
