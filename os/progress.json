@@ -1389,5 +1389,34 @@
       "receipt": "os/work/release-preview3/publication-ci/publication.json",
       "verification_run": "https://github.com/autonomous-ai/openharness/actions/runs/37107746318"
     }
-  ]
+  ],
+  "mac_support_and_feedback_loop": {
+    "first_recorded_utc": "2026-10-03T12:08:01Z",
+    "request_received_utc": null,
+    "status": "Support targets and development/test approach documented; Mac OS ports and incremental runtime updater are not implemented.",
+    "document": "os/DEVELOPMENT.md",
+    "documented_utc": "2026-10-03T12:12:18.648429+00:00",
+    "targets": [
+      "Older 64-bit Intel Macs without T2 first",
+      "Intel T2 Macs with a separate kernel/driver/firmware profile",
+      "Apple Silicon arm64 via Asahi platform integration, initially explicitly supported M1/M2 models"
+    ],
+    "recommended_feedback_loop": "One preview 4 install on the ThinkPad for daily work; native x86 KVM server VMs for repeatable installer/boot tests; Mac as development/control machine. M2 x86 emulation is not the primary feedback loop.",
+    "current_gap": "hn-os update upgrades Arch packages but does not replace the pinned Harness runtime. A small versioned deployment/rollback path is needed for rapid interface changes.",
+    "next_implementation": [
+      "Remote interactive test VM mode with SSH-tunneled display and optional localhost guest SSH forwarding",
+      "Versioned and checksummed development deployment to a dedicated test machine with rollback and preserved projects",
+      "Stopped-VM snapshot/restore",
+      "Per-model Intel Mac hardware evidence; evaluate Asahi Minimal for the arm64 hardware port"
+    ],
+    "sources": [
+      "https://www.qemu.org/docs/master/system/introduction.html",
+      "https://wiki.t2linux.org/distributions/arch/installation/",
+      "https://wiki.t2linux.org/guides/postinstall/",
+      "https://asahilinux.org/fedora/",
+      "https://asahilinux.org/docs/platform/feature-support/m2/",
+      "https://asahilinux.org/docs/project/faq/"
+    ],
+    "validation": "Documentation local links and JSON checked; no native Mac install, server deployment, new ARM image or hardware success claimed."
+  }
 }

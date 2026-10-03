@@ -20,6 +20,7 @@ Both the live and installed system use `me@harness`.
 [Download preview 4](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.4)
 · [Mac → USB → ThinkPad installation guide](INSTALL.md)
 · [Standalone HTML/CSS landing page](site/README.md)
+· [Development feedback loop and Mac support targets](DEVELOPMENT.md)
 
 The exact image passed BIOS/plain and UEFI/encrypted USB installation, boot,
 update retry and recovery at 1 GiB and 4 GiB RAM. First-use model conversations,
@@ -85,7 +86,7 @@ the normal Harness CLI/TUI update channels.
 
 ## Try and install
 
-For the full installation experience in a Mac window, install QEMU with
+To experiment with the PC image in a Mac window, install QEMU with
 `brew install qemu`, download the ISO and its `manifest.json` into `os/dist/`,
 then run from the repository root:
 
