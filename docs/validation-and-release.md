@@ -38,6 +38,22 @@ ten-minute budget; startup recovery retains the same narrow rules below. `full`
 includes this matrix alongside the existing component checks. Changed Dart
 analysis and browser/native integration checks remain separate where relevant.
 
+CI balances those same four shards using platform-specific file timings in
+`desktop/ci-test-durations.json`. Long files go to the shard with the least estimated
+work; files retain their normal alphabetical order inside each shard. The hints
+come from passing raw reporters (suite declaration through final completion),
+averaged across the recorded runs and rounded up to 100ms. Discovery remains the
+complete test inventory: new files get the default cost and removed hints cannot
+add files. Stale timings affect scheduling, never coverage. Receipts record the
+hint-file hash; the aggregate independently recomputes assignments with the same
+checked-out file and still requires every discovered file exactly once.
+
+Local runs retain the existing scheduling unless explicitly passed
+`--timings desktop/ci-test-durations.json` together with `--shard INDEX/TOTAL` from
+the repository root. To refresh hints, use complete passing macOS/Linux shard
+logs, record their run URLs/commits, and compare the resulting real CI duration;
+do not update weights from failed, partial or recovered attempts.
+
 The Desktop aggregate reads each raw test log, verifies its hash and complete-file
 result, and compares every shard's inventory with the checked-out test files.
 Every file must finish exactly once per platform. Failed jobs, missing or duplicate

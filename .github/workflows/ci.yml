@@ -128,7 +128,9 @@ jobs:
       - name: Run bounded Desktop VM shard
         env:
           DESKTOP_SHARD: ${{ matrix.shard }}
-        run: python3 scripts/test-desktop.py --shard "$DESKTOP_SHARD/4" --workers 4 --timeout 600
+        run: >-
+          python3 scripts/test-desktop.py --shard "$DESKTOP_SHARD/4" --workers 4 --timeout 600
+          --timings desktop/ci-test-durations.json
       - name: Preserve complete test logs and receipts
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
@@ -150,6 +152,7 @@ jobs:
         with:
           sparse-checkout: |
             /desktop/test/
+            /desktop/ci-test-durations.json
             /scripts/
             /.gitignore
           sparse-checkout-cone-mode: false
@@ -165,6 +168,7 @@ jobs:
         run: >-
           python3 scripts/verify-desktop-test-shards.py "$RUNNER_TEMP/desktop-shards"
           --root "$GITHUB_WORKSPACE" --shards 4 --tests-result "$DESKTOP_TEST_RESULT"
+          --timings desktop/ci-test-durations.json
           --output "$RUNNER_TEMP/desktop-test-summary.json"
       - uses: actions/upload-artifact@v4
         with:

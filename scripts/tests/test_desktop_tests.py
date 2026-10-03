@@ -36,6 +36,43 @@ class WorkerCountTests(unittest.TestCase):
             driver.partition(files[:1], (2, 2))
 
 
+class DurationPartitionTests(unittest.TestCase):
+    def test_long_files_are_spread_without_changing_discovery_or_file_order(self):
+        files = [f"test/{i:02}_test.dart" for i in range(12)]
+        durations = {files[i]: 100 for i in [0, 4, 8]}
+        timings = dict(default=1, durations=dict(durations, **{"test/removed_test.dart": 99999}))
+        groups = [driver.partition(files, (i, 4), timings) for i in range(1, 5)]
+        flat = [file for group in groups for file in group]
+        self.assertEqual(sorted(flat), files)
+        self.assertEqual(len(flat), len(set(flat)))
+        self.assertTrue(all(group == sorted(group) for group in groups))
+        loads = [sum(durations.get(file, 1) for file in group) for group in groups]
+        round_robin = [sum(durations.get(file, 1) for file in driver.partition(files, (i, 4))) for i in range(1, 5)]
+        self.assertLess(max(loads), max(round_robin) / 2)
+        self.assertEqual(groups, [driver.partition(list(reversed(files)), (i, 4), timings) for i in range(1, 5)])
+        self.assertEqual(driver.partition(files, (1, 1), timings), files)
+        with self.assertRaises(ValueError):
+            driver.partition(files[:1], (2, 2), timings)
+
+    def test_platform_weights_and_fingerprint_are_explicit_and_bad_hints_fail(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "timings.json"
+            data = dict(schema=1, defaultDurationMs=5000,
+                        platforms={"darwin": {"test/one_test.dart": 9000}, "linux": {"test/one_test.dart": 1000}})
+            path.write_text(json.dumps(data))
+            self.assertEqual(driver.load_timings(path, "darwin")["durations"]["test/one_test.dart"], 9000)
+            self.assertEqual(driver.load_timings(path, "linux")["durations"]["test/one_test.dart"], 1000)
+            self.assertEqual(driver.load_timings(path, "darwin")["sha256"], driver.validation.file_sha256(path))
+            self.assertIsNone(driver.load_timings(None, "darwin"))
+            for bad in [dict(data, schema=True), dict(data, defaultDurationMs=0), dict(data, platforms={}),
+                        *[dict(data, platforms={"darwin": {name: value}}) for name, value in
+                          [("../escape_test.dart", 1), ("test/web/browser_test.dart", 1), ("test/../escape_test.dart", 1),
+                           ("test/one_test.dart", True), ("test/one_test.dart", -1), ("test/one_test.dart", float("nan"))]]]:
+                path.write_text(json.dumps(bad))
+                with self.subTest(data=bad), self.assertRaises(ValueError):
+                    driver.load_timings(path, "darwin")
+
+
 class ReporterTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -156,6 +193,17 @@ class DesktopProcessTests(unittest.TestCase):
         self.assertEqual([Path(p).name for p in receipt["selected_files"]], ["two_test.dart"])
         self.assertEqual([Path(p).name for p in calls[0] if p.endswith("_test.dart")], ["two_test.dart"])
         self.assertEqual(receipt["coverage"], dict(files=1, verified_files=1, passed=1, skipped=1))
+
+    def test_timing_hints_change_assignment_and_are_recorded_without_selecting_stale_files(self):
+        path = self.root / "desktop/ci-test-durations.json"
+        path.write_text(json.dumps(dict(schema=1, defaultDurationMs=1000, platforms={sys.platform: {
+            "test/two_test.dart": 9000, "test/removed_test.dart": 99999}})))
+        result, receipt, calls = self.run_driver(extra=("--shard", "1/2", "--timings", str(path)))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([Path(p).name for p in receipt["selected_files"]], ["two_test.dart"])
+        self.assertEqual([Path(p).name for p in calls[0] if p.endswith("_test.dart")], ["two_test.dart"])
+        self.assertEqual(receipt["scheduling"], dict(algorithm="duration-balanced-v1", timings_sha256=driver.validation.file_sha256(path)))
+        self.assertEqual(receipt["shard"]["inventory"], ["test/one_test.dart", "test/two_test.dart"])
 
     def test_recovery_runs_only_the_failed_loader_once_and_preserves_both_logs(self):
         result, receipt, calls = self.run_driver("once")

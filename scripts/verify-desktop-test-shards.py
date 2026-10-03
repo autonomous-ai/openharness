@@ -13,7 +13,7 @@ spec.loader.exec_module(driver)
 PLATFORMS = {"ubuntu-22.04": "linux", "macos-15": "darwin"}
 
 
-def verify_receipt(path, source, inventory, platform, index, shards):
+def verify_receipt(path, source, inventory, platform, index, shards, timings=None):
     receipt = json.loads(path.read_text())
     if (receipt.get("schema") != 1 or receipt.get("kind") != "desktop-vm"
             or receipt.get("platform") != platform or source.get("dirty")
@@ -21,6 +21,8 @@ def verify_receipt(path, source, inventory, platform, index, shards):
             or not receipt.get("identity") or receipt.get("identity") != receipt.get("identity_after")):
         raise ValueError("receipt source, platform or environment differs")
     shard = receipt.get("shard", {})
+    if receipt.get("scheduling") != driver.scheduling(timings):
+        raise ValueError("shard scheduling inputs differ")
     if (type(shard.get("index")) is not int or type(shard.get("total")) is not int
             or shard != dict(index=index, total=shards, inventory=inventory)):
         raise ValueError("shard identity or full discovery inventory differs")
@@ -35,7 +37,7 @@ def verify_receipt(path, source, inventory, platform, index, shards):
         return path.relative_to(desktop).as_posix()
 
     selected = receipt["selected_files"]
-    if [relative(p) for p in selected] != driver.partition(inventory, (index, shards)):
+    if [relative(p) for p in selected] != driver.partition(inventory, (index, shards), timings):
         raise ValueError("selected files do not match the assigned shard")
     checks = receipt.get("checks", [])
     if not isinstance(checks, list) or len(checks) not in {1, 2}:
@@ -83,7 +85,7 @@ def verify_receipt(path, source, inventory, platform, index, shards):
         receipt_sha256=driver.validation.file_sha256(path))
 
 
-def verify(directory, root, shards, tests_result):
+def verify(directory, root, shards, tests_result, timings_path=None):
     if tests_result != "success":
         raise ValueError(f"the complete Desktop matrix must pass: {tests_result}")
     expected_folders = {f"desktop-shard-{label}-{index}" for label in PLATFORMS for index in range(1, shards + 1)}
@@ -94,6 +96,7 @@ def verify(directory, root, shards, tests_result):
                  for p in driver.select_files(root / "desktop", [])]
     platforms = []
     for label, platform in PLATFORMS.items():
+        timings = driver.load_timings(timings_path, platform)
         seen, counts = Counter(), Counter(passed=0, skipped=0)
         records = []
         for index in range(1, shards + 1):
@@ -101,7 +104,7 @@ def verify(directory, root, shards, tests_result):
             receipts = list(folder.rglob("receipt.json"))
             if len(receipts) != 1 or receipts[0].is_symlink():
                 raise ValueError(f"{label} shard {index}: expected exactly one receipt")
-            results, record = verify_receipt(receipts[0], source, inventory, platform, index, shards)
+            results, record = verify_receipt(receipts[0], source, inventory, platform, index, shards, timings)
             seen.update(results.keys())
             counts.update({key: record[key] for key in counts})
             records.append(record)
@@ -118,12 +121,13 @@ def main():
     parser.add_argument("directory", type=Path)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--shards", type=int, default=4)
+    parser.add_argument("--timings", type=Path, help="the same checked-out scheduling hints required by every shard")
     parser.add_argument("--tests-result", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.shards < 1:
         parser.error("shards must be positive")
-    result = verify(args.directory, args.root.resolve(), args.shards, args.tests_result)
+    result = verify(args.directory, args.root.resolve(), args.shards, args.tests_result, args.timings)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     for platform in result["platforms"]:
         print(f"{platform['platform']}: {platform['files']} files verified exactly once; "

@@ -8,7 +8,7 @@ import argparse
 import importlib.util
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import subprocess
@@ -158,9 +158,45 @@ def shard_pair(value):
     return index, total
 
 
-def partition(files, shard):
+def load_timings(path, platform):
+    if path is None:
+        return None
+    data = json.loads(path.read_text())
+    if not isinstance(data, dict) or type(data.get("schema")) is not int or data["schema"] != 1:
+        raise ValueError("unsupported Desktop timing hints")
+    default = data.get("defaultDurationMs")
+    platforms = data.get("platforms")
+    if type(default) is not int or default <= 0 or not isinstance(platforms, dict):
+        raise ValueError("invalid default duration or timing platforms")
+    durations = platforms.get(platform)
+    if not isinstance(durations, dict):
+        raise ValueError(f"Desktop timing hints lack platform {platform}")
+    for name, duration in durations.items():
+        if (not isinstance(name, str) or not name.startswith("test/") or name.startswith("test/web/")
+                or not name.endswith("_test.dart") or ".." in PurePosixPath(name).parts or "\\" in name
+                or PurePosixPath(name).as_posix() != name or type(duration) is not int or duration <= 0):
+            raise ValueError(f"invalid Desktop file timing: {name}")
+    return dict(default=default, durations=durations, sha256=validation.file_sha256(path))
+
+
+def scheduling(timings):
+    return dict(algorithm="duration-balanced-v1", timings_sha256=timings["sha256"]) if timings else None
+
+
+def partition(files, shard, timings=None):
     index, total = shard
-    selected = files[index - 1::total]
+    if timings is None:
+        selected = files[index - 1::total]
+    else:
+        # Longest files go to the lightest shard. Only discovered files select
+        # work: removed hints are ignored and new files receive the default.
+        costs = {path: timings["durations"].get(path, timings["default"]) for path in files}
+        groups, loads = [[] for _ in range(total)], [0] * total
+        for path in sorted(files, key=lambda path: (-costs[path], path)):
+            group = min(range(total), key=lambda i: (loads[i], len(groups[i]), i))
+            groups[group].append(path)
+            loads[group] += costs[path]
+        selected = sorted(groups[index - 1])  # Preserve normal ordering within each shard.
     if not selected:
         raise ValueError("shard has no test files; reduce the shard count")
     return selected
@@ -172,6 +208,7 @@ def main(argv=None):
     parser.add_argument("--flutter", default="flutter", help="Flutter executable (dependencies must already be installed)")
     parser.add_argument("--workers", type=int, default=default_workers())
     parser.add_argument("--shard", type=shard_pair, default=(1, 1), help="run INDEX/TOTAL of the complete selected file inventory")
+    parser.add_argument("--timings", type=Path, help="optional platform-specific file-duration hints for balanced shards")
     parser.add_argument("--timeout", type=float, default=900, help="total attempt budget in seconds, including recovery (default: 900)")
     parser.add_argument("--no-loader-retry", action="store_true", help="retain the first failure without recovery")
     args = parser.parse_args(argv)
@@ -182,7 +219,9 @@ def main(argv=None):
     root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()).resolve()
     desktop = root / "desktop"
     inventory = select_files(desktop, args.files)
-    selected = partition(inventory, args.shard)
+    relative_inventory = [Path(path).relative_to(desktop).as_posix() for path in inventory]
+    timings = load_timings(args.timings, sys.platform)
+    selected = [str(desktop / path) for path in partition(relative_inventory, args.shard, timings)]
     flutter = shutil.which(args.flutter)
     if flutter is None:
         raise ValueError(f"Flutter executable unavailable: {args.flutter}")
@@ -194,9 +233,9 @@ def main(argv=None):
     receipt = dict(schema=1, kind="desktop-vm", started_at=validation.utc_now(), source=validation.source_state(root),
                    workers=workers, logical_cpus=os.cpu_count(), timeout_seconds=args.timeout,
                    selected_files=selected, checks=[], status="blocked", platform=sys.platform,
-                   desktop_root=str(desktop.resolve()),
+                   desktop_root=str(desktop.resolve()), scheduling=scheduling(timings),
                    shard=dict(index=args.shard[0], total=args.shard[1],
-                              inventory=[str(Path(path).relative_to(desktop)) for path in inventory]))
+                              inventory=relative_inventory))
     # Reuse the common runner's source/toolchain/environment identity and owned
     # process cleanup. This driver never reuses results from an earlier invocation.
     identity_plan = {"checks": [{"name": "desktop-vm", "argv": [flutter, "test"], "cwd": "desktop",
@@ -227,7 +266,8 @@ def main(argv=None):
     def unchanged(identity):
         receipt["source_after"] = validation.source_state(root)
         receipt["identity_after"] = validation.reuse_keys(identity_plan, root)
-        return receipt["source"] == receipt["source_after"] and identity == receipt["identity_after"]
+        return (receipt["source"] == receipt["source_after"] and identity == receipt["identity_after"]
+                and timings == load_timings(args.timings, sys.platform))
 
     try:
         free = shutil.disk_usage(root).free / 1024 ** 3

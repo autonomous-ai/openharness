@@ -143,6 +143,30 @@ class DesktopShardTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.verify()
 
+    def test_balanced_shards_require_the_same_hint_file_and_all_discovered_tests(self):
+        timings = self.root / "desktop/ci-test-durations.json"
+        timings.write_text(json.dumps(dict(schema=1, defaultDurationMs=1000,
+                           platforms={p: {"test/two_test.dart": 9000} for p in verifier.PLATFORMS.values()})))
+        subprocess.run(["git", "add", "."], cwd=self.root, capture_output=True, check=True)
+        subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "timings"],
+                       cwd=self.root, capture_output=True, check=True)
+        source = verifier.driver.validation.source_state(self.root)
+        for path, record in self.records:
+            record.update(source=source, source_after=source,
+                          scheduling=dict(algorithm="duration-balanced-v1", timings_sha256=verifier.driver.validation.file_sha256(timings)))
+            record["selected_files"] = [record["desktop_root"] + "/" + self.inventory[2 - record["shard"]["index"]]]
+            record["checks"] = [self.check(path.parent, record["selected_files"], "desktop-vm")]
+            self.write(path, record)
+        result = verifier.verify(self.directory, self.root, 2, "success", timings)
+        self.assertTrue(all(p["verified_files"] == self.inventory for p in result["platforms"]))
+        with self.assertRaisesRegex(ValueError, "scheduling inputs differ"):
+            self.verify()
+        path, record = self.records[0]
+        record["scheduling"]["timings_sha256"] = "0" * 64
+        self.write(path, record)
+        with self.assertRaisesRegex(ValueError, "scheduling inputs differ"):
+            verifier.verify(self.directory, self.root, 2, "success", timings)
+
 
 if __name__ == "__main__":
     unittest.main()
