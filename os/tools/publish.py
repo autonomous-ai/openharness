@@ -81,6 +81,7 @@ def main():
     parser.add_argument('--image', type=int, required=True)
     parser.add_argument('--dsh', type=int, default=0)
     parser.add_argument('--repo', required=True)
+    parser.add_argument('--prepare-only', action='store_true', help='Validate and assemble local review files without publishing')
     args = parser.parse_args()
     root = args.input.resolve()
     folder = root / 'image'
@@ -156,6 +157,10 @@ BIOS/plain and UEFI/encrypted VM boot, clipboard, browser switching, offline ins
 
 Source: `{manifest['source_commit']}`. [Machine validation]({run['html_url']}).
 ''')
+    if args.prepare_only:
+        print(json.dumps({'status': 'prepared', 'tag': tag, 'repository': args.repo,
+                          'notes': str(notes), 'files': identities}, indent=2))
+        return
     subprocess.run(['gh', 'release', 'create', tag, '--repo', args.repo, '--target', manifest['source_commit'],
                     '--draft', '--prerelease', '--title', 'Programmer OS ' + version, '--notes-file', str(notes),
                     *map(str, assets)], check=True, timeout=900)

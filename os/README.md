@@ -4,9 +4,11 @@ Boot into `hn`. Talk to agents in their own terminal panes. Review their diffs,
 tests and output there. The browser opens only when requested. Development
 toolchains are installed by the agents as needed.
 
-**Development status:** image construction and machine testing are in progress.
-Source configuration and unit tests alone do not establish that an ISO boots or
-is safe to recommend for installation. See the release's validation receipt.
+**Preview status:** the actual image passes BIOS/plain and UEFI/encrypted
+installation, reboot, recovery, compiler and four-agent executable checks.
+Real OpenCode agents and shared DSH viewers have also run inside the installed OS.
+Physical ThinkPad, Wi-Fi, suspend and NVIDIA hardware remain unverified.
+The release's `validation.json` identifies the exact image and coverage.
 
 ## Design
 
@@ -161,3 +163,56 @@ owner. System guidance for agents lives at `/usr/share/harness-os/AGENTS.md`.
 No benchmark or hardware support claim is considered measured before these
 checks produce artifacts. Build, validation, publication and waiting are tracked
 separately in `progress.json`.
+
+## Measured preview footprint
+
+These measurements cover image `dfbb815f05a0cbe3c01e474ff83edce5315f6142`,
+tested in [the complete image run](https://github.com/autonomous-ai/openharness/actions/runs/37083780202).
+The guests have two virtual CPUs and 2 GiB RAM. Browser and agents are closed
+for idle measurements; the measurement process is included.
+
+| Measurement | Result |
+| --- | --- |
+| Hybrid ISO | 1,525,678,080 bytes (1.42 GiB) |
+| Installed root filesystem used | 2,099,101,696 bytes (1.95 GiB) |
+| Settled RAM, six samples across both firmware modes | 396.62–400.62 MiB |
+| Settled CPU, six two-second samples | 0–0.75% |
+| Offline BIOS/plain installation | 36.5 seconds |
+| Offline UEFI/encrypted installation | 57.7 seconds |
+| Installed BIOS boot through hn process readiness, including test login | 19.3 seconds |
+
+The encrypted boot check deliberately waits 100 seconds before entering the disk
+password; its total is 111 seconds. These are VM observations, not laptop power-on
+benchmarks. The Mac's x86 emulation is substantially slower and is for trying the
+installation and interface. The image shrank by 304 MiB (17%) during testing by
+removing duplicated live-initramfs graphics payload, while retaining the installed
+firmware and drivers. Software rendering is selected only for a detected 2D
+virtio display; physical GPUs retain their normal acceleration path.
+
+The same image also passed complete BIOS/plain and UEFI/encrypted machine checks
+with [1 GiB RAM](https://github.com/autonomous-ai/openharness/actions/runs/37086919917),
+including browser switching, a compiler build and the four agent executables.
+Concurrent live model workloads were tested at 2 GiB, not 1 GiB. Leave additional
+memory for projects, browser tabs and local model weights.
+
+## Real programmer exercises
+
+Opt-in tests use free OpenCode model turns inside a freshly installed OS. They
+create a Python log-analysis CLI, a keyboard-accessible conference website, a
+canvas game, and a Fastify/SQLite issue tracker. The independent tester checks
+file/stdin behavior, keyboard navigation, mobile layout, game controls and state,
+API validation, CRUD, and persistence across a server restart. Compiler and
+package checks separately build a C program after installing gcc/make on demand.
+
+The DSH exercises use the repository's existing Web Viewer and Game Viewer. They
+materialize real managed agent workspaces, edit and reload HTML, build a
+terminal-only CSV tool, and change/play/export a game. Playwright uses the OS's
+system Chromium with its sandbox enabled. Project source, screenshots and
+receipts are retained as workflow artifacts; none of these projects, testing
+tools, or downloaded agent binaries is preinstalled in the ISO.
+
+Dispatch the **Programmer OS** workflow with `image_run_id=37083780202` and either
+`workloads=true` or `dsh=true` to repeat the corresponding exercise. These use
+network-accessible free models and may fail or exceed their bounded deadline;
+agent exits and independent checks are reported separately. `memory_mib=1024`
+selects the additional constrained-memory machine check.

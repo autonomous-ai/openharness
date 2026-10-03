@@ -1,12 +1,12 @@
 {
   "request_started_utc": "2026-10-02T17:09:32Z",
   "implementation_started_utc": "2026-10-02T17:10:08Z",
-  "implementation_complete_utc": null,
-  "validation_complete_utc": null,
+  "implementation_complete_utc": "2026-10-03T01:54:40.607222+00:00",
+  "validation_complete_utc": "2026-10-03T01:49:00Z",
   "merge_utc": null,
   "publication_utc": null,
   "completion_utc": null,
-  "status": "Smaller image passes complete BIOS/plain and UEFI/encrypted gates. Four free-agent projects built; completing the game turn, corrected backend DELETE acceptance, and three DSH exercises.",
+  "status": "Public preview explicitly approved; publishing prepared ISO, examples and evidence. Mac VM update continues.",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -160,6 +160,33 @@
         0
       ],
       "limitations": "2-vCPU/2-GiB x86 VMs; measurements include the measurement process. Physical ThinkPad, Wi-Fi, suspend and RTX compute remain unverified."
+    },
+    {
+      "scope": "Four retained free OpenCode projects; focused game layout fix, all unit tests and independent browser/API checks",
+      "result": "passed",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37086423516",
+      "image_source_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
+      "test_source_commit": "a2b2f1a38d8f283b45d0b414a2b303647273d47f",
+      "unit_tests_passed": 103,
+      "project_origins": [
+        37082675625,
+        37084999965
+      ],
+      "limitations": "Three completed model turns reused; all project and independent checks reran. Prior game deadlines remain failed evidence."
+    },
+    {
+      "scope": "Three managed free OpenCode DSHs, shared viewers, CSV tool, keyboard game/pause/restart/export and viewport fit",
+      "result": "passed",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37086603345",
+      "image_source_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
+      "test_source_commit": "4c9d1a47c20ce06a6f4fbc311d6cca12efd1d3b4"
+    },
+    {
+      "scope": "1 GiB RAM BIOS/plain and UEFI/encrypted full install/recovery; browser, compiler and agent executable checks",
+      "result": "passed",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37086919917",
+      "image_source_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
+      "limitations": "No concurrent live model workload at 1 GiB; physical devices remain unverified."
     }
   ],
   "waiting": [
@@ -170,15 +197,22 @@
       "local_implementation_continued": true,
       "overlaps_other_stages": true,
       "resolution": "User restored network access. Git push and local VM package downloads succeeded."
+    },
+    {
+      "started_utc": "2026-10-03T01:54:40.607222+00:00",
+      "ended_utc": "2026-10-03T01:55:13.285215+00:00",
+      "reason": "Automatic approval review rejected public ISO/examples/evidence publication without explicit approval. Exact local bundle prepared and approval requested.",
+      "local_implementation_continued": true,
+      "overlaps_other_stages": true,
+      "resolution": "User approved publishing the exact prepared preview to autonomous-ai/openharness."
     }
   ],
   "remaining": [
-    "Complete existing-project acceptance and real DSH checks",
-    "Refresh installed Mac VM to the verified image runtime and leave examples available",
-    "Publish verified preview with exact evidence and hardware limitations",
-    "Continue resource and user-experience checks through the requested work window"
+    "Verify published preview checksums",
+    "Refresh installed Mac VM and preserve generated projects",
+    "Continue focused experience checks through requested work window"
   ],
-  "last_updated_utc": "2026-10-03T01:14:21.341082+00:00",
+  "last_updated_utc": "2026-10-03T01:55:13.285215+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -246,5 +280,8 @@
     "started_utc": "2026-10-02T23:33:00Z",
     "requested_hours": 4,
     "expected_user_return_utc": "2026-10-03T03:33:00Z"
-  }
+  },
+  "publication_prepared_utc": "2026-10-03T01:54:40.607222+00:00",
+  "publication_approved_utc": "2026-10-03T01:55:13.285215+00:00",
+  "publication_trigger_utc": "2026-10-03T01:55:13.285215+00:00"
 }
