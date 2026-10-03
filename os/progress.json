@@ -257,7 +257,7 @@
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
     "Physical ThinkPad boot, installation, Wi-Fi, suspend and hardware verification; user will test manually"
   ],
-  "last_updated_utc": "2026-10-03T11:24:15.435201+00:00",
+  "last_updated_utc": "2026-10-03T11:26:36.906384+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -922,7 +922,7 @@
   "usb_first_use_revision": {
     "request_received_utc": null,
     "first_recorded_utc": "2026-10-03T08:28:25.074631+00:00",
-    "status": "Full CLI and image passed. Full DSH journey passed; investigating encrypted initrd delay and 1 GiB extractor OOM before publication.",
+    "status": "New image building with bounded installer caches and graphical-primary diagnostic console; existing Naming System and full CLI evidence remain valid. Preview 4 not published.",
     "implementation_complete_utc": "2026-10-03T11:24:15.435201+00:00",
     "validation_complete_utc": null,
     "publication_utc": null,
@@ -1095,7 +1095,7 @@
       }
     },
     "next_step": "Build and inspect a fresh exact-source image with bounded extraction caches and corrected diagnostic console order; run native 4 GiB and constrained 1 GiB installation/recovery and project/DSH acceptance. Reuse passed full CLI evidence because CLI/TUI sources and dependencies are unchanged.",
-    "last_recorded_utc": "2026-10-03T11:24:15.435201+00:00",
+    "last_recorded_utc": "2026-10-03T11:26:36.906384+00:00",
     "first_use_visual_review": "Inspected BIOS 01d-bundled-opencode.png and failure.png from run 37116595898: upstream-default Fledge Alpha Free is shown without a plugin warning; after Ctrl+C twice, the clean Harness Install/Try welcome is visible. Both firmware JSONL replies are 42. The retained process in each is /usr/bin/opencode serve --service.",
     "revision_ready_utc": "2026-10-03T10:29:26.198461+00:00",
     "development_acceptance_revision": {
@@ -1222,11 +1222,33 @@
     "post_diagnostic_local_checks": {
       "completed_utc": "2026-10-03T11:12:50.086227+00:00",
       "result": "51 portable OS tests passed; Python/JSON/XML/shell checks and Node syntax for the browser acceptance script passed. Naming System relative links resolve. No new full CLI suite: CLI/runtime source is unchanged from passed run 37116593867."
+    },
+    "next_image_run": {
+      "run_id": 37119543543,
+      "url": "https://github.com/autonomous-ai/openharness/actions/runs/37119543543",
+      "source_commit": "21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8",
+      "started_utc": "2026-10-03T11:24:19Z",
+      "status": "in progress",
+      "initial_machine_memory_mib": 1024,
+      "transport": "usb",
+      "required_followups": [
+        "Inspect native/image results",
+        "Complete 1 GiB install/recovery and measure prompt latency",
+        "4 GiB RAM-copy journey with retained completed projects and independent browser/API checks",
+        "Three real DSH exercises and shared viewers against this exact image"
+      ]
     }
   },
   "previous_goal_turn_classification": {
-    "classification": "progress",
-    "evidence": "Committed and pushed bigint OverlayFS identities, OpenCode plugin migration, corrected default-model cwd and DSH v2 flags; local affected/real tests passed and exact-source CI was dispatched.",
-    "recorded_utc": "2026-10-03T10:38:15.965197+00:00"
+    "status": "meaningful progress",
+    "at_utc": "2026-10-03T11:26:36.906384+00:00",
+    "progress": [
+      "Naming System and cross-links verified; canonical product/workspace/OS terms documented.",
+      "Complete DSH BIOS/UEFI journey passed on prior image; preserved actual artifacts and screenshots.",
+      "Diagnosed 1 GiB installation OOM in unsquashfs; reduced extraction cache from 512 MiB default to 64 MiB.",
+      "Captured encrypted boot timings and initrd journal, isolated delay before prompt in serial-primary setup; next image tests tty0 primary and adds performance assertions.",
+      "Corrected independent game browser selector and diagnostic pager; new image/1 GiB machine run underway."
+    ],
+    "blocking_condition_repeated": false
   }
 }
