@@ -1,13 +1,30 @@
 """Keyboard acceptance on the installed VM, using real private test releases."""
 import json
 import shlex
+import subprocess
 import time
 from session_vm import put, screen_text, PROBE
 
 
-def wait_text(vm, text, name):
+def wait_text(vm, text, name, status_bar=False):
+    def observed():
+        if not status_bar:
+            return screen_text(vm, name)
+        # The full-screen OCR skips the eight-pixel status text. Retain the
+        # original frame, then read its enlarged bottom line as one text row.
+        from PIL import Image
+        vm.screenshot(name)
+        with Image.open(vm.folder / (name + '.png')) as frame:
+            bar = frame.crop((0, frame.height - 20, frame.width, frame.height))
+            bar.resize((bar.width * 3, bar.height * 3)).save(vm.folder / (name + '-bar.png'))
+        result = subprocess.check_output(['tesseract', str(vm.folder / (name + '-bar.png')),
+                                         'stdout', '--psm', '7'], text=True,
+                                         stderr=subprocess.DEVNULL, timeout=10)
+        (vm.folder / (name + '-bar.txt')).write_text(result)
+        return ' '.join(result.lower().split())
+
     deadline = time.monotonic() + 25
-    while text.lower() not in screen_text(vm, name):
+    while text.lower() not in observed():
         if time.monotonic() > deadline:
             raise AssertionError('Missing update screen: ' + text)
         time.sleep(.25)
@@ -43,7 +60,7 @@ def exercise(vm, fixture, host_url):
     state = '~/.local/state/harness-os/updates'
     vm.command('for n in $(seq 1 120); do test -s ' + state + '/ready.json && exit 0; sleep .5; done; '
                'journalctl --user -u harness-update --no-pager; exit 1', timeout=75)
-    wait_text(vm, 'update ready', 'fast-01-notice')
+    wait_text(vm, 'update ready', 'fast-01-notice', status_bar=True)
     checks = ['User timer discovers, verifies and stages a real hn release without changing the running selection']
     vm.command('test ! -e ' + state + '/current')
 
