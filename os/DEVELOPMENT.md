@@ -272,9 +272,9 @@ the small updater; install its separately validated development bundle to add it
 
 Intel Macs and Apple Silicon are both intended OS targets. They share the Harness
 interface and behavior, but need separate platform work. None is claimed as a
-validated Harness OS hardware target by preview 5.
+validated Harness OS hardware target by preview 6.
 
-The next image prepares selected older Broadcom radios by PCI ID, not Mac model.
+Preview 6 prepares selected older Broadcom radios by PCI ID, not Mac model.
 BCM4331 (`14e4:4331`) and BCM4360 (`14e4:43a0`) may load the optional wl driver;
 an already working native interface is preserved. BCM43602 and other native
 brcmfmac/brcmsmac devices are outside that selection. The vendor package's broad

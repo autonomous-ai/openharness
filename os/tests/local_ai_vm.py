@@ -91,16 +91,16 @@ def main():
             vm.start(live=False)
             vm.login_installed(config)
             result['post_driver_reboot_keyboard'] = check_graphical_keyboard(vm, 'nvidia-package-reboot')
-            vm.keys('meta_l', 'b')
-            vm.command('for n in $(seq 1 30); do pgrep -x chromium && exit 0; sleep 1; done; exit 1')
+            # One launch owns the test window. A second launch before Chromium
+            # finishes startup can leave the first New Tab in front of it.
             vm.command('hn-browser ' + shlex.quote(f'http://10.0.2.2:{server.server_port}/browser.html'))
             deadline = time.monotonic() + 45
             while time.monotonic() < deadline:
                 vm.screenshot('browser-after-driver-packages')
                 visible = subprocess.check_output(['tesseract', str(folder / 'browser-after-driver-packages.png'),
                     'stdout', '--psm', '11'], text=True, stderr=subprocess.DEVNULL, timeout=10)
+                (folder / 'browser-after-driver-packages.txt').write_text(visible)
                 if 'Harness preview is visible.' in visible:
-                    (folder / 'browser-after-driver-packages.txt').write_text(visible)
                     break
                 time.sleep(1)
             else:
