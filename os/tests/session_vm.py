@@ -90,7 +90,13 @@ def installed_session(vm, config, result):
         vm.command('test "$(cat ~/Projects/session-probe/pid)" = "$(cat /tmp/session-original-pid)" && kill -0 "$(cat /tmp/session-original-pid)"')
         vm.command('before=$(cat ~/Projects/session-probe/heartbeat); sleep 0.5; test "$before" != "$(cat ~/Projects/session-probe/heartbeat)"')
         expected = ''.join(word + '\n' for word in accepted)
-        expression = 'from pathlib import Path; assert (Path.home()/"Projects/session-probe/input").read_text() == ' + repr(expected)
+        expression = ('from pathlib import Path; import time\n'
+            'p = Path.home()/"Projects/session-probe/input"\n'
+            'expected = ' + repr(expected) + '\n'
+            'deadline = time.monotonic() + 3\n'
+            'while p.read_text() != expected and time.monotonic() < deadline: time.sleep(.05)\n'
+            'actual = p.read_text()\n'
+            'assert actual == expected, (repr(actual), repr(expected))')
         vm.command('python3 -c ' + shlex.quote(expression))
 
     def unlock(name):
@@ -112,6 +118,11 @@ def installed_session(vm, config, result):
         vm.type_probe(config['password'])
         vm.keys('ret')
         wait_lock(vm, False)
+        deadline = time.monotonic() + 10
+        while 'visible lock probe' not in screen_text(vm, name + '-unlocked'):
+            if time.monotonic() >= deadline:
+                raise AssertionError('Unlock did not restore the terminal')
+            time.sleep(.25)
         work_survives()
         word = 'accepted-' + name
         vm.type_probe(word)
@@ -119,7 +130,7 @@ def installed_session(vm, config, result):
         accepted.append(word)
         time.sleep(0.5)
         work_survives()
-        assert 'visible lock probe' in screen_text(vm, name + '-unlocked'), 'Unlock did not restore the terminal'
+        vm.screenshot(name + '-accepted-input')
 
     vm.keys('meta_l', 'l')
     print('Checking installed manual lock', flush=True)
@@ -174,6 +185,8 @@ def main():
     parser.add_argument('--iso', type=Path, required=True)
     parser.add_argument('--firmware', choices=['bios', 'uefi'], required=True)
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--video', choices=['VGA', 'virtio-vga'], default='VGA',
+                        help='QEMU display; bochs VGA has suspend/resume callbacks in the pinned LTS kernel')
     parser.add_argument('--session-file', type=Path,
                         help='Explicitly test this candidate launcher over the verified base ISO; records its hash and reboots before checking')
     args = parser.parse_args()
@@ -185,12 +198,13 @@ def main():
         assert hashlib.file_digest(handle, 'sha256').hexdigest() == manifest['iso']['sha256']
     folder = (args.output or Path('os/test-results') / (args.firmware + '-session')).resolve()
     folder.mkdir(parents=True, exist_ok=False)
-    vm = VM(folder, iso, args.firmware, 2048)
+    vm = VM(folder, iso, args.firmware, 2048, video=args.video)
     config = dict(disk='/dev/vda', expected_serial='HN_OS_TEST', confirm_erase='/dev/vda',
                   username='me', hostname='harness', password='test-password-123',
                   encrypt=args.firmware == 'uefi', serial_console=True)
     result = {'status': 'running', 'scope': 'password lock, input isolation and virtual ACPI suspend/resume',
               'firmware': args.firmware, 'encrypted': config['encrypt'], 'memory_mib': 2048,
+              'video': args.video,
               'iso_sha256': manifest['iso']['sha256'], 'image_source_commit': manifest['source_commit'],
               'test_source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
               'started_at_unix': time.time(), 'checks': []}
@@ -248,7 +262,10 @@ def main():
             vm.screenshot('failure')
             if vm.shell_ready:
                 output, _ = vm.command('sudo -n journalctl -b -o short-monotonic --no-pager; '
-                    'cat ~/.local/state/harness-os/display.log; ps -eo pid,ppid,sid,comm,args --width 240',
+                    'cat ~/.local/state/harness-os/display.log; ps -eo pid,ppid,sid,comm,args --width 240; '
+                    'cat /sys/class/drm/card*-*/status /sys/class/drm/card*-*/dpms; '
+                    'sudo -n sh -c "cat /sys/kernel/debug/dri/*/state"; '
+                    'cat ~/Projects/session-probe/input',
                     check=False, timeout=15)
                 (folder / 'session-diagnostics.log').write_text(output)
         except Exception:

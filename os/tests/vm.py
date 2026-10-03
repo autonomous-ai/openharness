@@ -25,10 +25,13 @@ import uuid
 
 
 class VM:
-    def __init__(self, folder, iso, firmware, memory, live_transport='cdrom', cpu=None):
+    def __init__(self, folder, iso, firmware, memory, live_transport='cdrom', cpu=None, video='virtio-vga'):
         self.folder, self.iso, self.firmware, self.memory = folder, iso, firmware, memory
         self.live_transport = live_transport
         self.cpu = cpu
+        if video not in ('virtio-vga', 'VGA'):
+            raise ValueError('Unsupported test display: ' + video)
+        self.video = video
         self.unlock_count = 0
         self.boot_count = 0
         self.process = None
@@ -62,7 +65,7 @@ class VM:
         acceleration = 'kvm' if os.access('/dev/kvm', os.R_OK | os.W_OK) else 'tcg'
         self.acceleration = acceleration
         args = ['qemu-system-x86_64', '-accel', acceleration, '-m', str(self.memory), '-smp', '2',
-                '-cpu', self.cpu or ('host' if acceleration == 'kvm' else 'max'), '-device', 'virtio-vga',
+                '-cpu', self.cpu or ('host' if acceleration == 'kvm' else 'max'), '-device', self.video,
                 '-display', 'none', '-no-reboot',
                 '-drive', f'file={self.disk},format=qcow2,if=none,id=target',
                 '-device', f'virtio-blk-pci,drive=target,serial=HN_OS_TEST,bootindex={2 if live else 1}',

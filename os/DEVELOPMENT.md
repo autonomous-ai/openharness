@@ -40,6 +40,14 @@ The same terminal process, heartbeat and project must survive. This is a quick
 integration check, followed by a fresh final image test. It does not establish
 physical laptop suspend, radio, audio or battery behavior.
 
+The focused sleep test uses QEMU standard VGA (`bochs-drm`), whose pinned LTS
+driver implements display suspend/resume. The normal install tests retain
+`virtio-vga`. Preview 4's Virtio display resumed with a working guest and terminal
+process but no visible output after S3; the pinned Virtio GPU driver has no
+freeze/restore callbacks. Keep that VM limitation separate from physical laptop
+acceptance. `--video virtio-vga` reproduces that configuration; do not count an
+unavailable display as successful sleep/wake.
+
 ## The feedback loop
 
 | Work being tested | Best environment | What it proves |
