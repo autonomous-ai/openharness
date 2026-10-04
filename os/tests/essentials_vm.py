@@ -71,10 +71,18 @@ exit 1
 def wait_screen(vm, words, name, timeout=20):
     deadline = time.monotonic() + timeout
     while True:
-        text = screen_text(vm, name)
+        # OCR drops dark text inside the selected network's light highlight.
+        # Read the real focused terminal for input readiness, and retain its
+        # actual framebuffer separately for visual inspection.
+        vm.command(USER_ENV + 'hn capture-pane -p > /tmp/harness-wifi-screen.txt')
+        content = vm.read_file('/tmp/harness-wifi-screen.txt')
+        (vm.folder / (name + '.txt')).write_bytes(content)
+        text = ' '.join(content.decode().lower().split())
         if all(word.lower() in text for word in words):
+            vm.screenshot(name)
             return text
         if time.monotonic() >= deadline:
+            vm.screenshot(name)
             raise AssertionError('Expected screen text not rendered: ' + repr(words) + '; saw: ' + text)
         time.sleep(.25)
 
