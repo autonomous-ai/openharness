@@ -111,7 +111,7 @@ export class DisposableOneShotPool<Options, Result> {
       if (this.connected || this.closed) return
       this.enabled = false
       this.reconcileAll()
-      this.log('[recap-pool] device grace expired · unwarmed')
+      this.log('[one-shot-pool] device grace expired · unwarmed')
     }, this.graceMs)
   }
 
@@ -121,7 +121,7 @@ export class DisposableOneShotPool<Options, Result> {
     for (const candidate of state.ready) {
       state.ready.delete(candidate)
       if (candidate.isAlive() && !this.expired(candidate)) { worker = candidate; break }
-      if (candidate.isAlive()) this.log(`[recap-pool] ${engine} dropped a stale warm worker · age=${Date.now() - candidate.createdAt}ms`)
+      if (candidate.isAlive()) this.log(`[one-shot-pool] ${engine} dropped a stale warm worker · age=${Date.now() - candidate.createdAt}ms`)
       candidate.dispose()
       this.all.delete(candidate)
     }
@@ -133,7 +133,7 @@ export class DisposableOneShotPool<Options, Result> {
     const selected = worker ?? await this.createWorker(engine)
 
     const age = Date.now() - selected.createdAt
-    this.log(`[recap-pool] ${engine} ${hit ? 'hit' : 'miss'} · workerAge=${age}ms · ready=${state.ready.size}/${state.target}`)
+    this.log(`[one-shot-pool] ${engine} ${hit ? 'hit' : 'miss'} · workerAge=${age}ms · ready=${state.ready.size}/${state.target}`)
     try {
       return await selected.run(options)
     } finally {
@@ -204,7 +204,7 @@ export class DisposableOneShotPool<Options, Result> {
         state.ready.delete(worker)
         worker.dispose()
         this.all.delete(worker)
-        this.log(`[recap-pool] ${engine} retired an idle warm worker · age=${Date.now() - worker.createdAt}ms`)
+        this.log(`[one-shot-pool] ${engine} retired an idle warm worker · age=${Date.now() - worker.createdAt}ms`)
       }
     }
     this.reconcileAll()
@@ -227,7 +227,7 @@ export class DisposableOneShotPool<Options, Result> {
     const previousTarget = state.target
     state.target = this.enabled ? poolTargetForActiveSessions(state.active) : 0
     if (state.target !== previousTarget) {
-      this.log(`[recap-pool] ${engine} target ${previousTarget}→${state.target} · active=${state.active}`)
+      this.log(`[one-shot-pool] ${engine} target ${previousTarget}→${state.target} · active=${state.active}`)
     }
 
     if (state.target === 0 && state.retryTimer) {
@@ -263,7 +263,7 @@ export class DisposableOneShotPool<Options, Result> {
         } else {
           state.ready.add(worker)
           state.failures = 0
-          this.log(`[recap-pool] ${engine} warm ready=${state.ready.size}/${state.target}`)
+          this.log(`[one-shot-pool] ${engine} warm ready=${state.ready.size}/${state.target}`)
           this.reconcile(engine)
         }
       })
@@ -276,7 +276,7 @@ export class DisposableOneShotPool<Options, Result> {
         // not narrate the same sentence every second until the log is 9MB.
         if (delay < RETRY_CAP_MS || state.failures === CAP_ANNOUNCE_AT) {
           this.log(
-            `[recap-pool] ${engine} warm spawn failed (${state.failures}): ${err instanceof Error ? err.message : String(err)}`
+            `[one-shot-pool] ${engine} warm spawn failed (${state.failures}): ${err instanceof Error ? err.message : String(err)}`
             + (delay >= RETRY_CAP_MS ? ` · backing off to ${RETRY_CAP_MS / 1000}s and staying quiet` : ` · retry in ${delay}ms`),
           )
         }
@@ -295,7 +295,7 @@ export class DisposableOneShotPool<Options, Result> {
     if (this.closed) {
       worker.dispose()
       this.all.delete(worker)
-      throw new Error('recap pool shut down while worker was starting')
+      throw new Error('one-shot pool shut down while worker was starting')
     }
     return worker
   }

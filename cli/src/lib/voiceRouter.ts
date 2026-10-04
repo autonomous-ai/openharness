@@ -110,7 +110,7 @@ function ensureRouterConfigured(engine: RouterEngine): void {
 }
 
 /**
- * Tell the router which agents exist. Called from the same place the recap pool is synced, so the warm
+ * Tell the router which agents exist. Called whenever the active agents change, so the warm
  * worker always belongs to an engine the machine really runs.
  */
 export function setVoiceRouterSessions(sessions: Array<{ engine: string }>): void {

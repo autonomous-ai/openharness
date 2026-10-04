@@ -55,7 +55,7 @@ describe('kilo recap worker containment', () => {
 
   it('passes a model only when one is configured', () => {
     expect(kiloOneShotSpawn('kilo/stepfun/step-3.7-flash', {}, SCRATCH).args).toContain('--model')
-    // KILO_SUMMARY_MODEL defaults to empty, meaning "use the user's own default" — not "--model ''".
+    // No model given means "use the user's own default" — not "--model ''".
     expect(kiloOneShotSpawn('', {}, SCRATCH).args).not.toContain('--model')
   })
 })

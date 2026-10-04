@@ -194,13 +194,7 @@ import { teamWriteHold } from './teams/preflight.js'
 import { TeamError } from './teams/model.js'
 import { CommanderMirror, SUBAGENT_IDLE_MS, type CommanderMirrorOpts } from './lib/commander.js'
 import { AgentNotifications } from './lib/agentNotifications.js'
-import {
-  setSummaryPoolDeviceConnected,
-  shutdownSummaryPool,
-  deriveTurnSummary,
-  summarizeTurnText,
-  syncSummaryPoolSessions,
-} from './lib/summarize.js'
+import { deriveTurnSummary } from './lib/deviceRecap.js'
 import type { CableAgent } from './cable/cableSession.js'
 import { routeVoiceTask, setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter, type RouterAgent } from './lib/voiceRouter.js'
 import { tailFile } from './lib/sessions.js'
@@ -1881,12 +1875,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Persisted records are not trusted blindly. The process reconciler below adopts a matching live
   // runtime, replaces it immediately when PID/start-marker changed, and requires two successful misses
   // before removing it. Probe errors leave the registry untouched.
-  // Recap pool AND voice router share one sync: both need to know which engines the machine actually
-  // runs, and a router warmed for an engine no agent uses is exactly the bug this rides along to fix.
+  // The voice router needs to know which engines the machine actually runs: a router warmed for an
+  // engine no agent uses is a worker nobody asked for.
   const syncRecapPool = (): void => {
-    const sessions = registry.active()
-    syncSummaryPoolSessions(sessions)
-    setVoiceRouterSessions(sessions)
+    setVoiceRouterSessions(registry.active())
   }
   syncRecapPool()
   const runtimeProfiles = new RuntimeProfileManager()
@@ -2932,27 +2924,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
 
 
-  // SUMMARY_MODE picks the recap writer.
-  //   model — recap = llm(instruct, previous recap, the user's ask, the answer): a disposable
-  //     one-shot of the session's own engine. The previous recap is what lets "same fix, other file"
-  //     recap as what was done rather than as a fragment. Costs the one-shot's latency on every turn.
-  //   local (default) — NO MODEL IN THE LOOP. The dial is cabled to the Mac whose window already shows this text
-  //     in full, so the recap is a glance and the detail is one turn of the head away; the one-shot cost
-  //     ~9s of the user's turn to say something they were already looking at. Instant, but every recap
-  //     stands alone.
-  const summarizer: Pick<CommanderMirrorOpts, 'summarize' | 'summarizeIsLocal'> = env.SUMMARY_MODE === 'local'
-    ? { summarize: async (text) => deriveTurnSummary(text), summarizeIsLocal: true }
-    : {
-        summarize: async (text, signal, userMessage, sessionId, previousRecap) => {
-          const session = sessionId ? registry.bySession(sessionId) : undefined
-          // Gateway agents recap through OpenRouter directly (no vendor credential to spend). The probe is
-          // cached per live process, so this resolves without touching the process table again.
-          const gateway = session?.gateway === 'ori' && session.processIdentity
-            ? await probeGatewayRuntime(session.processIdentity)
-            : undefined
-          return summarizeTurnText(text, signal, userMessage, session?.engine ?? 'claude', gateway, previousRecap)
-        },
-      }
+  // The recap is an excerpt of the answer, cut the moment the turn ends — no model in the loop. The
+  // window, the phone and the dial show it beside the whole answer, so a model's rewrite (which cost
+  // about 9 s of every turn) said again what the screen already showed.
+  const summarizer: Pick<CommanderMirrorOpts, 'summarize' | 'summarizeIsLocal'> = {
+    summarize: async (text) => deriveTurnSummary(text),
+    summarizeIsLocal: true,
+  }
   /**
    * A turn that belongs to a SUB-AGENT: an Orchestrator specialist, or its Director while specialists
    * are still out.
@@ -5296,9 +5274,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }, PANE_TITLE_SYNC_MS)
 
   // A device joined mid-turn (count rise or join generation; no adapter heartbeat) → replay live state.
-  backend.onCommanderJoin = () => { setSummaryPoolDeviceConnected(deviceIsWatching()); mirror.replayAll(); questionWatcher.reset() } // re-announce an open question
+  backend.onCommanderJoin = () => { mirror.replayAll(); questionWatcher.reset() } // re-announce an open question
   backend.onCommanderPresenceChanged = (connected) => {
-    setSummaryPoolDeviceConnected(connected || backend.autonomousDeviceConnected())
     // Warm the voice-router worker while a device is connected.
     setVoiceRouterDeviceConnected(connected)
   }
@@ -6456,7 +6433,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     hookServer.close()
     await localSocket?.close()
     codexActivity.close()
-    shutdownSummaryPool()
     shutdownVoiceRouter()
     // The new daemon starts its own viewers for the agents it restores; ours must not hold the ports.
     await dshViewers.stopAll()
@@ -6564,7 +6540,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     hookServer.close()
     await localSocket?.close()
     codexActivity.close()
-    shutdownSummaryPool()
     shutdownVoiceRouter()
     await dshViewers.stopAll()
     await dshVerdicts.stop()
@@ -6575,7 +6550,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   process.on('SIGINT', () => void shutdown('SIGINT'))
   process.on('SIGTERM', () => void shutdown('SIGTERM'))
-  process.on('exit', () => { shutdownSummaryPool(); shutdownVoiceRouter() })
+  process.on('exit', () => { shutdownVoiceRouter() })
 
   // A machine revocation or invalid SSO refresh ends this adapter session permanently.
   backend.onRevoked = () => {
