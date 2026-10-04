@@ -40,6 +40,27 @@ describe('starting up', () => {
     expect(errors).not.toContain('UNSUPPORTED_ON_REMOTE')
   })
 
+  // Worse than a refusal: `message` has no reply, so a message that lands before `onMessage` is wired is
+  // dropped with only a log line ("message handler is not wired; terminal input was not dispatched").
+  // Found by master.e2e.ts, whose client reconnects the moment a restarted daemon's port answers.
+  it.fails('delivers a message sent the instant its port answers', async () => {
+    daemon = await IsolatedDaemon.create()
+    await daemon.start()
+    const setup = await LocalClient.connect(daemon)
+    const cwd = join(daemon.projectsDir, 'message')
+    mkdirSync(cwd, { recursive: true })
+    const agentId: string = (await setup.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 60_000)).agent.id
+    await until('the conversation to bind', async () => ((await setup.request('agents_list', {})).agents as Array<Record<string, any>>)
+      .find((agent) => agent.id === agentId)?.sessionId, 45_000, 200)
+    setup.close()
+    await daemon.stop()
+    await daemon.start({ ready: 'port' })
+    const client = await LocalClient.connect(daemon)
+    const ended = client.next((frame) => frame.type === 'turn_ended' && frame.agentId === agentId, 20_000, 'the turn the message started')
+    client.send('message', { agentId, content: 'sent the moment the port answered' })
+    await ended
+  })
+
   // After a restart the registry is served before the first reconcile confirms the panes: a running
   // agent lists as `stopped` (when it had a conversation) or not at all, for ~100-200 ms after the
   // daemon says it is ready. The app shows it paused or gone meanwhile.

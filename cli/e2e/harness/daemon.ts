@@ -25,6 +25,8 @@ export interface DaemonOptions {
   /** Models the fake engines report. */
   claudeModel?: string
   codexModel?: string
+  /** Boot the core on its own (`__run`) instead of under harnessd's master (`__harnessd`). */
+  noMaster?: boolean
 }
 
 async function freePort(): Promise<number> {
@@ -121,14 +123,31 @@ export class IsolatedDaemon {
   get computerId(): string { return this.env.ADAPTER_COMPUTER_ID! }
   get socketPath(): string { return join(this.dataDir, `daemon-${this.port}.sock`) }
   get projectsDir(): string { return join(this.root, 'projects') }
+  /** The process `harness start` would have started: the master, or a core run on its own. */
   get pid(): number | null { return this.child?.pid ?? null }
+
+  /** The core the master is running now (the last one it said it started). */
+  corePid(): number | null {
+    if (this.options.noMaster) return this.pid
+    const started = [...this.output.matchAll(/\[harnessd\] core started \(pid (\d+)\)/g)]
+    return started.length ? Number(started[started.length - 1][1]) : null
+  }
+
+  /** How many cores the master has started since this daemon object first started one. */
+  coresStarted(): number {
+    return [...this.output.matchAll(/\[harnessd\] core started/g)].length
+  }
   log(): string { return this.output }
 
-  /** `ready: 'port'` returns as soon as the port answers, the way a client sees a restarting daemon. */
-  async start(options: { ready?: 'port' | 'wired' } = {}): Promise<void> {
+  /** `ready: 'port'` returns as soon as the port answers, the way a client sees a restarting daemon;
+   *  `'none'` as soon as the process is started. */
+  async start(options: { ready?: 'none' | 'port' | 'wired' } = {}): Promise<void> {
     if (this.child) throw new Error('already running')
     const heap = this.options.heapMiB ? [`--max-old-space-size=${this.options.heapMiB}`] : []
-    const child = spawn(process.execPath, [...heap, '--import', 'tsx', 'src/cli.ts', '__run'], {
+    const entry = this.options.noMaster ? '__run' : '__harnessd'
+    // Readiness is judged from what this start prints, never from an earlier boot's lines.
+    const from = this.output.length
+    const child = spawn(process.execPath, [...heap, '--import', 'tsx', 'src/cli.ts', entry], {
       cwd: CLI_ROOT, env: this.env, stdio: ['ignore', 'pipe', 'pipe'],
     })
     this.child = child
@@ -140,6 +159,7 @@ export class IsolatedDaemon {
       reject(new Error(`daemon exited during boot (${signal ?? code}):\n${this.output.slice(-4000)}`))
     }))
     exited.catch(() => {}) // observed below while booting; afterwards an exit is the test's business
+    if (options.ready === 'none') return
     await Promise.race([exited, (async () => {
       await until('the daemon to answer on its port', async () => {
         const response = await fetch(`http://127.0.0.1:${this.port}/api/health`).catch(() => null)
@@ -149,7 +169,7 @@ export class IsolatedDaemon {
       // The port answers ~1,100 lines of startup before every handler is wired (see the startup-race
       // test); this line is printed once they are.
       if (options.ready !== 'port') {
-        await until('the daemon to finish starting', () => /\[cli\] (dialing|not signed in)/.test(this.output), 60_000, 100)
+        await until('the daemon to finish starting', () => /\[cli\] (dialing|not signed in)/.test(this.output.slice(from)), 60_000, 100)
       }
     })()])
   }
@@ -179,11 +199,18 @@ export class IsolatedDaemon {
     await this.start()
   }
 
-  /** Resident memory of the daemon process, MiB. */
+  /** Resident memory of the core, MiB. */
   async rssMiB(): Promise<number> {
-    if (!this.child?.pid) return 0
-    const { stdout } = await exec('ps', ['-o', 'rss=', '-p', String(this.child.pid)])
+    const pid = this.corePid()
+    if (!pid) return 0
+    const { stdout } = await exec('ps', ['-o', 'rss=', '-p', String(pid)]).catch(() => ({ stdout: '0' }))
     return Number(stdout.trim()) / 1024
+  }
+
+  /** Whether a process is alive (signal 0). */
+  static alive(pid: number | null): boolean {
+    if (!pid) return false
+    try { process.kill(pid, 0); return true } catch { return false }
   }
 
   /** What the daemon's pane shows, plain text. */
