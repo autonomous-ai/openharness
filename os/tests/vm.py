@@ -469,9 +469,9 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     vm.keys('ctrl', 'b')
     vm.keys('c')
     time.sleep(1)
-    vm.type_probe('echo PREFIX_TAB_READY')
+    vm.type_probe('echo prefix-tab-ready')
     vm.keys('ret')
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 20); do hn capture-pane -p | grep -qx PREFIX_TAB_READY && exit 0; sleep .5; done; exit 1')), timeout=15)
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 20); do hn capture-pane -p | grep -qx prefix-tab-ready && exit 0; sleep .5; done; exit 1')), timeout=15)
     vm.screenshot('01c-prefix-terminal-tab')
     vm.keys('ctrl', 'd')
     time.sleep(.5)
@@ -751,7 +751,7 @@ def check_installer_cleanup(vm, folder):
         (folder / 'cleanup-native.log').write_text(output)
     finally:
         failure = sys.exception()
-        for name in ['receipt.json', 'baseline-close.txt', 'transient-close.log', 'persistent-close.log', 'timeout-close.log']:
+        for name in ['receipt.json', 'baseline-close.txt', 'transient-close.log', 'persistent-close.log', 'timeout-close.log', 'stalled-udev-close.log']:
             try:
                 (folder / ('cleanup-' + name)).write_bytes(vm.read_file('/run/hn-cleanup-result/' + name, timeout=10))
             except Exception as error:
