@@ -581,11 +581,14 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     (folder / 'first-agent-guide.txt').write_bytes(vm.read_file('/tmp/hn-first-guide.txt'))
     vm.screenshot('01f-agent-explains-harness')
     assert guide_status == 0, 'Bundled OpenCode must explain the actual OS shortcuts from its local guide'
-    vm.type_probe('create the folder /home/me/projects/usb-trial and an index html page inside it saying hello harness')
+    # Build inside the actual per-agent project, as a person does. A sibling
+    # directory would instead exercise OpenCode's external-directory permission.
+    trial_project = agent_path + '/usb-trial/index.html'
+    vm.type_probe('create the folder usb-trial in this project and an index html page inside it saying hello harness')
     vm.keys('ret')
-    vm.command('for n in $(seq 1 120); do test -s /home/me/projects/usb-trial/index.html && '
-               'grep -iq "hello harness" /home/me/projects/usb-trial/index.html && exit 0; sleep 1; done; exit 1', timeout=140)
-    (folder / 'trial-project.html').write_bytes(vm.read_file('/home/me/projects/usb-trial/index.html'))
+    vm.command('for n in $(seq 1 120); do test -s ' + shlex.quote(trial_project) + ' && '
+               'grep -iq "hello harness" ' + shlex.quote(trial_project) + ' && exit 0; sleep 1; done; exit 1', timeout=140)
+    (folder / 'trial-project.html').write_bytes(vm.read_file(trial_project))
     vm.screenshot('01g-agent-created-trial-project')
     # Test the agent-led install entry too. It may open the form; it must never
     # choose a disk or perform the destructive action from the conversation.
@@ -623,6 +626,7 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 60); do '
         'hn list-panes -a -F "#{pane_id}" | grep -Fx ' + shlex.quote(agent_pane.group(1)) +
         ' >/dev/null || exit 0; sleep .25; done; exit 1')), timeout=20)
+    return trial_project
 
 
 def install_interactively(vm, config, folder):
@@ -838,7 +842,7 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         vm.screenshot('01-live-hn')
         output, _ = vm.command(user('hn-os measure'))
         (folder / 'live-measurement.txt').write_text(output)
-        check_first_use(vm, user, folder)
+        trial_project = check_first_use(vm, user, folder)
         result['checks'].append('USB opens network setup; Super+i opens Install offline; Super+t opens a terminal without a setup form')
         result['checks'].append('Installer errors remain visible until acknowledged; exiting a direct terminal removes its pane')
         result['checks'].append('USB first agent conversation accepts physical keyboard input and displays the expected reply')
@@ -888,7 +892,7 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
                       username='me', hostname='harness', password='test-password-123',
                       encrypt=args.encrypt, serial_console=True)
         # Installation must work with the NIC down, using the ISO's immutable payload.
-        (folder / 'trial-project.html').write_bytes(vm.read_file('/home/me/projects/usb-trial/index.html'))
+        (folder / 'trial-project.html').write_bytes(vm.read_file(trial_project))
         vm.command(user('sh -c ' + shlex.quote('mkdir -p "$HOME/.config"; printf trial-only > "$HOME/.config/hn-trial-credential"')))
         vm.command('nmcli networking off')
         install_interactively(vm, config, folder)
@@ -913,11 +917,12 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         vm.screenshot('installed-first-workspace')
         vm.command('hn capture-pane -p | grep -qv "Enter.*Start OpenCode"; test -d ~/projects')
         result['checks'].append('Fresh installed first boot opens the same three real panes and records onboarding only once')
-        saved_trial = vm.read_file('/home/me/projects/usb-trial/index.html')
+        saved_trial = vm.read_file(trial_project)
         assert saved_trial == (folder / 'trial-project.html').read_bytes(), 'The installed home lost or changed the agent-created trial project'
-        vm.command('test ! -e /home/me/.config/hn-trial-credential && test "$(stat -c %u /home/me/projects/usb-trial/index.html)" -eq 1000')
+        vm.command('test ! -e /home/me/.config/hn-trial-credential && test "$(stat -c %u ' + shlex.quote(trial_project) + ')" -eq 1000')
         transfer = json.loads(vm.read_file('/home/me/.local/state/harness-os/trial-projects.json'))
-        assert transfer['entries']['usb-trial/index.html']['sha256'] == hashlib.sha256(saved_trial).hexdigest()
+        relative_trial = str(Path(trial_project).relative_to('/home/me/projects'))
+        assert transfer['entries'][relative_trial]['sha256'] == hashlib.sha256(saved_trial).hexdigest()
         result['checks'].append('Agent-created USB trial project survives offline installation and installed boot byte-for-byte')
         result['deliberate_unlock_delay_seconds'] = unlock_delay
         if unlock_delay:
