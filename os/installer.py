@@ -8,12 +8,14 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 MIN_DISK_BYTES = 12 * 1024**3
@@ -155,6 +157,58 @@ def preflight(config, source):
     return kernel
 
 
+def trial_command(action, source, account, destination_fd=None):
+    # Project paths are user-controlled. Read and write them without installer
+    # privileges; a symlink/race must never let the installer copy a root secret.
+    command = ['/usr/bin/python3', '/usr/lib/harness-os/trial_projects.py', action, str(source)]
+    descriptors = ()
+    if destination_fd is not None:
+        command += ['--destination-fd', str(destination_fd)]
+        descriptors = (destination_fd,)
+    result = subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=COMMAND_LOG,
+                            user=account.pw_uid, group=account.pw_gid, extra_groups=[],
+                            pass_fds=descriptors, env={'PATH': '/usr/bin', 'LANG': 'C.UTF-8'})
+    return json.loads(result.stdout)
+
+
+def trial_source(config):
+    if not Path('/etc/harness-live').is_file():
+        return None
+    account = pwd.getpwnam('me')
+    source = Path(account.pw_dir) / 'Projects'
+    if not source.exists():
+        return None
+    required = trial_command('size', source, account)['bytes']
+    available = int(selected_disk(config)['size']) - 5 * 1024**3
+    if required > available:
+        raise ValueError('This disk needs more space for your trial projects. Choose a larger disk or save the projects elsewhere first.')
+    return source, account
+
+
+def preserve_trial(trial, target, home):
+    if trial is None:
+        return None
+    source, account = trial
+    # A root-owned parent keeps other live processes from changing the destination.
+    # Only this child receives the open writable directory, then drops privileges.
+    with tempfile.TemporaryDirectory(prefix='.harness-trial-', dir=target / 'home') as temp:
+        staging = Path(temp) / 'Projects'
+        staging.mkdir(mode=0o700)
+        os.chown(staging, account.pw_uid, account.pw_gid)
+        descriptor = os.open(staging, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            receipt = trial_command('copy', source, account, descriptor)
+        finally:
+            os.close(descriptor)
+        shutil.rmtree(home / 'Projects')  # Only the new account's pristine skeleton.
+        staging.rename(home / 'Projects')
+    detail = home / '.local/state/harness-os/trial-projects.json'
+    detail.parent.mkdir(parents=True, exist_ok=True)
+    detail.write_text(json.dumps(receipt, indent=2) + '\n')
+    detail.chmod(0o600)
+    return {key: value for key, value in receipt.items() if key != 'entries'}
+
+
 def install(config, source, target, progress=None):
     report = progress or (lambda message: print(message, flush=True))
     validate_config(config)
@@ -168,6 +222,7 @@ def install(config, source, target, progress=None):
         raise ValueError('Explicit confirmation of the exact disk is required.')
     report('Checking installation files…')
     kernel = preflight(config, source)
+    trial = trial_source(config)
     selected_disk(config)
     started = time.monotonic()
     disk = config['disk']
@@ -227,7 +282,8 @@ def install(config, source, target, progress=None):
         # disk initramfs around this verified, package-owned kernel instead.
         shutil.copyfile(target / kernel['path'], target / 'boot/vmlinuz-linux-lts')
         report('Setting up your account…')
-        # The live image is immutable. No live passwords, SSH keys or sessions are copied.
+        # The live image is immutable. Only Projects is transferred explicitly;
+        # live account passwords, agent credentials, SSH keys and sessions stay out.
         for path in ['etc/sudoers.d/10-live', 'etc/mkinitcpio.conf.d/archiso.conf',
                      'etc/systemd/system/serial-getty@ttyS0.service.d/live.conf',
                      'etc/pacman.d/hooks/99-harness-live.hook', 'root/setup-live.sh']:
@@ -243,7 +299,10 @@ def install(config, source, target, progress=None):
         write(target, f'/var/lib/systemd/linger/{config["username"]}', '')
         home = target / 'home' / config['username']
         (home / 'Projects').mkdir(exist_ok=True)
-        chroot(target, 'chown', '-R', f"{config['username']}:{config['username']}", f"/home/{config['username']}")
+        if trial is not None:
+            report('Keeping your trial projects…')
+        trial_receipt = preserve_trial(trial, target, home)
+        chroot(target, 'chown', '-Rh', f"{config['username']}:{config['username']}", f"/home/{config['username']}")
         write(target, '/etc/sudoers.d/10-harness', '%wheel ALL=(ALL:ALL) ALL\n', 0o440)
         write(target, '/etc/hostname', config['hostname'] + '\n')
         write(target, '/etc/hosts', f"127.0.0.1 localhost\n::1 localhost\n127.0.1.1 {config['hostname']}\n")
@@ -306,6 +365,8 @@ def install(config, source, target, progress=None):
         receipt = {'version': lock['version'], 'installed_at': datetime.now(timezone.utc).isoformat(),
                    'duration_seconds': round(time.monotonic() - started, 3), 'encrypted': config['encrypt'],
                    'disk_bytes': selected_size(config), 'root_uuid': root_uuid, 'boot_uuid': boot_uuid}
+        if trial_receipt is not None:
+            receipt['trial_projects'] = trial_receipt
         write(target, '/var/lib/harness-os/install.json', json.dumps(receipt, indent=2) + '\n')
         report('Finishing installation…')
         run('sync')

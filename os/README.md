@@ -1,6 +1,6 @@
 # Harness
 
-An operating system built around agents. Boot into `hn`, describe the work,
+A Linux operating system built by agents, for agents. Boot into `hn`, describe the work,
 and let an agent use the tools it needs. Review its diffs, tests and output in
 the terminal; open the browser when the work needs a visual surface.
 
@@ -10,6 +10,14 @@ a task needs them. The product is Harness; “programmer OS” describes its ini
 audience, not its name.
 
 Product names and interface copy follow the [Naming System](../docs/naming-system.md).
+
+**Preview 7 candidate (not yet published):** the USB opens a short network step
+or goes straight into bundled OpenCode when already connected. **Install without
+connecting** opens the same native installer offline. The agent works beside
+**New Harness** and **Connect a computer** starter panels; a persistent install
+dock keeps the USB's temporary state clear. Saved `~/Projects` files are copied
+and verified during installation. The full TUI reference and OS guide are bundled
+for agent questions. **Super+n/t/m/i/w** require no Shift; Ctrl+b bindings still work.
 
 **Preview 6:** the USB welcome offers **Install Harness** or **Try without installing**.
 Install works offline. Try opens Wi-Fi setup when needed, then bundled OpenCode
@@ -120,10 +128,20 @@ machine can reach Harness but is not supported for the bundled agent trial.
 The [installation guide](INSTALL.md) covers the
 Mac download, checksum, flashing and ThinkPad boot menu in full.
 
-On the USB welcome, press **Enter** to install or **T** to try Harness. Installation
-needs no network or terminal command. Trying a cloud agent requires a connection;
-network setup opens when needed. Work in the live USB session is temporary and is
-not copied during installation.
+In the current source, the USB asks for a network connection before opening
+OpenCode. Choose **Install without connecting** to install immediately offline.
+Ethernet skips the network step when already connected. During a trial, click
+**Install Harness**, press **Super+i**, or ask the agent to open installation.
+F10 focuses the dock; Tab selects a button and Enter activates it. New Harness
+and Connect a computer introduce multiple agents and computers; dismiss those
+starter panels with their close button when the agent needs the whole screen.
+
+Saved files under `~/Projects`, including Git history, are transferred into the
+installed home and verified by hash. Work elsewhere remains temporary. Running
+processes and agent credentials outside Projects are not transferred. Stop writes
+to a project before installing; files changing during transfer are an error.
+Preview 6's older welcome uses Enter to install or T to try and does not transfer
+trial files; use the installation guide shipped with your image.
 
 The installer uses `me@harness`. Choose **Disk**, leave **Encryption** enabled or
 change it, then enter **Password** and **Repeat password**. **Install immediately
@@ -138,14 +156,17 @@ shows the Harness logo and **Enter your password**, then enters hn. An unencrypt
 install requires login as `me`. The password initially protects both the account
 and, when enabled, the disk. There is no first-boot account wizard.
 
-The command equivalent is `sudo harness install`. Advanced overrides remain:
+`harness install` opens the same form from an agent or terminal on the USB;
+`sudo harness install` runs it directly. Advanced overrides remain:
 `--no-encryption`, `--username NAME`, and `--hostname NAME`. With an unattended
 `--config` file, set `username`, `hostname` and `encrypt` in that file instead.
 Ordinary hn on macOS or another Linux distribution does not expose OS installation.
 
-On the installed system's empty home, Enter starts OpenCode. `Ctrl+B`, then `W`
-opens network setup; `Ctrl+B`, then `T` opens a shell directly. Capital letters
-in these prefix shortcuts mean Shift + letter. `Super+L` locks the session.
+On the installed system's empty home, Enter starts OpenCode. Super+n starts New
+Harness, Super+t opens a shell directly, Super+m connects a computer, Super+w
+opens Wi-Fi and Super+l locks the session. These require no Shift or prefix.
+The shared TUI shortcuts still work: Ctrl+b, then Shift+n/t/w for the corresponding
+actions. Ordinary hn on macOS and other Linux distributions retains its usual UI.
 Recovery remains available through another console or the USB; the owner retains
 normal Linux administrator control.
 

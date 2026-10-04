@@ -75,6 +75,8 @@ def main():
     if command == 'try':
         try_harness()
         return
+    if command == 'welcome':
+        os.execv('/usr/bin/python3', ['python3', '/usr/lib/harness-os/onboarding.py'])
     if command == 'hardware':
         os.execv('/usr/bin/python3', ['python3', '/usr/lib/harness-os/hardware.py', 'report', *args])
     if command in ['checkpoint', 'update', 'recover']:

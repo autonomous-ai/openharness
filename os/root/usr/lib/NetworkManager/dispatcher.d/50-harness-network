@@ -1,0 +1,13 @@
+#!/bin/sh
+# Publish a tiny state file on network events; no extra resident network monitor.
+set -eu
+state=$(LC_ALL=C nmcli -t -f STATE general)
+temporary=$(mktemp /run/harness-network.XXXXXX)
+trap 'rm -f "$temporary"' EXIT
+if [ "$state" = connected ]; then
+    printf '%s\n' connected > "$temporary"
+else
+    printf '%s\n' offline > "$temporary"
+fi
+chmod 644 "$temporary"
+mv -f "$temporary" /run/harness-network

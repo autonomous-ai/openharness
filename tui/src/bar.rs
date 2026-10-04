@@ -84,6 +84,7 @@ impl App {
     /// `status off` hides it, and when the terminal is too narrow for it and a window beside it.
     pub fn bar_side(&self) -> Option<Side> {
         if self.headless { return None }
+        if crate::os_welcome::live(self) { return None }
         let side = match self.options.status_bar() { "left" => Side::Left, "right" => Side::Right, _ => return None };
         if self.options.get("status", "", None).as_deref() == Some("off") { return None }
         if self.size.0 < self.bar_width() + ROOM || self.size.1 < 4 { return None }

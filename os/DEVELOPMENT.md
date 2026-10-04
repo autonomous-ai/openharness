@@ -270,6 +270,37 @@ change, explicitly approved for all platforms. Publishing the ISO did not releas
 these through the general TUI channel. The small updater adds no changes to `tui/`
 or `cli/`.
 
+## Agent-led USB onboarding
+
+The live launcher starts `hn-os welcome` in one real terminal pane. While offline,
+a small curses step offers Wi-Fi or the native installer without needing a model.
+Once connected, it execs packaged OpenCode immediately. The OS-only TUI integration
+adds two starter panels and a one-row install dock. `hn os-action` is a private
+integration command, guarded by OS mode; install additionally requires live mode.
+All install entry points create or focus one local form even if a remote pane has
+focus. Super bindings live in labwc; the shared Ctrl+b key tables are preserved.
+
+OpenCode reads the packaged guide through `/etc/opencode/opencode.json`. The guide
+points to the exact shipped `tui/README.md`, with a source revision, and tells the
+agent to inspect current bindings before answering. Model/provider selection is
+left to upstream. The package-owned OpenCode executable is updated by full system
+updates; its self-updater is disabled. No download blocks the first conversation.
+Independent background agent updates remain future work and must preserve the
+packaged fallback, validate provenance, avoid downgrades, and activate on a later
+launch rather than replacing an active executable.
+
+Trial transfer reads only `~/Projects` as the live user, using a private staging
+directory on the destination disk. It preserves saved bytes, modes, times, Git
+history and symlinks without following them. Special files and detected concurrent
+writes fail explicitly. The installed home gets a per-file hash receipt. It is a
+saved-file transfer, not a migration of processes or the live home/credentials.
+
+Validation must cover offline entry/cancellation, Ethernet skip, the real default
+agent answering TUI questions and creating a project, agent-requested installation,
+keyboard and mouse controls, plain/encrypted offline installation, post-boot file
+hashes, and ordinary Mac/Linux TUI isolation. Native VM screenshots are required
+before publication; local unit tests alone do not establish this experience.
+
 ## Optional remote VM controls
 
 `run-vm.py --vnc-port 5901 --ssh-port 2222 --remote-host me@build-host

@@ -171,7 +171,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     // The status lines (tmux's status: off, on, 2 … 5), at the bottom or (status-position) the top.
     let lines = app.status_lines().max(1).min(area.height);
-    let status = Rect::new(0, if app.status_top { 0 } else { area.height - lines }, area.width, lines);
+    let status = Rect::new(0, if app.status_top { 0 } else { area.height.saturating_sub(lines + crate::os_welcome::dock_height(app)) }, area.width, lines);
     let body = app.body();
     // The window in front at the terminal's size, whatever brought it there.
     let window_area = app.window_area(app.tab());
@@ -193,6 +193,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // ── status bar ──
     // The status bar down a side, and the tabs over the panes beside it.
     crate::bar::draw(buf, app);
+    crate::os_welcome::draw_intro(buf, app);
     if let Some(Modal::DisplayPanes { .. }) = &app.modal { display_panes(buf, app) }
     let search_busy = app.said_due.is_some() || app.said_pending > 0;
     let msg_style = app.message_style();
@@ -254,6 +255,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let hidden = app.status_lines() == 0;
     let speaking = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.toast_ms())).unwrap_or(false);
     if !hidden || speaking { if let Some(pos) = status_line(buf, app, status) { cursor = Some(pos) } }
+    crate::os_welcome::draw_dock(buf, app);
     // A menu is tmux's overlay: over the status line too, where it is kept on the screen.
     if let Some(Modal::Menu(m)) = &app.modal { menu(buf, app, m) }
     if let Some(Modal::NewHarness(form)) = &mut app.modal { cursor = crate::new_harness::draw(buf, body, form); }
@@ -599,9 +601,8 @@ fn os_welcome(buf: &mut Buffer, app: &App, area: Rect) {
         lines.push(Line::raw(""));
     }
     lines.push(Line::raw(""));
-    let prefix = crate::keys::name(&app.keymap.prefix);
-    lines.push(Line::styled(format!("{prefix} T terminal · {prefix} W Wi-Fi · Super+B browser"), fg(theme::MUTED)));
-    if app.os_live { lines.push(Line::styled(format!("Inside a session: {prefix} I install"), fg(theme::MUTED))) }
+    lines.push(Line::styled("Super+t terminal · Super+w Wi-Fi · Super+b browser", fg(theme::MUTED)));
+    if app.os_live { lines.push(Line::styled("Super+i install", fg(theme::MUTED))) }
     let width = area.width.saturating_sub(4).min(58);
     let left = area.x + area.width.saturating_sub(width) / 2;
     let top = area.y + area.height.saturating_sub(lines.len() as u16) / 2;

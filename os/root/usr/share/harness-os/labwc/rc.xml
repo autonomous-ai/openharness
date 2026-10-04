@@ -21,6 +21,26 @@
       <action name="Execute" command="/usr/lib/harness-os/open-updates" />
       <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
     </keybind>
+    <keybind key="W-i">
+      <action name="Execute" command="/usr/lib/harness-os/open-install" />
+      <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
+    </keybind>
+    <keybind key="W-w">
+      <action name="Execute" command="/usr/lib/harness-os/open-wifi" />
+      <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
+    </keybind>
+    <keybind key="W-n">
+      <action name="Execute" command="hn os-action new" />
+      <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
+    </keybind>
+    <keybind key="W-t">
+      <action name="Execute" command="hn os-action terminal" />
+      <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
+    </keybind>
+    <keybind key="W-m">
+      <action name="Execute" command="hn os-action connect" />
+      <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
+    </keybind>
     <keybind key="XF86MonBrightnessUp"><action name="Execute" command="brightnessctl set +5%" /></keybind>
     <keybind key="XF86MonBrightnessDown"><action name="Execute" command="brightnessctl set 5%-" /></keybind>
     <keybind key="XF86AudioRaiseVolume"><action name="Execute" command="wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+ -l 1" /></keybind>

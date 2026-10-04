@@ -57,6 +57,7 @@ fn typing(app: &App) -> bool {
 }
 
 fn on_key(app: &mut App, key: KeyEvent) {
+    if crate::os_welcome::key(app, key) { return }
     let chord = keys::of(&key);
     app.key_name = Some(keys::name(&chord));
     // A message goes on the next key, as tmux's does.
@@ -279,6 +280,7 @@ pub(crate) fn paste_form(app: &mut App, text: &str) -> bool {
 }
 
 fn on_mouse(app: &mut App, mouse: MouseEvent) {
+    if crate::os_welcome::mouse(app, mouse) { return }
     // tmux asks the terminal for bare motion only when a pane here wants it (or a menu opened by
     // the mouse): the rest of the motion hn is sent never happened, as far as tmux is concerned.
     if matches!(mouse.kind, MouseEventKind::Moved) && !app.wants_motion() { return }
@@ -541,7 +543,7 @@ fn os_home_command(app: &App, key: KeyEvent) -> Option<Option<&'static str>> {
         KeyCode::Enter if app.os_live => Some(Some("sudo /usr/bin/harness install")),
         KeyCode::Char('i' | 'I') if app.os_live => Some(Some("sudo /usr/bin/harness install")),
         KeyCode::Enter => Some(Some("/usr/bin/hn-os try")),
-        KeyCode::Char('t' | 'T') if app.os_live => Some(Some("/usr/bin/hn-os try")),
+        KeyCode::Char('t' | 'T') if app.os_live => Some(Some("/usr/bin/hn-os welcome")),
         KeyCode::Char('w' | 'W') => Some(Some("/usr/bin/hn-os wifi")),
         KeyCode::Char('t' | 'T') => Some(None),
         _ => None,
@@ -3289,7 +3291,7 @@ mod tests {
         for code in [KeyCode::Enter, KeyCode::Char('i'), KeyCode::Char('I')] {
             assert_eq!(os_home_command(&app, key(code)), Some(Some("sudo /usr/bin/harness install")));
         }
-        assert_eq!(os_home_command(&app, key(KeyCode::Char('T'))), Some(Some("/usr/bin/hn-os try")));
+        assert_eq!(os_home_command(&app, key(KeyCode::Char('T'))), Some(Some("/usr/bin/hn-os welcome")));
         for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SUPER] {
             assert_eq!(os_home_command(&app, KeyEvent::new(KeyCode::Enter, modifiers)), None);
         }
