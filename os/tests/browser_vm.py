@@ -57,12 +57,22 @@ def state(vm, *, path=None, value=None, timeout=10):
 def page_fills_display(vm, name):
     # Read the actual rendered page, independently from the compositor's state.
     # Below Chromium's toolbar the white page must reach both sides and bottom.
-    vm.screenshot(name)
-    with Image.open(vm.folder / (name + '.png')).convert('RGB') as frame:
-        width, height = frame.size
-        positions = [(3, height//2), (width-4, height//2), (3, height-4), (width-4, height-4)]
-        pixels = [frame.getpixel(position) for position in positions]
-    assert all(min(pixel) > 235 for pixel in pixels), (positions, pixels)
+    # HTTP load/input events can precede the next compositor frame. Observe a
+    # bounded render deadline, retaining every sample rather than assuming that
+    # receiving the page's event means its pixels are already on the display.
+    started = time.monotonic()
+    while True:
+        vm.screenshot(name)
+        with Image.open(vm.folder / (name + '.png')).convert('RGB') as frame:
+            width, height = frame.size
+            positions = [(3, height//2), (width-4, height//2), (3, height-4), (width-4, height-4)]
+            pixels = [frame.getpixel(position) for position in positions]
+        with (vm.folder / 'display-coverage.jsonl').open('a') as log:
+            log.write(json.dumps(dict(frame=name, seconds=time.monotonic()-started, pixels=pixels)) + '\n')
+        if all(min(pixel) > 235 for pixel in pixels):
+            return
+        assert time.monotonic() - started < 5, (positions, pixels)
+        time.sleep(.1)
 
 
 def check_browser(vm, result):
@@ -107,6 +117,7 @@ def check_browser(vm, result):
         to_browser = focused(vm, 'chromium', 'toggle-browser-' + str(index))
         vm.type_probe('x')
         state(vm, value='browser' + 'x'*(index+1))
+        page_fills_display(vm, 'toggle-full-display-' + str(index))
         result['toggles'].append(dict(to_terminal_seconds=to_terminal, to_browser_seconds=to_browser))
     result['checks'].append('Repeated Super+b switching routes keyboard input only to the intended surface and preserves the terminal process and browser input')
     vm.keys('meta_l', 'ret')
