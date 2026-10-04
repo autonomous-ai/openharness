@@ -58,7 +58,7 @@ or **Eject**. Do not initialize it.
 3. Select the USB. Prefer its UEFI entry when available; legacy BIOS also works.
 4. If firmware rejects the image, enter setup with **F1** and disable **Secure
    Boot**. This preview is unsigned. Leave TPM enabled.
-5. Choose the default **Harness** boot entry.
+5. Choose the default **Install Harness** boot entry.
 
 The exact menu wording varies by model. See Lenovo's
 [boot-menu instructions](https://docs.lenovocdrt.com/ref/bios/startup_menu/).
@@ -187,9 +187,9 @@ same folder before trying again.
 
 ## 9. First manual test
 
-1. Boot with the USB removed. Confirm disk unlock and the Harness home screen.
-2. Connect Wi-Fi, open a terminal, type a command, and exit with Ctrl+D.
-3. Start OpenCode and ask it to build a small website in `~/projects/hello`, run
+1. Boot with the USB removed. Confirm disk unlock.
+2. Connect Wi-Fi if needed. Confirm OpenCode and two terminals appear.
+3. Ask OpenCode to build a small website in `~/projects/hello`, run
    its server, and give you the address. Open it with `hn-browser ADDRESS`.
 4. Ask an agent to build and test a command-line program, installing tools as needed.
 5. Switch between Harness and the browser. Lock and unlock the computer.

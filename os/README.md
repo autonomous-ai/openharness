@@ -11,14 +11,16 @@ audience, not its name.
 
 Product names and interface copy follow the [Naming System](../docs/naming-system.md).
 
-**Preview 10:** the USB opens a short network step
-or goes straight into bundled OpenCode when already connected. **Install without
-connecting** opens the same native installer offline. OpenCode starts on the left with two real terminal panes on the right.
-The single green USB footer holds the window list on the left and **Make Harness your OS.
-[ Install Harness ]** on the right. Installed first boot uses the same workspace;
-later launches restore existing work. The installed system keeps hn’s standard status bar. Ctrl+b, then c opens a terminal in a new tab. Saved `~/projects` files are copied
-and verified during installation. The full TUI reference and OS guide are bundled
-for agent questions. **Super+n/t/m/i/w** require no Shift; Ctrl+b bindings still work.
+**Preview 11:** the USB opens the installer directly. Installation works offline.
+After shutdown, remove the USB and boot the installed disk. If disconnected,
+the Wi-Fi page opens first and advances automatically when connected; Ethernet
+skips that step. OpenCode starts on the left with two real terminals on the right.
+There is no trial choice or installation dock.
+
+Later launches restore existing work. The installed system keeps hn’s standard
+status bar. Ctrl+b, then c opens a terminal in a new tab. Projects live under
+`~/projects`. The full TUI reference and OS guide are bundled for agent questions.
+**Super+n/t/m/w** require no Shift; Ctrl+b bindings still work.
 
 The installer selects a disk, focuses Password, and has one full-width
 **Install Harness** action, one row tall and aligned with the fields. Progress shows the Harness wordmark above the current step; encrypted boot shows the
@@ -29,7 +31,7 @@ you choose when to reconnect the screen. Running agents and terminals stay alive
 The update checker records release ancestry so a source-built runtime cannot be
 replaced by an older public CLI with a higher development version number.
 
-[Download preview 10](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.10)
+[Download preview 11](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.11)
 · [Mac → USB → ThinkPad installation guide](INSTALL.md)
 · [Standalone HTML/CSS landing page](../website/public/os/README.md)
 · [Development feedback loop and Mac support targets](DEVELOPMENT.md)

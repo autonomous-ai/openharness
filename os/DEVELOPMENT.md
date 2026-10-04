@@ -17,7 +17,7 @@ Keep the existing terminal, agents and optional browser. Hardware integration mu
 not introduce a desktop, control panel or extra launcher. Update checks use a
 short-lived user timer; there is no resident update process.
 
-1. Refine USB welcome, offline installation, Wi-Fi setup, trial, first conversation
+1. Refine direct USB installation, first-boot Wi-Fi setup, first conversation
    and disk unlock. Review actual screens, keyboard navigation, narrow displays,
    cancellation and recoverable errors. Keep the Naming System and text artwork
    consistent across these steps.
@@ -468,7 +468,7 @@ or network addresses. No additional daemon or settings application is needed.
 | Raspberry Pi | Evaluate a maintained ARM64 board kernel, firmware and boot image with the same Harness session | Separate board image required; not covered by the PC ISO or an ARM VM |
 | Native Harness app/TUI on macOS | Existing arm64 and x64 app/runtime releases | Separate from installing the Linux OS |
 
-The initial Intel scope excludes 32-bit-only CPUs/EFI. The bundled OpenCode trial
+The initial Intel scope excludes 32-bit-only CPUs/EFI. Bundled OpenCode
 also requires SSE4.2. October 3 CPU checks used the unchanged preview 4 ISO under
 QEMU TCG with `-cpu core2duo`: a Core 2 Duo T7700 instruction set with SSSE3,
 without SSE4.1, SSE4.2 or AVX. The later check used 4 GiB of guest RAM and installed
@@ -487,10 +487,11 @@ These checks establish specific CPU startup limits, not physical Mac support,
 authenticated agent turns or full browser/media/GPU compatibility. They do not
 replace preview 6 installation testing or show that every future vendor binary
 will retain the same baseline. Codex and pi still need real model-turn validation
-on this CPU before being recommended as its trial path.
+on this CPU before being recommended as its first-agent path.
 
-The OS Try action detects the OpenCode limitation before Wi-Fi setup and explains
-it, instead of launching a binary that immediately fails with an illegal instruction.
+The agent launcher detects the OpenCode limitation and explains it instead of
+launching a binary that immediately fails with an illegal instruction. This does
+not make Core 2 a supported bundled-agent target.
 [Bun's executable targets](https://bun.com/docs/bundler/executables) document the
 SSE4.2 baseline used by its compiled runtime.
 
