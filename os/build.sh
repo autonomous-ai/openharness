@@ -49,6 +49,9 @@ repo-add "$BUILD_DIR/repo/harness-build.db.tar.gz" "$BUILD_DIR/repo/"*.pkg.tar.g
 python3 tools/build-hardware.py --config "$PROFILE/pacman.conf" \
     --work "$BUILD_DIR/hardware-build" \
     --output "$PROFILE/airootfs/usr/share/harness-os/hardware/broadcom"
+python3 tools/build-nvidia.py --config "$PROFILE/pacman.conf" \
+    --work "$BUILD_DIR/nvidia-build" \
+    --output "$PROFILE/airootfs/usr/share/harness-os/hardware/nvidia"
 cp -a live/. "$PROFILE/airootfs/"
 mkdir -p "$PROFILE/airootfs/root" "$PROFILE/airootfs/etc/pacman.d/hooks"
 cp tools/customize-live.sh "$PROFILE/airootfs/root/setup-live.sh"

@@ -280,6 +280,13 @@ def preserve_trial(trial, target, home):
     return {key: value for key, value in receipt.items() if key != 'entries'}
 
 
+def copy_image(source, target):
+    # Bound extraction memory and skip the optional GPU archive cache entirely.
+    # Selected hardware reads its signed packages directly from the live USB.
+    run('unsquashfs', '-mem', '64M', '-f', '-no-progress', '-excludes', '-d', target, source,
+        'usr/share/harness-os/hardware/nvidia')
+
+
 def install(config, source, target, progress=None):
     report = progress or (lambda message: print(message, flush=True))
     validate_config(config)
@@ -337,7 +344,7 @@ def install(config, source, target, progress=None):
         report('Copying Harness…')
         # Unsquashfs defaults to 512 MiB of caches. Bound them so installation
         # still fits on a 1 GiB machine after trying the bundled agent/browser.
-        run('unsquashfs', '-mem', '64M', '-f', '-no-progress', '-d', target, source)
+        copy_image(source, target)
         # Extract on Btrfs first: FAT cannot represent the image's Unix metadata.
         # Copy boot contents without that metadata before regenerating initramfs.
         boot_staging = target / 'boot.from-image'

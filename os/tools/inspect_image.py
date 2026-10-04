@@ -80,7 +80,7 @@ def inspect(iso):
         expected_version = re.escape(version.replace('-preview.', 'pre')) + r'\.r\d+\.g' + manifest['source_commit'][:10] + '-1'
         assert re.fullmatch(expected_version, package_version), 'OS package version differs from the image source'
         assert package_version == manifest['package_version'], 'OS package version differs from the manifest'
-        assert set(manifest['capabilities']) == {'runtime-updates', 'system-updates', 'single-action-updates', 'broadcom-offline', 'install-first'}, 'Image capabilities differ from the manifest'
+        assert set(manifest['capabilities']) == {'runtime-updates', 'system-updates', 'single-action-updates', 'broadcom-offline', 'nvidia-offline', 'install-first'}, 'Image capabilities differ from the manifest'
         hardware_root = 'usr/share/harness-os/hardware/broadcom/'
         hardware = json.loads(read(hardware_root + 'manifest.json'))
         assert hardware == manifest['hardware']['broadcom'], 'Hardware manifest differs from the payload'
@@ -94,6 +94,19 @@ def inspect(iso):
             data = read(path)
             assert len(data) == expected['bytes'] and hashlib.sha256(data).hexdigest() == expected['sha256'], f'Hardware bundle mismatch: {name}'
             assert owners.get(path) == '0/0', f'Hardware file is not root-owned: {name}'
+        nvidia_root = 'usr/share/harness-os/hardware/nvidia/'
+        nvidia = json.loads(read(nvidia_root + 'manifest.json'))
+        assert nvidia == manifest['hardware']['nvidia']
+        assert nvidia['kernel'] == Path(kernel['path']).parent.name
+        assert nvidia['arch_snapshot'] == manifest['arch_snapshot']
+        assert all(inventory.get(name) == version for name, version in nvidia['base_packages'].items())
+        assert not names & {'nvidia-utils', 'nvidia-open-lts'}, 'Optional GPU packages entered the generic image'
+        for name, expected in nvidia['files'].items():
+            assert not Path(name).is_absolute() and '..' not in Path(name).parts
+            path = nvidia_root + name
+            data = read(path)
+            assert len(data) == expected['bytes'] and hashlib.sha256(data).hexdigest() == expected['sha256'], f'NVIDIA bundle mismatch: {name}'
+            assert owners.get(path) == '0/0', f'NVIDIA file is not root-owned: {name}'
         wanted = {row.strip() for row in (source / 'packages.x86_64').read_text().splitlines() if row.strip() and not row.startswith('#')}
         assert wanted.issubset(names), f'Missing packages: {wanted - names}'
         config = read('etc/pacman.conf').decode()

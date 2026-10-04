@@ -1033,6 +1033,11 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
             vm.command('python3 -c ' + shlex.quote('import json; assert json.load(open('
                        '"/var/lib/harness-os/hardware.json")) == {"drivers": [], "devices": []}'))
             result['checks'].append('Unrelated hardware receives no optional Wi-Fi packages and retains no USB driver cache')
+        if 'nvidia-offline' in manifest.get('capabilities', []):
+            vm.command('test ! -e /usr/share/harness-os/hardware/nvidia && '
+                       'test ! -e /etc/mkinitcpio.conf.d/30-harness-nvidia.conf && '
+                       '! pacman -Q nvidia-open-lts && ! pacman -Q nvidia-utils')
+            result['checks'].append('Unrelated hardware receives no NVIDIA packages, boot configuration or USB GPU cache')
         vm.command('! pgrep -x chromium')
         vm.command('test "$(npm prefix -g)" = "$HOME/.local"')
         vm.command('findmnt -n -o FSTYPE / | grep -qx btrfs')
