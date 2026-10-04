@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import { SessionCheckpointStore } from './sessionCheckpoint.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { sqliteReadAll } from './sqliteRead.js'
+import { env } from '../config/env.js'
+import { piSessionFolder } from './sessionSearch/externals/pi.js'
 vi.mock('node:fs/promises', async importOriginal => {
   const real = await importOriginal<typeof import('node:fs/promises')>()
   return { ...real, copyFile: vi.fn(real.copyFile), rm: vi.fn(real.rm) }
@@ -28,6 +30,81 @@ beforeEach(async () => {
 })
 afterEach(async () => { vi.restoreAllMocks(); for (const s of registry.list()) registry.removeAgent(s.agentId); await rm(root, { recursive: true, force: true }) })
 const manifest = async () => JSON.parse(await readFile(join(directory, (await readdir(directory)).find(f => /^[a-f0-9]{64}\.json$/.test(f))!), 'utf8'))
+
+async function piSession() {
+  const previousHome = env.PI_HOME
+  env.PI_HOME = join(root, 'pi')
+  // This fixture owns every possible source; never scan the developer's Pi store.
+  Object.assign(row, { engine: 'pi', sessionId: 'preallocated-session', transcriptPath: null })
+  const folder = join(env.PI_HOME, 'agent', 'sessions', piSessionFolder(row.cwd!))
+  await mkdir(folder, { recursive: true })
+  const path = join(folder, `2026-10-04T12-00-00-000Z_${row.sessionId}.jsonl`)
+  return { path, restore: () => { env.PI_HOME = previousHome }, history: `${JSON.stringify({ type: 'session', version: 3, id: row.sessionId, cwd: row.cwd })}\n` }
+}
+
+it('checkpoints a Pi startup failure with an ID but no conversation file', async () => {
+  const pi = await piSession()
+  try {
+    await expect(store.save(row)).rejects.toThrow('Could not save this terminal')
+    const screen = 'Error: No API key found for the selected model.\nUnsent draft'
+    await store.save(row, { screen })
+    const saved = await manifest()
+    expect(saved.source).toBeNull()
+    expect(JSON.parse(await readFile(join(directory, saved.file), 'utf8'))).toMatchObject({
+      engine: 'pi', sessionId: row.sessionId, screen,
+    })
+    await store.save(row, { screen: null }) // post-exit checkpoint
+    expect(await manifest()).toEqual(saved)
+  } finally { pi.restore() }
+})
+
+it.each(['before', 'during'] as const)('backs up a Pi transcript first written %s Close', async when => {
+  const pi = await piSession()
+  try {
+    if (when === 'during') await store.save(row, { screen: 'Waiting for the first reply' })
+    await writeFile(pi.path, pi.history)
+    await store.save(row)
+    const saved = await manifest()
+    expect(saved.source).toBe(pi.path)
+    expect(await readFile(join(directory, saved.file), 'utf8')).toBe(pi.history)
+    expect(row.transcriptPath).toBeNull() // the captured registry row can still be stale
+    await rm(pi.path)
+    await expect(store.save(row, { screen: 'Still visible' })).rejects.toThrow('conversation file is unavailable')
+    expect(await manifest()).toEqual(saved)
+  } finally { pi.restore() }
+})
+
+it.each(['known', 'resumed', 'unreadable', 'ambiguous', 'unreadable store'] as const)('does not replace %s Pi history with only a screen', async state => {
+  const pi = await piSession()
+  try {
+    if (state === 'known') row.transcriptPath = pi.path
+    if (state === 'resumed') row.resumeOnly = true
+    if (state === 'unreadable') await writeFile(pi.path, '{partial')
+    if (state === 'unreadable store') {
+      const folder = join(pi.path, '..')
+      await rm(folder, { recursive: true })
+      await writeFile(folder, 'not a directory')
+    }
+    if (state === 'ambiguous') {
+      await writeFile(pi.path, pi.history)
+      await writeFile(join(pi.path, '..', `other_${row.sessionId}.jsonl`), pi.history)
+    }
+    await expect(store.save(row, { screen: 'Visible terminal' })).rejects.toThrow()
+    expect((await readdir(directory)).filter(file => file.endsWith('.history'))).toEqual([])
+  } finally { pi.restore() }
+})
+
+it('does not back up a different Pi ID or a project with the same encoded folder', async () => {
+  const pi = await piSession()
+  try {
+    await writeFile(pi.path, `${JSON.stringify({ type: 'session', id: row.sessionId, cwd: '/different/project' })}\n`)
+    await store.save(row, { screen: 'Startup screen' })
+    expect((await manifest()).source).toBeNull()
+    await writeFile(pi.path, `${JSON.stringify({ type: 'session', id: `other_${row.sessionId}`, cwd: row.cwd })}\n`)
+    await store.save(row, { screen: 'Startup screen' })
+    expect((await manifest()).source).toBeNull()
+  } finally { pi.restore() }
+})
 
 it('preserves a newly typed draft even when native history has not changed', async () => {
   await store.save(row, { screen: 'first draft' })

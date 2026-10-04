@@ -51,6 +51,13 @@ it.each([null, '/unsafe'])('retains the known id when its file is unavailable: %
   row.sessionId = 'known'; vi.mocked(findResumedTranscript).mockResolvedValue(path)
   vi.mocked(validTranscriptPath).mockReturnValue(false); expect(await captureResumeIdentity(row)).toBe(row)
 })
+it('looks up a preallocated Pi session ID in its own project before stopping', async () => {
+  Object.assign(row, { engine: 'pi', sessionId: 'preallocated', transcriptPath: null })
+  expect(await captureResumeIdentity(row)).toBe(row)
+  expect(findResumedTranscript).toHaveBeenCalledWith('pi', 'preallocated', { codexHome: undefined, cwd: '/work' })
+  vi.mocked(findResumedTranscript).mockResolvedValue('/first-reply.jsonl')
+  expect(await captureResumeIdentity(row)).toMatchObject({ sessionId: 'preallocated', transcriptPath: '/first-reply.jsonl' })
+})
 it.each(['identity', 'cwd', 'unknown', 'gone', 'pid', 'executable', 'start'])('refuses missing or changed process evidence: %s', async mode => {
   if (mode === 'identity') row.processIdentity = null
   if (mode === 'cwd') row.cwd = null

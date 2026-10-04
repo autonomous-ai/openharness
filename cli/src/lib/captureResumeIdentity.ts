@@ -15,7 +15,8 @@ import { isTerminalEngine } from '../engines/types.js'
 export async function captureResumeIdentity(session: RegisteredSession): Promise<RegisteredSession> {
   // A shell holds no conversation; there is nothing here to capture for it.
   if (isTerminalEngine(session.engine)) return session
-  const options = { codexHome: session.codexHome ?? undefined }
+  const options = { codexHome: session.codexHome ?? undefined,
+    ...(session.engine === 'pi' ? { cwd: session.cwd ?? undefined } : {}) }
   const keepsFile = engineKeepsTranscriptFile(session.engine)
   if (session.sessionId) {
     // A database-backed engine has the whole record already: the id IS the conversation.
