@@ -154,6 +154,15 @@ export class OpenSessions {
     return said ?? true
   }
 
+  /** Display state, unlike the conservative stop guard above: unknown is never called working. */
+  async working(sessionId: string): Promise<boolean | null> {
+    const owner = (await this.current()).owners.get(sessionId)
+    if (!owner) return false
+    if (owner.fromArgs) return null
+    const provider = this.opts.providers.find((candidate) => candidate.engine === owner.engine)
+    return await provider?.busy?.(owner).catch(() => null) ?? null
+  }
+
   private current(): Promise<OpenAnswer> {
     const now = (this.opts.now ?? Date.now)()
     if (this.answer && now - this.answer.at <= (this.opts.maxAgeMs ?? 5_000)) return Promise.resolve(this.answer)

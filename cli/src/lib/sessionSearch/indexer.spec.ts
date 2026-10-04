@@ -199,13 +199,14 @@ describe('SessionSearchIndex', () => {
     writeFileSync(untitledFile, prompt('compare retention\nby cohort please', 0) + answer('Day-7 is 35%.', 1))
     const store = SessionSearchStore.open(':memory:')!
     const open = new Map([['e1', 'terminal' as const]])
+    let working: boolean | null = true
     let sources: SearchSource[] = [
       { agentId: '', sessionId: 'e1', engine: 'claude', transcriptPath: claudeFile, header: '', changedAt: 2, external: { cwd: '/work/dial', origin: 'terminal', title: '' } },
       { agentId: '', sessionId: 'e2', engine: 'claude', transcriptPath: untitledFile, header: '', changedAt: 1, external: { cwd: '/work/cohorts', origin: 'claude-app', title: '' } },
     ]
     const index = new SessionSearchIndex({
       store, sources: () => sources, agents: () => [],
-      openSessions: { known: () => open, fresh: async () => open },
+      openSessions: { known: () => open, fresh: async () => open, working: async () => working },
     })
     cleanups.push(() => { index.stop(); store.close() })
     const settle = async () => {
@@ -221,7 +222,11 @@ describe('SessionSearchIndex', () => {
     expect(hit).toMatchObject({ sessionId: 'e1', agentId: '', external: { title: 'Dial fix', cwd: '/work/dial', origin: 'terminal', open: true, openIn: 'terminal' } })
     expect(index.search('cohort').hits[0]).toMatchObject({ sessionId: 'e2', external: { origin: 'claude-app', open: false } })
     const tail = await index.tail('e1')
-    expect(tail?.external).toEqual({ title: 'Dial fix', cwd: '/work/dial', origin: 'terminal', open: true, openIn: 'terminal' })
+    expect(tail?.external).toEqual({ title: 'Dial fix', cwd: '/work/dial', origin: 'terminal', open: true, openIn: 'terminal', working: true })
+    working = false
+    expect((await index.tail('e1'))?.external?.working).toBe(false)
+    working = null
+    expect((await index.tail('e1'))?.external).not.toHaveProperty('working')
 
     // Its file gone, it leaves the index at the next sweep.
     sources = sources.filter((source) => source.sessionId !== 'e2')

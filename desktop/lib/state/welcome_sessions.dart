@@ -11,8 +11,8 @@ import 'swarm_search.dart' show externalSessionDestination;
 /// did not start — the latest [limit] by conversation activity, whatever machine.
 /// Recorded visits determine which Harness sessions belong here, not their order.
 ///
-/// Read once when the page shows, like Cmd-P: the rows keep their order and
-/// numbers while the page is on screen, and the next showing reads again.
+/// Read once when the page shows, like Cmd-P: membership and order stay put.
+/// SessionActivityController keeps displayed activity and work state fresh.
 /// Harnesses are in the app already; the others are asked of each machine's
 /// session index (`session_search` with a time and no words).
 class WelcomeSessions extends ChangeNotifier {

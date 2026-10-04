@@ -9738,12 +9738,17 @@ class AppNotifier extends ChangeNotifier {
     String machineId,
     String sessionId, {
     int? beforeTurn,
+    int? maxChars,
   }) async {
     if (!searchableMachineIds.contains(machineId)) return null;
     try {
       final reply = await _conn(machineId).request(
         'session_tail',
-        payload: {'sessionId': sessionId, 'beforeTurn': ?beforeTurn},
+        payload: {
+          'sessionId': sessionId,
+          'beforeTurn': ?beforeTurn,
+          'maxChars': ?maxChars,
+        },
         timeout: const Duration(seconds: 4),
       );
       if (reply['error'] != null) return null;

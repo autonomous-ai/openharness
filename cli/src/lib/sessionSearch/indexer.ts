@@ -107,7 +107,11 @@ export interface SessionSearchIndexOptions {
    * Which sessions are open in a running process right now (external.ts `OpenSessions`), so a
    * conversation Harness did not start says whether a terminal still has it. `known` never waits.
    */
-  openSessions?: { known(): ReadonlyMap<string, 'terminal' | 'app' | 'harness' | 'maybe'>; fresh(): Promise<ReadonlyMap<string, 'terminal' | 'app' | 'harness' | 'maybe'>> }
+  openSessions?: {
+    known(): ReadonlyMap<string, 'terminal' | 'app' | 'harness' | 'maybe'>
+    fresh(): Promise<ReadonlyMap<string, 'terminal' | 'app' | 'harness' | 'maybe'>>
+    working?(sessionId: string): Promise<boolean | null>
+  }
   /** Looks again for conversations Harness did not start, before each sweep lists its sources. */
   discover?: () => Promise<unknown>
   /** Between full sweeps. */
@@ -290,7 +294,12 @@ export class SessionSearchIndex {
       // A preview of a conversation Harness did not start says whether a terminal has it, as of now.
       const open = await this.opts.openSessions?.fresh().catch(() => null)
       const where = open?.get(sessionId)
-      tail.external = { title: session.title ?? '', cwd: session.cwd ?? '', origin: session.origin ?? '', open: open?.has(sessionId) ?? false, ...(where ? { openIn: where } : {}) }
+      const working = open?.has(sessionId) ? await this.opts.openSessions?.working?.(sessionId).catch(() => null) : null
+      tail.external = {
+        title: session.title ?? '', cwd: session.cwd ?? '', origin: session.origin ?? '',
+        open: open?.has(sessionId) ?? false, ...(where ? { openIn: where } : {}),
+        ...(typeof working === 'boolean' ? { working } : {}),
+      }
     }
     return tail
   }

@@ -6,10 +6,10 @@ import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
-import '../state/harness_sessions.dart';
 import '../state/swarm_catalog.dart';
 import '../state/swarm_navigation.dart';
 import '../state/welcome_sessions.dart';
+import '../state/session_activity.dart';
 import 'engine_identity.dart';
 import 'desktop_chrome.dart';
 import '../shared/theme/appearance_prefs_store.dart';
@@ -61,6 +61,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
   // generated library overflows the browser debug runtime's stack here.
   static const _phoneIcon = AppIcons.smartphone;
   WelcomeSessions? _sessions;
+  SessionActivityController? _activity;
   Timer? _activityClock;
   int _cursor = 0;
   final _focus = FocusNode(debugLabel: 'Welcome sessions');
@@ -72,6 +73,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
     super.initState();
     final app = widget.app;
     if (app != null && widget.onOpen != null) {
+      _activity = SessionActivityController(app)..addListener(_changed);
       _sessions = WelcomeSessions(
         app,
         projects: widget.projects,
@@ -110,12 +112,14 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
   void _appChanged() => _sessions?.appChanged();
 
   void _changed() {
+    _activity?.watch(_sessions?.rows ?? const []);
     if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     _activityClock?.cancel();
+    _activity?.dispose();
     FocusManager.instance.removeListener(_claimFocus);
     _focus.dispose();
     if (_sessions != null) widget.app?.removeListener(_appChanged);
@@ -441,21 +445,24 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
                   ),
                 ),
                 const SizedBox(width: 16),
-                if (row.lastActivityAt case final at?)
-                  Tooltip(
-                    message: harnessActivityTooltip(at),
-                    child: Text(
-                      harnessActivityAge(at, widget.now()),
-                      style: DesktopChrome.text(
-                        size: 12,
-                        color: DesktopChrome.muted,
-                      ),
-                    ),
-                  ),
+                _activityLabel(row),
               ],
             ),
           ),
       ],
+    );
+  }
+
+  Widget _activityLabel(SwarmDestination row) {
+    final activity = _activity!.read(row);
+    final label = sessionActivityLabel(activity, widget.now());
+    if (label == null) return const SizedBox.shrink();
+    return Tooltip(
+      message: sessionActivityTooltip(activity),
+      child: Text(
+        label,
+        style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+      ),
     );
   }
 
@@ -644,8 +651,8 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
     final agent = row.agentId == null
         ? null
         : machine?.agents.where((agent) => agent.id == row.agentId).firstOrNull;
-    final at = row.lastActivityAt;
-    final age = at == null ? '' : harnessActivityAge(at, widget.now());
+    final activity = _activity!.read(row);
+    final age = sessionActivityLabel(activity, widget.now()) ?? '';
     final selected = index == _cursor;
     return TextButton(
       key: ValueKey('welcome-session-${row.id}'),
@@ -688,9 +695,9 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
             ),
           ),
           SizedBox(
-            width: cell * 5,
+            width: cell * 8,
             child: Tooltip(
-              message: at == null ? '' : harnessActivityTooltip(at),
+              message: sessionActivityTooltip(activity),
               child: Text(
                 age,
                 textAlign: TextAlign.right,
