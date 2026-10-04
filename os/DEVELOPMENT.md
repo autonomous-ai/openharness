@@ -271,8 +271,11 @@ a clean USB install to verify that upgrades have not hidden an installation bug.
   UEFI/encrypted install, boot, wrong-password retry, update and recovery checks.
   It retains screenshots, boot-stage timestamps, logs and source/image identity.
 - `image_run_id` tests an existing image without rebuilding it. `memory_mib=1024`
-  exercises a constrained machine; `memory_mib=4096` and `live_transport=usb`
-  exercise automatic copy-to-RAM. `workloads=true` or `dsh=true` runs the relevant
+  exercises a constrained machine; `memory_mib=6144` and `live_transport=usb`
+  require automatic copy-to-RAM. The USB test verifies its actual payload mount
+  and refuses the boot USB as an installation target in both modes. The 4 GiB
+  check permits either mode: Archiso copies only when available memory exceeds
+  the compressed payload plus 2 GiB. `workloads=true` or `dsh=true` runs the relevant
   real-agent exercises. See the [measured evidence](README.md#real-programmer-exercises).
 - `workload_seed_run_id` preserves generated projects and reruns their acceptance
   checks without another model turn. Enable `workloads=true` as well only when

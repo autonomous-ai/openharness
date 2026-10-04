@@ -37,6 +37,53 @@ def control_point(words, word, width, height, scale, border):
     return round(x * 32767 / (width - 1)), round(y * 32767 / (height - 1))
 
 
+def check_live_media(vm, result, expected_mode=None):
+    # Archiso reserves 2 GiB beyond the compressed payload before copying it.
+    # A fixed guest RAM size therefore does not determine the boot mode.
+    probe = '''import importlib.util, json
+from pathlib import Path
+s = importlib.util.spec_from_file_location('installer', '/usr/lib/harness-os/install.py')
+i = importlib.util.module_from_spec(s)
+s.loader.exec_module(i)
+payload = i.live_payload()
+ram = Path('/run/archiso/copytoram/airootfs.sfs')
+media = Path('/run/archiso/bootmnt/arch/x86_64/airootfs.sfs')
+bootmnt = Path('/run/archiso/bootmnt')
+assert payload in (ram, media), str(payload)
+mode = 'ram' if payload == ram else 'media'
+if mode == 'ram':
+    assert not bootmnt.exists(), 'RAM boot kept the USB mounted'
+    assert ram.parent.is_mount(), 'RAM payload is not on its own mount'
+    assert i.run('findmnt', '-nro', 'FSTYPE', '--mountpoint', str(ram.parent), capture=True).strip() == 'tmpfs'
+else:
+    assert bootmnt.is_mount(), 'USB payload is not on mounted media'
+    assert not ram.exists(), 'Ambiguous live payload'
+d = next(d for d in i.inventory() if d.get('serial') == 'HN_OS_LIVE')
+assert not d['ro'] and d['size'] >= i.MIN_DISK_BYTES
+try:
+    i.validate_disk(d)
+except ValueError as e:
+    assert ('booted into RAM' if mode == 'ram' else 'mounted filesystems') in str(e), str(e)
+else:
+    raise AssertionError('The writable boot USB was offered as an installation target')
+print('HN_LIVE_MEDIA=' + json.dumps(dict(mode=mode, payload=str(payload), payload_bytes=payload.stat().st_size, boot_usb_rejected=True)))
+'''
+    encoded = base64.b64encode(probe.encode()).decode()
+    output, _ = vm.command('printf %s ' + encoded + ' | base64 -d | python3')
+    match = re.search(r'HN_LIVE_MEDIA=(\{[^\r\n]+\})', output)
+    assert match, 'The guest did not report its actual live media'
+    media = json.loads(match.group(1))
+    result['live_media'] = media
+    if expected_mode and media['mode'] != expected_mode:
+        raise AssertionError(f"Expected {expected_mode} boot, observed {media['mode']}")
+    if media['mode'] == 'ram':
+        result['checks'].append('Real USB boot automatically copies the payload into RAM and unmounts the boot medium')
+        result['checks'].append('The unmounted writable Harness USB is rejected as an installation target in RAM mode')
+    else:
+        result['checks'].append('Real USB boot retains the mounted payload when automatic RAM copying is not selected')
+        result['checks'].append('The mounted writable Harness USB is rejected as an installation target')
+
+
 class VM:
     def __init__(self, folder, iso, firmware, memory, live_transport='cdrom', cpu=None, video='virtio-vga', audio=False):
         self.folder, self.iso, self.firmware, self.memory = folder, iso, firmware, memory
@@ -822,6 +869,7 @@ def main():
     parser.add_argument('--encrypt', action='store_true')
     parser.add_argument('--memory', type=int, default=2048)
     parser.add_argument('--live-transport', choices=['cdrom', 'usb'], default='cdrom')
+    parser.add_argument('--expect-live-mode', choices=['media', 'ram'], help='Require a specific USB boot path; otherwise validate and record the observed path')
     parser.add_argument('--cpu', help='Optional QEMU CPU model, for an older instruction-set baseline')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--agents', action='store_true', help='Install and start real agent executables after recovery; no accounts/API calls')
@@ -831,6 +879,8 @@ def main():
     parser.add_argument('--workload-repair-game', action='store_true', help='With a seed, explicitly ask the agent to repair game layout before rechecking')
     parser.add_argument('--live-only', action='store_true', help='Development probe: stop after the live-session checks, without installing')
     args = parser.parse_args()
+    if args.expect_live_mode and args.live_transport != 'usb':
+        parser.error('--expect-live-mode requires --live-transport usb')
     if args.workloads and not args.agents:
         parser.error('--workloads requires --agents')
     if args.dsh and not args.agents:
@@ -865,28 +915,8 @@ def main():
         vm.wait(r'root@[^\r\n]*[#] ')
         vm.shell_ready = True
         vm.command('stty -echo')
-        if args.live_transport == 'usb' and args.memory >= 4096:
-            vm.command('test -f /run/archiso/copytoram/airootfs.sfs && test ! -e /run/archiso/bootmnt')
-            result['checks'].append('Real USB boot automatically copies the payload into RAM and unmounts the boot medium')
-            # The unmounted writable boot USB must still be rejected, even
-            # though its size otherwise makes it an eligible target.
-            probe = '''import importlib.util
-s = importlib.util.spec_from_file_location('installer', '/usr/lib/harness-os/install.py')
-i = importlib.util.module_from_spec(s)
-s.loader.exec_module(i)
-d = next(d for d in i.inventory() if d.get('serial') == 'HN_OS_LIVE')
-assert not d['ro'] and d['size'] >= i.MIN_DISK_BYTES
-try:
-    i.validate_disk(d)
-except ValueError as e:
-    assert 'booted into RAM' in str(e), str(e)
-else:
-    raise AssertionError('The unmounted boot USB was offered as a target')
-assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
-'''
-            encoded = base64.b64encode(probe.encode()).decode()
-            vm.command('printf %s ' + encoded + ' | base64 -d | python3')
-            result['checks'].append('The unmounted writable Harness USB is rejected as an installation target in RAM mode')
+        if args.live_transport == 'usb':
+            check_live_media(vm, result, args.expect_live_mode)
         vm.command('foot --check-config --config=/usr/share/harness-os/foot.ini')
         if direct:
             from install_first import check_usb_installer

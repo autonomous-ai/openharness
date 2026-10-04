@@ -30,11 +30,11 @@ on:
         required: false
         type: string
       memory_mib:
-        description: 'VM RAM; 1024 exercises constrained machines, 4096 enables automatic USB copy-to-RAM'
+        description: 'VM RAM; 1024 exercises constrained machines, 6144 requires USB copy-to-RAM'
         required: false
         default: '2048'
         type: choice
-        options: ['2048', '1024', '4096']
+        options: ['2048', '1024', '4096', '6144']
       live_transport:
         description: 'Boot the ISO as a virtual optical disc or a writable USB with a private overlay'
         required: false
@@ -204,7 +204,15 @@ jobs:
           OS_WORKLOAD_SOURCE_RUN: ${{ inputs.workload_seed_run_id }}
           OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
           OS_LIVE_TRANSPORT: ${{ inputs.live_transport || 'cdrom' }}
-        run: python3 os/tests/vm.py --iso os/dist/*.iso --memory "$OS_MEMORY_MIB" --live-transport "$OS_LIVE_TRANSPORT" --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ matrix.cpu }} ${{ (inputs.workloads || inputs.workload_seed_run_id != '') && matrix.firmware == 'bios' && '--workloads' || '' }} ${{ inputs.dsh && matrix.firmware == 'bios' && '--dsh' || '' }} ${{ inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-seed os/work/workload-seed' || '' }} ${{ inputs.workloads && inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-repair-game' || '' }}
+        run: |
+          live_mode=()
+          if [[ "$OS_LIVE_TRANSPORT" == usb ]]; then
+            case "$OS_MEMORY_MIB" in
+              1024) live_mode=(--expect-live-mode media) ;;
+              6144) live_mode=(--expect-live-mode ram) ;;
+            esac
+          fi
+          python3 os/tests/vm.py --iso os/dist/*.iso --memory "$OS_MEMORY_MIB" --live-transport "$OS_LIVE_TRANSPORT" "${live_mode[@]}" --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ matrix.cpu }} ${{ (inputs.workloads || inputs.workload_seed_run_id != '') && matrix.firmware == 'bios' && '--workloads' || '' }} ${{ inputs.dsh && matrix.firmware == 'bios' && '--dsh' || '' }} ${{ inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-seed os/work/workload-seed' || '' }} ${{ inputs.workloads && inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-repair-game' || '' }}
       - name: Exercise password lock and actual suspend/resume
         if: ${{ inputs.checks == 'session' }}
         run: python3 os/tests/session_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --session-file os/root/usr/lib/harness-os/session --theme-directory os/root/usr/share/plymouth/themes/harness

@@ -33,5 +33,30 @@ class MonitorCommands(unittest.TestCase):
                 vm_module.control_point(words, 'Install', 1280, 800, 2, 24)
 
 
+class LiveMedia(unittest.TestCase):
+    def test_automatic_mode_records_the_observed_media(self):
+        vm = Mock()
+        vm.command.return_value = ('HN_LIVE_MEDIA={"mode":"media","boot_usb_rejected":true}\n', 0)
+        result = {'checks': []}
+        vm_module.check_live_media(vm, result)
+        self.assertEqual(result['live_media']['mode'], 'media')
+        self.assertEqual(len(result['checks']), 2)
+
+    def test_required_ram_path_cannot_pass_using_the_usb(self):
+        vm = Mock()
+        vm.command.return_value = ('HN_LIVE_MEDIA={"mode":"media","boot_usb_rejected":true}\n', 0)
+        result = {'checks': []}
+        with self.assertRaisesRegex(AssertionError, 'Expected ram boot, observed media'):
+            vm_module.check_live_media(vm, result, 'ram')
+        self.assertEqual(result['checks'], [])
+        self.assertEqual(result['live_media']['mode'], 'media')
+
+    def test_missing_guest_result_never_passes(self):
+        vm = Mock()
+        vm.command.return_value = ('shell prompt only', 0)
+        with self.assertRaisesRegex(AssertionError, 'did not report'):
+            vm_module.check_live_media(vm, {'checks': []})
+
+
 if __name__ == '__main__':
     unittest.main()
