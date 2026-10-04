@@ -453,13 +453,28 @@ export function processTreePids(rows: readonly ProcessRow[], rootPids: readonly 
 }
 
 
-function panePid(pane: string): Promise<number | null> {
+/**
+ * The pane's root pid; `'missing'` when tmux answered that it has no such pane; null when tmux could
+ * not be asked (a timeout, no server, a socket it cannot reach) — which says nothing about the pane.
+ * tmux 3.7 answers `display-message -t` for an unknown pane with an empty line and exit 0; older
+ * versions say "can't find pane".
+ */
+function panePidLookup(pane: string): Promise<number | 'missing' | null> {
   return new Promise((resolve) => {
-    execFile('tmux', ['display-message', '-p', '-t', pane, '#{pane_pid}'], { timeout: 2000 }, (err, stdout) => {
-      const pid = Number(stdout.trim())
-      resolve(!err && Number.isSafeInteger(pid) && pid > 0 ? pid : null)
+    execFile('tmux', ['display-message', '-p', '-t', pane, '#{pane_pid}'], { timeout: 2000 }, (err, stdout, stderr) => {
+      const text = String(stdout ?? '').trim()
+      const pid = Number(text)
+      if (!err && Number.isSafeInteger(pid) && pid > 0) resolve(pid)
+      else if (!err && text === '') resolve('missing')
+      else if (err && /can't find pane/.test(String(stderr ?? ''))) resolve('missing')
+      else resolve(null)
     })
   })
+}
+
+async function panePid(pane: string): Promise<number | null> {
+  const found = await panePidLookup(pane)
+  return typeof found === 'number' ? found : null
 }
 
 /**
@@ -834,9 +849,11 @@ export async function lookupPaneEngineProcess(
   pane: string,
   engine: RegisteredSession['engine'],
 ): Promise<PaneProcessLookup> {
-  const rootPid = await panePid(pane)
-  // The caller already confirmed the pane is in `tmux list-panes`, so a failure here is the tmux call,
-  // not a missing pane.
+  const rootPid = await panePidLookup(pane)
+  // tmux saying it has no such pane is an answer: the pane is gone. The reconciler asks exactly when a
+  // pane has dropped out of `tmux list-panes`, and reading that as "could not ask" kept an agent whose
+  // pane was killed counted as active for good. A failed call is still no evidence either way.
+  if (rootPid === 'missing') return { ok: false, unknown: false, reason: `tmux has no pane ${pane}` }
   if (!rootPid) return { ok: false, unknown: true, reason: `tmux could not resolve pane ${pane}` }
   const rows = await processRows()
   if (!rows) return { ok: false, unknown: true, reason: 'the process table could not be read' }
