@@ -27,6 +27,8 @@ if all((root / path).is_file() for path in [
     capabilities.append('runtime-updates')
 if (root / 'usr/lib/harness-os/release_update.py').is_file():
     capabilities.append('system-updates')
+if (root / 'etc/sudoers.d/30-harness-updates').is_file():
+    capabilities.append('single-action-updates')
 hardware = root / 'usr/share/harness-os/hardware/broadcom/manifest.json'
 if hardware.is_file():
     capabilities.append('broadcom-offline')

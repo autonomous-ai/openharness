@@ -204,6 +204,7 @@ def main():
     interactive_install = all(any(c.startswith('Keyboard disk selection, encryption checkbox') for c in r['checks']) for r in receipts)
     update_retry = all(any(c.startswith('Failed full update blocks package changes') for c in r['checks']) for r in receipts)
     in_place_updates = {'runtime-updates', 'system-updates'}.issubset(manifest.get('capabilities', []))
+    single_action_updates = 'single-action-updates' in manifest.get('capabilities', [])
     project_source_runs = sorted({str(r['workload_project_source_run_id']) for r in receipts if r.get('workload_project_source_run_id')})
     reuse_note = ('Completed project sources were retained from ' + ', '.join(
         f'[run {source}](https://github.com/{args.repo}/actions/runs/{source})' for source in project_source_runs) +
@@ -218,7 +219,7 @@ To install: follow the included `INSTALL.md` for Mac → USB → ThinkPad instru
 
 {'Interrupted full OS updates block ordinary package transactions until a full retry succeeds. Retrying keeps the original recovery checkpoint. This was exercised with a real failed repository refresh, blocked package upgrade, successful retry, and offline recovery. hn-os update upgrades Arch packages.' if update_retry else ''}
 
-{'Super+u opens Updates. hn and CLI releases are prepared automatically; Enter activates an available runtime update. hn reconnects to the local tabs while agent processes keep running. System updates are a separate action in the same screen, with a checkpoint and a restart when you are ready. Neither channel automatically interrupts your work. Older preview 4 installations need the matching small bootstrap bundle once; routine updates do not require reflashing.' if in_place_updates else ''}
+{'Super+u starts the update immediately. The Update button is clickable too. No confirmation or password prompt is needed. Running agents and terminals stay alive; system updates keep a recovery checkpoint and leave restarting to you. After that reboot, the same request finishes any remaining runtime update. Background checks otherwise prepare downloads without activating them. Older previews use their existing Super+u, then s action to receive this change once; routine updates do not require reflashing.' if single_action_updates else 'Super+u opens Updates. hn and CLI releases are prepared automatically; Enter activates an available runtime update. System updates are a separate action in the same screen, with a checkpoint and a restart when ready. Routine updates do not require reflashing.' if in_place_updates else ''}
 
 BIOS/plain and UEFI/encrypted VM boot, clipboard, browser switching, offline installation and package-checkpoint recovery passed. The BIOS VM uses a Nehalem CPU profile without AVX2, starts bundled OpenCode, installs the other agent executables, installs a compiler on demand, builds C, and serves a local Node preview. See `validation.json` and `machine-evidence.zip` for the exact checks and measurements.
 
