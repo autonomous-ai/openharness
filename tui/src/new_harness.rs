@@ -2285,7 +2285,7 @@ mod tests {
 
     #[tokio::test]
     async fn submitting_during_git_discovery_can_be_cancelled_without_losing_the_draft() {
-        for action in ["escape", "arrow", "typing", "paste", "dismiss"] {
+        for action in ["escape", "arrow", "typing", "paste", "dismiss", "account"] {
             let mut app = app();
             open(&mut app, None, Some("/home/dev/repo".into()));
             let Some(Modal::NewHarness(f)) = &mut app.modal else { panic!() };
@@ -2301,6 +2301,11 @@ mod tests {
             match action {
                 "paste" => { paste(&mut f, " more"); store_form(&mut app, f); }
                 "dismiss" => dismiss(&mut app, f),
+                "account" => {
+                    let machine = f.draft.machine.clone();
+                    store_form(&mut app, f);
+                    account_changed(&mut app, Some(&machine), "signed-in-local");
+                }
                 action => key(&mut app, f, KeyEvent::new(match action {
                     "escape" => KeyCode::Esc, "arrow" => KeyCode::Down, _ => KeyCode::Char('!'),
                 }, KeyModifiers::NONE)),
