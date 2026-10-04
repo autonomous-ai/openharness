@@ -15,8 +15,10 @@
 // dialog and answers with their choice, `!permit <command>` asks permission to run a command the way
 // the engine does and runs it only if allowed, `!flood <KiB>` prints that much to the terminal, in
 // numbered lines, the way a build log or a long diff does, `!clear` starts a new conversation in the
-// same pane as Claude Code's `/clear` and Codex's `/new` do, `!exit` ends the process. Everything else
-// is echoed as the answer.
+// same pane as Claude Code's `/clear` and Codex's `/new` do, `!compact` compacts the conversation as
+// `/compact` does (and Claude Code then announces the same session again), `!compactmid` compacts in the
+// middle of a turn as an automatic compaction does, `!exit` ends the process. Everything else is
+// echoed as the answer.
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -158,6 +160,14 @@ export async function run(engine, config) {
       }
     }
   }
+  const compact = () => {
+    if (engine === 'claude') {
+      claude({ type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted', compactMetadata: { trigger: 'manual', preTokens: 4096 } })
+      claude({ type: 'user', isCompactSummary: true, message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context.' } })
+    } else {
+      codex('compacted', { message: 'Summary of the conversation so far.', replacement_history: [] })
+    }
+  }
   const finish = (text) => {
     if (engine === 'claude') {
       claude({ type: 'assistant', message: { id: `msg_${turn}`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'text', text }], stop_reason: 'end_turn' } })
@@ -175,6 +185,15 @@ export async function run(engine, config) {
     const prompt = raw.trim()
     if (!prompt) { draw(); return }
     if (prompt === '!exit') { process.stdout.write('\x1b[?2004l\r\n'); process.exit(0) }
+    if (prompt === '!compact') {
+      // `/compact` is a command, not a turn: a summary replaces the history, and Claude Code announces
+      // the same session again (SessionStart, source compact), which makes the daemon re-read it.
+      compact()
+      process.stdout.write('\r\n(compacted)\r\n')
+      draw()
+      if (engine === 'claude') await hook('session-start', { hookEvent: 'SessionStart', source: 'compact' })
+      return
+    }
     if (prompt === '!clear') {
       // The old conversation ends (its open turn first), a new id and transcript begin, and the engine
       // says both through its hooks, as the real CLIs do.
@@ -240,6 +259,13 @@ export async function run(engine, config) {
       }
       finish(`flooded ${kib} KiB`)
       return
+    }
+    if (directive?.[1] === 'compactmid') {
+      // An automatic compaction in the middle of a turn: the turn goes on after it and ends once.
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      compact()
+      if (engine === 'claude') await hook('session-start', { hookEvent: 'SessionStart', source: 'compact' })
+      await new Promise((resolve) => setTimeout(resolve, 300))
     }
     if (directive?.[1] === 'hold') return
     if (directive?.[1] === 'permit') {
