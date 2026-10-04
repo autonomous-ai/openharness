@@ -469,15 +469,28 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     vm.command('for n in $(seq 1 90); do pgrep -u 1000 -x opencode >/dev/null && exit 0; sleep 1; done; exit 1', timeout=100)
     time.sleep(5)
     vm.screenshot('01d-bundled-opencode')
-    output, _ = vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do test "$(hn list-panes -F "#{pane_id}" | wc -l)" -eq 3 && break; sleep .5; done; hn list-panes -F "#{pane_id}|#{pane_left}|#{pane_top}|#{pane_width}|#{pane_height}|#{pane_current_path}"')))
-    pane_rows = [line.split('|') for line in output.splitlines() if re.match(r'^%\d+\|', line)]
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do test "$(hn list-panes -F "#{pane_id}" | wc -l)" -eq 3 && break; sleep .5; done; hn list-panes -F "#{pane_id}|#{pane_left}|#{pane_top}|#{pane_width}|#{pane_height}|#{pane_pid}" > /tmp/hn-first-panes.txt')))
+    # Serial shell-integration escapes precede the first output line. Read exact
+    # file bytes so the first pane is not silently discarded by an anchored regex.
+    pane_data = vm.read_file('/tmp/hn-first-panes.txt')
+    (folder / 'first-use-panes.txt').write_bytes(pane_data)
+    pane_rows = [line.split('|') for line in pane_data.decode().splitlines() if re.match(r'^%\d+\|', line)]
     assert len(pane_rows) == 3, 'First use must contain three real terminal panes'
     left = min(pane_rows, key=lambda row: int(row[1]))
     right = sorted((row for row in pane_rows if row != left), key=lambda row: int(row[2]))
-    assert int(left[1]) == 0 and right[0][1] == right[1][1] and int(right[1][2]) > int(right[0][2])
+    # Coordinates describe the terminal cells inside hn's one-cell pane border.
+    assert int(left[1]) == 1 and right[0][1] == right[1][1] and int(right[1][2]) > int(right[0][2])
     assert abs(int(left[3]) - int(right[0][3])) <= 2, 'First-use columns must be balanced'
     assert abs(int(right[0][4]) - int(right[1][4])) <= 2, 'Right terminals must split their column equally'
-    assert re.match(r'/home/me/projects/opencode-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}', left[5]), left
+    # The session's original shell path can lag discovery after exec; verify
+    # the working directory of the actual agent process instead of its label.
+    assert left[5].isdigit(), 'The first agent must expose its process identity'
+    vm.command('readlink /proc/' + left[5] + '/cwd > /tmp/hn-first-agent-path.txt')
+    agent_path = vm.read_file('/tmp/hn-first-agent-path.txt').decode().strip()
+    assert re.fullmatch(r'/home/me/projects/opencode-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}(?:-\d+)*', agent_path), agent_path
+    vm.command(user('hn display-message -p "#{E:status-right}"') + ' > /tmp/hn-first-footer.txt')
+    footer = vm.read_file('/tmp/hn-first-footer.txt').decode()
+    assert 'Make Harness your OS.' in footer and '[ Install Harness ]' in footer, footer
     for index, row in enumerate(right):
         vm.command(user('hn select-pane -t ' + row[0]))
         vm.type_probe('echo starter-terminal-' + str(index))

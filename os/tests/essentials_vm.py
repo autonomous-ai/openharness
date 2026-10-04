@@ -152,20 +152,24 @@ def sound(vm, result):
         match = re.search(r'Volume: ([0-9.]+)([^\r\n]*)', output)
         assert match, 'No default audio output'
         return float(match.group(1)), '[MUTED]' in match.group(2)
+    def press_volume(key, expected):
+        # labwc starts wpctl asynchronously. Observe completion instead of
+        # assuming it finished within 400 ms during first-agent startup.
+        started = time.monotonic()
+        vm.keys(key)
+        while True:
+            actual = volume()
+            if actual == expected:
+                result.setdefault('audio_key_seconds', {})[key + ('-unmute' if key == 'audiomute' and not expected[1] else '')] = round(time.monotonic() - started, 3)
+                return
+            assert time.monotonic() - started < 5, (key + ' did not reach PipeWire', actual, expected)
+            time.sleep(.1)
     vm.command(USER_ENV + 'wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.5')
     vm.command(USER_ENV + 'wpctl set-mute @DEFAULT_AUDIO_SINK@ 0')
-    vm.keys('volumeup')
-    time.sleep(.4)
-    assert volume() == (.55, False), ('Volume up did not reach PipeWire', volume())
-    vm.keys('volumedown')
-    time.sleep(.4)
-    assert volume() == (.5, False), ('Volume down did not reach PipeWire', volume())
-    vm.keys('audiomute')
-    time.sleep(.4)
-    assert volume() == (.5, True), ('Mute did not reach PipeWire', volume())
-    vm.keys('audiomute')
-    time.sleep(.4)
-    assert volume() == (.5, False), ('Unmute did not reach PipeWire', volume())
+    press_volume('volumeup', (.55, False))
+    press_volume('volumedown', (.5, False))
+    press_volume('audiomute', (.5, True))
+    press_volume('audiomute', (.5, False))
     tone = '''import array, math, wave
 with wave.open('/tmp/harness-tone.wav', 'wb') as output:
     output.setnchannels(2); output.setsampwidth(2); output.setframerate(48000)
@@ -205,8 +209,8 @@ def main():
         vm.command('stty -echo')
         vm.command(USER_ENV + '/usr/lib/harness-os/wait-runtime')
         vm.command(USER_ENV + 'sh -c ' + shlex.quote('for n in $(seq 1 60); do systemctl --user is-active --quiet hn-screen && pgrep -u 1000 -x foot >/dev/null && exit 0; sleep .25; done; exit 1'))
-        sound(vm, result)
         wireless(vm, result)
+        sound(vm, result)
         vm.stop()
         with wave.open(str(folder / 'audio-1.wav'), 'rb') as recording:
             samples = array.array('h', recording.readframes(recording.getnframes()))
