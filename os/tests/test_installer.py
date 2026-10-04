@@ -200,6 +200,19 @@ class EncryptionMemory(unittest.TestCase):
 
 
 class InstallerCleanup(unittest.TestCase):
+    def test_mapping_state_comes_from_kernel_names_and_tolerates_a_last_close(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            name = root / 'dm-0/dm/name'
+            name.parent.mkdir(parents=True)
+            name.write_text('hn-install-test\n')
+            (root / 'sda').mkdir()
+            with patch.object(installer, 'Path', return_value=root):
+                self.assertTrue(installer.mapping_active('hn-install-test'))
+                self.assertFalse(installer.mapping_active('another-mapping'))
+                name.unlink()
+                self.assertFalse(installer.mapping_active('hn-install-test'))
+
     def test_deferred_close_does_not_wait_for_or_force_a_remaining_reader(self):
         with patch.object(installer, 'run') as command:
             installer.close_install_mapping('hn-install-test')
@@ -208,7 +221,7 @@ class InstallerCleanup(unittest.TestCase):
     def test_slow_udev_or_busy_close_queues_kernel_removal_without_waiting_for_udev(self):
         for error in [subprocess.CalledProcessError(5, ['cryptsetup', 'close']),
                       subprocess.TimeoutExpired(['cryptsetup', 'close'], 4.66)]:
-            with self.subTest(error=error), patch.object(installer.Path, 'exists', return_value=True), \
+            with self.subTest(error=error), patch.object(installer, 'mapping_active', return_value=True), \
                  patch.object(installer, 'run', side_effect=[error, None]) as command:
                 installer.close_install_mapping('hn-install-test')
                 self.assertEqual(command.call_args_list[-1].args,
@@ -216,10 +229,16 @@ class InstallerCleanup(unittest.TestCase):
                 self.assertEqual(command.call_args_list[-1].kwargs, {'timeout': 3})
 
     def test_timeout_after_successful_removal_is_already_clean(self):
-        with patch.object(installer.Path, 'exists', return_value=False), \
+        with patch.object(installer, 'mapping_active', return_value=False), \
              patch.object(installer, 'run', side_effect=subprocess.TimeoutExpired(['cryptsetup'], 10)) as command:
             installer.close_install_mapping('hn-install-test')
             self.assertEqual(command.call_count, 1)
+
+    def test_last_reader_can_close_between_kernel_check_and_deferred_removal(self):
+        with patch.object(installer, 'mapping_active', side_effect=[True, False]), \
+             patch.object(installer, 'run', side_effect=[subprocess.TimeoutExpired(['cryptsetup'], 10),
+                                                       subprocess.CalledProcessError(1, ['dmsetup'])]):
+            installer.close_install_mapping('hn-install-test')
 
     def test_unexpected_close_error_and_failed_deferred_removal_remain_errors(self):
         error = subprocess.CalledProcessError(4, ['cryptsetup', 'close'])
@@ -228,7 +247,7 @@ class InstallerCleanup(unittest.TestCase):
                 installer.close_install_mapping('hn-install-test')
             self.assertIs(caught.exception, error)
             self.assertEqual(command.call_count, 1)
-        with patch.object(installer.Path, 'exists', return_value=True), \
+        with patch.object(installer, 'mapping_active', return_value=True), \
              patch.object(installer, 'run', side_effect=[subprocess.TimeoutExpired(['cryptsetup'], 10), error]):
             with self.assertRaises(subprocess.CalledProcessError) as caught:
                 installer.close_install_mapping('hn-install-test')

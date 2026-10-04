@@ -95,10 +95,17 @@ jobs:
           workspaces: tui
           shared-key: tui-x86_64-unknown-linux-musl
           cache-bin: false
-      - name: Build Harness from the exact OS source
+      - name: Prepare native build tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y musl-tools tmux
+          sudo apt-get install -y musl-tools tmux cryptsetup-bin btrfs-progs
+      - name: Check encrypted cleanup with real device readers and stalled udev
+        run: |
+          # Fail early on real cleanup semantics, before compressing an ISO.
+          # The fixture owns a temporary file/loop device, never a host disk.
+          sudo python3 os/tests/installer-cleanup-native.py --output os/test-results/cleanup-host
+      - name: Build Harness from the exact OS source
+        run: |
           make -C os runtime
       - name: Validate hn session behavior and native terminal lifecycle
         run: |
@@ -137,6 +144,7 @@ jobs:
           name: programmer-os-build-diagnostics
           path: |
             .harness/validation/
+            os/test-results/cleanup-host/receipt.json
             os/work/profile/profiledef.sh
             os/work/profile/pacman.conf
             os/work/archiso/x86_64/airootfs/var/log/pacman.log

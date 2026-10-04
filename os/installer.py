@@ -85,6 +85,23 @@ def log_diagnostic(message):
             pass
 
 
+def mapping_active(mapper):
+    # /dev nodes can outlive a successful removal while udev is stalled. Ask
+    # the kernel through sysfs, not the stale node which caused the timeout.
+    root = Path('/sys/class/block')
+    if not root.is_dir():
+        raise OSError('Cannot inspect the installed disk mapping.')
+    for device in root.iterdir():
+        if not device.name.startswith('dm-'):
+            continue
+        try:
+            if (device / 'dm/name').read_text().strip() == mapper:
+                return True
+        except FileNotFoundError:
+            pass  # A concurrent last close removed this mapping.
+    return False
+
+
 def close_install_mapping(mapper, timeout=10):
     """After successful unmount, let the kernel close any remaining device reader."""
     try:
@@ -96,11 +113,16 @@ def close_install_mapping(mapper, timeout=10):
         if isinstance(error, subprocess.CalledProcessError) and error.returncode != 5:
             raise
         log_diagnostic(f'Device close is waiting for a reader or udev: {error}')
-        if not (Path('/dev/mapper') / mapper).exists():
+        if not mapping_active(mapper):
             return  # The ioctl completed before cryptsetup's udev wait timed out.
         # Do not wait for unrelated udev work again. This uses the same deferred
         # kernel removal, with no force, table replacement or skipped disk flush.
-        run('dmsetup', 'remove', '--deferred', '--noudevsync', mapper, timeout=3)
+        try:
+            run('dmsetup', 'remove', '--deferred', '--noudevsync', mapper, timeout=3)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            if mapping_active(mapper):
+                raise
+            # The final reader can also leave between the check and removal.
 
 
 def partitions(disk):
