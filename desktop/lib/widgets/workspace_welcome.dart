@@ -13,6 +13,7 @@ import '../state/welcome_sessions.dart';
 import 'engine_identity.dart';
 import 'desktop_chrome.dart';
 import '../shared/theme/appearance_prefs_store.dart';
+import '../shared/theme/prompt_style.dart';
 import '../shared/theme/status_line_style.dart';
 import '../shared/theme/harness_background.dart';
 import 'swarm_wallpaper.dart';
@@ -446,7 +447,20 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
   }
 
   Widget? _recentContext(SwarmDestination row) {
-    final context = row.promptContext;
+    final external = row.external;
+    final context =
+        row.promptContext ??
+        (external == null
+            ? null
+            : PromptContext(
+                machine: row.machineLabel,
+                project:
+                    external.cwd
+                        .split('/')
+                        .where((part) => part.isNotEmpty)
+                        .lastOrNull ??
+                    external.cwd,
+              ));
     if (context == null) {
       return row.detail.isEmpty
           ? null
