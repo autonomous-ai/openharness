@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events'
 import { createServer, type IncomingMessage } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { lookup as dnsLookup } from 'node:dns/promises'
+import type { LookupAddress, LookupAllOptions } from 'node:dns'
 import { getDefaultAutoSelectFamily, type LookupFunction } from 'node:net'
 import { env } from '../config/env.js'
 import { isBlockedAddress, providerFetch, readBodyCapped } from './providerUrl.js'
@@ -47,6 +48,8 @@ describe('isBlockedAddress', () => {
 
 
 describe('providerFetch DNS callback', () => {
+  // Select the all-address overload used by the guarded connection lookup.
+  const lookupAll: (hostname: string, options: LookupAllOptions) => Promise<LookupAddress[]> = dnsLookup
   // Drive the exact hook installed on HTTPS requests, without dialing fixture addresses.
   async function connect(all: boolean, host = 'provider.example') {
     let resolved: { address: unknown; family?: number } | undefined
@@ -73,7 +76,7 @@ describe('providerFetch DNS callback', () => {
   it('returns every validated address for all:true and the scalar shape otherwise', async () => {
     const entries = [{ address: '1.1.1.1', family: 4 }, { address: '2606:4700:4700::1111', family: 6 }]
     for (const all of [true, false]) {
-      vi.mocked(dnsLookup).mockResolvedValue(entries)
+      vi.mocked(lookupAll).mockResolvedValue(entries)
       expect(await connect(all)).toEqual(all
         ? { address: entries, family: undefined }
         : { address: entries[0]!.address, family: 4 })
@@ -94,7 +97,7 @@ describe('providerFetch DNS callback', () => {
         [{ address: '2606:4700:4700::1111', family: 6 }, { address: '::ffff:a9fe:a9fe', family: 6 }],
         [],
       ]) {
-        vi.mocked(dnsLookup).mockResolvedValue(entries)
+        vi.mocked(lookupAll).mockResolvedValue(entries)
         await expect(connect(all)).rejects.toMatchObject({ code: 'BLOCKED_ADDRESS' })
       }
       for (const host of ['127.0.0.1', '[::1]']) {
@@ -109,7 +112,7 @@ describe('providerFetch DNS callback', () => {
     expect(getDefaultAutoSelectFamily()).toBe(true)
     // The stock development flag is only for this isolated loopback HTTP fixture.
     env.PROVIDER_ALLOW_INSECURE_URLS = true
-    vi.mocked(dnsLookup).mockResolvedValue([{ address: '127.0.0.1', family: 4 }])
+    vi.mocked(lookupAll).mockResolvedValue([{ address: '127.0.0.1', family: 4 }])
     const server = createServer((_request, response) => response.end('original provider response'))
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     try {
