@@ -404,7 +404,12 @@ def check_console_fallback(vm, user, folder):
 
 
 def check_first_use(vm, user, folder, installed=False):
-    """Operate the actual USB front door without a terminal command from the user."""
+    """Operate the installed first-use page or a historical USB trial."""
+    version, _ = vm.command(user('/usr/bin/opencode --version'))
+    (folder / 'bundled-opencode-version.txt').write_text(version)
+    defaults = json.loads(vm.read_file('/home/me/.config/opencode/opencode.json'))
+    assert not set(defaults) & {'model', 'provider', 'providers'}, 'The image must retain upstream model and provider defaults'
+    assert defaults.get('update') == 'disable', 'The packaged agent must remain managed by system updates'
     if installed:
         vm.command('test ! -e /etc/harness-live && test "$(id -un)" = me')
         vm.command('for n in $(seq 1 40); do hn capture-pane -p | grep -q "Connect to Wi-Fi to get started" && exit 0; sleep .5; done; exit 1', timeout=30)
@@ -415,11 +420,6 @@ def check_first_use(vm, user, folder, installed=False):
     else:
         vm.command('test "$(uname -n)" = harness && test "$(id -nu 1000)" = me && test -f /etc/harness-live')
         vm.command('nmcli networking off')
-        version, _ = vm.command(user('/usr/bin/opencode --version'))
-        (folder / 'bundled-opencode-version.txt').write_text(version)
-        defaults = json.loads(vm.read_file('/home/me/.config/opencode/opencode.json'))
-        assert not set(defaults) & {'model', 'provider', 'providers'}, 'The image must retain upstream model and provider defaults'
-        assert defaults.get('update') == 'disable', 'The packaged agent must remain managed by system updates'
         vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Connect to Wi-Fi to get started" && exit 0; sleep 1; done; exit 1')), timeout=40)
         vm.screenshot('01a-network-first')
         vm.command('! pgrep -u 1000 -x opencode')

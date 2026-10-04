@@ -1,5 +1,4 @@
 """Native checks for installer-only USB startup and the installed workspace."""
-from pathlib import Path
 import re
 import shlex
 import subprocess
@@ -81,7 +80,9 @@ def check_installed_controls(vm, result, folder):
     vm.command('hn new-window -n clipboard ' + shlex.quote(clipboard))
     vm.command('for n in $(seq 1 20); do test -e /tmp/hn-pane-clipboard-passed && exit 0; sleep .25; done; exit 1')
     result['checks'].append('An hn terminal pane inherits the working Wayland clipboard environment')
-    vm.command('! hn detach; ! hn suspend-client; kill -0 "$(cat /tmp/hn-survivor.pid)"')
+    vm.command('if hn detach; then exit 1; fi')
+    vm.command('if hn suspend-client; then exit 1; fi')
+    vm.command('kill -0 "$(cat /tmp/hn-survivor.pid)"')
     result['checks'].append('OS surface refuses detach and suspend while work stays alive')
     vm.command('systemctl --user restart hn-screen; sleep 3; kill -0 "$(cat /tmp/hn-survivor.pid)"')
     vm.command('/usr/lib/harness-os/wait-runtime', timeout=160)
