@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { emptyPorts, type CoreApi } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionSearchIndexOptions } from '../lib/sessionSearch/indexer.js'
+import { fakeCore } from '../testing/fakeCore.js'
 import { SESSION_SEARCH_FILE } from '../lib/sessionSearch/command.js'
 import { SessionSearchStore } from '../lib/sessionSearch/store.js'
 import { startSearch } from './search.js'
@@ -29,15 +30,14 @@ const reader = async () => []
 function setup(agents: RegisteredSession[] = [], external: unknown[] = [], owned: string[] = []) {
   const store = { ownedSessionIds: vi.fn(() => new Set(owned)) }
   vi.mocked(SessionSearchStore.open).mockReturnValue(store as never)
-  const core: CoreApi = {
-    dataDir: '/data',
+  const core = fakeCore({
     agents: { all: vi.fn(() => agents), displayName: vi.fn((s: RegisteredSession) => `name of ${s.agentId}`) },
     transcripts: { databaseHistory: vi.fn((s: RegisteredSession) => (s.engine === 'opencode' ? reader : undefined)) },
     external: {
       sessions: { list: vi.fn(() => external), scan: vi.fn(async () => []) } as unknown as CoreApi['external']['sessions'],
       open: { known: vi.fn(), fresh: vi.fn() } as unknown as CoreApi['external']['open'],
     },
-  }
+  })
   const ports = emptyPorts()
   startSearch(core, ports)
   return { core, ports, store, index: ports.search as unknown as Recorded }
