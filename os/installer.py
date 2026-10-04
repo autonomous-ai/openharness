@@ -491,6 +491,8 @@ class InstallForm:
         if row >= height or width < 5:
             return
         attr = (curses.A_REVERSE if active else self.accent if accent else curses.A_NORMAL) | (curses.A_BOLD if bold else 0)
+        if active:
+            text = text.ljust(self.width)
         self.screen.addnstr(row, self.left, text, min(self.width, width - self.left - 1), attr)
 
     def cursor(self, visible):
