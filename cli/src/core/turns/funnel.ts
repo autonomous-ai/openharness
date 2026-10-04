@@ -52,12 +52,36 @@ export interface FunnelDeps {
   startHeartbeat: (sessionId: string) => void
   questionWatcher: Pick<QuestionWatcher, 'start' | 'noteTurnStart' | 'stop'>
   mirror: Pick<CommanderMirror, 'ingest'>
+  /** How a consumer outside the core is called ([outsideConsumers]). */
+  outside?: OutsideConsumers
+}
+
+type OutsideConsumers = (consumer: string, call: () => void) => void
+
+/**
+ * A consumer outside the core — the teams and the device service — answers for itself: one that
+ * throws is logged, at most once a minute per consumer and with how many were not, and every consumer
+ * after it still gets the event. The heartbeat, the question watcher and the recaps must not miss a
+ * turn because a device was unplugged mid-call. The services on the boundary are guarded the same way
+ * (core/serviceHost.ts).
+ */
+export function outsideConsumers(log: (line: string) => void = (line) => console.error(line), now: () => number = Date.now): OutsideConsumers {
+  const said = new Map<string, { at: number; quiet: number }>()
+  return (consumer, call) => {
+    try { call() } catch (error) {
+      const at = now()
+      const last = said.get(consumer)
+      if (last && at - last.at < 60_000) { last.quiet++; return }
+      log(`[funnel] ${consumer} failed · ${error instanceof Error ? error.message : String(error)}${last?.quiet ? ` · ${last.quiet} more since` : ''}`)
+      said.set(consumer, { at, quiet: 0 })
+    }
+  }
 }
 
 /** The funnel itself, over what it feeds. */
 export function funnelFor({
   bySession, tokenUsage, agentIdFor, turnActivity, isSubagentSession, clients, search, turnStartedAt, input, teams,
-  deviceInput, device, startHeartbeat, questionWatcher, mirror,
+  deviceInput, device, startHeartbeat, questionWatcher, mirror, outside = outsideConsumers(),
 }: FunnelDeps) {
   return (sessionId: string, events: Events, opts?: EmitOptions): void => {
     if (!events.length || !bySession(sessionId)?.active) return
@@ -94,9 +118,9 @@ export function funnelFor({
         turnStartedAt.set(sessionId, Date.now())
         console.log(`[turn] ${sid(sessionId)} started · engine=${bySession(sessionId)?.engine ?? 'claude'} · bytes=${Buffer.byteLength(event.payload.userMessage, 'utf8')}`)
         input.onTurnStarted(agentIdFor(sessionId), event.payload.userMessage)
-        if (!opts?.resumed && !opts?.replay) teams.started(agentId, event.payload.userMessage, 'transcript', bySession(sessionId)?.engine)
+        if (!opts?.resumed && !opts?.replay) outside('teams', () => teams.started(agentId, event.payload.userMessage, 'transcript', bySession(sessionId)?.engine))
         deviceInput.onTurnStarted(agentId, event.payload.userMessage)
-        device()?.turnStarted(agentId)
+        outside('devices', () => device()?.turnStarted(agentId))
         startHeartbeat(sessionId)
         questionWatcher.start(sessionId)   // Claude opens its dialog INSIDE a turn
         // ...and anything already drawn belongs to the turn BEFORE this one — unless this is a turn the
@@ -114,7 +138,7 @@ export function funnelFor({
         )
         // Filter only the Device receipt view; shared normalizers, mirror, and local input stay unchanged.
         if (!isDeviceInputBoundary(usageSession?.engine ?? '', events, eventIndex)) {
-          device()?.turnEnded(agentId, event.payload.aborted === true)
+          outside('devices', () => device()?.turnEnded(agentId, event.payload.aborted === true))
           deviceInput.onTurnEnded(agentId)
         }
         input.onTurnEnded(agentIdFor(sessionId))
@@ -130,7 +154,7 @@ export function funnelFor({
     }
     mirror.ingest(events, sessionId, { replay: !!(opts?.resumed || opts?.replay) })
     // Subscribed devices only (lib/autonomous-device/stream.ts). A transcript re-read is history, not live.
-    if (!opts?.replay) device()?.stream(agentIdFor(sessionId), events)
+    if (!opts?.replay) outside('devices', () => device()?.stream(agentIdFor(sessionId), events))
   }
 }
 

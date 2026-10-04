@@ -426,6 +426,32 @@ describe('requests must name this server', () => {
     expect(onLogs).not.toHaveBeenCalled()
   })
 
+  it('answers every request even when its handler throws, instead of leaving the caller waiting', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const onStop = vi.fn(() => { throw new Error('stop failed after the answer') })
+    const { base } = await start({
+      onStatus: async () => { throw new Error('status read failed') },
+      onLogs: () => { throw 'log file gone' },
+      onStop,
+    })
+    // Before the answer: a 500 the caller can act on, at once.
+    const status = await fetch(`${base}/api/status`)
+    expect(status.status).toBe(500)
+    expect(await status.json()).toEqual({ error: 'INTERNAL' })
+    // After the headers went out: the response is ended, not left open.
+    const logs = await fetch(`${base}/api/logs`)
+    expect(logs.status).toBe(200)
+    expect(await logs.text()).toBe('')
+    // After the response ended: nothing more to send, and nothing breaks.
+    const stop = await fetch(`${base}/api/stop`, { method: 'POST', headers: { 'x-adapter-local': '1' } })
+    expect(await stop.json()).toEqual({ ok: true })
+    await vi.waitFor(() => expect(onStop).toHaveBeenCalled())
+    expect(error).toHaveBeenCalledWith('[hooks] GET /api/status failed:', 'status read failed')
+    expect(error).toHaveBeenCalledWith('[hooks] GET /api/logs failed:', 'log file gone')
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[hooks] POST /api/stop failed:', 'stop failed after the answer'))
+    error.mockRestore()
+  })
+
   it('serves a status that has to read before it answers', async () => {
     // A harness's `updatedAt` is when its conversation last moved, which is read from its transcript.
     const { base } = await start({ onStatus: async () => ({ sessions: [{ id: 'a', updatedAt: 42 }] }) })

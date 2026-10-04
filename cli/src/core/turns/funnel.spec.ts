@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { deviceErrorText } from '../../lib/deviceErrors.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { createEventFunnel, funnelFor, type FunnelDeps } from './funnel.js'
+import { createEventFunnel, funnelFor, outsideConsumers, type FunnelDeps } from './funnel.js'
 
 type Event = Parameters<ReturnType<typeof funnelFor>>[1][number]
 const started = (userMessage = 'go'): Event => ({ type: 'turn_started', payload: { userMessage } }) as Event
@@ -39,6 +39,28 @@ function setup(engine = 'claude', over: Partial<FunnelDeps> = {}) {
 
 describe('the event funnel', () => {
   afterEach(() => vi.restoreAllMocks())
+
+  it('carries on past a teams or device service that throws: every consumer after it still gets the event', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const boom = (what: string) => vi.fn(() => { throw new Error(`${what} unplugged`) })
+    const { funnel, calls } = setup('claude', {
+      teams: { started: boom('teams') },
+      device: () => ({ turnStarted: boom('device'), turnEnded: boom('device'), stream: boom('device') }),
+    })
+    funnel('s1', [started(), text(), ended()])
+    expect(calls).toEqual([
+      'send turn_started', 'search',
+      'input started', 'deviceInput started', 'heartbeat', 'questions start', 'questions pre-turn',
+      'send text_delta',
+      'send turn_ended', 'search',
+      'deviceInput ended', 'input ended', 'questions stop',
+      'mirror',
+    ])
+    // Once a minute per consumer: the devices failed three times and said so once.
+    expect(error.mock.calls.map(([line]) => line)).toEqual(['[funnel] teams failed · teams unplugged', '[funnel] devices failed · device unplugged'])
+  })
+
 
   it('fans a live turn out in its exact order: the app first, the recaps after the batch, the device stream last', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -184,5 +206,35 @@ describe('createEventFunnel', () => {
       deviceErrorText('rate limited', 'commandcode'),
     ])
     expect(String(log.mock.calls[0][0])).toContain('aborted by devin error')
+  })
+})
+
+describe('a consumer outside the core', () => {
+  it('is logged at most once a minute, with how many failures went unsaid, and never stops the caller', () => {
+    const lines: string[] = []
+    let at = 0
+    const outside = outsideConsumers((line) => lines.push(line), () => at)
+    const ran: string[] = []
+    outside('devices', () => { throw new Error('serial port gone') })
+    at += 10_000
+    outside('devices', () => { throw 'still gone' })
+    outside('teams', () => { ran.push('teams') })
+    at += 60_000
+    outside('devices', () => { throw 'back and gone again' })
+    at += 60_001
+    outside('devices', () => { throw new Error('once more') })
+    expect(ran).toEqual(['teams'])
+    expect(lines).toEqual([
+      '[funnel] devices failed · serial port gone',
+      '[funnel] devices failed · back and gone again · 1 more since',
+      '[funnel] devices failed · once more',
+    ])
+  })
+
+  it('reports to the error log by default', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    outsideConsumers()('teams', () => { throw new Error('x') })
+    expect(error).toHaveBeenCalledWith('[funnel] teams failed · x')
+    error.mockRestore()
   })
 })
