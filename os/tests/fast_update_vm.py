@@ -53,13 +53,16 @@ def exercise(vm, fixture, host_url):
     vm.command('cat /proc/sys/kernel/random/boot_id > /tmp/fast-original-boot')
     vm.command('mkdir -p ~/.config/systemd/user/harness-update.service.d ~/.config/systemd/user/harness-update.timer.d')
     put(vm, '/tmp/update-service.conf', '[Service]\nExecStart=\nExecStart=/usr/bin/python3 /usr/lib/harness-os/live_update.py check --feeds /tmp/fast-updates/feeds-hn.json\n')
-    put(vm, '/tmp/update-timer.conf', '[Timer]\nOnStartupSec=\nOnUnitInactiveSec=\nRandomizedDelaySec=0\nOnActiveSec=1s\n')
+    # systemd's default AccuracySec=1min can coalesce the one-second fixture
+    # beyond its deadline. Keep the real timer path, with explicit test accuracy.
+    put(vm, '/tmp/update-timer.conf', '[Timer]\nOnStartupSec=\nOnUnitInactiveSec=\nRandomizedDelaySec=0\nAccuracySec=100ms\nOnActiveSec=1s\n')
     vm.command('cp /tmp/update-service.conf ~/.config/systemd/user/harness-update.service.d/fixture.conf; '
                'cp /tmp/update-timer.conf ~/.config/systemd/user/harness-update.timer.d/fixture.conf; '
                'systemctl --user daemon-reload; systemctl --user restart harness-update.timer')
     state = '~/.local/state/harness-os/updates'
     vm.command('for n in $(seq 1 120); do test -s ' + state + '/ready.json && exit 0; sleep .5; done; '
-               'journalctl --user -u harness-update --no-pager; exit 1', timeout=75)
+               'sudo journalctl _UID=1000 _SYSTEMD_USER_UNIT=harness-update.service --no-pager; '
+               'systemctl --user status harness-update.timer harness-update.service --no-pager; exit 1', timeout=75)
     wait_text(vm, 'update ready', 'fast-01-notice', status_bar=True)
     checks = ['User timer discovers, verifies and stages a real hn release without changing the running selection']
     vm.command('test ! -e ' + state + '/current')

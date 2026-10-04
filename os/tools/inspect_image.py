@@ -31,13 +31,17 @@ def inspect(iso):
             return subprocess.check_output(['unsquashfs', '-cat', str(payload), path])
         files = {str(p.relative_to(source / 'root')): p for p in (source / 'root').rglob('*') if p.is_file()}
         files.update({'usr/lib/harness-os/install.py': source / 'installer.py',
+                      'usr/lib/harness-os/onboarding.py': source / 'onboarding.py',
+                      'usr/lib/harness-os/trial_projects.py': source / 'trial_projects.py',
                       'usr/lib/harness-os/system.py': source / 'system.py',
                       'usr/lib/harness-os/runtime_update.py': source / 'runtime_update.py',
                       'usr/lib/harness-os/live_update.py': source / 'live_update.py',
                       'usr/lib/harness-os/release_update.py': source / 'release_update.py',
                       'usr/lib/harness-os/hardware.py': source / 'hardware.py',
                       'usr/bin/hn-os': source / 'tools/hn-os',
-                      'usr/share/harness-os/lock.json': source / 'lock.json'})
+                      'usr/share/harness-os/lock.json': source / 'lock.json',
+                      'usr/share/harness-os/guide/tui.md': source.parent / 'tui/README.md',
+                      'usr/share/harness-os/guide/naming.md': source.parent / 'docs/naming-system.md'})
         for path, expected in files.items():
             assert read(path) == expected.read_bytes(), f'Payload does not match source: {path}'
             checked.append(path)
@@ -51,6 +55,10 @@ def inspect(iso):
         for path in [*files, '', 'etc', 'usr', 'usr/bin', 'usr/lib/harness-os', 'usr/share/harness-os']:
             assert owners.get(path) == '0/0', f'Packaged system path is not owned by root: {path}'
         runtime = json.loads(read('usr/share/harness-os/runtime.json'))
+        guide = json.loads(read('usr/share/harness-os/guide/source.json'))
+        assert guide == {'source_commit': manifest['source_commit'], 'tui_reference': 'tui/README.md'}, 'Agent guide belongs to a different source'
+        assert read('home/me/.config/opencode/AGENTS.md') == read('etc/skel/.config/opencode/AGENTS.md')
+        assert read('home/me/.config/opencode/opencode.json') == read('etc/skel/.config/opencode/opencode.json')
         assert runtime == manifest['harness_inputs'] and runtime['source_commit'] == manifest['source_commit']
         assert not runtime['dirty'] and runtime['target'] == 'x86_64-unknown-linux-musl'
         for name, identity in runtime['files'].items():

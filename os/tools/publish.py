@@ -12,8 +12,10 @@ import time
 import zipfile
 
 REQUIRED_CHECKS = ['Live hn ready;', 'Wayland clipboard round trip',
-                   'USB Enter opens Install offline;',
+                   'USB opens network setup; Super+i opens Install offline;',
                    'USB first agent conversation accepts physical keyboard input',
+                   'Bundled OpenCode loads the local TUI guide',
+                   'Agent-created USB trial project survives offline installation',
                    'Bundled OpenCode starts offline and its upstream-default clean-profile conversation',
                    'Keyboard disk selection, encryption checkbox, masked password entry and a single Install action',
                    'Browser starts only on shortcut', 'Dated package repositories are queryable',
@@ -197,17 +199,17 @@ def main():
     reuse_note = ('Completed project sources were retained from ' + ', '.join(
         f'[run {source}](https://github.com/{args.repo}/actions/runs/{source})' for source in project_source_runs) +
         '. The game agent ran again; all four projects\' unit tests and independent acceptance checks reran on this exact image.') if project_source_runs else ''
-    notes.write_text(f'''Boot directly into hn. Open agents with Ctrl+B, then N. Super+B opens Chromium or returns to hn.
+    notes.write_text(f'''Harness is a Linux operating system built by agents, for agents. Boot into the terminal, start another agent with Super+n, and open the browser with Super+b.
 
 Arch Linux with the LTS kernel, labwc, foot, and an on-demand browser. No desktop panels or preinstalled development stacks.
 
-To try it: follow the included `INSTALL.md` for Mac → USB → ThinkPad instructions. Verify the ISO's SHA-256, write the whole ISO to a USB stick, and boot an x86-64 PC with Secure Boot disabled. On the USB welcome screen, press Enter to install or T to try Harness. Try opens Wi-Fi setup when needed, then bundled OpenCode with its upstream default settings. Ctrl+B then T opens a terminal directly; Ctrl+B then I opens the installer from a live session. This preview's installer erases the entire selected disk; it does not resize another OS. Encryption is enabled by default.
+To try it: follow the included `INSTALL.md` for Mac → USB → ThinkPad instructions. Verify the ISO's SHA-256, write the whole ISO to a USB stick, and boot an x86-64 PC with Secure Boot disabled. The USB asks for Wi-Fi when needed, then opens bundled OpenCode with its upstream model defaults and a local guide to Harness. Install without connecting works offline. Ask the agent to open installation, press Super+i, or click Install Harness in the persistent bottom dock. The same native form handles all three routes. Saved projects under ~/Projects are preserved during installation; temporary account credentials and running processes are not. Super+n opens New Harness, Super+m connects a computer, and Super+t opens a shell directly. All Super shortcuts require no Shift; existing Ctrl+b bindings remain available. This preview's installer erases the entire selected disk; it does not resize another OS. Encryption is enabled by default.
 
 {'The installer has four aligned fields: disk, encryption, password, repeat password. Disk choices fit on one line. Activate Install to begin; there is no second confirmation screen or minimum password length. Empty passwords are rejected. The account is me@harness. The password initially protects both the local account and, when enabled, the encrypted disk. There is no first-boot account wizard.' if interactive_install else ''}
 
 {'Interrupted full OS updates block ordinary package transactions until a full retry succeeds. Retrying keeps the original recovery checkpoint. This was exercised with a real failed repository refresh, blocked package upgrade, successful retry, and offline recovery. hn-os update upgrades Arch packages.' if update_retry else ''}
 
-{'Super+U opens Updates. hn and CLI releases are prepared automatically; Enter activates an available runtime update. hn reconnects to the local tabs while agent processes keep running. System updates are a separate action in the same screen, with a checkpoint and a restart when you are ready. Neither channel automatically interrupts your work. Older preview 4 installations need the matching small bootstrap bundle once; routine updates do not require reflashing.' if in_place_updates else ''}
+{'Super+u opens Updates. hn and CLI releases are prepared automatically; Enter activates an available runtime update. hn reconnects to the local tabs while agent processes keep running. System updates are a separate action in the same screen, with a checkpoint and a restart when you are ready. Neither channel automatically interrupts your work. Older preview 4 installations need the matching small bootstrap bundle once; routine updates do not require reflashing.' if in_place_updates else ''}
 
 BIOS/plain and UEFI/encrypted VM boot, clipboard, browser switching, offline installation and package-checkpoint recovery passed. The BIOS VM uses a Nehalem CPU profile without AVX2, starts bundled OpenCode, installs the other agent executables, installs a compiler on demand, builds C, and serves a local Node preview. See `validation.json` and `machine-evidence.zip` for the exact checks and measurements.
 

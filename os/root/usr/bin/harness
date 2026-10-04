@@ -5,6 +5,9 @@ if [ "${1:-}" = hardware ]; then
 fi
 if [ "${1:-}" = install ]; then
     shift
+    if [ "$#" = 0 ] && [ "$(id -u)" != 0 ]; then
+        exec /usr/lib/harness-os/open-install
+    fi
     exec /usr/bin/python3 /usr/lib/harness-os/install.py "$@"
 fi
 if [ "${1:-}" = upgrade ]; then

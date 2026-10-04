@@ -1,6 +1,6 @@
 # Install Harness on a ThinkPad
 
-These instructions are for **0.1.0-preview.6**, using a Mac to prepare the USB.
+These instructions are for **0.1.0-preview.7**, using a Mac to prepare the USB.
 The USB starts a live session. Installation begins only when you choose **Install**
 in the installer; it erases the entire selected disk.
 
@@ -21,20 +21,20 @@ compute still need testing on the actual hardware.
 
 ## 2. Download and verify on the Mac
 
-From the [preview 6 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.6),
+From the [preview 7 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.7),
 download both files into the same folder:
 
-- `harness-0.1.0-preview.6-x86_64.iso`
-- `harness-0.1.0-preview.6-x86_64.iso.sha256`
+- `harness-0.1.0-preview.7-x86_64.iso`
+- `harness-0.1.0-preview.7-x86_64.iso.sha256`
 
 If they are in Downloads, open Terminal and run:
 
 ```sh
 cd ~/Downloads
-shasum -a 256 -c harness-0.1.0-preview.6-x86_64.iso.sha256
+shasum -a 256 -c harness-0.1.0-preview.7-x86_64.iso.sha256
 ```
 
-The result must say `harness-0.1.0-preview.6-x86_64.iso: OK`.
+The result must say `harness-0.1.0-preview.7-x86_64.iso: OK`.
 If it does not, download the files again before flashing.
 
 ## 3. Flash the USB
@@ -64,9 +64,20 @@ The exact menu wording varies by model. See Lenovo's
 [boot-menu instructions](https://docs.lenovocdrt.com/ref/bios/startup_menu/).
 If the USB is absent, try another USB port and check that USB boot is enabled.
 
-The welcome screen offers **Enter — Install Harness** and **T — Try without
-installing**. No account or password is needed to use the live session. Work in
-the USB session is temporary and is not copied during installation.
+The USB opens **Connect to Wi-Fi** and **Install without connecting** when offline.
+Choose Wi-Fi and enter its password in the system form to try an agent. Ethernet
+skips this step when already connected. No Harness account is needed.
+
+OpenCode starts with its default model selection. Beside it are **New Harness**
+and **Connect a computer**, for trying multiple agents and computers. Ask the agent
+about Harness, its shortcuts, or something you want to build. The bottom dock keeps
+**Install Harness** visible throughout the trial; **Temporary USB** reminds you
+that work has not yet been saved to an installed system.
+
+Create projects under `~/Projects`. The installer preserves and verifies these
+saved files, including Git history. Files elsewhere, running processes and agent
+credentials outside Projects are not copied. Save and stop project writes before
+installing, or copy important work to another drive.
 
 ### Trying an older Intel Mac
 
@@ -79,7 +90,7 @@ Try explains that limitation before attempting to start it.
 Shut down, insert the USB, then hold **Option (⌥)** while turning on the Mac.
 Choose the external **EFI Boot** entry. Apple's
 [startup-key guide](https://support.apple.com/en-us/102603) describes that menu.
-Start with **T — Try without installing** and check built-in keyboard, trackpad,
+Connect and try the agent first; check built-in keyboard, trackpad,
 Wi-Fi, brightness and sound before choosing the internal disk. Installation uses
 the same form below and erases the whole selected disk, including macOS.
 
@@ -89,8 +100,10 @@ IDs and driver names, without serial numbers or Wi-Fi passwords.
 
 ## 5. Install
 
-Press **Enter** on the welcome screen. You do not need to open a terminal or type
-a command. The form has four fields:
+Choose **Install without connecting** at the network step, click **Install Harness**
+in the bottom dock, press **Super+i**, or ask the agent to open installation.
+F10 focuses the dock; Tab selects a button and Enter activates it. All routes open
+the same native form, with four fields:
 
 1. **Disk:** press Enter, choose the internal disk by its model and capacity, and
    press Enter again. The live USB is excluded from the choices.
@@ -110,8 +123,9 @@ The account and computer name are set to **`me@harness`**. Installation works of
 When **Harness is installed.** appears, choose **Shut down**. Once the ThinkPad is
 off, remove the USB and power it on.
 
-While trying the live system, **Ctrl+B**, then **I** opens the same installer.
-The equivalent terminal command is `sudo harness install`.
+The existing **Ctrl+b, then Shift+i** shortcut also opens the installer.
+`harness install` opens the form from a conversation or terminal; disk selection
+and passwords stay in the form. `sudo harness install` runs it directly.
 
 ## 6. First boot
 
@@ -126,7 +140,7 @@ There is no cloud account that resets the disk password.
 
 On the empty home screen, press **Enter** to start OpenCode. If there is no network
 connection, the keyboard network picker opens first. Select your Wi-Fi network
-and enter its password there. **Ctrl+B**, then **W** opens network setup from any
+and enter its password there. **Super+w** opens network setup from any
 pane. Ethernet connects automatically when available.
 
 OpenCode is already installed and uses its upstream defaults. Available models
@@ -135,19 +149,22 @@ model setup. A Linux account does not sign you into an agent provider.
 
 ## 7. Use it
 
-**Super** means the Windows-logo key on a typical ThinkPad. For a Ctrl+B shortcut,
-press Ctrl+B, release both keys, then press the indicated letter. Capital letters
-below mean **Shift + letter**.
+**Super** means the Windows-logo key on a PC keyboard, or Command on a Mac keyboard
+running Harness OS. These shortcuts require no Shift and no Ctrl+b prefix. The
+shared TUI's Ctrl+b shortcuts remain available; release the prefix before pressing
+the next key. A capital letter in a prefix binding means Shift + letter.
 
 | Keys or command | Action |
 | --- | --- |
-| Ctrl+B, then N | New Harness: choose an agent |
-| Ctrl+B, then T | New terminal: open a shell directly |
-| Ctrl+B, then W | Connect to Wi-Fi |
-| Super+B | Open/focus Chromium, or return to Harness |
+| Super+n | New Harness: choose an agent |
+| Super+t | New terminal: open a shell directly |
+| Super+m | Connect a computer |
+| Super+w | Connect to Wi-Fi |
+| Super+i | Install Harness (USB only) |
+| Super+b | Open/focus Chromium, or return to Harness |
 | Super+Enter | Focus Harness |
-| Super+L | Lock; unlock with the account password |
-| Super+U | Updates |
+| Super+l | Lock; unlock with the account password |
+| Super+u | Updates |
 | `hn-browser http://localhost:3000` | Open a local project in the browser |
 | `sudo systemctl poweroff` | Shut down |
 
@@ -156,8 +173,8 @@ install the tools the project needs. Save work under `~/Projects`.
 
 ## 8. Updates
 
-A small **Update ready · Super+U** notice appears when a new hn or CLI release
-has downloaded and passed its checks. Press **Super+U**, then Enter to apply it.
+A small **Update ready · Super+u** notice appears when a new hn or CLI release
+has downloaded and passed its checks. Press **Super+u**, then Enter to apply it.
 The screen reconnects; your running agents and terminal processes remain.
 Use **R** in Updates to restore the previous runtime if needed.
 
@@ -174,7 +191,7 @@ sha256sum -c SHA256SUMS
 sudo python3 apply-update.py apply "$PWD"
 ```
 
-Reboot when it finishes; subsequent updates are available through Super+U.
+Reboot when it finishes; subsequent updates are available through Super+u.
 If the bootstrap fails, use `sudo python3 apply-update.py rollback` from that
 same folder before trying again.
 

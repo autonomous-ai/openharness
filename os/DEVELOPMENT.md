@@ -165,8 +165,8 @@ OS windows use hn's local session storage (`HARNESS_TUI_DESK=off`), so their
 layout and pane references survive reconnects without signing into the cloud.
 This setting is confined to the OS launcher; ordinary hn installs are unchanged.
 
-`Update ready · Super+U` appears in the bottom bar. Super+U opens the keyboard
-update action (Ctrl+B, Shift+U remains an alias). Enter applies the prepared
+`Update ready · Super+u` appears in the bottom bar. Super+u opens the keyboard
+update action (Ctrl+b, Shift+u remains an alias). Enter applies the prepared
 runtime through a transient user service. An hn-only change reconnects just the
 screen; a CLI change also restarts its supervised service. Failure restores the
 previous selection. Restore previous version holds the rejected versions until
@@ -183,7 +183,7 @@ ISO is not a requirement for a TUI update. The public preview
 validated preview 5 release; it does not need to be flashed again.
 
 `development_update=true` builds a private, deliberately unpublished `999.0.1`
-hn/CLI fixture. The installed VM's actual timer stages it, then real Super+U and
+hn/CLI fixture. The installed VM's actual timer stages it, then real Super+u and
 Enter keys apply hn and CLI independently. Acceptance checks the same terminal
 process, a live OpenCode process, keyboard input, rollback and an unchanged boot
 ID. Those fixture binaries are never included in the package or public channel.
@@ -269,6 +269,44 @@ actions require explicit OS mode. Opening Terminal directly is a shared chooser
 change, explicitly approved for all platforms. Publishing the ISO did not release
 these through the general TUI channel. The small updater adds no changes to `tui/`
 or `cli/`.
+
+## Agent-led USB onboarding
+
+The live launcher starts `hn-os welcome` in one real terminal pane. While offline,
+a small curses step offers Wi-Fi or the native installer without needing a model.
+Once connected, it execs packaged OpenCode immediately. The OS-only TUI integration
+adds two starter panels and a one-row install dock. `hn os-action` is a private
+integration command, guarded by OS mode; install additionally requires live mode.
+All install entry points create or focus one local form even if a remote pane has
+focus. Super bindings live in labwc; the shared Ctrl+b key tables are preserved.
+
+OpenCode reads the packaged guide through its global
+`~/.config/opencode/AGENTS.md`, linked to `/usr/share/harness-os/guide.md`.
+The account skeleton supplies this link; Start OpenCode also adds it on older
+installations when no personal instructions file exists. Existing instructions
+are never replaced. OpenCode 2 accepts the legacy JSON `instructions` field but
+does not load it; see its [instructions reference](https://opencode.ai/v2/docs/instructions/).
+The guide
+points to the exact shipped `tui/README.md`, with a source revision, and tells the
+agent to inspect current bindings before answering. Model/provider selection is
+left to upstream. The package-owned OpenCode executable is updated by full system
+updates; new accounts disable its self-updater through the global config.
+Existing user preferences are preserved. No download blocks the first conversation.
+Independent background agent updates remain future work and must preserve the
+packaged fallback, validate provenance, avoid downgrades, and activate on a later
+launch rather than replacing an active executable.
+
+Trial transfer reads only `~/Projects` as the live user, using a private staging
+directory on the destination disk. It preserves saved bytes, modes, times, Git
+history and symlinks without following them. Special files and detected concurrent
+writes fail explicitly. The installed home gets a per-file hash receipt. It is a
+saved-file transfer, not a migration of processes or the live home/credentials.
+
+Validation must cover offline entry/cancellation, Ethernet skip, the real default
+agent answering TUI questions and creating a project, agent-requested installation,
+keyboard and mouse controls, plain/encrypted offline installation, post-boot file
+hashes, and ordinary Mac/Linux TUI isolation. Native VM screenshots are required
+before publication; local unit tests alone do not establish this experience.
 
 ## Optional remote VM controls
 

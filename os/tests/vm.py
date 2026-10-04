@@ -7,6 +7,7 @@ to QEMU. Screenshots, serial logs, timings and checks survive every failure.
 from __future__ import annotations
 import argparse
 import base64
+import csv
 import hashlib
 import io
 import json
@@ -22,6 +23,17 @@ import tempfile
 import tarfile
 import time
 import uuid
+
+
+def control_point(words, word, width, height, scale, border):
+    rows = [r for r in csv.DictReader(io.StringIO(words), delimiter='\t')
+            if r.get('text', '').strip('[]').lower() == word.lower()]
+    assert rows, f'The visible screen has no {word} control'
+    row = max(rows, key=lambda r: int(r['top']))  # The dock is the lowest instance.
+    x = (int(row['left']) + int(row['width']) / 2 - border) / scale
+    y = (int(row['top']) + int(row['height']) / 2 - border) / scale
+    assert 0 <= x < width and 0 <= y < height, 'OCR control lies outside the actual screen'
+    return round(x * 32767 / (width - 1)), round(y * 32767 / (height - 1))
 
 
 class VM:
@@ -67,10 +79,11 @@ class VM:
         self.acceleration = acceleration
         args = ['qemu-system-x86_64', '-accel', acceleration, '-m', str(self.memory), '-smp', '2',
                 '-cpu', self.cpu or ('host' if acceleration == 'kvm' else 'max'), '-device', self.video,
+                '-device', 'virtio-tablet-pci',
                 '-display', 'none', '-no-reboot',
                 '-drive', f'file={self.disk},format=qcow2,if=none,id=target',
                 '-device', f'virtio-blk-pci,drive=target,serial=HN_OS_TEST,bootindex={2 if live else 1}',
-                '-device', 'virtio-net-pci,netdev=net', '-netdev', 'user,id=net',
+                '-device', 'virtio-net-pci,netdev=net,id=hnnet', '-netdev', 'user,id=net',
                 '-serial', f'unix:{self.control_path / "serial.sock"},server=on,wait=off',
                 '-qmp', f'unix:{self.control_path / "qmp.sock"},server=on,wait=off']
         if self.audio:
@@ -114,9 +127,9 @@ class VM:
                 time.sleep(0.1)
         raise TimeoutError(f'QEMU did not expose {name}')
 
-    def monitor(self, name, **arguments):
+    def monitor(self, command, /, **arguments):
         identity = uuid.uuid4().hex
-        self.qmp.sendall((json.dumps({'execute': name, 'arguments': arguments, 'id': identity}) + '\n').encode())
+        self.qmp.sendall((json.dumps({'execute': command, 'arguments': arguments, 'id': identity}) + '\n').encode())
         while True:
             result = json.loads(self.qmp_file.readline())
             if result.get('id') == identity:
@@ -251,6 +264,32 @@ class VM:
         self.monitor('send-key', keys=[{'type': 'qcode', 'data': key} for key in keys], **{'hold-time': 100})
         time.sleep(0.12)  # Release each key, including repeated password characters.
 
+    def click_word(self, name, word):
+        """Locate a visible control in a screenshot and send actual pointer input."""
+        from PIL import Image, ImageOps
+        self.screenshot(name)
+        frame = self.folder / (name + '.png')
+        # Small text against the screen edge needs a margin for OCR. Keep the
+        # original framebuffer and the exact transform so clicks still target
+        # the real control, never a hard-coded or inferred screen location.
+        scale, border = 2, 24
+        ocr_frame = self.folder / (name + '-ocr.png')
+        with Image.open(frame) as image:
+            width, height = image.size
+            readable = ImageOps.invert(image.convert('L')).resize((width * scale, height * scale))
+            ImageOps.expand(readable, border=border, fill=255).save(ocr_frame)
+        words = subprocess.check_output(['tesseract', str(ocr_frame), 'stdout', '--psm', '11', 'tsv'],
+                                        stderr=subprocess.DEVNULL, text=True, timeout=15)
+        (self.folder / (name + '-ocr.txt')).write_text(words)
+        x, y = control_point(words, word, width, height, scale, border)
+        self.monitor('input-send-event', events=[
+            {'type': 'abs', 'data': {'axis': 'x', 'value': x}},
+            {'type': 'abs', 'data': {'axis': 'y', 'value': y}},
+        ])
+        for down in [True, False]:
+            self.monitor('input-send-event', events=[{'type': 'btn', 'data': {'button': 'left', 'down': down}}])
+            time.sleep(.15)
+
     def type_probe(self, text):
         # Send display keyboard events, not hn's CLI input path. Probe commands
         # deliberately need only these unshifted US-layout characters.
@@ -326,6 +365,16 @@ def check_console_fallback(vm, user, folder):
                    'sleep 1; done; exit 1', timeout=75)
         vm.command('! pgrep -u 1000 -x labwc && ! pgrep -u 1000 -x foot')
         vm.command(user('/usr/lib/harness-os/wait-runtime'), timeout=160)
+        # A process attached to tty1 is not yet its command endpoint. During
+        # takeover the named socket can still belong to the departing renderer.
+        # Wait for a reply from this VT's actual client before creating a pane.
+        vm.command(user('sh -c ' + shlex.quote(
+            'for n in $(seq 1 60); do '
+            'p=$(hn display-message -p "#{client_pid}") || p=; '
+            'case "$p" in ""|*[!0-9]*) ;; *) '
+            'if test "$(readlink /proc/$p/fd/0)" = /dev/tty1; then '
+            'printf "HN_CONSOLE_READY=%s\\n" "$p"; exit 0; fi ;; esac; '
+            'sleep .25; done; exit 1')), timeout=75)
         vm.command('kill -0 "$(cat /tmp/hn-survivor.pid)"')
         probe = ('printf "Console input ready\\n"; touch /tmp/hn-console-input-ready; '
                  'read -r answer; test "$answer" = ready && '
@@ -342,6 +391,8 @@ def check_console_fallback(vm, user, folder):
         output, _ = vm.command('cat /home/me/.local/state/harness-os/display.log; '
                                'ps -u 1000 -o pid,ppid,tty,comm; cat /dev/vcs1', check=False)
         (folder / 'console-fallback.log').write_text(output)
+        output, _ = vm.command(user('hn hn-list-clients; hn show-messages'), check=False)
+        (folder / 'console-client.log').write_text(output)
         vm.command('rm -f ' + override + '; systemctl restart getty@tty1.service')
     vm.command(user("sh -c 'for n in $(seq 1 60); do systemctl --user is-active --quiet hn-screen && "
                     "pgrep -x labwc >/dev/null && pgrep -x foot >/dev/null && exit 0; "
@@ -357,17 +408,20 @@ def check_first_use(vm, user, folder):
     vm.command('nmcli networking off')
     version, _ = vm.command(user('/usr/bin/opencode --version'))
     (folder / 'bundled-opencode-version.txt').write_text(version)
-    vm.command('test ! -e /home/me/.config/opencode/opencode.json')
-    vm.keys('t')
+    defaults = json.loads(vm.read_file('/home/me/.config/opencode/opencode.json'))
+    assert not set(defaults) & {'model', 'provider', 'providers'}, 'The image must retain upstream model and provider defaults'
+    assert defaults.get('update') == 'disable', 'The packaged agent must remain managed by system updates'
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Connect to start with an agent" && exit 0; sleep 1; done; exit 1')), timeout=40)
+    vm.screenshot('01a-network-first')
+    vm.keys('ret')
     vm.command('for n in $(seq 1 30); do pgrep -x "nmtui|nmtui-connect" >/dev/null && exit 0; sleep 1; done; exit 1', timeout=40)
     vm.command('! pgrep -u 1000 -x opencode')
     vm.screenshot('01a-try-needs-network')
     vm.keys('esc')
     vm.command('for n in $(seq 1 15); do ! pgrep -x "nmtui|nmtui-connect" >/dev/null && exit 0; sleep 1; done; exit 1', timeout=20)
-    vm.keys('ret')
     vm.command('sleep 1; ! pgrep -u 1000 -x opencode')
-    # Enter is Install, including while the network is disabled.
-    vm.keys('ret')
+    # The OS shortcut needs neither a prefix nor Shift, and works offline.
+    vm.keys('meta_l', 'i')
     vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "All data on this disk will be erased" && exit 0; sleep 1; done; exit 1')), timeout=40)
     vm.screenshot('01b-direct-install-offline')
     vm.keys('esc')
@@ -381,8 +435,7 @@ def check_first_use(vm, user, folder):
     vm.keys('ret')
     vm.command('for n in $(seq 1 15); do ! pgrep -f ' + shlex.quote(installer_process) + ' && exit 0; sleep 1; done; exit 1', timeout=20)
     # New terminal is a shell immediately, without agent/project/task fields.
-    vm.keys('ctrl', 'b')
-    vm.keys('shift', 't')
+    vm.keys('meta_l', 't')
     vm.type_probe('echo terminal-ready')
     vm.keys('ret')
     vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 20); do hn capture-pane -p | grep -qx terminal-ready && exit 0; sleep 1; done; exit 1')), timeout=30)
@@ -409,11 +462,25 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do '
         'hn list-panes -a -F "#{pane_id}" | grep -Fx ' + shlex.quote(pane.group(1)) +
         ' >/dev/null || exit 0; sleep .25; done; exit 1')), timeout=15)
+    vm.monitor('set_link', name='hnnet', up=True)
     vm.command('nmcli networking on; for n in $(seq 1 30); do test "$(nmcli -t -f STATE general)" = connected && exit 0; sleep 1; done; exit 1', timeout=40)
-    vm.keys('t')
     vm.command('for n in $(seq 1 90); do pgrep -u 1000 -x opencode >/dev/null && exit 0; sleep 1; done; exit 1', timeout=100)
     time.sleep(5)
     vm.screenshot('01d-bundled-opencode')
+    # runuser changes the account but retains the serial root shell's cwd.
+    # OpenCode 2 resolves a project through its service; /root is inaccessible
+    # to me. Inspect the same project as the visible agent instead.
+    vm.command(user('sh -c ' + shlex.quote('cd "$HOME/Projects" && /usr/bin/opencode debug config > /tmp/hn-opencode-config.json')), timeout=60)
+    config_sources = vm.read_file('/tmp/hn-opencode-config.json')
+    (folder / 'opencode-config-sources.json').write_bytes(config_sources)
+    # V2 reports configuration sources, not the resolved V1 object. Its
+    # documented global AGENTS.md carries instructions; the real conversation
+    # below independently checks that the agent knows the Harness shortcuts.
+    agent_config = json.loads(config_sources)
+    assert isinstance(agent_config, list) and any(row.get('path') == '/home/me/.config/opencode' for row in agent_config), 'OpenCode did not discover its global configuration'
+    instructions = vm.read_file('/home/me/.config/opencode/AGENTS.md')
+    assert instructions == vm.read_file('/etc/skel/.config/opencode/AGENTS.md'), 'OpenCode global instructions differ from the packaged entry point'
+    assert b'/usr/share/harness-os/guide.md' in instructions, 'OpenCode must discover the current packaged guide'
     vm.command('test ! -e /home/me/.config/opencode/plugin/launcher-register.js && test -s /home/me/.config/opencode/plugins/launcher-register/tui.js')
     screen, _ = vm.command(user('hn capture-pane -p'))
     (folder / 'bundled-opencode-screen.txt').write_text(screen)
@@ -421,6 +488,38 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     output, _ = vm.command(user('hn display-message -p "HN_FIRST_AGENT=#{pane_id}"'))
     agent_pane = re.search(r'HN_FIRST_AGENT=(%\d+)', output)
     assert agent_pane, 'The visible OpenCode must identify its actual pane'
+    vm.keys('meta_l', 'n')
+    time.sleep(1)
+    vm.screenshot('01d-new-harness')
+    vm.keys('esc')
+    vm.keys('meta_l', 'm')
+    time.sleep(1)
+    vm.screenshot('01d-connect-computer')
+    # Fresh USB users are signed out. The connection panel must lead to the
+    # normal local sign-in flow, with a cancellable return to the trial.
+    vm.type_probe('sign in')
+    vm.keys('ret')
+    login_process = '[/]usr/lib/harness/cli.mjs login'
+    vm.command('for n in $(seq 1 20); do pgrep -u 1000 -f ' + shlex.quote(login_process) +
+               ' >/dev/null && exit 0; sleep 1; done; exit 1', timeout=30)
+    time.sleep(2)
+    vm.screenshot('01d-connect-sign-in')
+    vm.keys('ctrl', 'c')
+    vm.command('for n in $(seq 1 20); do ! pgrep -u 1000 -f ' + shlex.quote(login_process) +
+               ' >/dev/null && exit 0; sleep 1; done; exit 1', timeout=30)
+    vm.keys('ret')
+    time.sleep(1)
+    # F10 reaches the dock without consuming the agent's ordinary Tab key.
+    vm.keys('f10')
+    vm.keys('ret')
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "All data on this disk will be erased" && exit 0; sleep 1; done; exit 1')), timeout=40)
+    vm.screenshot('01d-dock-install')
+    vm.keys('esc')
+    time.sleep(1)
+    vm.click_word('01d-mouse-install', 'Install')
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "All data on this disk will be erased" && exit 0; sleep 1; done; exit 1')), timeout=40)
+    vm.command('test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
+    vm.keys('esc')
     # Exercise what a first-time user actually does after choosing Try: type
     # into the visible agent and receive its answer, without a CLI/API shortcut.
     vm.type_probe('what is six times seven reply with digits only')
@@ -433,6 +532,32 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     (folder / 'first-opencode-interactive.txt').write_text(screen)
     vm.screenshot('01e-first-agent-reply')
     assert interactive_status == 0, 'The visible bundled agent must accept keyboard input and display its reply'
+    # The real agent receives the local guide, knows both shortcut layers, and
+    # creates work that the later offline installation must preserve.
+    vm.type_probe('what are the os shortcuts for a new harness and connecting a computer and does ctrl b still work')
+    vm.keys('ret')
+    _, guide_status = vm.command(user('sh -c ' + shlex.quote(
+        'for n in $(seq 1 120); do hn capture-pane -p > /tmp/hn-first-guide.txt; '
+        "grep -Eiq 'super[[:space:]]*\\+[[:space:]]*n' /tmp/hn-first-guide.txt && "
+        "grep -Eiq 'super[[:space:]]*\\+[[:space:]]*m' /tmp/hn-first-guide.txt && exit 0; "
+        'sleep 1; done; exit 1')), timeout=140, check=False)
+    (folder / 'first-agent-guide.txt').write_bytes(vm.read_file('/tmp/hn-first-guide.txt'))
+    vm.screenshot('01f-agent-explains-harness')
+    assert guide_status == 0, 'Bundled OpenCode must explain the actual OS shortcuts from its local guide'
+    vm.type_probe('create a folder named usb-trial in the current folder and an index html page inside it saying hello harness')
+    vm.keys('ret')
+    vm.command('for n in $(seq 1 120); do test -s /home/me/Projects/usb-trial/index.html && '
+               'grep -iq "hello harness" /home/me/Projects/usb-trial/index.html && exit 0; sleep 1; done; exit 1', timeout=140)
+    (folder / 'trial-project.html').write_bytes(vm.read_file('/home/me/Projects/usb-trial/index.html'))
+    vm.screenshot('01g-agent-created-trial-project')
+    # Test the agent-led install entry too. It may open the form; it must never
+    # choose a disk or perform the destructive action from the conversation.
+    vm.type_probe('open the harness installer for me but do not choose a disk or start installation')
+    vm.keys('ret')
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 90); do hn capture-pane -p | grep -q "All data on this disk will be erased" && exit 0; sleep 1; done; exit 1')), timeout=100)
+    vm.command('test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
+    vm.screenshot('01h-agent-opened-installer')
+    vm.keys('esc')
     # No model flag/config, API key, account, or installer. Validate a real
     # upstream-default reply; preserve all events rather than just the exit code.
     prompt = 'What is six times seven? Reply with only the decimal number. Do not use tools.'
@@ -594,6 +719,7 @@ def main():
     user = lambda cmd: 'runuser -u "$(id -nu 1000)" -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus ' + cmd
     try:
         vm.start(live=True)
+        vm.monitor('set_link', name='hnnet', up=False)
         vm.wait(r'root@[^\r\n]*[#] ')
         vm.shell_ready = True
         vm.command('stty -echo')
@@ -640,9 +766,11 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         output, _ = vm.command(user('hn-os measure'))
         (folder / 'live-measurement.txt').write_text(output)
         check_first_use(vm, user, folder)
-        result['checks'].append('USB Enter opens Install offline; Try opens network setup while disconnected; direct terminal accepts physical keyboard input')
+        result['checks'].append('USB opens network setup; Super+i opens Install offline; Super+t opens a terminal without a setup form')
         result['checks'].append('Installer errors remain visible until acknowledged; exiting a direct terminal removes its pane')
         result['checks'].append('USB first agent conversation accepts physical keyboard input and displays the expected reply')
+        result['checks'].append('Bundled OpenCode loads the local TUI guide, explains Super+n/m, creates a trial project, and opens the native installer on request')
+        result['checks'].append('Super+n/m open the agent and machine controls; F10/Enter and an actual pointer click open the install dock action')
         result['checks'].append('Bundled OpenCode starts offline and its upstream-default clean-profile conversation returns the independently checked answer')
         vm.keys('meta_l', 'b')
         vm.command("for n in $(seq 1 45); do pgrep -x chromium >/dev/null && break; sleep 1; done; pgrep -x chromium", timeout=60)
@@ -684,6 +812,8 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
                       username='me', hostname='harness', password='test-password-123',
                       encrypt=args.encrypt, serial_console=True)
         # Installation must work with the NIC down, using the ISO's immutable payload.
+        (folder / 'trial-project.html').write_bytes(vm.read_file('/home/me/Projects/usb-trial/index.html'))
+        vm.command(user('sh -c ' + shlex.quote('mkdir -p "$HOME/.config"; printf trial-only > "$HOME/.config/hn-trial-credential"')))
         vm.command('nmcli networking off')
         install_interactively(vm, config, folder)
         result['checks'].append('Keyboard disk selection, encryption checkbox, masked password entry and a single Install action work on the guest terminal')
@@ -693,6 +823,12 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         vm.start(live=False)
         unlock_delay = 100 if config['encrypt'] else 0
         vm.login_installed(config, unlock_delay=unlock_delay)
+        saved_trial = vm.read_file('/home/me/Projects/usb-trial/index.html')
+        assert saved_trial == (folder / 'trial-project.html').read_bytes(), 'The installed home lost or changed the agent-created trial project'
+        vm.command('test ! -e /home/me/.config/hn-trial-credential && test "$(stat -c %u /home/me/Projects/usb-trial/index.html)" -eq 1000')
+        transfer = json.loads(vm.read_file('/home/me/.local/state/harness-os/trial-projects.json'))
+        assert transfer['entries']['usb-trial/index.html']['sha256'] == hashlib.sha256(saved_trial).hexdigest()
+        result['checks'].append('Agent-created USB trial project survives offline installation and installed boot byte-for-byte')
         result['deliberate_unlock_delay_seconds'] = unlock_delay
         if unlock_delay:
             result['installed_unlock_prompt_seconds'] = vm.unlock_prompt_seconds

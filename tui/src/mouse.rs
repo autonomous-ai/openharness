@@ -230,7 +230,7 @@ fn check(app: &mut App, m: &mut Event, double: bool) -> Option<Key> {
     m.ignore = ignore;
     let lines = app.status_lines();
     m.statuslines = lines;
-    m.statusat = if lines == 0 { -1 } else if app.status_top { 0 } else { app.size.1.saturating_sub(lines) as i32 };
+    m.statusat = if lines == 0 { -1 } else if app.status_top { 0 } else { app.size.1.saturating_sub(lines + crate::os_welcome::dock_height(app)) as i32 };
     (m.ox, m.oy) = app.bar_offset();
     let mut place = None;
     if m.statusat != -1 && (y as i32) >= m.statusat && (y as i32) < m.statusat + lines as i32 {

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Agent requests, compositor keys and the dock all open the same local form.
+set -eu
+[ -f /etc/harness-live ] || { printf '%s\n' 'Installation is available from the Harness USB.' >&2; exit 1; }
+exec hn os-action install

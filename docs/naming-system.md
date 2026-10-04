@@ -89,7 +89,7 @@ task form.
 | Manage a workspace group | **Rename Tab**, **Close Tab**, **Next Tab**, **Previous Tab** |
 | Manage a running harness | **Rename Harness**, **Pause Harness**, **Resume Harness**, **Restart Harness**, **Stop Harness** |
 | Author a reusable Store package | **Create Harness** |
-| Start the bundled agent from the OS welcome | **Start OpenCode** |
+| Start the bundled agent from the installed OS home | **Start OpenCode** |
 | Set up wireless networking | **Connect to Wi-Fi** |
 
 Use the object's own name where possible: **Blender**, **Web Viewer**, or the
@@ -102,8 +102,11 @@ configuration where it affects a decision.
 | --- | --- |
 | Boot and unlock branding | **Harness** |
 | Disk unlock prompt | **Enter your password** |
-| USB welcome primary action | **Install Harness** |
-| USB welcome secondary action | **Try without installing** |
+| USB install action | **Install Harness** |
+| Offline USB action | **Install without connecting** |
+| USB dock invitation | **Make Harness your OS.** |
+| USB dock session label | **Temporary USB** |
+| Connect another execution machine | **Connect a computer** |
 | Installer title | **Install Harness** |
 | Installer fields | **Disk**, **Encryption**, **Password**, **Repeat password** |
 | Installer action | **Install** |
@@ -112,14 +115,22 @@ configuration where it affects a decision.
 | Default account | `me` |
 | Default computer name | `harness` |
 | Default shell identity | `me@harness` |
-| Command equivalent of installation | `sudo harness install` |
-| OS page description | **An operating system built around agents.** |
+| Open installation from a conversation or shell | `harness install` |
+| Direct administrative installation command | `sudo harness install` |
+| OS page description | **A Linux operating system built by agents, for agents.** |
 | Audience description | **Built for programmers first.** |
 
-Installation is directly accessible from the USB welcome. Trying Harness may
-require network setup; offline installation does not. An installed system and
+The USB opens network setup when disconnected, with **Install without connecting**
+always available. Once connected, it opens the bundled agent and keeps the
+installation dock visible. An installed system and
 ordinary hn on macOS or another Linux distribution never show the USB installation
 actions. The `harness install` system command belongs to the OS integration.
+
+Write OS shortcuts with lowercase letters: **Super+n**, **Super+t**, **Super+m**,
+**Super+i**, **Super+w**, **Super+b**, **Super+u**, **Super+l**. They require no Shift
+and no prefix. The existing shared TUI prefix shortcuts remain available; write
+**Ctrl+b, then Shift+n** when that binding requires Shift. Super means the Windows
+key on PC keyboards and the Command key on Mac keyboards running Harness OS.
 
 The terminal and optional browser are the OS's working surfaces. This does not
 replace the desktop app's design system or require every Harness interface to

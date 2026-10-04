@@ -6,7 +6,7 @@
   <desktops><number>1</number><popupTime>0</popupTime></desktops>
   <keyboard>
     <repeatRate>35</repeatRate><repeatDelay>250</repeatDelay>
-    <!-- No default desktop shortcuts. Super+B is run-or-raise, then back to hn. -->
+    <!-- No default desktop shortcuts. Super+b is run-or-raise, then back to hn. -->
     <keybind key="W-b">
       <action name="If">
         <query identifier="chromium*" />
@@ -19,6 +19,26 @@
     <keybind key="W-l"><action name="Execute" command="swaylock -f -c 000000" /></keybind>
     <keybind key="W-u">
       <action name="Execute" command="/usr/lib/harness-os/open-updates" />
+      <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
+    </keybind>
+    <keybind key="W-i">
+      <action name="Execute" command="/usr/lib/harness-os/open-install" />
+      <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
+    </keybind>
+    <keybind key="W-w">
+      <action name="Execute" command="/usr/lib/harness-os/open-wifi" />
+      <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
+    </keybind>
+    <keybind key="W-n">
+      <action name="Execute" command="hn os-action new" />
+      <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
+    </keybind>
+    <keybind key="W-t">
+      <action name="Execute" command="hn os-action terminal" />
+      <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
+    </keybind>
+    <keybind key="W-m">
+      <action name="Execute" command="hn os-action connect" />
       <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
     </keybind>
     <keybind key="XF86MonBrightnessUp"><action name="Execute" command="brightnessctl set +5%" /></keybind>

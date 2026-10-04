@@ -39,6 +39,7 @@ mod modal;
 mod new_harness;
 mod mouse;
 mod options;
+mod os_welcome;
 mod paste;
 mod pane;
 mod pane_frame;

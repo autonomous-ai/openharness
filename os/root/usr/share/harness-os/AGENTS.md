@@ -5,12 +5,12 @@ for the current task, and use terminal output, diffs and tests to review the wor
 Open `hn-browser URL` only when a browser helps. Add tools and services when the
 current task needs them; run extra services on demand unless the task needs them
 persistently. Keep the desktop shell, launcher and panels absent unless the user
-requests that interface. Open a new terminal immediately with Ctrl+B, then T. No agent or project setup
+requests that interface. Open a new terminal immediately with Ctrl+b, then Shift+t. No agent or project setup
 is required.
 
 ## System operations
 
-- `Super+U` opens Updates inside hn; `harness updates` is the shell equivalent.
+- `Super+u` opens Updates inside hn; `harness updates` is the shell equivalent.
   The user timer checks hn and CLI releases and prepares verified downloads.
   Activation is explicit. An hn-only change restarts its screen, keeping terminal
   owners and agents alive. System packages use the separate checkpointed action.
@@ -61,8 +61,8 @@ is required.
 - npm installs into `~/.local`. The initial npm configuration permits the vendor
   install scripts for Claude Code, Codex and OpenCode. When another package needs
   an install script, approve that package explicitly; keep npm's other defaults.
-- `Super+B` opens/focuses Chromium or returns to hn; `Super+Enter` focuses hn;
-  `Super+L` locks the screen. `sudo systemctl poweroff` shuts down cleanly.
+- `Super+b` opens/focuses Chromium or returns to hn; `Super+Enter` focuses hn;
+  `Super+l` locks the screen. `sudo systemctl poweroff` shuts down cleanly.
 - On supported NVIDIA Turing and newer GPUs, including RTX 4090/5090 and RTX 6000
   generations, the LTS-kernel packages are `nvidia-open-lts nvidia-utils`.
   Install both from the same repository snapshot, regenerate initramfs with
