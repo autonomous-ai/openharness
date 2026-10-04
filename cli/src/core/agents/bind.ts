@@ -59,7 +59,7 @@ export interface BindDeps {
   clients: { send(frame: { type: string; payload: Record<string, unknown> }): void }
   attachSession: (session: RegisteredSession, reset?: boolean, replayCursorFromStart?: boolean, replayFromStart?: boolean) => Promise<boolean>
   announceSession: (session: RegisteredSession) => void
-  stoppedAgents: Pick<StoppedAgentStore, 'save' | 'finishResume'>
+  stoppedAgents: Pick<StoppedAgentStore, 'save' | 'finishResume' | 'get'>
   syncRecapPool: () => void
   teams: Pick<SwarmPromptScopes, 'forget'>
   input: Pick<SessionInputController, 'forget'>
@@ -142,7 +142,15 @@ export function createBinding({
     //
     // And only while the file is new (`transcriptIsFirstTurn`): a long session's transcript was born after
     // its agent too, and after a daemon restart its next SessionStart replayed the whole history live.
-    const bornAfterAgent = transcriptIsFirstTurn(
+    //
+    // And never for the conversation a resume put back: its transcript existed before the row did,
+    // whatever its birth says against the row's ORIGINAL `registeredAt`, which a resume keeps. Replaying
+    // it sent the whole first turn out again as live, and a turn the stopped process had left open was
+    // announced as running with nothing left to end it (found end to end: stop in the middle of a first
+    // turn, resume, and the agent read as working for good). A new session started in the agent after
+    // the resume is not this conversation, and is judged like any other.
+    const resumedConversation = !!entry.resumeOnly && stoppedAgents.get(entry.agentId)?.sessionId === entry.sessionId
+    const bornAfterAgent = !resumedConversation && transcriptIsFirstTurn(
       entry,
       entry.transcriptPath ? await statBirthMs(entry.transcriptPath) : 0,
       { rebound: !!meta.rebound, now: Date.now() },

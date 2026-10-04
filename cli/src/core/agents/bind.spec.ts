@@ -62,7 +62,7 @@ function setup(over: Partial<BindDeps> = {}) {
     clients: { send: vi.fn() },
     attachSession: vi.fn(async () => true),
     announceSession: vi.fn(),
-    stoppedAgents: { save: vi.fn(), finishResume: vi.fn() },
+    stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: vi.fn(() => null) },
     syncRecapPool: vi.fn(),
     teams: { forget: vi.fn() },
     input: { forget: vi.fn() },
@@ -166,6 +166,25 @@ describe('binding a registered session to its agent', () => {
     await run.binding.handleRegistered(agent({ transcriptPath: born, registeredAt: Date.now() - 60_000 }), meta())
     await run.binding.handleRegistered(agent({ transcriptPath: join(dir, 'missing.jsonl'), registeredAt: Date.now() - 60_000 }), meta())
     expect(vi.mocked(run.deps.attachSession).mock.calls.map((call) => call[3])).toEqual([true, false])
+  })
+
+  it('never replays the conversation a resume put back, and judges a new session in that agent like any other', async () => {
+    const run = setup()
+    const dir = mkdtempSync(join(tmpdir(), 'core-bind-'))
+    dirs.push(dir)
+    const born = join(dir, 'session.jsonl')
+    writeFileSync(born, '{}\n')
+    // A resume keeps the row's original registeredAt, so the transcript reads as born after its agent.
+    const resumed = agent({ transcriptPath: born, registeredAt: Date.now() - 60_000, resumeOnly: true } as Partial<RegisteredSession>)
+    vi.mocked(run.deps.stoppedAgents.get).mockReturnValue(agent({ sessionId: 's1' }))
+    await run.binding.handleRegistered(resumed, meta())
+    expect(run.deps.stoppedAgents.get).toHaveBeenCalledWith('a1')
+    // `/clear` after the resume: a session the stopped record does not hold.
+    await run.binding.handleRegistered({ ...resumed, sessionId: 's2' }, meta())
+    // A resumed row with no stopped record left to compare against.
+    vi.mocked(run.deps.stoppedAgents.get).mockReturnValue(null)
+    await run.binding.handleRegistered(resumed, meta())
+    expect(vi.mocked(run.deps.attachSession).mock.calls.map((call) => call[3])).toEqual([false, true, true])
   })
 })
 
