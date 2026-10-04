@@ -469,7 +469,7 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     vm.command('for n in $(seq 1 90); do pgrep -u 1000 -x opencode >/dev/null && exit 0; sleep 1; done; exit 1', timeout=100)
     time.sleep(5)
     vm.screenshot('01d-bundled-opencode')
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do test "$(hn list-panes -F "#{pane_id}" | wc -l)" -eq 3 && break; sleep .5; done; hn list-panes -F "#{pane_id}|#{pane_left}|#{pane_top}|#{pane_width}|#{pane_height}|#{pane_pid}" > /tmp/hn-first-panes.txt')))
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do test "$(hn list-panes -F "#{pane_id}" | wc -l)" -eq 3 && break; sleep .5; done; hn list-panes -F "#{pane_id}|#{pane_left}|#{pane_top}|#{pane_width}|#{pane_height}" > /tmp/hn-first-panes.txt')))
     # Serial shell-integration escapes precede the first output line. Read exact
     # file bytes so the first pane is not silently discarded by an anchored regex.
     pane_data = vm.read_file('/tmp/hn-first-panes.txt')
@@ -482,10 +482,16 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     assert int(left[1]) == 1 and right[0][1] == right[1][1] and int(right[1][2]) > int(right[0][2])
     assert abs(int(left[3]) - int(right[0][3])) <= 2, 'First-use columns must be balanced'
     assert abs(int(right[0][4]) - int(right[1][4])) <= 2, 'Right terminals must split their column equally'
-    # The session's original shell path can lag discovery after exec; verify
-    # the working directory of the actual agent process instead of its label.
-    assert left[5].isdigit(), 'The first agent must expose its process identity'
-    vm.command('readlink /proc/' + left[5] + '/cwd > /tmp/hn-first-agent-path.txt')
+    # hn's pane_pid describes remote panes; these local panes are backed by
+    # tmux. Ask that actual backend for the agent PID, then inspect /proc.
+    # The session's original shell path can lag discovery after exec.
+    vm.command(user('tmux list-panes -a -F "#{pane_pid}|#{pane_current_command}"') + ' > /tmp/hn-first-processes.txt')
+    process_data = vm.read_file('/tmp/hn-first-processes.txt')
+    (folder / 'first-use-processes.txt').write_bytes(process_data)
+    agent_pids = [line.split('|')[0] for line in process_data.decode().splitlines()
+                  if re.fullmatch(r'\d+\|opencode', line)]
+    assert len(agent_pids) == 1, 'The trial must have exactly one visible OpenCode process'
+    vm.command('readlink /proc/' + agent_pids[0] + '/cwd > /tmp/hn-first-agent-path.txt')
     agent_path = vm.read_file('/tmp/hn-first-agent-path.txt').decode().strip()
     assert re.fullmatch(r'/home/me/projects/opencode-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}(?:-\d+)*', agent_path), agent_path
     vm.command(user('hn display-message -p "#{E:status-right}"') + ' > /tmp/hn-first-footer.txt')
