@@ -475,6 +475,30 @@ by blindly copying its file.
 it does **not** update the pinned Harness runtime. Preview 4's ISO does not contain
 the small updater; install its separately validated development bundle to add it.
 
+## Native ARM runtime development
+
+`os/tools/build-runtime.sh` builds the same CLI and static hn on native x86-64 or
+aarch64 Linux. Rust's matching `*-unknown-linux-musl` target and native Node are
+required. The output records the clean source commit, release ancestry, CPU/ELF
+architecture, versions and file hashes. Use a fresh `HARNESS_OS_RUNTIME_DIR` to
+retain another build; the default is `os/work/runtime`.
+
+The **Harness OS native runtimes** workflow builds both architectures on separate
+native Linux runners. It runs the existing complete native terminal fixture set,
+then starts the exact bundled daemon with an isolated home and no account. Its
+real hn panes accept PTY input, run upstream-default OpenCode to create a Python
+project, and preserve the shell process/project through daemon restart and screen
+reattachment. Independent checks execute the generated code. Agent packages and
+test dependencies stay on disposable runners; their exact lockfile accompanies
+the receipt.
+
+This establishes a userspace test path, not an ARM operating-system release.
+The PC package builder, installer and public updater still reject ARM payloads.
+Raspberry Pi board boot and Apple Silicon's Asahi kernel, firmware, partitioning,
+graphics and audio integration remain required. An ARM Ubuntu runner does not
+establish compatibility with either device, or with a different distribution's
+packages. Retain that boundary when reporting the workflow's results.
+
 ## Mac support targets
 
 Intel Macs and Apple Silicon are both intended OS targets. They share the Harness

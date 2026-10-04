@@ -69,7 +69,8 @@ class PackageIdentity(unittest.TestCase):
                 (root / name).write_text('runtime fixture')
             (root / 'source.json').write_text(json.dumps(good))
             self.assertEqual(package.validate_runtime(root, 'a' * 40), good)
-            for changes in [{'dirty': True}, {'source_commit': 'b' * 40}, {'target': 'aarch64-apple-darwin'}]:
+            for changes in [{'dirty': True}, {'source_commit': 'b' * 40}, {'target': 'aarch64-apple-darwin'},
+                            {'target': 'aarch64-unknown-linux-musl', 'architecture': 'aarch64'}]:
                 (root / 'source.json').write_text(json.dumps(dict(good, **changes)))
                 with self.subTest(changes=changes), self.assertRaises(ValueError):
                     package.validate_runtime(root, 'a' * 40)
