@@ -109,3 +109,5 @@ export function createAdoption({ bySession, byAgent, stoppedAgents, externalSess
   }
   return { adoptableSession, takeOverWhenIdle, heldBy }
 }
+
+export type Adoption = ReturnType<typeof createAdoption>
