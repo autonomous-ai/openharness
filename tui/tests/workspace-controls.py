@@ -53,6 +53,18 @@ if args[:2] == ['auth', 'status']:
     try: value = json.loads((home / 'account.json').read_text())
     except (FileNotFoundError, ValueError): value = {'loggedIn': False}
     emit(value)
+elif args[:2] == ['remote-password', 'status']:
+    emit({'hasPassword': (home / 'password-set').exists()})
+elif args[:2] in (['remote-password', 'set'], ['remote-password', 'clear']):
+    if args[1] == 'set':
+        secret = sys.stdin.readline().rstrip('\n')
+        if secret != 'fixture pasted password': sys.exit(4)
+        (home / 'password-set').touch()
+    else: (home / 'password-set').unlink(missing_ok=True)
+    with (home / 'machine-actions').open('a') as out: out.write(args[1] + '\n')
+    emit({'ok': True})
+elif args == ['link', 'list']:
+    print('No machines linked yet.')
 elif args and args[0] == 'login':
     record('start')
     if '--qr' in args: emit({'type': 'qr', 'url': 'https://example.test/login/fixture', 'expiresIn': 120})
@@ -161,6 +173,62 @@ def snapshot(name):
 def login_events():
     path = BASE / 'login-events'
     return path.read_text().splitlines() if path.exists() else []
+
+
+def machine_prompt_journey():
+    def actions():
+        path = BASE / 'machine-actions'
+        return path.read_text().splitlines() if path.exists() else []
+
+    def paste_password():
+        raw = b'\x1b[200~fixture pasted password\x1b[201~'
+        tmux('send-keys', '-H', '-t', TARGET, *[f'{b:02x}' for b in raw])
+        shown('•' * len('fixture pasted password'))
+        assert 'fixture pasted password' not in screen()
+
+    hn('devices')
+    shown('Set password…')
+    click_text('Set password…')
+    shown('New remote password')
+    paste_password()
+    # A list click used to become Enter and accept the unfinished password.
+    click_text('Refresh links')
+    shown('New remote password')
+    assert 'Repeat password' not in screen()
+    click_text('Continue')
+    shown('Repeat password')
+    paste_password()
+    click_text('Continue')
+    shown("Set this computer's remote password?")
+    assert not actions()
+    snapshot('machine-password-confirmation')
+    click_text('Cancel')
+    shown('Nothing changed')
+    assert not actions() and 'fixture pasted password' not in screen()
+
+    click_text('Set password…')
+    paste_password()
+    click_text('Continue')
+    paste_password()
+    click_text('Continue')
+    click_text(' Yes ')
+    wait(lambda: actions() == ['set'], 'one explicitly confirmed password write')
+    shown('Clear password…')
+    click_text('Clear password…')
+    shown('Prevent new links')
+    for cols, rows in [(80, 24), (40, 12)]:
+        tmux('resize-window', '-t', 'test', '-x', str(cols), '-y', str(rows))
+        wait(lambda: value('#{client_width}x#{client_height}') == f'{cols}x{rows}', 'client follows terminal resize')
+        shown('Prevent new links')
+        shown(' Cancel ')
+        shown(' Yes ')
+        snapshot(f'machine-confirmation-{cols}x{rows}')
+    click_text('Cancel')
+    assert actions() == ['set']
+    keys('Escape')
+    tmux('resize-window', '-t', 'test', '-x', '170', '-y', '44')
+    shown('Alpha task terminal')
+    print('PASS workspace: machine prompts accept mouse confirmation, protect pasted passwords, cancel and resize', flush=True)
 
 
 def placement_restart_journey(command, alpha):
@@ -339,6 +407,9 @@ try:
     alpha, beta = panes
     workspace = value('#{window_id}')
     snapshot('workspace')
+    if '--machine-prompts' in sys.argv:
+        machine_prompt_journey()
+        sys.exit(0)
     if '--placement-restart' in sys.argv:
         placement_restart_journey(command, alpha)
         sys.exit(0)
@@ -353,6 +424,8 @@ try:
         api({'action': 'terminal-mouse'})
         title_drag_journey(alpha, beta)
         sys.exit(0)
+
+    machine_prompt_journey()
 
     # Local use is complete before any sign-in. The tiny footer entry explains the benefit,
     # then lets the user return without starting an authentication request.

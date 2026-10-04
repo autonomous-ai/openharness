@@ -268,8 +268,9 @@ fn on_paste(app: &mut App, text: String) {
     else { send_to_focused(app, text.into_bytes()) }
 }
 
-/// A foreground creation editor owns paste, including the tmux paste-buffer binding.
+/// Foreground editors own paste, including the tmux paste-buffer binding.
 pub(crate) fn paste_form(app: &mut App, text: &str) -> bool {
+    if crate::devices::paste(app, text) { return true }
     if let Some(Modal::NewHarness(form)) = &mut app.modal {
         crate::new_harness::paste(form, text);
         true
@@ -319,6 +320,7 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
     if matches!(app.modal, Some(Modal::NewHarness(_))) { return crate::new_harness::mouse(app, mouse) }
     // --no-mouse: a list the mouse does nothing to.
     if theme::fzf_opts().no_mouse && matches!(app.modal, Some(Modal::Picker { .. })) { return }
+    if crate::devices::mouse(app, mouse) { return }
     let inside = |r: ratatui::layout::Rect| mouse.column >= r.x && mouse.column < r.x + r.width && mouse.row >= r.y && mouse.row < r.y + r.height;
     let (list, preview) = match &app.modal { Some(Modal::Picker { picker, .. }) => (picker.list_area.get(), picker.preview_area.get().filter(|_| picker.preview)), _ => (Default::default(), None) };
     let in_preview = preview.map(|(r, _)| inside(r)).unwrap_or(false);
