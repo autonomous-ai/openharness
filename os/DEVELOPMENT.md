@@ -5,9 +5,9 @@ boot changes. Reflashing is a release/install test, not the intended way to try
 every interface fix. Keep the development tools on the build/test host; the
 installed OS keeps the same minimal interface.
 
-This plan was recorded on October 3, 2026. Preview 7 and its small bootstrap bundle
-and update channel are published. Its native upgrade from preview 6 passed; earlier
-preview 6 coverage includes upgrades from previews 4 and 5. Remote-launcher argument
+Preview 10, its small update bundle, and the installed system update channel are
+published. Its native upgrade from preview 9 passed; earlier preview 6 coverage
+includes upgrades from previews 4 and 5. Remote-launcher argument
 tests passed but remote display/SSH interaction is still unverified.
 
 ## Next release priorities
@@ -227,7 +227,7 @@ OS windows use hn's local session storage (`HARNESS_TUI_DESK=off`), so their
 layout and pane references survive reconnects without signing into the cloud.
 This setting is confined to the OS launcher; ordinary hn installs are unchanged.
 
-`Update ready · Super+u` appears in the bottom bar. Super+u opens the keyboard
+The installed system keeps hn's standard status bar. Super+u opens the keyboard
 update action (Ctrl+b, Shift+u remains an alias). Enter applies the prepared
 runtime through a transient user service. An hn-only change reconnects just the
 screen; a CLI change also restarts its supervised service. Failure restores the

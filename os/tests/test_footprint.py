@@ -1,5 +1,5 @@
 import unittest
-from footprint_guest import cpu, cpu_busy, memory, package_fields
+from footprint_guest import cpu, cpu_busy, memory, package_fields, package_row
 
 
 class FootprintCounters(unittest.TestCase):
@@ -26,6 +26,18 @@ class FootprintCounters(unittest.TestCase):
         self.assertEqual(result['DEPENDS'], ['libc', 'other>=2'])
         self.assertEqual(result['SIZE'], ['12345'])
         self.assertEqual(result['REASON'], ['1'])
+
+    def test_optional_size_does_not_invent_zero_byte_savings(self):
+        result = package_row('%NAME%\nbase\n\n%VERSION%\n3-1\n\n%DEPENDS%\nsystemd\n')
+        self.assertIsNone(result['uncompressed_bytes'])
+        self.assertEqual(result['size_status'], 'not recorded')
+        self.assertTrue(result['explicit'])
+
+    def test_recorded_zero_and_negative_size_are_distinct(self):
+        text = '%NAME%\nexample\n\n%VERSION%\n1-1\n\n%SIZE%\n'
+        self.assertEqual(package_row(text + '0\n')['uncompressed_bytes'], 0)
+        with self.assertRaises(ValueError):
+            package_row(text + '-1\n')
 
 
 if __name__ == '__main__':

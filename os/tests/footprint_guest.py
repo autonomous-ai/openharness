@@ -70,15 +70,28 @@ def package_fields(text):
     return result
 
 
+def package_row(text):
+    value = package_fields(text)
+    # SIZE is optional (notably for metapackages). Preserve an absent value as
+    # unrecorded rather than inventing measured savings or rejecting the sample.
+    # https://man.archlinux.org/man/alpm-db-desc.5.en#%SIZE%
+    size = int(value['SIZE'][0]) if value.get('SIZE') else None
+    if size is not None and size < 0:
+        raise ValueError('Negative installed package size')
+    row = dict(name=value['NAME'][0], version=value['VERSION'][0],
+               uncompressed_bytes=size, explicit=value.get('REASON', ['0']) == ['0'],
+               depends=value.get('DEPENDS', []))
+    if size is None:
+        row.update(size_status='not recorded', database_fields=sorted(value))
+    return row
+
+
 def inventory():
     packages = []
     for path in Path('/var/lib/pacman/local').glob('*/desc'):
-        value = package_fields(path.read_text())
-        packages.append(dict(name=value['NAME'][0], version=value['VERSION'][0],
-                             uncompressed_bytes=int(value['SIZE'][0]),
-                             explicit=value.get('REASON', ['0']) == ['0'],
-                             depends=value.get('DEPENDS', [])))
-    packages.sort(key=lambda row: row['uncompressed_bytes'], reverse=True)
+        packages.append(package_row(path.read_text()))
+    packages.sort(key=lambda row: (row['uncompressed_bytes'] is None,
+                                   -(row['uncompressed_bytes'] or 0), row['name']))
     usage = os.statvfs('/')
     directories = subprocess.run(['du', '-x', '-B1', '-d', '2', '/usr', '/var', '/opt'],
                                  capture_output=True, text=True, timeout=120, check=True).stdout
