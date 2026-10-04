@@ -72,8 +72,10 @@ def exercise(vm, fixture, host_url):
     vm.command('hn show-options -gv status-right > /tmp/fast-footer.txt')
     footer = vm.read_file('/tmp/fast-footer.txt').decode()
     assert 'local_machine' in footer and '%H:%M' in footer and '@harness-update' not in footer, footer
-    vm.keys('meta_l', 'u')
-    wait_text(vm, 'an update is ready', 'fast-01-ready')
+    # Opening the command screen permits inspection without starting an update.
+    # The OS shortcut itself is the user's request to apply it immediately.
+    vm.command("hn new-window -n Updates '/usr/bin/harness updates'")
+    wait_text(vm, 'update available', 'fast-01-ready')
     vm.keys('esc')
     # Closing the shell is asynchronous. The OS shortcut reuses a named Updates
     # window, so reopening before its removal can select the closing window and
@@ -104,11 +106,13 @@ assert (root/'heartbeat').stat().st_mtime_ns != before
                    ' ~/projects/session-probe/input && exit 0; sleep .1; done; exit 1')
         vm.screenshot(name + '-accepted-input')
 
-    def activate(expect_failure=False):
-        vm.keys('meta_l', 'u')
-        # After a failed activation the same screen offers a retry.
-        wait_text(vm, 'system updates', 'fast-02-update-action')
-        vm.keys('ret')
+    def activate(expect_failure=False, mouse=False):
+        if mouse:
+            vm.command("hn select-window -t Updates || hn new-window -n Updates '/usr/bin/harness updates'")
+            wait_text(vm, 'update available', 'fast-02-update-action')
+            vm.click_word('fast-02-click-update', 'Update')
+        else:
+            vm.keys('meta_l', 'u')
         condition = ('grep -q ' + shlex.quote('"status": "failed"') + ' ' + state + '/transaction.json' if expect_failure else
                      'test ! -e ' + state + '/ready.json && test -s ' + state + '/applied.json')
         vm.command('for n in $(seq 1 120); do ' + condition + ' && systemctl --user is-active --quiet hn-screen && exit 0; sleep .5; done; '
@@ -126,18 +130,18 @@ assert (root/'heartbeat').stat().st_mtime_ns != before
     checks.append('A real new-screen start failure restores the previous binary and visible tabs while the same agent and terminal remain alive')
     vm.command('rm ~/.config/systemd/user/hn-screen.service.d/fixture.conf; systemctl --user daemon-reload')
 
-    activate()
+    activate(mouse=True)
     vm.command('hn --version | grep -F "999.0.1"')
     vm.command('test "$(systemctl --user show harness-daemon -p MainPID --value)" = "$(cat /tmp/fast-original-daemon)"')
     alive('hn-update')
-    checks.append('Super+U and Enter activate the real new hn binary; daemon PID, live OpenCode, terminal PID, keyboard input and boot ID survive')
+    checks.append('Clicking Update activates the real new hn binary with no confirmation; daemon PID, live OpenCode, terminal PID, keyboard input and boot ID survive')
     # Add a CLI release through the same channel, independently of hn's version.
     vm.command('harness updates check --feeds /tmp/fast-updates/feeds-both.json', timeout=90)
     activate()
     vm.command('test "$(harness version)" = 999.0.1')
     vm.command('test "$(systemctl --user show harness-daemon -p MainPID --value)" != "$(cat /tmp/fast-original-daemon)"')
     alive('cli-update')
-    checks.append('A separate CLI release restarts its supervised service while the same OpenCode and terminal processes remain alive')
+    checks.append('Super+u alone activates a separate CLI release while the same OpenCode and terminal processes remain alive')
     vm.command('systemd-run --user --collect --unit=harness-test-rollback /usr/bin/python3 /usr/lib/harness-os/live_update.py rollback')
     vm.command('for n in $(seq 1 120); do test "$(harness version)" != 999.0.1 && '
                'systemctl --user is-active --quiet hn-screen && exit 0; sleep .5; done; exit 1', timeout=90)

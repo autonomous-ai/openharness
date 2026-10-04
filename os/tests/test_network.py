@@ -20,14 +20,18 @@ WIFI = dict(ssid='a:network', device='wlan0', security='WPA2', active=False, sig
 class Screen:
     def __init__(self, keys):
         self.keys, self.lines = iter(keys), []
+        self.size, self.frames, self.current = (24, 80), [], []
     def keypad(self, value): pass
     def timeout(self, value): pass
-    def refresh(self): pass
-    def erase(self): pass
+    def refresh(self): self.frames.append(list(self.current))
+    def erase(self): self.current = []
     def move(self, *args): pass
-    def getmaxyx(self): return 24, 80
+    def getmaxyx(self): return self.size
     def get_wch(self): return next(self.keys)
-    def addnstr(self, row, column, text, width, style): self.lines.append((row, text.rstrip()))
+    def addnstr(self, row, column, text, width, style):
+        assert 0 <= row < self.size[0] and 0 <= column < self.size[1] and column + width < self.size[1]
+        self.lines.append((row, text.rstrip()))
+        self.current.append((row, column, text, style))
 
 
 class Network(unittest.TestCase):
@@ -111,6 +115,24 @@ class Network(unittest.TestCase):
         with patch.object(network, 'connected', return_value=True), patch.object(network, 'scan') as scan:
             self.assertEqual(page.run(), 0)
             scan.assert_not_called()
+
+    def test_crowded_scan_scrolls_to_last_network_and_keeps_escape_reachable(self):
+        for size in [(24, 54), (45, 160)]:
+            screen, page = self.page([], live=False)
+            screen.size = size
+            networks = [dict(WIFI, ssid=f'network-{i:02}') for i in range(23)]
+            # 23 networks, Rescan, Ethernet, Set up later. Move directly to the
+            # last network, escape its password, then wrap to Set up later.
+            screen.keys = iter([curses.KEY_DOWN] * 22 + ['\n', '\x1b', curses.KEY_DOWN, curses.KEY_DOWN, curses.KEY_DOWN, '\n'])
+            with patch.object(network, 'scan', return_value=networks), patch.object(network, 'connect', return_value=False) as connect:
+                self.assertEqual(page.run(), network.OFFLINE)
+                self.assertEqual(connect.call_args.args[0]['ssid'], 'network-22')
+            for frame in screen.frames:
+                names = [text for _, _, text, _ in frame if text.startswith('network-')]
+                self.assertLessEqual(len(names), 10)
+                if names:
+                    self.assertTrue(any('Rescan' in text for _, _, text, _ in frame))
+                    self.assertTrue(any('Set up later' in text for _, _, text, _ in frame))
 
     def test_open_network_failure_does_not_ask_for_a_nonexistent_password(self):
         screen, page = self.page(['\n', 'i'])

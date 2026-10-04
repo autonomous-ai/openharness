@@ -119,7 +119,7 @@ disk. Changing the account password later does not change the disk password.
 There is no cloud account that resets the disk password.
 
 First boot opens OpenCode on the left and two terminal panes on the right.
-If disconnected, Wi-Fi opens first; you can connect or continue offline.
+If disconnected, Wi-Fi opens first; you can connect or choose **Set up later**.
 Subsequent launches restore your existing work. **Super+w** opens network setup from any
 pane. Ethernet connects automatically when available.
 
@@ -143,7 +143,7 @@ the next key. A capital letter in a prefix binding means Shift + letter.
 | Super+b | Open/focus Chromium, or return to Harness |
 | Super+Enter | Focus Harness |
 | Super+l | Lock; unlock with the account password |
-| Super+u | Updates |
+| Super+u | Update Harness |
 | `hn-browser http://localhost:3000` | Open a local project in the browser |
 | `sudo systemctl poweroff` | Shut down |
 
@@ -152,26 +152,23 @@ install the tools the project needs. Save work under `~/projects`.
 
 ## 8. Updates
 
-Press **Super+u** to see available hn, CLI and system updates. New hn/CLI
-releases download in the background; press Enter in Updates to apply a ready runtime.
-The screen reconnects; your running agents and terminal processes remain.
-Use **r** in Updates to restore the previous runtime if needed.
+Press **Super+u** to update. The **Update** button in `harness updates` does the
+same thing with a mouse. No confirmation or password is needed. New hn/CLI
+releases download in the background; applying them reconnects the screen while
+running agents and terminals stay alive.
 
-System updates use **s** in the same screen and ask for your account password.
-They retain a recovery checkpoint and rebuild the boot image. When the screen
-offers **Restart now**, save your work and press Enter when ready. Downloads do
-not restart the computer, and routine updates do not require another USB flash.
+System updates retain a recovery checkpoint. If a restart is needed, keep
+working and choose **Restart** when ready. **Done** leaves the computer running.
+The approved update finishes any remaining runtime release after reboot.
+Routine updates do not need another USB flash.
 
-Preview 5 through 10 can receive preview 11 through **Super+u**, then **s**.
-It includes the new network page, first-use workspace, lowercase project folders,
-and the fix preventing older public CLI releases from replacing the bundled
-OpenCode compatibility code. Running work is preserved; save before restarting.
-No reinstallation or USB flash is needed for these installed-system changes.
+Preview 5 through 11 still use their old update screen to install this change:
+**Super+u**, then **s**, then the account password. After restarting, the simpler
+control is available. Projects are preserved.
 
-Preview 11 boots the USB directly into installation. Wi-Fi setup happens after
-booting the installed system and advances into OpenCode and two terminals.
-USB startup changes require flashing the new ISO; existing installations keep
-their projects and receive system changes through Updates.
+The USB starts installation directly. Wi-Fi setup runs after the first installed
+boot and advances into OpenCode and two terminals. USB installer changes need a
+new ISO; existing computers receive installed-system changes through Updates.
 
 Preview 4 needs the 7.2 MB [preview 7 bootstrap bundle](https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.7/harness-update-0.1.0-preview.7-47872670a-x86_64.zip)
 once. Verify and extract that bundle, open a terminal in its folder, and run:

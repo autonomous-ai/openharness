@@ -1,4 +1,5 @@
 import hashlib
+import curses
 import fcntl
 import importlib.util
 import json
@@ -26,6 +27,7 @@ class FastUpdates(unittest.TestCase):
             (self.bundled / name).write_bytes(('old ' + name).encode())
         self.patches = [patch.object(update, 'STATE', self.state), patch.object(update, 'BUNDLED', self.bundled),
                         patch.object(update, 'BASE_ID', self.base),
+                        patch.object(update, 'BOOT_ID', self.root / 'boot-id'),
                         patch.object(update, 'RESTART_REQUIRED', self.root / 'restart-required'),
                         patch.object(update, 'SYSTEM_LOCK', self.root / 'system.lock'),
                         patch.object(update, 'check_system', return_value={}),
@@ -34,6 +36,7 @@ class FastUpdates(unittest.TestCase):
         for item in self.patches:
             item.start()
             self.addCleanup(item.stop)
+        update.BOOT_ID.write_text('first-boot')
 
     def versions(self, folder):
         return {component: '1.1.0' if (folder / name).read_bytes().startswith(b'new') else '1.0.0'
@@ -228,6 +231,85 @@ class FastUpdates(unittest.TestCase):
         with update.locked():
             update.prune()
         self.assertTrue(old_runtime.is_dir())
+
+    def show(self, keys, mouse=None):
+        class Window:
+            def __init__(self): self.drawn, self.keys = [], iter(keys)
+            def keypad(self, _): pass
+            def timeout(self, _): pass
+            def getmaxyx(self): return 30, 90
+            def erase(self): self.drawn.clear()
+            def refresh(self): pass
+            def addnstr(self, row, col, text, length, style): self.drawn.append((row, col, text[:length]))
+            def getch(self): return next(self.keys)
+        window = Window()
+        def event():
+            row, col, text = next(item for item in window.drawn if item[2] == '[ Update ]')
+            return 0, col + (2 if mouse == 'inside' else len(text) + 1), row, 0, curses.BUTTON1_CLICKED
+        with patch.object(update.curses, 'curs_set'), patch.object(update.curses, 'has_colors', return_value=False), \
+             patch.object(update.curses, 'mousemask'), patch.object(update.curses, 'mouseinterval'), \
+             patch.object(update.curses, 'getmouse', side_effect=event):
+            return update.screen(window)
+
+    def test_update_button_click_and_keyboard_use_the_same_action_without_a_confirmation(self):
+        with self.feed(): update.check()
+        self.assertEqual(self.show([10]), 'update')
+        self.assertEqual(self.show([curses.KEY_MOUSE], mouse='inside'), 'update')
+        self.assertIsNone(self.show([curses.KEY_MOUSE, 27], mouse='outside'))
+        self.assertIsNone(self.show([27]))
+        self.assertEqual(update.selected(), self.bundled)
+
+    def test_shortcut_request_starts_update_without_waiting_for_a_key(self):
+        with self.feed(): update.check()
+        update.write(self.state / 'request.json', {'requested_at': 1})
+        self.assertEqual(self.show([]), 'update')
+        self.assertFalse((self.state / 'request.json').exists())
+
+    def test_restart_is_never_the_default_action_or_triggered_by_update_shortcut(self):
+        self.state.mkdir()
+        update.RESTART_REQUIRED.write_text('{"status":"ready"}')
+        update.write(self.state / 'request.json', {'requested_at': 1})
+        self.assertIsNone(self.show([10]))
+        self.assertEqual(self.show([curses.KEY_RIGHT, 10]), 'reboot')
+
+    def test_one_action_uses_exact_passwordless_system_command_and_defers_runtime_until_reboot(self):
+        with self.feed(): update.check()
+        update.write(self.state / 'system.json', {'available': True})
+        def system(args, **kwargs):
+            self.assertEqual(args, ['sudo', '-n', '/usr/bin/harness', 'upgrade'])
+            self.assertTrue(kwargs['check'])
+            update.RESTART_REQUIRED.write_text('{"status":"ready"}')
+        with patch.object(update.subprocess, 'run', side_effect=system), patch.object(update, 'apply') as apply:
+            update.update_all()
+            update.finish_approved_update()
+            apply.assert_not_called()
+        self.assertEqual(update.read(self.state / 'approved.json')['status'], 'after-reboot')
+        update.RESTART_REQUIRED.unlink()
+        update.BOOT_ID.write_text('second-boot')
+        with patch.object(update, 'restart') as restart:
+            update.finish_approved_update()
+            self.assertEqual(restart.call_count, 1)
+            update.finish_approved_update()
+            self.assertEqual(restart.call_count, 1)
+        self.assertFalse((self.state / 'approved.json').exists())
+
+    def test_failed_privileged_update_does_not_authorize_later_activation(self):
+        self.state.mkdir()
+        update.write(self.state / 'system.json', {'available': True})
+        with patch.object(update.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'sudo')):
+            with self.assertRaises(subprocess.CalledProcessError): update.update_all()
+        self.assertFalse((self.state / 'approved.json').exists())
+
+    def test_later_timer_cannot_activate_without_a_request_or_after_base_changes(self):
+        with self.feed(): update.check()
+        with patch.object(update, 'apply') as apply:
+            update.finish_approved_update()
+            apply.assert_not_called()
+        update.write(self.state / 'approved.json', {'status':'after-reboot', 'boot_id':'earlier', 'base_sha256':'changed'})
+        with patch.object(update, 'apply') as apply, self.assertRaisesRegex(ValueError, 'system changed'):
+            update.finish_approved_update()
+        apply.assert_not_called()
+        self.assertEqual(update.read(self.state / 'approved.json')['status'], 'failed')
 
 
 if __name__ == '__main__':

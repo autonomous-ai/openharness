@@ -293,11 +293,14 @@ class VM:
 
     def type_probe(self, text):
         # Send display keyboard events, not hn's CLI input path. Probe commands
-        # deliberately need only these unshifted US-layout characters.
-        if not re.fullmatch(r'[a-z0-9 -]+', text):
+        # use this bounded US-layout set, including browser URL punctuation.
+        if not re.fullmatch(r'[a-z0-9 .:/-]+', text):
             raise ValueError('Keyboard probe contains unsupported characters.')
         for char in text:
-            self.keys({' ': 'spc', '-': 'minus'}.get(char, char))
+            if char == ':':
+                self.keys('shift', 'semicolon')
+            else:
+                self.keys({' ': 'spc', '-': 'minus', '.': 'dot', '/': 'slash'}.get(char, char))
 
     def stop(self):
         if self.process and self.process.poll() is None:

@@ -170,27 +170,36 @@ class NetworkPage:
         except curses.error:
             pass
 
-    def line(self, row, text, selected=False, accent=False):
+    def line(self, row, text, selected=False, accent=False, offset=0, span=None):
         height, width = self.screen.getmaxyx()
-        if 0 <= row < height - 1 and width > 3:
-            self.screen.addnstr(row, self.left, fit(text, self.width), self.width,
+        row += self.top
+        length = self.width - offset if span is None else min(span, self.width - offset)
+        if 0 <= row < height - 1 and width > 3 and length > 0:
+            self.screen.addnstr(row, self.left + offset, fit(text, length), length,
                                 curses.A_REVERSE if selected else self.accent if accent else curses.A_NORMAL)
+
+    def button(self, row, text, selected=False):
+        label = '[ ' + text + ' ]'
+        self.line(row, label, selected, offset=max(0, (self.width - len(label)) // 2), span=len(label))
 
     def begin(self):
         self.screen.erase()
         height, width = self.screen.getmaxyx()
-        self.width = max(1, min(64, width - 4))
+        self.width = max(1, min(50, width - 4))
         self.left = max(0, (width - self.width) // 2)
+        # Leave generous space on a laptop display while retaining room for the
+        # form on a 24-row terminal. All pages share this same text column.
+        self.top = max(1, (height - 26) // 2)
         for row, text in enumerate(WORDMARK):
-            self.line(row + 1, text.center(self.width), accent=True)
+            self.line(row, text.center(self.width), accent=True)
         if self.first_use:
-            self.line(4, 'The operating system built by agents, for agents.'.center(self.width))
-        self.line(7, 'Connect to Wi-Fi to get started' if self.first_use else 'Connect to Wi-Fi')
+            self.line(3, 'The operating system built by agents, for agents.'.center(self.width))
+        self.line(6, 'Connect to Wi-Fi to get started' if self.first_use else 'Connect to Wi-Fi')
         return height
 
     def refresh(self):
         self.begin()
-        self.line(9, 'Finding Wi-Fi…')
+        self.line(8, 'Finding Wi-Fi…')
         self.screen.refresh()
         self.message = ''
         try:
@@ -209,14 +218,17 @@ class NetworkPage:
         value, error = '', ''
         while True:
             height = self.begin()
-            self.line(8, clean(network['ssid']))
-            self.line(10, 'Password  ' + '*' * min(len(value), self.width - 11))
+            self.line(8, 'Network     ' + clean(network['ssid']))
+            self.line(10, 'Password', span=12)
+            capacity = max(1, self.width - 14)
+            self.line(10, '[' + ('*' * min(len(value), capacity)).ljust(capacity) + ']',
+                      selected=True, offset=12)
             self.line(12, error)
-            self.line(14, 'Connect'.center(self.width), True)
+            self.button(14, 'Connect')
             try:
                 curses.curs_set(1)
-                if height > 11:
-                    self.screen.move(10, self.left + min(10 + len(value), self.width - 1))
+                if height > self.top + 11:
+                    self.screen.move(self.top + 10, self.left + min(13 + len(value), self.width - 2))
             except curses.error:
                 pass
             self.screen.refresh()
@@ -262,22 +274,24 @@ class NetworkPage:
                 curses.curs_set(0)
             except curses.error:
                 pass
-            # Keep the offline route visible even in a crowded Wi-Fi scan.
-            listed = rows[:-1] if self.first_use else rows
-            visible = max(1, height - (13 if self.first_use else 11))
-            offset = max(0, min(self.selected, len(listed) - 1) - visible + 1)
-            for index, (kind, value) in enumerate(listed[offset:offset + visible], start=offset):
-                if kind == 'wifi':
-                    label = value['ssid'] + ('  Connected' if value['active'] else f"  {value['signal']}%")
-                elif kind == 'wired':
-                    label = 'Ethernet  ' + value[0]
-                else:
-                    label = '[ Rescan ]'
-                self.line(9 + index - offset, label, index == self.selected)
+            # Scroll networks only. Rescan, Ethernet and the offline escape stay
+            # below the list, even when a scan finds dozens of access points.
+            visible = max(1, min(10, height - self.top - 14 - len(self.wired) - (2 if self.first_use else 0)))
+            offset = max(0, min(self.selected, len(self.networks) - 1) - visible + 1)
+            networks = self.networks[offset:offset + visible]
+            for index, value in enumerate(networks, start=offset):
+                signal = 'Connected' if value['active'] else f"{value['signal']}%"
+                label = fit(value['ssid'], self.width - len(signal) - 2) + '  ' + signal
+                self.line(8 + index - offset, label, index == self.selected)
+            bottom = 9 + max(1, len(networks))
+            self.button(bottom, 'Rescan', self.selected == len(self.networks))
+            for index, device in enumerate(self.wired):
+                self.line(bottom + 2 + index, 'Ethernet  ' + device[0],
+                          self.selected == len(self.networks) + 1 + index)
             if self.first_use:
-                self.line(height - 4, '[ Install without connecting ]' if self.live else '[ Continue offline ]',
-                          self.selected == len(rows) - 1)
-            self.line(height - 2, self.message or ('' if self.networks else 'No Wi-Fi networks found. Rescan or use Ethernet.'))
+                self.button(bottom + 3 + len(self.wired), 'Install without connecting' if self.live else 'Set up later',
+                            self.selected == len(rows) - 1)
+            self.line(height - self.top - 2, self.message or ('' if self.networks else 'No Wi-Fi networks found. Rescan or use Ethernet.'))
             self.screen.refresh()
             try:
                 key = self.screen.get_wch()
