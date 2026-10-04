@@ -174,6 +174,7 @@ import { Watcher, type HistoryEvent, type LineEvent, type RewrittenEvent, type T
 import { chooseHookAgent, startHookServer } from './hookServer.js'
 import { connectToMaster } from './harnessd/coreLink.js'
 import { createTerminalControl } from './core/terminals/control.js'
+import { createAgentEvents } from './core/agents/events.js'
 import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
@@ -1826,39 +1827,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // NB: hooks are installed AFTER the hook server binds (below), with the port it actually got — the
   // server may fall back to a free port if env.PORT is taken, and the hooks must point at the real one.
 
-  const syncSession = createSessionSync({
+  // Telling the app and the dial about agents (core/agents/events.ts). The socket is read when each
+  // frame goes out: until it exists, frames are dropped, and start-up announces every agent again.
+  const agentEvents = createAgentEvents({
+    sink: () => backendRef,
     terminalAvailable: (agentId) => registry.terminalAvailable(agentId),
+    resolve: (target) => registry.resolve(target),
+    stopped: (agentId) => stoppedAgents.get(agentId),
     project: (s) => projectFrame(s, runtimeProfiles.selectedModel(s)),
-    send: (frame) => backendRef?.send(frame),
-    sendCommander: (frame) => backendRef?.sendCommander(frame),
-    warn: (err) => console.error('[cli] announceSession failed:', err instanceof Error ? err.message : err),
   })
-  const announceRename = (s: RegisteredSession, opts: { device?: boolean } = {}): void => {
-    if (isTerminalEngine(s.engine)) opts = { ...opts, device: false }
-    const name = projectDisplayName(s)
-    backendRef?.send({ type: 'agent_renamed', payload: { agentId: s.agentId, name, engine: s.engine } })
-    if (opts.device !== false) backendRef?.sendCommander({ type: 'agent_renamed', payload: { agentId: s.agentId, name, engine: s.engine } })
-  }
-  agentTokenUsage.onChanged = (target) => {
-    const current = registry.resolve(target.agentId)
-    if (current?.sessionId === target.sessionId && current.engine === target.engine) {
-      if (registry.terminalAvailable(current.agentId)) syncSession(current, { device: false })
-      return
-    }
-    try {
-      const saved = stoppedAgents.get(target.agentId)
-      if (saved?.sessionId === target.sessionId && saved.engine === target.engine) {
-        void backendRef?.publishStoppedAgent(saved).catch(() => {})
-      }
-    } catch { /* A concurrently removed archive has nothing to update. */ }
-  }
-  // New process observations, session bindings, runtime-profile changes, reconnects and periodic
-  // reconciliation refresh web and device from the same authoritative snapshot. Device agent_synced is
-  // idempotent and can upsert a sessionless tile, so re-announcing at bind is both safe and necessary.
-  const announceSession = (s: RegisteredSession, opts: { device?: boolean } = {}): void => {
-    syncSession(s, opts)
-    announceRename(s, opts)
-  }
+  const syncSession = agentEvents.syncSession
+  const announceRename = agentEvents.announceRename
+  agentTokenUsage.onChanged = agentEvents.onTokenUsageChanged
+  const announceSession = agentEvents.announceSession
 
   // ── Domain-specific harness companions ──────────────────────────────────────────────────────────
   // A DSH agent has two things beside its pane that the daemon owns for as long as the agent exists:
