@@ -35,6 +35,7 @@ import type { RuntimeField, RuntimeProfileManager } from '../../lib/runtimeProfi
 import { tailFile } from '../../lib/transcriptTail.js'
 import type { TailHold, Watcher } from '../../watcher/watcher.js'
 import type { SessionNormalizers } from './normalizers.js'
+import type { RelaunchMarks } from './relaunch.js'
 
 export interface AttachDeps {
   validateTerminal: (session: RegisteredSession) => Promise<boolean>
@@ -57,11 +58,13 @@ export interface AttachDeps {
   hermesDb: (session: RegisteredSession) => Promise<string>
   /** How many sessions attach at once. */
   concurrency: number
+  /** Where an engine's writing became live again after a relaunch (core/transcripts/relaunch.ts): the fold stops there. */
+  relaunchMarks?: Pick<RelaunchMarks, 'take'>
 }
 
 export function createAttach({
   validateTerminal, normalizers, watcher, cursorDiscovery, device, runtimeProfiles, captureTerminal, emit,
-  announceTurnAborted, questionWatcher, terminalLabel, dbs, devinHome, hermesDb, concurrency,
+  announceTurnAborted, questionWatcher, terminalLabel, dbs, devinHome, hermesDb, concurrency, relaunchMarks,
 }: AttachDeps) {
   const {
     turnStates, codexNormalizers, cursorNormalizers, opencodeReaders, kiloReaders, museNormalizers, ampNormalizers,
@@ -111,6 +114,8 @@ export function createAttach({
     handover: { hold: TailHold | null; next: number | null } = { hold: null, next: null },
   ): Promise<boolean> => {
     if (!await validateTerminal(session)) return false
+    // Taken whichever way this attach goes: a mark is for the next attach of the conversation only.
+    const relaunchedAt = relaunchMarks?.take(session.sessionId)
     if (!reset && normalizers.hasState(session.sessionId)) {
       if (session.transcriptPath) {
         const unseen = neverFoldedHistory.delete(session.sessionId)
@@ -194,7 +199,7 @@ export function createAttach({
         profile: (line) => profile.ingest(line),
         fold: (line) => stream.push(line),
         observe,
-      }, { fromStart: live, end: handover.hold?.offset })
+      }, { fromStart: live, end: handover.hold?.offset ?? relaunchedAt })
       if (handover.hold && (read.failed || handover.hold.expired)) {
         return keepLiveNormalizer(read.failed ? 'could not read the transcript' : 'outlasted its hold on the tail')
       }

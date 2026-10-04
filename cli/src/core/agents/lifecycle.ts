@@ -37,12 +37,13 @@ export interface LifecycleDeps {
   prepareSessionResume: ResumeAgentServiceDeps['prepareSessionResume']
   refreshGridWebSearch: ResumeAgentServiceDeps['refreshGridWebSearch']
   attachDsh: ResumeAgentServiceDeps['attachDsh']
+  relaunchMarks?: ResumeAgentServiceDeps['relaunchMarks']
 }
 
 export function createAgentLifecycle({
   registry, stoppedAgents, restartJobs, tmuxBackend, agentReconciler, forgetSession, markDeleted, clearDeleted,
   sessionCheckpoints, mirror, sessionSearch, send, pinnedControls, retainExitedSession, announceSession,
-  relaunchOverrides, prepareSessionResume, refreshGridWebSearch, attachDsh,
+  relaunchOverrides, prepareSessionResume, refreshGridWebSearch, attachDsh, relaunchMarks,
 }: LifecycleDeps) {
   /**
    * Stop Harness (`agent_delete`) archives its conversation and launch settings, removes the live
@@ -68,7 +69,7 @@ export function createAgentLifecycle({
   const resume = createResumeAgentService({
     registry, stoppedAgents, tmuxBackend, restartJobs, stopJobs, pinnedControls,
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume,
-    refreshGridWebSearch, clearDeleted, attachDsh,
+    refreshGridWebSearch, clearDeleted, attachDsh, relaunchMarks,
   })
   const resumeAgent: ResumeAgent = (id, permissionMode) => purgeAgentService.busy(id) || purgeAgentService.blocksFolder(stoppedAgents.get(id)?.cwd)
     ? Promise.resolve({ ok: false, error: 'AGENT_BUSY' }) : resume(id, permissionMode)

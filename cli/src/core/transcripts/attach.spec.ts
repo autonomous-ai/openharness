@@ -195,6 +195,25 @@ describe('attaching a session', () => {
       expect(await none.attach.attachSession(session('pi', transcript([{}])))).toBe(true)
     })
 
+    it('folds a resumed conversation only up to where its relaunched engine began, and tails the rest live', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const take = vi.fn((_sessionId: string): number | undefined => undefined)
+      const run = setup({ relaunchMarks: { take } })
+      const history = JSON.stringify({ ...CLAUDE_PROMPT, uuid: 'before' })
+      // The relaunched engine answered a message before this attach: a whole turn after the mark.
+      const s = session('claude', transcript([history, { ...CLAUDE_PROMPT, uuid: 'after' }, { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }], stop_reason: 'end_turn' }, uuid: 'a1' }]))
+      const mark = Buffer.byteLength(history) + 1
+      take.mockReturnValueOnce(mark)
+      expect(await run.attach.attachSession(s)).toBe(true)
+      expect(take).toHaveBeenCalledWith(s.sessionId)
+      // The tail starts where the engine's own writing began, so its turn reaches every window live.
+      expect(vi.mocked(run.deps.watcher.addSession).mock.calls[0][1]).toEqual({ fromOffset: mark })
+      // A mark is for the next attach only: taken even by an attach that only makes sure the tail runs.
+      take.mockReturnValueOnce(mark)
+      expect(await run.attach.attachSession(s)).toBe(true)
+      expect(take).toHaveBeenCalledTimes(2)
+    })
+
     it('takes over a tail it holds for a reset, resuming it where the read stopped', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup()

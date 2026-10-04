@@ -144,6 +144,7 @@ import { createAgyBackstop } from './core/turns/agyBackstop.js'
 import { createIngest } from './core/transcripts/ingest.js'
 import { createTurnHooks } from './core/turns/turnHooks.js'
 import { createAttach } from './core/transcripts/attach.js'
+import { createRelaunchMarks, transcriptSize } from './core/transcripts/relaunch.js'
 import { createForgetSession } from './core/agents/forget.js'
 import { createBinding } from './core/agents/bind.js'
 import { createDiscoveryHandlers } from './core/agents/discovery.js'
@@ -2011,6 +2012,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     })
   })
 
+  // Where an engine's writing becomes live again after a resume or a daemon restart, read by the attach
+  // that follows (core/transcripts/relaunch.ts).
+  const relaunchMarks = createRelaunchMarks()
   // Following a session: its history read into its engine's normalizer, then its tail
   // (core/transcripts/attach.ts).
   const attach = createAttach({
@@ -2030,6 +2034,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     devinHome: env.DEVIN_HOME,
     hermesDb: (s) => hermesDbForSession(s),
     concurrency: ATTACH_CONCURRENCY,
+    relaunchMarks,
   })
   const attaches = attach.attaches
   const attachSession = attach.attachSession
@@ -3250,6 +3255,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   watcher.start()
   await cursorDiscovery.start()
+  // What a restored agent's engine writes from here on is live: the first attach of each folds its
+  // conversation only up to this byte (core/transcripts/relaunch.ts). The request gate opens before
+  // those attaches run, and a message answered in between was filed as history.
+  for (const entry of registry.list()) {
+    if (!entry.sessionId || !entry.transcriptPath || watcher.tails(entry.sessionId, entry.transcriptPath)) continue
+    const offset = transcriptSize(entry.transcriptPath)
+    if (offset !== null) relaunchMarks.note(entry.sessionId, offset)
+  }
   // Panes that died while the daemon was down (a reboot takes the whole tmux server with it) are
   // rebuilt BEFORE the first reconcile pass: it would otherwise count them absent, and a second
   // pass five seconds later would drop the agents for good. Pane creation is awaited so the first
@@ -3587,6 +3600,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     prepareSessionResume,
     refreshGridWebSearch,
     attachDsh,
+    relaunchMarks,
   })
   const stopJobs = lifecycle.stopJobs
   const stopAgent = lifecycle.stopAgent
