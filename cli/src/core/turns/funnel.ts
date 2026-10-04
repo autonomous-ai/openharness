@@ -63,16 +63,29 @@ type OutsideConsumers = (consumer: string, call: () => void) => void
  * throws is logged, at most once a minute per consumer and with how many were not, and every consumer
  * after it still gets the event. The heartbeat, the question watcher and the recaps must not miss a
  * turn because a device was unplugged mid-call. The services on the boundary are guarded the same way
- * (core/serviceHost.ts).
+ * (core/serviceHost.ts), and so are the dial and the window bridges on the local socket (cli.ts).
  */
-export function outsideConsumers(log: (line: string) => void = (line) => console.error(line), now: () => number = Date.now): OutsideConsumers {
+export function outsideConsumers(options: {
+  log?: (line: string) => void
+  now?: () => number
+  /** What the lines start with: `[funnel]` by default. */
+  prefix?: string
+  /** Consumers to fail on every call, for the end-to-end suite only (`HARNESSD_TEST_FAULTS`). */
+  faults?: ReadonlySet<string>
+} = {}): OutsideConsumers {
+  const log = options.log ?? ((line: string) => console.error(line))
+  const now = options.now ?? Date.now
+  const prefix = options.prefix ?? 'funnel'
   const said = new Map<string, { at: number; quiet: number }>()
   return (consumer, call) => {
-    try { call() } catch (error) {
+    try {
+      if (options.faults?.has(consumer)) throw new Error(`injected fault: ${consumer}`)
+      call()
+    } catch (error) {
       const at = now()
       const last = said.get(consumer)
       if (last && at - last.at < 60_000) { last.quiet++; return }
-      log(`[funnel] ${consumer} failed · ${error instanceof Error ? error.message : String(error)}${last?.quiet ? ` · ${last.quiet} more since` : ''}`)
+      log(`[${prefix}] ${consumer} failed · ${error instanceof Error ? error.message : String(error)}${last?.quiet ? ` · ${last.quiet} more since` : ''}`)
       said.set(consumer, { at, quiet: 0 })
     }
   }

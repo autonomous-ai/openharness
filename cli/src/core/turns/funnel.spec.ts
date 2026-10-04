@@ -213,7 +213,7 @@ describe('a consumer outside the core', () => {
   it('is logged at most once a minute, with how many failures went unsaid, and never stops the caller', () => {
     const lines: string[] = []
     let at = 0
-    const outside = outsideConsumers((line) => lines.push(line), () => at)
+    const outside = outsideConsumers({ log: (line) => lines.push(line), now: () => at })
     const ran: string[] = []
     outside('devices', () => { throw new Error('serial port gone') })
     at += 10_000
@@ -236,5 +236,15 @@ describe('a consumer outside the core', () => {
     outsideConsumers()('teams', () => { throw new Error('x') })
     expect(error).toHaveBeenCalledWith('[funnel] teams failed · x')
     error.mockRestore()
+  })
+
+  it('says whose it is, and fails a consumer named in the end-to-end suite\'s faults without running it', () => {
+    const lines: string[] = []
+    const ran: string[] = []
+    const outside = outsideConsumers({ log: (line) => lines.push(line), prefix: 'devices', faults: new Set(['dial']) })
+    outside('dial', () => { ran.push('dial') })
+    outside('window', () => { ran.push('window') })
+    expect(ran).toEqual(['window'])
+    expect(lines).toEqual(['[devices] dial failed · injected fault: dial'])
   })
 })

@@ -138,7 +138,7 @@ import { createTurnActivity } from './core/turns/activity.js'
 import { createLastTurnReader } from './core/transcripts/lastTurn.js'
 import { createRecaps } from './core/turns/recaps.js'
 import { createHeartbeats } from './core/turns/heartbeats.js'
-import { createEventFunnel } from './core/turns/funnel.js'
+import { createEventFunnel, outsideConsumers } from './core/turns/funnel.js'
 import { createAgyBackstop } from './core/turns/agyBackstop.js'
 import { createIngest } from './core/transcripts/ingest.js'
 import { createTurnHooks } from './core/turns/turnHooks.js'
@@ -2843,6 +2843,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     void ensureSignInEpoch().catch(() => null).then(() => devLogSyncer?.register())
     setInterval(() => { void devLogSyncer?.refresh() }, 10 * 60_000).unref()
   }
+  // The dial, the window bridges and the WiFi device answer for themselves. A throw in any of them is
+  // logged — at most once a minute each, with a count of the rest (core/turns/funnel.ts) — and goes no
+  // further: the local socket closes a connection whose frame handler throws, so a device fault left
+  // unguarded here would disconnect the desktop, again on every pane change.
+  const devices = outsideConsumers({ prefix: 'devices', faults: testFaults(process.env.HARNESSD_TEST_FAULTS) })
+
   // Spoken tasks go to the WINDOW to be routed, not to the copy of the router in this process.
   //
   // Built here because both ends need it: the local socket hands it the window's replies, and the cable
@@ -2875,37 +2881,40 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const localWsServer = attachLocalWsServer(hookServer, {
     localSocketServer: localSocket?.server ?? null,
     shareRelay,
-    onSelectionReply: (connId, machineId, payload) => windowSelection.reply(connId, machineId, payload),
-    onVisitReply: (connId, machineId, payload) => windowVisit.reply(connId, machineId, payload),
-    onFormReply: (connId, machineId, payload) => windowForm.reply(connId, machineId, payload),
+    onSelectionReply: (connId, machineId, payload) => devices('window', () => windowSelection.reply(connId, machineId, payload)),
+    onVisitReply: (connId, machineId, payload) => devices('window', () => windowVisit.reply(connId, machineId, payload)),
+    onFormReply: (connId, machineId, payload) => devices('window', () => windowForm.reply(connId, machineId, payload)),
     onAppDisconnect: (machineId, connId) => {
       if (appFormWindow?.connId === connId) appFormWindow = undefined
       if (appVoiceFocus?.connId === connId) appVoiceFocus = undefined
-      windowForm.disconnected(connId)
-      windowSelection.focusChanged()
-      autonomousDeviceService?.appFocus(machineId, null, connId)
+      devices('window', () => windowForm.disconnected(connId))
+      devices('window', () => windowSelection.focusChanged())
+      devices('devices', () => autonomousDeviceService?.appFocus(machineId, null, connId))
     },
     // The window and the dial are one desk: opening an agent in the app brings the dial to it, switching
     // the dial's machine first when the app moved to another one.
-    onDevicePrepareOpened: (operationId, agentId) => deviceStoreRef?.acknowledgeReveal(operationId, agentId),
+    onDevicePrepareOpened: (operationId, agentId) => devices('devices', () => deviceStoreRef?.acknowledgeReveal(operationId, agentId)),
     onAppFocusState: (machineId, agentId, connId, expectedRevision) => {
-      // A delayed automatic selection cannot replace a newer explicit user choice.
-      if (expectedRevision && autonomousDeviceService?.focusSnapshot().focusRevision !== expectedRevision) return false
+      // A delayed automatic selection cannot replace a newer explicit user choice. A device service
+      // that cannot say which choice is newest is one with no choice to protect: refused, as without one.
+      let focusRevision: unknown
+      devices('devices', () => { focusRevision = autonomousDeviceService?.focusSnapshot().focusRevision })
+      if (expectedRevision && focusRevision !== expectedRevision) return false
       appFormWindow = { machineId, connId }
       if (agentId === null) {
         if (appVoiceFocus?.connId === connId) appVoiceFocus = undefined
       } else appVoiceFocus = { machineId, agentId, connId }
-      windowSelection.focusChanged()
-      autonomousDeviceService?.appFocus(machineId, agentId, connId)
+      devices('window', () => windowSelection.focusChanged())
+      devices('devices', () => autonomousDeviceService?.appFocus(machineId, agentId, connId))
     },
-    onAppFocus: (machineId, agentId) => { void cableRef?.followApp(machineId, agentId) },
+    onAppFocus: (machineId, agentId) => devices('dial', () => { void cableRef?.followApp(machineId, agentId) }),
     // Everything the window still has unread. Held rather than acted on: the dial is handed it when a
     // cable attaches, which is the one moment its own drawer is known to be empty.
-    onAppUnread: (items) => { cableHostRef?.setUnread(items); void cableRef?.replaceNotifications(items) },
+    onAppUnread: (items) => devices('dial', () => { cableHostRef?.setUnread(items); void cableRef?.replaceNotifications(items) }),
     // The window looked at a harness, so the dial's drawer row for it is stale.
     // The dial's own tap already reaches the window (`agent.open`); this is the
     // return leg, and the pair is what keeps the badge and the pill equal.
-    onAgentSeen: (agentId, readToken) => { void cableRef?.agentSeen(agentId, readToken) },
+    onAgentSeen: (agentId, readToken) => devices('dial', () => { void cableRef?.agentSeen(agentId, readToken) }),
     // Agents the window has a tile for. A finished turn on one of these is
     // already in front of the person, so the dial updates its tile in silence
     // rather than beeping about something being looked at.
@@ -2918,9 +2927,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // window with an empty swarm is an empty carousel, not the whole machine.
     onAppSwarms: (swarms) => {
       appSwarmsLatest = swarms
-      cableHostRef?.setSwarms(swarms)
-      void cableRef?.syncSwarms()
-      void cableRef?.syncAgents()
+      devices('dial', () => {
+        cableHostRef?.setSwarms(swarms)
+        void cableRef?.syncSwarms()
+        void cableRef?.syncAgents()
+      })
     },
     onAppTabAgents: (connection, ids) => cleanupTabs.updateWindow(connection, ids),
     onAppPanes: (agentIds, foreground) => {
@@ -2944,7 +2955,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // below is what `quiet` is read from, so emptying it is how both screens
       // come to the same answer.
       appWindowForeground = foreground
-      cableHostRef?.setDesk(agentIds)
+      devices('dial', () => cableHostRef?.setDesk(agentIds))
       const next = new Set(agentIds)
       // Logged on CHANGE only. It fires on every pane add, close and reconnect,
       // and it is the one place the whole feature is observable from — without
@@ -2953,7 +2964,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       openPaneAgents = next
       if (changed) console.log(`[cable] window tiles: ${next.size ? [...next].map(sid).join(' ') : '(none)'}`)
       // Ordered, not set-wise: two tiles swapping places is the same set and a different ring.
-      if (deskChanged) void cableRef?.syncAgents()
+      if (deskChanged) devices('dial', () => { void cableRef?.syncAgents() })
     },
     // ⌘K in the window: a typed task, and which agent it belongs to.
     //
@@ -3092,7 +3103,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // difference (local → the same door the web and the hooks use, remote → the fleet), and it is the
     // one the dial has been using for every voice turn.
     // A window that connects after the dial did has missed the `dial_status` that announced it.
-    dialStatus: () => cableHostRef?.currentDialStatus() ?? { attached: false },
+    dialStatus: () => {
+      let status: ReturnType<DaemonCableHost['currentDialStatus']> | undefined
+      devices('dial', () => { status = cableHostRef?.currentDialStatus() })
+      return status ?? { attached: false }
+    },
     /*
      * A window changing a device's settings. Addressed by the fleet's id, so a second robot on the same
      * desk is not dragged along — every other cable command broadcasts on purpose (they all show the
@@ -3101,12 +3116,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
      * Nothing is answered here. The device replies to its own `settings.set` with the values it now
      * holds, and that reaches the window as an ordinary `dial_status`.
      */
-    onDialSettings: (id, patch) => {
+    onDialSettings: (id, patch) => devices('dial', () => {
       void cableRef?.setSettings(id, patch as Parameters<NonNullable<typeof cableRef>['setSettings']>[1])
         .then(result => {
           if (!result.ok) console.log(`[cable] settings for ${id || 'no device'}: ${result.error}`)
         })
-    },
+    }),
     openQuestions: () => [...openQuestions.values()],
     onRouteSend: backend.ownerCommands.onRouteSend = (agentId, text) => {
       const sent = cableHostRef?.sendTurn(agentId, text) ?? { ok: false as const, machine: '', reason: 'no agent list yet' }
@@ -3114,7 +3129,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         + (sent.ok ? '' : ` · REFUSED: ${sent.reason}${sent.machine ? ` (${sent.machine})` : ''}`))
       return sent
     },
-    onVoiceRouteReply: (voiceId, reply) => windowRouter.reply(voiceId, reply),
+    onVoiceRouteReply: (voiceId, reply) => devices('window', () => windowRouter.reply(voiceId, reply)),
     machineId: backend.machineId,
     backend,
     relayPool,
@@ -4036,7 +4051,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Every card bound for the WiFi device goes down the cable too, translated once. Teeing beats emitting
   // again at each call site: a new event kind reaches the dial the day it reaches the socket.
-  backend.onOutboundCommander = (frame) => {
+  // The tee runs before the frame is queued for the WiFi device (BackendSocket.sendCommander): a dial
+  // fault here must cost neither that frame nor whoever is sending it.
+  backend.onOutboundCommander = (frame) => devices('dial', () => {
     autonomousDeviceService?.commander(frame as Record<string, unknown>)
     // THIS COMPUTER'S cards, by definition — and every one of them belongs to a tile that is on the
     // carousel, because the carousel now spans machines. The old guard dropped them whenever the wheel
@@ -4064,7 +4081,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       void cable.summary(event.agentId, event.recap || event.text, event.text, alreadyOnScreen(event.agentId), event.subagent)
     }
     else void cable.turnError(event.agentId, event.text)
-  }
+  })
 
   // A remote machine's cards reach the dial through the SAME four calls the local tee uses, so a new
   // event kind lands on both surfaces the day it lands on either.

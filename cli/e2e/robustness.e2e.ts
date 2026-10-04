@@ -186,6 +186,33 @@ describe('what the daemon survives', () => {
     client.close()
   })
 
+  it('the dial, the window bridges and the device service failing on every call never disconnect the desktop', async () => {
+    const d = await fresh({ env: { HARNESSD_TEST_FAULTS: 'dial,window,devices' } })
+    await d.start()
+    // The handshake itself asks the dial for its status.
+    const desktop = await LocalClient.connect(d)
+    const agent = await boundAgent(d, desktop, 'devices-failing')
+    // What a desktop sends on every pane change, focus, read and spoken reply — each one reaching the dial,
+    // a window bridge or the WiFi device service.
+    for (let i = 0; i < 3; i++) {
+      desktop.send('app_panes', { agentIds: [agent.id], foreground: true })
+      desktop.send('app_focus', { agentId: agent.id })
+      desktop.send('agent_seen', { agentId: agent.id })
+      desktop.send('app_unread', { items: [{ agentId: agent.id, machineId: d.computerId, text: 'done' }] })
+      desktop.send('voice_route_reply', { voiceId: 'v1', state: 'taken' })
+      desktop.send('dial_settings', { id: 'dial-1', brightness: 3 })
+    }
+    expect((await desktop.request('agents_list', {}, 15_000)).agents).toHaveLength(1)
+    await turn(desktop, agent.id, 'the desktop is still connected')
+    expect(desktop.closed).toBe(false)
+    expect(d.log()).toContain('[devices] dial failed · injected fault: dial')
+    expect(d.log()).toContain('[devices] window failed · injected fault: window')
+    expect(d.log()).toContain('[devices] devices failed · injected fault: devices')
+    expect(d.log()).not.toContain('local dispatch failed')
+    expect(d.coresStarted()).toBe(1)
+    desktop.close()
+  })
+
   it('state files that are garbage at start: the daemon starts, keeps what it can, and runs a new agent', async () => {
     const d = await fresh()
     await d.start()
