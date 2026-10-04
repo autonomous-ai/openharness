@@ -49,7 +49,7 @@ import { terminalActivity } from './cable/terminalActivity.js'
 import { MachineListCache, machineListCachePath, withStaleMarker } from './device/machineList.js'
 import { DeviceLink } from './device/deviceLink.js'
 import { DeviceFleet } from './device/deviceFleet.js'
-import { registry, projectDisplayName, sessionDisplayTitle, validTranscriptPath, type RegisteredSession } from './lib/registry.js'
+import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from './lib/registry.js'
 import { engineSessionTitle } from './lib/sessionTitle.js'
 import { installCodexHooks } from './lib/hooks.js'
 import { PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
@@ -99,9 +99,6 @@ import { prepareAgentHandoff } from './lib/agentHandoff.js'
 import { ExternalSessions, OpenSessions } from './lib/sessionSearch/external.js'
 import { externalProviders } from './lib/sessionSearch/externals/index.js'
 import { SESSION_SEARCH_FILE, searchCommand } from './lib/sessionSearch/command.js'
-import { sweepWorktrees } from './lib/worktreeSweep.js'
-import { nameBranchAfterSession } from './lib/branchNaming.js'
-import { forgetAgentProject } from './lib/agentProject.js'
 import { type LaunchOverridesDeps } from './lib/launchOverrides.js'
 import { buildHarnessSessionLabel } from './lib/harnessSessionLabel.js'
 import { adoptLegacyHarnessSessions, listTmuxPanes } from './lib/tmuxAgentDiscovery.js'
@@ -167,6 +164,7 @@ import { createCoreApi, emptyPorts } from './core/api.js'
 import { startSearch } from './services/search.js'
 import { startViewers } from './services/viewers.js'
 import { startModels } from './services/models.js'
+import { startWorkspaces } from './services/workspaces.js'
 import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
@@ -1786,26 +1784,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const attachDsh = (s: RegisteredSession): void => ports.viewers?.attach(s)
   const detachDsh = (agentId: string): void => ports.viewers?.detach(agentId)
 
-  // A worktree branch Harness made up at Start takes its session's name once it has one
-  // (lib/branchNaming.ts). Each agent is looked at once per daemon; the git reads are the cost.
-  const branchNamed = new Set<string>()
-  const nameSessionBranches = (): void => {
-    for (const session of registry.list()) {
-      const title = sessionDisplayTitle(session)
-      if (!title || !session.cwd || branchNamed.has(session.agentId)) continue
-      branchNamed.add(session.agentId)
-      const cwd = session.cwd
-      void nameBranchAfterSession(cwd, title).then((renamed) => {
-        if (!renamed) return
-        console.log(`[worktrees] agent ${sid(session.agentId)} branch named ${renamed}`)
-        forgetAgentProject(cwd)
-        const current = registry.byAgent(session.agentId)
-        if (current) syncSession(current)
-      }).catch(() => {})
-    }
-  }
+  // The folders agents work in: branch names and unused worktrees (services/workspaces.ts).
+  startWorkspaces(coreApi, ports)
   const syncTerminalTitles = async (): Promise<void> => {
-    nameSessionBranches()
+    ports.workspaces?.nameBranches()
     const titles = await terminals.titles()
     if (titles.size === 0) return
     for (const session of registry.list()) {
@@ -4038,17 +4020,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   autonomousDeviceDirect.start()
 
   // Worktrees Harness made that no live or stopped harness uses and nothing would miss
-  // (lib/worktreeSweep.ts): a few minutes after start, once restored agents are back in the
+  // (services/workspaces.ts): a few minutes after start, once restored agents are back in the
   // registry, then twice a day.
-  const sweepUnusedWorktrees = () => {
-    let inUse: Array<string | null>
-    try { inUse = [...registry.list().map(s => s.cwd), ...stoppedAgents.list().map(s => s.cwd)] } catch { return }
-    void sweepWorktrees({ root: join(homedir(), 'harnesses'), inUse })
-      .then(removed => { if (removed.length) console.log(`[worktrees] removed ${removed.length} unused worktree(s)`) })
-      .catch(() => {})
-  }
-  setTimeout(sweepUnusedWorktrees, 5 * 60_000).unref()
-  setInterval(sweepUnusedWorktrees, 12 * 3600_000).unref()
+  setTimeout(() => ports.workspaces?.sweepUnused(), 5 * 60_000).unref()
+  setInterval(() => ports.workspaces?.sweepUnused(), 12 * 3600_000).unref()
 
 
   // Every card bound for the WiFi device goes down the cable too, translated once. Teeing beats emitting

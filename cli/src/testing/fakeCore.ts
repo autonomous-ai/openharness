@@ -13,6 +13,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     dataDir: over.dataDir ?? '/data',
     agents: {
       all: vi.fn(() => []),
+      live: vi.fn(() => []),
       displayName: vi.fn(() => ''),
       byAgent: vi.fn(() => undefined),
       advertised: vi.fn(() => []),

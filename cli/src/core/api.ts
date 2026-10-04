@@ -22,6 +22,8 @@ export interface CoreApi {
   agents: {
     /** Every agent on this machine: the live ones, then the stopped ones. */
     all(): RegisteredSession[]
+    /** The live agents. */
+    live(): RegisteredSession[]
     /** The name the apps show for an agent. */
     displayName(session: RegisteredSession): string
     /** A live agent, by its agent id. */
@@ -92,16 +94,24 @@ export interface ModelsPort {
   signedOut(): void
 }
 
+/** The core's calls into workspaces: name made-up worktree branches after their sessions, on each
+ *  terminal-title pass, and sweep the worktrees nothing uses, when the core says it is time. */
+export interface WorkspacesPort {
+  nameBranches(): void
+  sweepUnused(): void
+}
+
 /** Each port is filled by the service that owns it when that service starts, and is null while the
  *  service is off: the core never waits on one. */
 export interface CorePorts {
   search: SearchPort | null
   viewers: ViewersPort | null
   models: ModelsPort | null
+  workspaces: WorkspacesPort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { search: null, viewers: null, models: null }
+  return { search: null, viewers: null, models: null, workspaces: null }
 }
 
 export interface CoreApiDeps {
@@ -126,6 +136,7 @@ export function createCoreApi({
     dataDir,
     agents: {
       all: () => [...registry.list(), ...stoppedAgents.list()],
+      live: () => registry.list(),
       displayName: projectDisplayName,
       byAgent: (agentId) => registry.byAgent(agentId),
       advertised: () => registry.advertised(),

@@ -27,6 +27,7 @@ describe('the core API services stand on', () => {
     const core = createCoreApi(deps)
     expect(core.dataDir).toBe('/data')
     expect(core.agents.all().map((s) => s.agentId)).toEqual(['live', 'stopped'])
+    expect(core.agents.live().map((s) => s.agentId)).toEqual(['live'])
     expect(core.agents.displayName).toBe(projectDisplayName)
     expect(core.transcripts.databaseHistory).toBe(deps.databaseHistory)
     expect(core.external.sessions).toBe(deps.externalSessions)
@@ -43,7 +44,7 @@ describe('the core API services stand on', () => {
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ search: null, viewers: null, models: null })
+    expect(emptyPorts()).toEqual({ search: null, viewers: null, models: null, workspaces: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
   })
 })
