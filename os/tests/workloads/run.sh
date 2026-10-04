@@ -2,7 +2,7 @@
 # Opt-in live-model acceptance. These projects and tools never enter the ISO.
 set -uo pipefail
 INPUTS=$(cd -- "$(dirname -- "$0")" && pwd)
-WORK="$HOME/Projects/os-workloads"
+WORK="$HOME/projects/os-workloads"
 REPORT="$HOME/.local/state/harness-os/workloads"
 # The disposable guest has no provider credentials. Exercise the bundled
 # binary's upstream model choice, just as a clean first launch does.
@@ -20,7 +20,7 @@ for scenario in terminal-tool website game fullstack; do
     mkdir -p "$project"
     cp "$INPUTS/$scenario.txt" "$project/TASK.txt"
     cat > "$project/opencode.json" <<EOF
-{"permission":{"question":"deny","task":"deny","external_directory":{"*":"deny","$HOME/Projects/**":"allow","/tmp/opencode/**":"allow","/usr/share/harness-os/**":"allow"}}}
+{"permission":{"question":"deny","task":"deny","external_directory":{"*":"deny","$HOME/projects/**":"allow","/tmp/opencode/**":"allow","/usr/share/harness-os/**":"allow"}}}
 EOF
     printf '\nChecking %s with the upstream default model\n' "$scenario"
     if [[ -d "$INPUTS/seed" && ( "$scenario" != game || ! -e "$INPUTS/repair-game" ) ]]; then

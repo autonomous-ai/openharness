@@ -358,7 +358,7 @@ Independent background agent updates remain future work and must preserve the
 packaged fallback, validate provenance, avoid downgrades, and activate on a later
 launch rather than replacing an active executable.
 
-Trial transfer reads only `~/Projects` as the live user, using a private staging
+Trial transfer reads only `~/projects` as the live user, using a private staging
 directory on the destination disk. It preserves saved bytes, modes, times, Git
 history and symlinks without following them. Special files and detected concurrent
 writes fail explicitly. The installed home gets a per-file hash receipt. It is a
