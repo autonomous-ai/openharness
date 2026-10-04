@@ -109,7 +109,9 @@ def package_sizes(root):
             lines = block.splitlines()
             if len(lines) >= 2:
                 fields[lines[0]] = lines[1:]
-        result.append(dict(name=fields['%NAME%'][0], bytes=int(fields['%ISIZE%'][0])))
+        # The installed package database uses SIZE. ISIZE belongs to the sync
+        # repository database, which is not what an extracted image contains.
+        result.append(dict(name=fields['%NAME%'][0], bytes=int(fields['%SIZE%'][0])))
     return sorted(result, key=lambda row: (-row['bytes'], row['name']))
 
 

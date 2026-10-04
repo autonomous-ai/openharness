@@ -9,7 +9,19 @@ import tempfile
 import time
 import unittest
 
-from payload_compression import compare, extract, inventory, measured, tool_versions
+from payload_compression import compare, extract, inventory, measured, package_sizes, tool_versions
+
+
+class PackageSizes(unittest.TestCase):
+    def test_installed_database_sizes_are_ranked_without_sync_database_fields(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name, size in [('small', 31), ('largest', 901), ('middle', 210)]:
+                desc = root / 'var/lib/pacman/local' / (name + '-1.0-1') / 'desc'
+                desc.parent.mkdir(parents=True)
+                desc.write_text(f'%NAME%\n{name}\n\n%VERSION%\n1.0-1\n\n%SIZE%\n{size}\n\n%REASON%\n0\n')
+            self.assertEqual(package_sizes(root), [
+                {'name': 'largest', 'bytes': 901}, {'name': 'middle', 'bytes': 210}, {'name': 'small', 'bytes': 31}])
 
 
 class Fixture:
