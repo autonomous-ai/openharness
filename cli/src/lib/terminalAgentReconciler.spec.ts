@@ -262,6 +262,53 @@ describe('composite terminal reconciliation', () => {
     expect(onRemoved).toHaveBeenCalledWith(agents[0], 'terminal runtime absent after 2 confirmed scans')
   })
 
+  it('does not open an agent for a route that was held and released while the probe ran', async () => {
+    // A stop retiring a starting agent's pane holds its route and lets it go; a probe taken before it
+    // still saw the engine there, and opened a second agent for a pane that no longer existed.
+    const onDiscovered = vi.fn()
+    const route = terminalRouteKey(tmux)
+    let whileProbing: (() => void) | null = null
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [], backends: [], backendOrder: ['tmux'],
+      onDiscovered, onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(),
+      probe: async () => {
+        whileProbing?.()
+        whileProbing = null
+        return probe([{ instanceId: 'tmux:default', result: { state: 'available', roots: [{ runtime: tmux, rootPid: 1, cwd: '/work' }] } }], [observed([tmux])])
+      },
+    })
+    whileProbing = () => { reconciler.holdRoute(route); reconciler.releaseRoute(route) }
+    await reconciler.trigger()
+    expect(onDiscovered).not.toHaveBeenCalled()
+    // Releasing a route nobody held changes nothing, and a probe that began afterwards speaks for it.
+    reconciler.releaseRoute(route)
+    await reconciler.trigger()
+    expect(onDiscovered).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not count a miss for an agent whose route changed hands while the probe ran', async () => {
+    const current = session([tmux])
+    const pane = { runtime: tmux, rootPid: 1, cwd: '/work' }
+    const route = terminalRouteKey(tmux)
+    let whileProbing: (() => void) | null = null
+    const onDormant = vi.fn()
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [current], backends: [], backendOrder: ['tmux'],
+      onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant, onRemoved: vi.fn(),
+      probe: async () => {
+        whileProbing?.()
+        whileProbing = null
+        return probe([{ instanceId: 'tmux:default', result: { state: 'available', roots: [pane] } }])
+      },
+    })
+    await reconciler.trigger()
+    whileProbing = () => { reconciler.holdRoute(route); reconciler.releaseRoute(route) }
+    await reconciler.trigger()
+    expect(onDormant).not.toHaveBeenCalled()
+    await reconciler.trigger()
+    expect(onDormant).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps an agent active when pane-specific validation is inconclusive', async () => {
     const current = session([tmux])
     const onDormant = vi.fn()

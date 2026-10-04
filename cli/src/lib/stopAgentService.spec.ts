@@ -131,6 +131,24 @@ it.each(['removed', 'replaced', 'conversation', 'route'] as const)('does not rem
   expect(deps.tmuxBackend!.kill).not.toHaveBeenCalled()
   expect(deps.forgetSession).not.toHaveBeenCalled()
 })
+it.each(['capture', 'termination'] as const)('stops an agent still starting when its engine is identified during %s', async stage => {
+  // Created, not yet bound to a process: the stop's snapshot has none.
+  row.processIdentity = null
+  const launched = { pid: 91, executable: 'codex', startMarker: 'launched' }
+  if (stage === 'capture') vi.mocked(captureResumeIdentity).mockImplementation(async session => { row.processIdentity = launched; return session })
+  else vi.mocked(terminateDeletedAgent).mockImplementation(async () => { row.processIdentity = launched; return 'terminated' })
+  await createStopAgentService(deps)(row.agentId)
+  expect(registry.byAgent(row.agentId)).toBeUndefined()
+  expect(deps.tmuxBackend!.kill).toHaveBeenCalledOnce()
+  // Identified before termination: that exact process is the one checked and signalled.
+  if (stage === 'capture') expect(vi.mocked(terminateDeletedAgent).mock.calls[0][0].processIdentity).toEqual(launched)
+})
+it('still refuses a starting agent whose pane or conversation changed under the stop', async () => {
+  row.processIdentity = null
+  vi.mocked(terminateDeletedAgent).mockImplementation(async () => { row.runtimes = [{ backend: 'tmux', paneId: '%89' }]; return 'gone' })
+  await expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('changed while pausing')
+  expect(deps.tmuxBackend!.kill).not.toHaveBeenCalled()
+})
 it.each(['capture', 'termination'] as const)('accepts a hook rebuilding the same process during %s', async stage => {
   const replacement = { ...row, title: 'Updated title',
     processIdentity: { startMarker: 'fixture', executable: 'codex', pid: 77 },
