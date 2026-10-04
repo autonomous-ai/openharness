@@ -103,6 +103,8 @@ def wireless(vm, result):
     wait_screen(vm, ['harness-test', 'install without connecting'], 'wifi-01-networks')
     vm.keys('esc')
     wait_screen(vm, ['harness-test'], 'wifi-01-escape-keeps-welcome')
+    vm.keys('ctrl', 'c')
+    wait_screen(vm, ['harness-test'], 'wifi-01-interrupt-keeps-welcome')
     # Wi-Fi is the first selection. A bad password stays recoverable in-page.
     vm.keys('ret')
     wait_screen(vm, ['password'], 'wifi-02-password')
