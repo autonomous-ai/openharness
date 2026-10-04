@@ -74,6 +74,22 @@ of one; keyboard controls select only `*::kbd_backlight` LEDs. These use the
 existing [brightnessctl options](https://github.com/Hummer12007/brightnessctl).
 No extra daemon, package, widget or screen is required.
 
+The same workflow's `probe=apple-boot` check installs a checksum-verified image
+to an encrypted 1 GiB VM. It uses private mount-namespace DMI fixtures and the
+actual `mkinitcpio -P` presets to inspect both pre-T2 SPI controller families.
+The baseline includes `applespi` but omits its host controllers; the candidate
+must include the controllers, their dependency closure and early module loading,
+while retaining existing explicit modules. Negative model fixtures check that
+USB-only Macs, T2, Apple Silicon and other PCs are unaffected. Finally it removes
+the fixtures, regenerates the generic initramfs and verifies graphical disk
+unlock and typing in hn after reboot. Logs, module lists and image hashes are
+retained; this is preparation for physical Mac tests, not proof of Apple input.
+
+The small `20-harness-apple-keyboard.conf` mkinitcpio drop-in uses the model and
+controller mapping documented by [Linux KEYBOARD_APPLESPI](https://github.com/torvalds/linux/blob/master/drivers/input/keyboard/Kconfig).
+It adds the existing in-tree drivers during installation and subsequent initramfs
+rebuilds. Do not replace them with the obsolete macbook12 SPI DKMS driver.
+
 `checks=browser` with an `image_run_id` exercises the installed terminal/browser
 session in BIOS/plain and UEFI/encrypted VMs. It records and applies only the
 candidate `hn-browser` script and labwc configuration over the checksum-verified

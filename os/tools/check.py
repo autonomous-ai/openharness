@@ -16,6 +16,6 @@ for p in root.rglob('*'):
         json.loads(p.read_text())
     elif p.suffix == '.xml':
         ET.parse(p)
-    elif p.read_bytes().startswith((b'#!/bin/sh', b'#!/bin/bash', b'#!/usr/bin/env bash')):
+    elif p.parent.name == 'mkinitcpio.conf.d' or p.read_bytes().startswith((b'#!/bin/sh', b'#!/bin/bash', b'#!/usr/bin/env bash')):
         subprocess.run(['bash', '-n', str(p)], check=True)
 print('Python, JSON, XML and shell syntax checked.')

@@ -8,6 +8,12 @@ on:
         type: string
         default: '37222390225'
         required: true
+      probe:
+        description: 'Laptop media controls or Apple encrypted-boot module closure'
+        type: choice
+        options: [laptop-input, apple-boot]
+        default: laptop-input
+        required: true
   push:
     branches: ['os-polish/laptop-input']
     paths: ['os/tests/input_*.py', 'os/root/usr/share/harness-os/labwc*/rc.xml', '.github/workflows/os-input.yml']
@@ -40,15 +46,22 @@ jobs:
           sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
           sudo chmod a+rw /dev/kvm
       - name: Check actual media-key input on USB and installed sessions
+        if: ${{ inputs.probe != 'apple-boot' }}
         run: python3 os/tests/input_vm.py --iso os/dist/*.iso
+      - name: Check Apple initramfs selection and encrypted boot
+        if: ${{ inputs.probe == 'apple-boot' }}
+        run: python3 os/tests/apple_boot_vm.py --iso os/dist/*.iso
       - name: Retain actual input, module and display evidence
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: harness-os-laptop-input
+          name: harness-os-${{ inputs.probe || 'laptop-input' }}
           path: |
             os/test-results/input/
+            os/test-results/apple-boot/
             !os/test-results/input/*.qcow2
             !os/test-results/input/OVMF_VARS.fd
+            !os/test-results/apple-boot/*.qcow2
+            !os/test-results/apple-boot/OVMF_VARS.fd
           retention-days: 14
           compression-level: 0
