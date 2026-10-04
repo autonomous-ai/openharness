@@ -364,24 +364,19 @@ void main() {
 
   for (final withKeymap in [false, true]) {
     testWidgets(
-      'Repo machine keyboard traversal works with keymap=$withKeymap',
+      'Header computer keyboard traversal works with keymap=$withKeymap',
       (tester) async {
         final fixture = await _mount(tester, withKeymap: withKeymap);
         await tester.tap(
           find.byKey(const ValueKey('new-harness-field-project')),
         );
         await tester.pumpAndSettle();
-        final machine = find.byKey(const ValueKey('new-harness-repo-machine'));
-        bool queryFocused() =>
-            tester.widget<TextField>(_query).focusNode!.hasFocus;
-        expect(queryFocused(), isTrue);
-        await key(tester, LogicalKeyboardKey.tab);
-        expect(queryFocused(), isFalse);
+        expect(tester.widget<TextField>(_query).focusNode!.hasFocus, isTrue);
         await key(tester, LogicalKeyboardKey.tab, shift: true);
-        expect(queryFocused(), isTrue);
-        await key(tester, LogicalKeyboardKey.tab);
+        expect(_query, findsNothing);
+        final machine = find.byKey(const ValueKey('new-harness-field-machine'));
         expect(tester.widget<DesktopPill>(machine).focusNode!.hasFocus, isTrue);
-        await key(tester, LogicalKeyboardKey.arrowRight);
+        await key(tester, LogicalKeyboardKey.enter);
         await tester.pumpAndSettle();
         final choice = find.byKey(
           const ValueKey('new-harness-machine-option-machine'),
@@ -392,8 +387,8 @@ void main() {
             .dismissFromOutside();
         await tester.pumpAndSettle();
         expect(choice, findsNothing);
-        expect(_query, findsOneWidget);
-        // Repeated activation toggles the cascade without closing Repo.
+        expect(_query, findsNothing);
+        expect(tester.widget<DesktopPill>(machine).focusNode!.hasFocus, isTrue);
         await tester.tap(machine);
         await tester.pumpAndSettle();
         expect(choice, findsOneWidget);
@@ -402,7 +397,15 @@ void main() {
         expect(choice, findsNothing);
         await key(tester, LogicalKeyboardKey.tab);
         await tester.pumpAndSettle();
-        expect(_query, findsNothing);
+        expect(
+          tester
+              .widget<DesktopPill>(
+                find.byKey(const ValueKey('new-harness-field-project')),
+              )
+              .focusNode!
+              .hasFocus,
+          isTrue,
+        );
         expect(fixture.closes, 0);
         expect(fixture.app.launches, isEmpty);
       },
@@ -421,9 +424,7 @@ void main() {
       ),
     )..nodeOnline = true;
     fixture.app.notifyListeners();
-    await tester.tap(find.byKey(const ValueKey('new-harness-field-project')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('new-harness-repo-machine')));
+    await tester.tap(find.byKey(const ValueKey('new-harness-field-machine')));
     await tester.pumpAndSettle();
     final choice = find.byKey(
       const ValueKey('new-harness-machine-option-other'),
@@ -437,33 +438,28 @@ void main() {
     expect(fixture.app.launches, isEmpty);
   });
 
-  testWidgets('Escape closes the chooser before the composer close button', (
-    tester,
-  ) async {
-    final fixture = await _mount(tester);
-    await tester.tap(find.byKey(const ValueKey('new-harness-field-project')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('new-harness-repo-machine')));
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey('new-harness-machine-option-machine')),
-      findsOneWidget,
-    );
-    expect(fixture.box.field, NewHarnessField.projectMenu);
-    fixture.box.warn('Choose an installed agent to continue.');
-    await tester.pumpAndSettle();
-    expect(find.text('Choose an installed agent to continue.'), findsWidgets);
-    await key(tester, LogicalKeyboardKey.escape);
-    await tester.pumpAndSettle();
-    expect(fixture.box.field, NewHarnessField.projectMenu);
-    expect(_query, findsOneWidget);
-    await key(tester, LogicalKeyboardKey.escape);
-    await tester.pumpAndSettle();
-    expect(_query, findsNothing);
-    expect(fixture.closes, 0);
-    await tester.tap(find.byKey(const ValueKey('new-harness-close')));
-    expect(fixture.closes, 1);
-  });
+  testWidgets(
+    'Escape closes the computer menu before the composer close button',
+    (tester) async {
+      final fixture = await _mount(tester);
+      await tester.tap(find.byKey(const ValueKey('new-harness-field-machine')));
+      await tester.pumpAndSettle();
+      final choice = find.byKey(
+        const ValueKey('new-harness-machine-option-machine'),
+      );
+      expect(choice, findsOneWidget);
+      fixture.box.warn('Choose an installed agent to continue.');
+      await tester.pumpAndSettle();
+      expect(find.text('Choose an installed agent to continue.'), findsWidgets);
+      await key(tester, LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(choice, findsNothing);
+      expect(_query, findsNothing);
+      expect(fixture.closes, 0);
+      await tester.tap(find.byKey(const ValueKey('new-harness-close')));
+      expect(fixture.closes, 1);
+    },
+  );
 
   testWidgets('Change machine backs to the same nested folder prompt', (
     tester,
@@ -521,8 +517,6 @@ void main() {
       await tester.enterText(_task, 'Keep my review notes');
       await tester.tap(find.byKey(const ValueKey('new-harness-field-project')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('new-harness-repo-machine')));
-      await tester.pumpAndSettle();
       final surface = tester.getRect(
         find.byKey(const ValueKey('new-harness-surface')),
       );
@@ -531,9 +525,6 @@ void main() {
       );
       final outside = surface.topLeft + const Offset(12, 12);
       expect(chooser.contains(outside), isFalse);
-      await tester.tapAt(outside);
-      await tester.pumpAndSettle();
-      expect(_query, findsOneWidget);
       await tester.tapAt(outside);
       await tester.pumpAndSettle();
       expect(_query, findsNothing);
@@ -634,7 +625,7 @@ void main() {
           .widget<Semantics>(find.byKey(const ValueKey('new-harness-choices')))
           .properties
           .label,
-      'Codex profile',
+      'Codex account',
     );
     expect(find.text('Codex profile'), findsNothing);
     expect(

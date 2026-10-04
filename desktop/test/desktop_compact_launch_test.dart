@@ -376,6 +376,7 @@ void main({bool nativeSmoke = false}) {
       _close,
       _start,
       _agent,
+      find.byKey(const ValueKey('new-harness-field-machine')),
       find.byKey(const ValueKey('new-harness-field-project')),
       _task,
     ]) {
@@ -612,6 +613,8 @@ void main({bool nativeSmoke = false}) {
       expect(tester.getSize(_surface).width, 680);
       await tester.tapAt(const Offset(5, 5));
       await tester.pumpAndSettle();
+      expect(fixture.closed, 0);
+      await key(tester, LogicalKeyboardKey.escape);
       expect(fixture.closed, 1);
     });
   }

@@ -10,27 +10,40 @@ Cmd-N, at the same 680-point maximum width. The page has Recent harnesses below
 the composer, without a modal frame or Close button. Opening the page or dialog
 never starts a harness; Enter or New Harness starts it, with or without a prompt.
 
-Agent and Repo selectors sit above the message. Model, Approvals, applicable
-Profile, Worktree, and Branch remain visible below it. Fresh forms and recovered
+Agent, Computer, and Repo selectors sit above the message. The local computer is
+**This Mac** on macOS and **This Computer** on Linux; remote computers retain their
+names. Model, Approvals, applicable Account, Worktree, and Branch remain visible
+below the message. Worktree and Branch stay on one line, without explanatory text
+underneath. **From main** identifies the base of a new worktree branch; a tooltip
+explains the operation. Existing branches and worktrees retain their branch name.
+
+The model control retains the provider/subscription picker and shared models.
+Per-agent model selection stays in the agent's own UI. Model, Approvals, Account,
+Worktree, and Branch remain on one row; narrow windows scroll horizontally
+instead of wrapping settings onto another line. Named accounts are currently
+Codex-only; an unnamed account reads **Default account**. Fresh forms and recovered
 launches focus the prompt. Terminal, which takes no task, focuses New Harness. In the message,
 Enter submits and Shift-Enter inserts a newline, respecting composition and the
 active keymap. Tab/Shift-Tab traverse the visible controls. Arrow keys navigate
 an open chooser. Accepting or cancelling returns focus to its originating control.
 
-Outside clicks and Escape close the innermost child picker first, then the main
-popup. The X directly closes the popup. Closing cancels an ordinary unfinished
-form; unresolved launch receipts retain their close guards and recovery values.
+Outside clicks close an open picker but never dismiss the main popup. Escape
+closes the innermost child picker first; with no picker open, it closes the popup.
+The X directly closes the popup. Closing discards an ordinary unfinished task
+and its attachments; unresolved launch receipts retain their close guards and recovery values.
 The popup's 95% dark backdrop covers the native footer. Reopening starts fresh. Choosers use system typography, normal controls, a search field,
 natural row heights, and bounded scrolling.
 
+![Cmd-N composition with a separate computer selector and one settings row](images/new-harness-cmd-n.png)
+
 Agent combines direct coding agents and specialized harnesses in one searchable
 list. A specialized harness then offers compatible coding agents. Repo searches
-recent folders on the selected machine; its search row contains the machine
-picker, using the working project's machine, or local for a first launch. Open Folder, New Folder,
+recent folders on the computer selected in the header; the search row does not
+repeat the computer picker. Open Folder, New Folder,
 and GitHub operate on that selected machine. Open invokes the native local
 folder dialog or remote browser; New and Clone offer Change machine inside
-their prompts. Escape retraces child steps. A remote machine appears in the
-closed Repo label, with the full folder path available in its tooltip.
+their prompts. Escape retraces child steps. The computer remains visible in its own header selector, with the full folder
+path available in the Repo tooltip.
 
 Opening, searching, and cancelling never send input to an existing harness.
 

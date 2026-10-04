@@ -79,8 +79,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   final _queryText = TextEditingController();
   late final _taskText = TextEditingController(text: box.task);
   final _taskFocus = FocusNode(debugLabel: 'New harness task');
-  final _machineMenu = MenuController();
-  final _machineFocus = FocusNode(debugLabel: 'Repo machine');
+  final _headerMachineMenu = MenuController();
+  final _headerMachineFocus = FocusNode(debugLabel: 'New harness computer');
+  final _headerMachineAnchor = GlobalKey();
   bool get _desktopStartEnabled =>
       !box.busy &&
       !box.linkingProfile &&
@@ -108,6 +109,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   bool? _chooserTraversal;
   bool _focusScheduled = false;
   final _fieldsScroll = ScrollController();
+  final _settingsScroll = ScrollController();
   final _choicesScroll = ScrollController();
   final _desktopNoticesScroll = ScrollController();
   _Row _row = _Row.start;
@@ -168,12 +170,13 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _queryText.dispose();
     _taskText.dispose();
     _taskFocus.dispose();
-    _machineFocus.dispose();
+    _headerMachineFocus.dispose();
     _dialogScope.dispose();
     for (final node in _desktopFocus.values) {
       node.dispose();
     }
     _fieldsScroll.dispose();
+    _settingsScroll.dispose();
     _choicesScroll.dispose();
     _desktopNoticesScroll.dispose();
     _focus.dispose();
@@ -240,10 +243,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusScheduled = false;
       if (!mounted) return;
+      if (_headerMachineMenu.isOpen) return;
       if (_picking) {
-        if (!_machineMenu.isOpen && !_machineFocus.hasFocus) {
-          _inputFocus.requestFocus();
-        }
+        _inputFocus.requestFocus();
       } else if (widget.desktop) {
         final origin = _chooserOrigin;
         if (_restoreChoiceFocus &&
@@ -264,14 +266,14 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     });
   }
 
+  /// Outside clicks dismiss a desktop picker, never the creation form.
+  /// Escape and Close remain the explicit ways to discard an unfinished task.
   void dismissFromOutside() {
     if (widget.desktop) {
-      if (_machineMenu.isOpen) {
-        _machineMenu.close();
+      if (_headerMachineMenu.isOpen) {
+        _headerMachineMenu.close();
       } else if (_picking && !box.locked) {
         _closeDesktopChooser();
-      } else if (!widget.embedded && box.requestDismiss()) {
-        widget.onClose();
       }
     } else {
       _runCommand(_cancel);
@@ -286,7 +288,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   }
 
   void _closeDesktopChooser({bool? next}) {
-    _machineMenu.close();
+    _headerMachineMenu.close();
     _folderAction = null;
     box.setQuery('');
     box.focusField(NewHarnessField.launch);
@@ -344,7 +346,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _Row.branch => 'Branch',
     _Row.worktree => 'Worktree',
     _Row.approvals => 'Approvals',
-    _Row.profile => 'Profile',
+    _Row.profile => widget.desktop ? 'Account' : 'Profile',
     _Row.start => 'New Harness',
   };
 
@@ -360,7 +362,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _Row.branch => box.branchRowLabel,
     _Row.worktree => box.worktree ? '[x]' : '[ ]',
     _Row.approvals => box.modeLabel,
-    _Row.profile => box.profileLabel ?? 'Default',
+    _Row.profile =>
+      box.profileLabel ?? (widget.desktop ? 'Default account' : 'Default'),
     _Row.start => box.checking ? 'Check status' : _label(row),
   };
 
@@ -631,18 +634,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   void _switchPane({bool reverse = false}) {
     if (box.locked) return;
-    if (widget.desktop &&
-        _picking &&
-        box.field == NewHarnessField.projectMenu) {
-      if (!reverse && _inputFocus.hasFocus) {
-        _machineFocus.requestFocus();
-        return;
-      }
-      if (reverse && _machineFocus.hasFocus) {
-        _inputFocus.requestFocus();
-        return;
-      }
-    }
     if (widget.desktop && _picking) {
       _closeDesktopChooser(next: !reverse);
       return;
@@ -961,12 +952,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   }
 
   void _confirm() {
-    if (widget.desktop &&
-        _machineFocus.hasFocus &&
-        box.field == NewHarnessField.projectMenu) {
-      _machineMenu.open();
-      return;
-    }
     // Return chooses a value in the list; only the start row launches.
     if (_picking) {
       final option = box.selected;
@@ -991,8 +976,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   }
 
   void _cancel() {
-    if (widget.desktop && _machineMenu.isOpen) {
-      _machineMenu.close();
+    if (widget.desktop && _headerMachineMenu.isOpen) {
+      _headerMachineMenu.close();
       return;
     }
     if (widget.desktop && !_picking) {
@@ -1051,7 +1036,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   }
 
   void _openCreationRow(_Row row) {
-    _machineMenu.close();
+    _headerMachineMenu.close();
     _folderAction = null;
     // A direct shortcut enters the top-level chooser, even when another
     // chooser currently owns a nested project or specialized-agent prompt.
@@ -1065,19 +1050,16 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   void _openMachineChooser() {
     if (box.locked) return;
-    _folderAction = null;
-    _chooserOrigin = _desktopFocus[_Row.project];
-    _chooserAnchor = _desktopAnchors[_Row.project];
-    _restoreChoiceFocus = false;
-    if (box.field != NewHarnessField.projectMenu) _selectRow(_Row.project);
-    box.focusField(NewHarnessField.projectMenu);
-    setState(() => _listOpen = true);
-    _focusEditor();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && box.field == NewHarnessField.projectMenu && _picking) {
-        _machineFocus.requestFocus();
-        _machineMenu.open();
-      }
+    _closeDesktopChooser();
+    _chooserOrigin = _headerMachineFocus;
+    _chooserAnchor = _headerMachineAnchor;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final anchor = _headerMachineAnchor.currentContext;
+      if (anchor != null) await Scrollable.ensureVisible(anchor);
+      if (!mounted) return;
+      _headerMachineFocus.requestFocus();
+      _headerMachineMenu.open();
     });
   }
 
@@ -1128,7 +1110,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     // The cascading menu owns its own arrow, Enter, and Escape handling.
-    if (_machineMenu.isOpen) return KeyEventResult.ignored;
+    if (_headerMachineMenu.isOpen) {
+      return KeyEventResult.ignored;
+    }
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
@@ -1171,31 +1155,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     // Candidate navigation and confirmation belong to the input method. Keep
     // these keys out of both the picker and ancestor focus-traversal shortcuts.
     if (_isComposing()) return KeyEventResult.skipRemainingHandlers;
-    if (widget.desktop && box.field == NewHarnessField.projectMenu) {
-      if (_machineFocus.hasFocus) {
-        if (event.logicalKey == LogicalKeyboardKey.tab) {
-          if (HardwareKeyboard.instance.isShiftPressed) {
-            _inputFocus.requestFocus();
-          } else {
-            _closeDesktopChooser(next: true);
-          }
-          return KeyEventResult.handled;
-        }
-        if (event.logicalKey == LogicalKeyboardKey.enter ||
-            event.logicalKey == LogicalKeyboardKey.numpadEnter ||
-            event.logicalKey == LogicalKeyboardKey.arrowDown ||
-            event.logicalKey == LogicalKeyboardKey.arrowRight) {
-          _machineMenu.open();
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
-      }
-      if (event.logicalKey == LogicalKeyboardKey.tab &&
-          !HardwareKeyboard.instance.isShiftPressed) {
-        _machineFocus.requestFocus();
-        return KeyEventResult.handled;
-      }
-    }
     if (event.logicalKey == LogicalKeyboardKey.keyR &&
         (HardwareKeyboard.instance.isMetaPressed ||
             HardwareKeyboard.instance.isControlPressed) &&
@@ -1212,7 +1171,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     switch (event.logicalKey) {
       case LogicalKeyboardKey.tab:
         // Arrows move within a pane; Tab switches panes without choosing.
-        _switchPane();
+        _switchPane(reverse: HardwareKeyboard.instance.isShiftPressed);
       case LogicalKeyboardKey.arrowDown:
         // While the list is open it owns ↑↓, so the rows below do not move
         // under a highlight the reader is using to choose.
@@ -1467,9 +1426,11 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         },
         if (widget.desktop)
           'picker.add_here': () {
-            if (!_isComposing() && !_picking) unawaited(_start());
+            if (!_isComposing() && !_picking && !_headerMachineMenu.isOpen) {
+              unawaited(_start());
+            }
           },
-        if ((!widget.desktop || _picking) && !_machineMenu.isOpen) ...{
+        if ((!widget.desktop || _picking) && !_headerMachineMenu.isOpen) ...{
           'picker.accept': () => _runCommand(_confirm),
           'picker.next': () =>
               _runCommand(() => _picking ? _stepMatch(1) : _moveRow(1)),
@@ -1693,13 +1654,11 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
               Positioned.fromRect(
                 rect: anchor,
-                child: _desktopMachineAnchor(
-                  child: DesktopDialogSurface(
-                    radius: DesktopChrome.menuRadius,
-                    key: const ValueKey('new-harness-chooser-surface'),
-                    elevation: 8,
-                    child: _desktopChooser(),
-                  ),
+                child: DesktopDialogSurface(
+                  radius: DesktopChrome.menuRadius,
+                  key: const ValueKey('new-harness-chooser-surface'),
+                  elevation: 8,
+                  child: _desktopChooser(),
                 ),
               ),
               // Keep the explicit Close action above the chooser's outside-tap
@@ -1772,15 +1731,39 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 ),
               ),
               _desktopField(
+                order: 2,
+                anchor: _headerMachineAnchor,
+                child: _desktopMachineAnchor(
+                  child: DesktopPill(
+                    key: const ValueKey('new-harness-field-machine'),
+                    focusNode: _headerMachineFocus,
+                    label: _repoMachineLabel(box.machineId),
+                    semanticLabel:
+                        'Computer, ${_repoMachineLabel(box.machineId)}',
+                    icon: box.app.stateOf(box.machineId)?.isLocalMachine == true
+                        ? AppIcons.laptop
+                        : AppIcons.monitor,
+                    menu: true,
+                    capsule: true,
+                    tooltip: 'Choose computer',
+                    textSize: 13,
+                    surfaceColor: DesktopChrome.surface,
+                    onPressed: box.locked
+                        ? null
+                        : () => _headerMachineMenu.isOpen
+                              ? _headerMachineMenu.close()
+                              : _headerMachineMenu.open(),
+                  ),
+                ),
+              ),
+              _desktopField(
                 order: 3,
                 anchor: _desktopAnchors[_Row.project]!,
                 maxWidth: 340,
                 child: _desktopChoiceButton(
                   _Row.project,
                   AppIcons.folder,
-                  label: box.app.stateOf(box.machineId)?.isLocalMachine == true
-                      ? projectName
-                      : '$projectName · ${box.machineLabel}',
+                  label: projectName,
                   capsule: true,
                 ),
               ),
@@ -1946,10 +1929,10 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   Widget _desktopSettings() => LayoutBuilder(
     builder: (context, constraints) {
-      final controls = Wrap(
+      final controls = Row(
         key: const ValueKey('new-harness-agent-settings'),
+        mainAxisSize: MainAxisSize.min,
         spacing: 2,
-        runSpacing: 4,
         children: [
           if (!box.isTerminal)
             _desktopField(
@@ -1973,7 +1956,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       );
       final gitControls = Row(
         key: const ValueKey('new-harness-git-settings'),
-        mainAxisAlignment: MainAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
         children: [
           if (box.canUseWorktree)
             _desktopField(
@@ -2001,37 +1984,33 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
             ),
           if (box.isGitProject || box.checkingGit || box.gitError != null)
-            Flexible(
-              child: _desktopField(
-                order: 9,
-                anchor: _desktopAnchors[_Row.branch]!,
-                child: _desktopChoiceButton(
-                  _Row.branch,
-                  AppIcons.gitBranch,
-                  label: box.branchRowLabel.split(' · ').first,
-                ),
+            _desktopField(
+              order: 9,
+              anchor: _desktopAnchors[_Row.branch]!,
+              child: _desktopChoiceButton(
+                _Row.branch,
+                AppIcons.gitBranch,
+                label: box.compactBranchLabel,
               ),
             ),
         ],
       );
-      if (constraints.maxWidth <
-          620 * MediaQuery.textScalerOf(context).scale(1)) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            controls,
-            if (!box.isTerminal) const SizedBox(height: 2),
-            gitControls,
-          ],
-        );
-      }
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(child: controls),
-          const SizedBox(width: 16),
-          SizedBox(width: constraints.maxWidth * .48, child: gitControls),
-        ],
+      return Scrollbar(
+        controller: _settingsScroll,
+        child: SingleChildScrollView(
+          key: const ValueKey('new-harness-settings-scroll'),
+          controller: _settingsScroll,
+          scrollDirection: Axis.horizontal,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minWidth: constraints.maxWidth),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              spacing: 16,
+              children: [controls, gitControls],
+            ),
+          ),
+        ),
       );
     },
   );
@@ -2080,10 +2059,11 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   String _desktopChoiceTooltip(_Row row) {
     if (_blocked(row) case final reason?) return '${_label(row)}: $reason';
+    if (row == _Row.branch) return box.branchTooltip;
     final action = switch (row) {
       _Row.model => 'Choose model',
       _Row.approvals => 'Choose approval mode',
-      _Row.profile => 'Choose Codex profile',
+      _Row.profile => 'Choose Codex account',
       _ => _label(row),
     };
     return '$action: ${_value(row)}';
@@ -2163,14 +2143,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     final preferredWidth = switch (box.field) {
       NewHarnessField.harness || NewHarnessField.agent => 304.0,
       NewHarnessField.model => 440.0,
-      // Keep room for the query beside its machine at enlarged text sizes.
-      // Fixed space covers both insets, icons, gaps, the capped machine pill,
-      // and refresh; measuring the labels also supports nonlinear text scaling.
       NewHarnessField.projectMenu => math.max(
         400.0,
-        _desktopTextSize('Search repos', 14).width +
-            _desktopTextSize('in', 12).width +
-            278,
+        _desktopTextSize('Search repos', 14).width + 96,
       ),
       NewHarnessField.project => 400.0,
       NewHarnessField.mode => 380.0,
@@ -2237,7 +2212,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     NewHarnessField.harness => 'Choose agent',
     NewHarnessField.model => 'Choose model',
     NewHarnessField.mode => 'Approvals',
-    NewHarnessField.profile => 'Codex profile',
+    NewHarnessField.profile => 'Codex account',
     NewHarnessField.branch => 'Choose branch',
     _ => 'Choose an option',
   };
@@ -2523,7 +2498,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   Widget _desktopOption(NewHarnessOption option) {
     final title = _desktopOptionTitle(option);
-    final highlighted = identical(option, box.selected) && !_machineMenu.isOpen;
+    final highlighted = identical(option, box.selected);
     final ink = highlighted
         ? DesktopChrome.onSelection
         : DesktopChrome.foreground;
@@ -3156,7 +3131,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           NewHarnessField.projectRepository => 'Enter GitHub URL',
           NewHarnessField.agent => 'Run ${box.harnessLabel} with',
           NewHarnessField.mode => 'Search approvals',
-          NewHarnessField.profile => 'Search profiles',
+          NewHarnessField.profile => 'Search accounts',
           _ => box.hint,
         }
       : box.field == NewHarnessField.agent
@@ -3172,7 +3147,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       box.app.stateOf(id)?.isLocalMachine == true
       ? Theme.of(context).platform == TargetPlatform.macOS
             ? 'This Mac'
-            : 'This computer'
+            : 'This Computer'
       : box.app.stateOf(id)?.machine.displayName ?? id;
 
   void _selectRepoMachine(String id) {
@@ -3185,23 +3160,27 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     }
     box.focusField(NewHarnessField.machine);
     box.accept(choice);
-    _inputFocus.requestFocus();
-    _focusEditor();
+    box.focusField(NewHarnessField.launch);
+    _headerMachineFocus.requestFocus();
   }
 
-  // Anchor to the whole repo popover so both top edges align and the child
-  // menu sits beyond its rim, rather than overlapping the search field.
+  // Computer selection belongs to the header, independently of repo search.
   Widget _desktopMachineAnchor({required Widget child}) => MenuAnchor(
-    controller: _machineMenu,
-    childFocusNode: _machineFocus,
+    controller: _headerMachineMenu,
+    childFocusNode: _headerMachineFocus,
     consumeOutsideTap: true,
     alignmentOffset: const Offset(8, 0),
     onOpen: () => setState(() {}),
     onClose: () {
-      if (mounted) setState(() {});
+      if (!mounted) return;
+      setState(() {});
+      _chooserOrigin = _headerMachineFocus;
+      _restoreChoiceFocus = true;
+      _chooserTraversal = null;
+      _focusEditor();
     },
     style: MenuStyle(
-      alignment: Alignment.topRight,
+      alignment: Alignment.bottomLeft,
       backgroundColor: WidgetStatePropertyAll(DesktopChrome.surface),
       surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
       elevation: const WidgetStatePropertyAll(grid.AppMenu.elevation),
@@ -3217,7 +3196,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           key: ValueKey('new-harness-machine-option-${option.id}'),
           autofocus: option.id == box.machineId && option.enabled,
           onPressed: option.enabled && !box.locked
-              ? () => _selectRepoMachine(option.id)
+              ? () {
+                  _selectRepoMachine(option.id);
+                }
               : null,
           style:
               MenuItemButton.styleFrom(
@@ -3316,34 +3297,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         ),
     ],
     child: child,
-  );
-
-  // Handle traversal before MenuAnchor's menu-bar shortcuts consume arrows.
-  Widget _repoMachinePicker() => Focus(
-    canRequestFocus: false,
-    onKeyEvent: _onKey,
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 160),
-      child: DesktopPill(
-        key: const ValueKey('new-harness-repo-machine'),
-        focusNode: _machineFocus,
-        label: _repoMachineLabel(box.machineId),
-        semanticLabel: 'Machine, ${_repoMachineLabel(box.machineId)}',
-        tooltip: 'Machine: ${box.machineLabel}',
-        menu: true,
-        menuIcon: AppIcons.chevronRight,
-        compact: true,
-        quiet: true,
-        onPressed: box.locked
-            ? null
-            : () {
-                _machineFocus.requestFocus();
-                _machineMenu.isOpen
-                    ? _machineMenu.close()
-                    : _machineMenu.open();
-              },
-      ),
-    ),
   );
 
   Widget _searchBar() {
@@ -3445,15 +3398,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
             ),
           ),
-          if (widget.desktop && box.field == NewHarnessField.projectMenu) ...[
-            const SizedBox(width: 8),
-            Text(
-              'in',
-              style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
-            ),
-            const SizedBox(width: 2),
-            _repoMachinePicker(),
-          ],
           if (box.canRefreshChoices)
             // Held to two cells by one row: a Material button's 48px tap
             // target would make the prompt taller than every other line.

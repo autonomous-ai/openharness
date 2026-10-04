@@ -279,6 +279,21 @@ void main() {
             await tester.sendKeyEvent(LogicalKeyboardKey.escape);
           } else {
             await tester.tapAt(const Offset(4, 10));
+            await tester.pumpAndSettle();
+            expect(find.byType(NewHarnessForm), findsOneWidget);
+            expect(
+              box.task,
+              '  Review before changing anything\nKeep the patch small  ',
+            );
+            expect(box.mode, 'readOnly');
+            expect(box.draft.profileChosen, isTrue);
+            expect(box.draft.profile, isNull);
+            expect(
+              box.project.repository?.url,
+              'https://github.com/acme/terminal-tools.git',
+            );
+            expect(connection.requests, isEmpty);
+            await tester.sendKeyEvent(LogicalKeyboardKey.escape);
           }
           await tester.pumpAndSettle();
           expect(find.byType(NewHarnessForm), findsNothing);
