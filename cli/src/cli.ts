@@ -70,15 +70,11 @@ import { qrSignIn } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
 import { watchJsonDriver, type JsonDriver } from './lib/jsonDriver.js'
 import { terminalQr } from './lib/terminalQr.js'
-import { ensureGridInstalled } from './lib/gridInstall.js'
 import { ensureHarnessGrid, type EnsureStatus } from './lib/gridEnsure.js'
 import { passThroughToGridLogout } from './lib/gridLogout.js'
-import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { warnIfGridSignInRemains } from './lib/gridCredentials.js'
-import { reconcileGridAttach, gridNamesLocal, createGridAccess } from './lib/gridAttach.js'
-import { signedInGridEmail, resetGridDeriveMemo } from './lib/gridDerive.js'
-import { forgetGridModels, gridAnnotation, keystrokePrewarm, observeMachineList, onGridModelsChanged, warmGridModels } from './lib/gridModels.js'
-import { gridAvailable, managedGridPath } from './lib/gridExec.js'
+import { observeMachineList } from './lib/gridModels.js'
+import { managedGridPath } from './lib/gridExec.js'
 import { ENGINE_CLI_COMMANDS, ENGINES, PROCESS_ENGINES, enginePathOverride } from './lib/engineBin.js'
 import { isTerminalEngine } from './engines/types.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
@@ -170,6 +166,7 @@ import { databaseHistory } from './core/transcripts/databaseHistory.js'
 import { createCoreApi, emptyPorts } from './core/api.js'
 import { startSearch } from './services/search.js'
 import { startViewers } from './services/viewers.js'
+import { startModels } from './services/models.js'
 import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
@@ -1772,6 +1769,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       backendRef?.viewerForwarder.refresh(agentId)
       backendRef?.interactiveViewers.refresh(agentId)
     },
+    gridNamed: (name) => backendRef?.setHarnessGridName(name),
+    // The backend mints and remembers the account's grid name; this CLI holds neither the account's
+    // email nor its id. An older backend (no route) answers nothing, which the grid reconcile treats as
+    // "no grid yet". Bounded so a stalled control-plane connection cannot hold the attempt open.
+    mintGridName: async () => {
+      const { headers } = await controlPlaneAuth()
+      return (await postJson<{ gridName?: string }>('/api/grid/name', {}, headers, AbortSignal.timeout(GRID_MINT_TIMEOUT_MS))).gridName ?? null
+    },
+    accessToken: () => new AuthSessionManager(backendHttpBase()).accessToken(),
   })
   const ports = emptyPorts()
   // The DSH companions: each harness agent's viewer and verdict watch (services/viewers.ts).
@@ -1862,52 +1868,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   ensureBundledCoreHarnesses()
 
-  // Grid is an add-on (`lib/gridAttach.ts`): nothing on this path installs `grid`, signs this machine in
-  // to it or creates a grid. The first grid feature a person uses — the models picker's Set up, a local
-  // model's Get or Use, an agent moved onto a grid model, the Model Manager — asks `backend.ensureGrid`,
-  // which does it then, with this machine's harness token (no second browser) and, only for what needs
-  // one, the account's own grid. It used to run here on every start and every reconnect.
-  const gridLog = (line: string): void => console.log(`[grid-attach] ${line}`)
-  const gridAccess = createGridAccess({
-    signedIn: () => signedInGridEmail() !== null,
-    log: gridLog,
-    attempt: ({ ownGrid, signedInThisRun }) => reconcileGridAttach({
-      // The pinned managed runtime first; grid's own installer when there is none to follow.
-      installCli: async () => {
-        await ensureManagedGrid((m) => console.log(`[grid-runtime] ${m}`))
-        if (gridAvailable()) return
-        const installed = await ensureGridInstalled()
-        if (installed.status !== 'present') gridLog(installed.message)
-      },
-      gridAvailable: () => gridAvailable(),
-      // The backend mints and remembers the name; this CLI holds neither the account's email nor its
-      // id. An older backend (no route) answers nothing, which the reconcile treats as "no grid yet".
-      // Bounded so a stalled control-plane connection cannot hold the attempt open indefinitely.
-      mintName: async () => {
-        const { headers } = await controlPlaneAuth()
-        return (await postJson<{ gridName?: string }>('/api/grid/name', {}, headers, AbortSignal.timeout(GRID_MINT_TIMEOUT_MS))).gridName ?? null
-      },
-      accessToken: () => new AuthSessionManager(backendHttpBase()).accessToken(),
-      signedInEmail: () => signedInGridEmail(),
-      gridNames: () => gridNamesLocal(),
-      handoff: (token) => handOffToGrid(token, { json: true }),
-      ensure: (name) => ensureHarnessGrid(name),
-      onName: (name) => {
-        // Answer the picker with this account's grid at once, and drop the memos a stale or absent
-        // sign-in may have filled — the model list, the derived name, and the web-tools URL.
-        backend.setHarnessGridName(name)
-        forgetGridModels()
-        resetGridDeriveMemo()
-        clearGridMcpUrlCache()
-      },
-      log: gridLog,
-    }, { ownGrid, signedInThisRun }),
-  })
-
-  backend.ensureGrid = (request) => gridAccess.ensure(request)
+  // Models: grid access, the model pictures on agents' frames, the keystroke prewarm (services/models.ts).
+  startModels(coreApi, ports)
+  const models = ports.models
+  backend.ensureGrid = models ? (request) => models.ensure(request) : null
   // Offline, for every list read: is there a `grid` here holding a sign-in? What decides whether the
   // picker offers local and shared models or a Set up row.
-  backend.gridSetUp = () => gridAvailable() && signedInGridEmail() !== null
+  backend.gridSetUp = models ? () => models.setUp() : null
 
   /**
    * Is ANY device surface watching this machine?
@@ -1972,29 +1939,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // an older desktop and typing from a phone get it too; an agent on its own login has no `grid`.
     onInput: (agentId) => {
       const grid = registry.resolve(agentId)?.grid
-      if (grid) void keystrokePrewarm(grid).catch(() => {})
+      if (grid) ports.models?.prewarm(grid)
     },
   })
   backend.setTerminalStreamManager(terminalStreams)
-  // An agent's frame says what its grid's picture says (`grid.state`, and a `grid.note` when its model
-  // will not answer). The picture changes on reads nobody waited for, so the frames of the agents whose
-  // annotation moved are pushed again — only those, and only when it moved.
-  const announcedGrid = new Map<string, string>()
-  onGridModelsChanged(() => {
-    const onGrid = registry.advertised().filter((s) => s.grid)
-    const present = new Set(onGrid.map((s) => s.agentId))
-    for (const agentId of [...announcedGrid.keys()]) if (!present.has(agentId)) announcedGrid.delete(agentId)
-    for (const s of onGrid) {
-      const said = JSON.stringify(gridAnnotation(s.grid))
-      if (announcedGrid.get(s.agentId) === said) continue
-      announcedGrid.set(s.agentId, said)
-      syncSession(s)
-    }
-  })
-  // The pictures saved before this start, back in memory with nothing read from any grid: an agent's
-  // frame carries its grid's state and note, and a keystroke can start its grid, before any window asks
-  // for the list (after a self-update, a phone may be the only one typing).
-  void warmGridModels().catch(() => {})
   // `agentReconciler` is declared further down; this closure only ever runs for a frame, and no
   // socket is connected until well after that declaration (backend.connect() is the last thing
   // this function does).
@@ -3865,7 +3813,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     clearAuthSession()
     // The web-tools cache lives exactly as long as the sign-in. `harness logout` and `reset` stop
     // the daemon outright; this is the one sign-out the daemon learns of from inside.
-    clearGridMcpUrlCache()
+    ports.models?.signedOut()
     void shutdown('revoked')
   }
 

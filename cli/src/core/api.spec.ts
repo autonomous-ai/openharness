@@ -11,6 +11,7 @@ describe('the core API services stand on', () => {
       registry: {
         list: vi.fn(() => [row('live')]),
         byAgent: vi.fn((agentId: string) => (agentId === 'live' ? row('live') : undefined)),
+        advertised: vi.fn(() => [row('live')]),
         terminalAvailable: vi.fn((agentId: string) => agentId === 'live'),
       } as unknown as CoreApiDeps['registry'],
       stoppedAgents: { list: vi.fn(() => [row('stopped')]) } as unknown as CoreApiDeps['stoppedAgents'],
@@ -19,6 +20,9 @@ describe('the core API services stand on', () => {
       openSessions: { known: vi.fn(), fresh: vi.fn() } as unknown as CoreApiDeps['openSessions'],
       syncSession: vi.fn(),
       viewerChanged: vi.fn(),
+      gridNamed: vi.fn(),
+      mintGridName: vi.fn(async () => 'grid-1'),
+      accessToken: vi.fn(async () => 'token'),
     }
     const core = createCoreApi(deps)
     expect(core.dataDir).toBe('/data')
@@ -32,10 +36,14 @@ describe('the core API services stand on', () => {
     expect(core.agents.terminalAvailable('live')).toBe(true)
     expect(core.agents.sync).toBe(deps.syncSession)
     expect(core.clients.viewerChanged).toBe(deps.viewerChanged)
+    expect(core.agents.advertised().map((s) => s.agentId)).toEqual(['live'])
+    expect(core.clients.gridNamed).toBe(deps.gridNamed)
+    expect(core.account.mintGridName).toBe(deps.mintGridName)
+    expect(core.account.accessToken).toBe(deps.accessToken)
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ search: null, viewers: null })
+    expect(emptyPorts()).toEqual({ search: null, viewers: null, models: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
   })
 })

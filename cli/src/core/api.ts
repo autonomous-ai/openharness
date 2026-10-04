@@ -8,6 +8,8 @@
  * never a generic `call(name, args)`.
  */
 import type { AgentDshContext } from '../lib/agentFrame.js'
+import type { GridAccess } from '../lib/gridAttach.js'
+import type { AgentGridTarget } from '../lib/gridModels.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../lib/registry.js'
 import type { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
@@ -24,6 +26,8 @@ export interface CoreApi {
     displayName(session: RegisteredSession): string
     /** A live agent, by its agent id. */
     byAgent(agentId: string): RegisteredSession | undefined
+    /** The live agents the apps are shown. */
+    advertised(): RegisteredSession[]
     /** Whether the agent's terminal is attached: a frame without one reads to the apps as "agent gone". */
     terminalAvailable(agentId: string): boolean
     /** Send the agent's frame to the apps again. */
@@ -39,9 +43,19 @@ export interface CoreApi {
     sessions: Pick<ExternalSessions, 'list' | 'scan'>
     open: Pick<OpenSessions, 'known' | 'fresh'>
   }
+  /** The sign-in the core holds for every service: a service never holds a credential itself. */
+  account: {
+    /** The account's private grid name, minted and remembered by the backend; null when an older
+     *  backend issues none. Bounded in time. */
+    mintGridName(): Promise<string | null>
+    /** This machine's harness access token, for handing a sign-in to grid. Rejects when signed out. */
+    accessToken(): Promise<string>
+  }
   clients: {
     /** An agent's viewer moved: the windows' viewer panes forward to the new one. */
     viewerChanged(agentId: string): void
+    /** The account's grid has a name: the models picker answers with it at once. */
+    gridNamed(name: string): void
   }
 }
 
@@ -65,30 +79,48 @@ export interface ViewersPort {
   stop(): Promise<void>
 }
 
+/** The core's calls into models (grid): have grid ready, whether it is set up, and the two things
+ *  the core tells it — someone is typing to an agent on a grid, and the sign-in ended. */
+export interface ModelsPort {
+  /** Have grid ready for what the caller is about to do; resolves with what happened, never rejects. */
+  ensure: GridAccess['ensure']
+  /** Offline: is there a `grid` here holding a sign-in? */
+  setUp(): boolean
+  /** Start the agent's sleeping grid while someone types to it. */
+  prewarm(grid: AgentGridTarget): void
+  /** The sign-in ended: drop what lives exactly as long as it. */
+  signedOut(): void
+}
+
 /** Each port is filled by the service that owns it when that service starts, and is null while the
  *  service is off: the core never waits on one. */
 export interface CorePorts {
   search: SearchPort | null
   viewers: ViewersPort | null
+  models: ModelsPort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { search: null, viewers: null }
+  return { search: null, viewers: null, models: null }
 }
 
 export interface CoreApiDeps {
   dataDir: string
-  registry: Pick<typeof registry, 'list' | 'byAgent' | 'terminalAvailable'>
+  registry: Pick<typeof registry, 'list' | 'byAgent' | 'advertised' | 'terminalAvailable'>
   stoppedAgents: Pick<StoppedAgentStore, 'list'>
   databaseHistory: CoreApi['transcripts']['databaseHistory']
   externalSessions: CoreApi['external']['sessions']
   openSessions: CoreApi['external']['open']
   syncSession: CoreApi['agents']['sync']
   viewerChanged: CoreApi['clients']['viewerChanged']
+  gridNamed: CoreApi['clients']['gridNamed']
+  mintGridName: CoreApi['account']['mintGridName']
+  accessToken: CoreApi['account']['accessToken']
 }
 
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, viewerChanged,
+  gridNamed, mintGridName, accessToken,
 }: CoreApiDeps): CoreApi {
   return {
     dataDir,
@@ -96,11 +128,13 @@ export function createCoreApi({
       all: () => [...registry.list(), ...stoppedAgents.list()],
       displayName: projectDisplayName,
       byAgent: (agentId) => registry.byAgent(agentId),
+      advertised: () => registry.advertised(),
       terminalAvailable: (agentId) => registry.terminalAvailable(agentId),
       sync: syncSession,
     },
     transcripts: { databaseHistory },
     external: { sessions: externalSessions, open: openSessions },
-    clients: { viewerChanged },
+    account: { mintGridName, accessToken },
+    clients: { viewerChanged, gridNamed },
   }
 }
