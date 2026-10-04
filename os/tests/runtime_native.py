@@ -227,9 +227,12 @@ def main():
             for pane in [shell, right, agent]:
                 wait(lambda: hn('display-message', '-p', '-t', pane, '#{pane_current_path}') == str(project),
                      'Project working directory in ' + pane)
-            type_into_screen(shell, 'printf before > ' + shlex.quote(str(project / 'keyboard.txt')))
+            type_into_screen(shell, 'printf "%s" "$$" > ' + shlex.quote(str(project / 'shell.pid')) +
+                             '; printf before > ' + shlex.quote(str(project / 'keyboard.txt')))
             wait(lambda: (project / 'keyboard.txt').read_text() == 'before', 'PTY keyboard input')
-            pid = int(hn('display-message', '-p', '-t', shell, '#{pane_pid}'))
+            # A daemon-backed pane is not a local PTY owner and need not expose
+            # pane_pid. Ask the actual shell, independently of UI metadata.
+            pid = int((project / 'shell.pid').read_text())
             start_time = Path(f'/proc/{pid}/stat').read_text().split()[21]
             receipt['checks'].append('Three real hn shell panes open; the attached terminal accepts native PTY keyboard input')
             prompt = ('Create sum.py here using only the Python standard library. It must accept zero or more '
