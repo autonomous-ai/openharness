@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CommandCodeNormalizer } from '../engines/commandcode/normalizer.js'
+import type { AutonomousDeviceInput } from '../lib/autonomous-device/input.js'
 import { deviceErrorText } from '../lib/deviceErrors.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
@@ -54,11 +55,11 @@ function deps(over: Partial<InputDeps> = {}) {
 }
 
 /** A device pane lock that runs each write at once and remembers whose pane it was. */
-const lock = (calls: string[]) => ({
-  legacyWrite: vi.fn(async (id: string, write: () => Promise<boolean | TerminalActionResult>) => {
+const lock = (calls: string[]): Pick<AutonomousDeviceInput, 'legacyWrite'> => ({
+  legacyWrite: <T,>(id: string, write: () => Promise<T>): Promise<T> => {
     calls.push(`lock ${id}`)
     return write()
-  }),
+  },
 })
 
 const delivery = (deliveryId: string) => ({ deliveryId }) as unknown as SessionInputDelivery
@@ -163,7 +164,7 @@ describe('the device input\'s dependencies', () => {
   it('tells the device service what happened, when there is one', () => {
     const run = deps()
     const wired = deviceInputDeps(run.deps, () => ({ acquireControl: vi.fn(), submit: vi.fn(), cancelDelivery: vi.fn() }))
-    const status = { agentId: 'a1' } as Parameters<NonNullable<typeof wired.onInputStatus>>[0]
+    const status = { agentId: 'a1' } as unknown as Parameters<NonNullable<typeof wired.onInputStatus>>[0]
     wired.onDelivery(delivery('d1'))
     wired.onDispatch!('a1', 'd1', 'hi')
     wired.onDispatch!('nobody', 'd2', 'hi')
