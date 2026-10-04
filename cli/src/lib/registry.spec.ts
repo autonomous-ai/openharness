@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { processStartMarker } from './processLiveness.js'
@@ -214,7 +214,7 @@ describe('registry remote display names', () => {
     })
   })
 
-  it('persists Codex engine metadata and preserves a malformed v2 row for operator recovery', async () => {
+  it('persists Codex engine metadata and moves a malformed v2 row aside for operator recovery', async () => {
     const sessionsDir = join(dataDir, 'sessions')
     const transcriptPath = join(sessionsDir, 'codex-session.jsonl')
     mkdirSync(sessionsDir)
@@ -243,10 +243,16 @@ describe('registry remote display names', () => {
     const malformed = JSON.stringify(persisted)
     writeFileSync(join(dataDir, 'registry.json'), malformed)
 
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     registry.load()
     expect(registry.list()).toEqual([])
     expect(registry.get('invalid-session')).toBeUndefined()
-    expect(readFileSync(join(dataDir, 'registry.json'), 'utf-8')).toBe(malformed)
+    // Kept byte for byte beside the registry, which starts empty and can be written again.
+    const aside = readdirSync(dataDir).filter((name) => name.startsWith('registry.json.corrupt-'))
+    expect(aside).toHaveLength(1)
+    expect(readFileSync(join(dataDir, aside[0]), 'utf-8')).toBe(malformed)
+    expect(existsSync(join(dataDir, 'registry.json'))).toBe(false)
+    error.mockRestore()
   })
 
   it('migrates legacy tmux rows additively without changing agent identity or binding', async () => {
@@ -292,12 +298,35 @@ describe('registry remote display names', () => {
   it.each([
     ['truncated JSON', '[{"agentId":'],
     ['non-array root', '{"schemaVersion":2}'],
-    ['unknown row schema', JSON.stringify([{ schemaVersion: 99, agentId: 'future' }])],
-    ['nonnumeric row schema', JSON.stringify([{ schemaVersion: '3', agentId: 'future' }])],
     ['empty legacy row', JSON.stringify([{}])],
     ['primitive legacy row', JSON.stringify([7])],
     ['legacy row without runtime', JSON.stringify([{ agentId: 'legacy-agent' }])],
-  ])('preserves %s byte-for-byte and blocks later writes', async (_label, bytes) => {
+  ])('moves %s aside byte-for-byte, starts empty, and goes on starting agents', async (_label, bytes) => {
+    const file = join(dataDir, 'registry.json')
+    writeLegacyStateFile(file, bytes)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const aside = readdirSync(dataDir).filter((name) => name.startsWith('registry.json.corrupt-'))
+    expect(aside).toHaveLength(1)
+    expect(readFileSync(join(dataDir, aside[0]), 'utf8')).toBe(bytes)
+    expect(statSync(join(dataDir, aside[0])).mode & 0o777).toBe(0o600)
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry .*; moved it aside to .*registry\.json\.corrupt-.* and started empty$/))
+    registry.openProcessAgent({
+      agentId: 'after-the-move',
+      engine: 'claude',
+      tmuxPane: '%88',
+      processIdentity: processIdentity(888),
+    })
+    expect(registry.list().map((s) => s.agentId)).toEqual(['after-the-move'])
+    expect(JSON.parse(readFileSync(file, 'utf8')).map((row: { agentId: string }) => row.agentId)).toEqual(['after-the-move'])
+    error.mockRestore()
+  })
+
+  it.each([
+    ['unknown row schema', JSON.stringify([{ schemaVersion: 99, agentId: 'future' }])],
+    ['nonnumeric row schema', JSON.stringify([{ schemaVersion: '3', agentId: 'future' }])],
+  ])('preserves a newer version\'s %s byte-for-byte and blocks later writes', async (_label, bytes) => {
     const file = join(dataDir, 'registry.json')
     writeLegacyStateFile(file, bytes)
     const { registry } = await loadRegistryModule()
