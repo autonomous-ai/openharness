@@ -11,6 +11,7 @@
  * The optional `scms` parameters are test seams; the daemon always uses `scmProjects`.
  */
 import { basename } from 'node:path'
+import { PROJECT_INSTRUCTION_FILES } from '../dsh/adapters.js'
 import { validProjectCwd } from '../lib/agentProject.js'
 import { GitScmProject } from './gitScmProject.js'
 import type { ScmDescription, ScmDetectOptions, ScmDetectResult, ScmKind, ScmLaunchRecord, ScmProject } from './types.js'
@@ -83,6 +84,17 @@ export function scmLaunchEnv(record: ScmLaunchRecord | null | undefined, scms: r
  *  no `prepareWrite` (git), so a git workspace sees no new subprocess and no file access from this. */
 export async function prepareScmWrite(cwd: string, paths: readonly string[], scms: readonly ScmProject[] = scmProjects): Promise<void> {
   for (const scm of scms) await scm.prepareWrite?.(cwd, paths)
+}
+
+/** Before Harness writes into a project's instruction files (a harness's session bootstrap, the
+ *  saved-API notes): an SCM that holds tracked files read-only opens `PROJECT_INSTRUCTION_FILES` first.
+ *  Awaited by create, fork and every relaunch (`core/agents/create.ts`, `fork.ts`, `launch.ts`). Git
+ *  has no `prepareWrite`, so for a git workspace this runs nothing and touches no file. A failure here
+ *  is only logged; the write that follows reports its own. */
+export async function prepareInstructionWrites(cwd: string | null | undefined, scms: readonly ScmProject[] = scmProjects): Promise<void> {
+  if (!cwd) return
+  try { await prepareScmWrite(cwd, PROJECT_INSTRUCTION_FILES, scms) }
+  catch (error) { console.warn(`[scm] could not prepare instruction files for writing · ${error instanceof Error ? error.message : error}`) }
 }
 
 export function forgetScmProject(cwd: string, scms: readonly ScmProject[] = scmProjects): void {

@@ -23,7 +23,7 @@ import { forkName, planFork } from '../../lib/forkAgent.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../../lib/registry.js'
 import type { TmuxBackend } from '../../lib/tmuxBackend.js'
-import { scmLaunchEnv } from '../../scm/scmProjects.js'
+import { prepareInstructionWrites, scmLaunchEnv } from '../../scm/scmProjects.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'
 
@@ -73,6 +73,7 @@ export function createAgentForker({
     if (!plan.ok) return { ok: false, error: plan.error, detail: plan.detail }
 
     const label = buildHarnessSessionLabel(engine)
+    await prepareInstructionWrites(source.cwd)
     // Fork the source's saved harness context. Workspace templates and init are not run again.
     let dshEnv: Record<string, string> | undefined
     let dshArgs: string[] = []

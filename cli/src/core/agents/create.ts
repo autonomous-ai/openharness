@@ -40,7 +40,7 @@ import { clearPaneRemainOnExit } from '../../lib/tmux.js'
 import type { TmuxBackend } from '../../lib/tmuxBackend.js'
 import { TMUX_SESSION_ENV_MIN, tmuxSupportsSessionEnv } from '../../lib/tmuxVersion.js'
 import type { Adoption } from './adopt.js'
-import { scmLaunchEnv } from '../../scm/scmProjects.js'
+import { prepareInstructionWrites, scmLaunchEnv } from '../../scm/scmProjects.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'
 
@@ -128,6 +128,7 @@ export function createAgentCreator({
     // The `harness-` prefix is also discovery's whitelist (see `isHarnessSession` /
     // `TmuxBackend.inventory()`) — every pane outside it is invisible to the daemon.
     const label = buildHarnessSessionLabel(engine)
+    await prepareInstructionWrites(cwd)
     // Prepare the harness workspace, then bind its session context to the selected engine.
     // Missing packages or invalid runtimes refuse the launch before the agent is started.
     let dshEnv: Record<string, string> | undefined

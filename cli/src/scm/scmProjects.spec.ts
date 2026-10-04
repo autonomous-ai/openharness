@@ -3,14 +3,15 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { promisify } from 'node:util'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { PROJECT_INSTRUCTION_FILES } from '../dsh/adapters.js'
 import { agentProject } from '../lib/agentProject.js'
 import { encryptDownFrame, encryptRpcResult } from '../lib/e2ee/applicationFrames.js'
 import { readGitProject } from '../lib/gitProject.js'
 import { sweepWorktrees } from '../lib/worktreeSweep.js'
 import { GitScmProject } from './gitScmProject.js'
 import {
-  describeScmProject, detectScmProject, forgetScmProject, prepareScmWrite, renameScmProject, scmByKind, scmLaunchEnv, scmProjects, sweepScmProjects,
+  describeScmProject, detectScmProject, forgetScmProject, prepareInstructionWrites, prepareScmWrite, renameScmProject, scmByKind, scmLaunchEnv, scmProjects, sweepScmProjects,
 } from './scmProjects.js'
 import { parseScmLaunchRecord, type ScmDetectResult, type ScmProject } from './types.js'
 
@@ -111,6 +112,20 @@ describe('the SCM seam, with git as its only implementation', { timeout: 30_000 
     const writer = { kind: 'git', prepareWrite: async (cwd: string, paths: readonly string[]) => { asked.push([cwd, paths]) } }
     await prepareScmWrite(repo, ['AGENTS.md', 'CLAUDE.md'], [new GitScmProject(), writer as unknown as ScmProject])
     expect(asked).toEqual([[repo, ['AGENTS.md', 'CLAUDE.md']]])
+  })
+
+  it('asks for the instruction files before a write, skips a missing cwd, and only logs a failure', async () => {
+    const asked: Array<[string, readonly string[]]> = []
+    const writer = { kind: 'git', prepareWrite: async (cwd: string, paths: readonly string[]) => { asked.push([cwd, paths]) } }
+    await prepareInstructionWrites(repo, [writer as unknown as ScmProject])
+    await prepareInstructionWrites(null, [writer as unknown as ScmProject])
+    expect(asked).toEqual([[repo, PROJECT_INSTRUCTION_FILES]])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const failing = { kind: 'git', prepareWrite: async () => { throw new Error('locked') } }
+      await expect(prepareInstructionWrites(repo, [failing as unknown as ScmProject])).resolves.toBeUndefined()
+      expect(warn).toHaveBeenCalledWith('[scm] could not prepare instruction files for writing · locked')
+    } finally { warn.mockRestore() }
   })
 
   it('rehydrates a launch record from the registry file and refuses anything else', () => {
