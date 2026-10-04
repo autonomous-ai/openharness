@@ -62,24 +62,24 @@ Useful terminal defaults (verify with `hn list-keys` if customized):
 
 | Keys | Action |
 | --- | --- |
-| Ctrl+B, then Shift+N | New Harness |
-| Ctrl+B, then Shift+T | New terminal |
-| Ctrl+B, then s | Find harnesses across connected computers |
-| Ctrl+B, then c | New tab |
-| Ctrl+B, then n / p | Next / previous tab |
-| Ctrl+B, then o / arrow | Next pane / pane in that direction |
-| Ctrl+B, then z | Zoom or restore the focused pane |
-| Ctrl+B, then % / " | Split right / below with a terminal |
-| Ctrl+B, then a | Next harness needing attention |
-| Ctrl+B, then Shift+A | All harnesses needing attention |
-| Ctrl+B, then Shift+B | Broadcast a message to the tab |
-| Ctrl+B, then @ | Machines |
-| Ctrl+B, then Shift+S | Harness Store |
-| Ctrl+B, then ? | Key reference |
-| Ctrl+B, then : | Command prompt |
-| Ctrl+B, then [ | Scrollback/copy mode |
+| Ctrl+b, then Shift+n | New Harness |
+| Ctrl+b, then Shift+t | New terminal |
+| Ctrl+b, then s | Find harnesses across connected computers |
+| Ctrl+b, then c | New tab |
+| Ctrl+b, then n / p | Next / previous tab |
+| Ctrl+b, then o / arrow | Next pane / pane in that direction |
+| Ctrl+b, then z | Zoom or restore the focused pane |
+| Ctrl+b, then % / " | Split right / below with a terminal |
+| Ctrl+b, then a | Next harness needing attention |
+| Ctrl+b, then Shift+a | All harnesses needing attention |
+| Ctrl+b, then Shift+b | Broadcast a message to the tab |
+| Ctrl+b, then @ | Machines |
+| Ctrl+b, then Shift+s | Harness Store |
+| Ctrl+b, then ? | Key reference |
+| Ctrl+b, then : | Command prompt |
+| Ctrl+b, then [ | Scrollback/copy mode |
 
-Ctrl+B is a prefix: release it, then press the next key.
+Ctrl+b is a prefix: release it, then press the next key.
 Each agent also owns its own keys while its pane has focus. Shift+Enter inserts a
 new line in compatible agent prompts. Do not intercept agent shortcuts needlessly.
 

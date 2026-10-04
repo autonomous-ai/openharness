@@ -379,7 +379,9 @@ def check_first_use(vm, user, folder):
     vm.command('nmcli networking off')
     version, _ = vm.command(user('/usr/bin/opencode --version'))
     (folder / 'bundled-opencode-version.txt').write_text(version)
-    vm.command('test ! -e /home/me/.config/opencode/opencode.json')
+    defaults = json.loads(vm.read_file('/home/me/.config/opencode/opencode.json'))
+    assert not set(defaults) & {'model', 'provider', 'providers'}, 'The image must retain upstream model and provider defaults'
+    assert defaults.get('update') == 'disable', 'The packaged agent must remain managed by system updates'
     vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Connect to start with an agent" && exit 0; sleep 1; done; exit 1')), timeout=40)
     vm.screenshot('01a-network-first')
     vm.keys('ret')
@@ -440,9 +442,14 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     # OpenCode 2 resolves a project through its service; /root is inaccessible
     # to me. Inspect the same project as the visible agent instead.
     vm.command(user('sh -c ' + shlex.quote('cd "$HOME/Projects" && /usr/bin/opencode debug config > /tmp/hn-opencode-config.json')), timeout=60)
-    agent_config = json.loads(vm.read_file('/tmp/hn-opencode-config.json'))
-    assert '/usr/share/harness-os/guide.md' in agent_config.get('instructions', []), 'OpenCode did not load the bundled Harness guide'
-    assert not agent_config.get('model'), 'The image must keep upstream model selection'
+    config_sources = vm.read_file('/tmp/hn-opencode-config.json')
+    (folder / 'opencode-config-sources.json').write_bytes(config_sources)
+    # V2 reports configuration sources, not the resolved V1 object. Its
+    # documented global AGENTS.md carries instructions; the real conversation
+    # below independently checks that the agent knows the Harness shortcuts.
+    agent_config = json.loads(config_sources)
+    assert isinstance(agent_config, list) and any(row.get('path') == '/home/me/.config/opencode' for row in agent_config), 'OpenCode did not discover its global configuration'
+    assert vm.read_file('/home/me/.config/opencode/AGENTS.md') == vm.read_file('/usr/share/harness-os/guide.md'), 'OpenCode global instructions differ from the packaged guide'
     vm.command('test ! -e /home/me/.config/opencode/plugin/launcher-register.js && test -s /home/me/.config/opencode/plugins/launcher-register/tui.js')
     screen, _ = vm.command(user('hn capture-pane -p'))
     (folder / 'bundled-opencode-screen.txt').write_text(screen)

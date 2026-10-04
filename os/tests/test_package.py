@@ -13,6 +13,23 @@ spec.loader.exec_module(package)
 
 
 class PackageIdentity(unittest.TestCase):
+    def test_new_accounts_discover_the_packaged_guide_without_model_overrides(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            runtime = base / 'runtime'
+            runtime.mkdir()
+            for name in ['harness-tui', 'cli.js', 'notify.mjs']:
+                (runtime / name).write_bytes(b'runtime fixture')
+            destination = base / 'stage'
+            with patch.object(package, 'validate_runtime', return_value={'source_commit': 'a' * 40}):
+                package.stage(Path(__file__).resolve().parents[2], runtime, destination, 'a' * 40)
+            config = destination / 'etc/skel/.config/opencode'
+            self.assertEqual((config / 'AGENTS.md').readlink(), Path('/usr/share/harness-os/guide.md'))
+            self.assertIn('Super+n', (destination / 'usr/share/harness-os/guide.md').read_text())
+            settings = json.loads((config / 'opencode.json').read_text())
+            self.assertEqual(settings['update'], 'disable')
+            self.assertFalse(set(settings) & {'model', 'provider', 'providers', 'instructions'})
+
     def test_same_source_is_byte_identical_across_build_times_and_output_names(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / 'stage'

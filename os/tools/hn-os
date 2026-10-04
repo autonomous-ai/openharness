@@ -44,6 +44,17 @@ def opencode_cpu_ready():
     return True  # The x86 instruction check does not apply to an ARM CPU.
 
 
+def prepare_opencode_guidance():
+    # Fresh accounts get this from skel. An older installation receives the
+    # same guide on first use, without replacing personal instructions.
+    config = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'opencode'
+    config.mkdir(parents=True, exist_ok=True)
+    try:
+        (config / 'AGENTS.md').symlink_to('/usr/share/harness-os/guide.md')
+    except FileExistsError:
+        pass
+
+
 def try_harness():
     if not opencode_cpu_ready():
         print('The bundled OpenCode needs a newer CPU (SSE4.2).')
@@ -59,6 +70,7 @@ def try_harness():
             return
     projects = Path.home() / 'Projects'
     projects.mkdir(exist_ok=True)
+    prepare_opencode_guidance()
     os.chdir(projects)
     os.execv('/usr/bin/opencode', ['opencode'])
 

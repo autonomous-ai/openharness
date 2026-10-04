@@ -24,7 +24,7 @@ Install works offline. Try opens Wi-Fi setup when needed, then bundled OpenCode
 with its upstream default settings. The installer has four fields and one Install
 action; encrypted boot shows the Harness wordmark and a masked password prompt.
 Both the live and installed system use `me@harness`.
-`Super+U` opens Updates. Frequent hn/CLI releases download in the background;
+`Super+u` opens Updates. Frequent hn/CLI releases download in the background;
 you choose when to reconnect the screen. Running agents and terminals stay alive.
 
 [Download preview 6](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.6)
@@ -57,10 +57,10 @@ installation does not need reinstalling solely for the USB payload-location fix.
   foot or add a second graphical Harness client.
   If graphics initialization fails, the login session falls back to hn on the
   Linux console so drivers can be repaired without a working compositor.
-- Chromium is installed but does not start at boot. `Super+B` opens/focuses it or
+- Chromium is installed but does not start at boot. `Super+b` opens/focuses it or
   returns to hn. `Super+Enter` focuses hn; `Alt+Tab` switches available windows.
   Browser sandboxing and hardware acceleration remain enabled.
-- `Ctrl+B`, then `N` opens the agent picker; `Ctrl+B`, then `T` opens a terminal directly. The normal session
+- `Ctrl+b`, then `Shift+n` opens the agent picker; `Ctrl+b`, then `Shift+t` opens a terminal directly. The normal session
   has no interactive parent shell to exit into. Shells remain available in hn panes. This is
   an interface policy, not confinement against someone with shell/admin access.
 - NetworkManager, fonts, clipboard, audio, locking, firmware and zram provide
@@ -173,7 +173,7 @@ normal Linux administrator control.
 ## Updates and recovery
 
 Preview 5 prepares hn/CLI releases automatically and shows a small bottom-bar
-notice. `Super+U` opens Updates; Enter activates an available runtime and
+notice. `Super+u` opens Updates; Enter activates an available runtime and
 reconnects the screen without a computer reboot. **R** restores the previous
 runtime. System updates use **S**, ask for the account password, retain a
 checkpoint and offer a restart when ready. Neither channel automatically

@@ -594,8 +594,8 @@ fn os_welcome(buf: &mut Buffer, app: &App, area: Rect) {
     } else { lines.push(Line::styled("harness", bold(theme::accent()))) }
     lines.push(Line::raw(""));
     let centered = lines.len();
-    let actions = if app.os_live { vec![("Enter", "Install Harness"), ("T", "Try without installing")] }
-        else { vec![("Enter", "Start OpenCode"), ("T", "New terminal"), ("W", "Connect to Wi-Fi")] };
+    let actions = if app.os_live { vec![("Enter", "Install Harness"), ("t", "Try without installing")] }
+        else { vec![("Enter", "Start OpenCode"), ("t", "New terminal"), ("w", "Connect to Wi-Fi")] };
     for (key, action) in actions {
         lines.push(Line::from(vec![Span::styled(format!("{key:7}"), bold(theme::accent())), Span::styled(action, bold(theme::TEXT))]));
         lines.push(Line::raw(""));
@@ -632,13 +632,13 @@ mod os_welcome_tests {
                 empty_window(&mut buf, &mut app, area);
                 let text = (0..height).map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect::<Vec<_>>().join("\n");
                 if !os {
-                    for action in ["Install Harness", "Try without installing", "Wi-Fi", "Super+B"] {
+                    for action in ["Install Harness", "Try without installing", "Wi-Fi", "Super+b"] {
                         assert!(!text.contains(action), "ordinary hn must not offer {action}: {text}");
                     }
                     assert!(text.contains("Task"), "{text}");
                 } else if live {
                     assert!(text.contains("Enter  Install Harness"), "{text}");
-                    assert!(text.contains("T      Try without installing"), "{text}");
+                    assert!(text.contains("t      Try without installing"), "{text}");
                     assert!(!text.contains("Nothing running"), "{text}");
                 } else {
                     assert!(text.contains("Start OpenCode"), "{text}");

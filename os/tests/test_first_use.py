@@ -13,6 +13,18 @@ loader.exec_module(hn_os)
 
 
 class FirstUse(unittest.TestCase):
+    def test_global_agent_guide_is_added_without_replacing_personal_instructions(self):
+        with tempfile.TemporaryDirectory() as temp, patch.dict(hn_os.os.environ, {'XDG_CONFIG_HOME': temp}):
+            guide = Path(temp) / 'opencode/AGENTS.md'
+            hn_os.prepare_opencode_guidance()
+            self.assertTrue(guide.is_symlink())
+            self.assertEqual(guide.readlink(), Path('/usr/share/harness-os/guide.md'))
+            hn_os.prepare_opencode_guidance()
+            guide.unlink()
+            guide.write_text('My own instructions.\n')
+            hn_os.prepare_opencode_guidance()
+            self.assertEqual(guide.read_text(), 'My own instructions.\n')
+
     def test_old_cpu_gets_an_explanation_before_network_setup_or_agent_launch(self):
         for cpu, ready in [('flags : sse sse2 ssse3\n', False), ('flags : sse4_2\n', True),
                            ('Features : fp asimd\n', True)]:

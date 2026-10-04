@@ -165,8 +165,8 @@ OS windows use hn's local session storage (`HARNESS_TUI_DESK=off`), so their
 layout and pane references survive reconnects without signing into the cloud.
 This setting is confined to the OS launcher; ordinary hn installs are unchanged.
 
-`Update ready · Super+U` appears in the bottom bar. Super+U opens the keyboard
-update action (Ctrl+B, Shift+U remains an alias). Enter applies the prepared
+`Update ready · Super+u` appears in the bottom bar. Super+u opens the keyboard
+update action (Ctrl+b, Shift+u remains an alias). Enter applies the prepared
 runtime through a transient user service. An hn-only change reconnects just the
 screen; a CLI change also restarts its supervised service. Failure restores the
 previous selection. Restore previous version holds the rejected versions until
@@ -183,7 +183,7 @@ ISO is not a requirement for a TUI update. The public preview
 validated preview 5 release; it does not need to be flashed again.
 
 `development_update=true` builds a private, deliberately unpublished `999.0.1`
-hn/CLI fixture. The installed VM's actual timer stages it, then real Super+U and
+hn/CLI fixture. The installed VM's actual timer stages it, then real Super+u and
 Enter keys apply hn and CLI independently. Acceptance checks the same terminal
 process, a live OpenCode process, keyboard input, rollback and an unchanged boot
 ID. Those fixture binaries are never included in the package or public channel.
@@ -280,11 +280,18 @@ integration command, guarded by OS mode; install additionally requires live mode
 All install entry points create or focus one local form even if a remote pane has
 focus. Super bindings live in labwc; the shared Ctrl+b key tables are preserved.
 
-OpenCode reads the packaged guide through `/etc/opencode/opencode.json`. The guide
+OpenCode reads the packaged guide through its global
+`~/.config/opencode/AGENTS.md`, linked to `/usr/share/harness-os/guide.md`.
+The account skeleton supplies this link; Start OpenCode also adds it on older
+installations when no personal instructions file exists. Existing instructions
+are never replaced. OpenCode 2 accepts the legacy JSON `instructions` field but
+does not load it; see its [instructions reference](https://opencode.ai/v2/docs/instructions/).
+The guide
 points to the exact shipped `tui/README.md`, with a source revision, and tells the
 agent to inspect current bindings before answering. Model/provider selection is
 left to upstream. The package-owned OpenCode executable is updated by full system
-updates; its self-updater is disabled. No download blocks the first conversation.
+updates; new accounts disable its self-updater through the global config.
+Existing user preferences are preserved. No download blocks the first conversation.
 Independent background agent updates remain future work and must preserve the
 packaged fallback, validate provenance, avoid downgrades, and activate on a later
 launch rather than replacing an active executable.

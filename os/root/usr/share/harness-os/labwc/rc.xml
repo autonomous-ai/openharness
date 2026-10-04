@@ -6,7 +6,7 @@
   <desktops><number>1</number><popupTime>0</popupTime></desktops>
   <keyboard>
     <repeatRate>35</repeatRate><repeatDelay>250</repeatDelay>
-    <!-- No default desktop shortcuts. Super+B is run-or-raise, then back to hn. -->
+    <!-- No default desktop shortcuts. Super+b is run-or-raise, then back to hn. -->
     <keybind key="W-b">
       <action name="If">
         <query identifier="chromium*" />

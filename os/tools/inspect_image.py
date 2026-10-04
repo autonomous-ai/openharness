@@ -46,17 +46,23 @@ def inspect(iso):
             assert read(path) == expected.read_bytes(), f'Payload does not match source: {path}'
             checked.append(path)
         listing = subprocess.check_output(['unsquashfs', '-lln', str(payload)], text=True)
-        owners = {}
+        owners, links = {}, {}
         for line in listing.splitlines():
             fields = line.split(maxsplit=5)
             if len(fields) == 6 and fields[1].count('/') == 1 and fields[5].startswith('squashfs-root'):
                 path = fields[5].split(' -> ', 1)[0] if fields[0].startswith('l') else fields[5]
                 owners[path.removeprefix('squashfs-root').lstrip('/')] = fields[1]
+                if fields[0].startswith('l'):
+                    links[path.removeprefix('squashfs-root').lstrip('/')] = fields[5].split(' -> ', 1)[1]
         for path in [*files, '', 'etc', 'usr', 'usr/bin', 'usr/lib/harness-os', 'usr/share/harness-os']:
             assert owners.get(path) == '0/0', f'Packaged system path is not owned by root: {path}'
         runtime = json.loads(read('usr/share/harness-os/runtime.json'))
         guide = json.loads(read('usr/share/harness-os/guide/source.json'))
         assert guide == {'source_commit': manifest['source_commit'], 'tui_reference': 'tui/README.md'}, 'Agent guide belongs to a different source'
+        for path in ['etc/skel/.config/opencode/AGENTS.md', 'home/me/.config/opencode/AGENTS.md']:
+            assert links.get(path) == '/usr/share/harness-os/guide.md', 'OpenCode global instructions are missing: ' + path
+        assert owners['etc/skel/.config/opencode/AGENTS.md'] == '0/0'
+        assert read('home/me/.config/opencode/opencode.json') == read('etc/skel/.config/opencode/opencode.json')
         assert runtime == manifest['harness_inputs'] and runtime['source_commit'] == manifest['source_commit']
         assert not runtime['dirty'] and runtime['target'] == 'x86_64-unknown-linux-musl'
         for name, identity in runtime['files'].items():
