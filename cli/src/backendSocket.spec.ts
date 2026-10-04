@@ -6,6 +6,7 @@ import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { AGENT_OPENED_THROTTLE_MS, BackendSocket, compactRuntimePickerModels, deviceAgentListItem, deviceAgentRow, grokHistoryPage } from './backendSocket.js'
+import { ServiceUnavailableError } from './core/serviceHost.js'
 import { AuthSessionError, type AuthSessionManager } from './lib/authSession.js'
 import { WS_IDLE_DEADLINE_MS as IDLE_DEADLINE_MS } from './lib/wsLiveness.js'
 import { TerminalStreamManager } from './lib/terminalStreamManager.js'
@@ -836,6 +837,17 @@ describe('BackendSocket outbound queue', () => {
     await vi.waitFor(() => {
       expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_search_result', 's-2', { error: 'SEARCH_UNAVAILABLE' })
     })
+
+    // A search service that failed (core/serviceHost.ts) answers this one request, and says the
+    // client may ask again — never INTERNAL, and never the whole socket.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    socket.sessionSearchProvider = () => { throw new ServiceUnavailableError('search', new Error('disk I/O error')) }
+    unwrap.mockReturnValueOnce({ type: 'session_search', payload: { requestId: 's-3', query: 'dial' } })
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'session_search', payload: envelope } })
+    await vi.waitFor(() => {
+      expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_search_result', 's-3', { error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
+    })
+    expect(warn).toHaveBeenCalledWith('[backend] session_search: the search service is unavailable')
     await socket.stop()
   })
 

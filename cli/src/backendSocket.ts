@@ -1,4 +1,5 @@
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
+import { ServiceUnavailableError } from './core/serviceHost.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { readSessionGitPullRequest } from './lib/sessionGitPullRequest.js'
 import { MonitorCompletions, type MonitorActivity } from './lib/harnessMonitor.js'
@@ -3489,6 +3490,13 @@ export class BackendSocket {
           return
       }
     } catch (err) {
+      // A service on the core boundary that failed or is off (core/serviceHost.ts): the host has logged
+      // it, and the client may ask again — the service can be back after the daemon restarts.
+      if (err instanceof ServiceUnavailableError) {
+        console.warn(`[backend] ${type}: ${err.message}`)
+        if (requestId !== undefined) reply(type, requestId, { error: 'SERVICE_UNAVAILABLE', service: err.service, retryable: true })
+        return
+      }
       console.error(`[backend] dispatch ${type} failed:`, err)
       if (requestId !== undefined) reply(type, requestId, { error: 'INTERNAL' })
     }

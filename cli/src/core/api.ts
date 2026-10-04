@@ -15,6 +15,7 @@ import { projectDisplayName, type registry, type RegisteredSession } from '../li
 import type { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
+import { FAIL, later, type PortFallbacks } from './serviceHost.js'
 
 export interface CoreApi {
   /** The daemon's data folder; a service keeps its own files in it. */
@@ -62,9 +63,15 @@ export interface CoreApi {
 }
 
 /** The core's calls into session search: index a session at its turn boundaries, forget a purged
- *  conversation, the title it indexed for one being adopted, and the two requests it answers
- *  (`session_search`, `session_tail`). */
-export type SearchPort = Pick<SessionSearchIndex, 'touch' | 'deleteHistory' | 'session' | 'search' | 'tail'>
+ *  conversation, the title it indexed for one being adopted, the two requests it answers
+ *  (`session_search`, `session_tail`), and stopping its sweeps. */
+export type SearchPort = Pick<SessionSearchIndex, 'touch' | 'deleteHistory' | 'session' | 'search' | 'tail' | 'stop'>
+
+/** What the core gets when search fails: nothing indexed, no title, and the requests answered with
+ *  an error. */
+export const SEARCH_FALLBACKS: PortFallbacks<SearchPort> = {
+  touch: undefined, deleteHistory: undefined, session: undefined, search: FAIL, tail: later(FAIL), stop: undefined,
+}
 
 /** The core's calls into the DSH viewers: each harness agent's viewer server and verdict watch. */
 export interface ViewersPort {
@@ -81,6 +88,12 @@ export interface ViewersPort {
   stop(): Promise<void>
 }
 
+/** What the core gets when the viewers fail: agents' frames carry no DSH context and the windows
+ *  no viewer, and a restart or shutdown goes on. */
+export const VIEWERS_FALLBACKS: PortFallbacks<ViewersPort> = {
+  attach: undefined, detach: undefined, frameContext: null, forwardingUrl: null, stop: later(undefined),
+}
+
 /** The core's calls into models (grid): have grid ready, whether it is set up, and the two things
  *  the core tells it — someone is typing to an agent on a grid, and the sign-in ended. */
 export interface ModelsPort {
@@ -94,12 +107,21 @@ export interface ModelsPort {
   signedOut(): void
 }
 
+/** What the core gets when models fails: a grid request answered with an error, grid read as not
+ *  set up, and no prewarm. */
+export const MODELS_FALLBACKS: PortFallbacks<ModelsPort> = {
+  ensure: later(FAIL), setUp: false, prewarm: undefined, signedOut: undefined,
+}
+
 /** The core's calls into workspaces: name made-up worktree branches after their sessions, on each
  *  terminal-title pass, and sweep the worktrees nothing uses, when the core says it is time. */
 export interface WorkspacesPort {
   nameBranches(): void
   sweepUnused(): void
 }
+
+/** What the core gets when workspaces fails: branches keep their names and nothing is swept. */
+export const WORKSPACES_FALLBACKS: PortFallbacks<WorkspacesPort> = { nameBranches: undefined, sweepUnused: undefined }
 
 /** Each port is filled by the service that owns it when that service starts, and is null while the
  *  service is off: the core never waits on one. */

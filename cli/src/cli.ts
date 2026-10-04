@@ -160,7 +160,8 @@ import { createAgentClosing } from './core/agents/close.js'
 import { createEngineHooks, installEngineHooks } from './core/engines/hooks.js'
 import { createCursorTaskHooks } from './core/engines/cursorTasks.js'
 import { databaseHistory } from './core/transcripts/databaseHistory.js'
-import { createCoreApi, emptyPorts } from './core/api.js'
+import { createCoreApi, emptyPorts, MODELS_FALLBACKS, SEARCH_FALLBACKS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS } from './core/api.js'
+import { createServiceHost, testFaults } from './core/serviceHost.js'
 import { startSearch } from './services/search.js'
 import { startViewers } from './services/viewers.js'
 import { startModels } from './services/models.js'
@@ -1778,14 +1779,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     accessToken: () => new AuthSessionManager(backendHttpBase()).accessToken(),
   })
   const ports = emptyPorts()
+  // Each service starts and is called through the host, so one that fails is logged and left off and
+  // the core carries on without it (core/serviceHost.ts).
+  const serviceHost = createServiceHost(ports, { faults: testFaults(process.env.HARNESSD_TEST_FAULTS) })
   // The DSH companions: each harness agent's viewer and verdict watch (services/viewers.ts).
-  startViewers(coreApi, ports)
+  serviceHost.start('viewers', startViewers, coreApi, VIEWERS_FALLBACKS)
   dshFrameContextRef = (s) => ports.viewers?.frameContext(s) ?? null
   const attachDsh = (s: RegisteredSession): void => ports.viewers?.attach(s)
   const detachDsh = (agentId: string): void => ports.viewers?.detach(agentId)
 
   // The folders agents work in: branch names and unused worktrees (services/workspaces.ts).
-  startWorkspaces(coreApi, ports)
+  serviceHost.start('workspaces', startWorkspaces, coreApi, WORKSPACES_FALLBACKS)
   const syncTerminalTitles = async (): Promise<void> => {
     ports.workspaces?.nameBranches()
     const titles = await terminals.titles()
@@ -1851,12 +1855,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   ensureBundledCoreHarnesses()
 
   // Models: grid access, the model pictures on agents' frames, the keystroke prewarm (services/models.ts).
-  startModels(coreApi, ports)
+  serviceHost.start('models', startModels, coreApi, MODELS_FALLBACKS)
   const models = ports.models
   backend.ensureGrid = models ? (request) => models.ensure(request) : null
   // Offline, for every list read: is there a `grid` here holding a sign-in? What decides whether the
   // picker offers local and shared models or a Set up row.
   backend.gridSetUp = models ? () => models.setUp() : null
+  // Models switched off: the socket reads grid as it stands, as it does with no models at all.
+  serviceHost.onOff('models', () => { backend.ensureGrid = null; backend.gridSetUp = null })
 
   /**
    * Is ANY device surface watching this machine?
@@ -2126,10 +2132,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.handoffProvider = (req) => prepareAgentHandoff(handoffDeps, req)
 
   // Session search (services/search.ts).
-  startSearch(coreApi, ports)
+  serviceHost.start('search', startSearch, coreApi, SEARCH_FALLBACKS)
   const sessionSearch = ports.search
   backend.sessionSearchProvider = sessionSearch ? (query, options) => sessionSearch.search(query, options) : null
   backend.sessionTailProvider = sessionSearch ? (sessionId, options) => sessionSearch.tail(sessionId, options) : null
+  // Search switched off: both requests say search is unavailable, as on a Node without an index.
+  serviceHost.onOff('search', () => { backend.sessionSearchProvider = null; backend.sessionTailProvider = null })
 
   const runtimeController = new RuntimeProfileController({
     manager: runtimeProfiles,
