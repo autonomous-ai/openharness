@@ -40,6 +40,10 @@ metadata = dict(schema=1, channel='preview', architecture='x86_64',
     vm.command('systemctl --user stop harness-update.timer harness-update.service; '
                'cp -R ~/update-test/system-channel ~/update-test/fast-updates /tmp/; '
                'test ! -e /run/harness-os-restart-required')
+    # The preceding independent rollback test deliberately rejects its 999.x
+    # runtime. Reset only that private fixture hold for this combined-update
+    # case; production checks must continue to honor a user's rejected version.
+    vm.command('rm -f ~/.local/state/harness-os/updates/ignored.json')
     vm.command('systemd-run --user --collect --unit=harness-test-feed python3 -m http.server 19447 '
                '--bind 127.0.0.1 --directory /tmp/fast-updates')
     vm.command('for n in $(seq 1 30); do curl -fsS http://127.0.0.1:19447/fixture.json && exit 0; sleep .2; done; exit 1')
