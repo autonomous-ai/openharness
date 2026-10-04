@@ -24,7 +24,7 @@ HN = BASE / 'hn'
 shutil.copy2(os.environ.get('HN_NEW_UI_BINARY', ROOT / 'target/release/harness-tui'), HN)
 TMUX = shutil.which('tmux')
 assert TMUX
-ENV = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'TZ', 'NODE_PATH') if k in os.environ}
+ENV = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'TZ', 'NODE_PATH', 'LLVM_PROFILE_FILE') if k in os.environ}
 ENV.update(HOME=str(BASE), HN_TMPDIR=str(BASE), HN_SOCKET_NAME=PREFIX, PORT=str(PORT),
            RUST_BACKTRACE='1',
            TERM='xterm-256color', COLORTERM='truecolor', SHELL='/bin/sh', HARNESS_TUI_DESK='sync',
@@ -270,17 +270,18 @@ try:
     new_form()
     before_terminal = placement()
     previous_agents = {a['id'] for a in state()['agents']}
-    field('Harness'); type_text('Terminal'); keys('Enter')
-    wait(lambda: create_count() == before + 7 and not form_visible(), 'Terminal choice opens a shell immediately')
+    field('Harness'); type_text('Terminal'); shows('No matches')
+    keys('Escape', 'Escape', 'C-b', 'T')
+    wait(lambda: create_count() == before + 7 and not form_visible(), 'Terminal shortcut opens a shell immediately')
     snapshot('new-harness-terminal')
     placed_in_current_window(before_terminal)
     request = state()['created'][-1]
     assert request['engine'] == 'terminal' and request.get('permissionMode') is None, request
     assert not any(k in request for k in ('dsh', 'prompt', 'gridModel', 'gitSource', 'codexHome')), request
     end_new_terminal(previous_agents, before_terminal)
-    print('PASS New Harness: specialized harness compatibility and ordinary Terminal launch', flush=True)
+    print('PASS New Harness: specialized harness compatibility, agents exclude Terminal, separate shell shortcut', flush=True)
 
-    # The keyboard shortcut owns the same shell lifecycle as the chooser.
+    # The keyboard shortcut owns the same shell lifecycle on repeated use.
     # Its normal exit closes its view, rather than showing an agent error card.
     previous_agents = {a['id'] for a in state()['agents']}
     count = create_count()
@@ -290,7 +291,7 @@ try:
     request = state()['created'][-1]
     assert request['engine'] == 'terminal' and 'prompt' not in request and 'dsh' not in request, request
     end_new_terminal(previous_agents, before_terminal)
-    print('PASS New terminal: chooser and Ctrl+B T both close their views on normal shell exit', flush=True)
+    print('PASS New terminal: Ctrl+B T closes its view on normal shell exit', flush=True)
 
     new_form(); field('Agent|Harness'); type_text('claude'); keys('Enter'); choose_field('Approvals', 'plan'); shows('Plan first')
     keys('Escape'); new_form(); shows('Plan first')
@@ -323,12 +324,21 @@ try:
     snapshot('new-harness-flat-narrow')
     # A terminal starts immediately and leaves the agent draft intact. Never run
     # the retained natural-language task as a shell command.
-    field('Agent|Harness'); type_text('Terminal'); keys('Enter')
+    keys('Escape', 'C-b', 'T')
     wait(lambda: create_count() == count + 1 and not form_visible(), 'terminal launch with retained agent draft')
     request = state()['created'][-1]
     assert request['engine'] == 'terminal' and 'prompt' not in request and 'command' not in request, request
     count += 1
     new_form(); shows('Improve the New Harness keyboard flow.')
+    choose_field('Agent|Harness', 'cursor')
+    field('Task'); keys('Enter'); shows('This agent cannot start with a task')
+    assert create_count() == count, 'unsupported first tasks never reach the daemon'
+    keys('Down')
+    assert re.search(r'›\s+Agent\s+Cursor', form_screen()), 'Down leaves the rejected task for Agent even in a narrow terminal'
+    keys('Right'); shows('Search agents and harnesses'); type_text('claude'); keys('Enter')
+    shows('Start Claude Code')
+    shows('Improve the New Harness keyboard flow.')
+    assert 'This agent cannot start with a task' not in screen(), 'keyboard-only agent correction clears the live error'
     field('Task'); keys('C-Home', 'C-k', 'C-k', 'C-k', 'C-k', 'Tab'); choose_field('Agent|Harness', 'claude')
     field('Task'); type_text('x' * 2001); keys('Enter'); field('Start Claude Code'); shows('Task is too long')
     assert create_count() == count, 'an overlong task is rejected before creating a harness'

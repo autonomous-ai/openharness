@@ -69,7 +69,7 @@ impl View {
     }
     pub fn of(id: &str) -> Option<View> { View::ALL.into_iter().find(|v| v.id() == id) }
     pub fn title(self) -> &'static str {
-        match self { View::Connect => "Connect a machine", View::Phone => "Add your phone", View::Machines => "Machines & devices" }
+        match self { View::Connect => "Connect a machine", View::Phone => "Add your phone", View::Machines => "Machines" }
     }
     fn placeholder(self) -> &'static str {
         match self {
@@ -223,8 +223,10 @@ pub fn ask(app: &mut App, req: Req, line: Option<fn(&mut App, &str)>, then: impl
         if let (Some(line), Reply::Cli { out, .. }) = (line, &reply) { for l in out.lines() { line(app, l) } }
         return then(app, reply);
     }
+    let epoch = app.account_epoch;
+    let then = move |app: &mut App, reply| { if app.account_epoch == epoch { then(app, reply); } };
     match req {
-        Req::Cli { args, stdin } => { let sink = app.sink.clone(); app.spawn(run_cli(args, stdin, line, sink), then) }
+        Req::Cli { args, stdin } => { let sink = app.sink.clone(); app.spawn(run_cli(args, stdin, line, sink, epoch), then) }
         Req::Http { method, path, body } => {
             let port = app.port;
             // (A phone's handshake holds `/api/pair` open while it runs; the app waits 60 s for it.)
@@ -239,7 +241,7 @@ pub fn ask(app: &mut App, req: Req, line: Option<fn(&mut App, &str)>, then: impl
 /// The CLI that started us (node + its script), else `harness` on PATH — as M-l always ran it: its
 /// stdin one line then closed, its stdout read line by line (each to [line] as it comes), its
 /// stderr drained so a full pipe never stalls it.
-async fn run_cli(args: Vec<String>, stdin: Option<String>, line: Option<fn(&mut App, &str)>, sink: tokio::sync::mpsc::UnboundedSender<crate::event::Event>) -> Reply {
+async fn run_cli(args: Vec<String>, stdin: Option<String>, line: Option<fn(&mut App, &str)>, sink: tokio::sync::mpsc::UnboundedSender<crate::event::Event>, epoch: u64) -> Reply {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
     use std::process::Stdio;
     let exe = std::env::var("HARNESS_CLI").unwrap_or_else(|_| "harness".into());
@@ -256,7 +258,7 @@ async fn run_cli(args: Vec<String>, stdin: Option<String>, line: Option<fn(&mut 
         let mut lines = tokio::io::BufReader::new(pipe).lines();
         let read = async {
             while let Ok(Some(l)) = lines.next_line().await {
-                if let Some(f) = line { let each = l.clone(); let _ = sink.send(crate::event::Event::Apply(Box::new(move |app: &mut App| f(app, &each)))); }
+                if let Some(f) = line { let each = l.clone(); let _ = sink.send(crate::event::Event::Apply(Box::new(move |app: &mut App| { if app.account_epoch == epoch { f(app, &each); } }))); }
                 out.push_str(&l);
                 out.push('\n');
             }
@@ -453,6 +455,7 @@ fn enter(app: &mut App, view: View) {
 
 /// What a view needs read when it opens.
 fn opened(app: &mut App, view: View) {
+    crate::account::refresh(app, false);
     match view {
         View::Connect => load_account(app),
         View::Machines => { load_password(app); load_links(app); load_account(app); load_me(app) }
@@ -706,7 +709,7 @@ fn run_act(app: &mut App, act: Act) {
             ask(app, http("DELETE", path, None), None, move |app, reply| {
                 match reply {
                     Reply::Http(Ok(_)) => {
-                        app.fleet.machines.retain(|m| m.id != machine);
+                        app.account_machine_removed(&machine);
                         app.devices.account.remove(&machine);
                         if app.devices.sub.as_deref() == Some(&format!("m:{machine}")) { app.devices.sub = None }
                         note(app, format!("Deleted {name} from your account"));
@@ -892,6 +895,7 @@ pub fn choose(app: &mut App, view: View, picker: Picker, enter: bool) {
     let (what, rest) = id.split_once(':').unwrap_or((id.as_str(), ""));
     let rest = rest.to_string();
     match (view, what) {
+        (_, "account") => { crate::account::open(app); return }
         (View::Connect, "m") => { let name = name_of(app, &rest); start_link(app, rest, name) }
         (_, "m") => sub(app, format!("m:{rest}")),
         (_, "act") => machine_action(app, &rest),
@@ -1016,8 +1020,11 @@ pub fn fill(app: &App, view: View, picker: &mut Picker) {
 }
 
 fn connect_rows(app: &App) -> Vec<Row> {
+    if app.account.status == crate::account::Status::SignedOut {
+        return vec![account_row(app), info("local-use", "Local harnesses work without an account.", "This computer")];
+    }
     let (mut ready, mut done, mut away) = (Vec::new(), Vec::new(), Vec::new());
-    for m in app.fleet.machines.iter().filter(|m| !m.local) {
+    for m in app.fleet.machines.iter().filter(|m| !m.local && !m.shared) {
         let (glyph, color, word) = reach(app, m);
         let linking = app.devices.link.as_ref().is_some_and(|l| l.machine == m.id && l.result.is_none());
         // (One just linked stays in view, how it went beside it.)
@@ -1037,8 +1044,13 @@ fn connect_rows(app: &App) -> Vec<Row> {
     ready
 }
 
+fn account_row(app: &App) -> Row {
+    let detail = if app.account.status == crate::account::Status::SignedOut { "Connect computers, sync your workspace and use your phone" } else { "Your Harness account and connected computers" };
+    Row::new("account", crate::account::label(app)).group("Account").detail(vec![span(detail, fg(theme::MUTED))])
+}
+
 fn machines_rows(app: &App) -> Vec<Row> {
-    let mut rows = Vec::new();
+    let mut rows = vec![account_row(app)];
     let here = "This computer";
     let password = app.devices.password.as_ref();
     let set = password.and_then(|p| p.as_ref().ok()).and_then(|v| v.get("hasPassword")).and_then(Value::as_bool);
@@ -1055,7 +1067,7 @@ fn machines_rows(app: &App) -> Vec<Row> {
     if matches!(password, Some(Err(_))) { rows.push(Row::new("pw:status", "Retry").group(here).extra("password status").lead(dot("↻", theme::MUTED)).detail(vec![span("Password status is unavailable.", fg(theme::WARN))])) }
 
     let yours = "Your machines";
-    for m in &app.fleet.machines {
+    for m in app.fleet.machines.iter().filter(|m| !m.shared) {
         if crate::local::is_local(&m.id) { continue }
         let (glyph, color, word) = reach(app, m);
         let rtt = app.rtt.get(&m.id).filter(|_| m.usable()).map(|d| format!("{}ms  ", d.as_millis())).unwrap_or_default();
@@ -1139,7 +1151,8 @@ pub fn preview(app: &App, view: View, id: &str) -> Vec<Line<'static>> {
     let (what, rest) = id.split_once(':').unwrap_or((id, ""));
     match what {
         _ if app.daemon_down && matches!(id, "none" | "m-none") => vec![Line::raw("Harness is not running on this computer."), Line::raw(""), dim("Start it with `harness start`, then come back.").into()],
-        "none" => vec![Line::raw("Every machine on your account that is online is linked."), Line::raw(""), dim("To add another: Machines & devices… › Add a machine.").into()],
+        "account" => vec![Line::raw("Use Harness locally without signing in."), Line::raw(""), Line::raw("Sign in to connect your computers, sync your workspace, and use your phone."), Line::raw("Run models on one linked computer and use them from another.")],
+        "none" => vec![Line::raw("Every machine on your account that is online is linked."), Line::raw(""), dim("To add another: Machines… › Add a machine.").into()],
         "m" => {
             let mut out = machine_lines(app, rest);
             if view == View::Connect {
@@ -1448,9 +1461,9 @@ mod tests {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19789, sink, size);
         app.fleet.local_id = LOCAL.into();
-        app.fleet.machines.push(crate::fleet::Machine { id: LOCAL.into(), name: "studio".into(), local: true, status: "online".into(), reach: Reach::Ready });
-        app.fleet.machines.push(crate::fleet::Machine { id: REMOTE.into(), name: "gpu-box".into(), local: false, status: "online".into(), reach: Reach::NeedsLink });
-        app.fleet.machines.push(crate::fleet::Machine { id: OFF.into(), name: "laptop".into(), local: false, status: "offline".into(), reach: Reach::Offline });
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: LOCAL.into(), name: "studio".into(), local: true, status: "online".into(), reach: Reach::Ready });
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: REMOTE.into(), name: "gpu-box".into(), local: false, status: "online".into(), reach: Reach::NeedsLink });
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: OFF.into(), name: "laptop".into(), local: false, status: "offline".into(), reach: Reach::Offline });
         app
     }
 
@@ -1527,7 +1540,7 @@ mod tests {
         let groups: Vec<&str> = picker.rows.iter().filter_map(|r| r.group.as_deref()).collect::<Vec<_>>();
         let mut seen: Vec<&str> = Vec::new();
         for g in groups { if seen.last() != Some(&g) { seen.push(g) } }
-        assert_eq!(seen, vec!["This computer", "Your machines", "Linked from here", "Add a machine", "Set up a server"], "each group once, in order");
+        assert_eq!(seen, vec!["Account", "This computer", "Your machines", "Linked from here", "Add a machine", "Set up a server"], "each group once, in order");
         assert!(picker.rows.iter().any(|r| r.id == "add:login" && r.label == "2. Sign in as dev+hn@example.com"), "the server steps name the account");
         // A machine opens its actions: no Remove for this computer, Connect for one not linked.
         go_to(&mut app, &format!("m:{REMOTE}"));

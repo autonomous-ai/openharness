@@ -441,7 +441,16 @@ try:
     both('split-window', '-d', '-t', 'work:4', 'sleep 30')
     first_id = same('list-panes', '-t', 'work:4', '-F', '#{pane_id}').splitlines()[0]
     both('select-window', '-t', 'work:0')
-    both('respawn-window', '-k', '-t', 'work:4', 'printf "WHOLE_WINDOW\\n"; exit 9')
+    # Observe the replacement before asking it to exit. The reference tmux 3.4
+    # sometimes loses this rapid exit status while replacing live panes on Linux
+    # ARM64. Fast exits are covered separately below; here we verify replacement
+    # identity, output, input and final exit with an explicit readiness barrier.
+    both('respawn-window', '-k', '-t', 'work:4', 'printf "WHOLE_WINDOW\\n"; read answer; exit 9')
+    wait(lambda: same('list-panes', '-t', 'work:4', '-F', '#{pane_id}:#{pane_dead}') == first_id + ':0', 'whole-window replacement is running in the first pane')
+    for kind in ('hn', 'tmux'):
+        wait(lambda: 'WHOLE_WINDOW' in cli(kind, 'capture-pane', '-p', '-t', 'work:4').stdout,
+             f'{kind} whole-window replacement has reached its input barrier')
+    both('send-keys', '-t', 'work:4', 'Enter')
     wait(lambda: same('list-panes', '-t', 'work:4', '-F', '#{pane_id}:#{pane_dead}:#{pane_dead_status}') == first_id + ':1:9', 'whole-window respawn keeps only the first pane')
     assert same('display', '-p', '-t', 'work', '#{window_index}') == '4'
     assert 'WHOLE_WINDOW' in same('display', '-p', '-t', 'work:4', '#{pane_start_command}')

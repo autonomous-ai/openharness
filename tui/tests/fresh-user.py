@@ -76,7 +76,7 @@ class User:
     def field(self, label):
         self.settle()
         for y, line in enumerate(self.screen().splitlines()):
-            match = re.search(r'(?<![^\s│›])(' + re.escape(label) + r') {2,}', line)
+            match = re.search(r'(?<![^\s│›])(' + re.escape(label) + r')(?: {2,}|$)', line)
             if match:
                 self.click(match.start(1), y)
                 self.settle()
@@ -90,7 +90,14 @@ class User:
             # Messages can wrap across popup rows, with the working panes visible beside them.
             popup = ' '.join(line[line.index('│') + 1:line.rindex('│')].strip()
                              for line in screen.splitlines() if line.count('│') >= 2)
-            if text in screen or text in popup or text in ' '.join(screen.split()):
+            # The current form is borderless. Read wrapped messages inside its
+            # centered surface, without interleaving text from the panes beside it.
+            lines = screen.splitlines()
+            width = int(self.outer('display-message', '-p', '-t', 'user', '#{pane_width}').stdout.strip())
+            panel_width = min(60, max(0, width - 4))
+            left = (width - panel_width) // 2
+            panel = ' '.join(' '.join(line[left:left+panel_width].split()) for line in lines)
+            if text in screen or text in popup or text in panel or text in ' '.join(screen.split()):
                 return screen
             time.sleep(.1)
         raise AssertionError(f'Did not see {text!r}\n{screen}')
@@ -170,9 +177,15 @@ class User:
         return added[0]
 
     def close_view(self):
+        pane = self.native('display-message', '-p', '#{pane_id}')
+        def closed():
+            return pane not in self.native('list-panes', '-s', '-F', '#{pane_id}').splitlines()
         self.keys('C-b', 'x')
-        self.wait('kill-pane')
-        self.keys('y')
+        self.check(lambda: closed() or '(s)' in self.screen() or 'kill-pane' in self.screen(),
+                   'Stop completes or offers confirmation')
+        if not closed():
+            self.keys('s' if '(s)' in self.screen() else 'y')
+        self.check(closed, 'Confirmed Stop removes its pane', 60)
 
     def status(self):
         conn = http.client.HTTPConnection('localhost', timeout=3)
