@@ -4,22 +4,87 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { coreHandle, masterDefaults, onProcessSignal, processExit, runMaster, supervisorOptions } from './master.js'
+import {
+  coreExecArgv, coreHandle, describeMasterStatus, heapLimitInArgv, masterDefaults, onProcessSignal, processExit,
+  readStatusFile, runMaster, supervisorOptions, trimLogEvery, writeStatusFile, type MasterStatusFile,
+} from './master.js'
 import { DEFAULT_SUPERVISOR_OPTIONS } from './supervisor.js'
 
 describe('supervisorOptions', () => {
   it('reads valid overrides and keeps the defaults for anything unset or invalid', () => {
     expect(supervisorOptions({})).toEqual(DEFAULT_SUPERVISOR_OPTIONS)
     expect(supervisorOptions({
-      HARNESSD_BIND_TIMEOUT_MS: '100', HARNESSD_HEARTBEAT_TIMEOUT_MS: '200', HARNESSD_STOP_GRACE_MS: '300',
-      HARNESSD_INITIAL_BACKOFF_MS: '0', HARNESSD_MAX_BACKOFF_MS: '50', HARNESSD_BACKOFF_RESET_MS: '0',
-      HARNESSD_RSS_LIMIT_MIB: '0', HARNESSD_UPDATE_PROBATION_MS: '10',
+      HARNESSD_BIND_TIMEOUT_MS: '100', HARNESSD_READY_TIMEOUT_MS: '150', HARNESSD_HEARTBEAT_TIMEOUT_MS: '200',
+      HARNESSD_STOP_GRACE_MS: '300', HARNESSD_INITIAL_BACKOFF_MS: '0', HARNESSD_MAX_BACKOFF_MS: '50',
+      HARNESSD_BACKOFF_RESET_MS: '0', HARNESSD_HEAP_LIMIT_MIB: '512', HARNESSD_HEAP_RESTART_PERCENT: '90',
+      HARNESSD_RSS_LIMIT_MIB: '0', HARNESSD_UPDATE_PROBATION_MS: '10', HARNESSD_CRASH_LOOP_CRASHES: '5',
+      HARNESSD_CRASH_LOOP_WINDOW_MS: '1000',
     })).toEqual({
-      bindTimeoutMs: 100, heartbeatTimeoutMs: 200, stopGraceMs: 300, initialBackoffMs: 0, maxBackoffMs: 50,
-      backoffResetMs: 0, rssLimitMiB: 0, updateProbationMs: 10,
+      bindTimeoutMs: 100, readyTimeoutMs: 150, heartbeatTimeoutMs: 200, stopGraceMs: 300, initialBackoffMs: 0,
+      maxBackoffMs: 50, backoffResetMs: 0, heapLimitMiB: 512, heapRestartPercent: 90, rssLimitMiB: 0,
+      updateProbationMs: 10, crashLoopCrashes: 5, crashLoopWindowMs: 1000,
     })
-    expect(supervisorOptions({ HARNESSD_BIND_TIMEOUT_MS: '0', HARNESSD_HEARTBEAT_TIMEOUT_MS: 'soon', HARNESSD_RSS_LIMIT_MIB: '-1' }))
-      .toEqual(DEFAULT_SUPERVISOR_OPTIONS)
+    expect(supervisorOptions({
+      HARNESSD_BIND_TIMEOUT_MS: '0', HARNESSD_HEARTBEAT_TIMEOUT_MS: 'soon', HARNESSD_RSS_LIMIT_MIB: '-1',
+      HARNESSD_HEAP_RESTART_PERCENT: '101', HARNESSD_CRASH_LOOP_CRASHES: '0',
+    })).toEqual(DEFAULT_SUPERVISOR_OPTIONS)
+  })
+
+  it('takes the heap limit from the flags the master was given, unless the environment names one', () => {
+    expect(supervisorOptions({}, ['--import', 'tsx', '--max-old-space-size=256']).heapLimitMiB).toBe(256)
+    expect(supervisorOptions({ HARNESSD_HEAP_LIMIT_MIB: '2048' }, ['--max-old-space-size=256']).heapLimitMiB).toBe(2048)
+  })
+})
+
+describe('the core\'s flags', () => {
+  it('finds the last heap limit given, in either spelling', () => {
+    expect(heapLimitInArgv([])).toBeNull()
+    expect(heapLimitInArgv(['--max-old-space-size=100', '--max_old_space_size=200', '--inspect'])).toBe(200)
+    expect(heapLimitInArgv(['--max-old-space-size=lots'])).toBeNull()
+  })
+
+  it('gives the core exactly the heap limit its budget is a share of, or V8\'s own when that is 0', () => {
+    expect(coreExecArgv(['--import', 'tsx', '--max-old-space-size=256'], 512)).toEqual(['--import', 'tsx', '--max-old-space-size=512'])
+    expect(coreExecArgv(['--max_old_space_size=256'], 0)).toEqual([])
+  })
+})
+
+describe('the status file', () => {
+  let dir: string
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'harnessd-status-')) })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+  const status = (over: Partial<MasterStatusFile> = {}): MasterStatusFile => ({
+    state: 'running', corePid: 7, restarts: 0, lastExit: null, lastExitReason: null, safeMode: null,
+    protocol: 2, since: 1, masterPid: 42, ...over,
+  })
+
+  it('is written whole and read back only for the master that wrote it', () => {
+    const file = join(dir, 'harnessd-status.json')
+    writeStatusFile(file, status())
+    expect(readStatusFile(file, 42)).toEqual(status())
+    expect(readStatusFile(file, 43)).toBeNull()
+    expect(readStatusFile(join(dir, 'none.json'), 42)).toBeNull()
+    writeFileSync(file, '{"masterPid": 42}')
+    expect(readStatusFile(file, 42)).toBeNull()
+    expect(existsSync(`${file}.42.tmp`)).toBe(false)
+  })
+
+  it('never stops the master over a disk it cannot write', () => {
+    expect(() => writeStatusFile(join(dir, 'missing', 'harnessd-status.json'), status())).not.toThrow()
+  })
+
+  it('says what the master knows when the core cannot answer', () => {
+    expect(describeMasterStatus(null)).toBeNull()
+    expect(describeMasterStatus(status())).toBeNull()
+    expect(describeMasterStatus(status({ state: 'restarting', restarts: 3, lastExit: 'signal SIGKILL', lastExitReason: 'hung' })))
+      .toBe('◍ restarting its core · restart 3 · last core ended because it hung (signal SIGKILL)')
+    expect(describeMasterStatus(status({ state: 'starting' }))).toBe('● starting')
+    expect(describeMasterStatus(status({ state: 'listening', restarts: 1, lastExit: 'code 1', lastExitReason: 'crashed' })))
+      .toBe('● starting · restart 1 · last core ended because it crashed (code 1)')
+    expect(describeMasterStatus(status({ safeMode: 'crash-loop' })))
+      .toBe('◍ safe mode · the core kept crashing — waiting for a fixed build')
+    expect(describeMasterStatus(status({ safeMode: 'no tmux', lastExit: 'code 7', lastExitReason: 'mystery' as never })))
+      .toBe('◍ safe mode · the core could not start (no tmux) — waiting for a fixed build · last core ended because mystery (code 7)')
   })
 })
 
@@ -33,6 +98,34 @@ describe('the process defaults', () => {
     onProcessSignal('SIGHUP', listener)
     try { process.emit('SIGHUP') } finally { process.removeListener('SIGHUP', listener) }
     expect(listener).toHaveBeenCalledOnce()
+  })
+})
+
+describe('trimLogEvery', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('trims the log on its interval until stopped, and does nothing without one', () => {
+    const trimmed: string[] = []
+    const stop = trimLogEvery('/logs/harness.log', 1_000, (file) => { trimmed.push(file); return false })
+    vi.advanceTimersByTime(2_999)
+    expect(trimmed).toEqual(['/logs/harness.log', '/logs/harness.log'])
+    stop()
+    vi.advanceTimersByTime(5_000)
+    expect(trimmed).toHaveLength(2)
+    expect(() => trimLogEvery(undefined)()).not.toThrow()
+  })
+
+  it('uses the daemon log trim by default', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'harnessd-trim-'))
+    try {
+      const file = join(dir, 'harness.log')
+      writeFileSync(file, 'x'.repeat(11 * 1024 * 1024))
+      const stop = trimLogEvery(file, 1_000)
+      vi.advanceTimersByTime(1_000)
+      stop()
+      expect(readFileSync(file).length).toBeLessThan(11 * 1024 * 1024)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 })
 
@@ -72,7 +165,7 @@ describe('coreHandle', () => {
     const messages: unknown[] = []
     handle.onMessage((message) => messages.push(message))
     child.emit('message', { type: 'x' })
-    handle.send({ type: 'harnessd:status', status: { state: 'running', corePid: 1, restarts: 0, lastExit: null, protocol: 1 } })
+    handle.send({ type: 'harnessd:status', status: { state: 'running', corePid: 1, restarts: 0, lastExit: null, lastExitReason: null, safeMode: null, protocol: 2, since: 0 } })
     handle.kill('SIGTERM')
     expect(handle.pid).toBe(4242)
     expect(messages).toEqual([{ type: 'x' }])
@@ -135,6 +228,33 @@ describe('runMaster', () => {
     expect(exits).toEqual([0])
     expect(existsSync(pidFile)).toBe(false)
     expect(updates).toEqual([])
+  })
+
+  it('records its status as it goes, and starts the core with the heap limit its budget is a share of', async () => {
+    const pidFile = join(dir, 'adapter.pid')
+    const statusFile = join(dir, 'harnessd-status.json')
+    const flags = join(dir, 'flags')
+    const core = join(dir, 'core.cjs')
+    writeFileSync(core, `
+      require('node:fs').writeFileSync(${JSON.stringify(flags)}, JSON.stringify(process.execArgv))
+      process.send({ type: 'harnessd:bound', protocol: 2, port: 1 })
+      process.send({ type: 'harnessd:ready' })
+      setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 }), 50)
+      process.on('SIGTERM', () => process.exit(0))
+    `)
+    const exits: number[] = []
+    const signals = new Map<string, () => void>()
+    runMaster({
+      nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile, statusFile, logFile: join(dir, 'harness.log'),
+      restoreUpdate: () => {}, confirmUpdate: () => {},
+      env: { ...process.env, HARNESSD_HEAP_LIMIT_MIB: '300' },
+      exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
+    })
+    await until('the core to be ready', () => readStatusFile(statusFile, process.pid)?.state === 'running')
+    expect(JSON.parse(readFileSync(flags, 'utf8'))).toEqual(['--max-old-space-size=300'])
+    signals.get('SIGTERM')!()
+    await until('the master to finish', () => exits.length > 0)
+    expect(readStatusFile(statusFile, process.pid)).toMatchObject({ state: 'stopped', lastExitReason: 'stopped' })
   })
 
   it.each([

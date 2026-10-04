@@ -40,11 +40,11 @@ async function turnWorks(daemon: IsolatedDaemon, agentId: string) {
 describe('harnessd', () => {
   let daemon: IsolatedDaemon | undefined
   afterEach(async () => { await daemon?.close(); daemon = undefined })
-  const make = async (env: Record<string, string> = {}) => {
+  const make = async (env: Record<string, string> = {}, { start = true } = {}) => {
     daemon = await IsolatedDaemon.create({ env: { HARNESSD_INITIAL_BACKOFF_MS: '100', ...env } })
     const d = daemon
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-80).join('\n')}`) })
-    await d.start()
+    if (start) await d.start()
     return d
   }
 
@@ -110,4 +110,60 @@ describe('harnessd', () => {
     await new Promise((resolve) => setTimeout(resolve, 3_000))
     expect(d.coresStarted()).toBeLessThanOrEqual(6)
   })
+
+  it('restarts a core that something other than its master stops — it does not take the daemon down', async () => {
+    const d = await make()
+    const { agentId } = await withAgent(d)
+    const first = d.corePid()!
+    const wired = wiredCount(d)
+    process.kill(first, 'SIGTERM')
+    await until('a new core to finish starting', () => wiredCount(d) > wired, 60_000)
+    expect(IsolatedDaemon.alive(d.pid)).toBe(true)
+    expect(d.log()).toMatch(/core exited \(code 0, crashed\) — restarting/)
+    await turnWorks(d, agentId)
+  })
+
+  it('records what the master knows where `harness status` reads it, the core alive or not', async () => {
+    const d = await make()
+    const statusFile = join(d.dataDir, 'harnessd-status.json')
+    const read = () => JSON.parse(readFileSync(statusFile, 'utf8'))
+    await until('the status file to say running', () => existsSync(statusFile) && read().state === 'running', 10_000)
+    expect(read()).toMatchObject({ masterPid: d.pid, corePid: d.corePid(), restarts: 0, safeMode: null, protocol: 2 })
+    const core = d.corePid()!
+    process.kill(core, 'SIGKILL')
+    await until('the status file to name the crash', () => read().restarts === 1 && read().lastExitReason === 'crashed', 10_000)
+    await until('the status file to say running again', () => read().state === 'running', 60_000)
+  })
+
+  it('puts a core that keeps crashing in safe mode, and tries a normal one once safe mode runs out', async () => {
+    const d = await make({ HARNESSD_CRASH_LOOP_WINDOW_MS: '120000', ADAPTER_SAFE_MODE_MS: '6000' })
+    const statusFile = join(d.dataDir, 'harnessd-status.json')
+    const read = () => JSON.parse(readFileSync(statusFile, 'utf8'))
+    for (let crash = 1; crash <= 3; crash++) {
+      const core = d.corePid()!
+      process.kill(core, 'SIGKILL')
+      await until(`core ${crash + 1} to start`, () => d.coresStarted() > crash, 30_000)
+      await until(`core ${crash + 1} to bind`, () => d.corePid() !== core && read().state !== 'restarting', 60_000)
+    }
+    expect(d.log()).toMatch(/core crashed 3 times in 2 min — starting it in safe mode/)
+    await until('the safe-mode core to say so', () => read().safeMode !== null && read().state === 'running', 30_000)
+    expect(read().safeMode).toMatch(/crash again and again/)
+    // Its time runs out with no fix: a normal core starts and finishes starting.
+    const wired = wiredCount(d)
+    await until('a normal core again', () => wiredCount(d) > wired, 60_000)
+    await until('the status file to drop safe mode', () => read().safeMode === null && read().state === 'running', 30_000)
+  })
+
+  it('kills a core that binds but never finishes starting, and keeps doing so into safe mode', async () => {
+    const d = await make({ HARNESSD_TEST_HOLD_READY: '1', HARNESSD_READY_TIMEOUT_MS: '3000', HARNESSD_CRASH_LOOP_WINDOW_MS: '120000' }, { start: false })
+    await d.start({ ready: 'none' })
+    await until('the master to give up on a start-up', () => /core bound but not ready within 3000 ms — killing it/.test(d.log()), 30_000)
+    await until('safe mode', () => /starting it in safe mode/.test(d.log()), 60_000)
+    const statusFile = join(d.dataDir, 'harnessd-status.json')
+    await until('the safe-mode core to be up', () => {
+      const status = JSON.parse(readFileSync(statusFile, 'utf8'))
+      return status.state === 'running' && status.safeMode !== null
+    }, 30_000)
+  })
 })
+

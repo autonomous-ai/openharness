@@ -55,7 +55,7 @@ import { registry, projectDisplayName, sessionDisplayTitle, validTranscriptPath,
 import { engineSessionTitle } from './lib/sessionTitle.js'
 import { installAmpPlugin, installCodexHooks, installCommandCodeHooks, installCursorHooks, installDevinHooks, installGrokHooks, installAgyHooks, installCopilotHooks, installHermesHooks, installKiloPlugin, installOpencodePlugin, installPiExtension, installSessionHooks } from './lib/hooks.js'
 import { PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
-import { clearSafeModeMarker, readSafeModeMarker, runBootHandoff, safeModeDisposition, safeModeStatusBody, writeSafeModeMarker } from './lib/daemonSafeMode.js'
+import { clearSafeModeMarker, readSafeModeMarker, runBootHandoff, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from './lib/daemonSafeMode.js'
 import { awakeTimeout } from './lib/sleepAware.js'
 import {
   BIND_WAIT_MS, connectFailure, defaultLaunchDeps, removePidFileIf, waitForBind, waitForReady,
@@ -173,8 +173,8 @@ import {
 import { Watcher, type HistoryEvent, type LineEvent, type RewrittenEvent, type TailHold } from './watcher/watcher.js'
 import { chooseHookAgent, startHookServer } from './hookServer.js'
 import { connectToMaster } from './harnessd/coreLink.js'
-import { runMaster } from './harnessd/master.js'
-import { CORE_EXIT_UPDATE } from './harnessd/protocol.js'
+import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
+import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
 import { legacyDaemonStatus, localDaemonStatus, saveDaemonPort } from './lib/daemonEndpoint.js'
 import { commandBarService } from './lib/commandBar.js'
@@ -290,6 +290,8 @@ const STOP_HOOK_GRACE_MS = 1_500
 
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
 const LOG_FILE = join(env.ADAPTER_DATA_DIR, 'harness.log')
+/** What harnessd's master last said about itself, for `harness status` when no core answers. */
+const HARNESSD_STATUS_FILE = join(env.ADAPTER_DATA_DIR, 'harnessd-status.json')
 // Pre-rename name. Adopted (renamed, keeping the inode) the first time a daemon opens the log, so a
 // machine that updates mid-run keeps its history instead of stranding it in a file nobody tails.
 // The log has had three names; this slot holds the OLDEST. The middle one (`machine.log`) is adopted
@@ -1687,6 +1689,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     intervalMs: env.ADAPTER_UPDATE_CHECK_MS,
     slotSecond: env.ADAPTER_UPDATE_SLOT_SEC,
   })
+
+  // harnessd's master saw this core crash again and again: start nothing that could do it again. The
+  // updaters above keep running, so a published fix still lands (`enterSafeMode`).
+  if (process.env.HARNESSD_SAFE_MODE) throw new SafeModeRequest(process.env.HARNESSD_SAFE_MODE)
 
   const savedApis = new ApiConnections(env.ADAPTER_DATA_DIR)
   // Before any agent is probed: one already running on a saved API's model reports that model.
@@ -6400,10 +6406,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Keep the log file under its cap. This daemon writes it through an inherited stdout fd, so a size
   // check on a timer is the only place that can see it grow — `prepareLogFile` at spawn time alone
   // would let a long-lived, chatty daemon run unbounded between restarts.
-  const logTrimTimer = setInterval(() => {
+  // A core run by harnessd leaves this to its master, which outlives it (harnessd/master.ts).
+  const logTrimTimer = coreLink.supervised ? undefined : setInterval(() => {
     if (trimLogFile(LOG_FILE)) console.log(`[log] ${tildify(LOG_FILE)} hit its size cap — dropped the oldest half`)
   }, LOG_CHECK_INTERVAL_MS)
-  logTrimTimer.unref?.() // never hold the event loop open for log upkeep
+  logTrimTimer?.unref?.() // never hold the event loop open for log upkeep
 
   // Signed out, the backend is not dialed at all. The socket would only meet a missing session and back
   // off forever, one log line at a time; a sign-in RESTARTS this process with the session in hand
@@ -6536,6 +6543,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     handoffChild = null
   })
 
+  /** Stopping for good — removed from the account, or connected from elsewhere: tell harnessd's master,
+   *  which restarts any other exit (harnessd/protocol.ts). */
+  const forGood = (reason: string): boolean => reason === 'revoked' || reason === 'busy'
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`\n[cli] ${signal} — shutting down`)
     // Mid-handoff everything below has already been torn down once, and the daemon that matters is
@@ -6582,7 +6592,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     autonomousDeviceDirect?.stop()
     await backend.stop()
     try { if (readPid() === process.pid) rmSync(PID_FILE, { force: true }) } catch { /* ignore */ }
-    process.exit(0)
+    process.exit(coreLink.supervised && forGood(signal) ? CORE_EXIT_STOP : 0)
   }
   process.on('SIGINT', () => void shutdown('SIGINT'))
   process.on('SIGTERM', () => void shutdown('SIGTERM'))
@@ -6900,8 +6910,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Last: every handler is wired and the restored agents are confirmed, so requests that arrived while
   // starting — a client reconnecting the moment the port answered, the backend's first frames — are
   // answered now, in order, by the handlers meant to answer them (see BackendSocket.openRequests).
+  // Only the end-to-end harness sets this: a start-up that hangs after binding, for the master's deadline.
+  if (process.env.HARNESSD_TEST_HOLD_READY === '1') await new Promise<never>(() => {})
   backend.openRequests()
   daemonBoot.openRequests = null
+  coreLink.ready()
   console.log('[cli] ready')
 }
 
@@ -7997,6 +8010,8 @@ async function status(): Promise<void> {
   // A daemon whose start-up failed is alive and answering, but nothing on this machine works. Say so
   // in the one line a person reads, rather than leaving it looking like an ordinary slow start.
   const safeMode = alive ? readSafeModeMarker(env.ADAPTER_DATA_DIR, isAlive) : null
+  // A core that cannot answer — restarting, starting, crash-looping — is described by its master.
+  const master = alive && daemonStatus == null ? describeMasterStatus(readStatusFile(HARNESSD_STATUS_FILE, pid)) : null
   printInfoBlock({
     // The backend link is the daemon's own business, so `status` is where it is read — `start` no
     // longer waits to see it, and a daemon with no backend is still serving every local agent.
@@ -8004,6 +8019,8 @@ async function status(): Promise<void> {
     // and `machine: not signed in` in place of the whole block hid a running daemon and its agents.
     status: !alive
       ? '○ stopped'
+      : master
+        ? master
       : safeMode
         ? `◍ safe mode · start-up failed on v${safeMode.version} — waiting for a fixed build (${safeMode.error.split('\n')[0]})`
       : !signedIn
@@ -8133,7 +8150,7 @@ const onError = (err: unknown): never => {
  * `harness status` say what happened. `harness stop` still works throughout — it kills by pid.
  */
 const enterSafeMode = (err: unknown): void => {
-  const disposition = safeModeDisposition(err, { selfPid: process.pid, readPid, isAlive })
+  const disposition = safeModeDisposition(err, { selfPid: process.pid, masterPid: coreLink.supervised ? process.ppid : null, readPid, isAlive })
   if (!disposition.stay) {
     console.error(`[safe-mode] not staying up — ${disposition.reason}`)
     onError(err)
@@ -8157,8 +8174,10 @@ const enterSafeMode = (err: unknown): void => {
   process.on('SIGINT', () => leave('SIGINT — leaving safe mode', 0))
   process.on('SIGTERM', () => leave('SIGTERM — leaving safe mode', 0))
   // Up, though not ready: the master must neither give up waiting for a bind nor take it for hung,
-  // or the updater that can fix this build would never get its chance.
+  // or the updater that can fix this build would never get its chance. It hears why, and rolls back an
+  // update whose first core ends up here.
   coreLink.bound(daemonPort())
+  coreLink.ready(disposition.reason)
   coreLink.startHeartbeat()
   coreLink.onMasterGone(() => leave('the harnessd master is gone — leaving safe mode', 0))
 
@@ -8240,6 +8259,8 @@ switch (cmd) {
       execArgv: process.execArgv,
       scriptPath: SCRIPT_PATH,
       pidFile: PID_FILE,
+      statusFile: HARNESSD_STATUS_FILE,
+      logFile: LOG_FILE,
       restoreUpdate: () => restoreUpdate(env.ADAPTER_CLI_DIR),
       confirmUpdate: () => confirmUpdate(env.ADAPTER_CLI_DIR),
     })

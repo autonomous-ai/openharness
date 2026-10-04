@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   clearSafeModeMarker, readSafeModeMarker, runBootHandoff, safeModeDisposition,
-  safeModeFile, safeModeStatusBody, writeSafeModeMarker, type BootHandoffDeps,
+  safeModeFile, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker, type BootHandoffDeps,
 } from './daemonSafeMode.js'
 
 let dir = ''
@@ -30,6 +30,20 @@ describe('safeModeDisposition', () => {
   it('stays when the pid file names us, or names a corpse', () => {
     expect(safeModeDisposition(new Error('boom'), { selfPid: 100, readPid: () => 100, isAlive: () => true }).stay).toBe(true)
     expect(safeModeDisposition(new Error('boom'), { selfPid: 100, readPid: () => 200, isAlive: () => false }).stay).toBe(true)
+  })
+
+  // Under harnessd the pid file is the master's. Leaving because of it was why safe mode never held
+  // under a master: the core exited, and the master restarted it into the same failure.
+  it('stays when the pid file names the harnessd master running this core', () => {
+    expect(safeModeDisposition(new Error('boom'), { selfPid: 100, masterPid: 200, readPid: () => 200, isAlive: () => true }).stay).toBe(true)
+    expect(safeModeDisposition(new Error('boom'), { selfPid: 100, masterPid: 300, readPid: () => 200, isAlive: () => true }).stay).toBe(false)
+  })
+
+  it('stays, saying why, when the master asked for safe mode', () => {
+    expect(safeModeDisposition(new SafeModeRequest('crash-loop'), { ...nobody, masterPid: 1 }))
+      .toEqual({ stay: true, reason: 'harnessd saw this core crash again and again — started in safe mode' })
+    const other = new SafeModeRequest('a corrupt registry')
+    expect([other.name, other.why, other.message]).toEqual(['SafeModeRequest', 'a corrupt registry', 'harnessd asked for safe mode: a corrupt registry'])
   })
 })
 

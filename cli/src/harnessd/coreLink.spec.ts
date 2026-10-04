@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { connectToMaster, processChannel, type MasterChannel } from './coreLink.js'
+import { connectToMaster, processChannel, processLoopDelay, type LoopDelay, type MasterChannel } from './coreLink.js'
 import { HARNESSD_PROTOCOL, type CoreMessage } from './protocol.js'
 
 class FakeChannel implements MasterChannel {
@@ -17,6 +17,20 @@ class FakeChannel implements MasterChannel {
 
 const supervised = { HARNESSD_SUPERVISED: '1' }
 
+/** Loop delays that read back as given, one per beat, and remember being stopped. */
+const delays = (...values: number[]) => {
+  const made: Array<LoopDelay & { stopped: boolean }> = []
+  return {
+    made,
+    factory: () => {
+      const queue = [...values]
+      const delay = { stopped: false, take: () => queue.shift() ?? 0, stop: () => { delay.stopped = true } }
+      made.push(delay)
+      return delay
+    },
+  }
+}
+
 describe('connectToMaster', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
@@ -26,6 +40,7 @@ describe('connectToMaster', () => {
     for (const link of [connectToMaster(channel, {}), connectToMaster({ ...channel, send: undefined, once: channel.once.bind(channel), on: channel.on.bind(channel), memoryUsage: () => channel.memoryUsage() }, supervised)]) {
       expect(link.supervised).toBe(false)
       link.bound(1)
+      link.ready()
       link.startHeartbeat()
       const gone = vi.fn()
       link.onMasterGone(gone)
@@ -38,11 +53,13 @@ describe('connectToMaster', () => {
     expect(channel.sent).toEqual([])
   })
 
-  it('says it is bound, then beats with its memory until closed', () => {
+  it('says it is bound, then ready, then beats with its memory and loop delay until closed', () => {
     const channel = new FakeChannel()
-    const link = connectToMaster(channel, supervised, 1_000)
+    const loop = delays(4, 250)
+    const link = connectToMaster(channel, supervised, 1_000, loop.factory)
     expect(link.supervised).toBe(true)
     link.bound(18473)
+    link.ready()
     link.startHeartbeat()
     link.startHeartbeat()
     channel.rss = 200
@@ -52,9 +69,18 @@ describe('connectToMaster', () => {
     link.close()
     expect(channel.sent).toEqual([
       { type: 'harnessd:bound', protocol: HARNESSD_PROTOCOL, port: 18473 },
-      { type: 'harnessd:heartbeat', rssBytes: 100, heapUsedBytes: 50 },
-      { type: 'harnessd:heartbeat', rssBytes: 200, heapUsedBytes: 100 },
+      { type: 'harnessd:ready' },
+      { type: 'harnessd:heartbeat', rssBytes: 100, heapUsedBytes: 50, loopDelayMs: 4 },
+      { type: 'harnessd:heartbeat', rssBytes: 200, heapUsedBytes: 100, loopDelayMs: 250 },
     ])
+    expect(loop.made).toHaveLength(1)
+    expect(loop.made[0].stopped).toBe(true)
+  })
+
+  it('says why when start-up gave way to safe mode', () => {
+    const channel = new FakeChannel()
+    connectToMaster(channel, supervised).ready('no tmux')
+    expect(channel.sent).toEqual([{ type: 'harnessd:ready', safeMode: 'no tmux' }])
   })
 
   it('keeps what the master says about itself, and hears when the master goes', () => {
@@ -81,5 +107,14 @@ describe('connectToMaster', () => {
   it('uses this process by default, which no master started', () => {
     expect(connectToMaster().supervised).toBe(false)
     expect(processChannel.memoryUsage().rss).toBeGreaterThan(0)
+  })
+
+  it('measures this process\'s loop delay, in whole milliseconds, from nothing after each reading', () => {
+    vi.useRealTimers()
+    const delay = processLoopDelay()
+    const first = delay.take()
+    expect(Number.isInteger(first) && first >= 0).toBe(true)
+    expect(delay.take()).toBeGreaterThanOrEqual(0)
+    delay.stop()
   })
 })
