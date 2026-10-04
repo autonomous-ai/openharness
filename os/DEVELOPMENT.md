@@ -57,6 +57,20 @@ keys, and checks DHCP, DNS, HTTP, reconnection and non-silent audio output. Acce
 point tools are installed only inside the disposable guest, never in the ISO.
 Physical radio, backlight, speaker and microphone tests remain separate.
 
+`checks=browser` with an `image_run_id` exercises the installed terminal/browser
+session in BIOS/plain and UEFI/encrypted VMs. It records and applies only the
+candidate `hn-browser` script and labwc configuration over the checksum-verified
+image. The observer checks actual Wayland window states, local-page rendering,
+keyboard input destinations, repeated Super+b switching, an explicit URL request,
+and browser close/reopen while the same terminal process remains alive. The host's
+`wlrctl` binary is copied to the disposable guest's `/tmp`; it is not added to the
+image. Every candidate and observer hash is retained with screenshots and input
+logs. These focused checks do not replace a changed image's release acceptance.
+
+Boot readiness is recorded before first-use Wi-Fi and model conversations. Keep
+password wait, diagnostic login, onboarding, and active model latency separate
+when reporting startup. Native VM timings do not establish laptop power-on times.
+
 The **Harness OS optional local AI assessment** workflow reuses an exact image
 artifact and installs it to an encrypted disposable disk. Its two independent
 checks add packages only inside their guests:
