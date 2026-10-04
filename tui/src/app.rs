@@ -5275,7 +5275,10 @@ impl App {
             if self.os_live && self.tabs.len() == 1 && self.tabs[0].root.is_none() {
                 if self.link(&self.fleet.local_id).is_none() { return }
                 self.shell_asked = true;
-                crate::input::new_shell_from(self, None, Placement::Auto(None), None, Some("/usr/bin/hn-os welcome".into()));
+                // The welcome reply may arrive after another terminal is requested.
+                // Fill its original tab instead of whichever tab is now active.
+                let tab = self.tab().id.clone();
+                crate::input::new_shell_from(self, None, Placement::Fill(tab), None, Some("/usr/bin/hn-os welcome".into()));
             } else { self.shell_asked = true; }
             return;
         }

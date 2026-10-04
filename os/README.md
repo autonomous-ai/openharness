@@ -30,10 +30,11 @@ you choose when to reconnect the screen. Running agents and terminals stay alive
 · [Standalone HTML/CSS landing page](../website/public/os/README.md)
 · [Development feedback loop and Mac support targets](DEVELOPMENT.md)
 
-Preview 8 uses stronger USB payload compression. The installed software and
-agent-led experience introduced in preview 7 are unchanged; existing installations
-do not need updating or reflashing for this download-size improvement. The installed
-system update feed remains independent from ISO packaging.
+Preview 8 uses stronger USB payload compression and fixes a startup race: opening
+a terminal immediately can no longer send the USB welcome into that new window.
+Both changes concern the live USB; existing installations do not need updating or
+reflashing for them. The installed system update feed remains independent from
+ISO packaging.
 
 Each published image includes its matching installation guide and exact validation
 evidence. Preview 6 passed BIOS/plain and UEFI/encrypted USB installation, boot,

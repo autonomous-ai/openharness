@@ -391,7 +391,7 @@ def check_console_fallback(vm, user, folder):
         output, _ = vm.command('cat /home/me/.local/state/harness-os/display.log; '
                                'ps -u 1000 -o pid,ppid,tty,comm; cat /dev/vcs1', check=False)
         (folder / 'console-fallback.log').write_text(output)
-        output, _ = vm.command(user('hn hn-list-clients; hn show-messages'), check=False)
+        output, _ = vm.command(user('sh -c ' + shlex.quote('hn hn-list-clients; hn show-messages')), check=False)
         (folder / 'console-client.log').write_text(output)
         vm.command('rm -f ' + override + '; systemctl restart getty@tty1.service')
     vm.command(user("sh -c 'for n in $(seq 1 60); do systemctl --user is-active --quiet hn-screen && "
