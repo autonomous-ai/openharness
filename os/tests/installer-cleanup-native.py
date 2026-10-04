@@ -122,20 +122,24 @@ def main():
                 holder = None
                 wait_removed()
                 result['checks'].append('A real subprocess timeout falls back to deferred kernel removal without udev synchronization')
-                # Reproduce the other timeout: the kernel has removed the
-                # mapping but udev has not removed its device node yet.
+                # Cleanup must not depend on the udev queue making progress.
+                # Some cryptsetup versions also remove the node themselves,
+                # so record that observation instead of requiring a stale node.
                 open_mapping()
                 run('udevadm', 'control', '--stop-exec-queue')
                 try:
+                    stalled = time.monotonic()
                     with installer.command_log(output / 'stalled-udev-close.log'):
                         installer.close_install_mapping(mapper, timeout=.5)
                     assert not installer.mapping_active(mapper)
-                    assert mapped.exists(), 'Fixture must retain the stale device node while udev is stopped'
+                    result['stalled_udev_close_seconds'] = round(time.monotonic() - stalled, 3)
+                    result['stale_node_observed'] = mapped.exists()
+                    assert result['stalled_udev_close_seconds'] < 4
                 finally:
                     run('udevadm', 'control', '--start-exec-queue')
                     run('udevadm', 'settle', '--timeout=5')
                 wait_removed()
-                result['checks'].append('Cleanup succeeds after kernel removal even with a stale device node and the real udev queue stopped')
+                result['checks'].append('Cleanup completes within its bound with the real udev queue stopped; kernel state confirms removal')
                 # Reopen the same filesystem and verify the completed data was
                 # not modified by either failed or retried close operation.
                 open_mapping()
