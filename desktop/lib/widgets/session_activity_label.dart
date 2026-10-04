@@ -29,7 +29,11 @@ class SessionActivityLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final status = activity.status;
-    final showMark = status != null && status != HarnessActivity.idle;
+    final showMark =
+        status != null &&
+        status != HarnessActivity.idle &&
+        status != HarnessActivity.unknown;
+    final textScaler = MediaQuery.textScalerOf(context);
     if (age == null && !showMark) return const SizedBox.shrink();
     final description = [
       if (reason != null && reason != status?.label) reason!,
@@ -44,31 +48,49 @@ class SessionActivityLabel extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (showMark) ...[
-              ListenableBuilder(
-                listenable: Listenable.merge([
-                  terminalThemeStore,
-                  appearancePrefsStore,
-                ]),
-                builder: (context, _) => ActivityMark(
-                  activity: status,
-                  color:
-                      markColor ??
-                      activityColor(
-                        status,
-                        terminalThemeFor(
-                          grid.AppTheme.palette.value,
-                          terminalThemeStore.value,
+            // Keep both columns fixed as ages change (now, 1m, 12m), including
+            // rows without a confirmed status. Only the timestamp is shown
+            // when the status is unknown; its tooltip retains that detail.
+            SizedBox(
+              width: textScaler.scale(16),
+              child: showMark
+                  ? Center(
+                      heightFactor: 1,
+                      child: ListenableBuilder(
+                        listenable: Listenable.merge([
+                          terminalThemeStore,
+                          appearancePrefsStore,
+                        ]),
+                        builder: (context, _) => ActivityMark(
+                          activity: status,
+                          color:
+                              markColor ??
+                              activityColor(
+                                status,
+                                terminalThemeFor(
+                                  grid.AppTheme.palette.value,
+                                  terminalThemeStore.value,
+                                ),
+                                color: appearancePrefsStore.value.prompt.color,
+                              ),
+                          tooltip: false,
                         ),
-                        color: appearancePrefsStore.value.prompt.color,
                       ),
-                  tooltip: false,
-                ),
-              ),
-              if (age != null) const SizedBox(width: 6),
-            ],
-            if (age != null)
-              Text(age!, maxLines: 1, textAlign: TextAlign.right, style: style),
+                    )
+                  : null,
+            ),
+            const SizedBox(width: 6),
+            SizedBox(
+              width: textScaler.scale(40),
+              child: age == null
+                  ? null
+                  : Text(
+                      age!,
+                      maxLines: 1,
+                      textAlign: TextAlign.right,
+                      style: style,
+                    ),
+            ),
           ],
         ),
       ),

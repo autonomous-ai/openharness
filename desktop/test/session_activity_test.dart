@@ -115,6 +115,7 @@ void main() {
         expect(_mark(HarnessActivity.working), findsOneWidget);
         expect(find.text('12m'), findsOneWidget);
         expect(find.text('Working'), findsNothing);
+        final statusX = tester.getCenter(_mark(HarnessActivity.working)).dx;
         final selected = search.selected?.id;
 
         // A quiet tool can work for minutes without writing another message.
@@ -130,6 +131,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(_mark(HarnessActivity.working), findsOneWidget);
         expect(find.text('now'), findsOneWidget);
+        expect(tester.getCenter(_mark(HarnessActivity.working)).dx, statusX);
         expect(tester.getTopLeft(title), position);
         expect(search.selected?.id, selected);
 
@@ -149,13 +151,13 @@ void main() {
         expect(find.text('now'), findsOneWidget);
         expect(find.text('Open'), findsNothing);
         expect(_mark(HarnessActivity.working), findsNothing);
-        expect(_mark(HarnessActivity.unknown), findsOneWidget);
+        expect(_mark(HarnessActivity.unknown), findsNothing);
         fail = true;
         await tester.pump(const Duration(seconds: 5));
         await tester.pumpAndSettle();
         expect(find.text('Open'), findsNothing);
         expect(_mark(HarnessActivity.working), findsNothing);
-        expect(_mark(HarnessActivity.unknown), findsOneWidget);
+        expect(_mark(HarnessActivity.unknown), findsNothing);
         expect(find.text('now'), findsOneWidget);
 
         await tester.pumpWidget(const SizedBox());
