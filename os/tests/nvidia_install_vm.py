@@ -83,7 +83,7 @@ def main():
         receipt['keyboard'] = check_graphical_keyboard(vm, 'nvidia-installed')
         vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S true')
         vm.command('test ! -e /usr/share/harness-os/hardware/nvidia && test ! -e /etc/harness-live')
-        output, _ = vm.command('lsinitcpio /boot/initramfs-linux-lts.img')
+        output, _ = vm.command('sudo -n lsinitcpio /boot/initramfs-linux-lts.img')
         (folder / 'initramfs-files.txt').write_text(output)
         for module in ['nvidia', 'nvidia_modeset', 'nvidia_drm']:
             assert re.search(r'/' + module + r'\.ko(?:\.(?:zst|xz|gz))?(?:\s|$)', output), module
@@ -97,7 +97,7 @@ def main():
         output, _ = vm.command('pacman -Q nvidia-open-lts nvidia-utils; harness hardware; '
             'cat /var/lib/harness-os/hardware.json')
         (folder / 'installed-hardware.txt').write_text(output)
-        vm.command('nmcli networking on; nm-online -q --timeout=60')
+        vm.command('sudo -n nmcli networking on; nm-online -q --timeout=60')
         vm.command('hn-browser ' + shlex.quote(f'http://10.0.2.2:{server.server_port}/browser.html'))
         deadline = time.monotonic() + 45
         while time.monotonic() < deadline:
