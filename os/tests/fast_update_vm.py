@@ -75,6 +75,11 @@ def exercise(vm, fixture, host_url):
     vm.keys('meta_l', 'u')
     wait_text(vm, 'an update is ready', 'fast-01-ready')
     vm.keys('esc')
+    # Closing the shell is asynchronous. The OS shortcut reuses a named Updates
+    # window, so reopening before its removal can select the closing window and
+    # make OCR accept its old frame before the next Enter reaches a live screen.
+    vm.command('for n in $(seq 1 80); do hn list-windows -F "#{window_name}" > /tmp/fast-windows.txt && '
+               '! grep -Fx Updates /tmp/fast-windows.txt && exit 0; sleep .25; done; exit 1', timeout=30)
     checks = ['An already-included public CLI release is ignored before staging; independent newer hn and CLI releases remain eligible', 'User timer discovers, verifies and stages a real hn release without changing the running selection', 'Super+u shows the prepared update while the installed footer stays hn’s standard footer']
     vm.command('test ! -e ' + state + '/current')
 
