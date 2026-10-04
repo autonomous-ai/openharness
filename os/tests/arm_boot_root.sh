@@ -3,7 +3,7 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y --no-install-recommends ca-certificates python3 tmux libutf8proc2 \
+apt-get install -y --no-install-recommends ca-certificates python3 tmux libutf8proc3 \
     procps kmod iproute2 util-linux passwd busybox-static
 install -m 755 /inputs/node /usr/local/bin/node
 install -m 755 /inputs/tmux /usr/local/bin/tmux

@@ -196,6 +196,7 @@ def main():
                 stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT)
             process.wait(timeout=1200)
         receipt['vm_elapsed_seconds'] = time.monotonic() - boot_started
+        receipt['qemu_exit'] = process.returncode
         run(['debugfs', '-R', f'rdump /results {output}', disk], timeout=90)
         guest = output / 'results'
         boot = json.loads((guest / 'boot.json').read_text())
@@ -204,6 +205,8 @@ def main():
             raise ValueError('The 16 KiB guest runtime acceptance did not pass')
         if native['runtime'] != info or native['kernel'] != lock['kernel_release']:
             raise ValueError('The guest did not run the expected runtime/kernel')
+        if process.returncode != 0:
+            raise ValueError('QEMU did not shut down successfully')
         if not re.search(r'^HARNESS_ARM_BOOT_EXIT=0\r?$', serial.read_text(), re.M):
             raise ValueError('The guest did not report successful completion')
         receipt.update(status='passed', boot=boot, native_receipt_sha256=digest(guest / 'native-runtime/receipt.json'))
