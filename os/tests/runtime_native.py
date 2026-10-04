@@ -237,22 +237,32 @@ def main():
             receipt['checks'].append('Three real hn shell panes open; the attached terminal accepts native PTY keyboard input')
             prompt = ('Create sum.py here using only the Python standard library. It must accept zero or more '
                       'signed integer command-line arguments, print their sum as one integer, and exit successfully. '
-                      'No arguments must print 0. Test it. Do the work now without questions or subagents.')
-            agent_command = shlex.join(['opencode', 'run', '--format', 'json', prompt])
-            type_into_screen(agent, agent_command + ' > agent.jsonl 2>&1; printf "%s" "$?" > agent.status')
-            wait(lambda: (project / 'agent.status').exists(), 'OpenCode upstream-default project turn', 480)
-            assert (project / 'agent.status').read_text() == '0', 'OpenCode did not complete successfully'
+                      'No arguments must print 0. Test it. After testing, write exactly done to agent.done. '
+                      'Do the work now without questions or subagents.')
+            # Keep the agent open as it is on the OS. A completed `opencode run`
+            # process is archived by Harness; that is not a running pane to retain.
+            agent_command = shlex.join(['opencode', '--prompt', prompt])
+            type_into_screen(agent, 'printf "%s" "$$" > agent.pid; exec ' + agent_command)
+            wait(lambda: (project / 'agent.done').read_text().strip() == 'done',
+                 'OpenCode upstream-default interactive project turn', 480)
+            agent_pid = int((project / 'agent.pid').read_text())
+            agent_start_time = Path(f'/proc/{agent_pid}/stat').read_text().split()[21]
             assert (project / 'sum.py').is_file(), 'The agent did not create the requested project'
             for values, expected in [([], '0'), (['13', '-5', '7'], '15'), (['999999999999999999999', '1'], '1000000000000000000000')]:
                 actual = subprocess.check_output(['python3', str(project / 'sum.py'), *values], env=env,
                                                  cwd=project, text=True, timeout=5).strip()
                 assert actual == expected, (values, actual, expected)
             receipt['checks'].append('Upstream-default OpenCode runs inside an hn pane and creates Python code that passes independent execution checks')
+            expected_panes = {shell, right, agent}
+            before_panes = hn('list-panes', '-t', 'runtime', '-F', '#{pane_id}').splitlines()
+            assert set(before_panes) == expected_panes, ('Before restart', before_panes, expected_panes)
+            (output / 'agent-before-restart.txt').write_text(hn('capture-pane', '-p', '-t', agent) + '\n')
             project_digest = checksum(project / 'sum.py')
             stop_daemon()
             daemon = start_daemon()
             wait(ready, 'Restarted native daemon readiness', 90)
             assert Path(f'/proc/{pid}/stat').read_text().split()[21] == start_time
+            assert Path(f'/proc/{agent_pid}/stat').read_text().split()[21] == agent_start_time
             assert checksum(project / 'sum.py') == project_digest
             screen.close()
             (output / 'before-reconnect.ansi').write_bytes(screen.data)
@@ -262,8 +272,13 @@ def main():
             type_into_screen(shell, 'printf after > keyboard.txt')
             wait(lambda: (project / 'keyboard.txt').read_text() == 'after', 'Keyboard input after daemon/screen restart')
             assert Path(f'/proc/{pid}/stat').read_text().split()[21] == start_time
-            assert len(hn('list-panes', '-t', 'runtime').splitlines()) == 3
-            receipt['checks'].append('The same shell process, three panes and agent-created project survive daemon restart and screen reattachment; keyboard input still works')
+            assert Path(f'/proc/{agent_pid}/stat').read_text().split()[21] == agent_start_time
+            after_panes = hn('list-panes', '-t', 'runtime', '-F', '#{pane_id}').splitlines()
+            assert set(after_panes) == expected_panes, ('After restart', after_panes, expected_panes)
+            (output / 'agent-after-restart.txt').write_text(hn('capture-pane', '-p', '-t', agent) + '\n')
+            receipt['checks'].append('The same shell and interactive agent processes, three pane identities and generated project survive daemon restart and screen reattachment; keyboard input still works')
+            receipt['surviving_processes'] = {'shell': {'pid': pid, 'start_time': start_time},
+                                             'opencode_launcher': {'pid': agent_pid, 'start_time': agent_start_time}}
             receipt.update(status='passed', project_sha256=project_digest)
         except BaseException as error:
             receipt.update(status='failed', error=str(error))
@@ -283,7 +298,7 @@ def main():
                     cleanup_errors.append(str(error))
             for log in logs:
                 log.close()
-            for name in ['sum.py', 'agent.jsonl', 'agent.status']:
+            for name in ['sum.py', 'agent.done', 'agent.pid', 'shell.pid']:
                 if (project / name).is_file():
                     shutil.copy2(project / name, output / name)
             receipt['finished_at_unix'] = time.time()
