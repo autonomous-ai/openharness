@@ -9,7 +9,7 @@ import tempfile
 import time
 import unittest
 
-from payload_compression import compare, extract, inventory, measured
+from payload_compression import compare, extract, inventory, measured, tool_versions
 
 
 class Fixture:
@@ -71,6 +71,13 @@ class InventoryTest(Fixture, unittest.TestCase):
 
 @unittest.skipUnless(platform.system() == 'Linux', 'Needs Linux SquashFS and GNU time')
 class NativeTest(Fixture, unittest.TestCase):
+    @unittest.skipUnless(all(shutil.which(tool) for tool in ['mksquashfs', 'unsquashfs', 'xorriso']),
+                         'Needs the assessment toolchain')
+    def test_version_reporting_accepts_tools_without_an_input_image(self):
+        versions = tool_versions()
+        self.assertEqual(set(versions), {'mksquashfs', 'unsquashfs', 'xorriso'})
+        self.assertTrue(all(row['output'] for row in versions.values()))
+
     @unittest.skipUnless(os.geteuid() == 0 and all(shutil.which(tool) for tool in ['mksquashfs', 'unsquashfs', 'setcap']),
                          'SquashFS metadata roundtrip needs root, squashfs-tools and libcap2-bin')
     def test_roundtrip_preserves_privileged_metadata(self):

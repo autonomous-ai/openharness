@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import signal
 import stat
@@ -112,6 +113,19 @@ def package_sizes(root):
     return sorted(result, key=lambda row: (-row['bytes'], row['name']))
 
 
+def tool_versions():
+    versions = {}
+    for tool in ['mksquashfs', 'unsquashfs', 'xorriso']:
+        # unsquashfs 4.6.1 prints its version and exits 1 without an input image.
+        probe = subprocess.run([tool, '-version'], stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, text=True, timeout=10)
+        if probe.returncode not in (0, 1) or not re.search(
+                rf'(?im)^{re.escape(tool)} (?:version )?\d+\.\d+', probe.stdout):
+            raise RuntimeError(f'Cannot identify {tool}: {probe.returncode}\n{probe.stdout}')
+        versions[tool] = dict(output=probe.stdout.strip(), returncode=probe.returncode)
+    return versions
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--iso', type=Path, required=True)
@@ -151,9 +165,7 @@ def main():
     try:
         result['test_source_commit'] = subprocess.check_output(
             ['git', '-c', f'safe.directory={Path.cwd()}', 'rev-parse', 'HEAD'], text=True).strip()
-        result['tools'] = {tool: subprocess.check_output([tool, '-version'], stderr=subprocess.STDOUT,
-                                                       text=True).strip()
-                           for tool in ['mksquashfs', 'unsquashfs', 'xorriso']}
+        result['tools'] = tool_versions()
         if os.environ.get('SOURCE_DATE_EPOCH'):
             raise RuntimeError('Unset SOURCE_DATE_EPOCH: file timestamps must be preserved for this assessment')
         with tempfile.TemporaryDirectory(prefix='payload-', dir=folder) as temp:
