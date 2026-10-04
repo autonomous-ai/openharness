@@ -11,6 +11,19 @@ import time
 from PIL import Image
 from footprint_vm import copy_file
 from vm import VM
+from session_vm import screen_text
+
+
+class BrowserVM(VM):
+    def keys(self, *keys):
+        # Use explicit press/release events. send-key's delayed release follows
+        # the VM clock; a host sleep can finish while the guest is still holding
+        # Ctrl during a memory-heavy browser startup. Never paste probe text.
+        for down, sequence in [(True, keys), (False, reversed(keys))]:
+            self.monitor('input-send-event', events=[
+                {'type': 'key', 'data': {'down': down, 'key': {'type': 'qcode', 'data': key}}}
+                for key in sequence])
+            time.sleep(.06)
 
 
 TERMINAL = '''import os, pathlib, sys
@@ -33,15 +46,27 @@ def observe(vm, *args):
     return 'systemd-run --user --quiet --wait --pipe --collect /tmp/harness-wlrctl ' + shlex.join(args)
 
 
-def focused(vm, app, name, timeout=15):
+def focused(vm, app, name, timeout=15, title=None):
     started = time.monotonic()
     criteria = ['app_id:' + app, 'state:active']
+    if title:
+        criteria.append('title:' + title)
     # wlrctl 0.2.2's contains_value rejects enum zero, which is the Wayland
     # maximized state. Observe focus here; actual page pixels independently
     # verify display coverage instead of trusting that broken query.
     wait_command(vm, observe(vm, 'toplevel', 'find', *criteria), timeout)
     vm.screenshot(name)
     return round(time.monotonic() - started, 3)
+
+
+def new_tab_ready(vm, name):
+    # For Ctrl+n the old browser can still be active until the new window maps.
+    # Wait for that window's own title and its painted toolbar before typing.
+    focused(vm, 'chromium', name, timeout=45, title='New Tab - Chromium')
+    deadline = time.monotonic() + 15
+    while 'new tab' not in screen_text(vm, name):
+        assert time.monotonic() < deadline, 'The new browser window has not painted'
+        time.sleep(.1)
 
 
 def state(vm, *, path=None, value=None, ready=False, timeout=10):
@@ -103,6 +128,7 @@ def check_browser(vm, result):
     terminal('before-browser')
     vm.keys('meta_l', 'b')
     result['cold_start_seconds_including_observer'] = focused(vm, 'chromium', 'browser-shortcut-cold', timeout=45)
+    new_tab_ready(vm, 'browser-shortcut-ready')
     vm.keys('ctrl', 'l')
     vm.type_probe('http://127.0.0.1:18782/first')
     vm.keys('ret')
@@ -140,7 +166,7 @@ def check_browser(vm, result):
     page_fills_display(vm, 'explicit-url-full-display')
     result['checks'].append('An explicit hn-browser URL raises the already running browser from behind Harness')
     vm.keys('ctrl', 'n')
-    focused(vm, 'chromium', 'new-browser-window')
+    new_tab_ready(vm, 'new-browser-window')
     vm.keys('ctrl', 'l')
     vm.type_probe('http://127.0.0.1:18782/new-window')
     vm.keys('ret')
@@ -153,7 +179,7 @@ def check_browser(vm, result):
     terminal('after-browser-close')
     wait_command(vm, '! pgrep -u "$(id -u)" -x chromium')
     vm.keys('meta_l', 'b')
-    focused(vm, 'chromium', 'browser-reopened', timeout=45)
+    new_tab_ready(vm, 'browser-reopened')
     vm.keys('ctrl', 'l')
     vm.type_probe('http://127.0.0.1:18782/reopened')
     vm.keys('ret')
@@ -182,7 +208,7 @@ def main():
         assert hashlib.file_digest(handle, 'sha256').hexdigest() == manifest['iso']['sha256']
     folder = Path(f'os/test-results/{args.firmware}-browser').resolve()
     folder.mkdir(parents=True, exist_ok=False)
-    vm = VM(folder, iso, args.firmware, args.memory_mib, cpu='Nehalem')
+    vm = BrowserVM(folder, iso, args.firmware, args.memory_mib, cpu='Nehalem')
     config = dict(disk='/dev/vda', expected_serial='HN_OS_TEST', confirm_erase='/dev/vda', username='me',
                   hostname='harness', password='test-password-123', encrypt=args.firmware == 'uefi', serial_console=True)
     result = dict(status='running', started_at=time.time(), checks=[], firmware=args.firmware,
@@ -229,7 +255,8 @@ def main():
             vm.screenshot('failure')
             output, _ = vm.command(observe(vm, 'toplevel', 'list'), check=False)
             (folder / 'failure-windows.txt').write_text(output)
-            output, _ = vm.command('journalctl --user -b --no-pager -n 150', check=False)
+            output, _ = vm.command('sudo -n journalctl -b --no-pager -n 150; '
+                'cat /proc/meminfo; ps -u 1000 -o pid,ppid,rss,args --width 200', check=False)
             (folder / 'failure-journal.log').write_text(output)
         except Exception as diagnostic:
             result['diagnostic_error'] = repr(diagnostic)
