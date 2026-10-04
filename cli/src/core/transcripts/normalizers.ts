@@ -7,9 +7,7 @@
  * The maps themselves stay public: attach and ingest create each engine's entry their own way, lazily
  * for the file engines and never from ingest for the database readers.
  *
- * Moved out of `runForeground` (the core boundary, step 4: docs/design/2026-10-03-harnessd.md). Kept
- * exactly as it was, and tested as such: a cancel does not close Kilo's turn, and shutdown does not stop
- * Kilo's poller.
+ * Moved out of `runForeground` (the core boundary, step 4: docs/design/2026-10-03-harnessd.md).
  */
 import type { AgyNormalizer } from '../../engines/agy/normalizer.js'
 import type { AmpNormalizer } from '../../engines/amp/normalizer.js'
@@ -108,6 +106,7 @@ export function createSessionNormalizers() {
     codexNormalizers.get(sessionId)?.closeTurn()
     cursorNormalizers.get(sessionId)?.closeTurn()
     opencodeReaders.get(sessionId)?.closeTurn()
+    kiloReaders.get(sessionId)?.closeTurn()
     piNormalizers.get(sessionId)?.closeTurn()
     museNormalizers.get(sessionId)?.closeTurn()
     ampNormalizers.get(sessionId)?.closeTurn()
@@ -122,6 +121,7 @@ export function createSessionNormalizers() {
   /** Stop every database reader's poller (shutdown, and the handoff to an update). */
   const stopPollers = (): void => {
     for (const r of opencodeReaders.values()) r.stop()
+    for (const r of kiloReaders.values()) r.stop()
     for (const r of hermesReaders.values()) r.stop()
     for (const r of devinReaders.values()) r.stop()
   }

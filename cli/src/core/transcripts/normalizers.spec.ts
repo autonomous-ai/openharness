@@ -73,7 +73,7 @@ describe('the session normalizer table', () => {
     expect(() => table.forget('never-seen')).not.toThrow()
   })
 
-  it('closes a cancelled turn in every engine but Kilo, as before the move', () => {
+  it('closes a cancelled turn in every engine', () => {
     const table = createSessionNormalizers()
     const state = { turnOpen: true } as TurnState
     table.turnStates.set('s', state)
@@ -85,12 +85,13 @@ describe('the session normalizer table', () => {
     table.closeTurns('s')
     expect(state.turnOpen).toBe(false)
     for (const map of ENGINE_MAPS) {
-      expect(entries.get(map)!.closeTurn, map).toHaveBeenCalledTimes(map === 'kiloReaders' ? 0 : 1)
+      // Kilo's included: it used to be missed, so a cancelled Kilo agent could go on showing as working.
+      expect(entries.get(map)!.closeTurn, map).toHaveBeenCalledTimes(1)
     }
     expect(() => table.closeTurns('never-seen')).not.toThrow()
   })
 
-  it('stops the OpenCode, Hermes and Devin pollers on shutdown, but not Kilo\'s, as before the move', () => {
+  it('stops every database reader\'s poller on shutdown, and touches nothing else', () => {
     const table = createSessionNormalizers()
     const entries = new Map<EngineMap, Fake>()
     for (const map of ENGINE_MAPS) {
@@ -99,8 +100,8 @@ describe('the session normalizer table', () => {
     }
     table.stopPollers()
     for (const map of ENGINE_MAPS) {
-      const stopped = map === 'opencodeReaders' || map === 'hermesReaders' || map === 'devinReaders'
-      expect(entries.get(map)!.stop, map).toHaveBeenCalledTimes(stopped ? 1 : 0)
+      // Kilo's included: it used to be missed, and its poller ran on through the update handoff.
+      expect(entries.get(map)!.stop, map).toHaveBeenCalledTimes(DATABASE_READERS.includes(map) ? 1 : 0)
     }
   })
 })
