@@ -20,6 +20,18 @@ class MonitorCommands(unittest.TestCase):
         sent = json.loads(vm.qmp.sendall.call_args.args[0])
         self.assertEqual(sent, {'execute': 'set_link', 'arguments': {'name': 'hnnet', 'up': False}, 'id': 'network-check'})
 
+    def test_ocr_click_maps_the_lowest_control_back_to_the_real_frame(self):
+        words = 'left\ttop\twidth\theight\ttext\n124\t224\t100\t24\tInstall\n'
+        words += '492\t1576\t120\t28\tInstall\n'
+        self.assertEqual(vm_module.control_point(words, 'Install', 1280, 800, 2, 24),
+                         (round(264 * 32767 / 1279), round(783 * 32767 / 799)))
+
+    def test_missing_or_out_of_frame_controls_never_generate_a_click(self):
+        for words in ['left\ttop\twidth\theight\ttext\n0\t0\t8\t8\tOther\n',
+                      'left\ttop\twidth\theight\ttext\n0\t0\t8\t8\tInstall\n']:
+            with self.assertRaises(AssertionError):
+                vm_module.control_point(words, 'Install', 1280, 800, 2, 24)
+
 
 if __name__ == '__main__':
     unittest.main()

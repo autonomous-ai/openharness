@@ -25,6 +25,17 @@ import time
 import uuid
 
 
+def control_point(words, word, width, height, scale, border):
+    rows = [r for r in csv.DictReader(io.StringIO(words), delimiter='\t')
+            if r.get('text', '').strip('[]').lower() == word.lower()]
+    assert rows, f'The visible screen has no {word} control'
+    row = max(rows, key=lambda r: int(r['top']))  # The dock is the lowest instance.
+    x = (int(row['left']) + int(row['width']) / 2 - border) / scale
+    y = (int(row['top']) + int(row['height']) / 2 - border) / scale
+    assert 0 <= x < width and 0 <= y < height, 'OCR control lies outside the actual screen'
+    return round(x * 32767 / (width - 1)), round(y * 32767 / (height - 1))
+
+
 class VM:
     def __init__(self, folder, iso, firmware, memory, live_transport='cdrom', cpu=None, video='virtio-vga', audio=False):
         self.folder, self.iso, self.firmware, self.memory = folder, iso, firmware, memory
@@ -255,19 +266,25 @@ class VM:
 
     def click_word(self, name, word):
         """Locate a visible control in a screenshot and send actual pointer input."""
-        from PIL import Image
+        from PIL import Image, ImageOps
         self.screenshot(name)
         frame = self.folder / (name + '.png')
-        words = subprocess.check_output(['tesseract', str(frame), 'stdout', '--psm', '11', 'tsv'], stderr=subprocess.DEVNULL, text=True)
-        rows = [r for r in csv.DictReader(io.StringIO(words), delimiter='\t') if r.get('text', '').strip('[]').lower() == word.lower()]
-        assert rows, f'The visible screen has no {word} control'
-        row = max(rows, key=lambda r: int(r['top']))  # The install dock is the lowest instance.
-        x, y = int(row['left']) + int(row['width']) // 2, int(row['top']) + int(row['height']) // 2
+        # Small text against the screen edge needs a margin for OCR. Keep the
+        # original framebuffer and the exact transform so clicks still target
+        # the real control, never a hard-coded or inferred screen location.
+        scale, border = 2, 24
+        ocr_frame = self.folder / (name + '-ocr.png')
         with Image.open(frame) as image:
             width, height = image.size
+            readable = ImageOps.invert(image.convert('L')).resize((width * scale, height * scale))
+            ImageOps.expand(readable, border=border, fill=255).save(ocr_frame)
+        words = subprocess.check_output(['tesseract', str(ocr_frame), 'stdout', '--psm', '11', 'tsv'],
+                                        stderr=subprocess.DEVNULL, text=True, timeout=15)
+        (self.folder / (name + '-ocr.txt')).write_text(words)
+        x, y = control_point(words, word, width, height, scale, border)
         self.monitor('input-send-event', events=[
-            {'type': 'abs', 'data': {'axis': 'x', 'value': round(x * 32767 / (width - 1))}},
-            {'type': 'abs', 'data': {'axis': 'y', 'value': round(y * 32767 / (height - 1))}},
+            {'type': 'abs', 'data': {'axis': 'x', 'value': x}},
+            {'type': 'abs', 'data': {'axis': 'y', 'value': y}},
         ])
         for down in [True, False]:
             self.monitor('input-send-event', events=[{'type': 'btn', 'data': {'button': 'left', 'down': down}}])
