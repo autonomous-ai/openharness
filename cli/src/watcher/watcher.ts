@@ -40,11 +40,16 @@ export interface HistoryEvent {
 export interface TailHold {
   /** The byte the next undelivered line starts at. */
   readonly offset: number
-  /** Resume delivery — from `offset` when given (where the caller's own read stopped). Idempotent. */
+  /** The hold let go on its own after its timeout: delivery resumed into whatever it was feeding, from
+   *  where it had stopped, and a later `release` changes nothing. */
+  readonly expired: boolean
+  /** Resume delivery — from `offset` when given (where the caller's own read stopped), unless the tail
+   *  was moved under the hold (`setTail`), whose position then stands. Idempotent. */
   release(offset?: number | null): void
 }
 
-/** An attach that holds a tail longer than this has hung; the hold lets go with a warning. */
+/** The longest a session's live delivery may stay held. An attach still running by then lets it go
+ *  (`TailHold.expired`) and must keep the normalizer delivery went back to. */
 export const HOLD_TIMEOUT_MS = 30_000
 
 const EMPTY = Buffer.alloc(0)
@@ -65,6 +70,8 @@ interface FileState extends WatchedSession {
   /** Settled when the last hold is released: what a drain waits on. */
   unheld: Promise<void> | null
   settleUnheld: (() => void) | null
+  /** How many times `setTail` moved the tail: a hold taken before a move cannot put it back. */
+  moves: number
   cursorLines: string[]
 }
 
@@ -130,6 +137,7 @@ export class Watcher extends EventEmitter {
       holds: new Set(),
       unheld: null,
       settleUnheld: null,
+      moves: 0,
       cursorLines,
     })
     this.bySession.set(session.sessionId, session.transcriptPath)
@@ -145,43 +153,55 @@ export class Watcher extends EventEmitter {
    * A re-attach rebuilds the session's normalizer from the transcript while the old one is still the
    * one being fed. Holding the tail is what lets it read exactly up to where the old one stopped and
    * hand everything after that to the new one: a line written meanwhile is neither lost to the
-   * normalizer being replaced nor read twice. Every hold must be released; one held past
-   * `timeoutMs` — an attach that hung — lets go on its own, so a stream is never frozen for good.
+   * normalizer being replaced nor read twice. Every hold must be released. One held past `timeoutMs`
+   * lets go on its own and says so (`expired`), so a stream is never frozen for good; the attach that
+   * held it must then keep the normalizer delivery resumed into, which has seen every line since.
    */
   async hold(sessionId: string, transcriptPath: string, timeoutMs = HOLD_TIMEOUT_MS): Promise<TailHold | null> {
     const state = this.bySession.get(sessionId) === transcriptPath ? this.files.get(transcriptPath) : undefined
     if (!state) return null
     if (!state.holds.size) state.unheld = new Promise((resolve) => { state.settleUnheld = resolve })
     if (state.debounce) { clearTimeout(state.debounce); state.debounce = null }
+    const moves = state.moves
+    let offset = 0
     let released = false
+    let expired = false
+    const release = (to: number | null = null): void => {
+      if (released) return
+      released = true
+      clearTimeout(timer)
+      state.holds.delete(hold)
+      if (to !== null && state.moves === moves) {
+        state.offset = to
+        state.partial = EMPTY
+      }
+      if (state.holds.size) return
+      state.settleUnheld?.()
+      state.unheld = null
+      state.settleUnheld = null
+      if (this.files.get(transcriptPath) === state) this.schedule(transcriptPath)
+    }
     // Counted from the request: an attach that never lets go is hung however long its read took.
     const timer = setTimeout(() => {
       console.warn(`[watcher] ${sessionId.slice(0, 8)} held for ${timeoutMs} ms — letting its tail go`)
-      hold.release()
+      expired = true
+      release()
     }, timeoutMs)
     timer.unref()
     const hold: TailHold = {
-      offset: 0,
-      release: (offset = null) => {
-        if (released) return
-        released = true
-        clearTimeout(timer)
-        state.holds.delete(hold)
-        if (offset !== null) {
-          state.offset = offset
-          state.partial = EMPTY
-        }
-        if (state.holds.size) return
-        state.settleUnheld?.()
-        state.unheld = null
-        state.settleUnheld = null
-        if (this.files.get(transcriptPath) === state) this.schedule(transcriptPath)
-      },
+      get offset() { return offset },
+      get expired() { return expired },
+      release,
     }
     state.holds.add(hold)
     while (state.reading) await new Promise((resolve) => setTimeout(resolve, 5))
-    ;(hold as { offset: number }).offset = state.offset - state.partial.length
+    offset = state.offset - state.partial.length
     return hold
+  }
+
+  /** Whether `transcriptPath` is the file being tailed for the session. */
+  tails(sessionId: string, transcriptPath: string): boolean {
+    return this.bySession.get(sessionId) === transcriptPath && this.files.has(transcriptPath)
   }
 
   /** Move a byte-tailed session's read cursor to a known length after the file was rewritten in place
@@ -199,6 +219,8 @@ export class Watcher extends EventEmitter {
     if (state.debounce) { clearTimeout(state.debounce); state.debounce = null }
     state.offset = offset
     state.partial = EMPTY
+    // An attach holding the tail read the file as it was; where it stopped is no position in this one.
+    state.moves++
   }
 
   async removeSession(sessionId: string): Promise<void> {
@@ -207,12 +229,17 @@ export class Watcher extends EventEmitter {
     this.bySession.delete(sessionId)
     const state = this.files.get(filePath)
     if (state?.debounce) clearTimeout(state.debounce)
+    // Nothing is left to drain: a drain waiting for a hold here is done.
+    state?.settleUnheld?.()
     this.files.delete(filePath)
     await this.watcher?.unwatch(filePath)
   }
 
   async stop(): Promise<void> {
-    for (const state of this.files.values()) if (state.debounce) clearTimeout(state.debounce)
+    for (const state of this.files.values()) {
+      if (state.debounce) clearTimeout(state.debounce)
+      state.settleUnheld?.()
+    }
     this.files.clear()
     this.bySession.clear()
     if (this.watcher) await this.watcher.close()
@@ -231,14 +258,18 @@ export class Watcher extends EventEmitter {
     }))
   }
 
+  /** Deliver everything on disk now. A hold stops delivery where it is until its attach lets go —
+   *  whether it landed before this drain or during its read — so the drain waits for it and reads on,
+   *  until nothing holds the tail and no read asked for is left undone. */
   async pollSession(sessionId: string): Promise<void> {
     const filePath = this.bySession.get(sessionId)
     if (!filePath) return
-    // A drain asks for everything on disk: an attach holding the tail delivers it when it lets go.
-    const unheld = this.files.get(filePath)?.unheld
-    if (unheld) await unheld
-    await this.readNew(filePath)
-    while (this.files.get(filePath)?.reading) await new Promise((resolve) => setTimeout(resolve, 10))
+    for (let state = this.files.get(filePath); state; state = this.files.get(filePath)) {
+      if (state.unheld) { await state.unheld; continue }
+      await this.readNew(filePath)
+      while (state.reading) await new Promise((resolve) => setTimeout(resolve, 10))
+      if (!state.holds.size && !state.pending) return
+    }
   }
 
   /** Chokidar told us the file moved. Logged for commandcode/devin only, whose whole turn lifecycle rides
@@ -352,8 +383,8 @@ export class Watcher extends EventEmitter {
     state.offset = 0
     state.partial = EMPTY
     state.historicalUntil = 0
+    // `completeLines` has already dropped blank lines.
     for (const text of next.slice(common)) {
-      if (!text.trim()) continue
       this.emit('line', {
         sessionId: state.sessionId,
         engine: state.engine,

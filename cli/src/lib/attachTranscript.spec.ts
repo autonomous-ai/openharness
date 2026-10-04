@@ -204,6 +204,14 @@ describe('attachTranscript', () => {
     expect((await wholeHistory('codex', file, false)).opened).toEqual({ type: 'turn_started', payload: { userMessage: 'Continuing goal: ship' } })
   })
 
+  it('reports a forked rollout\'s own CLI version, where the whole fold ends on its parent\'s', async () => {
+    // A fork opens with its own session_meta, then copies its parent's history, the parent's own included.
+    const turn = (id: string, text: string) => [codex.started(id), codex.context('gpt-6', 'high', 'default'), codex.user(text)]
+    writeFileSync(file, [codex.meta('0.160.0'), codex.meta('0.159.0'), ...turn('t1', 'go'), codex.complete('t1'), ...turn('t2', 'again')].join('\n') + '\n')
+    expect((await wholeHistory('codex', file, false)).profile).toEqual({ model: 'gpt-6', effort: 'high', mode: 'default', cliVersion: '0.159.0' })
+    expect((await fromTheEnd('codex', file, false)).profile).toEqual({ model: 'gpt-6', effort: 'high', mode: 'default', cliVersion: '0.160.0' })
+  })
+
   it('reads only the last turn of a long history, never the rest', async () => {
     const history = codexScenario()
     const turn = [codex.started('t-last'), codex.context('gpt-6', 'high', 'default'), codex.user('last'), codex.reasoning('now')]
@@ -572,33 +580,71 @@ describe('the review of the first cut', () => {
     try {
       const fed: string[] = []
       const read = await attachTranscript(file, codexAttachRules(() => []), { profile: (line) => fed.push(line), fold: (line) => fed.push(line) })
-      expect(read).toMatchObject({ next: 0, records: 0, content: false, turnFrom: 0, seeds: [] })
+      expect(read).toMatchObject({ next: 0, records: 0, content: false, turnFrom: 0, seeds: [], failed: true })
       expect(fed).toEqual([])
       expect(warn).toHaveBeenCalledOnce()
     } finally { warn.mockRestore() }
   })
 
-  // A read that fails part-way must not hand the tail byte 0: from there it would deliver every old
-  // turn as a new one.
+  // A read that fails must not hand the tail byte 0: from there it would deliver every old turn as a
+  // new one. It hands it the end it was reading to, and says it failed.
   it.each([
-    ['cannot be read', () => { chmodSync(file, 0o000) }, {}],
-    ['fails while it is being read', () => {}, { fold: () => { throw new Error('disk full') } }],
-  ])('resumes the tail at the end of a transcript that %s', async (_, prepare, consumers) => {
+    ['cannot be read at all', () => { chmodSync(file, 0o000) }, () => {}],
+    ['stops being readable once its span is found', () => {}, () => { chmodSync(file, 0o000) }],
+  ])('resumes the tail at the end of a transcript that %s', async (_, prepare, start) => {
     const content = [codex.started('t1'), codex.user('a'), codex.complete('t1')].join('\n') + '\n'
     writeFileSync(file, content)
     prepare()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      const read = await attachTranscript(file, codexAttachRules(() => []), { profile: () => {}, fold: () => {}, ...consumers })
-      expect(read).toMatchObject({ next: Buffer.byteLength(content), records: 0, content: true })
+      const read = await attachTranscript(file, codexAttachRules(() => []), { start, profile: () => {}, fold: () => {} })
+      expect(read).toMatchObject({ next: Buffer.byteLength(content), records: 0, content: true, failed: true })
+      chmodSync(file, 0o600)
+      prepare()
       const boundary = Buffer.byteLength(codex.started('t1') + '\n' + codex.user('a') + '\n')
-      const held = await attachTranscript(file, codexAttachRules(() => []), { profile: () => {}, fold: () => {}, ...consumers }, { end: boundary })
-      expect(held.next).toBe(boundary)
+      const held = await attachTranscript(file, codexAttachRules(() => []), { start, profile: () => {}, fold: () => {} }, { end: boundary })
+      expect(held).toMatchObject({ next: boundary, failed: true })
       expect(warn).toHaveBeenCalledTimes(2)
     } finally {
       warn.mockRestore()
       chmodSync(file, 0o600)
     }
+  })
+
+  // A consumer that throws loses that record, not the attach: the read still ends exactly where it
+  // stopped, so a record the engine writes meanwhile — whole, or still being written — is tailed.
+  it.each([
+    ['whole', (record: string) => [record + '\n', '']],
+    ['half-written', (record: string) => [record.slice(0, 20), record.slice(20) + '\n']],
+  ])('tails a record written %s while a consumer throws', async (_, split) => {
+    const content = [codex.started('t1'), codex.user('a'), codex.complete('t1')].join('\n') + '\n'
+    writeFileSync(file, content)
+    const record = codex.user('a prompt typed while the daemon was attaching')
+    const [now, later] = split(record)
+    const folded: string[] = []
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const read = await attachTranscript(file, codexAttachRules(() => []), {
+        profile: () => { throw new Error('profile') },
+        fold: (line) => {
+          if (!folded.length) { appendFileSync(file, now); folded.push(line); throw new Error('boom') }
+          folded.push(line)
+        },
+        observe: () => { throw new Error('device') },
+      })
+      expect(read).toMatchObject({ next: Buffer.byteLength(content), records: 3, failed: false })
+      expect(folded).toEqual([codex.started('t1'), codex.user('a'), codex.complete('t1')])
+      expect(warn).toHaveBeenCalledOnce()
+      expect(warn.mock.calls[0][0]).toContain('7 record(s) could not be taken in: Error: profile')
+      const watcher = new Watcher()
+      const lines: string[] = []
+      watcher.on('line', (event: LineEvent) => lines.push(event.text))
+      await watcher.addSession({ sessionId: 's', engine: 'codex', transcriptPath: file }, { fromOffset: read.next })
+      appendFileSync(file, later)
+      await watcher.pollSession('s')
+      await watcher.stop()
+      expect(lines).toEqual([record])
+    } finally { warn.mockRestore() }
   })
 
   it('names thinking blocks so no two windows of one session share an id, and one window keeps its names', async () => {

@@ -90,6 +90,13 @@ export interface AttachRead {
   content: boolean
 }
 
+/** What attaching read: the span, the replay, and whether the file could be read through at all. */
+export interface AttachResult extends AttachSpan, AttachRead {
+  /** The file could not be read through, so the fold holds less than the history: a reset should keep
+   *  the normalizer it meant to replace, which has seen every record. */
+  failed: boolean
+}
+
 /** The first record is only ever wanted for its metadata (Codex `session_meta`, a few KB). */
 export const HEAD_RECORD_LIMIT = 4 * 1024 * 1024
 
@@ -208,24 +215,33 @@ export async function locateAttachSpan(filePath: string, rules: AttachRules, opt
 
 /**
  * Feed the span to its consumers, one record at a time. If the file shrank meanwhile, what it still
- * held was replayed and the tail picks up at the span's end.
+ * held was replayed and the tail picks up at the span's end. A consumer that throws on a record loses
+ * that record, as a live line it threw on would be lost, and the replay goes on: stopping would leave
+ * the tail nowhere exact to start.
  */
 export async function replayAttachSpan(
   filePath: string,
   span: AttachSpan,
   consumers: AttachConsumers,
 ): Promise<AttachRead> {
+  let failures = 0
+  let firstFailure: unknown = null
+  const feed = (consume: (line: string) => void, line: string): void => {
+    try { consume(line) } catch (error) { if (failures++ === 0) firstFailure = error }
+  }
+  const { profile, fold, observe } = consumers
   consumers.start?.(span)
-  if (span.head !== null) consumers.profile(span.head)
-  for (const seed of span.seeds) consumers.fold(seed)
+  if (span.head !== null) feed(profile, span.head)
+  for (const seed of span.seeds) feed(fold, seed)
   let records = 0
   const read = await streamRecords(filePath, span.profileFrom, span.end, (line, offset) => {
-    consumers.profile(line)
+    feed(profile, line)
     if (offset < span.turnFrom) return
     records++
-    consumers.observe?.(line)
-    consumers.fold(line)
+    if (observe) feed(observe, line)
+    feed(fold, line)
   }, isWholeRecord)
+  if (failures) console.warn(`[attach] ${filePath}: ${failures} record(s) could not be taken in: ${String(firstFailure)}`)
   return { next: read?.next ?? span.end, records, content: records > 0 || !!read?.partial }
 }
 
@@ -240,25 +256,27 @@ async function reach(filePath: string, end: number | undefined): Promise<number>
 /**
  * Locate, then replay. A file that shrank under the walk is walked once more and then replayed whole.
  * One that is not there — moved, archived or deleted since it was announced — is an empty history, as
- * it always was. A read that fails part-way (an unreadable file, a consumer that throws) leaves the
- * history unread, not unwritten: the tail resumes where the read was meant to end, never at byte 0,
- * from where it would deliver old turns as new ones.
+ * it always was. A file that cannot be read through (`failed`) leaves the history unread, not
+ * unwritten: the tail resumes where the read was meant to end — never at byte 0, from where it would
+ * deliver old turns as new ones, and not at a later end, past a record written while it read. A record
+ * the engine was still writing right there, if the read failed before reaching it, is lost to both.
  */
 export async function attachTranscript(
   filePath: string,
   rules: AttachRules,
   consumers: AttachConsumers,
   options: Omit<LocateOptions, 'reach'> = {},
-): Promise<AttachSpan & AttachRead> {
+): Promise<AttachResult> {
+  let span: AttachSpan | null = null
   try {
-    const span = await locateAttachSpan(filePath, rules, options)
+    span = await locateAttachSpan(filePath, rules, options)
       ?? await locateAttachSpan(filePath, rules, options)
       ?? wholeFile(Math.min(options.end ?? Infinity, (await stat(filePath)).size))
-    return { ...span, ...await replayAttachSpan(filePath, span, consumers) }
+    return { ...span, ...await replayAttachSpan(filePath, span, consumers), failed: false }
   } catch (error) {
     console.warn(`[attach] ${filePath} could not be read: ${String(error)}`)
-    const end = await reach(filePath, options.end)
-    return { ...wholeFile(end), next: end, records: 0, content: end > 0 }
+    const end = span ? span.end : await reach(filePath, options.end)
+    return { ...(span ?? wholeFile(end)), next: end, records: 0, content: end > 0, failed: true }
   }
 }
 

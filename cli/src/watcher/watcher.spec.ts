@@ -1,3 +1,4 @@
+import { chmodSync } from 'fs'
 import { appendFile, mkdtemp, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -262,9 +263,11 @@ describe('Watcher.hold and release', () => {
     await writeFile(transcriptPath, content)
     const watcher = new Watcher()
     const lines: string[] = []
+    const history: string[] = []
     watcher.on('line', (event: LineEvent) => lines.push(event.text))
+    watcher.on('history', (event: HistoryEvent) => history.push(...event.lines.map((line) => line.text)))
     await watcher.addSession({ sessionId: 's1', engine: 'codex', transcriptPath })
-    return { transcriptPath, watcher, lines }
+    return { transcriptPath, watcher, lines, history }
   }
 
   it('stops delivery where the next line starts, a carried partial line included, and resumes from a given byte', async () => {
@@ -326,23 +329,86 @@ describe('Watcher.hold and release', () => {
     await watcher.stop()
   })
 
-  it('lets go of a hold an attach never releases, and says so', async () => {
+  it('lets go of a hold an attach never releases, says so, and lets a late release change nothing', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const { transcriptPath, watcher, lines } = await tailed('')
-      await watcher.hold('s1', transcriptPath, 40)
+      const hold = (await watcher.hold('s1', transcriptPath, 40))!
+      expect(hold.expired).toBe(false)
       await appendFile(transcriptPath, '{"n":1}\n')
       await new Promise((resolve) => setTimeout(resolve, 150))
       expect(warn).toHaveBeenCalledOnce()
+      expect(hold.expired).toBe(true)
       expect(lines).toEqual(['{"n":1}'])
+      // The attach finishing late: where its read stopped is behind what was delivered since.
+      hold.release(0)
+      await appendFile(transcriptPath, '{"n":2}\n')
+      await watcher.pollSession('s1')
+      expect(lines).toEqual(['{"n":1}', '{"n":2}'])
       await watcher.stop()
     } finally { warn.mockRestore() }
+  })
+
+  it('keeps the position a repair moved the tail to while it was held', async () => {
+    const { transcriptPath, watcher, lines, history } = await tailed(`{"n":1,"r":"${'x'.repeat(200)}"}\n{"n":2}\n`)
+    const hold = (await watcher.hold('s1', transcriptPath))!
+    // The Codex resume repair shrinks the rollout in place and pins the tail to its new end.
+    const repaired = '{"n":1}\n{"n":2}\n'
+    await writeFile(transcriptPath, repaired)
+    watcher.setTail('s1', Buffer.byteLength(repaired))
+    await appendFile(transcriptPath, '{"n":3}\n')
+    hold.release(hold.offset)
+    await watcher.pollSession('s1')
+    expect({ lines, history }).toEqual({ lines: ['{"n":3}'], history: [] })
+    await watcher.stop()
+  })
+
+  it('drains through a hold that lands during its read, once the hold lets go', async () => {
+    const { transcriptPath, watcher, lines } = await tailed('')
+    await appendFile(transcriptPath, '{"n":1}\n')
+    const reading = watcher.pollAll()
+    let drained = false
+    // A drain asked for while that read runs (the Stop hook's), then a reset attach takes the tail.
+    const drain = watcher.pollSession('s1').then(() => { drained = true })
+    const held = watcher.hold('s1', transcriptPath)
+    await appendFile(transcriptPath, '{"n":2}\n')
+    await reading
+    const hold = (await held)!
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(drained).toBe(false)
+    hold.release()
+    await drain
+    expect(lines).toEqual(['{"n":1}', '{"n":2}'])
+    await watcher.stop()
+  })
+
+  it('ends a drain waiting on a hold when the session is removed, or the watcher stops', async () => {
+    for (const end of ['remove', 'stop'] as const) {
+      const { transcriptPath, watcher } = await tailed('')
+      const hold = (await watcher.hold('s1', transcriptPath))!
+      const drain = watcher.pollSession('s1')
+      if (end === 'remove') await watcher.removeSession('s1')
+      else await watcher.stop()
+      await drain
+      hold.release()
+      await watcher.stop()
+    }
+  })
+
+  it('says which file it tails for a session', async () => {
+    const { transcriptPath, watcher } = await tailed('')
+    expect(watcher.tails('s1', transcriptPath)).toBe(true)
+    expect(watcher.tails('s1', `${transcriptPath}.other`)).toBe(false)
+    expect(watcher.tails('nobody', transcriptPath)).toBe(false)
+    await watcher.removeSession('s1')
+    expect(watcher.tails('s1', transcriptPath)).toBe(false)
+    await watcher.stop()
   })
 
   it('stops a read in progress that more data would keep going, at the hold', async () => {
     const { transcriptPath, watcher, lines } = await tailed('')
     await appendFile(transcriptPath, '{"n":1}\n')
-    const reading = watcher.pollSession('s1')
+    const reading = watcher.pollAll()
     const held = watcher.hold('s1', transcriptPath)
     // Asks for another read while the first is running: without the hold the read would loop on.
     const another = watcher.pollAll()
@@ -381,7 +447,7 @@ describe('Watcher.hold and release', () => {
   it('waits out a read in progress, and that read stops at the hold', async () => {
     const { transcriptPath, watcher, lines } = await tailed('')
     await appendFile(transcriptPath, '{"n":1}\n')
-    const reading = watcher.pollSession('s1')
+    const reading = watcher.pollAll()
     const held = watcher.hold('s1', transcriptPath)
     await appendFile(transcriptPath, '{"n":2}\n')
     await reading
@@ -425,6 +491,149 @@ describe('Watcher.hold and release', () => {
     const hold = (await watcher.hold('s1', transcriptPath))!
     await watcher.removeSession('s1')
     expect(() => hold.release(5)).not.toThrow()
+    await watcher.stop()
+  })
+})
+
+describe('Watcher, at its edges', () => {
+  const until = async (what: string, test: () => boolean, ms = 10_000): Promise<void> => {
+    const deadline = Date.now() + ms
+    while (!test()) {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+  }
+  const fresh = async (content = '') => {
+    const dir = await mkdtemp(join(tmpdir(), 'machine-watcher-edges-'))
+    cleanup.push(dir)
+    const transcriptPath = join(dir, 'session.jsonl')
+    await writeFile(transcriptPath, content)
+    const watcher = new Watcher()
+    const lines: string[] = []
+    watcher.on('line', (event: LineEvent) => lines.push(event.text))
+    return { dir, transcriptPath, watcher, lines }
+  }
+  // Private state, read only to see what the file system's events did.
+  const internals = (watcher: Watcher) => watcher as unknown as {
+    watcher: { emit(event: string, ...args: unknown[]): boolean } | null
+    files: Map<string, { pending: boolean }>
+    readNew(filePath: string): Promise<void>
+  }
+
+  it('follows what chokidar reports from start to stop, and logs the changes the turn engines ride on', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { dir, transcriptPath, watcher, lines } = await fresh()
+      await watcher.addSession({ sessionId: 's1', engine: 'commandcode', transcriptPath })
+      watcher.start()
+      watcher.start()
+      const second = join(dir, 'second.jsonl')
+      await writeFile(second, '')
+      await watcher.addSession({ sessionId: 's2', engine: 'codex', transcriptPath: second })
+      await appendFile(transcriptPath, '{"n":1}\n')
+      await until('the change to be read', () => lines.includes('{"n":1}'))
+      expect(log.mock.calls.some(([line]) => String(line).startsWith('[watcher] change commandcode s1'))).toBe(true)
+      await appendFile(second, '{"n":2}\n')
+      await until('the second file to be read', () => lines.includes('{"n":2}'))
+      expect(log.mock.calls.some(([line]) => String(line).startsWith('[watcher] change codex'))).toBe(false)
+      await rm(transcriptPath)
+      await until('the unlink to be noticed', () => internals(watcher).files.get(transcriptPath)?.pending === true)
+      // Events for a file no longer tailed are dropped, however often they come.
+      internals(watcher).watcher!.emit('change', join(dir, 'gone.jsonl'), undefined)
+      internals(watcher).watcher!.emit('change', join(dir, 'gone.jsonl'), undefined)
+      internals(watcher).watcher!.emit('unlink', join(dir, 'gone.jsonl'))
+      internals(watcher).watcher!.emit('error', new Error('EMFILE'))
+      expect(error).toHaveBeenCalledWith('[watcher] error:', expect.any(Error))
+      await watcher.stop()
+      await watcher.stop()
+      // Started before anything is tailed: there is nothing to watch yet.
+      const idle = new Watcher()
+      idle.start()
+      await idle.stop()
+    } finally {
+      log.mockRestore()
+      error.mockRestore()
+    }
+  })
+
+  it('moves a session to its new file, and starts a missing one from nothing', async () => {
+    const { dir, transcriptPath, watcher, lines } = await fresh('{"n":1}\n')
+    await watcher.addSession({ sessionId: 's1', engine: 'codex', transcriptPath })
+    const moved = join(dir, 'moved.jsonl')
+    await watcher.addSession({ sessionId: 's1', engine: 'codex', transcriptPath: moved })
+    expect(watcher.tails('s1', transcriptPath)).toBe(false)
+    expect(watcher.tails('s1', moved)).toBe(true)
+    await writeFile(moved, '{"n":2}\n')
+    await watcher.pollSession('s1')
+    expect(lines).toEqual(['{"n":2}'])
+    await watcher.stop()
+  })
+
+  it('hands a file to the session added last, and lets a session that lost it go quietly', async () => {
+    const { transcriptPath, watcher, lines } = await fresh()
+    const seen: string[] = []
+    watcher.on('line', (event: LineEvent) => seen.push(event.sessionId))
+    await watcher.addSession({ sessionId: 's1', engine: 'codex', transcriptPath })
+    await watcher.addSession({ sessionId: 's2', engine: 'codex', transcriptPath })
+    await appendFile(transcriptPath, '{"n":1}\n')
+    await watcher.pollSession('s2')
+    expect(seen).toEqual(['s2'])
+    await watcher.removeSession('s2')
+    // s1 still names the file, which is no longer tailed.
+    watcher.setTail('s1', 0)
+    await watcher.pollSession('s1')
+    expect(await watcher.hold('s1', transcriptPath)).toBeNull()
+    expect(lines).toEqual(['{"n":1}'])
+    await watcher.removeSession('nobody')
+    await watcher.pollSession('nobody')
+    await watcher.stop()
+  })
+
+  it('drops a read that was only scheduled when the tail is moved or the session removed', async () => {
+    for (const end of ['setTail', 'remove'] as const) {
+      const { transcriptPath, watcher, lines } = await fresh('{"n":1}\n{"n":2}\n')
+      await watcher.addSession({ sessionId: 's1', engine: 'codex', transcriptPath }, { fromOffset: 0 })
+      if (end === 'setTail') watcher.setTail('s1', 16)
+      else await watcher.removeSession('s1')
+      await new Promise((resolve) => setTimeout(resolve, 80))
+      expect(lines).toEqual([])
+      await watcher.stop()
+    }
+  })
+
+  it('skips a read of a file it does not tail, one that is gone, and one it may not open', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { transcriptPath, watcher, lines } = await fresh('{"n":1}\n')
+      await internals(watcher).readNew('/nowhere.jsonl')
+      await watcher.addSession({ sessionId: 's1', engine: 'codex', transcriptPath })
+      await appendFile(transcriptPath, '{"n":2}\n')
+      chmodSync(transcriptPath, 0o000)
+      await watcher.pollSession('s1')
+      expect(error).toHaveBeenCalledOnce()
+      expect(String(error.mock.calls[0][0])).toContain('[watcher] read failed (session.jsonl)')
+      chmodSync(transcriptPath, 0o600)
+      await rm(transcriptPath)
+      await watcher.pollSession('s1')
+      expect(lines).toEqual([])
+      await watcher.stop()
+    } finally { error.mockRestore() }
+  })
+
+  it('reads Cursor transcripts whole: none to begin with, a last line not yet ended, and one that vanishes', async () => {
+    const { transcriptPath, watcher, lines } = await fresh()
+    await rm(transcriptPath)
+    await watcher.addSession({ sessionId: 's1', engine: 'cursor', transcriptPath })
+    await writeFile(transcriptPath, '{"c":1}\n\n{"c":2}\r\n{"c":3')
+    await watcher.pollSession('s1')
+    expect(lines).toEqual(['{"c":1}', '{"c":2}'])
+    await appendFile(transcriptPath, '}\n')
+    await watcher.pollSession('s1')
+    expect(lines).toEqual(['{"c":1}', '{"c":2}', '{"c":3}'])
+    await rm(transcriptPath)
+    await watcher.pollSession('s1')
+    expect(lines).toHaveLength(3)
     await watcher.stop()
   })
 })

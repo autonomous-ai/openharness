@@ -2465,6 +2465,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         ? { rules: claudeAttachRules(fields), ingest: (line: string) => lineToEvents(line, claudeState), turnOpen: () => claudeState.turnOpen }
         : null
     let fromEnd: AttachRead | null = null
+    // A reset keeps the normalizer it meant to replace when its read failed, or outlasted the hold on the
+    // tail — which then let go, and delivery went back to that normalizer: it has seen every record since,
+    // this one has not.
+    const keepLiveNormalizer = (why: string): boolean => {
+      console.warn(`[agent] ${sid(session.agentId)} kept its live normalizer · the re-read ${why}`)
+      handover.hold?.release()
+      handover.next = null
+      return true
+    }
     if (session.transcriptPath && fromEndFold) {
       // A session already being tailed — a reset — is re-read while its old normalizer is still the one
       // being fed: hold its tail, so the read stops exactly where delivery stopped and delivery resumes,
@@ -2485,6 +2494,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         fold: (line) => stream.push(line),
         observe,
       }, { fromStart: live, end: handover.hold?.offset })
+      if (handover.hold && (read.failed || handover.hold.expired)) {
+        return keepLiveNormalizer(read.failed ? 'could not read the transcript' : 'outlasted its hold on the tail')
+      }
       profile.commit()
       fromEnd = read
       handover.next = read.next
@@ -2497,6 +2509,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       runtimeProfiles.hydrate(session, lines)
     }
     await runtimeProfiles.ingestConfig(session, true)
+    // From here to the release in `attachSession` nothing is awaited for a held tail, so the hold cannot
+    // expire between installing the new normalizer and handing it the tail.
+    if (handover.hold?.expired) return keepLiveNormalizer('outlasted its hold on the tail')
     const fold = (ingest: (line: string) => LiveEvent[], turnOpenAfter: () => boolean): boolean =>
       take(foldTranscript(ingest, lines, turnOpenAfter, { live: replayLive }))
     if (codexNormalizer) {
@@ -2634,7 +2649,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // Measured: a claude turn opened, closed after 44ms and opened again, because the fold replayed the
       // open turn and the watcher then re-read the same bytes. `fromStart` belongs to the re-attach path,
       // which folds nothing. A transcript read from its end hands the tail the exact byte it stopped at.
-      await watcher.addSession({ ...session, transcriptPath: session.transcriptPath }, fromEnd ? { fromOffset: fromEnd.next } : {})
+      // A held tail is already this session's, and resumes from there when the hold is released.
+      if (!handover.hold || !watcher.tails(session.sessionId, session.transcriptPath)) {
+        await watcher.addSession({ ...session, transcriptPath: session.transcriptPath }, fromEnd ? { fromOffset: fromEnd.next } : {})
+      }
     } else if (session.engine === 'cursor') {
       await cursorDiscovery.add(session.sessionId)
     } else {
