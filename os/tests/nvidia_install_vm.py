@@ -86,7 +86,8 @@ def main():
         output, _ = vm.command('sudo -n lsinitcpio /boot/initramfs-linux-lts.img')
         (folder / 'initramfs-files.txt').write_text(output)
         for module in ['nvidia', 'nvidia_modeset', 'nvidia_drm']:
-            assert re.search(r'/' + module + r'\.ko(?:\.(?:zst|xz|gz))?(?:\s|$)', output), module
+            filename = module.replace('_', '[-_]')
+            assert re.search(r'/' + filename + r'\.ko(?:\.(?:zst|xz|gz))?(?:\s|$)', output), module
         firmware, _ = vm.command('modinfo -F firmware nvidia')
         # Serial shell-integration escapes may precede the first output line.
         names = re.findall(r'nvidia/[A-Za-z0-9._/-]+', firmware)
