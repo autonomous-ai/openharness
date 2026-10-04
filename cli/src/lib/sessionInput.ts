@@ -704,7 +704,6 @@ export class SessionInputController {
       return
     }
     state.retries++
-    console.log(`[inject] ${sid(sessionId)} resubmit Enter · engine=${session.engine} · retry=${state.retries}/${SUBMIT_MAX_RETRIES}`)
     const valid = await this.deps.validateRuntime(session)
     if (!valid) {
       this.finishDelivery(sessionId, state, 'unknown', 'runtime_gone_post_paste')
@@ -715,6 +714,9 @@ export class SessionInputController {
       return
     }
     if (state.deliveryId && (this.states.get(sessionId) !== state || !state.awaitingFingerprint || state.turnOpen)) return
+    // Said once the engine is known to be there: an engine that exited gets no Enter, and the log used
+    // to claim one anyway.
+    console.log(`[inject] ${sid(sessionId)} resubmit Enter · engine=${session.engine} · retry=${state.retries}/${SUBMIT_MAX_RETRIES}`)
     // Only the submit key is retried. The prompt body is never pasted twice.
     const delivery = await this.deps.sendKey(session.agentId, 'Enter')
     state.ambiguousDispatch = typeof delivery === 'boolean'
