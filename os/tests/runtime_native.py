@@ -166,7 +166,8 @@ def main():
         env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / '.config'),
                    XDG_DATA_HOME=str(home / '.local/share'), XDG_STATE_HOME=str(home / '.local/state'),
                    XDG_CACHE_HOME=str(home / '.cache'), PATH=str(binaries) + ':' + env['PATH'],
-                   PORT=str(port), HN_TMPDIR=str(base), HN_SOCKET_NAME=prefix, SHELL='/bin/bash',
+                   PORT=str(port), HN_TMPDIR=str(base), HN_SOCKET_NAME=prefix,
+                   TMUX_TMPDIR=str(base), SHELL='/bin/bash',
                    TERM='xterm-256color', HARNESS_OS='1', HARNESS_TUI_DESK='off',
                    HARNESS_TUI_NOTIFY='off', HARNESS_TUI_BIN=str(binaries / 'hn'),
                    HARNESS_CLI=str(wrapper), HARNESS_CLI_ARGS='[]', ADAPTER_UPDATE_DISABLE='true',
@@ -200,6 +201,14 @@ def main():
                 except subprocess.TimeoutExpired:
                     os.killpg(daemon.pid, signal.SIGKILL)
                     daemon.wait(timeout=5)
+
+        def stop_tmux():
+            # The daemon's terminal backend also needs an isolated server. Never
+            # kill the host's default tmux server when cleaning up this fixture.
+            tmux_socket = base / f'tmux-{os.getuid()}' / 'default'
+            if tmux_socket.exists():
+                subprocess.run(['tmux', '-S', str(tmux_socket), 'kill-server'],
+                               env=env, check=True, capture_output=True, timeout=15)
 
         def type_into_screen(pane, line):
             hn('select-pane', '-t', pane)
@@ -291,7 +300,7 @@ def main():
                     screen.close()
                 except (OSError, subprocess.SubprocessError) as error:
                     cleanup_errors.append(str(error))
-            for cleanup in [lambda: hn('kill-server', check=False), stop_daemon]:
+            for cleanup in [lambda: hn('kill-server', check=False), stop_daemon, stop_tmux]:
                 try:
                     cleanup()
                 except (OSError, subprocess.SubprocessError) as error:
