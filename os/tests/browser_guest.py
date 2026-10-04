@@ -6,20 +6,30 @@ from pathlib import Path
 
 ROOT = Path('/tmp/harness-browser-probe')
 PAGE = '''<!doctype html><meta charset="utf-8"><title>Harness browser check</title>
-<style>html,body{background:white;color:black;margin:0}body{padding:24px}
-input{font-size:24px;width:70%}</style>
-<h1>Harness browser check</h1><input id="input" autofocus autocomplete="off">
+<style>html,body{background:rgb(230,245,236);color:black;margin:0}body{padding:24px}
+label{display:block;margin-bottom:8px}input{font-size:24px;width:70%}</style>
+<h1>Harness browser check</h1><label for="input">Keyboard</label>
+<input id="input" autofocus autocomplete="off">
 <script>
 const input = document.querySelector('input');
+let previous = '';
 function report() {
-  fetch('/observe', {method:'POST', body:JSON.stringify({
+  const data = JSON.stringify({
     path:location.pathname, input:input.value, focused:document.hasFocus(),
+    inputFocused:document.activeElement === input,
     innerWidth, innerHeight, outerWidth, outerHeight,
     screenWidth:screen.width, screenHeight:screen.height
-  })});
+  });
+  if (data !== previous) {
+    previous = data;
+    fetch('/observe', {method:'POST', body:data});
+  }
 }
 for (const name of ['load','resize','focus','blur']) addEventListener(name, report);
 input.addEventListener('input', report);
+// Wayland bounds and HTML autofocus can settle after load without another
+// resize event. Report state transitions instead of equating load with readiness.
+setInterval(report, 100);
 </script>'''
 
 
