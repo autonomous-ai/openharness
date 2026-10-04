@@ -38,11 +38,16 @@ export interface MasterChannel {
   once(event: 'disconnect', listener: () => void): unknown
   on(event: 'message', listener: (message: unknown) => void): unknown
   memoryUsage(): { rss: number; heapUsed: number }
+  /** The process that started this one: the master, when it holds the channel. */
+  readonly parentPid: number
 }
 
 export interface CoreLink {
   /** Started by a master, with the channel to it still open. */
   readonly supervised: boolean
+  /** The master's pid, as the pid file names the daemon; null without one. Read once, at start: a
+   *  core whose master died is handed to launchd, and must not then name it as its master. */
+  readonly masterPid: number | null
   /** The control port is bound: the master may now tell everyone the daemon is up. */
   bound(port: number): void
   /** Start-up is done and requests are served — or it gave way to safe mode, and why: the master stops
@@ -63,6 +68,7 @@ export const processChannel: MasterChannel = {
   once: process.once.bind(process),
   on: process.on.bind(process),
   memoryUsage: () => process.memoryUsage(),
+  parentPid: process.ppid,
 }
 
 export function connectToMaster(
@@ -85,6 +91,7 @@ export function connectToMaster(
   }
   return {
     supervised,
+    masterPid: supervised ? channel.parentPid : null,
     bound: (port) => send({ type: 'harnessd:bound', protocol: HARNESSD_PROTOCOL, port }),
     ready: (safeMode) => send(safeMode === undefined ? { type: 'harnessd:ready' } : { type: 'harnessd:ready', safeMode }),
     startHeartbeat: () => {

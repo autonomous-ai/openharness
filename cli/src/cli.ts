@@ -4333,11 +4333,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       deviceTransportConnected: backend.hasCommander(),
       deviceE2eeConnected: backend.deviceE2eeConnected(),
       uptimeSec: Math.round((Date.now() - startedAt) / 1000),
-      pid: process.pid,
+      // The daemon as everything outside knows it: the pid file's pid, which `harness stop` signals
+      // and the desktop app judges the owner of. Under a master that is the master's. A core's pid
+      // changes with every restart, and macOS counts a core as its master's, so an app judging the
+      // core would read a daemon started from tmux or ssh as "owned by node" and restart it on sight.
+      pid: coreLink.masterPid ?? process.pid,
+      corePid: process.pid,
       startedAt,
       // The master keeping this core running, when one is: how often it has restarted it, and why the
       // last one ended. Null for a core run on its own.
-      harnessd: coreLink.supervised ? { masterPid: process.ppid, ...coreLink.status() } : null,
+      harnessd: coreLink.supervised ? { masterPid: coreLink.masterPid, ...coreLink.status() } : null,
       // True for the few hundred ms between an update being staged and this server closing for the
       // handoff. Informational: nothing should build readiness on a field the server stops serving.
       restarting,
@@ -8151,7 +8156,7 @@ const onError = (err: unknown): never => {
  * `harness status` say what happened. `harness stop` still works throughout — it kills by pid.
  */
 const enterSafeMode = (err: unknown): void => {
-  const disposition = safeModeDisposition(err, { selfPid: process.pid, masterPid: coreLink.supervised ? process.ppid : null, readPid, isAlive })
+  const disposition = safeModeDisposition(err, { selfPid: process.pid, masterPid: coreLink.masterPid, readPid, isAlive })
   if (!disposition.stay) {
     console.error(`[safe-mode] not staying up — ${disposition.reason}`)
     onError(err)

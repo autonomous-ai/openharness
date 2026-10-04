@@ -7,6 +7,7 @@ class FakeChannel implements MasterChannel {
   private messageListeners: Array<(message: unknown) => void> = []
   private disconnect: Array<() => void> = []
   rss = 100
+  parentPid = 4242
   send?: (message: CoreMessage) => unknown = (message) => { this.sent.push(message) }
   once(_event: 'disconnect', listener: () => void): void { this.disconnect.push(listener) }
   on(_event: 'message', listener: (message: unknown) => void): void { this.messageListeners.push(listener) }
@@ -37,8 +38,9 @@ describe('connectToMaster', () => {
 
   it('is inert without a master: nothing sent, nothing listened for', () => {
     const channel = new FakeChannel()
-    for (const link of [connectToMaster(channel, {}), connectToMaster({ ...channel, send: undefined, once: channel.once.bind(channel), on: channel.on.bind(channel), memoryUsage: () => channel.memoryUsage() }, supervised)]) {
+    for (const link of [connectToMaster(channel, {}), connectToMaster({ ...channel, send: undefined, once: channel.once.bind(channel), on: channel.on.bind(channel), memoryUsage: () => channel.memoryUsage(), parentPid: 1 }, supervised)]) {
       expect(link.supervised).toBe(false)
+      expect(link.masterPid).toBeNull()
       link.bound(1)
       link.ready()
       link.startHeartbeat()
@@ -58,6 +60,10 @@ describe('connectToMaster', () => {
     const loop = delays(4, 250)
     const link = connectToMaster(channel, supervised, 1_000, loop.factory)
     expect(link.supervised).toBe(true)
+    expect(link.masterPid).toBe(4242)
+    // Reparented once the master is gone: the master it had is still the one it names.
+    channel.parentPid = 1
+    expect(link.masterPid).toBe(4242)
     link.bound(18473)
     link.ready()
     link.startHeartbeat()
@@ -107,6 +113,7 @@ describe('connectToMaster', () => {
   it('uses this process by default, which no master started', () => {
     expect(connectToMaster().supervised).toBe(false)
     expect(processChannel.memoryUsage().rss).toBeGreaterThan(0)
+    expect(processChannel.parentPid).toBe(process.ppid)
   })
 
   it('measures this process\'s loop delay, in whole milliseconds, from nothing after each reading', () => {
