@@ -445,39 +445,53 @@ void main() {
     );
   }
 
-  testWidgets('Enter submits resume immediately with no confirmation dialog', (
-    tester,
-  ) async {
-    await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyT);
-    await openHarnessPicker(tester);
-    await tester.pump();
-    await tester.enterText(
-      find.byKey(const ValueKey('swarm-search-input')),
-      'Saved work',
-    );
-    await tester.pump();
-    // The preview offers the same action for pointer users; Return submits
-    // directly from search without first opening a confirmation dialog.
-    expect(find.widgetWithText(TextButton, 'Open'), findsOneWidget);
-    expect(find.byType(AlertDialog), findsNothing);
-    expect(connection.types, isEmpty);
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pump();
-    expect(connection.types, ['agent_resume']);
-    expect(find.byType(AlertDialog), findsNothing);
-    connection.restartReplies.single.complete({
-      'creationId': connection.requests.single['creationId'],
-      'state': 'failed',
-      'failure': {
-        'code': 'RESUME_UNAVAILABLE',
-        'detail': 'Conversation missing',
-      },
-    });
-    await tester.pump();
-    expect(find.text('Conversation missing'), findsOneWidget);
-    expect(find.text('Start New Conversation'), findsOneWidget);
-    expect(app.allPanes, isEmpty);
-    await tester.pumpWidget(const SizedBox());
-  });
+  testWidgets(
+    'Enter submits resume immediately and its failure notice expires',
+    (tester) async {
+      await mount(tester, app);
+      await chord(tester, LogicalKeyboardKey.keyT);
+      await openHarnessPicker(tester);
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const ValueKey('swarm-search-input')),
+        'Saved work',
+      );
+      await tester.pump();
+      // The preview offers the same action for pointer users; Return submits
+      // directly from search without first opening a confirmation dialog.
+      expect(find.widgetWithText(TextButton, 'Open'), findsOneWidget);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(connection.types, isEmpty);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(connection.types, ['agent_resume']);
+      expect(find.byType(AlertDialog), findsNothing);
+      connection.restartReplies.single.complete({
+        'creationId': connection.requests.single['creationId'],
+        'state': 'failed',
+        'failure': {
+          'code': 'RESUME_UNAVAILABLE',
+          'detail': 'Conversation missing',
+        },
+      });
+      await tester.pump();
+      expect(find.text('Conversation missing'), findsOneWidget);
+      expect(find.text('Start New Conversation'), findsOneWidget);
+      expect(find.byTooltip('Dismiss notice'), findsOneWidget);
+      expect(app.allPanes, isEmpty);
+      // Let the notice finish appearing, then check both sides of its timeout.
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 9));
+      expect(find.text('Conversation missing'), findsOneWidget);
+      expect(find.text('Start New Conversation'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(find.text('Conversation missing'), findsNothing);
+      expect(find.text('Start New Conversation'), findsNothing);
+      expect(find.byTooltip('Dismiss notice'), findsNothing);
+      expect(connection.types, ['agent_resume']);
+      expect(app.allPanes, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 }

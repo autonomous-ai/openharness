@@ -37,6 +37,7 @@ import '../sharing/share_harness_dialog.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/status_line_style.dart';
 import '../shared/theme/pull_request_icon.dart';
+import '../shared/widgets/app_icon_button.dart';
 import '../shortcuts/app_shortcuts.dart';
 import '../core/models.dart';
 import '../shortcuts/app_keymap.dart';
@@ -3617,26 +3618,49 @@ class _SwarmScreenState extends State<SwarmScreen> {
         ?.agents
         .where((agent) => agent.id == row.agentId)
         .firstOrNull;
-    ScaffoldMessenger.of(context).showSnackBar(
+    final messenger = ScaffoldMessenger.of(context);
+    // A conversation Harness did not start says what stopped it (open in
+    // a terminal, gone); a new, empty one is not what was asked for.
+    final action = row.external == null
+        ? SnackBarAction(
+            label: 'Start New Conversation',
+            onPressed: () => _openNewHarness(
+              machineId: row.machineId!,
+              engine: agent?.dsh ?? agent?.engine,
+              folder: agent?.project?.cwd,
+              swarmId: app.swarms.any((tab) => tab.id == target)
+                  ? target
+                  : app.activeSwarmId,
+              placement: placement,
+              task: '',
+            ),
+          )
+        : null;
+    messenger.showSnackBar(
       SnackBar(
-        content: Text(failure.message),
-        // A conversation Harness did not start says what stopped it (open in
-        // a terminal, gone); a new, empty one is not what was asked for.
-        action: row.external != null
-            ? null
-            : SnackBarAction(
-                label: 'Start New Conversation',
-                onPressed: () => _openNewHarness(
-                  machineId: row.machineId!,
-                  engine: agent?.dsh ?? agent?.engine,
-                  folder: agent?.project?.cwd,
-                  swarmId: app.swarms.any((tab) => tab.id == target)
-                      ? target
-                      : app.activeSwarmId,
-                  placement: placement,
-                  task: '',
-                ),
+        content: Row(
+          children: [
+            Expanded(
+              child: OverflowBar(
+                alignment: MainAxisAlignment.spaceBetween,
+                overflowAlignment: OverflowBarAlignment.end,
+                spacing: 16,
+                overflowSpacing: 8,
+                children: [Text(failure.message), ?action],
               ),
+            ),
+            const SizedBox(width: 8),
+            AppIconButton(
+              icon: AppIcons.close,
+              tooltip: 'Dismiss notice',
+              onPressed: () => messenger.hideCurrentSnackBar(
+                reason: SnackBarClosedReason.dismiss,
+              ),
+            ),
+          ],
+        ),
+        duration: const Duration(seconds: 10),
+        persist: false,
       ),
     );
   }
