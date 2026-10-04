@@ -196,6 +196,7 @@ import { createPaneWatcher } from './core/agents/newPane.js'
 import { createAdoption } from './core/agents/adopt.js'
 import { createAgentCreator } from './core/agents/create.js'
 import { createAgentForker } from './core/agents/fork.js'
+import { createPaneSwap } from './core/agents/swap.js'
 import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
@@ -3875,101 +3876,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     gridName: () => backend.gridName(),
   })
 
-  /**
-   * The dependencies a pane-process swap needs, for both callers that do one.
-   *
-   * Restart and retarget are the same mechanism pointed at different ends: kill the engine, respawn it
-   * in the pane it was already in, wait for the new process. They differ only in what the replacement
-   * is launched WITH — retarget adds the grid's environment and the argv that configures it — so that
-   * is the only thing this takes. Written once because two copies of a kill sequence drift, and the
-   * half that drifts is the half nobody ran today.
-   */
-  const restartJobs = new AgentRestartCoordinator()
-  const sameRestartTarget = (session: RegisteredSession): boolean => {
-    const current = registry.byAgent(session.agentId)
-    return !!current && current.registeredAt === session.registeredAt
-      && current.tmuxPane === session.tmuxPane && current.engine === session.engine
-  }
-
-  const paneSwapDeps = (
-    session: RegisteredSession,
-    runtime: TmuxRuntimeRef,
-    launch: { env?: Record<string, string>; extraArgs?: readonly string[]; clearEnv?: readonly string[] } = {},
-    /** The mode this swap may actually ask for — the row's own, unless the engine on disk has since
-     *  stopped taking its flag and the caller dropped it (`dropPermissionFlagIfUnsupported`). */
-    permissionMode: string | null = session.permissionMode ?? null,
-  ): RestartAgentDeps => ({
-    prepareResume: () => prepareSessionResume(session),
-    holdOpen: async () => {
-      const result = await tmuxBackend!.holdOpen(runtime)
-      return result.state === 'succeeded'
-        ? { ok: true }
-        : { ok: false, reason: 'reason' in result ? result.reason : 'could not re-arm remain-on-exit' }
-    },
-    terminate: (checkAfterMs) => terminateDeletedAgent(session, {
-      checkRuntime: checkPidRuntime,
-      kill: (pid, signal) => process.kill(pid, signal),
-      sleep: (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.() }),
-      log: (message) => console.log(message),
-    }, checkAfterMs),
-    respawn: async (argv) => {
-      const result = await tmuxBackend!.respawn(runtime, {
-        command: argv,
-        cwd: homedir(),
-        ...(launch.env ? { env: launch.env } : {}),
-      })
-      return result.state === 'succeeded'
-        ? { ok: true }
-        : { ok: false, reason: 'reason' in result ? result.reason : 'tmux respawn-pane did not complete' }
-    },
-    waitForProcess: async () => {
-      // Mirrors onCreateAgent's own discovery budget/backoff shape for the same reason: the engine's
-      // interactive-login-shell startup, not the tmux call, is the slow half.
-      const SWAP_DISCOVERY_BUDGET_MS = 8_000
-      let delayMs = 150
-      let waited = 0
-      while (waited < SWAP_DISCOVERY_BUDGET_MS) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs))
-        waited += delayMs
-        const found = await resolvePaneEngineProcess(runtime.paneId, session.engine)
-        if (found) return found
-        delayMs = Math.min(delayMs * 2, 750)
-      }
-      return null
-    },
-    buildArgv: (opts) => buildEngineLaunchArgv(session.engine, {
-      ...opts,
-      // The mode picked at create outranks what the live argv said: `bypassPermission` is a yes/no, and
-      // Plan or Accept edits would come back as Ask without it.
-      ...(permissionMode ? { permissionMode } : {}),
-      ...(session.cwd ? { cwd: session.cwd } : {}),
-      ...(launch.extraArgs?.length ? { extraArgs: launch.extraArgs } : {}),
-      // A pane swap onto a grid has to clear the same vendor credentials a fresh create does, for the
-      // same reason and against the same failure: an engine re-exec'd with the grid's variables still
-      // sees whatever else the pane inherited, and picks its provider from all of it. This was the
-      // gap — a create cleared them, then moving that agent onto a grid from the pane header put them
-      // straight back, so the engine came up on Anthropic with a grid selected above it.
-      //
-      // Named by the caller (`buildLaunchOverrides` derives it from what the grid launch provides), so
-      // a swap that sets no grid — back to the engine's own login, or a Codex profile's CODEX_HOME —
-      // clears nothing. There the user's own variables are the point.
-      ...(launch.clearEnv?.length ? { clearEnv: launch.clearEnv } : {}),
-      ...(launch.env?.HARNESS_DSH ? { harnessNode: true } : {}),
-    }),
-    log: (message) => console.log(message),
+  // Swapping a pane's engine process, for restart and retarget (core/agents/swap.ts).
+  const paneSwap = createPaneSwap({
+    byAgent: (agentId) => registry.byAgent(agentId),
+    tmuxBackend,
+    prepareSessionResume,
   })
-
-  /** The bypass-permission flag the LIVE process was launched with. The fallback behind
-   *  `bypassPermissionFor` for a row that recorded neither a mode nor the flag (written before either
-   *  was persisted, and not yet seen by a discovery scan); read before anything is signalled. */
-  const liveBypassPermission = async (session: RegisteredSession): Promise<boolean> => {
-    const identity = session.processIdentity
-    if (!identity) return false
-    const rows = await processRows()
-    const row = rows?.find((candidate) =>
-      candidate.pid === identity.pid && candidate.startMarker === identity.startMarker)
-    return row ? bypassPermissionActive(session.engine, row.args) : false
-  }
+  const restartJobs = paneSwap.restartJobs
+  const sameRestartTarget = paneSwap.sameRestartTarget
+  const paneSwapDeps = paneSwap.paneSwapDeps
+  const liveBypassPermission = paneSwap.liveBypassPermission
 
   /**
    * Move a RUNNING agent onto a grid (`agent_retarget`).
