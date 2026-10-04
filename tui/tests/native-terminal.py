@@ -446,7 +446,8 @@ try:
     # have their own paired coverage below.
     both('respawn-window', '-k', '-t', 'work:4', 'printf "WHOLE_WINDOW\\n"; read -r status; exit "$status"')
     wait(lambda: same('list-panes', '-t', 'work:4', '-F', '#{pane_id}:#{pane_dead}') == first_id + ':0'
-         and 'WHOLE_WINDOW' in same('capture-pane', '-p', '-t', 'work:4'), 'whole-window replacement ready')
+         and all('WHOLE_WINDOW' in cli(kind, 'capture-pane', '-p', '-t', 'work:4').stdout
+                 for kind in ('hn', 'tmux')), 'whole-window replacement ready')
     both('send-keys', '-t', 'work:4', '9', 'Enter')
     wait(lambda: same('list-panes', '-t', 'work:4', '-F', '#{pane_id}:#{pane_dead}:#{pane_dead_status}') == first_id + ':1:9', 'whole-window respawn keeps only the first pane')
     assert same('display', '-p', '-t', 'work', '#{window_index}') == '4'
