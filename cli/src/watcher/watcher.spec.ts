@@ -7,6 +7,15 @@ import { Watcher, type HistoryEvent, type LineEvent } from './watcher.js'
 
 const cleanup: string[] = []
 
+/** Waits for what a timer delivers — a released hold's read, an expired hold — however slow the machine. */
+const until = async (what: string, test: () => boolean, ms = 10_000): Promise<void> => {
+  const deadline = Date.now() + ms
+  while (!test()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
+
 afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
@@ -336,7 +345,7 @@ describe('Watcher.hold and release', () => {
       const hold = (await watcher.hold('s1', transcriptPath, 40))!
       expect(hold.expired).toBe(false)
       await appendFile(transcriptPath, '{"n":1}\n')
-      await new Promise((resolve) => setTimeout(resolve, 150))
+      await until('the hold to let go and its read to deliver', () => lines.length > 0)
       expect(warn).toHaveBeenCalledOnce()
       expect(hold.expired).toBe(true)
       expect(lines).toEqual(['{"n":1}'])
@@ -474,7 +483,7 @@ describe('Watcher.hold and release', () => {
     await new Promise((resolve) => setTimeout(resolve, 80))
     expect(lines).toEqual([])
     hold.release()
-    await new Promise((resolve) => setTimeout(resolve, 80))
+    await until('the read the release schedules', () => lines.length > 0)
     expect(lines).toEqual(['{"n":2}'])
     await watcher.stop()
   })
@@ -496,13 +505,6 @@ describe('Watcher.hold and release', () => {
 })
 
 describe('Watcher, at its edges', () => {
-  const until = async (what: string, test: () => boolean, ms = 10_000): Promise<void> => {
-    const deadline = Date.now() + ms
-    while (!test()) {
-      if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`)
-      await new Promise((resolve) => setTimeout(resolve, 20))
-    }
-  }
   const fresh = async (content = '') => {
     const dir = await mkdtemp(join(tmpdir(), 'machine-watcher-edges-'))
     cleanup.push(dir)
