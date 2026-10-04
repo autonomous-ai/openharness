@@ -3442,6 +3442,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stopHeartbeat,
     questionWatcher,
     mirror,
+    turnActivity,
+    turnStartedAt,
+    agentIdFor,
+    clients: backend,
   })
   backend.onCancel = id => { void cancelAgent(id) }
 
