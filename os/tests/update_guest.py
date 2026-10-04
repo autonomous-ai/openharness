@@ -31,11 +31,15 @@ def main():
     updater = str(bundle / 'apply-update.py')
     original_version = version()
     original_runtime = Path('/usr/share/harness-os/runtime.json').read_text()
-    project = Path.home() / 'Projects/update-survivor'
+    # Preview 9 already uses lowercase projects. Only older installations need
+    # migration; creating a second Projects folder must not make an update merge
+    # two independent user directories.
+    legacy = not (Path.home() / 'projects').is_dir()
+    project = Path.home() / ('Projects' if legacy else 'projects') / 'update-survivor'
     project.mkdir(parents=True, exist_ok=True)
     (project / 'keep.txt').write_text('keep this project through apply, restart and rollback\n')
     (project / 'heartbeat.py').write_text('''import os, pathlib, time
-root = pathlib.Path.home() / 'Projects/update-survivor'
+root = pathlib.Path(__file__).resolve().parent
 (root / 'pid').write_text(str(os.getpid()))
 while True:
     with (root / 'heartbeat').open('a') as output: output.write('alive\\n')
@@ -101,7 +105,8 @@ while True:
     receipt['checks'].append('Repeated apply recognizes the installed build without another transaction')
     restart()
     assert (Path.home() / 'projects/update-survivor/keep.txt').read_text() == (project / 'keep.txt').read_text()
-    receipt['checks'].append('Legacy Projects migrates to lowercase projects while existing session paths remain valid')
+    receipt['checks'].append('Legacy Projects migrates to lowercase projects while existing session paths remain valid'
+                             if legacy else 'Existing lowercase projects stays in place through the update')
     receipt['checks'].append('The same terminal process and project survive restarting both Harness daemon and screen')
     for name, info in manifest['runtime']['files'].items():
         path = Path('/usr/lib/harness') / name
