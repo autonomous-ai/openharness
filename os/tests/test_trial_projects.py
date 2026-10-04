@@ -15,7 +15,7 @@ class TrialProjects(unittest.TestCase):
     def test_saved_project_tree_keeps_git_binary_data_permissions_and_links(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
-            source, target = base / 'Projects', base / 'installed'
+            source, target = base / 'projects', base / 'installed'
             (source / 'game/.git').mkdir(parents=True)
             (source / 'empty').mkdir()
             script = source / 'game/run'
@@ -41,7 +41,7 @@ class TrialProjects(unittest.TestCase):
     def test_external_links_are_preserved_without_copying_their_contents(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
-            source, outside = base / 'Projects', base / 'outside'
+            source, outside = base / 'projects', base / 'outside'
             source.mkdir()
             outside.mkdir()
             (outside / 'secret').write_text('outside project')
@@ -54,7 +54,7 @@ class TrialProjects(unittest.TestCase):
 
     def test_special_files_fail_preflight_and_copy_without_hanging(self):
         with tempfile.TemporaryDirectory() as temp:
-            source = Path(temp) / 'Projects'
+            source = Path(temp) / 'projects'
             source.mkdir()
             os.mkfifo(source / 'pipe')
             with self.assertRaisesRegex(ValueError, 'special file'):

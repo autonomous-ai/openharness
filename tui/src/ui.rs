@@ -171,7 +171,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     // The status lines (tmux's status: off, on, 2 … 5), at the bottom or (status-position) the top.
     let lines = app.status_lines().max(1).min(area.height);
-    let status = Rect::new(0, if app.status_top { 0 } else { area.height.saturating_sub(lines + crate::os_welcome::dock_height(app)) }, area.width, lines);
+    let status = Rect::new(0, if app.status_top { 0 } else { area.height.saturating_sub(lines) }, area.width, lines);
     let body = app.body();
     // The window in front at the terminal's size, whatever brought it there.
     let window_area = app.window_area(app.tab());
@@ -193,7 +193,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // ── status bar ──
     // The status bar down a side, and the tabs over the panes beside it.
     crate::bar::draw(buf, app);
-    crate::os_welcome::draw_intro(buf, app);
     if let Some(Modal::DisplayPanes { .. }) = &app.modal { display_panes(buf, app) }
     let search_busy = app.said_due.is_some() || app.said_pending > 0;
     let msg_style = app.message_style();

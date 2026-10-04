@@ -32,6 +32,8 @@ def inspect(iso):
         files = {str(p.relative_to(source / 'root')): p for p in (source / 'root').rglob('*') if p.is_file()}
         files.update({'usr/lib/harness-os/install.py': source / 'installer.py',
                       'usr/lib/harness-os/onboarding.py': source / 'onboarding.py',
+                      'usr/lib/harness-os/network.py': source / 'network.py',
+                      'usr/lib/harness-os/projects.py': source / 'projects.py',
                       'usr/lib/harness-os/trial_projects.py': source / 'trial_projects.py',
                       'usr/lib/harness-os/system.py': source / 'system.py',
                       'usr/lib/harness-os/runtime_update.py': source / 'runtime_update.py',

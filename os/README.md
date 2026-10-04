@@ -13,17 +13,21 @@ Product names and interface copy follow the [Naming System](../docs/naming-syste
 
 **Preview 9:** the USB opens a short network step
 or goes straight into bundled OpenCode when already connected. **Install without
-connecting** opens the same native installer offline. The agent works beside
-**New Harness** and **Connect a computer** starter panels; a persistent install
-dock keeps the USB's temporary state clear. Saved `~/Projects` files are copied
+connecting** opens the same native installer offline. OpenCode starts on the left with two real terminal panes on the right.
+The single footer holds the window list on the left and **Make Harness your OS.
+[ Install Harness ]** on the right. Installed first boot uses the same workspace;
+later launches restore existing work. Saved `~/projects` files are copied
 and verified during installation. The full TUI reference and OS guide are bundled
 for agent questions. **Super+n/t/m/i/w** require no Shift; Ctrl+b bindings still work.
 
-The installer has four fields and one Install action; encrypted boot shows the
+The installer selects a disk, focuses Password, and has one full-width
+**Install Harness** action. Progress shows only the current step; encrypted boot shows the
 Harness wordmark and a masked password prompt.
 Both the live and installed system use `me@harness`.
 `Super+u` opens Updates. Frequent hn/CLI releases download in the background;
 you choose when to reconnect the screen. Running agents and terminals stay alive.
+The update checker records release ancestry so a source-built runtime cannot be
+replaced by an older public CLI with a higher development version number.
 
 [Download preview 9](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.9)
 · [Mac → USB → ThinkPad installation guide](INSTALL.md)
@@ -143,13 +147,13 @@ In the current source, the USB asks for a network connection before opening
 OpenCode. Choose **Install without connecting** to install immediately offline.
 Ethernet skips the network step when already connected. During a trial, click
 **Install Harness**, press **Super+i**, or ask the agent to open installation.
-F10 focuses the dock; Tab selects a button and Enter activates it. New Harness
+F10 focuses Install Harness in the footer; Enter opens the form. New Harness
 and Connect a computer introduce multiple agents and computers; dismiss those
 starter panels with their close button when the agent needs the whole screen.
 
-Saved files under `~/Projects`, including Git history, are transferred into the
+Saved files under `~/projects`, including Git history, are transferred into the
 installed home and verified by hash. Work elsewhere remains temporary. Running
-processes and agent credentials outside Projects are not transferred. Stop writes
+processes and agent credentials outside projects are not transferred. Stop writes
 to a project before installing; files changing during transfer are an error.
 Preview 6's older welcome uses Enter to install or T to try and does not transfer
 trial files; use the installation guide shipped with your image.

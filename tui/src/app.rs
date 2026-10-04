@@ -665,6 +665,7 @@ pub struct App {
     /// A disposable USB session offers direct try, install and network actions on its home.
     pub os_live: bool,
     pub os_welcome: crate::os_welcome::State,
+    pub os_first_use: bool,
     /// While a command runs in another session (`-t work:2`): the session to come back to.
     pub swap_back: Option<u32>,
     /// The session asked for at start (`hn new -A -s main`, `hn attach -t work`).
@@ -873,6 +874,7 @@ impl App {
             os_session: std::env::var("HARNESS_OS").as_deref() == Ok("1"),
             os_live: std::env::var("HARNESS_OS").as_deref() == Ok("1") && std::env::var("HARNESS_OS_LIVE").as_deref() == Ok("1"),
             os_welcome: Default::default(),
+            os_first_use: std::env::var("HARNESS_OS_FIRST_USE").as_deref() == Ok("1"),
             wait_channels: HashMap::new(),
             cli_held: std::collections::VecDeque::new(),
             last_cli: Instant::now(),
@@ -1994,7 +1996,7 @@ impl App {
         let front = self.swap_back.is_none_or(|b| b == self.session_id) && self.tabs.get(self.active).map(|t| t.id == tab.id).unwrap_or(false);
         let manual = self.options.get("window-size", &tab.id, None).as_deref() == Some("manual");
         let creating = self.shell_inputs.contains_key(&tab.id) && tab.size.is_some();
-        if !self.headless && self.swap_back.is_none_or(|b| b == self.session_id) && !manual && !creating && (front || tab.root.is_none()) { return crate::os_welcome::workspace(self, tab, self.body()) }
+        if !self.headless && self.swap_back.is_none_or(|b| b == self.session_id) && !manual && !creating && (front || tab.root.is_none()) { return self.body() }
         let (w, h) = tab.root.as_ref().map(|r| r.size()).unwrap_or_else(|| tab.size.unwrap_or(self.default_size()));
         Rect::new(0, if front && !self.headless { self.body().y } else { 0 }, w, h)
     }
@@ -3663,7 +3665,7 @@ impl App {
         }
         // The bar down a side takes its columns.
         if let Some(bar) = self.bar_rect() { return Rect::new(if bar.x == 0 { bar.width } else { 0 }, 0, self.size.0.saturating_sub(bar.width), self.size.1) }
-        Rect::new(0, if self.status_top { n } else { 0 }, self.size.0, self.size.1.saturating_sub(n + crate::os_welcome::dock_height(self)))
+        Rect::new(0, if self.status_top { n } else { 0 }, self.size.0, self.size.1.saturating_sub(n))
     }
 
     /// tmux's status option: how many status lines (off, on, 2 … 5).
@@ -5272,7 +5274,7 @@ impl App {
         // The OS opens on the agent launcher. An explicit `hn new ...` still gets
         // its requested shell; reconnecting to existing work is handled by the desk.
         if self.os_session && self.start_session.is_none() {
-            if self.os_live && self.tabs.len() == 1 && self.tabs[0].root.is_none() {
+            if (self.os_live || self.os_first_use) && self.tabs.len() == 1 && self.tabs[0].root.is_none() {
                 if self.link(&self.fleet.local_id).is_none() { return }
                 self.shell_asked = true;
                 // The welcome reply may arrive after another terminal is requested.

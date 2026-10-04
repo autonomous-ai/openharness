@@ -228,7 +228,7 @@ def trial_source(config):
     if not Path('/etc/harness-live').is_file():
         return None
     account = pwd.getpwnam('me')
-    source = Path(account.pw_dir) / 'Projects'
+    source = Path(account.pw_dir) / 'projects'
     if not source.exists():
         return None
     required = trial_command('size', source, account)['bytes']
@@ -245,7 +245,7 @@ def preserve_trial(trial, target, home):
     # A root-owned parent keeps other live processes from changing the destination.
     # Only this child receives the open writable directory, then drops privileges.
     with tempfile.TemporaryDirectory(prefix='.harness-trial-', dir=target / 'home') as temp:
-        staging = Path(temp) / 'Projects'
+        staging = Path(temp) / 'projects'
         staging.mkdir(mode=0o700)
         os.chown(staging, account.pw_uid, account.pw_gid)
         descriptor = os.open(staging, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -253,8 +253,8 @@ def preserve_trial(trial, target, home):
             receipt = trial_command('copy', source, account, descriptor)
         finally:
             os.close(descriptor)
-        shutil.rmtree(home / 'Projects')  # Only the new account's pristine skeleton.
-        staging.rename(home / 'Projects')
+        shutil.rmtree(home / 'projects')  # Only the new account's pristine skeleton.
+        staging.rename(home / 'projects')
     detail = home / '.local/state/harness-os/trial-projects.json'
     detail.parent.mkdir(parents=True, exist_ok=True)
     detail.write_text(json.dumps(receipt, indent=2) + '\n')
@@ -338,7 +338,7 @@ def install(config, source, target, progress=None):
         # disk initramfs around this verified, package-owned kernel instead.
         shutil.copyfile(target / kernel['path'], target / 'boot/vmlinuz-linux-lts')
         report('Setting up your account…')
-        # The live image is immutable. Only Projects is transferred explicitly;
+        # The live image is immutable. Only projects is transferred explicitly;
         # live account passwords, agent credentials, SSH keys and sessions stay out.
         for path in ['etc/sudoers.d/10-live', 'etc/mkinitcpio.conf.d/archiso.conf',
                      'etc/systemd/system/serial-getty@ttyS0.service.d/live.conf',
@@ -354,7 +354,7 @@ def install(config, source, target, progress=None):
         (target / 'var/lib/systemd/linger/me').unlink(missing_ok=True)
         write(target, f'/var/lib/systemd/linger/{config["username"]}', '')
         home = target / 'home' / config['username']
-        (home / 'Projects').mkdir(exist_ok=True)
+        (home / 'projects').mkdir(exist_ok=True)
         if trial is not None:
             report('Keeping your trial projects…')
         trial_receipt = preserve_trial(trial, target, home)
@@ -474,7 +474,7 @@ class InstallForm:
     def __init__(self, screen, candidates, username, hostname, encrypt):
         self.screen, self.disks = screen, candidates
         self.username, self.hostname, self.encrypt = username, hostname, encrypt
-        self.selected, self.focus = 0, 0
+        self.selected, self.focus = 0, 2
         self.passwords, self.positions = ['', ''], [0, 0]
         self.error = ''
         self.title = None
@@ -495,7 +495,7 @@ class InstallForm:
         row += self.top
         if row >= height or width < 5:
             return
-        attr = curses.A_REVERSE if active else self.accent if accent else curses.A_BOLD if bold else curses.A_NORMAL
+        attr = (curses.A_REVERSE if active else self.accent if accent else curses.A_NORMAL) | (curses.A_BOLD if bold else 0)
         self.screen.addnstr(row, self.left, text, min(self.width, width - self.left - 1), attr)
 
     def cursor(self, visible):
@@ -530,7 +530,8 @@ class InstallForm:
             for row, word in enumerate(WORDMARK):
                 self.line(row, word.center(self.width), accent=True)
             self.top += 4
-        self.line(1, title, bold=True)
+        if title:
+            self.line(1, title, bold=True)
         return True
 
     def key(self):
@@ -594,7 +595,7 @@ class InstallForm:
     def run(self):
         self.screen.keypad(True)
         while True:
-            if not self.begin('Install Harness'):
+            if not self.begin(''):
                 continue
             disk = self.disks[self.selected]
             # Identical models/capacities need a visible discriminator after selection.
@@ -610,8 +611,8 @@ class InstallForm:
                 mask = '*' * len(self.passwords[index][offset:offset + capacity])
                 self.line(8 + index * 2, f'{label:<18}[{mask:<{capacity}}]', self.focus == index + 2)
             self.line(12, self.error)
-            self.line(14, f"{'':18}[ Install ]", self.focus == 4)
-            self.line(16, 'All data on this disk will be erased.')
+            for row, text in [(13, ''), (14, 'Install Harness'), (15, '')]:
+                self.line(row, text.center(self.width), active=True, bold=self.focus == 4)
             self.cursor(self.focus in (2, 3))
             if self.focus in (2, 3):
                 position = self.positions[self.focus - 2]
@@ -703,16 +704,8 @@ def install_with_progress(screen, config, source, target):
         # A resize must never pause a disk operation waiting for keyboard input.
         screen.erase()
         height, width = screen.getmaxyx()
-        view.width = max(1, min(60, width - 4))
-        view.left = max(0, (width - view.width) // 2)
-        view.top = max(0, (height - 12) // 2)
-        if height >= 18:
-            for row, word in enumerate(WORDMARK):
-                view.line(row, word.center(view.width), accent=True)
-            view.top += 4
-        view.line(1, 'Installing Harness', bold=True)
-        view.line(4, message)
-        view.line(6, 'Keep this computer powered on.')
+        if height > 0 and width > 1:
+            screen.addnstr(height // 2, max(0, (width - len(message)) // 2), message, width - 1)
         screen.refresh()
 
     def progress(message):

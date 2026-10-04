@@ -177,14 +177,14 @@ def main():
         for directory in ['machines', 'dsh-machines', 'hardware']:
             for path in sorted((root / directory).rglob('*')):
                 include = path.suffix in {'.png', '.json', '.txt', '.jsonl'} or path.name.endswith('-boot-journal.log')
-                if path.is_file() and include and 'Projects' not in path.relative_to(root / directory).parts:
+                if path.is_file() and include and not {'Projects', 'projects'} & set(path.relative_to(root / directory).parts):
                     archive.write(path, path.relative_to(root))
     if examples:
         with zipfile.ZipFile(folder / 'harness-examples.zip', 'w', compression=zipfile.ZIP_DEFLATED) as archive:
             for directory, kind in [('machines', 'workloads'), ('dsh-machines', 'dsh')]:
                 if kind not in examples:
                     continue
-                for project_root in (root / directory).rglob('Projects'):
+                for project_root in (path for path in (root / directory).rglob('*') if path.name in {'Projects', 'projects'} and path.is_dir()):
                     for path in sorted(project_root.rglob('*')):
                         if path.is_file() and not set(path.relative_to(project_root).parts) & {'node_modules', '.git', '.harness', '__pycache__'}:
                             archive.write(path, path.relative_to(project_root))
@@ -203,7 +203,7 @@ def main():
 
 Arch Linux with the LTS kernel, labwc, foot, and an on-demand browser. No desktop panels or preinstalled development stacks.
 
-To try it: follow the included `INSTALL.md` for Mac → USB → ThinkPad instructions. Verify the ISO's SHA-256, write the whole ISO to a USB stick, and boot an x86-64 PC with Secure Boot disabled. The USB asks for Wi-Fi when needed, then opens bundled OpenCode with its upstream model defaults and a local guide to Harness. Install without connecting works offline. Ask the agent to open installation, press Super+i, or click Install Harness in the persistent bottom dock. The same native form handles all three routes. Saved projects under ~/Projects are preserved during installation; temporary account credentials and running processes are not. Super+n opens New Harness, Super+m connects a computer, and Super+t opens a shell directly. All Super shortcuts require no Shift; existing Ctrl+b bindings remain available. This preview's installer erases the entire selected disk; it does not resize another OS. Encryption is enabled by default.
+To try it: follow the included `INSTALL.md` for Mac → USB → ThinkPad instructions. Verify the ISO's SHA-256, write the whole ISO to a USB stick, and boot an x86-64 PC with Secure Boot disabled. The USB asks for Wi-Fi when needed, then opens bundled OpenCode with its upstream model defaults and a local guide to Harness. Install without connecting works offline. Ask the agent to open installation, press Super+i, or click Install Harness in the persistent bottom dock. The same native form handles all three routes. Saved projects under ~/projects are preserved during installation; temporary account credentials and running processes are not. Super+n opens New Harness, Super+m connects a computer, and Super+t opens a shell directly. All Super shortcuts require no Shift; existing Ctrl+b bindings remain available. This preview's installer erases the entire selected disk; it does not resize another OS. Encryption is enabled by default.
 
 {'The installer has four aligned fields: disk, encryption, password, repeat password. Disk choices fit on one line. Activate Install to begin; there is no second confirmation screen or minimum password length. Empty passwords are rejected. The account is me@harness. The password initially protects both the local account and, when enabled, the encrypted disk. There is no first-boot account wizard.' if interactive_install else ''}
 

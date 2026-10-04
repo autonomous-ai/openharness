@@ -2,6 +2,7 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -10,67 +11,59 @@ onboarding = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(onboarding)
 
 
+def result(code=0):
+    return subprocess.CompletedProcess([], code)
+
+
 class Onboarding(unittest.TestCase):
-    def test_ethernet_skips_network_form_and_starts_the_real_agent(self):
+    def test_network_page_opens_directly_then_agent_and_workspace_start(self):
+        for live in [True, False]:
+            with self.subTest(live=live), tempfile.TemporaryDirectory() as temp, \
+                 patch.object(onboarding.Path, 'is_file', return_value=live), \
+                 patch.object(onboarding.Path, 'home', return_value=Path(temp)), \
+                 patch.object(onboarding.subprocess, 'run', return_value=result()) as command, \
+                 patch.object(onboarding.os, 'execv') as execute, \
+                 patch.dict(os.environ, {'TMUX_PANE': '%4'}):
+                onboarding.welcome()
+                self.assertEqual(command.call_args_list[0].args[0],
+                                 ['sudo', '/usr/bin/python3', '/usr/lib/harness-os/network.py', '--first-use'])
+                self.assertEqual(command.call_args_list[1].args[0], ['hn', 'os-action', 'ready', '%4'])
+                execute.assert_called_once_with('/usr/bin/hn-os', ['hn-os', 'try'])
+                self.assertEqual((Path(temp) / '.local/state/harness-os/onboarded').exists(), not live)
+
+    def test_offline_install_opens_native_form_and_returns_to_network_page(self):
         with patch.object(onboarding.Path, 'is_file', return_value=True), \
-             patch.object(onboarding, 'connected', return_value=True), \
-             patch.object(onboarding.curses, 'set_escdelay'), \
-             patch.object(onboarding.curses, 'wrapper') as form, \
-             patch.object(onboarding.subprocess, 'run') as command, \
-             patch.object(onboarding.os, 'execv') as execute, \
-             patch.dict(os.environ, {'TMUX_PANE': '%4'}):
+             patch.object(onboarding.subprocess, 'run', side_effect=[result(10), result(), KeyboardInterrupt]) as command, \
+             patch.object(onboarding.os, 'execv') as execute:
+            with self.assertRaises(KeyboardInterrupt):
+                onboarding.welcome()
+            self.assertEqual(command.call_args_list[1].args[0], ['hn', 'os-action', 'install'])
+            self.assertEqual(command.call_args_list[0], command.call_args_list[2])
+            execute.assert_not_called()
+
+    def test_installed_system_can_open_workspace_offline(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(onboarding.Path, 'is_file', return_value=False), \
+             patch.object(onboarding.Path, 'home', return_value=Path(temp)), \
+             patch.object(onboarding.subprocess, 'run', side_effect=[result(11), result()]), \
+             patch.object(onboarding.os, 'execv') as execute:
             onboarding.welcome()
-            form.assert_not_called()
-            command.assert_called_once_with(['hn', 'os-action', 'ready', '%4'], check=False, timeout=15)
-            execute.assert_called_once_with('/usr/bin/hn-os', ['hn-os', 'try'])
+            execute.assert_called_once_with('/usr/bin/hn-os', ['hn-os', 'try', '--offline'])
 
-    def test_offline_install_opens_native_form_without_starting_an_agent(self):
-        with patch.object(onboarding.Path, 'is_file', return_value=True), \
-             patch.object(onboarding, 'connected', return_value=False), \
-             patch.object(onboarding.curses, 'set_escdelay'), \
-             patch.object(onboarding.curses, 'wrapper', side_effect=['install', KeyboardInterrupt]), \
-             patch.object(onboarding.subprocess, 'run') as command, \
+    def test_failed_layout_request_does_not_mark_first_use_complete(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(onboarding.Path, 'is_file', return_value=False), \
+             patch.object(onboarding.Path, 'home', return_value=Path(temp)), \
+             patch.object(onboarding.subprocess, 'run', side_effect=[result(), subprocess.TimeoutExpired('hn', 15)]), \
              patch.object(onboarding.os, 'execv') as execute:
+            onboarding.welcome()
+            self.assertFalse((Path(temp) / '.local/state/harness-os/onboarded').exists())
+            execute.assert_called_once()
+
+    def test_install_launch_failure_keeps_network_recoverable(self):
+        with patch.object(onboarding.Path, 'is_file', return_value=True), \
+             patch.object(onboarding.subprocess, 'run', side_effect=[result(10), subprocess.TimeoutExpired('hn', 15), KeyboardInterrupt]) as command, \
+             patch('builtins.input') as acknowledge, patch.object(onboarding.os, 'execv') as execute:
             with self.assertRaises(KeyboardInterrupt):
                 onboarding.welcome()
-            command.assert_called_once_with(['hn', 'os-action', 'install'], check=True, timeout=15)
+            acknowledge.assert_called_once()
+            self.assertEqual(command.call_args_list[0], command.call_args_list[2])
             execute.assert_not_called()
-
-    def test_cancelled_wifi_returns_to_network_form(self):
-        with patch.object(onboarding.Path, 'is_file', return_value=True), \
-             patch.object(onboarding, 'connected', return_value=False), \
-             patch.object(onboarding.curses, 'set_escdelay'), \
-             patch.object(onboarding.curses, 'wrapper', side_effect=['wifi', KeyboardInterrupt]) as form, \
-             patch.object(onboarding.subprocess, 'run') as command, \
-             patch.object(onboarding.os, 'execv') as execute:
-            with self.assertRaises(KeyboardInterrupt):
-                onboarding.welcome()
-            self.assertEqual(form.call_count, 2)
-            command.assert_called_once_with(['/usr/bin/hn-os', 'wifi'], check=False)
-            execute.assert_not_called()
-
-    def test_network_failure_stays_recoverable_and_installed_system_rejects_usb_flow(self):
-        for failure in [OSError('missing'), subprocess.TimeoutExpired('nmcli', 3)]:
-            with patch.object(onboarding.subprocess, 'run', side_effect=failure):
-                self.assertFalse(onboarding.connected())
-        with patch.object(onboarding.Path, 'is_file', return_value=False), \
-             patch.object(onboarding, 'connected') as connected:
-            with self.assertRaises(SystemExit):
-                onboarding.welcome()
-            connected.assert_not_called()
-
-    def test_install_launch_failure_keeps_a_recoverable_network_screen(self):
-        with patch.object(onboarding.Path, 'is_file', return_value=True), \
-             patch.object(onboarding, 'connected', return_value=False), \
-             patch.object(onboarding.curses, 'set_escdelay'), \
-             patch.object(onboarding.curses, 'wrapper', side_effect=['install', KeyboardInterrupt]) as form, \
-             patch.object(onboarding.subprocess, 'run', side_effect=subprocess.TimeoutExpired('hn', 15)), \
-             patch.object(onboarding.os, 'execv') as execute:
-            with self.assertRaises(KeyboardInterrupt):
-                onboarding.welcome()
-            self.assertIn('Could not open Install', form.call_args.args[1])
-            execute.assert_not_called()
-
-
-if __name__ == '__main__':
-    unittest.main()

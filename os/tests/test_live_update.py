@@ -75,6 +75,23 @@ class FastUpdates(unittest.TestCase):
             self.assertEqual(update.prepared(), target)
             self.assertEqual(len(list((self.state / 'builds').iterdir())), 1)
 
+    def test_public_release_already_included_in_os_source_cannot_replace_newer_fixes(self):
+        self.base.write_text(json.dumps({'source_commit': 'source-built',
+                                        'release_baselines': {'cli': {'version': '1.1.0', 'commit': 'a' * 40}}}))
+        with self.feed():
+            self.assertTrue(update.check())
+        # The independent TUI update still arrives; the older public CLI does not.
+        ready = update.verify(update.prepared())
+        self.assertEqual(ready['versions'], {'hn': '1.1.0', 'cli': '1.0.0'})
+        self.assertEqual((update.prepared() / 'cli.mjs').read_bytes(), b'old cli.mjs')
+        self.assertEqual((update.prepared() / 'notify.mjs').read_bytes(), b'old notify.mjs')
+
+    def test_release_newer_than_the_os_source_baseline_is_still_downloaded(self):
+        self.base.write_text(json.dumps({'release_baselines': {'cli': {'version': '1.0.5', 'commit': 'a' * 40}}}))
+        with self.feed():
+            self.assertTrue(update.check())
+        self.assertEqual(update.verify(update.prepared())['versions']['cli'], '1.1.0')
+
     def test_bad_cli_hook_does_not_stage_half_a_pair_or_block_independent_hn(self):
         with self.feed(fail='notify.mjs'):
             self.assertTrue(update.check())

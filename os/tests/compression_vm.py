@@ -81,9 +81,9 @@ def run_trial(iso, folder, firmware):
         vm.command('nmcli networking off')
         # Check the recompressed media's actual payload checksum in the guest.
         vm.command('cd /run/archiso/bootmnt/arch/x86_64 && sha512sum -c airootfs.sha512', timeout=90)
-        vm.command(user('sh -c ' + shlex.quote('mkdir -p "$HOME/Projects/compression"; printf %s ' +
+        vm.command(user('sh -c ' + shlex.quote('mkdir -p "$HOME/projects/compression"; printf %s ' +
             shlex.quote(base64.b64encode(project).decode()) +
-            ' | base64 -d > "$HOME/Projects/compression/retained.txt"')))
+            ' | base64 -d > "$HOME/projects/compression/retained.txt"')))
         for name, data in [('config.json', json.dumps(config).encode()),
                            ('probe.py', INSTALL_PROBE.encode())]:
             encoded = base64.b64encode(data).decode()
@@ -116,7 +116,7 @@ def run_trial(iso, folder, firmware):
         if config['encrypt']:
             result['unlock_prompt_seconds'] = vm.unlock_prompt_seconds
         result['keyboard'] = check_graphical_keyboard(vm, 'compression')
-        assert vm.read_file('/home/me/Projects/compression/retained.txt') == project
+        assert vm.read_file('/home/me/projects/compression/retained.txt') == project
         vm.command('test ! -e /etc/harness-live && ! pgrep -x chromium && ! pgrep -x opencode')
         # A new disk/boot per trial prevents page-cache reuse inside the guest.
         vm.command('sleep 20; hn-os measure > /tmp/compression-idle.json', timeout=35)

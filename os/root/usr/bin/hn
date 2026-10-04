@@ -7,6 +7,11 @@ export HARNESS_CLI_ARGS='[]'
 # This computer's working tabs must survive an update without a cloud account or
 # network. hn's ordinary local sessions retain their complete pane references.
 export HARNESS_TUI_DESK=off
+if [ ! -f "$HOME/.local/state/harness-os/onboarded" ]; then
+    export HARNESS_OS_FIRST_USE=1
+else
+    unset HARNESS_OS_FIRST_USE
+fi
 if [ -f /etc/harness-live ]; then
     export HARNESS_OS_LIVE=1
     export HARNESS_TUI_TMUX_CONF=/usr/share/harness-os/tmux-live.conf
