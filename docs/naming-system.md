@@ -28,7 +28,9 @@ applicable design system, including the [desktop Design System](../desktop/desig
 | Open source project and repository | **OpenHarness** | Use for the source project and repository identity; the product interface says Harness. |
 
 Use **Harness** in prose. Wordmarks and ASCII artwork may use their established
-lettering. `hn` and `harness` are commands, not additional product brands.
+lettering. `hn` and `harness` are commands, and `harnessd` is the name of the
+daemon's process (the way `dockerd` is Docker's); none of them is an additional
+product brand. Prose says "the Harness daemon".
 Keep vendor names intact: **Claude Code**, **Codex**, **OpenCode**, and **pi**.
 
 The roadmap can be explained in one sentence:

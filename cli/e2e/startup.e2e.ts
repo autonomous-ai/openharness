@@ -2,8 +2,8 @@
  * What a client sees while the daemon starts. The desktop app connects the moment the daemon's port
  * answers, so everything the daemon says from then on is something a person sees.
  *
- * Known defects of the current daemon are pinned with `it.fails`: each passes today only because it
- * fails, and harnessd must turn it green (then it becomes an ordinary `it`).
+ * Each of these was a defect of the daemon before harnessd, found by this suite and pinned with
+ * `it.fails` until the request gate (BackendSocket.openRequests) fixed it.
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -15,11 +15,10 @@ describe('starting up', () => {
   let daemon: IsolatedDaemon | undefined
   afterEach(async () => { await daemon?.close(); daemon = undefined })
 
-  // The port answers, and the pid file is written, long before every request handler is wired:
-  // cli.ts writes PID_FILE at ~4325, assigns backend.onCreateAgent at ~5435 and onForkAgent later
-  // still, with the restore and the first full reconcile awaited in between. A request in that window
-  // is refused with UNSUPPORTED_ON_REMOTE, which no client expects from its own machine.
-  it.fails('answers every request with its real handler from the instant its port answers', async () => {
+  // The port answers long before every request handler is wired (the restore and the first full
+  // reconcile come in between). Before the gate a request in that window was refused with
+  // UNSUPPORTED_ON_REMOTE, which no client expects from its own machine.
+  it('answers every request with its real handler from the instant its port answers', async () => {
     daemon = await IsolatedDaemon.create()
     await daemon.start()
     const setup = await LocalClient.connect(daemon)
@@ -40,10 +39,10 @@ describe('starting up', () => {
     expect(errors).not.toContain('UNSUPPORTED_ON_REMOTE')
   })
 
-  // Worse than a refusal: `message` has no reply, so a message that lands before `onMessage` is wired is
-  // dropped with only a log line ("message handler is not wired; terminal input was not dispatched").
-  // Found by master.e2e.ts, whose client reconnects the moment a restarted daemon's port answers.
-  it.fails('delivers a message sent the instant its port answers', async () => {
+  // Worse than a refusal: `message` has no reply, so before the gate a message that landed before
+  // `onMessage` was wired was dropped with only a log line. Found by master.e2e.ts, whose client
+  // reconnects the moment a restarted daemon's port answers.
+  it('delivers a message sent the instant its port answers', async () => {
     daemon = await IsolatedDaemon.create()
     await daemon.start()
     const setup = await LocalClient.connect(daemon)
@@ -61,10 +60,9 @@ describe('starting up', () => {
     await ended
   })
 
-  // After a restart the registry is served before the first reconcile confirms the panes: a running
-  // agent lists as `stopped` (when it had a conversation) or not at all, for ~100-200 ms after the
-  // daemon says it is ready. The app shows it paused or gone meanwhile.
-  it.fails('never shows a running agent as stopped or missing across a restart', async () => {
+  // Before the gate the registry was served before the restore confirmed the panes: a running agent
+  // listed as `stopped` (when it had a conversation) or not at all, and the app showed it paused or gone.
+  it('never shows a running agent as stopped or missing across a restart', async () => {
     daemon = await IsolatedDaemon.create()
     await daemon.start()
     let client = await LocalClient.connect(daemon)

@@ -183,6 +183,9 @@ export const AGENT_OPENED_THROTTLE_MS = 3_000
 const BASE_DELAY_MS = 1_000
 const MAX_DELAY_MS = 30_000
 const QUEUE_MAX = 2_000
+/** Requests one local connection may queue before the daemon is ready (see `openRequests`). The app
+ *  sends a handful on connect; hundreds is a client looping, not a person. */
+const MAX_REQUESTS_BEFORE_READY = 256
 const DEVICE_AGENT_LIST_LIMIT = 100
 const DEVICE_AGENT_NAME_MAX_CODEPOINTS = 15
 const DEVICE_AGENT_NAME_MAX_BYTES = 39 // device project_t.name[40], including trailing NUL on-device.
@@ -488,6 +491,17 @@ export class BackendSocket {
   // real and must be counted once, so it is owed to the next link — not turned into a `ping`.
   private appOpenOwed = false
   private readonly downChains = new Map<string, Promise<void>>()
+  /**
+   * Requests wait here until the daemon is ready (`openRequests`), each in its connection's own order.
+   * The port answers long before start-up has wired every handler and confirmed the agents it
+   * restored; a request answered in between met a handler that was not there yet — refused with
+   * UNSUPPORTED_ON_REMOTE, or for `message` silently dropped — or a registry not yet reconciled.
+   */
+  private requestsOpen = true
+  private openRequestGate: () => void = () => {}
+  private requestGate: Promise<void> = Promise.resolve()
+  /** Requests waiting at the gate, per connection: a client that floods a starting daemon is closed. */
+  private readonly waitingAtGate = new Map<string, number>()
   private readonly localClients = new Map<string, LocalClientSink>()
   /**
    * Loopback clients that are TOOLS, not windows (`machine_select { tool: true }`): `harness pair`, the
@@ -1556,11 +1570,40 @@ export class BackendSocket {
     console.warn(`[terminal-p2p] conn=${sid(connId)} fallback=relay reason=${reason}`)
   }
 
+  /** Hold requests at the gate until `openRequests`. The daemon calls this the moment it builds this
+   *  socket, before anything can reach it; a socket built without it answers at once. */
+  holdRequests(): void {
+    if (!this.requestsOpen) return
+    this.requestsOpen = false
+    this.requestGate = new Promise<void>((resolve) => { this.openRequestGate = resolve })
+  }
+
+  /** Let requests through: every handler is wired and the agents the daemon restored are confirmed.
+   *  Idempotent. Called once at the end of start-up — and by safe mode, so a daemon that could not
+   *  start still answers rather than leaving its clients waiting. */
+  openRequests(): void {
+    if (this.requestsOpen) return
+    this.requestsOpen = true
+    this.waitingAtGate.clear()
+    this.openRequestGate()
+  }
+
   private enqueueDown(frame: Frame, connId: string, transport: DownTransport = 'relay'): void {
     const key = connId || '__backend__'
+    if (!this.requestsOpen) {
+      const waiting = (this.waitingAtGate.get(key) ?? 0) + 1
+      this.waitingAtGate.set(key, waiting)
+      if (waiting > MAX_REQUESTS_BEFORE_READY && transport === 'local') {
+        console.warn(`[backend] local client ${key} sent ${waiting} requests before the daemon was ready — closing it`)
+        this.waitingAtGate.delete(key)
+        void this.unregisterLocalClient(connId)
+        return
+      }
+    }
     const previous = this.downChains.get(key) ?? Promise.resolve()
     const next = previous
       .catch(() => { /* prior failure is already logged */ })
+      .then(() => this.requestGate)
       .then(() => this.dispatchDown(frame, connId, transport))
       .catch((err) => {
         console.error('[backend] down-frame dispatch failed:', err instanceof Error ? err.message : err)

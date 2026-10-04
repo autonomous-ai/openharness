@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 
-const ready = /\[cli\] (dialing|not signed in)/g
+const ready = /\[cli\] ready/g
 const wiredCount = (daemon: IsolatedDaemon) => [...daemon.log().matchAll(ready)].length
 
 async function withAgent(daemon: IsolatedDaemon) {

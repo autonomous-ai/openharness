@@ -169,7 +169,7 @@ export class IsolatedDaemon {
       // The port answers ~1,100 lines of startup before every handler is wired (see the startup-race
       // test); this line is printed once they are.
       if (options.ready !== 'port') {
-        await until('the daemon to finish starting', () => /\[cli\] (dialing|not signed in)/.test(this.output.slice(from)), 60_000, 100)
+        await until('the daemon to finish starting', () => /\[cli\] ready/.test(this.output.slice(from)), 60_000, 100)
       }
     })()])
   }

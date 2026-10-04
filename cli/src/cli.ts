@@ -552,7 +552,9 @@ const daemonBoot: {
   safeMode: string | null
   handingOff: boolean
   applyStagedUpdate: (version: string) => void | Promise<void>
-} = { updater: null, tuiUpdater: null, hookServer: null, localSocket: null, markNotReady: null, safeMode: null, handingOff: false, applyStagedUpdate: bootHandoff }
+  /** Opens the request gate of a start-up that did not finish, so its clients are answered (safe mode). */
+  openRequests: (() => void) | null
+} = { updater: null, tuiUpdater: null, hookServer: null, localSocket: null, markNotReady: null, safeMode: null, handingOff: false, applyStagedUpdate: bootHandoff, openRequests: null }
 
 /**
  * Hand the machine to a newer build without finishing start-up.
@@ -2093,6 +2095,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     })
   }, computerId(), autonomousEnv)
   backendRef = backend
+  // Nothing is answered until start-up is done (see the end of this function).
+  backend.holdRequests()
+  daemonBoot.openRequests = () => backend.openRequests()
   backend.viewerTargetProvider = (agentId) => dshViewers.forwardingUrl(agentId)
 
   ensureBundledCoreHarnesses()
@@ -2138,6 +2143,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       log: gridLog,
     }, { ownGrid, signedInThisRun }),
   })
+
   backend.ensureGrid = (request) => gridAccess.ensure(request)
   // Offline, for every list read: is there a `grid` here holding a sign-in? What decides whether the
   // picker offers local and shared models or a Set up row.
@@ -4322,6 +4328,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       uptimeSec: Math.round((Date.now() - startedAt) / 1000),
       pid: process.pid,
       startedAt,
+      // The master keeping this core running, when one is: how often it has restarted it, and why the
+      // last one ended. Null for a core run on its own.
+      harnessd: coreLink.supervised ? { masterPid: process.ppid, ...coreLink.status() } : null,
       // True for the few hundred ms between an update being staged and this server closing for the
       // handoff. Informational: nothing should build readiness on a field the server stops serving.
       restarting,
@@ -6888,6 +6897,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   if (env.CABLE_DISABLE) console.log('[cable] disabled (CABLE_DISABLE=true) — the serial port is left alone')
   else cable.start()
+  // Last: every handler is wired and the restored agents are confirmed, so requests that arrived while
+  // starting — a client reconnecting the moment the port answered, the backend's first frames — are
+  // answered now, in order, by the handlers meant to answer them (see BackendSocket.openRequests).
+  backend.openRequests()
+  daemonBoot.openRequests = null
+  console.log('[cli] ready')
 }
 
 // ── info block ───────────────────────────────────────────────────────────────────────────────────
@@ -8130,6 +8145,8 @@ const enterSafeMode = (err: unknown): void => {
   writeSafeModeMarker(env.ADAPTER_DATA_DIR, { pid: process.pid, version: VERSION, at: Date.now(), error: detail })
   daemonBoot.safeMode = disposition.reason
   daemonBoot.markNotReady?.(disposition.reason)
+  // Requests queued behind a start-up that will not finish are answered now, by whatever is wired.
+  daemonBoot.openRequests?.()
 
   const leave = (why: string, code: number): never => {
     clearSafeModeMarker(env.ADAPTER_DATA_DIR)
