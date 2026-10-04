@@ -115,6 +115,10 @@ permissions, timestamps, symlink targets, hardlink groups, device numbers and
 extended attributes, including capabilities. A small native roundtrip checks the
 verifier before the full image download.
 
+Ubuntu's 4.6.1 extractor uses explicit 32 MiB data and fragment queues; these
+match the queue allocation of `-mem 64M` in newer SquashFS tools. The installed
+OS keeps its existing extractor and command.
+
 This uses an unconstrained Linux host with a warm/uncontrolled page cache. It does
 not measure a complete installation, low-memory boot, or the final ISO size.
 Any promising compression change still needs an actual image build and the

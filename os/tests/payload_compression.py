@@ -84,7 +84,8 @@ def measured(command, folder, label, timeout=900):
                 child.wait()
             raise
     if status:
-        raise RuntimeError(f'{label} exited {status}; see {label}.log')
+        detail = (folder / (label + '.log')).read_text(errors='replace')[-4000:]
+        raise RuntimeError(f'{label} exited {status}; see {label}.log\n{detail}')
     elapsed, user, system, rss = map(float, metrics.read_text().splitlines()[-1].split())
     return dict(command=list(map(str, command)), wall_seconds=time.monotonic() - started,
                 command_seconds=elapsed, user_seconds=user, system_seconds=system,
@@ -92,7 +93,10 @@ def measured(command, folder, label, timeout=900):
 
 
 def extract(image, target, folder, label):
-    return measured(['unsquashfs', '-processors', '2', '-mem', '64M', '-no-progress',
+    # Upstream 4.7's -mem 64M sets each of these queues to 32 MiB. The explicit
+    # form also works with Ubuntu 24.04's 4.6.1 tools; compare like with like.
+    return measured(['unsquashfs', '-processors', '2', '-data-queue', '32',
+                     '-frag-queue', '32', '-no-progress',
                      '-d', target, image], folder, label)
 
 
@@ -136,7 +140,8 @@ def main():
                               cpu=subprocess.check_output(['lscpu'], text=True)),
                   conditions=dict(compression_processors=2, compression_memory='1G',
                                   block_size='1M', extraction_processors=2,
-                                  extraction_memory='64M', repetitions=3,
+                                  extraction_memory='64M', data_queue_mib=32,
+                                  fragment_queue_mib=32, repetitions=3,
                                   cache='Warm/uncontrolled host page cache; no cache flushing',
                                   source_date_epoch=os.environ.get('SOURCE_DATE_EPOCH')),
                   limits=['Host extraction is not a complete installation or boot test.',
