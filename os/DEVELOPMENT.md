@@ -105,6 +105,23 @@ establish a precise causal difference. It provides no evidence for a saving from
 these flags; the shipped defaults remain unchanged. Retain raw per-round data
 and use representative long-running agent work before adopting a memory limit.
 
+The **Harness OS compression assessment** workflow compares Zstandard levels 6,
+15, and 19 on the same checksum-verified ISO filesystem. It rebuilds level 6 with
+the same runner tools as the alternatives, then measures three extractions per
+level using the installer's 64 MiB SquashFS cache. Receipts include compression
+time and peak process memory, payload bytes, extraction timings, tool versions,
+and a filesystem manifest. Every extraction must preserve file hashes, ownership,
+permissions, timestamps, symlink targets, hardlink groups, device numbers and
+extended attributes, including capabilities. A small native roundtrip checks the
+verifier before the full image download.
+
+This uses an unconstrained Linux host with a warm/uncontrolled page cache. It does
+not measure a complete installation, low-memory boot, or the final ISO size.
+Any promising compression change still needs an actual image build and the
+normal plain/encrypted installation and boot journeys. Run it through Actions
+with the existing image's `image_run_id` and independently trusted `iso_sha256`;
+it retains evidence, not candidate images, and changes no release defaults.
+
 ## The feedback loop
 
 | Work being tested | Best environment | What it proves |
