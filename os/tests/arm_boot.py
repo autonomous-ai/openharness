@@ -181,8 +181,11 @@ def main():
         run(['sudo', 'mkfs.ext4', '-F', '-q', '-d', root, disk], timeout=180)
         receipt['disk'] = {'virtual_bytes': disk.stat().st_size, 'allocated_bytes': disk.stat().st_blocks * 512}
         accelerator = 'kvm' if os.access('/dev/kvm', os.R_OK | os.W_OK) else 'tcg'
-        cpu = 'host' if accelerator == 'kvm' else 'max'
+        # Keep the TCG instruction set stable across emulator versions.
+        cpu = 'host' if accelerator == 'kvm' else 'cortex-a76'
         receipt['accelerator'] = accelerator
+        receipt['cpu'] = cpu
+        receipt['qemu_version'] = run(['qemu-system-aarch64', '--version'], capture=True).strip()
         print(f'Booting the 16 KiB kernel with {accelerator}', flush=True)
         serial = output / 'serial.log'
         boot_started = time.monotonic()
@@ -190,11 +193,17 @@ def main():
             process = subprocess.Popen(['qemu-system-aarch64', '-machine', 'virt', '-accel', accelerator,
                 '-cpu', cpu, '-smp', '2', '-m', '4096', '-nodefaults', '-display', 'none',
                 '-serial', 'stdio', '-monitor', 'none', '-no-reboot', '-kernel', str(image),
-                '-append', 'root=/dev/vda rw console=ttyAMA0 init=/sbin/harness-test-init net.ifnames=0 panic=1',
+                '-append', 'root=/dev/vda rw console=ttyAMA0 earlycon init=/sbin/harness-test-init net.ifnames=0 panic=1',
                 '-drive', f'file={disk},format=raw,if=none,id=root', '-device', 'virtio-blk-pci,drive=root',
                 '-netdev', 'user,id=net', '-device', 'virtio-net-pci,netdev=net,romfile='],
                 stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT)
-            process.wait(timeout=1200)
+            while process.poll() is None:
+                elapsed = time.monotonic() - boot_started
+                if elapsed > 120 and 'HARNESS_ARM_KERNEL=' not in serial.read_text(errors='replace'):
+                    raise TimeoutError('Guest did not reach the kernel/page-size assertion within 120 seconds; see serial.log')
+                if elapsed > 1200:
+                    raise TimeoutError('Guest runtime acceptance exceeded 1200 seconds; see serial.log')
+                time.sleep(1)
         receipt['vm_elapsed_seconds'] = time.monotonic() - boot_started
         receipt['qemu_exit'] = process.returncode
         run(['debugfs', '-R', f'rdump /results {output}', disk], timeout=90)

@@ -113,7 +113,7 @@ def main():
     for name, identity in info['files'].items():
         assert (runtime / name).stat().st_size == identity['bytes']
         assert checksum(runtime / name) == identity['sha256']
-    assert subprocess.check_output(['node', '-p', 'process.arch'], text=True).strip() == {
+    assert subprocess.check_output(['node', '-p', 'process.arch'], text=True, timeout=30).strip() == {
         'x86_64': 'x64', 'aarch64': 'arm64'}[args.architecture]
     with (runtime / 'harness-tui').open('rb') as handle:
         header = handle.read(64)
@@ -143,7 +143,7 @@ def main():
     receipt = {'status': 'running', 'scope': 'native userspace; no boot, drivers or platform installation',
                'architecture': args.architecture, 'kernel': platform.release(), 'runtime': info,
                'page_size': os.sysconf('SC_PAGE_SIZE'), 'hn_load_alignments': load_alignments,
-               'tmux': subprocess.check_output(['tmux', '-V'], text=True).strip(),
+               'tmux': subprocess.check_output(['tmux', '-V'], text=True, timeout=15).strip(),
                'checks': ['Exact source, native ELF/Node architecture, complete hashes and PC packaging boundary verified'],
                'started_at_unix': time.time()}
     report = output / 'receipt.json'
