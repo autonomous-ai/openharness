@@ -82,7 +82,7 @@ def main():
         vm.login_installed(config)
         manifest = json.loads((bundle / 'package-manifest.json').read_text())
         vm.command('test "$(pacman -Q harness-os)" = ' + shlex.quote('harness-os ' + manifest['package']['version']))
-        vm.command('test -s ~/Projects/update-survivor/keep.txt')
+        vm.command('test -s ~/projects/update-survivor/keep.txt')
         receipt['keyboard'] = check_graphical_keyboard(vm, 'updated')
         receipt['checks'].append('Updated encrypted machine reboots to hn, accepts physical-keyboard input and retains the project')
         if args.fast_fixture:
@@ -95,7 +95,7 @@ def main():
             vm.stop()
             vm.start(live=False)
             vm.login_installed(config)
-            vm.command('test ! -e /run/harness-os-restart-required; test -s ~/Projects/update-survivor/keep.txt')
+            vm.command('test ! -e /run/harness-os-restart-required; test -s ~/projects/update-survivor/keep.txt')
             receipt['system_channel']['reboot_keyboard'] = check_graphical_keyboard(vm, 'system-channel-reboot')
             receipt['checks'].append('The OS-channel update boots its rebuilt encrypted image and accepts keyboard input')
         receipt['status'] = 'passed'
