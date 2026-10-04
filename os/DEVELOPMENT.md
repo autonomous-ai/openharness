@@ -504,6 +504,30 @@ An aligned ARM executable still needs execution on a 16 KiB-page kernel before
 claiming Apple Silicon userspace compatibility; see
 [Asahi's page-size requirements](https://asahilinux.org/docs/sw/broken-software/).
 
+The **Harness OS ARM kernel acceptance** workflow boots that runtime under a
+16 KiB-page Asahi kernel in a disposable QEMU VM. `tests/arm-boot.lock.json`
+pins the Ubuntu ARM64 userspace image, kernel RPMs and signing key by digest.
+The runner verifies RPM signatures before extracting the raw boot image; no
+kernel packages are installed on the runner. The guest records its actual kernel
+and page size, then runs the real daemon/pane/agent acceptance above, including
+independent execution of generated code and preservation of work through restart.
+Serial output, guest receipts, userspace package versions and agent lockfiles are
+retained even when acceptance fails. The private disk and container are removed.
+
+Run on a disposable native ARM Linux host with Docker, QEMU, RPM verification,
+libarchive, zstd and ext4 tools; use the workflow for complete tool setup:
+
+```sh
+python3 os/tests/arm_boot.py --runtime os/work/runtime \
+  --agent /path/to/npm-opencode-prefix --output os/test-results/arm-boot
+```
+
+This isolates the page-size/kernel change while retaining the native runner's
+Ubuntu userspace. It is not a product image, distribution choice, graphical boot
+test or hardware installation. It does not test Apple firmware, storage, GPU,
+audio, Wi-Fi or Raspberry Pi boot. Keep ARM payloads out of the PC installer and
+update feed until each platform has its own packaging and installation path.
+
 ## Mac support targets
 
 Intel Macs and Apple Silicon are both intended OS targets. They share the Harness

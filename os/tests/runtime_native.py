@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import platform
 import pty
+import re
 import select
 import shlex
 import shutil
@@ -94,6 +95,7 @@ def main():
     parser.add_argument('--opencode', type=Path, required=True)
     parser.add_argument('--architecture', choices=['x86_64', 'aarch64'], required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--source-commit', help='Expected clean producer commit when testing an exported VM payload')
     args = parser.parse_args()
     if platform.system() != 'Linux' or platform.machine() != args.architecture or os.geteuid() == 0:
         parser.error('Run as an ordinary user on the matching native Linux runner.')
@@ -101,7 +103,9 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     info = json.loads((runtime / 'source.json').read_text())
-    source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+    source = args.source_commit or subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+    if not re.fullmatch(r'[0-9a-f]{40}', source):
+        parser.error('A complete source commit is required.')
     assert info['source_commit'] == source and info['dirty'] is False
     assert info['architecture'] == args.architecture
     assert info['target'] == args.architecture + '-unknown-linux-musl'

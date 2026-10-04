@@ -1,0 +1,85 @@
+name: Harness OS ARM kernel acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['os-polish/arm-boot']
+    paths:
+      - 'os/tests/arm_boot*'
+      - 'os/tests/arm-boot.lock.json'
+      - 'os/tests/runtime_native.py'
+      - '.github/workflows/os-arm-boot.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-arm-boot-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  boot:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tui
+          shared-key: tui-aarch64-unknown-linux-musl
+          cache-bin: false
+      - name: Boot tools and portable OS checks
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools qemu-system-arm \
+            e2fsprogs rpm libarchive-tools zstd gnupg libevent-dev libncurses-dev libutf8proc-dev bison
+          if [ -c /dev/kvm ]; then sudo chown "$USER" /dev/kvm; fi
+          make -C os check
+      - name: Use the OS tmux release for native comparison
+        run: |
+          curl --fail --location --retry 3 --max-time 120 \
+            https://github.com/tmux/tmux/releases/download/3.7c/tmux-3.7c.tar.gz \
+            --output "$RUNNER_TEMP/tmux.tar.gz"
+          echo '7c60cae9a0e25288e2e24750aafc9e8800fc7fd4555e447e1b29ee4201cfb3bf  tmux.tar.gz' > "$RUNNER_TEMP/tmux.sha256"
+          (cd "$RUNNER_TEMP" && sha256sum --check tmux.sha256)
+          mkdir "$RUNNER_TEMP/tmux-source"
+          tar -xzf "$RUNNER_TEMP/tmux.tar.gz" -C "$RUNNER_TEMP/tmux-source" --strip-components=1
+          cd "$RUNNER_TEMP/tmux-source"
+          ./configure --prefix="$RUNNER_TEMP/tmux-reference"
+          make -j2
+          make install
+          "$RUNNER_TEMP/tmux-reference/bin/tmux" -V
+          echo "$RUNNER_TEMP/tmux-reference/bin" >> "$GITHUB_PATH"
+      - name: Build the exact native Harness runtime
+        run: bash os/tools/build-runtime.sh
+      - name: Prepare the upstream-default agent for the disposable VM
+        run: |
+          npm install --prefix "$RUNNER_TEMP/harness-native-agent" --no-audit --no-fund opencode-ai
+          mkdir -p os/test-results
+          cp "$RUNNER_TEMP/harness-native-agent/package-lock.json" os/test-results/agent-test-lock.json
+      - name: Boot the signed 16 KiB kernel and exercise actual work
+        run: |
+          python3 os/tests/arm_boot.py --runtime os/work/runtime \
+            --agent "$RUNNER_TEMP/harness-native-agent" --output os/test-results/arm-boot
+      - name: Retain boot and native runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-arm-kernel-acceptance
+          path: |
+            os/work/runtime/source.json
+            os/test-results/arm-boot/
+            os/test-results/agent-test-lock.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 6
