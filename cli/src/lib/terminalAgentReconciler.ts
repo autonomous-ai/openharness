@@ -100,7 +100,9 @@ function unboundRouteObservation(
 /** Serialized, failure-isolated reconciliation across every enabled backend instance. */
 export class TerminalAgentReconciler {
   private readonly misses = new Map<string, number>()
-  private readonly engineMisses = new Map<string, number>()
+  /** Consecutive scans that found no engine for an agent, counted against the process identity they
+   *  missed: an engine identified since is a different engine, and its count starts again. */
+  private readonly engineMisses = new Map<string, { processKey: string | null; count: number }>()
   private readonly suppressed = new Set<string>()
   private readonly hints = new Map<string, AgentEngine>()
   /** Terminal routes currently mid an in-place process swap (restart). Held by ROUTE, not by process
@@ -225,6 +227,16 @@ export class TerminalAgentReconciler {
 
   private async reconcileOnce(): Promise<void> {
     const hints = new Map(this.hints)
+    // What every agent was when the probe began. A probe is evidence only about what it could have
+    // seen: an agent created, a pane given to it, or an engine identified while the probe ran (the
+    // new-pane watcher binds one between two scans) is judged by the next probe, not this one. Four
+    // agents created at once proved it: a probe that began before one engine started counted that
+    // engine's second "miss", and the agent was retired 22ms after its engine was found
+    // (e2e/soak.e2e.ts, 2026-10-04).
+    const probedAs = new Map(this.deps.current().map((agent) => [agent.agentId, {
+      processKey: currentProcessKey(agent),
+      placements: new Set(agent.runtimes.map(terminalPlacementKey)),
+    }]))
     const probe = await (this.deps.probe
       ? this.deps.probe(hints)
       : probeTerminalAgents(
@@ -333,6 +345,7 @@ export class TerminalAgentReconciler {
             // route and its active UI entry, just as a failed whole-process-table read does above.
             if (validation.state === 'unknown') continue
           }
+          if (!probedAs.get(current.agentId)?.placements.has(placement)) continue
           const misses = (this.misses.get(missKey) ?? 0) + 1
           if (misses < MISS_LIMIT) {
             this.misses.set(missKey, misses)
@@ -343,21 +356,24 @@ export class TerminalAgentReconciler {
         }
 
         if (terminalVerified) await this.deps.onTerminalAvailability?.(current, true)
+        const probed = probedAs.get(current.agentId)
         if (observed) {
           this.engineMisses.delete(current.agentId)
-        } else if (current.active && terminalVerified && !isTerminalEngine(current.engine) && !current.runtimes.some((runtime) =>
+        } else if (probed && probed.processKey === processKey
+          && current.active && terminalVerified && !isTerminalEngine(current.engine) && !current.runtimes.some((runtime) =>
           probe.ambiguousPlacements.has(terminalPlacementKey(runtime)))) {
           // A live pane with no engine process in it. For an agent that is a dormant engine; for a
           // terminal (`engine === 'terminal'`) it is simply a shell at its prompt, which is why the
           // branch is skipped for one. A terminal that ADOPTED an engine (`terminalHost`, engine no
           // longer `terminal`) does come through here when that engine exits — the handler turns it
           // back into a terminal rather than marking it dormant (cli.ts `onDormant`).
-          const misses = (this.engineMisses.get(current.agentId) ?? 0) + 1
+          const prior = this.engineMisses.get(current.agentId)
+          const misses = (prior?.processKey === processKey ? prior.count : 0) + 1
           if (misses >= MISS_LIMIT) {
             this.engineMisses.delete(current.agentId)
             await this.deps.onDormant(current, `engine process absent after ${MISS_LIMIT} confirmed scans`)
           } else {
-            this.engineMisses.set(current.agentId, misses)
+            this.engineMisses.set(current.agentId, { processKey, count: misses })
           }
         }
 

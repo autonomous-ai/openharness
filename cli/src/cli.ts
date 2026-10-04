@@ -120,6 +120,7 @@ import { ALL_TERMINAL_BACKENDS } from './config/terminalConfig.js'
 import { TerminalBackendCoordinator } from './lib/terminalBackendCoordinator.js'
 import { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { terminalRouteKey, terminalRuntimeLabel } from './lib/terminalRuntime.js'
+import { probeTerminalAgents } from './lib/terminalAgentDiscovery.js'
 import { TerminalAgentReconciler } from './lib/terminalAgentReconciler.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
@@ -2305,6 +2306,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stoppedAgents,
     restoreDegraded: () => restoreDegraded,
   })
+  // HARNESSD_TEST_SLOW_PROBE_MS holds each discovery probe for up to that long, at random, before it is
+  // applied: some scans land at once and some straddle an agent's start, as on a loaded machine. The
+  // end-to-end suite uses it to put a scan across an engine's start on purpose (e2e/core.e2e.ts).
+  const slowProbeMs = Number(process.env.HARNESSD_TEST_SLOW_PROBE_MS) || 0
   const agentReconciler = new TerminalAgentReconciler({
     // The hook server starts before restore. Its early SessionStart hints must not run a full
     // discovery scan over rows whose panes have not been recreated yet (and archive those rows).
@@ -2313,6 +2318,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     backends: terminalBackends,
     backendOrder: terminalConfig.backends,
     transaction: (apply) => registry.transaction(apply),
+    ...(slowProbeMs > 0 ? {
+      probe: async (hints: Parameters<typeof probeTerminalAgents>[3]) => {
+        const probe = await probeTerminalAgents(terminalBackends, terminalConfig.backends, process.pid, hints)
+        await new Promise((resolve) => setTimeout(resolve, Math.random() * slowProbeMs))
+        return probe
+      },
+    } : {}),
     ...discovery,
     onProbeStatus: (status) => {
       discoveryReady = status.ready

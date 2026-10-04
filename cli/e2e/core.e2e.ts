@@ -74,6 +74,30 @@ describe('the core under pressure', () => {
     client.close()
   })
 
+  it('agents created at once while discovery is slow: each binds under its own id, none retired or duplicated', async () => {
+    // Scans are held at random before they are applied, so some land while engines start and some
+    // straddle the moment the new-pane watcher identifies one. One that straddled used to count an
+    // engine's second miss and retire its agent 22ms after the engine was found; discovery then minted
+    // a second agent for the same pane, and the first never bound (e2e/soak.e2e.ts, 2026-10-04).
+    const d = await IsolatedDaemon.create({ env: { HARNESSD_TEST_SLOW_PROBE_MS: '500' } })
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    await d.start()
+    const client = await LocalClient.connect(d)
+    const plan = [...engines, ...engines, ...engines, ...engines].map((engine, i) => ({ engine, name: `slow-scan-${engine}-${i}` }))
+    const ids = await Promise.all(plan.map(({ engine, name }) => create(d, client, engine, name)))
+    await Promise.all(ids.map((id) => bound(client, id, 90_000)))
+    // Let the scans that straddled the starts land, then look again.
+    await new Promise((resolve) => setTimeout(resolve, 3_000))
+    const all = await rows(client)
+    expect(all.map((agent) => agent.id).sort()).toEqual([...ids].sort())
+    for (const agent of all) expect(agent.status, agent.id).toBe('active')
+    expect(new Set(all.map((agent) => agent.tmuxPane)).size).toBe(ids.length)
+    expect(d.log()).not.toMatch(/retained · engine process absent/)
+    await Promise.all(ids.map((id, i) => turn(client, id, `after the slow scans ${i}`, 60_000)))
+    client.close()
+  })
+
   it.each(engines)('%s: stopping in the middle of a turn, then resuming: the conversation goes on', async (engine) => {
     const d = await fresh()
     const client = await LocalClient.connect(d)

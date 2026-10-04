@@ -180,6 +180,88 @@ describe('composite terminal reconciliation', () => {
     expect(onRemoved).not.toHaveBeenCalled()
   })
 
+  it('does not count a scan that began before the engine was identified against that engine', async () => {
+    // The race four agents created at once hit (e2e/soak.e2e.ts): the first scan finds the pane still
+    // running its launcher; the new-pane watcher identifies the engine while the second scan's probe
+    // runs, and that probe, taken before the engine existed, used to count its second miss.
+    const current: RegisteredSession = { ...session([tmux]), processIdentity: null, launch: { state: 'starting' } }
+    const pane = { runtime: tmux, rootPid: 1, cwd: '/work' }
+    let whileProbing: (() => void) | null = null
+    const onDormant = vi.fn()
+    const onObserved = vi.fn()
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [current], backends: [], backendOrder: ['tmux'],
+      onDiscovered: vi.fn(), onObserved, onDormant, onRemoved: vi.fn(),
+      probe: async () => {
+        whileProbing?.()
+        whileProbing = null
+        return probe([{ instanceId: 'tmux:default', result: { state: 'available', roots: [pane] } }])
+      },
+    })
+    await reconciler.trigger()
+    whileProbing = () => { current.processIdentity = identity; current.launch = { state: 'ready' } }
+    await reconciler.trigger()
+    expect(onDormant).not.toHaveBeenCalled()
+    // A probe that began after the engine was identified does speak for it, from a count of one.
+    await reconciler.trigger()
+    expect(onDormant).not.toHaveBeenCalled()
+    await reconciler.trigger()
+    expect(onDormant).toHaveBeenCalledWith(current, 'engine process absent after 2 confirmed scans')
+    expect(onObserved).not.toHaveBeenCalled()
+  })
+
+  it('counts misses against one engine: an engine identified since starts again', async () => {
+    const current = session([tmux])
+    const pane = { runtime: tmux, rootPid: 1, cwd: '/work' }
+    const onDormant = vi.fn()
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [current], backends: [], backendOrder: ['tmux'],
+      onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant, onRemoved: vi.fn(),
+      probe: async () => probe([{ instanceId: 'tmux:default', result: { state: 'available', roots: [pane] } }]),
+    })
+    await reconciler.trigger()
+    current.processIdentity = { ...identity, pid: 43 }
+    await reconciler.trigger()
+    expect(onDormant).not.toHaveBeenCalled()
+    await reconciler.trigger()
+    expect(onDormant).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not judge an agent created, or a pane given to one, while the probe ran', async () => {
+    const agents: RegisteredSession[] = []
+    const moved: TerminalRuntimeRef = { backend: 'tmux', paneId: '%2' }
+    let whileProbing: (() => void) | null = null
+    const onDormant = vi.fn()
+    const onRemoved = vi.fn()
+    const validate = vi.fn(async () => ({ state: 'gone' as const, reason: 'no such pane' }))
+    const backend = { instanceId: 'tmux:default', validate } as unknown as TerminalBackend
+    const reconciler = new TerminalAgentReconciler({
+      current: () => agents, backends: [backend], backendOrder: ['tmux'],
+      onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant, onRemoved,
+      probe: async () => {
+        whileProbing?.()
+        whileProbing = null
+        return probe([{ instanceId: 'tmux:default', result: { state: 'available', roots: [] } }])
+      },
+    })
+    // Created mid-probe: the inventory was taken before its pane existed.
+    whileProbing = () => { agents.push(session([tmux])) }
+    await reconciler.trigger()
+    // Given a new pane mid-probe: the same.
+    whileProbing = () => {
+      agents[0].runtimes = [moved]
+      agents[0].primaryRuntimeKey = terminalRouteKey(moved)
+    }
+    await reconciler.trigger()
+    expect(onRemoved).not.toHaveBeenCalled()
+    expect(onDormant).not.toHaveBeenCalled()
+    // Probes that began after both judge the pane as they find it: gone, twice.
+    await reconciler.trigger()
+    expect(onRemoved).not.toHaveBeenCalled()
+    await reconciler.trigger()
+    expect(onRemoved).toHaveBeenCalledWith(agents[0], 'terminal runtime absent after 2 confirmed scans')
+  })
+
   it('keeps an agent active when pane-specific validation is inconclusive', async () => {
     const current = session([tmux])
     const onDormant = vi.fn()
