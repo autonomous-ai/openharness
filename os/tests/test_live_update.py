@@ -232,7 +232,7 @@ class FastUpdates(unittest.TestCase):
             update.prune()
         self.assertTrue(old_runtime.is_dir())
 
-    def show(self, keys, mouse=None):
+    def show(self, keys, mouse=None, refresh=False):
         class Window:
             def __init__(self): self.drawn, self.keys = [], iter(keys)
             def keypad(self, _): pass
@@ -249,7 +249,7 @@ class FastUpdates(unittest.TestCase):
         with patch.object(update.curses, 'curs_set'), patch.object(update.curses, 'has_colors', return_value=False), \
              patch.object(update.curses, 'mousemask'), patch.object(update.curses, 'mouseinterval'), \
              patch.object(update.curses, 'getmouse', side_effect=event):
-            return update.screen(window)
+            return update.screen(window, refresh=refresh)
 
     def test_update_button_click_and_keyboard_use_the_same_action_without_a_confirmation(self):
         with self.feed(): update.check()
@@ -310,6 +310,22 @@ class FastUpdates(unittest.TestCase):
             update.finish_approved_update()
         apply.assert_not_called()
         self.assertEqual(update.read(self.state / 'approved.json')['status'], 'failed')
+
+    def test_explicit_recheck_clears_failed_completion_when_no_updates_remain(self):
+        self.state.mkdir()
+        update.write(self.state / 'approved.json', {'status': 'failed'})
+        with patch.object(update, 'check', return_value=False):
+            self.assertIsNone(self.show([10], refresh=True))
+        self.assertFalse((self.state / 'approved.json').exists())
+
+    def test_retry_keeps_the_request_so_recovered_downloads_apply_without_another_key(self):
+        with patch.object(update.os, 'geteuid', return_value=1000), \
+             patch.object(update.curses, 'wrapper', side_effect=['check', None]):
+            update.main(['screen'])
+        self.assertTrue((self.state / 'request.json').exists())
+        with self.feed():
+            self.assertEqual(self.show([], refresh=True), 'update')
+        self.assertFalse((self.state / 'request.json').exists())
 
 
 if __name__ == '__main__':

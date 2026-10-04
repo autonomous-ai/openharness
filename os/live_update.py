@@ -565,10 +565,17 @@ def screen(window, message='', refresh=False):
         window.refresh()
         return choices
 
+    def refresh_releases():
+        check(progress=draw, force_system=True)
+        # An explicit retry supersedes a failed post-reboot request. Otherwise
+        # even a successful recheck with nothing left to apply stays on Retry.
+        if read(STATE / 'approved.json', {}).get('status') == 'failed':
+            (STATE / 'approved.json').unlink(missing_ok=True)
+
     if refresh and not RESTART_REQUIRED.exists():
         draw('Checking for updates…')
         try:
-            check(progress=draw, force_system=True)
+            refresh_releases()
         except (ValueError, OSError, subprocess.SubprocessError) as error:
             message = str(error)
     while True:
@@ -582,7 +589,7 @@ def screen(window, message='', refresh=False):
                 if choices[0][1] != 'update' and not refresh:
                     draw('Checking for updates…')
                     try:
-                        check(progress=draw, force_system=True)
+                        refresh_releases()
                         message = ''
                     except (ValueError, OSError, subprocess.SubprocessError) as error:
                         message = str(error)
@@ -632,6 +639,10 @@ def main(argv=None):
                 break
             message, refresh = '', action == 'check'
             try:
+                if action == 'check':
+                    # Retry means finish updating, without another confirmation
+                    # after the connection or release has recovered.
+                    write(STATE / 'request.json', {'requested_at': time.time()})
                 if action == 'reboot':
                     subprocess.run(['systemctl', 'reboot'], check=True)
                     break
@@ -643,7 +654,8 @@ def main(argv=None):
                     (STATE / 'system.json').unlink(missing_ok=True)
                     (STATE / 'approved.json').unlink(missing_ok=True)
             except (ValueError, OSError, subprocess.SubprocessError) as error:
-                message = str(error)
+                write(STATE / 'error.json', {'at': time.time(), 'error': str(error)})
+                message = 'The update did not finish. Try again.'
     elif args.action in ('apply', 'rollback'):
         apply(rollback=args.action == 'rollback')
     else:
