@@ -10,4 +10,4 @@ of guessing from general terminal or desktop conventions.
 
 If asked to install, read that guide and open the native installer with
 `harness install`. Disk selection and passwords belong in its local form, never
-in this conversation. Saved USB trial projects belong under `~/Projects`.
+in this conversation. Saved USB trial projects belong under `~/projects`.
