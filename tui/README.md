@@ -189,14 +189,19 @@ All settings are visible without expanding Options. Project reads `project @ loc
 The initial destination is the connected local Harness machine, with successful agent
 and project choices remembered. Explicit project commands keep their destination. Enter starts
 with the displayed choices; the action names the selected agent (for example, Start Codex).
-Tab/Shift-Tab moves between fields. Outside the task editor, Up/Down also moves between fields
-and previews their choices on the right. Enter, Right or typing enters a chooser; Enter accepts
+Tab/Shift-Tab moves between fields. Up/Down edits multiline tasks and moves to the previous/next
+field at the first/last visual line. On other fields, it moves between fields and previews
+their choices on the right. Enter, Right or typing enters a chooser; Enter accepts
 an item and focuses Start. Enter in the task editor starts immediately. The harness opens in
 the window that requested it, splitting beside the focused pane when needed. Switching windows
 while it starts leaves your new window focused. Lowercase `C-b n` remains next window.
+Escape backs out of a chooser or closes the popup without losing its draft. On New Window,
+Escape leaves task editing; another Escape returns to the previous window and keeps the draft.
 
 Agent combines coding agents and installed Store harnesses; a Store harness then offers its
-compatible coding agents. Project offers Clone Repository, Open Folder, New Folder and recent
+compatible coding agents. Terminal is a separate action: `C-b T` opens a shell directly,
+and Open Terminal on New Window is available by mouse. Neither sends task text to the shell.
+Project offers Clone Repository, Open Folder, New Folder and recent
 machine/folder pairs. Folder actions choose a machine first. Ctrl-L in the folder browser edits
 a path. Project search includes the 50 most recently active distinct folders per machine;
 duplicate sessions in one folder count once. Combine a machine name and folder, such as

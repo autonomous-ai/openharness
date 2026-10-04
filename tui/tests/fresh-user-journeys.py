@@ -40,12 +40,12 @@ def rejected(u, text, label):
 
 
 def core(u):
-    u.wait('C-b N new', 60)
+    u.wait('Welcome to Harness', 60)
     assert not u.status()['signedIn']
     for name in ['codex', 'claude']:
         assert not (u.home / '.local/bin' / name).exists()
     u.record('signed-out-start')
-    u.form()
+    u.form('codex')
     u.launch('codex', 'codex-auto-install-default-folder')
     assert (u.home / '.local/bin/codex').exists()
 
@@ -55,16 +55,18 @@ def core(u):
     assert session['cwd'] == '~/harnesses/My-First-Claude-Project'
     assert (u.home / '.local/bin/claude').exists()
 
+
+def terminal(u):
     folder = u.home / "Projects/Notes & 'quotes' café"
-    folder.mkdir(parents=True)
+    folder.mkdir(parents=True, exist_ok=True)
     (folder / 'keep-me.txt').write_text('fresh-user folder fixture\n')
-    u.form('terminal')
+    u.keys('C-b', 'c')
+    u.wait('New Window')
     u.project('open folder', str(folder))
     before = {s['id'] for s in u.status()['sessions']}
-    u.keys('Enter')
+    u.field('Open Terminal')
     u.check(lambda: len([s for s in u.status()['sessions'] if s['id'] not in before]) == 1,
-            'Third pane created', 60)
-    # Keep all three splits visible to catch sub-40-column terminal_open regressions.
+            'Terminal created in the selected folder', 60)
     u.wait('Terminal on', 60)
     assert 'TERMINAL_OPEN_INVALID' not in u.screen()
     u.keys('C-c')
@@ -73,7 +75,7 @@ def core(u):
     u.wait('OPEN_FOLDER_OK')
     assert (u.home / 'open-folder-cwd.txt').read_text().strip() == str(folder)
     assert (folder / 'keep-me.txt').read_text() == 'fresh-user folder fixture\n'
-    u.record('open-folder-special-characters-third-pane')
+    u.record('open-folder-special-characters-terminal')
     u.zoom()
     u.close_view()
 
@@ -222,7 +224,7 @@ def git_edges(u):
 
 
 def run(u, names):
-    cases = dict(core=core, folders=folders, clones=clones, worktrees=worktrees,
+    cases = dict(core=core, terminal=terminal, folders=folders, clones=clones, worktrees=worktrees,
                  git_edges=git_edges, narrow=narrow_cancel)
     for name in names or cases:
         print('RUN ' + name, flush=True)

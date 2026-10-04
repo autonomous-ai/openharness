@@ -59,6 +59,13 @@ impl Editor {
         self.cursor = text.grapheme_indices(true).map(|(at, _)| at)
             .chain(std::iter::once(text.len())).take_while(|at| *at <= self.cursor).last().unwrap_or(0);
     }
+    fn finish_edit(&mut self, text: &str) {
+        // An insertion, or deleting a line break before a combining mark, can join
+        // two graphemes. Keep the edit point after the resulting whole grapheme.
+        self.cursor = text.grapheme_indices(true).map(|(at, _)| at)
+            .chain(std::iter::once(text.len())).find(|at| *at >= self.cursor).unwrap_or(text.len());
+        self.column = None;
+    }
     fn previous(&self, text: &str) -> usize {
         text[..self.cursor].grapheme_indices(true).next_back().map(|(at, _)| at).unwrap_or(0)
     }
@@ -95,25 +102,25 @@ impl Editor {
             .filter(|ch| matches!(ch, '\n' | '\t') || !ch.is_control()).collect();
         text.insert_str(self.cursor, &clean);
         self.cursor += clean.len();
-        // Inserting before a combining mark can join the next grapheme.
-        self.cursor = text.grapheme_indices(true).map(|(at, _)| at)
-            .chain(std::iter::once(text.len())).find(|at| *at >= self.cursor).unwrap_or(text.len());
-        self.column = None;
+        self.finish_edit(text);
     }
     fn remove(&mut self, text: &mut String, start: usize, end: usize, kill: bool) {
         if start < end {
             if kill { self.killed = text[start..end].to_string(); }
             text.replace_range(start..end, "");
             self.cursor = start;
+            self.finish_edit(text);
         }
         self.column = None;
     }
-    fn vertical(&mut self, text: &str, delta: isize, limit: usize) {
+    fn vertical(&mut self, text: &str, delta: isize, limit: usize) -> bool {
         let rows = lines(text, limit);
         let (row, col) = position(&rows, self.cursor);
         let col = *self.column.get_or_insert(col);
         let to = (row as isize + delta).clamp(0, rows.len() as isize - 1) as usize;
+        if to == row { return false }
         self.cursor = at_column(&rows[to], col);
+        true
     }
     pub fn key(&mut self, text: &mut String, key: KeyEvent, limit: usize) -> bool {
         self.free_scroll = false;
@@ -128,10 +135,10 @@ impl Editor {
             KeyCode::Right => self.cursor = if ctrl || alt { self.word_right(text) } else { self.next(text) },
             KeyCode::Char('b') if ctrl || alt => self.cursor = if alt { self.word_left(text) } else { self.previous(text) },
             KeyCode::Char('f') if ctrl || alt => self.cursor = if alt { self.word_right(text) } else { self.next(text) },
-            KeyCode::Up => self.vertical(text, -1, limit),
-            KeyCode::Down => self.vertical(text, 1, limit),
-            KeyCode::Char('p') if ctrl => self.vertical(text, -1, limit),
-            KeyCode::Char('n') if ctrl => self.vertical(text, 1, limit),
+            KeyCode::Up => return self.vertical(text, -1, limit),
+            KeyCode::Down => return self.vertical(text, 1, limit),
+            KeyCode::Char('p') if ctrl => { self.vertical(text, -1, limit); }
+            KeyCode::Char('n') if ctrl => { self.vertical(text, 1, limit); }
             KeyCode::Home if ctrl => self.cursor = 0,
             KeyCode::End if ctrl => self.cursor = text.len(),
             KeyCode::Home => self.cursor = self.line_start(text),
@@ -252,5 +259,62 @@ mod tests {
         editor.click(&text, area, Position::new(4, 4));
         editor.insert(&mut text, "X");
         assert!(text.starts_with("oXne\n"));
+    }
+
+    #[test]
+    fn wrapped_arrows_escape_only_at_visual_edges() {
+        let mut editor = Editor::default();
+        let mut text = String::new();
+        editor.insert(&mut text, "ab界cdef");
+        assert!(!editor.key(&mut text, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), 4));
+        assert!(editor.key(&mut text, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), 4));
+        assert_eq!(editor.cursor, "ab界".len());
+        assert!(editor.key(&mut text, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), 4));
+        assert_eq!(editor.cursor, 0);
+        assert!(!editor.key(&mut text, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), 4));
+        assert_eq!(text, "ab界cdef");
+    }
+
+    #[test]
+    fn deleting_a_line_break_before_a_combining_mark_keeps_the_edit_point_valid() {
+        for (cursor, code) in [(1, KeyCode::Delete), (2, KeyCode::Backspace)] {
+            let mut editor = Editor::default();
+            let mut text = String::from("e\n\u{301}x");
+            editor.cursor = cursor;
+            key(&mut editor, &mut text, code, KeyModifiers::NONE);
+            assert_eq!(text, "e\u{301}x");
+            assert_eq!(editor.cursor, "e\u{301}".len());
+            key(&mut editor, &mut text, KeyCode::Char('!'), KeyModifiers::NONE);
+            assert_eq!(text, "e\u{301}!x");
+        }
+    }
+
+    #[test]
+    fn mixed_unicode_edits_and_resizes_keep_the_cursor_at_a_grapheme_boundary() {
+        let mut editor = Editor::default();
+        let mut text = String::new();
+        let codes = [KeyCode::Left, KeyCode::Right, KeyCode::Up, KeyCode::Down,
+            KeyCode::Home, KeyCode::End, KeyCode::Backspace, KeyCode::Delete,
+            KeyCode::Char('a'), KeyCode::Char('e'), KeyCode::Char('b'), KeyCode::Char('f'),
+            KeyCode::Char('p'), KeyCode::Char('n'), KeyCode::Char('u'), KeyCode::Char('k'),
+            KeyCode::Char('w'), KeyCode::Char('y'), KeyCode::Char('d'), KeyCode::Enter];
+        let modifiers = [KeyModifiers::NONE, KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SHIFT];
+        let snippets = ["café", "e\u{301}", "界", "👨‍👩‍👧‍👦", "\r\n\t", "\u{301}", "\x00\x1b", " words "];
+        let mut seed = 0x19c3a51_u64;
+        for step in 0..5000 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let n = (seed >> 32) as usize;
+            let width = [1, 2, 4, 8, 40][n % 5];
+            if step % 3 == 0 {
+                editor.insert(&mut text, snippets[n % snippets.len()]);
+            } else {
+                editor.key(&mut text, KeyEvent::new(codes[n % codes.len()], modifiers[n / 20 % modifiers.len()]), width);
+            }
+            assert!(editor.cursor == text.len() || text.grapheme_indices(true).any(|(at, _)| at == editor.cursor),
+                "invalid edit point after step {step} at {}", editor.cursor);
+            let area = Rect::new(2, 2, width as u16, 3);
+            let cursor = editor.draw(&mut Buffer::empty(Rect::new(0, 0, 44, 8)), area, &text, true, Style::default(), Style::default());
+            assert!(cursor.is_some_and(|point| area.contains(point)), "cursor lost after step {step}");
+        }
     }
 }
