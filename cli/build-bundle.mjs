@@ -31,12 +31,15 @@ const processImages = readProcessImageBundle({
   required: process.env.HARNESS_REQUIRE_PROCESS_IMAGES === '1',
 })
 
+// `BUNDLE_OUT_DIR`: somewhere other than dist/ (the end-to-end update test builds real releases).
+const outDir = process.env.BUNDLE_OUT_DIR || 'dist'
+
 // Start clean so no stale per-file `dist/*.js` / sourcemaps leak into the release artifact.
-rmSync('dist', { recursive: true, force: true })
+rmSync(outDir, { recursive: true, force: true })
 
 await esbuild.build({
   entryPoints: ['src/cli.ts'],
-  outfile: 'dist/cli.js',
+  outfile: `${outDir}/cli.js`,
   bundle: true,
   platform: 'node',
   format: 'esm',
@@ -64,6 +67,6 @@ await esbuild.build({
   logLevel: 'info',
 })
 
-copyFileSync('hook/notify.mjs', 'dist/notify.mjs')
+copyFileSync('hook/notify.mjs', `${outDir}/notify.mjs`)
 
-console.log(`✓ Bundled dist/cli.js (v${version}) + dist/notify.mjs`)
+console.log(`✓ Bundled ${outDir}/cli.js (v${version}) + ${outDir}/notify.mjs`)

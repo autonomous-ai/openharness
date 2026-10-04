@@ -27,6 +27,8 @@ export interface DaemonOptions {
   codexModel?: string
   /** Boot the core on its own (`__run`) instead of under harnessd's master (`__harnessd`). */
   noMaster?: boolean
+  /** Run this bundle (an installed `cli.js`) instead of the checkout's source. */
+  scriptPath?: string
 }
 
 async function freePort(): Promise<number> {
@@ -147,7 +149,8 @@ export class IsolatedDaemon {
     const entry = this.options.noMaster ? '__run' : '__harnessd'
     // Readiness is judged from what this start prints, never from an earlier boot's lines.
     const from = this.output.length
-    const child = spawn(process.execPath, [...heap, '--import', 'tsx', 'src/cli.ts', entry], {
+    const script = this.options.scriptPath ? [this.options.scriptPath] : ['--import', 'tsx', 'src/cli.ts']
+    const child = spawn(process.execPath, [...heap, ...script, entry], {
       cwd: CLI_ROOT, env: this.env, stdio: ['ignore', 'pipe', 'pipe'],
     })
     this.child = child
