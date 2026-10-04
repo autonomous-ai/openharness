@@ -444,7 +444,7 @@ try:
     # Check whole-window replacement after the new shell is ready. Immediate
     # exit here races the reference tmux's old-child signal reaping; rapid exits
     # have their own paired coverage below.
-    both('respawn-window', '-k', '-t', 'work:4', 'printf "WHOLE_WINDOW\\n"; read -r status; exit "$status"')
+    both('respawn-window', '-k', '-t', 'work:4', 'printf "WHOLE_WINDOW\\n"; read -r status; exit 9')
     wait(lambda: same('list-panes', '-t', 'work:4', '-F', '#{pane_id}:#{pane_dead}') == first_id + ':0'
          and all('WHOLE_WINDOW' in cli(kind, 'capture-pane', '-p', '-t', 'work:4').stdout
                  for kind in ('hn', 'tmux')), 'whole-window replacement ready')
