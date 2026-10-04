@@ -18,6 +18,7 @@
     "test:dsh-updates": "vitest run --config vitest.dsh-updates.config.ts",
     "test:sharing": "vitest run src/sharing --coverage --coverage.include='src/sharing/**' --coverage.thresholds.lines=100 --coverage.thresholds.statements=100 --coverage.thresholds.branches=100 --coverage.thresholds.functions=100",
     "test:harnessd": "vitest run --config vitest.harnessd.config.ts",
+    "test:core": "vitest run --config vitest.core.config.ts",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:sharing-e2e": "tsx scripts/share-harness-e2e.ts",
     "test:remote-viewers": "vitest run --config vitest.viewer.config.ts",

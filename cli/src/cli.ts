@@ -173,6 +173,7 @@ import {
 import { Watcher, type HistoryEvent, type LineEvent, type RewrittenEvent, type TailHold } from './watcher/watcher.js'
 import { chooseHookAgent, startHookServer } from './hookServer.js'
 import { connectToMaster } from './harnessd/coreLink.js'
+import { createTerminalControl } from './core/terminals/control.js'
 import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
@@ -1800,102 +1801,18 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     })
   }
 
-  const terminalSession = (target: string): RegisteredSession | undefined => registry.resolve(target)
-  const controlLeases = new Map<string, { lease: Awaited<ReturnType<typeof terminals.acquireLease>> & { state: 'succeeded' }; expiresAt: number }>()
-  const pinnedControls = new Set<string>()
-  const invalidControls = new Set<string>()
-  const CONTROL_LEASE_IDLE_MS = 15_000
-  const leasedTerminal = async (session: RegisteredSession): Promise<Extract<Awaited<ReturnType<typeof terminals.acquireLease>>, { state: 'succeeded' }> | null> => {
-    const pinned = pinnedControls.has(session.agentId)
-    if (pinned && invalidControls.has(session.agentId)) return null
-    const current = controlLeases.get(session.agentId)
-    if (current && (pinned || current.expiresAt > Date.now())) {
-      if (!await terminals.validateLease(current.lease.value, session)) {
-        controlLeases.delete(session.agentId)
-        if (pinned) invalidControls.add(session.agentId)
-        return null
-      }
-      current.expiresAt = Date.now() + CONTROL_LEASE_IDLE_MS
-      return current.lease
-    }
-    controlLeases.delete(session.agentId)
-    const acquired = await terminals.acquireLease(session)
-    if (acquired.state !== 'succeeded') return null
-    const value = { lease: acquired, expiresAt: Date.now() + CONTROL_LEASE_IDLE_MS }
-    controlLeases.set(session.agentId, value)
-    return acquired
-  }
-  const pinTerminalControl = (target: string): (() => void) | null => {
-    const session = terminalSession(target)
-    if (!session || pinnedControls.has(session.agentId)) return null
-    pinnedControls.add(session.agentId)
-    invalidControls.delete(session.agentId)
-    return () => {
-      pinnedControls.delete(session.agentId)
-      invalidControls.delete(session.agentId)
-      controlLeases.delete(session.agentId)
-    }
-  }
-  const invalidateTerminalControl = (agentId: string): void => {
-    controlLeases.delete(agentId)
-    if (pinnedControls.has(agentId)) invalidControls.add(agentId)
-  }
-  const captureTerminal = async (target: string, historyLines?: number): Promise<string | null> => {
-    const session = terminalSession(target)
-    if (!session) return null
-    const pinned = pinnedControls.has(session.agentId)
-    if (pinned && invalidControls.has(session.agentId)) return null
-    let activeLease = controlLeases.get(session.agentId)
-    if (activeLease && !pinned && activeLease.expiresAt <= Date.now()) {
-      controlLeases.delete(session.agentId)
-      activeLease = undefined
-    }
-    const leased = activeLease || pinned ? await leasedTerminal(session) : null
-    if ((activeLease || pinned) && !leased) return null
-    const result = leased
-      ? await terminals.captureLease(leased.value, { historyLines })
-      : await terminals.capture(session, { historyLines })
-    return result.state === 'succeeded' ? result.value : null
-  }
-  const terminalActionSucceeded = (result: Awaited<ReturnType<typeof terminals.submitText>>): boolean =>
-    result.state === 'succeeded'
-  const submitTerminalAction = async (target: string, text: string): Promise<TerminalActionResult> => {
-    const session = terminalSession(target)
-    if (!session) return terminalActionNotStarted('terminal agent is unavailable')
-    const lease = await leasedTerminal(session)
-    if (!lease) return terminalActionNotStarted('terminal control lease is unavailable or changed')
-    const result = pinnedControls.has(session.agentId)
-      ? await terminals.submitTextLease(lease.value, text)
-      : await terminals.submitTextForLease(session, lease.value, text)
-    if (result.state !== 'succeeded' && pinnedControls.has(session.agentId)) invalidateTerminalControl(session.agentId)
-    return result
-  }
-  const submitTerminal = async (target: string, text: string): Promise<boolean> => {
-    return terminalActionSucceeded(await submitTerminalAction(target, text))
-  }
-  const typeTerminal = async (target: string, text: string): Promise<boolean> => {
-    const session = terminalSession(target)
-    if (!session) return false
-    const lease = await leasedTerminal(session)
-    if (!lease) return false
-    const succeeded = terminalActionSucceeded(await terminals.typeLiteralLease(lease.value, text))
-    if (!succeeded && pinnedControls.has(session.agentId)) invalidateTerminalControl(session.agentId)
-    return succeeded
-  }
-  const keyTerminalAction = async (target: string, key: string): Promise<TerminalActionResult> => {
-    const session = terminalSession(target)
-    if (!session) return terminalActionNotStarted('terminal session is unavailable')
-    const lease = await leasedTerminal(session)
-    if (!lease) return terminalActionNotStarted('terminal control lease is unavailable or changed')
-    const result = await terminals.sendLegacyKeyLease(lease.value, key)
-    if (result.state !== 'succeeded' && pinnedControls.has(session.agentId)) invalidateTerminalControl(session.agentId)
-    return result
-  }
-  const keyTerminal = async (target: string, key: string): Promise<boolean> => {
-    return terminalActionSucceeded(await keyTerminalAction(target, key))
-  }
-  const validateTerminal = async (session: RegisteredSession): Promise<boolean> =>
-    (await terminals.validate(session)).state === 'alive'
+  // Reading and writing panes through control leases (core/terminals/control.ts).
+  const terminalControl = createTerminalControl({ resolve: (target) => registry.resolve(target), terminals })
+  const pinnedControls = terminalControl.pinnedControls
+  const pinTerminalControl = terminalControl.pinTerminalControl
+  const invalidateTerminalControl = terminalControl.invalidateTerminalControl
+  const captureTerminal = terminalControl.captureTerminal
+  const submitTerminalAction = terminalControl.submitTerminalAction
+  const submitTerminal = terminalControl.submitTerminal
+  const typeTerminal = terminalControl.typeTerminal
+  const keyTerminalAction = terminalControl.keyTerminalAction
+  const keyTerminal = terminalControl.keyTerminal
+  const validateTerminal = terminalControl.validateTerminal
   // Persisted records are not trusted blindly. The process reconciler below adopts a matching live
   // runtime, replaces it immediately when PID/start-marker changed, and requires two successful misses
   // before removing it. Probe errors leave the registry untouched.
