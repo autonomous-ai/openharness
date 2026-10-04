@@ -1,7 +1,7 @@
 //! OS first-use startup and the USB install action. Ordinary hn never enters this UI.
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::{buffer::Buffer, layout::Rect, style::Modifier};
-use crate::{app::{App, At, Placement}, layout::Dir, theme::{self, bold}};
+use ratatui::{buffer::Buffer, layout::Rect, style::{Modifier, Style}};
+use crate::{app::{App, At, Placement}, layout::Dir};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action { Install, Wifi, New, Connect, Terminal, Dismiss }
@@ -140,8 +140,11 @@ pub fn draw_dock(buf: &mut Buffer, app: &mut App) {
     for (start, end) in ranges {
         let area = Rect::new(start, y, end.min(app.size.0).saturating_sub(start), 1);
         if area.width == 0 { continue }
-        let style = if app.os_welcome.dock_focus.is_some() { bold(theme::accent()).add_modifier(Modifier::REVERSED) }
-            else { bold(theme::accent()) };
+        // Keep the status line's foreground/background contrast. The terminal
+        // accent can be nearly invisible on a light status background.
+        let style = Style::default().add_modifier(Modifier::BOLD);
+        let style = if app.os_welcome.dock_focus.is_some() { style.add_modifier(Modifier::REVERSED) }
+            else { style };
         buf.set_style(area, style);
         app.os_welcome.hits.push((area, Action::Install));
     }
