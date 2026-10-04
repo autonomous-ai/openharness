@@ -271,6 +271,27 @@ separately in `progress.json`.
 
 ## Measured preview footprint
 
+Preview 10's ISO is 1,668,448,256 bytes (1.55 GiB). Its
+[installed footprint assessment](https://github.com/autonomous-ai/openharness/actions/runs/37212080839)
+used the published image `2eee2748c2290f5700695922d7e12589033ee3c3` in fresh
+two-vCPU, encrypted UEFI VMs. Installed root usage, including home and snapshots,
+was 2.04 GiB. Ten samples per state give these medians:
+
+| Installed state | RAM used, 1 GiB VM | Swap used, 1 GiB VM | RAM used, 4 GiB VM |
+| --- | --- | --- | --- |
+| OpenCode and two terminal panes | 678.7 MiB | 30.4 MiB | 827.8 MiB |
+| Terminal, agent and browser closed | 392.3 MiB | 23.9 MiB | 525.4 MiB |
+| Local browser page, agent closed | 476.5 MiB | 170.7 MiB | 828.8 MiB |
+
+The 4 GiB VM used no swap. RAM means `MemTotal - MemAvailable`; diagnostic login
+and the observer remain included. The browser's low resident usage in the 1 GiB
+VM comes with substantially more swap. Each VM runs one ordered sequence, so
+these figures describe those states rather than proving a causal difference.
+OpenCode is idle; this does not measure active agent work or local inference.
+Both VMs rendered the browser page and accepted keyboard input on return to hn.
+
+### Earlier installation and boot measurements
+
 These measurements cover preview 6 image `3c15fe540de02db8a3b37d565ce8b4001b872779`.
 The ISO is 1,748,402,176 bytes (1.63 GiB). The table records two-vCPU, 1 GiB VMs.
 [1 GiB USB tests](https://github.com/autonomous-ai/openharness/actions/runs/37149350400)
