@@ -67,8 +67,15 @@ def exercise(vm, fixture, host_url):
     vm.command('for n in $(seq 1 120); do test -s ' + state + '/ready.json && exit 0; sleep .5; done; '
                'sudo journalctl _UID=1000 _SYSTEMD_USER_UNIT=harness-update.service --no-pager; '
                'systemctl --user status harness-update.timer harness-update.service --no-pager; exit 1', timeout=75)
-    wait_text(vm, 'update ready', 'fast-01-notice', status_bar=True)
-    checks = ['An already-included public CLI release is ignored before staging; independent newer hn and CLI releases remain eligible', 'User timer discovers, verifies and stages a real hn release without changing the running selection']
+    # The installed OS uses hn's standard footer. Availability belongs to the
+    # Updates screen, which must still expose the timer's staged release.
+    vm.command('hn show-options -gv status-right > /tmp/fast-footer.txt')
+    footer = vm.read_file('/tmp/fast-footer.txt').decode()
+    assert 'local_machine' in footer and '%H:%M' in footer and '@harness-update' not in footer, footer
+    vm.keys('meta_l', 'u')
+    wait_text(vm, 'an update is ready', 'fast-01-ready')
+    vm.keys('esc')
+    checks = ['An already-included public CLI release is ignored before staging; independent newer hn and CLI releases remain eligible', 'User timer discovers, verifies and stages a real hn release without changing the running selection', 'Super+u shows the prepared update while the installed footer stays hn’s standard footer']
     vm.command('test ! -e ' + state + '/current')
 
     def alive(name):
