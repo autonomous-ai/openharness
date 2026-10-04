@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CodexNormalizer, codexGoalOf, startsCodexTurn } from '../engines/codex/normalizer.js'
-import { canonical, fromTheEnd, goalForgotten, session, wholeHistory } from '../testing/transcriptOracle.js'
+import { canonical, fromTheEnd, goalForgotten, newFold, session, wholeHistory } from '../testing/transcriptOracle.js'
 import {
   attachTranscript,
   claudeAttachRules,
@@ -17,6 +17,7 @@ import {
 import { foldTranscript, lastTurnTextFromRawLines, lineToEvents, newTurnState, selectClaudeRecapLine, startsClaudeTurn, TranscriptFold, type LiveEvent } from './normalize.js'
 import { RuntimeProfileManager } from './runtimeProfile.js'
 import { tailFile, tailFileUntil } from './transcriptTail.js'
+import { Watcher, type LineEvent } from '../watcher/watcher.js'
 
 // ── Codex records, in the shapes a 0.159 rollout writes ──────────────────────────────────────────────
 const cx = (type: string, payload: Record<string, unknown>): string =>
@@ -75,6 +76,11 @@ const codexScenario = (): string[] => [
   codex.started('t8'), codex.context('gpt-6', 'medium', 'default'), codex.goal('ship the release'), codex.reasoning('still the goal'),
   codex.call('c8', 'make'), codex.complete('t8'),
   codex.started('t9'), codex.context('gpt-6', 'max', 'plan'), codex.goal('a different goal'), codex.reasoning('new goal'),
+  codex.complete('t9'),
+  // A message sent mid-task, with a call still in flight: its output arrives after the new message.
+  codex.started('t10'), codex.context('gpt-6', 'max', 'default'), codex.user('start the build'),
+  codex.call('c10', 'make all'), codex.user('also run the tests while that builds'),
+  codex.output('c10', 'built'), codex.reasoning('now the tests'), codex.call('c11', 'npm test'),
 ]
 
 // ── Claude Code records ───────────────────────────────────────────────────────────────────────────────
@@ -119,6 +125,10 @@ const claudeScenario = (): string[] => [
   claude.assistant([claude.thinking('almost'), claude.text('Built it.')], 'end_turn'),
   claude.user('fifth prompt, left running'),
   claude.assistant([claude.tool('toolu_4', 'npm test')], 'tool_use'),
+  // A prompt that lands while a call is in flight: the result arrives after it, naming its call.
+  claude.user('sixth prompt, typed during the tests'),
+  claude.result('toolu_4', 'tests passed'),
+  claude.assistant([claude.thinking('reading results'), claude.text('All green.')], 'end_turn'),
 ]
 
 describe('attachTranscript', () => {
@@ -201,7 +211,8 @@ describe('attachTranscript', () => {
     const fields = (line: string) => new RuntimeProfileManager().transcriptFields(session('codex'), line)
     const span = await locateAttachSpan(file, codexAttachRules(fields))
     const full = Buffer.byteLength([...history, ...Array(200).fill(codex.compacted(30_000)), codex.complete('x')].join('\n') + '\n')
-    expect(span).toMatchObject({ turnFrom: full + Buffer.byteLength(turn[0] + '\n' + turn[1] + '\n'), profileFrom: full + Buffer.byteLength(turn[0] + '\n') })
+    // Codex's turn begins at its task_started; the turn_context after it already sets every field.
+    expect(span).toMatchObject({ turnFrom: full, profileFrom: full, seeds: [] })
     expect(span?.head).toBe(history[0])
   })
 })
@@ -218,9 +229,9 @@ describe('locateAttachSpan', () => {
 
   it('returns the whole file for an empty transcript or a first turn', async () => {
     writeFileSync(file, '')
-    expect(await locateAttachSpan(file, rules())).toEqual({ end: 0, turnFrom: 0, profileFrom: 0, head: null, seed: null })
+    expect(await locateAttachSpan(file, rules())).toEqual({ end: 0, turnFrom: 0, profileFrom: 0, head: null, seeds: [] })
     writeFileSync(file, '{"open":1}\n{"x":1}\n')
-    expect(await locateAttachSpan(file, rules(), true)).toEqual({ end: 19, turnFrom: 0, profileFrom: 0, head: null, seed: null })
+    expect(await locateAttachSpan(file, rules(), { fromStart: true })).toEqual({ end: 19, turnFrom: 0, profileFrom: 0, head: null, seeds: [] })
   })
 
   it('never decodes a record without a turn marker to ask whether it opens a turn', async () => {
@@ -233,7 +244,7 @@ describe('locateAttachSpan', () => {
 
   it('takes the whole file as the turn when nothing opens one', async () => {
     writeFileSync(file, '{"a":1}\n{"b":2}\n')
-    expect(await locateAttachSpan(file, rules())).toEqual({ end: 16, turnFrom: 0, profileFrom: 0, head: null, seed: null })
+    expect(await locateAttachSpan(file, rules())).toEqual({ end: 16, turnFrom: 0, profileFrom: 0, head: null, seeds: [] })
   })
 
   it('reaches back past the opener only as far as the newest record setting each missing field', async () => {
@@ -245,7 +256,7 @@ describe('locateAttachSpan', () => {
     }
     const span = await locateAttachSpan(file, rules({ fields, required: ['model', 'effort'] }))
     const offset = (index: number) => Buffer.byteLength(lines.slice(0, index).join('\n') + '\n')
-    expect(span).toEqual({ end: Buffer.byteLength(lines.join('\n')), turnFrom: offset(4), profileFrom: offset(2), head: '{"meta":1}', seed: null })
+    expect(span).toEqual({ end: Buffer.byteLength(lines.join('\n')), turnFrom: offset(4), profileFrom: offset(2), head: '{"meta":1}', seeds: [] })
   })
 
   it('asks only marked records about fields, and stops at BOF when a field is never set', async () => {
@@ -267,11 +278,11 @@ describe('locateAttachSpan', () => {
       seedFor: (line) => (line.includes('goal') ? (candidate) => candidate.includes('goal') : null),
       seedMarkers: [Buffer.from('goal')],
     })
-    expect((await locateAttachSpan(file, seeded))?.seed).toBe('{"goal":"a"}')
+    expect((await locateAttachSpan(file, seeded))?.seeds).toEqual(['{"goal":"a"}'])
     writeFileSync(file, lines.slice(1).join('\n'))
-    expect((await locateAttachSpan(file, seeded))?.seed).toBeNull()
+    expect((await locateAttachSpan(file, seeded))?.seeds).toEqual([])
     writeFileSync(file, '{"goal":"a"}\n{"open":2}')
-    expect((await locateAttachSpan(file, seeded))?.seed).toBeNull()
+    expect((await locateAttachSpan(file, seeded))?.seeds).toEqual([])
   })
 
   it('stops reaching back for fields and seeds at the reach limit', async () => {
@@ -284,10 +295,10 @@ describe('locateAttachSpan', () => {
       seedMarkers: [Buffer.from('goal')],
     })
     const opener = Buffer.byteLength(lines.slice(0, 21).join('\n') + '\n')
-    expect(await locateAttachSpan(file, reaching, false, 100)).toEqual({
-      end: Buffer.byteLength(lines.join('\n')), turnFrom: opener, profileFrom: opener, head: '{"model":"far","goal":1}', seed: null,
+    expect(await locateAttachSpan(file, reaching, { reach: 100 })).toEqual({
+      end: Buffer.byteLength(lines.join('\n')), turnFrom: opener, profileFrom: opener, head: '{"model":"far","goal":1}', seeds: [],
     })
-    expect(await locateAttachSpan(file, reaching, false, opener)).toMatchObject({ profileFrom: 0, head: null, seed: '{"model":"far","goal":1}' })
+    expect(await locateAttachSpan(file, reaching, { reach: opener })).toMatchObject({ profileFrom: 0, head: null, seeds: ['{"model":"far","goal":1}'] })
   })
 
   it('leaves the head out when it is the opener itself or too large to be metadata', async () => {
@@ -316,7 +327,7 @@ describe('replayAttachSpan', () => {
   it('feeds the head and older records to the profile only, the seed to the fold first', async () => {
     writeFileSync(file, '{"a":1}\n{"b":2}\n{"c":3}\n{"d":4}\n')
     const seen: string[] = []
-    const read = await replayAttachSpan(file, { end: 32, turnFrom: 16, profileFrom: 8, head: '{"a":1}', seed: '{"s":0}' }, {
+    const read = await replayAttachSpan(file, { end: 32, turnFrom: 16, profileFrom: 8, head: '{"a":1}', seeds: ['{"s":0}'] }, {
       profile: (line) => seen.push(`profile ${line}`),
       fold: (line) => seen.push(`fold ${line}`),
       observe: (line) => seen.push(`observe ${line}`),
@@ -333,7 +344,7 @@ describe('replayAttachSpan', () => {
   it('counts a record still being written as content without feeding it', async () => {
     writeFileSync(file, '{"half":')
     const fed: string[] = []
-    const read = await replayAttachSpan(file, { end: 8, turnFrom: 0, profileFrom: 0, head: null, seed: null }, {
+    const read = await replayAttachSpan(file, { end: 8, turnFrom: 0, profileFrom: 0, head: null, seeds: [] }, {
       profile: (line) => fed.push(line), fold: (line) => fed.push(line),
     })
     expect(fed).toEqual([])
@@ -342,13 +353,13 @@ describe('replayAttachSpan', () => {
 
   it('says a whitespace-only transcript has no content', async () => {
     writeFileSync(file, '  \n\n')
-    expect(await replayAttachSpan(file, { end: 4, turnFrom: 0, profileFrom: 0, head: null, seed: null }, { profile: () => {}, fold: () => {} }))
+    expect(await replayAttachSpan(file, { end: 4, turnFrom: 0, profileFrom: 0, head: null, seeds: [] }, { profile: () => {}, fold: () => {} }))
       .toEqual({ next: 4, records: 0, content: false })
   })
 
   it('hands the tail the span end when the file shrank under the replay', async () => {
     writeFileSync(file, '{"a":1}\n')
-    expect(await replayAttachSpan(file, { end: 500, turnFrom: 0, profileFrom: 0, head: null, seed: null }, { profile: () => {}, fold: () => {} }))
+    expect(await replayAttachSpan(file, { end: 500, turnFrom: 0, profileFrom: 0, head: null, seeds: [] }, { profile: () => {}, fold: () => {} }))
       .toEqual({ next: 500, records: 0, content: false })
   })
 })
@@ -495,5 +506,140 @@ describe('the Claude recap reads only its last turn', () => {
     expect(lastTurnTextFromRawLines(await tailFileUntil(file, selectClaudeRecapLine))).toEqual({ userMessage: 'q', assistantText: 'Let me look' })
     expect(selectClaudeRecapLine('not json')).toBe('skip')
     expect(selectClaudeRecapLine(JSON.stringify({ type: 'system' }))).toBe('skip')
+  })
+})
+
+describe('the review of the first cut', () => {
+  let dir: string, file: string
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'attach-review-')); file = join(dir, 'rollout.jsonl') })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  // A reset (Codex fires SessionStart on every compaction) re-reads a session that is being tailed.
+  // The tail is held for the whole attach: the read stops where delivery stopped, a record written
+  // meanwhile reaches only the new fold, and nothing is delivered twice.
+  it('hands a tailed session over to the new fold without losing or repeating a record', async () => {
+    const open = [codex.meta(), codex.started('t1'), codex.context('gpt-6', 'high', 'default'), codex.user('go'), codex.reasoning('working')]
+    writeFileSync(file, open.join('\n') + '\n')
+    const watcher = new Watcher()
+    const seen: Array<{ fold: string; text: string }> = []
+    let current = 'old'
+    watcher.on('line', (event: LineEvent) => seen.push({ fold: current, text: event.text }))
+    await watcher.addSession({ sessionId: 's1', engine: 'codex', transcriptPath: file })
+    appendFileSync(file, codex.agent('still going') + '\n')
+    await watcher.pollSession('s1')
+    expect(seen.map((line) => line.fold)).toEqual(['old'])
+
+    const heldAt = await watcher.hold('s1')
+    expect(heldAt).toBe(Buffer.byteLength([...open, codex.agent('still going')].join('\n') + '\n'))
+    const replacement = newFold('codex')
+    const stream = new TranscriptFold(replacement.ingest, replacement.turnOpen, false)
+    const read = await attachTranscript(file, codexAttachRules(() => []), {
+      // Written while the attach reads: the turn ends.
+      start: () => { appendFileSync(file, codex.complete('t1') + '\n') },
+      profile: () => {},
+      fold: (line) => stream.push(line),
+    }, { end: heldAt! })
+    await watcher.pollSession('s1')
+    expect(seen).toHaveLength(1)
+    expect(stream.finish().turnOpen).toBe(true)
+    expect(read.next).toBe(heldAt)
+
+    current = 'new'
+    watcher.release('s1', read.next)
+    await watcher.pollSession('s1')
+    expect(seen).toEqual([{ fold: 'old', text: codex.agent('still going') }, { fold: 'new', text: codex.complete('t1') }])
+    for (const line of seen.filter((entry) => entry.fold === 'new')) replacement.ingest(line.text)
+    expect(replacement.turnOpen()).toBe(false)
+    await watcher.stop()
+  })
+
+  it('shows the device the record Codex writes before the opener, which is the turn\'s input', async () => {
+    const input = cx('response_item', {
+      type: 'message', role: 'user', content: [{ type: 'input_text', text: 'go' }],
+      internal_chat_message_metadata_passthrough: { turn_id: 't1', content_item_kinds: ['user.text'] },
+    })
+    writeFileSync(file, [codex.meta(), codex.started('t1'), codex.context('gpt-6', 'high', 'default'), input, codex.userItem('go'), codex.reasoning('x')].join('\n') + '\n')
+    const observed: string[] = []
+    await attachTranscript(file, codexAttachRules(() => []), { profile: () => {}, fold: () => {}, observe: (line) => observed.push(line) })
+    expect(observed).toContain(input)
+    expect(observed[0]).toBe(codex.started('t1'))
+  })
+
+  it.each([
+    ['is missing', () => {}],
+    ['cannot be read', () => { writeFileSync(file, codex.user('x') + '\n'); chmodSync(file, 0o000) }],
+  ])('treats a transcript that %s as an empty history, as the whole read did', async (_, prepare) => {
+    prepare()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const fed: string[] = []
+    const read = await attachTranscript(file, codexAttachRules(() => []), { profile: (line) => fed.push(line), fold: (line) => fed.push(line) })
+    expect(read).toMatchObject({ next: 0, records: 0, content: false, turnFrom: 0, seeds: [] })
+    expect(fed).toEqual([])
+    expect(warn).toHaveBeenCalledOnce()
+    warn.mockRestore()
+    try { chmodSync(file, 0o600) } catch { /* missing */ }
+  })
+
+  it('names thinking blocks so no two windows of one session share an id, and one window keeps its names', async () => {
+    const records = claudeScenario()
+    const ids = async (cut: number) => {
+      writeFileSync(file, records.slice(0, cut).join('\n') + '\n')
+      const tail = await fromTheEnd('claude', file, false)
+      const next = [claude.user('next'), claude.assistant([claude.thinking('a'), claude.thinking('b')], 'end_turn')]
+      return next.flatMap(tail.ingest).flatMap((event) => {
+        const id = (event.payload as { thinkingId?: string }).thinkingId
+        return event.type === 'thinking_delta' && id ? [id] : []
+      })
+    }
+    const early = await ids(10)
+    const late = await ids(records.length)
+    expect(early).toHaveLength(2)
+    expect(new Set([...early, ...late]).size).toBe(4)
+    expect(await ids(records.length)).toEqual(late)
+  })
+
+  it('reaches back for the call a turn\'s result answers, and only within reach', async () => {
+    const call = claude.assistant([claude.tool('toolu_far', 'make')], 'tool_use')
+    const lines = [claude.user('first'), call, claude.user('second, mid-call'), claude.result('toolu_far', 'made')]
+    writeFileSync(file, lines.join('\n') + '\n')
+    expect((await locateAttachSpan(file, claudeAttachRules(() => [])))?.seeds).toEqual([call])
+    expect((await locateAttachSpan(file, claudeAttachRules(() => []), { reach: 1 }))?.seeds).toEqual([])
+    writeFileSync(file, [claude.user('first'), claude.user('second'), claude.result('', 'no id')].join('\n') + '\n')
+    expect((await locateAttachSpan(file, claudeAttachRules(() => [])))?.seeds).toEqual([])
+  })
+
+  it('does not look past a finished task for the beginning of a turn that has none', async () => {
+    writeFileSync(file, [codex.started('t1'), codex.user('a'), codex.complete('t1'), codex.user('b, no task_started')].join('\n') + '\n')
+    const span = await locateAttachSpan(file, codexAttachRules(() => []))
+    expect(span?.turnFrom).toBe(Buffer.byteLength([codex.started('t1'), codex.user('a'), codex.complete('t1')].join('\n') + '\n'))
+  })
+})
+
+describe('the walk, at its edges', () => {
+  let dir: string, file: string
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'attach-edges-')); file = join(dir, 't.jsonl') })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('keeps looking for a task\'s beginning past a record that only mentions one', async () => {
+    const mention = codex.agent('the task_complete event is next')
+    const lines = [codex.started('t1'), codex.user('a'), mention, codex.user('b')]
+    writeFileSync(file, lines.join('\n') + '\n')
+    expect((await locateAttachSpan(file, codexAttachRules(() => [])))?.turnFrom).toBe(0)
+  })
+
+  it('feeds several calls still running, oldest first', async () => {
+    const first = claude.assistant([claude.tool('toolu_a', 'make')], 'tool_use')
+    const second = claude.assistant([claude.tool('toolu_b', 'npm test')], 'tool_use')
+    writeFileSync(file, [claude.user('go'), first, second, claude.user('while both run')].join('\n') + '\n')
+    expect((await locateAttachSpan(file, claudeAttachRules(() => [])))?.seeds).toEqual([first, second])
+  })
+
+  it('counts an answer before the turn as answered, and passes over one without an id', async () => {
+    const lines = [
+      claude.user('first'), claude.assistant([claude.tool('toolu_done', 'ls')], 'tool_use'),
+      claude.result('toolu_done', 'ok'), claude.result('', 'stray'), claude.user('second'),
+    ]
+    writeFileSync(file, lines.join('\n') + '\n')
+    expect((await locateAttachSpan(file, claudeAttachRules(() => [])))?.seeds).toEqual([])
   })
 })

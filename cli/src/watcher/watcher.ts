@@ -45,6 +45,8 @@ interface FileState extends WatchedSession {
   debounce: NodeJS.Timeout | null
   reading: boolean
   pending: boolean
+  /** Attaches holding delivery (see `hold`); nothing is read while any does. */
+  held: number
   cursorLines: string[]
 }
 
@@ -107,11 +109,45 @@ export class Watcher extends EventEmitter {
       debounce: null,
       reading: false,
       pending: false,
+      held: 0,
       cursorLines,
     })
     this.bySession.set(session.sessionId, session.transcriptPath)
     this.watcher?.add(session.transcriptPath)
     if (opts.fromStart || offset < size) this.schedule(session.transcriptPath)
+  }
+
+  /**
+   * Stop delivering a tailed session's lines, and say where delivery stopped: the byte its next line
+   * starts at. Waits out a read already in progress. Null when the session is not being tailed.
+   *
+   * A re-attach rebuilds the session's normalizer from the transcript while the old one is still the
+   * one being fed. Holding the tail is what lets it read exactly up to where the old one stopped and
+   * hand everything after that to the new one: a line written meanwhile is neither lost to the
+   * normalizer being replaced nor read twice. Every hold must be released.
+   */
+  async hold(sessionId: string): Promise<number | null> {
+    const filePath = this.bySession.get(sessionId)
+    const state = filePath ? this.files.get(filePath) : undefined
+    if (!state) return null
+    state.held++
+    if (state.debounce) { clearTimeout(state.debounce); state.debounce = null }
+    while (state.reading) await new Promise((resolve) => setTimeout(resolve, 5))
+    return state.offset - Buffer.byteLength(state.partial, 'utf8')
+  }
+
+  /** Undo a `hold`. With `offset`, delivery resumes there — where the caller's own read stopped — and
+   *  whatever was written since is read at once. */
+  release(sessionId: string, offset: number | null = null): void {
+    const filePath = this.bySession.get(sessionId)
+    const state = filePath ? this.files.get(filePath) : undefined
+    if (!filePath || !state || !state.held) return
+    state.held--
+    if (offset !== null) {
+      state.offset = offset
+      state.partial = ''
+    }
+    if (!state.held) this.schedule(filePath)
   }
 
   /** Move a byte-tailed session's read cursor to a known length after the file was rewritten in place
@@ -190,13 +226,14 @@ export class Watcher extends EventEmitter {
   private async readNew(filePath: string): Promise<void> {
     const state = this.files.get(filePath)
     if (!state) return
-    if (state.reading) { state.pending = true; return }
+    if (state.reading || state.held) { state.pending = true; return }
     state.reading = true
     try {
       do {
         state.pending = false
         await this.readOnce(filePath, state)
-      } while (state.pending && this.files.get(filePath) === state)
+        // A hold taken during this read stops it here; `release` reads what is left.
+      } while (state.pending && !state.held && this.files.get(filePath) === state)
     } finally {
       state.reading = false
     }

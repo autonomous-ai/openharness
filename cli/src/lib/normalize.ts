@@ -755,6 +755,9 @@ export interface TurnState {
   /** tool_use ids started but not yet resolved by a tool_result. */
   pendingTools: Set<string>
   thinkingCounter: number
+  /** Before the counter in a live thinking id. A fold that starts mid-transcript names its window here
+   *  (lib/attachTranscript.ts), so its ids cannot repeat ones another fold of the same session sent. */
+  thinkingPrefix?: string
 }
 
 export function newTurnState(): TurnState {
@@ -886,7 +889,7 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
 
   // assistant
   const before = events.length
-  events.push(...assistantEvents(msg, state.toolIdToName, 'thinking-live-', state.thinkingCounter))
+  events.push(...assistantEvents(msg, state.toolIdToName, state.thinkingPrefix ?? 'thinking-live-', state.thinkingCounter))
   state.thinkingCounter += events.slice(before).filter((e) => e.type === 'thinking_delta').length
   for (const e of events) {
     if (e.type === 'tool_start') state.pendingTools.add(e.payload.id)
@@ -920,6 +923,24 @@ export function startsClaudeTurn(rawLine: string): boolean {
   const msg = transformLine(raw)
   if (!msg?.message || msg.type !== 'user' || isInterruptLine(msg)) return false
   return realUserText(msg) !== null
+}
+
+/**
+ * The tool calls a Claude record makes (`defines`) and the earlier calls whose results it carries
+ * (`references`), decided along `lineToEvents`' own branches. A result names its tool from the call
+ * `lineToEvents` saw earlier, so an attach that starts mid-transcript reaches back for the calls its
+ * turn's results answer (lib/attachTranscript.ts).
+ */
+export function claudeToolLinks(rawLine: string): { defines: string[]; references: string[] } {
+  const raw = parseRecord(rawLine)
+  if (!raw || compactEventFromRaw(raw) || taskNotificationEvent(raw)) return { defines: [], references: [] }
+  const msg = transformLine(raw)
+  if (!msg?.message) return { defines: [], references: [] }
+  if (msg.type === 'assistant') {
+    return { defines: msg.message.content.filter((block) => block.type === 'tool_use').map((block) => block.id || ''), references: [] }
+  }
+  if (isInterruptLine(msg) || realUserText(msg) !== null) return { defines: [], references: [] }
+  return { defines: [], references: msg.message.content.filter((block) => block.type === 'tool_result').map((block) => block.tool_use_id || '') }
 }
 
 /** `tailFileUntil` selector for `lastTurnTextFromRawLines`: stop on the prompt it resets on, keep the

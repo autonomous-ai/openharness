@@ -71,8 +71,22 @@ export interface RuntimeState {
 /** The runtime axes a transcript record can set — see `RuntimeProfileManager.transcriptFields`. */
 export type RuntimeField = 'model' | 'effort' | 'mode'
 
-/** The scratch session `transcriptFields` reads into. No engine session id is empty or starts with NUL. */
+/** The session `transcriptFields` reads as — never a real one, so no model-switch control applies.
+ *  No engine session id is empty or starts with NUL. */
 const FIELD_PROBE = '\u0000transcript-fields'
+
+const blankState = (): RuntimeState => ({ model: null, effort: null, mode: 'unknown', cliVersion: null, observedAt: null })
+
+/** Where a session's runtime state starts before its transcript is read. */
+function freshState(session: RegisteredSession): RuntimeState {
+  return {
+    ...blankState(),
+    // Registries written by older builds can hold a non-string model; treat it as unknown instead of
+    // letting it reach claudeAliasForModel and abort startup.
+    model: typeof session.model === 'string' ? session.model : null,
+    cliVersion: session.cliVersion,
+  }
+}
 
 export interface CursorModelTarget {
   rawId: string
@@ -678,16 +692,32 @@ export class RuntimeProfileManager {
 
   hydrate(session: RegisteredSession, rawLines: string[]): void {
     if (this.unbound(session.sessionId)) return
-    this.states.set(session.sessionId, {
-      // Registries written by older builds can hold a non-string model; treat it as unknown instead of
-      // letting it reach claudeAliasForModel and abort startup.
-      model: typeof session.model === 'string' ? session.model : null,
-      effort: null,
-      mode: 'unknown',
-      cliVersion: session.cliVersion,
-      observedAt: null,
-    })
+    this.states.set(session.sessionId, freshState(session))
     for (const line of rawLines) this.ingest(session, line, true)
+  }
+
+  /**
+   * `hydrate`, for a Claude Code or Codex transcript streamed in rather than loaded
+   * (lib/attachTranscript.ts): records are read into a staged state, and what the session shows only
+   * changes at `commit` — never an empty chip while the read runs, never a live record overwritten by
+   * an older one read after it.
+   */
+  beginHydrate(session: RegisteredSession): { ingest(rawLine: string): void; commit(): void } {
+    const staged = freshState(session)
+    return {
+      ingest: (rawLine) => {
+        let raw: Record<string, unknown> | null
+        try { raw = record(JSON.parse(rawLine)) } catch { return }
+        if (!raw) return
+        if (session.engine === 'codex') this.ingestCodex(session, raw, staged)
+        else this.ingestClaude(session, raw, staged)
+      },
+      commit: () => {
+        if (this.unbound(session.sessionId)) return
+        this.states.set(session.sessionId, staged)
+        this.wake(session.sessionId)
+      },
+    }
   }
 
   ingest(session: RegisteredSession, rawLine: string, silent = false): boolean {
@@ -729,11 +759,9 @@ export class RuntimeProfileManager {
     try { raw = record(JSON.parse(rawLine)) } catch { return [] }
     if (!raw) return []
     const probe: RegisteredSession = { ...session, sessionId: FIELD_PROBE }
-    this.states.delete(FIELD_PROBE)
-    if (session.engine === 'codex') this.ingestCodex(probe, raw)
-    else this.ingestClaude(probe, raw)
-    const state = this.state(FIELD_PROBE)
-    this.states.delete(FIELD_PROBE)
+    const state = blankState()
+    if (session.engine === 'codex') this.ingestCodex(probe, raw, state)
+    else this.ingestClaude(probe, raw, state)
     const fields: RuntimeField[] = []
     if (state.model !== null) fields.push('model')
     if (state.effort !== null) fields.push('effort')
@@ -1187,18 +1215,16 @@ export class RuntimeProfileManager {
   }
 
   private state(sessionId: string): RuntimeState {
-    const blank = (): RuntimeState => ({ model: null, effort: null, mode: 'unknown', cliVersion: null, observedAt: null })
-    if (this.unbound(sessionId)) return blank()
+    if (this.unbound(sessionId)) return blankState()
     let state = this.states.get(sessionId)
     if (!state) {
-      state = blank()
+      state = blankState()
       this.states.set(sessionId, state)
     }
     return state
   }
 
-  private ingestCodex(session: RegisteredSession, raw: Record<string, unknown>): void {
-    const state = this.state(session.sessionId)
+  private ingestCodex(session: RegisteredSession, raw: Record<string, unknown>, state = this.state(session.sessionId)): void {
     const payload = record(raw.payload)
     const cliVersion = raw.type === 'session_meta' ? text(payload?.cli_version) : ''
     if (parseVersion(cliVersion)) {
@@ -1247,8 +1273,7 @@ export class RuntimeProfileManager {
     }
   }
 
-  private ingestClaude(session: RegisteredSession, raw: Record<string, unknown>): void {
-    const state = this.state(session.sessionId)
+  private ingestClaude(session: RegisteredSession, raw: Record<string, unknown>, state = this.state(session.sessionId)): void {
     const cliVersion = text(raw.version)
     if (parseVersion(cliVersion)) {
       session.cliVersion = cliVersion

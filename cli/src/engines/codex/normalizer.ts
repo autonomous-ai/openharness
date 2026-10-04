@@ -268,6 +268,8 @@ export class CodexNormalizer implements EngineNormalizer {
   private pendingChildResults = new Map<string, ChildResult>()
   private completedChildren = new Set<string>()
   private thinkingCounter = 0
+  /** See `TurnState.thinkingPrefix`. */
+  thinkingPrefix = 'thinking-codex-'
   private compactJustEmitted = false
   /** Objective of the active `/goal`, so its re-injection each turn isn't read as a new submission. */
   private goalObjective: string | null = null
@@ -383,7 +385,7 @@ export class CodexNormalizer implements EngineNormalizer {
       if (!summary) return []
       return [{
         type: 'thinking_delta',
-        payload: { content: clip(summary, MAX_THINKING), thinkingId: `thinking-codex-${this.thinkingCounter++}` },
+        payload: { content: clip(summary, MAX_THINKING), thinkingId: `${this.thinkingPrefix}${this.thinkingCounter++}` },
       }]
     }
 
@@ -599,6 +601,19 @@ export function startsCodexTurn(line: string): boolean {
   const type = string(item.type)
   if (raw.type === 'event_msg') return USER_TURN_TYPES.has(type) && !!messageText(item)
   return raw.type === 'response_item' && type === 'message' && goalObjective(item) !== null
+}
+
+/**
+ * Where a Codex task's work begins (`task_started`, written before the turn's first message) and
+ * where one ends (`task_complete`, `turn_aborted`). Everything the normalizer keeps across messages —
+ * tool names, sub-agents in flight — belongs to one task and is cleared when it ends, so a fold that
+ * starts at the task's beginning keeps all of it, a message sent mid-task included.
+ */
+export function codexTaskBoundary(line: string): 'begins' | 'ends' | null {
+  const raw = parse(line)
+  const item = raw && raw.type === 'event_msg' ? payload(raw) : null
+  const type = item ? string(item.type) : ''
+  return type === 'task_started' ? 'begins' : type === 'task_complete' || type === 'turn_aborted' ? 'ends' : null
 }
 
 /** The objective a `/goal` turn opener carries, or null. Whether that turn reads as the submission or a

@@ -253,3 +253,100 @@ describe('Watcher.addSession fromOffset', () => {
     await watcher.stop()
   })
 })
+
+describe('Watcher.hold and release', () => {
+  const tailed = async (content: string) => {
+    const dir = await mkdtemp(join(tmpdir(), 'machine-watcher-hold-'))
+    cleanup.push(dir)
+    const transcriptPath = join(dir, 'session.jsonl')
+    await writeFile(transcriptPath, content)
+    const watcher = new Watcher()
+    const lines: string[] = []
+    watcher.on('line', (event: LineEvent) => lines.push(event.text))
+    await watcher.addSession({ sessionId: 's1', engine: 'codex', transcriptPath })
+    return { transcriptPath, watcher, lines }
+  }
+
+  it('stops delivery where the next line starts, a carried partial line included, and resumes from a given byte', async () => {
+    const { transcriptPath, watcher, lines } = await tailed('{"n":1}\n')
+    await appendFile(transcriptPath, '{"n":2}\n{"n":')
+    await watcher.pollSession('s1')
+    expect(lines).toEqual(['{"n":2}'])
+    expect(await watcher.hold('s1')).toBe(16)
+    await appendFile(transcriptPath, '3}\n{"n":4}\n')
+    await watcher.pollSession('s1')
+    expect(lines).toEqual(['{"n":2}'])
+    watcher.release('s1', 24)
+    await watcher.pollSession('s1')
+    expect(lines).toEqual(['{"n":2}', '{"n":4}'])
+    await watcher.stop()
+  })
+
+  it('keeps its own position when released without one, and delivers what arrived while held', async () => {
+    const { transcriptPath, watcher, lines } = await tailed('')
+    await watcher.hold('s1')
+    await appendFile(transcriptPath, '{"n":1}\n')
+    watcher.release('s1')
+    await watcher.pollSession('s1')
+    expect(lines).toEqual(['{"n":1}'])
+    await watcher.stop()
+  })
+
+  it('stays held until every hold is released', async () => {
+    const { transcriptPath, watcher, lines } = await tailed('')
+    await watcher.hold('s1')
+    await watcher.hold('s1')
+    await appendFile(transcriptPath, '{"n":1}\n')
+    watcher.release('s1')
+    await watcher.pollSession('s1')
+    expect(lines).toEqual([])
+    watcher.release('s1')
+    await watcher.pollSession('s1')
+    expect(lines).toEqual(['{"n":1}'])
+    await watcher.stop()
+  })
+
+  it('waits out a read in progress, and that read stops at the hold', async () => {
+    const { transcriptPath, watcher, lines } = await tailed('')
+    await appendFile(transcriptPath, '{"n":1}\n')
+    const reading = watcher.pollSession('s1')
+    const held = watcher.hold('s1')
+    await appendFile(transcriptPath, '{"n":2}\n')
+    await reading
+    expect(await held).toBe(8)
+    await watcher.pollSession('s1')
+    expect(lines).toEqual(['{"n":1}'])
+    watcher.release('s1')
+    await watcher.pollSession('s1')
+    expect(lines).toEqual(['{"n":1}', '{"n":2}'])
+    await watcher.stop()
+  })
+
+  it('cancels a read that was only scheduled, and reads it after release', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'machine-watcher-hold-'))
+    cleanup.push(dir)
+    const transcriptPath = join(dir, 'session.jsonl')
+    await writeFile(transcriptPath, '{"n":1}\n{"n":2}\n')
+    const watcher = new Watcher()
+    const lines: string[] = []
+    watcher.on('line', (event: LineEvent) => lines.push(event.text))
+    await watcher.addSession({ sessionId: 's1', engine: 'codex', transcriptPath }, { fromOffset: 8 })
+    expect(await watcher.hold('s1')).toBe(8)
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    expect(lines).toEqual([])
+    watcher.release('s1')
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    expect(lines).toEqual(['{"n":2}'])
+    await watcher.stop()
+  })
+
+  it('answers null for a session it does not tail, and ignores a release without a hold', async () => {
+    const { watcher, lines } = await tailed('')
+    expect(await watcher.hold('nobody')).toBeNull()
+    watcher.release('nobody', 5)
+    watcher.release('s1', 5)
+    await watcher.pollSession('s1')
+    expect(lines).toEqual([])
+    await watcher.stop()
+  })
+})

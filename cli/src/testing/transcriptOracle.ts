@@ -33,13 +33,21 @@ export interface Folded {
   content: boolean
 }
 
-export function newFold(engine: Engine): { ingest: (line: string) => LiveEvent[]; turnOpen: () => boolean } {
+export function newFold(engine: Engine): { ingest: (line: string) => LiveEvent[]; turnOpen: () => boolean; name(windowStart: number): void } {
   if (engine === 'codex') {
     const normalizer = new CodexNormalizer('live', () => null)
-    return { ingest: (line) => normalizer.ingest(line), turnOpen: () => normalizer.turnOpen }
+    return {
+      ingest: (line) => normalizer.ingest(line),
+      turnOpen: () => normalizer.turnOpen,
+      name: (windowStart) => { normalizer.thinkingPrefix = `thinking-codex-${windowStart.toString(36)}-` },
+    }
   }
   const state = newTurnState()
-  return { ingest: (line) => lineToEvents(line, state), turnOpen: () => state.turnOpen }
+  return {
+    ingest: (line) => lineToEvents(line, state),
+    turnOpen: () => state.turnOpen,
+    name: (windowStart) => { state.thinkingPrefix = `thinking-live-${windowStart.toString(36)}-` },
+  }
 }
 
 const profileOf = (profiles: RuntimeProfileManager, s: RegisteredSession): Folded['profile'] => {
@@ -66,17 +74,20 @@ export async function wholeHistory(engine: Engine, file: string, live: boolean):
   }
 }
 
-export async function fromTheEnd(engine: Engine, file: string, live: boolean): Promise<Folded & { next: number }> {
+export async function fromTheEnd(engine: Engine, file: string, live: boolean, end?: number): Promise<Folded & { next: number }> {
   const s = session(engine)
   const profiles = new RuntimeProfileManager()
   const fold = newFold(engine)
   const stream = new TranscriptFold(fold.ingest, fold.turnOpen, live)
   const fields = (line: string) => profiles.transcriptFields(s, line)
-  profiles.hydrate(s, [])
+  const profile = profiles.beginHydrate(s)
+  // As attachSessionNow does: the staged profile, ids named for the window, then Claude's settings.
   const read = await attachTranscript(file, engine === 'codex' ? codexAttachRules(fields) : claudeAttachRules(fields), {
-    profile: (line) => { profiles.ingest(s, line, true) },
+    start: (span) => fold.name(span.turnFrom),
+    profile: (line) => profile.ingest(line),
     fold: (line) => stream.push(line),
-  }, live)
+  }, { fromStart: live, end })
+  profile.commit()
   await profiles.ingestConfig(s, true)
   const out = stream.finish()
   return {
