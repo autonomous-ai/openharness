@@ -1,0 +1,84 @@
+name: Harness OS runtimes
+
+# Native ARM userspace bring-up does not build or publish an Apple/Pi image.
+# Both builders exercise the same script used by the existing PC image job.
+on:
+  workflow_dispatch:
+  push:
+    branches: ['os-arm/**']
+    paths: ['os/**', 'cli/**', 'tui/**', 'scripts/validate-tui-native.py', '.github/workflows/os-runtimes.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: os-runtimes-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { architecture: x86_64, runner: ubuntu-24.04, target: x86_64-unknown-linux-musl }
+          - { architecture: aarch64, runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.2'
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: tui
+          shared-key: tui-${{ matrix.target }}
+          cache-bin: false
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y musl-tools tmux
+      - name: Build and execute the exact-source runtime
+        run: make -C os runtime
+      - name: Check native terminal behavior
+        env:
+          RUNTIME_TARGET: ${{ matrix.target }}
+        run: |
+          timeout 8m cargo test --manifest-path tui/Cargo.toml --locked --release --target "$RUNTIME_TARGET"
+          python3 scripts/validate-tui-native.py "tui/target/$RUNTIME_TARGET/release/harness-tui"
+      - name: Verify source and retain runtime checksums
+        env:
+          RUNTIME_TARGET: ${{ matrix.target }}
+          RUNTIME_ARCH: ${{ matrix.architecture }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          source = json.loads(Path('os/work/runtime/source.json').read_text())
+          assert source['source_commit'] == subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert source['dirty'] is False
+          assert source['target'] == os.environ['RUNTIME_TARGET']
+          PY
+          cd os/work/runtime
+          sha256sum harness-tui cli.js notify.mjs source.json > SHA256SUMS
+          tar -czf "../harness-runtime-$RUNTIME_ARCH.tar.gz" harness-tui cli.js notify.mjs source.json SHA256SUMS
+      - uses: actions/upload-artifact@v6
+        with:
+          name: harness-runtime-${{ matrix.architecture }}
+          path: os/work/harness-runtime-${{ matrix.architecture }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain native test evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-runtime-checks-${{ matrix.architecture }}
+          path: .harness/validation/
+          if-no-files-found: warn
+          retention-days: 14
