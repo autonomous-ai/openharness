@@ -183,8 +183,11 @@ They retain a recovery checkpoint and rebuild the boot image. When the screen
 offers **Restart now**, save your work and press Enter when ready. Downloads do
 not restart the computer, and routine updates do not require another USB flash.
 
-Preview 4 needs the small bootstrap bundle from the new preview release once.
-Verify and extract that bundle, open a terminal in its folder, and run:
+Preview 8 reduces the USB download size; it does not require an update or reflash
+on an installed preview 7 computer. The installed-system feed remains on preview 7.
+
+Preview 4 needs the 7.2 MB [preview 7 bootstrap bundle](https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.7/harness-update-0.1.0-preview.7-47872670a-x86_64.zip)
+once. Verify and extract that bundle, open a terminal in its folder, and run:
 
 ```sh
 sha256sum -c SHA256SUMS
