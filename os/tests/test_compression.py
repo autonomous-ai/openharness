@@ -23,6 +23,17 @@ class PackageSizes(unittest.TestCase):
             self.assertEqual(package_sizes(root), [
                 {'name': 'largest', 'bytes': 901}, {'name': 'middle', 'bytes': 210}, {'name': 'small', 'bytes': 31}])
 
+    def test_missing_size_is_explicitly_unknown_and_does_not_stop_the_assessment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            desc = root / 'var/lib/pacman/local/metadata-only-1/desc'
+            desc.parent.mkdir(parents=True)
+            desc.write_text('%NAME%\nmetadata-only\n\n%VERSION%\n1\n')
+            row, = package_sizes(root)
+            self.assertIsNone(row['bytes'])
+            self.assertEqual(row['size_status'], 'not recorded')
+            self.assertEqual(row['database_fields'], ['%NAME%', '%VERSION%'])
+
 
 class Fixture:
     def setUp(self):

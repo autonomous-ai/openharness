@@ -109,10 +109,14 @@ def package_sizes(root):
             lines = block.splitlines()
             if len(lines) >= 2:
                 fields[lines[0]] = lines[1:]
-        # The installed package database uses SIZE. ISIZE belongs to the sync
-        # repository database, which is not what an extracted image contains.
-        result.append(dict(name=fields['%NAME%'][0], bytes=int(fields['%SIZE%'][0])))
-    return sorted(result, key=lambda row: (-row['bytes'], row['name']))
+        # Installed sizes are ancillary evidence. A package without that field
+        # must be reported as unknown, not as zero or a failed filesystem test.
+        size = fields.get('%SIZE%') or fields.get('%ISIZE%')
+        row = dict(name=fields['%NAME%'][0], bytes=int(size[0]) if size else None)
+        if size is None:
+            row.update(size_status='not recorded', database_fields=sorted(fields))
+        result.append(row)
+    return sorted(result, key=lambda row: (row['bytes'] is None, -(row['bytes'] or 0), row['name']))
 
 
 def tool_versions():
