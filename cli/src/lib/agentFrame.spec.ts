@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { agentFrame } from './agentFrame.js'
+import { agentProject } from './agentProject.js'
 import type { RegisteredSession } from './registry.js'
 
 function session(grid: RegisteredSession['grid'], codexHome: RegisteredSession['codexHome'] = null): RegisteredSession {
@@ -50,6 +51,21 @@ describe('agentFrame', () => {
     expect(frame.forkedFrom).toEqual({ agentId: 'p', name: 'P' })
     expect(JSON.stringify(frame)).not.toContain('p-sess.jsonl')
     expect(JSON.stringify(frame)).not.toContain('p-sess')
+  })
+
+  // The SCM seam (scm/scmProjects.ts) names the project's SCM and changes nothing else on it: every
+  // field a client reads is exactly what agentProject reports. A folder no SCM claims is `none`.
+  it('names the project\'s SCM beside exactly what agentProject reports, and none outside any repository', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'agent-frame-scm-'))
+    try {
+      const row = { ...session(null), cwd: dir }
+      const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })
+      expect(frame.project).toEqual({ kind: 'none', ...await agentProject(dir) })
+      expect(frame.project).toMatchObject({ kind: 'none', cwd: dir, root: null, remote: null, branch: null })
+      expect((await agentFrame({ ...row, cwd: null }, { selectedModel: null, terminalAvailable: true })).project).toBeNull()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   it('reports no assignment as null rather than omitting the field', async () => {
