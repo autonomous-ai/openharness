@@ -79,7 +79,7 @@ class Network(unittest.TestCase):
         return screen, network.NetworkPage(screen, first_use=True, live=live)
 
     def test_first_page_has_wifi_above_wired_rescan_and_always_visible_offline_install(self):
-        screen, page = self.page(['\x1b', 'r', 'i'])
+        screen, page = self.page(['\x1b', '\x03', 'r', 'i'])
         self.assertEqual(page.run(), network.INSTALL)
         text = '\n'.join(text for _, text in screen.lines)
         self.assertIn('Welcome to Harness', text)

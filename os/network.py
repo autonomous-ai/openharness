@@ -314,7 +314,13 @@ def main():
     if os.geteuid() != 0:
         parser.error('Open Wi-Fi through Harness.')
     curses.set_escdelay(25)
-    return curses.wrapper(lambda screen: NetworkPage(screen, args.first_use, Path('/etc/harness-live').exists()).run())
+    def page(screen):
+        # Treat Ctrl+C as a key, so first use cannot be killed into an empty
+        # workspace. Ordinary Wi-Fi and the password field still handle it as
+        # their existing Back action. wrapper restores the terminal on exit.
+        curses.raw()
+        return NetworkPage(screen, args.first_use, Path('/etc/harness-live').exists()).run()
+    return curses.wrapper(page)
 
 
 if __name__ == '__main__':
