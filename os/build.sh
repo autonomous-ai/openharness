@@ -87,7 +87,7 @@ for d in ['syslinux', 'efiboot', 'grub']:
             try: s = f.read_text()
             except UnicodeDecodeError: continue
             s = s.replace('vmlinuz-linux', 'vmlinuz-linux-lts').replace('initramfs-linux.img', 'initramfs-linux-lts.img')
-            s = s.replace('Arch Linux install medium', 'Harness - try or install')
+            s = s.replace('Arch Linux install medium', 'Install Harness')
             # The 256 MiB Archiso default cannot install even one current agent.
             # tmpfs grows on demand; this is a ceiling, not reserved memory.
             s = s.replace('archisobasedir=%INSTALL_DIR%', 'archisobasedir=%INSTALL_DIR% cow_spacesize=50%')
