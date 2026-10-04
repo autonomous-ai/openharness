@@ -177,16 +177,22 @@ install the tools the project needs. Save work under `~/projects`.
 A small **Update ready · Super+u** notice appears when a new hn or CLI release
 has downloaded and passed its checks. Press **Super+u**, then Enter to apply it.
 The screen reconnects; your running agents and terminal processes remain.
-Use **R** in Updates to restore the previous runtime if needed.
+Use **r** in Updates to restore the previous runtime if needed.
 
-System updates use **S** in the same screen and ask for your account password.
+System updates use **s** in the same screen and ask for your account password.
 They retain a recovery checkpoint and rebuild the boot image. When the screen
 offers **Restart now**, save your work and press Enter when ready. Downloads do
 not restart the computer, and routine updates do not require another USB flash.
 
-Preview 9 fixes a transient encrypted-disk cleanup failure after installation.
-An installed computer that boots successfully needs no update or reflash for this
-fix. The installed-system feed remains on preview 7.
+Preview 5 through 8 can receive preview 9 through **Super+u**, then **s**.
+It includes the new network page, first-use workspace, lowercase project folders,
+and the fix preventing older public CLI releases from replacing the bundled
+OpenCode compatibility code. Running work is preserved; save before restarting.
+No reinstallation or USB flash is needed for these installed-system changes.
+
+Preview 9 also fixes a transient encrypted-disk cleanup failure in the USB
+installer. A computer that already boots successfully needs no reinstallation
+for that cleanup fix.
 
 Preview 4 needs the 7.2 MB [preview 7 bootstrap bundle](https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.7/harness-update-0.1.0-preview.7-47872670a-x86_64.zip)
 once. Verify and extract that bundle, open a terminal in its folder, and run:
