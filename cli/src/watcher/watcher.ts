@@ -36,17 +36,35 @@ export interface HistoryEvent {
   lines: LineEvent[]
 }
 
+/** A tailed session's delivery, held by an attach (see `Watcher.hold`). */
+export interface TailHold {
+  /** The byte the next undelivered line starts at. */
+  readonly offset: number
+  /** Resume delivery — from `offset` when given (where the caller's own read stopped). Idempotent. */
+  release(offset?: number | null): void
+}
+
+/** An attach that holds a tail longer than this has hung; the hold lets go with a warning. */
+export const HOLD_TIMEOUT_MS = 30_000
+
+const EMPTY = Buffer.alloc(0)
+
 interface FileState extends WatchedSession {
   offset: number
   /** Bytes below this were on disk before the current read cursor was placed — history, not live. */
   historicalUntil: number
-  partial: string
+  /** The end of the file not yet ending in a newline: raw bytes, decoded only once the line is whole,
+   *  so a character split between two reads is not mangled and positions stay byte-exact. */
+  partial: Buffer
   seq: number
   debounce: NodeJS.Timeout | null
   reading: boolean
   pending: boolean
   /** Attaches holding delivery (see `hold`); nothing is read while any does. */
-  held: number
+  holds: Set<TailHold>
+  /** Settled when the last hold is released: what a drain waits on. */
+  unheld: Promise<void> | null
+  settleUnheld: (() => void) | null
   cursorLines: string[]
 }
 
@@ -104,12 +122,14 @@ export class Watcher extends EventEmitter {
       offset,
       // A `fromStart` tail of a file that already has content reads that content as history.
       historicalUntil: opts.fromStart ? size : 0,
-      partial: '',
+      partial: EMPTY,
       seq: 0,
       debounce: null,
       reading: false,
       pending: false,
-      held: 0,
+      holds: new Set(),
+      unheld: null,
+      settleUnheld: null,
       cursorLines,
     })
     this.bySession.set(session.sessionId, session.transcriptPath)
@@ -118,36 +138,50 @@ export class Watcher extends EventEmitter {
   }
 
   /**
-   * Stop delivering a tailed session's lines, and say where delivery stopped: the byte its next line
-   * starts at. Waits out a read already in progress. Null when the session is not being tailed.
+   * Stop delivering a tailed session's lines from `transcriptPath`, and say where delivery stopped: the
+   * byte its next line starts at. Waits out a read already in progress. Null when that file is not the
+   * one being tailed for the session.
    *
    * A re-attach rebuilds the session's normalizer from the transcript while the old one is still the
    * one being fed. Holding the tail is what lets it read exactly up to where the old one stopped and
    * hand everything after that to the new one: a line written meanwhile is neither lost to the
-   * normalizer being replaced nor read twice. Every hold must be released.
+   * normalizer being replaced nor read twice. Every hold must be released; one held past
+   * `timeoutMs` — an attach that hung — lets go on its own, so a stream is never frozen for good.
    */
-  async hold(sessionId: string): Promise<number | null> {
-    const filePath = this.bySession.get(sessionId)
-    const state = filePath ? this.files.get(filePath) : undefined
+  async hold(sessionId: string, transcriptPath: string, timeoutMs = HOLD_TIMEOUT_MS): Promise<TailHold | null> {
+    const state = this.bySession.get(sessionId) === transcriptPath ? this.files.get(transcriptPath) : undefined
     if (!state) return null
-    state.held++
+    if (!state.holds.size) state.unheld = new Promise((resolve) => { state.settleUnheld = resolve })
     if (state.debounce) { clearTimeout(state.debounce); state.debounce = null }
-    while (state.reading) await new Promise((resolve) => setTimeout(resolve, 5))
-    return state.offset - Buffer.byteLength(state.partial, 'utf8')
-  }
-
-  /** Undo a `hold`. With `offset`, delivery resumes there — where the caller's own read stopped — and
-   *  whatever was written since is read at once. */
-  release(sessionId: string, offset: number | null = null): void {
-    const filePath = this.bySession.get(sessionId)
-    const state = filePath ? this.files.get(filePath) : undefined
-    if (!filePath || !state || !state.held) return
-    state.held--
-    if (offset !== null) {
-      state.offset = offset
-      state.partial = ''
+    let released = false
+    // Counted from the request: an attach that never lets go is hung however long its read took.
+    const timer = setTimeout(() => {
+      console.warn(`[watcher] ${sessionId.slice(0, 8)} held for ${timeoutMs} ms — letting its tail go`)
+      hold.release()
+    }, timeoutMs)
+    timer.unref()
+    const hold: TailHold = {
+      offset: 0,
+      release: (offset = null) => {
+        if (released) return
+        released = true
+        clearTimeout(timer)
+        state.holds.delete(hold)
+        if (offset !== null) {
+          state.offset = offset
+          state.partial = EMPTY
+        }
+        if (state.holds.size) return
+        state.settleUnheld?.()
+        state.unheld = null
+        state.settleUnheld = null
+        if (this.files.get(transcriptPath) === state) this.schedule(transcriptPath)
+      },
     }
-    if (!state.held) this.schedule(filePath)
+    state.holds.add(hold)
+    while (state.reading) await new Promise((resolve) => setTimeout(resolve, 5))
+    ;(hold as { offset: number }).offset = state.offset - state.partial.length
+    return hold
   }
 
   /** Move a byte-tailed session's read cursor to a known length after the file was rewritten in place
@@ -164,7 +198,7 @@ export class Watcher extends EventEmitter {
     if (!state) return
     if (state.debounce) { clearTimeout(state.debounce); state.debounce = null }
     state.offset = offset
-    state.partial = ''
+    state.partial = EMPTY
   }
 
   async removeSession(sessionId: string): Promise<void> {
@@ -200,6 +234,9 @@ export class Watcher extends EventEmitter {
   async pollSession(sessionId: string): Promise<void> {
     const filePath = this.bySession.get(sessionId)
     if (!filePath) return
+    // A drain asks for everything on disk: an attach holding the tail delivers it when it lets go.
+    const unheld = this.files.get(filePath)?.unheld
+    if (unheld) await unheld
     await this.readNew(filePath)
     while (this.files.get(filePath)?.reading) await new Promise((resolve) => setTimeout(resolve, 10))
   }
@@ -226,14 +263,14 @@ export class Watcher extends EventEmitter {
   private async readNew(filePath: string): Promise<void> {
     const state = this.files.get(filePath)
     if (!state) return
-    if (state.reading || state.held) { state.pending = true; return }
+    if (state.reading || state.holds.size) { state.pending = true; return }
     state.reading = true
     try {
       do {
         state.pending = false
         await this.readOnce(filePath, state)
         // A hold taken during this read stops it here; `release` reads what is left.
-      } while (state.pending && !state.held && this.files.get(filePath) === state)
+      } while (state.pending && !state.holds.size && this.files.get(filePath) === state)
     } finally {
       state.reading = false
     }
@@ -250,19 +287,19 @@ export class Watcher extends EventEmitter {
       // The file shrank: rewritten in place (or recreated). Whatever it holds now is read from byte 0,
       // and none of it is new to the world — it is history until the write that grows it past this.
       state.offset = 0
-      state.partial = ''
+      state.partial = EMPTY
       state.historicalUntil = size
     }
     if (size <= state.offset) return
 
     const start = state.offset
-    let chunk = ''
+    let fresh: Buffer
     try {
       const fh = await open(filePath, 'r')
       try {
         const buf = Buffer.alloc(size - start)
         const { bytesRead } = await fh.read(buf, 0, buf.length, start)
-        chunk = buf.subarray(0, bytesRead).toString('utf8')
+        fresh = buf.subarray(0, bytesRead)
         state.offset = start + bytesRead
       } finally {
         await fh.close()
@@ -272,17 +309,17 @@ export class Watcher extends EventEmitter {
       return
     }
 
-    // Byte position of each line, to tell the historical prefix of this chunk from the live rest: a
-    // file appended to between the cursor being placed and this read has both in the same chunk. The
-    // carried partial line began that many bytes before `start`.
-    let pos = start - Buffer.byteLength(state.partial, 'utf8')
-    const combined = state.partial + chunk
-    const lines = combined.split('\n')
-    state.partial = combined.endsWith('\n') ? '' : (lines.pop() ?? '')
+    // Lines are cut on the newline BYTE and decoded only once whole. Each line's byte position tells
+    // the historical prefix of this read from the live rest: a file appended to between the cursor
+    // being placed and this read has both. The carried partial line began that many bytes before `start`.
+    const base = start - state.partial.length
+    const combined = state.partial.length ? Buffer.concat([state.partial, fresh]) : fresh
+    let lineStart = 0
     const history: LineEvent[] = []
-    for (const raw of lines) {
-      const linePos = pos
-      pos += Buffer.byteLength(raw, 'utf8') + 1
+    for (let newline = combined.indexOf(10); newline >= 0; newline = combined.indexOf(10, lineStart)) {
+      const linePos = base + lineStart
+      const raw = combined.subarray(lineStart, newline).toString('utf8')
+      lineStart = newline + 1
       const text = raw.replace(/\r$/, '')
       if (!text.trim()) continue
       const evt: LineEvent = {
@@ -298,6 +335,8 @@ export class Watcher extends EventEmitter {
       this.emit('line', evt)
     }
     if (history.length) this.flushHistory(state, history)
+    // A copy: the read buffer can be large, and only its unfinished last line is kept.
+    state.partial = lineStart < combined.length ? Buffer.from(combined.subarray(lineStart)) : EMPTY
   }
 
   private flushHistory(state: FileState, lines: LineEvent[]): void {
@@ -311,7 +350,7 @@ export class Watcher extends EventEmitter {
     while (common < state.cursorLines.length && common < next.length && state.cursorLines[common] === next[common]) common++
     state.cursorLines = next
     state.offset = 0
-    state.partial = ''
+    state.partial = EMPTY
     state.historicalUntil = 0
     for (const text of next.slice(common)) {
       if (!text.trim()) continue

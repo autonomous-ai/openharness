@@ -529,7 +529,8 @@ describe('the review of the first cut', () => {
     await watcher.pollSession('s1')
     expect(seen.map((line) => line.fold)).toEqual(['old'])
 
-    const heldAt = await watcher.hold('s1')
+    const hold = (await watcher.hold('s1', file))!
+    const heldAt = hold.offset
     expect(heldAt).toBe(Buffer.byteLength([...open, codex.agent('still going')].join('\n') + '\n'))
     const replacement = newFold('codex')
     const stream = new TranscriptFold(replacement.ingest, replacement.turnOpen, false)
@@ -538,14 +539,15 @@ describe('the review of the first cut', () => {
       start: () => { appendFileSync(file, codex.complete('t1') + '\n') },
       profile: () => {},
       fold: (line) => stream.push(line),
-    }, { end: heldAt! })
-    await watcher.pollSession('s1')
+    }, { end: heldAt })
+    // Held: nothing reaches the old fold, however long it waits (a drain would wait for the release).
+    await new Promise((resolve) => setTimeout(resolve, 80))
     expect(seen).toHaveLength(1)
     expect(stream.finish().turnOpen).toBe(true)
     expect(read.next).toBe(heldAt)
 
     current = 'new'
-    watcher.release('s1', read.next)
+    hold.release(read.next)
     await watcher.pollSession('s1')
     expect(seen).toEqual([{ fold: 'old', text: codex.agent('still going') }, { fold: 'new', text: codex.complete('t1') }])
     for (const line of seen.filter((entry) => entry.fold === 'new')) replacement.ingest(line.text)
@@ -565,19 +567,38 @@ describe('the review of the first cut', () => {
     expect(observed[0]).toBe(codex.started('t1'))
   })
 
+  it('treats a transcript that is missing as an empty history, as the whole read did', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const fed: string[] = []
+      const read = await attachTranscript(file, codexAttachRules(() => []), { profile: (line) => fed.push(line), fold: (line) => fed.push(line) })
+      expect(read).toMatchObject({ next: 0, records: 0, content: false, turnFrom: 0, seeds: [] })
+      expect(fed).toEqual([])
+      expect(warn).toHaveBeenCalledOnce()
+    } finally { warn.mockRestore() }
+  })
+
+  // A read that fails part-way must not hand the tail byte 0: from there it would deliver every old
+  // turn as a new one.
   it.each([
-    ['is missing', () => {}],
-    ['cannot be read', () => { writeFileSync(file, codex.user('x') + '\n'); chmodSync(file, 0o000) }],
-  ])('treats a transcript that %s as an empty history, as the whole read did', async (_, prepare) => {
+    ['cannot be read', () => { chmodSync(file, 0o000) }, {}],
+    ['fails while it is being read', () => {}, { fold: () => { throw new Error('disk full') } }],
+  ])('resumes the tail at the end of a transcript that %s', async (_, prepare, consumers) => {
+    const content = [codex.started('t1'), codex.user('a'), codex.complete('t1')].join('\n') + '\n'
+    writeFileSync(file, content)
     prepare()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const fed: string[] = []
-    const read = await attachTranscript(file, codexAttachRules(() => []), { profile: (line) => fed.push(line), fold: (line) => fed.push(line) })
-    expect(read).toMatchObject({ next: 0, records: 0, content: false, turnFrom: 0, seeds: [] })
-    expect(fed).toEqual([])
-    expect(warn).toHaveBeenCalledOnce()
-    warn.mockRestore()
-    try { chmodSync(file, 0o600) } catch { /* missing */ }
+    try {
+      const read = await attachTranscript(file, codexAttachRules(() => []), { profile: () => {}, fold: () => {}, ...consumers })
+      expect(read).toMatchObject({ next: Buffer.byteLength(content), records: 0, content: true })
+      const boundary = Buffer.byteLength(codex.started('t1') + '\n' + codex.user('a') + '\n')
+      const held = await attachTranscript(file, codexAttachRules(() => []), { profile: () => {}, fold: () => {}, ...consumers }, { end: boundary })
+      expect(held.next).toBe(boundary)
+      expect(warn).toHaveBeenCalledTimes(2)
+    } finally {
+      warn.mockRestore()
+      chmodSync(file, 0o600)
+    }
   })
 
   it('names thinking blocks so no two windows of one session share an id, and one window keeps its names', async () => {

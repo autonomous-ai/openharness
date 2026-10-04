@@ -229,10 +229,20 @@ export async function replayAttachSpan(
   return { next: read?.next ?? span.end, records, content: records > 0 || !!read?.partial }
 }
 
+/** How far a file reaches, up to `end`; 0 for one that is not there. */
+async function reach(filePath: string, end: number | undefined): Promise<number> {
+  try {
+    const { size } = await stat(filePath)
+    return end === undefined ? size : Math.min(end, size)
+  } catch { return 0 }
+}
+
 /**
- * Locate, then replay. A file that shrank under the walk is walked once more and then replayed whole;
- * one that cannot be read at all — moved, archived or deleted since it was announced, or unreadable —
- * is an empty history, as it always was, and the tail takes it from there.
+ * Locate, then replay. A file that shrank under the walk is walked once more and then replayed whole.
+ * One that is not there — moved, archived or deleted since it was announced — is an empty history, as
+ * it always was. A read that fails part-way (an unreadable file, a consumer that throws) leaves the
+ * history unread, not unwritten: the tail resumes where the read was meant to end, never at byte 0,
+ * from where it would deliver old turns as new ones.
  */
 export async function attachTranscript(
   filePath: string,
@@ -247,7 +257,8 @@ export async function attachTranscript(
     return { ...span, ...await replayAttachSpan(filePath, span, consumers) }
   } catch (error) {
     console.warn(`[attach] ${filePath} could not be read: ${String(error)}`)
-    return { ...wholeFile(0), next: 0, records: 0, content: false }
+    const end = await reach(filePath, options.end)
+    return { ...wholeFile(end), next: end, records: 0, content: end > 0 }
   }
 }
 

@@ -170,7 +170,7 @@ import {
   type TerminalRuntimeRef,
   type TmuxRuntimeRef,
 } from './lib/terminalTypes.js'
-import { Watcher, type HistoryEvent, type LineEvent } from './watcher/watcher.js'
+import { Watcher, type HistoryEvent, type LineEvent, type TailHold } from './watcher/watcher.js'
 import { chooseHookAgent, startHookServer } from './hookServer.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
 import { legacyDaemonStatus, localDaemonStatus, saveDaemonPort } from './lib/daemonEndpoint.js'
@@ -2390,9 +2390,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
      * tailing from the end, since its history belongs to `session_get`, not to the live stream.
      */
     replayFromStart = false,
-    /** A tail being taken over: where its delivery was held (see `attachSession`), and where the read
-     *  that replaces its normalizer stopped — the byte the tail resumes from. */
-    handover: { heldAt: number | null; next: number | null } = { heldAt: null, next: null },
+    /** A tail being taken over (see `attachSession`): the hold on it, and where the read that replaces
+     *  its normalizer stopped — the byte the tail resumes from. */
+    handover: { hold: TailHold | null; next: number | null } = { hold: null, next: null },
   ): Promise<boolean> => {
     if (!await validateTerminal(session)) return false
     if (!reset && (
@@ -2466,8 +2466,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         : null
     let fromEnd: AttachRead | null = null
     if (session.transcriptPath && fromEndFold) {
+      // A session already being tailed — a reset — is re-read while its old normalizer is still the one
+      // being fed: hold its tail, so the read stops exactly where delivery stopped and delivery resumes,
+      // into the new normalizer, from where the read stopped (released by `attachSession`).
+      handover.hold = await watcher.hold(session.sessionId, session.transcriptPath)
       // Lines a held tail already delivered were seen live; replaying them live again would repeat them.
-      const live = replayLive && handover.heldAt === null
+      const live = replayLive && handover.hold === null
       const stream = new TranscriptFold(fromEndFold.ingest, fromEndFold.turnOpen, live)
       const profile = runtimeProfiles.beginHydrate(session)
       const read = await attachTranscript(session.transcriptPath, fromEndFold.rules, {
@@ -2480,12 +2484,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         profile: (line) => profile.ingest(line),
         fold: (line) => stream.push(line),
         observe,
-      }, { fromStart: live, end: handover.heldAt ?? undefined })
+      }, { fromStart: live, end: handover.hold?.offset })
       profile.commit()
       fromEnd = read
       handover.next = read.next
       historyTurnOpen = take(stream.finish())
-      console.log(`[agent] ${sid(session.agentId)} read the transcript from its end · turn @${read.turnFrom} · profile @${read.profileFrom} · ${read.end} bytes${handover.heldAt === null ? '' : ' · took over its tail'}`)
+      console.log(`[agent] ${sid(session.agentId)} read the transcript from its end · turn @${read.turnFrom} · profile @${read.profileFrom} · ${read.end} bytes${handover.hold ? ' · took over its tail' : ''}`)
     }
     const lines = session.transcriptPath && !fromEnd ? await tailFile(session.transcriptPath, Infinity) : []
     if (!fromEnd) {
@@ -2687,19 +2691,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     replayFromStart = false,
   ): Promise<boolean> =>
     attaches.attach(session, reset, async () => {
-      // A Claude Code or Codex session already being tailed — a reset — is re-read from the end while
-      // its old normalizer is still the one being fed. Hold the tail for the whole attach: the read
-      // stops exactly where delivery stopped, and delivery resumes from where the read stopped, into
-      // the new normalizer, after the attach has said whether a turn is open. Nothing written meanwhile
-      // is lost to the normalizer being replaced, read twice, or delivered ahead of that.
-      const handover = { heldAt: null as number | null, next: null as number | null }
-      if (session.transcriptPath && (session.engine === 'claude' || session.engine === 'codex')) {
-        handover.heldAt = await watcher.hold(session.sessionId)
-      }
+      // A tail an attach holds (a Claude Code or Codex reset, see attachSessionNow) is released only
+      // here, after the whole attach — the new normalizer installed and any open turn said to be open —
+      // so delivery resumes into it, in order. Released on every exit, however the attach ends.
+      const handover = { hold: null as TailHold | null, next: null as number | null }
       try {
         return await attachSessionNow(session, reset, replayCursorFromStart, replayFromStart, handover)
       } finally {
-        if (handover.heldAt !== null) watcher.release(session.sessionId, handover.next)
+        handover.hold?.release(handover.next)
       }
     })
   const input: SessionInputController = new SessionInputController({
