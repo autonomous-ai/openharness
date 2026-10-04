@@ -44,19 +44,22 @@ def focused(vm, app, name, timeout=15):
     return round(time.monotonic() - started, 3)
 
 
-def state(vm, *, path=None, value=None, timeout=10):
+def state(vm, *, path=None, value=None, ready=False, timeout=10):
     expression = 'import json; d=json.load(open("/tmp/harness-browser-probe/state.json")); '
     if path is not None:
         expression += 'assert d["path"] == ' + repr(path) + '; '
     if value is not None:
         expression += 'assert d["input"] == ' + repr(value) + '; '
+    if ready:
+        expression += 'assert d["focused"] and d["inputFocused"] and d["outerWidth"] > 0; '
     wait_command(vm, 'python3 -c ' + shlex.quote(expression), timeout)
     return json.loads(vm.read_file('/tmp/harness-browser-probe/state.json'))
 
 
 def page_fills_display(vm, name):
     # Read the actual rendered page, independently from the compositor's state.
-    # Below Chromium's toolbar the white page must reach both sides and bottom.
+    # Below Chromium's toolbar the fixture color must reach both sides and bottom.
+    # A white frame can be Chromium's previous blank tab, before this page paints.
     # HTTP load/input events can precede the next compositor frame. Observe a
     # bounded render deadline, retaining every sample rather than assuming that
     # receiving the page's event means its pixels are already on the display.
@@ -69,7 +72,8 @@ def page_fills_display(vm, name):
             pixels = [frame.getpixel(position) for position in positions]
         with (vm.folder / 'display-coverage.jsonl').open('a') as log:
             log.write(json.dumps(dict(frame=name, seconds=time.monotonic()-started, pixels=pixels)) + '\n')
-        if all(min(pixel) > 235 for pixel in pixels):
+        if all(all(abs(actual - expected) <= 3 for actual, expected in zip(pixel, (230, 245, 236)))
+               for pixel in pixels):
             return
         assert time.monotonic() - started < 5, (positions, pixels)
         time.sleep(.1)
@@ -104,6 +108,10 @@ def check_browser(vm, result):
     vm.keys('ret')
     result['page'] = state(vm, path='/first')
     page_fills_display(vm, 'browser-page-full-display')
+    # Select the actual rendered input label as a user would. HTML autofocus on
+    # first navigation is asynchronous and is not the OS focus contract.
+    vm.click_word('browser-input-click', 'Keyboard')
+    state(vm, path='/first', ready=True)
     vm.type_probe('browser')
     state(vm, value='browser')
     result['checks'].append('Super+b cold-starts a maximized browser; its local page fills the display and receives real keyboard input')
@@ -115,6 +123,7 @@ def check_browser(vm, result):
         state(vm, value='browser' + 'x'*index)
         vm.keys('meta_l', 'b')
         to_browser = focused(vm, 'chromium', 'toggle-browser-' + str(index))
+        state(vm, ready=True)
         vm.type_probe('x')
         state(vm, value='browser' + 'x'*(index+1))
         page_fills_display(vm, 'toggle-full-display-' + str(index))
