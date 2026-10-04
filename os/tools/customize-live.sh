@@ -15,6 +15,7 @@ passwd -d root
 mkdir -p /etc/sudoers.d /home/me/projects /etc/systemd/system/getty@tty1.service.d
 echo 'me ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/10-live
 chmod 440 /etc/sudoers.d/10-live
+visudo -cf /etc/sudoers.d/20-harness-network
 chown me:me /home/me/projects
 systemctl enable NetworkManager systemd-resolved systemd-timesyncd getty@tty1.service
 systemctl enable harness-keyring.service
