@@ -978,6 +978,8 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
             vm.monitor('set_link', name='hnnet', up=False)
         unlock_delay = 100 if config['encrypt'] else 0
         vm.login_installed(config, unlock_delay=unlock_delay)
+        # First-use network setup and model turns are not OS boot time.
+        result['installed_hn_ready_seconds_including_test_login'] = round(time.monotonic() - vm.started, 3)
         if direct:
             trial_project = check_first_use(vm, lambda command: command, folder, installed=True)
             result['checks'].append('Installed Wi-Fi first use advances into three real panes and the bundled default agent answers keyboard input')
@@ -1005,7 +1007,6 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         if unlock_delay:
             result['installed_unlock_prompt_seconds'] = vm.unlock_prompt_seconds
             result['checks'].append('Harness unlock screen renders, masks input, accepts a retry after a wrong password, and unlocks after the deliberate 100-second wait')
-        result['installed_hn_ready_seconds_including_test_login'] = round(time.monotonic() - vm.started, 3)
         result['installed_keyboard_readiness'] = check_graphical_keyboard(vm, 'installed')
         result['checks'].append('Installed graphical hn accepts physical-keyboard shell input, returns output and returns home after closing the pane')
         if config['encrypt']:

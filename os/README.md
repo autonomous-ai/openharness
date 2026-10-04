@@ -242,9 +242,10 @@ owner. System guidance for agents lives at `/usr/share/harness-os/AGENTS.md`.
 1. Installer input/disk safety tests, shell/Python/XML/JSON syntax, workflow lint.
 2. Build a real ISO; check checksums, package inventory and configuration in its
    actual SquashFS filesystem.
-3. Boot the ISO under BIOS and UEFI; verify hn is visible and Chromium is absent
-   until requested. Test browser toggle, clipboard, terminal input, reconnect,
-   last-pane behavior and frontend restart without terminating agent work.
+3. Boot the ISO under BIOS and UEFI; verify the installer opens directly and no
+   agent or browser starts. On the installed disk, test browser focus and keyboard
+   routing, clipboard, terminal input, reconnect, last-pane behavior and screen
+   restart without terminating agent work.
 4. Operate the real installer form on a guest terminal: disk picker, encryption
    toggle, masked passwords, Back/Esc, a single explicit Install action and persistent completion.
    Install from the offline image to disposable VM disks, encrypted and plain;

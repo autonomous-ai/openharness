@@ -47,11 +47,11 @@ on:
         default: false
         type: boolean
       checks:
-        description: 'Image journey, lock/suspend, Wi-Fi/audio essentials, or offline hardware installation; image_run_id reuses an image'
+        description: 'Image journey, browser focus, lock/suspend, Wi-Fi/audio, or offline hardware installation; image_run_id reuses an image'
         required: false
         default: image
         type: choice
-        options: [image, session, essentials, hardware]
+        options: [image, browser, session, essentials, hardware]
   push:
     branches: ['os/**']
     paths: ['os/**', 'tui/**', 'cli/**', '.github/workflows/os.yml']
@@ -61,7 +61,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'session' && 'session' || inputs.checks == 'essentials' && 'essentials' || inputs.checks == 'hardware' && 'hardware' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
+  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'browser' && 'browser' || inputs.checks == 'session' && 'session' || inputs.checks == 'essentials' && 'essentials' || inputs.checks == 'hardware' && 'hardware' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
   cancel-in-progress: false
 
 jobs:
@@ -182,8 +182,11 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
           if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
+      - name: Install the disposable browser observer
+        if: ${{ inputs.checks == 'browser' }}
+        run: sudo apt-get install -y wlrctl
       - name: Check the focused session test and workflow
-        if: ${{ inputs.checks == 'session' }}
+        if: ${{ inputs.checks == 'session' || inputs.checks == 'browser' }}
         run: |
           make -C os check
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
@@ -196,7 +199,7 @@ jobs:
           run-id: ${{ inputs.workload_seed_run_id }}
           github-token: ${{ github.token }}
       - name: Boot, operate, install and reboot the real image
-        if: ${{ inputs.checks != 'session' }}
+        if: ${{ inputs.checks != 'session' && inputs.checks != 'browser' }}
         env:
           OS_WORKLOAD_SOURCE_RUN: ${{ inputs.workload_seed_run_id }}
           OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
@@ -205,6 +208,11 @@ jobs:
       - name: Exercise password lock and actual suspend/resume
         if: ${{ inputs.checks == 'session' }}
         run: python3 os/tests/session_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --session-file os/root/usr/lib/harness-os/session --theme-directory os/root/usr/share/plymouth/themes/harness
+      - name: Exercise installed browser focus and physical keyboard routing
+        if: ${{ inputs.checks == 'browser' }}
+        env:
+          OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
+        run: python3 os/tests/browser_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --memory-mib "$OS_MEMORY_MIB" --wlrctl /usr/bin/wlrctl --browser-script os/root/usr/bin/hn-browser --compositor-config os/root/usr/share/harness-os/labwc/rc.xml
       - name: Show machine failure diagnostics
         if: failure()
         run: |
