@@ -112,6 +112,11 @@ export class LocalClient {
     return (await answer).payload as T
   }
 
+  /** Stops reading the socket, as a client that hangs does: the daemon's writes back up behind it. */
+  pauseReading(): void {
+    (this.ws as unknown as { _socket?: { pause(): void } })._socket?.pause()
+  }
+
   close(): void {
     try { this.ws.close() } catch { /* already closed */ }
   }
