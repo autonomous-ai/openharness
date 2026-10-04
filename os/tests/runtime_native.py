@@ -246,21 +246,34 @@ def main():
             receipt['checks'].append('Three real hn shell panes open; the attached terminal accepts native PTY keyboard input')
             prompt = ('Create sum.py here using only the Python standard library. It must accept zero or more '
                       'signed integer command-line arguments, print their sum as one integer, and exit successfully. '
-                      'No arguments must print 0. Test it. After testing, write exactly done to agent.done. '
-                      'Do the work now without questions or subagents.')
+                      'No arguments must print 0. Test it. Do the work now without questions or subagents.')
             # Keep the agent open as it is on the OS. A completed `opencode run`
             # process is archived by Harness; that is not a running pane to retain.
             agent_command = shlex.join(['opencode', '--prompt', prompt])
             type_into_screen(agent, 'printf "%s" "$$" > agent.pid; exec ' + agent_command)
-            wait(lambda: (project / 'agent.done').read_text().strip() == 'done',
-                 'OpenCode upstream-default interactive project turn', 480)
+
+            def project_passes():
+                if not (project / 'sum.py').is_file():
+                    return False
+                before = checksum(project / 'sum.py')
+                results = []
+                receipt['project_execution'] = results
+                for values, expected in [([], '0'), (['13', '-5', '7'], '15'),
+                                         (['999999999999999999999', '1'], '1000000000000000000000')]:
+                    actual = subprocess.run(['python3', str(project / 'sum.py'), *values], env=env,
+                                            cwd=project, text=True, timeout=5, capture_output=True,
+                                            stdin=subprocess.DEVNULL)
+                    results.append({'arguments': values, 'expected': expected, 'exit': actual.returncode,
+                                    'stdout': actual.stdout, 'stderr': actual.stderr})
+                    if actual.returncode != 0 or actual.stdout.strip() != expected:
+                        return False
+                return before == checksum(project / 'sum.py')
+
+            # Judge the actual work independently, rather than asking the model
+            # to manufacture a fixture-only "done" file or trusting its reply.
+            wait(project_passes, 'Agent-created Python passes independent execution', 480)
             agent_pid = int((project / 'agent.pid').read_text())
             agent_start_time = Path(f'/proc/{agent_pid}/stat').read_text().split()[21]
-            assert (project / 'sum.py').is_file(), 'The agent did not create the requested project'
-            for values, expected in [([], '0'), (['13', '-5', '7'], '15'), (['999999999999999999999', '1'], '1000000000000000000000')]:
-                actual = subprocess.check_output(['python3', str(project / 'sum.py'), *values], env=env,
-                                                 cwd=project, text=True, timeout=5).strip()
-                assert actual == expected, (values, actual, expected)
             receipt['checks'].append('Upstream-default OpenCode runs inside an hn pane and creates Python code that passes independent execution checks')
             expected_panes = {shell, right, agent}
             before_panes = hn('list-panes', '-t', 'runtime', '-F', '#{pane_id}').splitlines()
@@ -307,7 +320,7 @@ def main():
                     cleanup_errors.append(str(error))
             for log in logs:
                 log.close()
-            for name in ['sum.py', 'agent.done', 'agent.pid', 'shell.pid']:
+            for name in ['sum.py', 'agent.pid', 'shell.pid']:
                 if (project / name).is_file():
                     shutil.copy2(project / name, output / name)
             receipt['finished_at_unix'] = time.time()
