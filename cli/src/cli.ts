@@ -178,6 +178,10 @@ import { createAgentEvents } from './core/agents/events.js'
 import { createSessionNormalizers } from './core/transcripts/normalizers.js'
 import { createInput } from './core/input.js'
 import { createQuestions } from './core/questions.js'
+import { createTurnActivity } from './core/turns/activity.js'
+import { createLastTurnReader } from './core/transcripts/lastTurn.js'
+import { createRecaps } from './core/turns/recaps.js'
+import { createHeartbeats } from './core/turns/heartbeats.js'
 import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
@@ -2197,26 +2201,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const sessionTurnState = normalizers.sessionTurnState
   const sessionTurnOpen = normalizers.sessionTurnOpen
   const watcher = new Watcher()
-  const codexActivity = new CodexActivityReader()
-  const runtimeActivity = new RuntimeActivityReader({
-    codex: session => codexActivity.read(session),
-    capture: async session => {
-      const screen = await terminals.capture(session, { mode: 'visible', ansi: true })
-      return screen.state === 'succeeded' ? screen.value : null
-    },
+  // Whether a turn is really working, beyond its transcript (core/turns/activity.ts).
+  const activity = createTurnActivity({
+    terminals,
+    bySession: (sessionId) => registry.bySession(sessionId),
+    sessionTurnOpen,
+    drain: (sessionId) => watcher.pollSession(sessionId),
   })
-  const turnActivity = new TurnActivity({
-    runtime: sessionId => {
-      const session = registry.bySession(sessionId)
-      return session?.active ? { key: activityRuntimeKey(session), turnOpen: sessionTurnOpen(sessionId) } : undefined
-    },
-    drain: sessionId => watcher.pollSession(sessionId),
-    probe: async sessionId => {
-      const session = registry.bySession(sessionId)
-      return session?.active ? runtimeActivity.read(session) : 'unknown'
-    },
-  })
-  activityFrameContextRef = session => isTerminalEngine(session.engine) ? null : turnActivity.snapshot(session.sessionId) ?? null
+  const codexActivity = activity.codexActivity
+  const runtimeActivity = activity.runtimeActivity
+  const turnActivity = activity.turnActivity
+  activityFrameContextRef = activity.activityFrame
   backend.activityFrameProvider = activityFrameContextRef
 
   const queuedSessionEvents: Array<{
@@ -2705,90 +2700,35 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const questionWatcher = asking.questionWatcher
 
 
-  // The recap is an excerpt of the answer, cut the moment the turn ends — no model in the loop. The
-  // window, the phone and the dial show it beside the whole answer, so a model's rewrite (which cost
-  // about 9 s of every turn) said again what the screen already showed.
-  const summarizer: Pick<CommanderMirrorOpts, 'summarize' | 'summarizeIsLocal'> = {
-    summarize: async (text) => deriveTurnSummary(text),
-    summarizeIsLocal: true,
-  }
-  /**
-   * A turn that belongs to a SUB-AGENT: an Orchestrator specialist, or its Director while specialists
-   * are still out.
-   *
-   * Hoisted out of the commander's options because the dial is no longer the only screen that has to
-   * know. The cable learns it as `silent` on the summary card; the window and the phone learn it as
-   * `subagent` on `turn_ended` (see emitSessionEvents) — the phone notifies on neither. One rule, asked twice — the two surfaces used to disagree
-   * here, and a four-specialist project put ONE row on the dial and FIVE marks in the window.
-   *
-   * ⚠️ The commander ORs this with its own `abandoned` state — a held turn released because a
-   * sub-agent went silent — which lives inside it and is not reachable from here. That case is rare
-   * (a killed or crashed sub-agent) and costs the window one extra mark, not five.
-   */
-  const isSubagentSession = (sessionId: string): boolean => {
-    const agentId = registry.bySession(sessionId)?.agentId
-    if (!agentId) return false
-    const role = backend.orchestratorRoleOf(agentId)
-    return role?.role === 'worker' || (role?.role === 'director' && role.busy)
-  }
-  const mirror = new CommanderMirror({
+  // The turn's last text, for its recap, whatever the engine (core/transcripts/lastTurn.ts).
+  const readLastTurn = createLastTurnReader({
+    bySession: (sessionId) => registry.bySession(sessionId),
+    dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
+    hermesDb: (s) => hermesDbForSession(s),
+  })
+  // Recaps: turn cards on the dial and the window, notifications on the phone (core/turns/recaps.ts).
+  const recaps = createRecaps({
     notifications: agentNotifications,
-    notifyWithoutDevice: true,
-    verifiedWorking: sessionId => turnActivity.snapshot(sessionId)?.state === 'working',
-    send: (frame) => backend.sendCommander(frame),
-    sendWeb: (frame) => backend.send(frame), // turn_summary_pending / turn_summary → web indicator
-    hasDevice: () => deviceIsWatching(),        // device-gate the LLM recap (mirror node)
-    // Live cards stream to whatever is actually rendering. The dial has one screen and it is always the
-    // one in front of the user, so a cable session counts as active by construction.
-    active: () => backend.hasActiveCommander() || cableWatchingLocal(),
-    ...summarizer,
-    nameFor: (sessionId) => { const s = registry.bySession(sessionId); return s ? projectDisplayName(s) : undefined },
-    agentIdFor: (sessionId) => registry.bySession(sessionId)?.agentId,
-    // An Orchestrator specialist's turn end, or the Director's while specialists are still out, is not
-    // announced: the person asked to hear from the main agent once, not from every sub-agent.
-    isSubagent: (sessionId: string) => isSubagentSession(sessionId),
-    // A claude sub-agent still at work is one whose transcript is still growing:
-    // `<session>/subagents/agent-<id>.jsonl` beside the parent's (the same file enrichSubagentStats
-    // reads). Written in the last SUBAGENT_IDLE_MS = alive; the held turn end waits for it.
-    subagentActive: (sessionId, agentId) => {
-      const transcriptPath = registry.bySession(sessionId)?.transcriptPath
-      if (!transcriptPath) return false
-      try {
-        const at = statSync(join(transcriptPath.replace(/\.jsonl$/, ''), 'subagents', `agent-${agentId}.jsonl`)).mtimeMs
-        return Date.now() - at < SUBAGENT_IDLE_MS
-      } catch { return false }
-    },
-    readLastTurn: async (sessionId) => {
-      const s = registry.bySession(sessionId)
-      if (!s) return null
-      if (s.engine === 'opencode') return lastOpencodeTurnText(await readOpencodeMessages(OPENCODE_DB, sessionId))
-      if (s.engine === 'kilo') return lastKiloTurnText(await readKiloMessages(KILO_DB, sessionId))
-      if (s.engine === 'hermes') return lastHermesTurnText(await readHermesMessages(await hermesDbForSession(s), sessionId))
-      if (s.engine === 'devin') return lastDevinTurnText(await readDevinMessages(DEVIN_DB, sessionId))
-      if (!s.transcriptPath) return null
-      if (s.engine === 'codex') return readLastCodexTurnText(s.transcriptPath)
-      // Its last turn, read backward — not the whole conversation once per turn end.
-      if (s.engine === 'claude') return lastTurnTextFromRawLines(await tailFileUntil(s.transcriptPath, selectClaudeRecapLine))
-      const lines = await tailFile(s.transcriptPath, Infinity)
-      if (s.engine === 'cursor') return lastCursorTurnText(lines)
-      if (s.engine === 'muse') return lastMuseTurnText(lines)
-      if (s.engine === 'amp') return lastAmpTurnText(lines)
-      if (s.engine === 'grok') return lastGrokTurnText(lines)
-      if (s.engine === 'agy') return lastAgyTurnText(lines)
-      if (s.engine === 'copilot') return lastCopilotTurnText(lines)
-      if (s.engine === 'pi') return lastPiTurnText(lines)
-      if (s.engine === 'commandcode') return lastCommandCodeTurnText(lines)
-      return lastTurnTextFromRawLines(lines)
-    },
+    turnActivity,
+    clients: backend,
+    deviceIsWatching,
+    cableWatchingLocal,
+    bySession: (sessionId) => registry.bySession(sessionId),
+    resolve: (id) => registry.resolve(id),
+    stopped: (agentId) => stoppedAgents.get(agentId),
+    orchestratorRoleOf: (agentId) => backend.orchestratorRoleOf(agentId),
+    readLastTurn,
     dataDir: env.ADAPTER_DATA_DIR,
     recapForce: env.RECAP_FORCE,
-    alwaysGenerate: () => env.RECAP_WITHOUT_DEVICE,
+    recapWithoutDevice: () => env.RECAP_WITHOUT_DEVICE,
   })
+  const isSubagentSession = recaps.isSubagentSession
+  const mirror = recaps.mirror
   // Recaps are STORED under the engine session id — that is what lets `--resume` bring the last recap
   // back under a brand-new agent — but they are ASKED FOR by agent id, which is the only id the device
   // and the voice router know. Resolve across the two, or every tile restores empty.
-  backend.recentProvider = (id, n) => mirror.recent(registry.resolve(id)?.sessionId || stoppedAgents.get(id)?.sessionId || id, n)
-  backend.recentAsksProvider = (id, n) => mirror.recentAsks(registry.resolve(id)?.sessionId || stoppedAgents.get(id)?.sessionId || id, n)
+  backend.recentProvider = recaps.recent
+  backend.recentAsksProvider = recaps.recentAsks
 
   // The engines that keep a conversation in a database instead of a transcript file, read through
   // the same readers and replay normalizers as `session_get`.
@@ -2924,36 +2864,20 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (session) syncSession(session)
   }
 
-  // A timer is an opportunity to inspect work, not proof that work is happening.
-  // Keep polling unfinished transcripts even when their activity lease expires:
-  // a missed file notification or a later completion must still be discovered.
-  const TURN_HEARTBEAT_MS = 5000
-  const heartbeats = new Map<string, NodeJS.Timeout>()
-  const turnStartedAt = new Map<string, number>()
-  const stopHeartbeat = (sessionId: string): void => {
-    runtimeActivity.forget(sessionId)
-    const timer = heartbeats.get(sessionId)
-    if (timer) { clearInterval(timer); heartbeats.delete(sessionId) }
-  }
-  const startHeartbeat = (sessionId: string): void => {
-    stopHeartbeat(sessionId)
-    const beat = async () => {
-      if (!registry.bySession(sessionId)?.active) {
-        stopHeartbeat(sessionId); turnActivity.forget(sessionId); return
-      }
-      if (sessionTurnOpen(sessionId)) await turnActivity.check(sessionId)
-      if (!heartbeats.has(sessionId)) return
-      const activity = turnActivity.snapshot(sessionId)
-      if (activity) {
-        backend.send(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, sessionId, agentIdFor(sessionId)))
-        if (activity.state === 'working') backend.send(turnHeartbeatFrame(sessionId, agentIdFor(sessionId), activity))
-      }
-      const deviceBusy = mirror.heartbeat(sessionId)
-      if (!sessionTurnOpen(sessionId) && !deviceBusy) stopHeartbeat(sessionId)
-    }
-    const timer = setInterval(() => { void beat().catch(error => console.error('[activity] probe failed:', String(error))) }, TURN_HEARTBEAT_MS)
-    heartbeats.set(sessionId, timer)
-  }
+  // Turn heartbeats (core/turns/heartbeats.ts).
+  const turnBeats = createHeartbeats({
+    bySession: (sessionId) => registry.bySession(sessionId),
+    sessionTurnOpen,
+    agentIdFor,
+    runtimeActivity,
+    turnActivity,
+    mirror,
+    clients: backend,
+  })
+  const heartbeats = turnBeats.heartbeats
+  const turnStartedAt = turnBeats.turnStartedAt
+  const stopHeartbeat = turnBeats.stopHeartbeat
+  const startHeartbeat = turnBeats.startHeartbeat
 
   emitSessionEvents = (sessionId: string, events: ReturnType<CursorNormalizer['ingest']>, opts?: { resumed?: boolean; replay?: boolean }): void => {
     if (!events.length || !registry.bySession(sessionId)?.active) return
