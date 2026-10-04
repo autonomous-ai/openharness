@@ -1,5 +1,6 @@
 [Unit]
 Description=Lock before suspend
+ConditionPathExists=!/etc/harness-live
 PartOf=harness-os.target
 
 [Service]

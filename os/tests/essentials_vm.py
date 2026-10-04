@@ -87,7 +87,7 @@ def wait_screen(vm, words, name, timeout=20):
         time.sleep(.25)
 
 
-def wireless(vm, result):
+def wireless(vm, result, installed=False):
     print('Preparing simulated WPA2 access point inside the disposable guest', flush=True)
     vm.command('systemctl start harness-keyring', timeout=240)
     output, _ = vm.command('pacman -S --needed --noconfirm hostapd dnsmasq iw', timeout=180)
@@ -100,7 +100,8 @@ def wireless(vm, result):
     vm.command('! ip route show default | grep -v "dev $(cat /run/harness-station)"')
     form = 'sudo python3 /usr/lib/harness-os/network.py --first-use; result=$?; printf %s "$result" > /tmp/wifi-form-result; exec bash -l'
     vm.command(USER_ENV + 'hn new-window -n Wi-Fi ' + shlex.quote(form))
-    wait_screen(vm, ['harness-test', 'install without connecting'], 'wifi-01-networks')
+    offline_label = 'continue offline' if installed else 'install without connecting'
+    wait_screen(vm, ['harness-test', offline_label], 'wifi-01-networks')
     vm.keys('esc')
     wait_screen(vm, ['harness-test'], 'wifi-01-escape-keeps-welcome')
     vm.keys('ctrl', 'c')
@@ -161,10 +162,15 @@ def wireless(vm, result):
     # not strand a first-time user in an empty shell.
     vm.command('nmcli device disconnect "$(cat /run/harness-station)"')
     vm.command(USER_ENV + 'hn new-window -n Offline ' + shlex.quote(form.replace('/tmp/wifi-form-result', '/tmp/wifi-offline-result')))
-    wait_screen(vm, ['install without connecting'], 'wifi-05-offline-install')
-    vm.keys('i')
-    vm.command('for n in $(seq 1 40); do test "$(cat /tmp/wifi-offline-result 2>/dev/null)" = 10 && exit 0; sleep .25; done; exit 1')
-    result['checks'].append('First-use Wi-Fi always offers offline installation, and selecting it exits with the native install action')
+    wait_screen(vm, [offline_label], 'wifi-05-offline')
+    if installed:
+        vm.keys('shift', 'tab')
+        vm.keys('ret')
+    else:
+        vm.keys('i')
+    expected = 11 if installed else 10
+    vm.command('for n in $(seq 1 40); do test "$(cat /tmp/wifi-offline-result 2>/dev/null)" = ' + str(expected) + ' && exit 0; sleep .25; done; exit 1')
+    result['checks'].append('Installed Wi-Fi can continue to offline work without exposing installation' if installed else 'First-use Wi-Fi always offers offline installation, and selecting it exits with the native install action')
     vm.command('nmcli connection up ' + SSID, timeout=60)
     vm.monitor('set_link', name='hnnet', up=True)
     vm.command('while read -r dev; do nmcli device set "$dev" managed yes; nmcli device connect "$dev"; done < /run/harness-ethernet')
@@ -235,12 +241,28 @@ def main():
         vm.wait(r'root@[^\r\n]*[#] ')
         vm.shell_ready = True
         vm.command('stty -echo')
+        installed = 'install-first' in manifest.get('capabilities', [])
+        if installed:
+            config = dict(disk='/dev/vda', expected_serial='HN_OS_TEST', confirm_erase='/dev/vda',
+                          username='me', hostname='harness', password='test-password-123', encrypt=True, serial_console=True)
+            put(vm, '/tmp/essentials-install.json', json.dumps(config))
+            vm.command('nmcli networking off')
+            vm.command('harness install --config /tmp/essentials-install.json --yes-erase-disk', timeout=360)
+            vm.command('sync')
+            vm.stop()
+            vm.start(live=False)
+            vm.login_installed(config)
+            vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+            vm.send('sudo -n -i\n')
+            vm.wait(r'root@[^\r\n]*[#] ')
+            vm.command('stty -echo')
+            result['checks'].append('Wi-Fi and audio checks run on an encrypted installed system after offline USB installation')
         vm.command(USER_ENV + '/usr/lib/harness-os/wait-runtime')
         vm.command(USER_ENV + 'sh -c ' + shlex.quote('for n in $(seq 1 60); do systemctl --user is-active --quiet hn-screen && pgrep -u 1000 -x foot >/dev/null && exit 0; sleep .25; done; exit 1'))
-        wireless(vm, result)
+        wireless(vm, result, installed=installed)
         sound(vm, result)
         vm.stop()
-        with wave.open(str(folder / 'audio-1.wav'), 'rb') as recording:
+        with wave.open(str(folder / ('audio-2.wav' if installed else 'audio-1.wav')), 'rb') as recording:
             samples = array.array('h', recording.readframes(recording.getnframes()))
             assert samples and max(abs(v) for v in samples) > 100, 'The virtual audio backend received silence'
             result['captured_audio'] = {'sample_rate': recording.getframerate(), 'frames': recording.getnframes(),

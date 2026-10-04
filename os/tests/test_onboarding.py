@@ -16,30 +16,27 @@ def result(code=0):
 
 
 class Onboarding(unittest.TestCase):
-    def test_network_page_opens_directly_then_agent_and_workspace_start(self):
-        for live in [True, False]:
-            with self.subTest(live=live), tempfile.TemporaryDirectory() as temp, \
-                 patch.object(onboarding.Path, 'is_file', return_value=live), \
-                 patch.object(onboarding.Path, 'home', return_value=Path(temp)), \
-                 patch.object(onboarding.subprocess, 'run', return_value=result()) as command, \
-                 patch.object(onboarding.os, 'execv') as execute, \
-                 patch.dict(os.environ, {'TMUX_PANE': '%4'}):
-                onboarding.welcome()
-                self.assertEqual(command.call_args_list[0].args[0],
-                                 ['sudo', '/usr/bin/python3', '/usr/lib/harness-os/network.py', '--first-use'])
-                self.assertEqual(command.call_args_list[1].args[0], ['hn', 'os-action', 'ready', '%4'])
-                execute.assert_called_once_with('/usr/bin/hn-os', ['hn-os', 'try'])
-                self.assertEqual((Path(temp) / '.local/state/harness-os/onboarded').exists(), not live)
+    def test_installed_network_page_advances_to_agent_and_workspace(self):
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(onboarding.Path, 'is_file', return_value=False), \
+             patch.object(onboarding.Path, 'home', return_value=Path(temp)), \
+             patch.object(onboarding.subprocess, 'run', return_value=result()) as command, \
+             patch.object(onboarding.os, 'execv') as execute, \
+             patch.dict(os.environ, {'TMUX_PANE': '%4'}):
+            onboarding.welcome()
+            self.assertEqual(command.call_args_list[0].args[0],
+                             ['sudo', '/usr/bin/python3', '/usr/lib/harness-os/network.py', '--first-use'])
+            self.assertEqual(command.call_args_list[1].args[0], ['hn', 'os-action', 'ready', '%4'])
+            execute.assert_called_once_with('/usr/bin/hn-os', ['hn-os', 'try'])
+            self.assertTrue((Path(temp) / '.local/state/harness-os/onboarded').exists())
 
-    def test_offline_install_opens_native_form_and_returns_to_network_page(self):
+    def test_usb_never_opens_networking_or_an_agent(self):
         with patch.object(onboarding.Path, 'is_file', return_value=True), \
-             patch.object(onboarding.subprocess, 'run', side_effect=[result(10), result(), KeyboardInterrupt]) as command, \
+             patch.object(onboarding.subprocess, 'run') as command, \
              patch.object(onboarding.os, 'execv') as execute:
-            with self.assertRaises(KeyboardInterrupt):
-                onboarding.welcome()
-            self.assertEqual(command.call_args_list[1].args[0], ['hn', 'os-action', 'install'])
-            self.assertEqual(command.call_args_list[0], command.call_args_list[2])
-            execute.assert_not_called()
+            onboarding.welcome()
+            command.assert_not_called()
+            execute.assert_called_once_with('/usr/lib/harness-os/open-install', ['open-install'])
 
     def test_installed_system_can_open_workspace_offline(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(onboarding.Path, 'is_file', return_value=False), \
@@ -58,12 +55,10 @@ class Onboarding(unittest.TestCase):
             self.assertFalse((Path(temp) / '.local/state/harness-os/onboarded').exists())
             execute.assert_called_once()
 
-    def test_install_launch_failure_keeps_network_recoverable(self):
-        with patch.object(onboarding.Path, 'is_file', return_value=True), \
-             patch.object(onboarding.subprocess, 'run', side_effect=[result(10), subprocess.TimeoutExpired('hn', 15), KeyboardInterrupt]) as command, \
-             patch('builtins.input') as acknowledge, patch.object(onboarding.os, 'execv') as execute:
-            with self.assertRaises(KeyboardInterrupt):
+    def test_network_failure_does_not_claim_onboarding_or_start_agent(self):
+        with patch.object(onboarding.Path, 'is_file', return_value=False), \
+             patch.object(onboarding.subprocess, 'run', return_value=result(1)), \
+             patch.object(onboarding.os, 'execv') as execute:
+            with self.assertRaisesRegex(SystemExit, 'Could not open Wi-Fi'):
                 onboarding.welcome()
-            acknowledge.assert_called_once()
-            self.assertEqual(command.call_args_list[0], command.call_args_list[2])
             execute.assert_not_called()

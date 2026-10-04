@@ -403,80 +403,90 @@ def check_console_fallback(vm, user, folder):
     vm.screenshot('03b-graphics-restored')
 
 
-def check_first_use(vm, user, folder):
+def check_first_use(vm, user, folder, installed=False):
     """Operate the actual USB front door without a terminal command from the user."""
-    vm.command('test "$(uname -n)" = harness && test "$(id -nu 1000)" = me && test -f /etc/harness-live')
-    vm.command('nmcli networking off')
-    version, _ = vm.command(user('/usr/bin/opencode --version'))
-    (folder / 'bundled-opencode-version.txt').write_text(version)
-    defaults = json.loads(vm.read_file('/home/me/.config/opencode/opencode.json'))
-    assert not set(defaults) & {'model', 'provider', 'providers'}, 'The image must retain upstream model and provider defaults'
-    assert defaults.get('update') == 'disable', 'The packaged agent must remain managed by system updates'
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Connect to Wi-Fi to get started" && exit 0; sleep 1; done; exit 1')), timeout=40)
-    vm.screenshot('01a-network-first')
-    vm.command('! pgrep -u 1000 -x opencode')
-    # Escape cannot leave a first-use dead end. Offline install is in this page.
-    vm.keys('esc')
-    vm.command(user('hn capture-pane -p') + ' | grep -q "Install without connecting"')
-    vm.keys('i')
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Repeat password" && exit 0; sleep 1; done; exit 1')), timeout=40)
-    vm.screenshot('01a-offline-install')
-    vm.keys('esc')
-    # The OS shortcut needs neither a prefix nor Shift, and works offline.
-    vm.keys('meta_l', 'i')
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Repeat password" && exit 0; sleep 1; done; exit 1')), timeout=40)
-    vm.screenshot('01b-direct-install-offline')
-    vm.keys('esc')
-    vm.command('sleep 1; test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
-    # A preflight error must remain visible in a command-owned pane until read.
-    vm.command(user('hn new-window -n install-error ' + shlex.quote('sudo /usr/bin/harness install --source /run/hn-missing-image')))
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 15); do hn capture-pane -p | grep -q "Press Enter to return to Harness" && exit 0; sleep 1; done; exit 1')), timeout=20)
-    installer_process = '^/usr/bin/python3 /usr/lib/harness-os/install[.]py --source /run/hn-missing-image$'
-    vm.command('pgrep -f ' + shlex.quote(installer_process))
-    vm.screenshot('01b-install-error')
-    vm.keys('ret')
-    vm.command('for n in $(seq 1 15); do ! pgrep -f ' + shlex.quote(installer_process) + ' && exit 0; sleep 1; done; exit 1', timeout=20)
-    # New terminal is a shell immediately, without agent/project/task fields.
-    vm.keys('meta_l', 't')
-    vm.type_probe('echo terminal-ready')
-    vm.keys('ret')
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 20); do hn capture-pane -p | grep -qx terminal-ready && exit 0; sleep 1; done; exit 1')), timeout=30)
-    vm.screenshot('01c-direct-terminal')
-    # Allow a full discovery cycle, then ensure a live-overlay shell or
-    # installer has not been promoted to an agent by rounded file identities.
-    vm.command('sleep 6')
-    identity_probe = '''const fs = require('node:fs');
-for (const path of ['/usr/bin/opencode', '/usr/bin/bash', '/usr/bin/python3', '/usr/bin/nmtui', '/usr/bin/sudo']) {
-    const numeric = fs.statSync(path), exact = fs.statSync(path, {bigint: true});
-    console.log(JSON.stringify({path, numberKey: `${numeric.dev}:${numeric.ino}`, exactKey: `${exact.dev}:${exact.ino}`}));
-}
-const rows = JSON.parse(fs.readFileSync('/home/me/.harness/cli/data/registry.json', 'utf8'));
-for (const row of rows) console.log(JSON.stringify({agentId: row.agentId, engine: row.engine, active: row.active, processIdentity: row.processIdentity}));
-if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell or installer was misidentified as an agent');
-'''
-    output, identity_status = vm.command(user('node -e ' + shlex.quote(identity_probe)), check=False)
-    (folder / 'live-process-identities.txt').write_text(output)
-    assert identity_status == 0, 'Live USB executable discovery must distinguish shells and installers from agents'
-    output, _ = vm.command(user('hn display-message -p "HN_FIRST_TERMINAL=#{pane_id}"'))
-    pane = re.search(r'HN_FIRST_TERMINAL=(%\d+)', output)
-    assert pane, 'New terminal must identify its actual pane'
-    vm.keys('ctrl', 'd')
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do '
-        'hn list-panes -a -F "#{pane_id}" | grep -Fx ' + shlex.quote(pane.group(1)) +
-        ' >/dev/null || exit 0; sleep .25; done; exit 1')), timeout=15)
-    # The OS opts into hn's existing shell-tab setting; test real prefix keys,
-    # since invoking new-window through the CLI already opened a shell before.
-    vm.keys('ctrl', 'b')
-    vm.keys('c')
-    time.sleep(1)
-    vm.type_probe('echo prefix-tab-ready')
-    vm.keys('ret')
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 20); do hn capture-pane -p | grep -qx prefix-tab-ready && exit 0; sleep .5; done; exit 1')), timeout=15)
-    vm.screenshot('01c-prefix-terminal-tab')
-    vm.keys('ctrl', 'd')
-    time.sleep(.5)
+    if installed:
+        vm.command('test ! -e /etc/harness-live && test "$(id -un)" = me')
+        vm.command('for n in $(seq 1 40); do hn capture-pane -p | grep -q "Connect to Wi-Fi to get started" && exit 0; sleep .5; done; exit 1', timeout=30)
+        vm.screenshot('installed-network-first')
+        vm.command('! pgrep -u 1000 -x opencode')
+        vm.keys('esc')
+        vm.command('hn capture-pane -p | grep -q "Connect to Wi-Fi to get started"')
+    else:
+        vm.command('test "$(uname -n)" = harness && test "$(id -nu 1000)" = me && test -f /etc/harness-live')
+        vm.command('nmcli networking off')
+        version, _ = vm.command(user('/usr/bin/opencode --version'))
+        (folder / 'bundled-opencode-version.txt').write_text(version)
+        defaults = json.loads(vm.read_file('/home/me/.config/opencode/opencode.json'))
+        assert not set(defaults) & {'model', 'provider', 'providers'}, 'The image must retain upstream model and provider defaults'
+        assert defaults.get('update') == 'disable', 'The packaged agent must remain managed by system updates'
+        vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Connect to Wi-Fi to get started" && exit 0; sleep 1; done; exit 1')), timeout=40)
+        vm.screenshot('01a-network-first')
+        vm.command('! pgrep -u 1000 -x opencode')
+        # Escape cannot leave a first-use dead end. Offline install is in this page.
+        vm.keys('esc')
+        vm.command(user('hn capture-pane -p') + ' | grep -q "Install without connecting"')
+        vm.keys('i')
+        vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Repeat password" && exit 0; sleep 1; done; exit 1')), timeout=40)
+        vm.screenshot('01a-offline-install')
+        vm.keys('esc')
+        # The OS shortcut needs neither a prefix nor Shift, and works offline.
+        vm.keys('meta_l', 'i')
+        vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Repeat password" && exit 0; sleep 1; done; exit 1')), timeout=40)
+        vm.screenshot('01b-direct-install-offline')
+        vm.keys('esc')
+        vm.command('sleep 1; test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
+        # A preflight error must remain visible in a command-owned pane until read.
+        vm.command(user('hn new-window -n install-error ' + shlex.quote('sudo /usr/bin/harness install --source /run/hn-missing-image')))
+        vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 15); do hn capture-pane -p | grep -q "Press Enter to return to Harness" && exit 0; sleep 1; done; exit 1')), timeout=20)
+        installer_process = '^/usr/bin/python3 /usr/lib/harness-os/install[.]py --source /run/hn-missing-image$'
+        vm.command('pgrep -f ' + shlex.quote(installer_process))
+        vm.screenshot('01b-install-error')
+        vm.keys('ret')
+        vm.command('for n in $(seq 1 15); do ! pgrep -f ' + shlex.quote(installer_process) + ' && exit 0; sleep 1; done; exit 1', timeout=20)
+        # New terminal is a shell immediately, without agent/project/task fields.
+        vm.keys('meta_l', 't')
+        vm.type_probe('echo terminal-ready')
+        vm.keys('ret')
+        vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 20); do hn capture-pane -p | grep -qx terminal-ready && exit 0; sleep 1; done; exit 1')), timeout=30)
+        vm.screenshot('01c-direct-terminal')
+        # Allow a full discovery cycle, then ensure a live-overlay shell or
+        # installer has not been promoted to an agent by rounded file identities.
+        vm.command('sleep 6')
+        identity_probe = '''const fs = require('node:fs');
+    for (const path of ['/usr/bin/opencode', '/usr/bin/bash', '/usr/bin/python3', '/usr/bin/nmtui', '/usr/bin/sudo']) {
+        const numeric = fs.statSync(path), exact = fs.statSync(path, {bigint: true});
+        console.log(JSON.stringify({path, numberKey: `${numeric.dev}:${numeric.ino}`, exactKey: `${exact.dev}:${exact.ino}`}));
+    }
+    const rows = JSON.parse(fs.readFileSync('/home/me/.harness/cli/data/registry.json', 'utf8'));
+    for (const row of rows) console.log(JSON.stringify({agentId: row.agentId, engine: row.engine, active: row.active, processIdentity: row.processIdentity}));
+    if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell or installer was misidentified as an agent');
+    '''
+        output, identity_status = vm.command(user('node -e ' + shlex.quote(identity_probe)), check=False)
+        (folder / 'live-process-identities.txt').write_text(output)
+        assert identity_status == 0, 'Live USB executable discovery must distinguish shells and installers from agents'
+        output, _ = vm.command(user('hn display-message -p "HN_FIRST_TERMINAL=#{pane_id}"'))
+        pane = re.search(r'HN_FIRST_TERMINAL=(%\d+)', output)
+        assert pane, 'New terminal must identify its actual pane'
+        vm.keys('ctrl', 'd')
+        vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do '
+            'hn list-panes -a -F "#{pane_id}" | grep -Fx ' + shlex.quote(pane.group(1)) +
+            ' >/dev/null || exit 0; sleep .25; done; exit 1')), timeout=15)
+        # The OS opts into hn's existing shell-tab setting; test real prefix keys,
+        # since invoking new-window through the CLI already opened a shell before.
+        vm.keys('ctrl', 'b')
+        vm.keys('c')
+        time.sleep(1)
+        vm.type_probe('echo prefix-tab-ready')
+        vm.keys('ret')
+        vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 20); do hn capture-pane -p | grep -qx prefix-tab-ready && exit 0; sleep .5; done; exit 1')), timeout=15)
+        vm.screenshot('01c-prefix-terminal-tab')
+        vm.keys('ctrl', 'd')
+        time.sleep(.5)
     vm.monitor('set_link', name='hnnet', up=True)
-    vm.command('nmcli networking on; for n in $(seq 1 30); do test "$(nmcli -t -f STATE general)" = connected && exit 0; sleep 1; done; exit 1', timeout=40)
+    if not installed:
+        vm.command('nmcli networking on')
+    vm.command('for n in $(seq 1 30); do test "$(nmcli -t -f STATE general)" = connected && exit 0; sleep 1; done; exit 1', timeout=40)
     vm.command('for n in $(seq 1 90); do pgrep -u 1000 -x opencode >/dev/null && exit 0; sleep 1; done; exit 1', timeout=100)
     time.sleep(5)
     vm.screenshot('01d-bundled-opencode')
@@ -507,9 +517,12 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     assert re.fullmatch(r'/home/me/projects/opencode-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}(?:-\d+)*', agent_path), agent_path
     vm.command(user('hn display-message -p "#{E:status-right}"') + ' > /tmp/hn-first-footer.txt')
     footer = vm.read_file('/tmp/hn-first-footer.txt').decode()
-    assert 'Make Harness your OS.' in footer and '[ Install Harness ]' in footer, footer
-    vm.command(user('hn show-options -gv status-style') + ' > /tmp/hn-first-footer-style.txt')
-    assert vm.read_file('/tmp/hn-first-footer-style.txt').strip() == b'fg=black,bg=green'
+    if installed:
+        assert 'Install Harness' not in footer, footer
+    else:
+        assert 'Make Harness your OS.' in footer and '[ Install Harness ]' in footer, footer
+        vm.command(user('hn show-options -gv status-style') + ' > /tmp/hn-first-footer-style.txt')
+        assert vm.read_file('/tmp/hn-first-footer-style.txt').strip() == b'fg=black,bg=green'
     vm.command("! pgrep -f '[/]usr/lib/harness-os/network[.]py'")
     for index, row in enumerate(right):
         vm.command(user('hn select-pane -t ' + row[0]))
@@ -560,17 +573,18 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
                ' >/dev/null && exit 0; sleep 1; done; exit 1', timeout=30)
     vm.keys('ret')
     time.sleep(1)
-    # F10 reaches the dock without consuming the agent's ordinary Tab key.
-    vm.keys('f10')
-    vm.keys('ret')
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Repeat password" && exit 0; sleep 1; done; exit 1')), timeout=40)
-    vm.screenshot('01d-dock-install')
-    vm.keys('esc')
-    time.sleep(1)
-    vm.click_word('01d-mouse-install', 'Install')
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Repeat password" && exit 0; sleep 1; done; exit 1')), timeout=40)
-    vm.command('test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
-    vm.keys('esc')
+    if not installed:
+        # F10 reaches the dock without consuming the agent's ordinary Tab key.
+        vm.keys('f10')
+        vm.keys('ret')
+        vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Repeat password" && exit 0; sleep 1; done; exit 1')), timeout=40)
+        vm.screenshot('01d-dock-install')
+        vm.keys('esc')
+        time.sleep(1)
+        vm.click_word('01d-mouse-install', 'Install')
+        vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Repeat password" && exit 0; sleep 1; done; exit 1')), timeout=40)
+        vm.command('test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
+        vm.keys('esc')
     # Exercise what a first-time user actually does after choosing Try: type
     # into the visible agent and receive its answer, without a CLI/API shortcut.
     vm.type_probe('what is six times seven reply with digits only')
@@ -597,21 +611,23 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     assert guide_status == 0, 'Bundled OpenCode must explain the actual OS shortcuts from its local guide'
     # Build inside the actual per-agent project, as a person does. A sibling
     # directory would instead exercise OpenCode's external-directory permission.
-    trial_project = agent_path + '/usb-trial/index.html'
-    vm.type_probe('create the folder usb-trial in this project and an index html page inside it saying hello harness')
+    project_name = 'first-project' if installed else 'usb-trial'
+    trial_project = agent_path + '/' + project_name + '/index.html'
+    vm.type_probe('create the folder ' + project_name + ' in this project and an index html page inside it saying hello harness')
     vm.keys('ret')
     vm.command('for n in $(seq 1 120); do test -s ' + shlex.quote(trial_project) + ' && '
                'grep -iq "hello harness" ' + shlex.quote(trial_project) + ' && exit 0; sleep 1; done; exit 1', timeout=140)
     (folder / 'trial-project.html').write_bytes(vm.read_file(trial_project))
     vm.screenshot('01g-agent-created-trial-project')
-    # Test the agent-led install entry too. It may open the form; it must never
-    # choose a disk or perform the destructive action from the conversation.
-    vm.type_probe('open the harness installer for me but do not choose a disk or start installation')
-    vm.keys('ret')
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 90); do hn capture-pane -p | grep -q "Repeat password" && exit 0; sleep 1; done; exit 1')), timeout=100)
-    vm.command('test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
-    vm.screenshot('01h-agent-opened-installer')
-    vm.keys('esc')
+    if not installed:
+        # Test the agent-led install entry too. It may open the form; it must never
+        # choose a disk or perform the destructive action from the conversation.
+        vm.type_probe('open the harness installer for me but do not choose a disk or start installation')
+        vm.keys('ret')
+        vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 90); do hn capture-pane -p | grep -q "Repeat password" && exit 0; sleep 1; done; exit 1')), timeout=100)
+        vm.command('test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
+        vm.screenshot('01h-agent-opened-installer')
+        vm.keys('esc')
     # No model flag/config, API key, account, or installer. Validate a real
     # upstream-default reply; preserve all events rather than just the exit code.
     prompt = 'What is six times seven? Reply with only the decimal number. Do not use tools.'
@@ -632,6 +648,8 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
             events.append(event)
     reply = ''.join(e.get('part', {}).get('text', '') for e in events if e.get('type') == 'text').strip()
     assert status == 0 and reply == '42', f'Bundled OpenCode default conversation failed: exit={status}, reply={reply!r}'
+    if installed:
+        return trial_project
     vm.keys('ctrl', 'c')
     time.sleep(.3)
     vm.keys('ctrl', 'c')
@@ -643,7 +661,7 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     return trial_project
 
 
-def install_interactively(vm, config, folder):
+def install_interactively(vm, config, folder, direct=False):
     # Drive the actual graphical form. The sole installer addition is serial boot
     # output so the following installed boot remains observable to this fixture.
     bootstrap = f'''import importlib.util, traceback
@@ -659,6 +677,13 @@ def observed_install(actual, source, target, **kwargs):
     actual['serial_console'] = True
     return original_install(actual, source, target, **kwargs)
 installer.install = observed_install
+original_run = installer.run
+def observed_run(*args, **kwargs):
+    if args == ('systemctl', 'poweroff'):
+        Path('/run/hn-shutdown-requested').touch()
+        return
+    return original_run(*args, **kwargs)
+installer.run = observed_run
 status = 0
 try:
     installer.main()
@@ -675,11 +700,24 @@ if status:
     vm.command(f"printf %s {shlex.quote(encoded)} | base64 -d > /run/hn-interactive-test.py; chmod 600 /run/hn-interactive-test.py")
     user = lambda command: 'runuser -u me -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus ' + command
     _, progress_status = vm.command("grep -q '^def install_with_progress(' /usr/lib/harness-os/install.py", check=False)
-    vm.command(user('sh -c ' + shlex.quote('hn new-window -P -F "#{pane_id}" -n Install '
-               + shlex.quote('sudo python3 /run/hn-interactive-test.py') + ' > /tmp/hn-install-pane')))
+    if direct:
+        command = '/usr/bin/foot --config=/usr/share/harness-os/foot.ini /usr/bin/sudo /usr/bin/python3 /run/hn-interactive-test.py --boot'
+        override = '[Service]\nExecStart=\nExecStart=' + command + '\n'
+        encoded = base64.b64encode(override.encode()).decode()
+        vm.command('mkdir -p /run/user/1000/systemd/user/harness-install.service.d; printf %s ' + encoded + ' | base64 -d > /run/user/1000/systemd/user/harness-install.service.d/fixture.conf; chown -R me:me /run/user/1000/systemd')
+        vm.command(user('systemctl --user daemon-reload'))
+        vm.command(user('systemctl --user restart harness-install.service'))
+    else:
+        vm.command(user('sh -c ' + shlex.quote('hn new-window -P -F "#{pane_id}" -n Install '
+                   + shlex.quote('sudo python3 /run/hn-interactive-test.py') + ' > /tmp/hn-install-pane')))
     transcript = []
 
     def wait_screen(pattern, timeout=30):
+        if direct:
+            from install_first import wait_installer_screen
+            output = wait_installer_screen(vm, pattern, 'installer-current', timeout)
+            transcript.append(output)
+            return output
         command = ('for n in $(seq 1 ' + str(timeout * 2) + '); do '
                    'hn capture-pane -p -t "$(cat /tmp/hn-install-pane)" > /tmp/hn-install-screen || exit 1; '
                    'grep -Eq ' + shlex.quote(pattern) + ' /tmp/hn-install-screen && exit 0; '
@@ -696,7 +734,8 @@ if status:
         # A first typed character must go straight into the masked password.
         vm.type_probe('x')
         entered = wait_screen('Repeat password')
-        assert '[*' in entered, 'Installer did not initially focus Password'
+        if not direct:
+            assert '[*' in entered, 'Installer did not initially focus Password'
         vm.keys('ctrl', 'u')
         vm.keys('shift', 'tab')
         vm.keys('shift', 'tab')
@@ -718,7 +757,9 @@ if status:
         vm.type_probe(config['password'])
         vm.keys('ret')
         output = wait_screen('Repeat password')
-        assert config['password'] not in output and '*' * len(config['password']) in output, 'Password fields must be masked'
+        assert config['password'] not in output, 'Password fields must be masked'
+        if not direct:
+            assert '*' * len(config['password']) in output, 'Password fields must be masked'
         vm.screenshot('install-03-ready')
         # Finishing password entry only focuses Install. No disk has changed yet.
         vm.command('test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
@@ -727,9 +768,11 @@ if status:
             progress = wait_screen('Preparing the disk|Setting up encryption|Copying Harness|Setting up your account', timeout=30)
             assert 'Keep this computer powered on' not in progress and 'Installing Harness' not in progress
             vm.screenshot('install-04-progress')
-        wait_screen('Harness is installed', timeout=900)
+        output = wait_screen('Harness is installed', timeout=900)
         vm.screenshot('install-05-complete')
-        vm.keys('esc')
+        if direct:
+            assert 'Back to Harness' not in output
+        vm.keys('ret' if direct else 'esc')
         vm.command('for n in $(seq 1 30); do test -s /run/hn-interactive-status && break; sleep .25; done; test "$(cat /run/hn-interactive-status)" = 0')
     finally:
         (folder / 'installer-ui.log').write_text('\n'.join(transcript))
@@ -806,6 +849,7 @@ def main():
     result['image_source_commit'] = manifest['source_commit']
     result['test_source_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     result['test_script_sha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    direct = 'install-first' in manifest.get('capabilities', [])
     vm = VM(folder, args.iso.resolve(), args.firmware, args.memory, args.live_transport, args.cpu)
     user = lambda cmd: 'runuser -u "$(id -nu 1000)" -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus ' + cmd
     try:
@@ -837,65 +881,70 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
             vm.command('printf %s ' + encoded + ' | base64 -d | python3')
             result['checks'].append('The unmounted writable Harness USB is rejected as an installation target in RAM mode')
         vm.command('foot --check-config --config=/usr/share/harness-os/foot.ini')
-        vm.command(user("sh -c 'for n in $(seq 1 90); do systemctl --user is-active --quiet hn-screen && pgrep -u 1000 -x \"hn|harness-tui\" >/dev/null && exit 0; sleep 1; done; systemctl --user --no-pager status hn-screen harness-daemon; exit 1'"), timeout=110)
-        vm.command(user('/usr/lib/harness-os/wait-runtime'), timeout=160)
-        result['live_hn_ready_seconds'] = round(time.monotonic() - vm.started, 3)
-        result['checks'].append('Harness runtime reports discovery ready before hn startup is measured')
-        output, _ = vm.command("printf 'HN_SCRATCH=%s\\n' \"$(df -B1 --output=size /run/archiso/cowspace | tail -1)\"")
-        scratch_bytes = int(re.search(r'HN_SCRATCH=\s*(\d+)', output).group(1))
-        if scratch_bytes < args.memory * 1024 ** 2 * 0.45:
-            raise RuntimeError('Live writable space is too small for on-demand agent installation.')
-        result['live_scratch_mib'] = round(scratch_bytes / 1024 ** 2, 1)
-        vm.command('! pgrep -x chromium')
-        result['checks'].append('Live hn ready; browser absent at boot')
-        vm.command('systemctl start harness-keyring; pacman -Si git chromium >/dev/null', timeout=180)
-        result['checks'].append('Dated package repositories are queryable before the first download')
-        vm.command(user('systemd-run --user --quiet --wait --pipe --collect /bin/sh -c ' +
-                        shlex.quote('printf hn-clipboard-check | wl-copy; test "$(wl-paste --no-newline)" = hn-clipboard-check')))
-        result['checks'].append('Wayland clipboard round trip')
-        vm.screenshot('01-live-hn')
-        output, _ = vm.command(user('hn-os measure'))
-        (folder / 'live-measurement.txt').write_text(output)
-        trial_project = check_first_use(vm, user, folder)
-        result['checks'].append('USB opens network setup; Super+i opens Install offline; Super+t opens a terminal without a setup form')
-        result['checks'].append('Installer errors remain visible until acknowledged; exiting a direct terminal removes its pane')
-        result['checks'].append('USB first agent conversation accepts physical keyboard input and displays the expected reply')
-        result['checks'].append('Bundled OpenCode loads the local TUI guide, explains Super+n/m, creates a trial project, and opens the native installer on request')
-        result['checks'].append('Super+n/m open the agent and machine controls; F10/Enter and an actual pointer click open the install dock action')
-        result['checks'].append('Bundled OpenCode starts offline and its upstream-default clean-profile conversation returns the independently checked answer')
-        vm.keys('meta_l', 'b')
-        vm.command("for n in $(seq 1 45); do pgrep -x chromium >/dev/null && break; sleep 1; done; pgrep -x chromium", timeout=60)
-        time.sleep(3)
-        vm.screenshot('02-browser')
-        vm.keys('meta_l', 'b')
-        time.sleep(1)
-        vm.screenshot('03-return-to-hn')
-        result['checks'].append('Browser starts only on shortcut; toggle screenshots recorded')
-        # hn has its own tmux-style settings; the underlying tmux server needs
-        # its separate system configuration so a short-lived last pane cannot
-        # restart the server and reuse a still-registered terminal identity.
-        for index in range(3):
-            vm.command(user('hn new-window -n quick-exit ' + shlex.quote(f'touch /tmp/hn-quick-exit-{index}')))
-            vm.command(f'for n in $(seq 1 10); do test -e /tmp/hn-quick-exit-{index} && exit 0; sleep 1; done; exit 1', timeout=15)
-        result['checks'].append('Closing the last terminal and immediately opening another works repeatedly')
-        # A long-lived terminal process proves a screen restart does not kill the work.
-        survivor = "echo $$ > /tmp/hn-survivor.pid; exec sleep 1800"
-        vm.command(user("hn new-window -n persistence " + shlex.quote(survivor)))
-        vm.command('for n in $(seq 1 15); do test -s /tmp/hn-survivor.pid && exit 0; sleep 1; done; exit 1', timeout=20)
-        clipboard_probe = 'printf hn-pane-clipboard | wl-copy; test "$(wl-paste --no-newline)" = hn-pane-clipboard && touch /tmp/hn-pane-clipboard-passed'
-        vm.command(user('hn new-window -n clipboard ' + shlex.quote(clipboard_probe)))
-        vm.command('for n in $(seq 1 15); do test -e /tmp/hn-pane-clipboard-passed && exit 0; sleep 1; done; exit 1', timeout=20)
-        result['checks'].append('An hn terminal pane inherits the working Wayland clipboard environment')
-        vm.command('! ' + user('hn detach'))
-        vm.command('! ' + user('hn suspend-client'))
-        vm.command('kill -0 "$(cat /tmp/hn-survivor.pid)"')
-        result['checks'].append('OS surface refuses detach and suspend while work stays alive')
-        vm.command(user('systemctl --user restart hn-screen'))
-        vm.command('sleep 3; kill -0 "$(cat /tmp/hn-survivor.pid)"')
-        result['checks'].append('Terminal process survives screen restart')
-        check_console_fallback(vm, user, folder)
-        result['checks'].append('Graphics startup failure falls back to hn on tty1; physical-keyboard input reaches a terminal pane and existing work survives')
-        result['checks'].append('Restoring graphics returns to the fullscreen hn service without losing the terminal process')
+        if direct:
+            from install_first import check_usb_installer
+            result['live_installer_ready_seconds'] = check_usb_installer(vm, user, folder)
+            result['checks'].append('USB opens the installer directly with no trial, network page, hn runtime or agent')
+        else:
+            vm.command(user("sh -c 'for n in $(seq 1 90); do systemctl --user is-active --quiet hn-screen && pgrep -u 1000 -x \"hn|harness-tui\" >/dev/null && exit 0; sleep 1; done; systemctl --user --no-pager status hn-screen harness-daemon; exit 1'"), timeout=110)
+            vm.command(user('/usr/lib/harness-os/wait-runtime'), timeout=160)
+            result['live_hn_ready_seconds'] = round(time.monotonic() - vm.started, 3)
+            result['checks'].append('Harness runtime reports discovery ready before hn startup is measured')
+            output, _ = vm.command("printf 'HN_SCRATCH=%s\\n' \"$(df -B1 --output=size /run/archiso/cowspace | tail -1)\"")
+            scratch_bytes = int(re.search(r'HN_SCRATCH=\s*(\d+)', output).group(1))
+            if scratch_bytes < args.memory * 1024 ** 2 * 0.45:
+                raise RuntimeError('Live writable space is too small for on-demand agent installation.')
+            result['live_scratch_mib'] = round(scratch_bytes / 1024 ** 2, 1)
+            vm.command('! pgrep -x chromium')
+            result['checks'].append('Live hn ready; browser absent at boot')
+            vm.command('systemctl start harness-keyring; pacman -Si git chromium >/dev/null', timeout=180)
+            result['checks'].append('Dated package repositories are queryable before the first download')
+            vm.command(user('systemd-run --user --quiet --wait --pipe --collect /bin/sh -c ' +
+                            shlex.quote('printf hn-clipboard-check | wl-copy; test "$(wl-paste --no-newline)" = hn-clipboard-check')))
+            result['checks'].append('Wayland clipboard round trip')
+            vm.screenshot('01-live-hn')
+            output, _ = vm.command(user('hn-os measure'))
+            (folder / 'live-measurement.txt').write_text(output)
+            trial_project = check_first_use(vm, user, folder)
+            result['checks'].append('USB opens network setup; Super+i opens Install offline; Super+t opens a terminal without a setup form')
+            result['checks'].append('Installer errors remain visible until acknowledged; exiting a direct terminal removes its pane')
+            result['checks'].append('USB first agent conversation accepts physical keyboard input and displays the expected reply')
+            result['checks'].append('Bundled OpenCode loads the local TUI guide, explains Super+n/m, creates a trial project, and opens the native installer on request')
+            result['checks'].append('Super+n/m open the agent and machine controls; F10/Enter and an actual pointer click open the install dock action')
+            result['checks'].append('Bundled OpenCode starts offline and its upstream-default clean-profile conversation returns the independently checked answer')
+            vm.keys('meta_l', 'b')
+            vm.command("for n in $(seq 1 45); do pgrep -x chromium >/dev/null && break; sleep 1; done; pgrep -x chromium", timeout=60)
+            time.sleep(3)
+            vm.screenshot('02-browser')
+            vm.keys('meta_l', 'b')
+            time.sleep(1)
+            vm.screenshot('03-return-to-hn')
+            result['checks'].append('Browser starts only on shortcut; toggle screenshots recorded')
+            # hn has its own tmux-style settings; the underlying tmux server needs
+            # its separate system configuration so a short-lived last pane cannot
+            # restart the server and reuse a still-registered terminal identity.
+            for index in range(3):
+                vm.command(user('hn new-window -n quick-exit ' + shlex.quote(f'touch /tmp/hn-quick-exit-{index}')))
+                vm.command(f'for n in $(seq 1 10); do test -e /tmp/hn-quick-exit-{index} && exit 0; sleep 1; done; exit 1', timeout=15)
+            result['checks'].append('Closing the last terminal and immediately opening another works repeatedly')
+            # A long-lived terminal process proves a screen restart does not kill the work.
+            survivor = "echo $$ > /tmp/hn-survivor.pid; exec sleep 1800"
+            vm.command(user("hn new-window -n persistence " + shlex.quote(survivor)))
+            vm.command('for n in $(seq 1 15); do test -s /tmp/hn-survivor.pid && exit 0; sleep 1; done; exit 1', timeout=20)
+            clipboard_probe = 'printf hn-pane-clipboard | wl-copy; test "$(wl-paste --no-newline)" = hn-pane-clipboard && touch /tmp/hn-pane-clipboard-passed'
+            vm.command(user('hn new-window -n clipboard ' + shlex.quote(clipboard_probe)))
+            vm.command('for n in $(seq 1 15); do test -e /tmp/hn-pane-clipboard-passed && exit 0; sleep 1; done; exit 1', timeout=20)
+            result['checks'].append('An hn terminal pane inherits the working Wayland clipboard environment')
+            vm.command('! ' + user('hn detach'))
+            vm.command('! ' + user('hn suspend-client'))
+            vm.command('kill -0 "$(cat /tmp/hn-survivor.pid)"')
+            result['checks'].append('OS surface refuses detach and suspend while work stays alive')
+            vm.command(user('systemctl --user restart hn-screen'))
+            vm.command('sleep 3; kill -0 "$(cat /tmp/hn-survivor.pid)"')
+            result['checks'].append('Terminal process survives screen restart')
+            check_console_fallback(vm, user, folder)
+            result['checks'].append('Graphics startup failure falls back to hn on tty1; physical-keyboard input reaches a terminal pane and existing work survives')
+            result['checks'].append('Restoring graphics returns to the fullscreen hn service without losing the terminal process')
         if args.live_only:
             result['status'] = 'passed'
             return
@@ -906,10 +955,11 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
                       username='me', hostname='harness', password='test-password-123',
                       encrypt=args.encrypt, serial_console=True)
         # Installation must work with the NIC down, using the ISO's immutable payload.
-        (folder / 'trial-project.html').write_bytes(vm.read_file(trial_project))
+        if not direct:
+            (folder / 'trial-project.html').write_bytes(vm.read_file(trial_project))
         vm.command(user('sh -c ' + shlex.quote('mkdir -p "$HOME/.config"; printf trial-only > "$HOME/.config/hn-trial-credential"')))
         vm.command('nmcli networking off')
-        install_interactively(vm, config, folder)
+        install_interactively(vm, config, folder, direct=direct)
         result['checks'].append('Keyboard disk selection, encryption checkbox, masked password entry and a single Install action work on the guest terminal')
         result['checks'].append('Offline installer completed on disposable disk')
         if config['encrypt']:
@@ -924,8 +974,15 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         vm.command('sync')
         vm.stop()
         vm.start(live=False)
+        if direct:
+            vm.monitor('set_link', name='hnnet', up=False)
         unlock_delay = 100 if config['encrypt'] else 0
         vm.login_installed(config, unlock_delay=unlock_delay)
+        if direct:
+            trial_project = check_first_use(vm, lambda command: command, folder, installed=True)
+            result['checks'].append('Installed Wi-Fi first use advances into three real panes and the bundled default agent answers keyboard input')
+            result['checks'].append('Bundled OpenCode loads the local TUI guide, explains Super+n/m and creates a project on the installed disk')
+            result['checks'].append("Bundled OpenCode's upstream-default clean-profile conversation returns the independently checked answer")
         vm.command('for n in $(seq 1 60); do test -f ~/.local/state/harness-os/onboarded && '
                    'test "$(hn list-panes -F "#{pane_id}" | wc -l)" -eq 3 && exit 0; sleep .5; done; exit 1', timeout=40)
         vm.screenshot('installed-first-workspace')
@@ -936,13 +993,14 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         vm.command("! pgrep -f '[/]usr/lib/harness-os/network[.]py'")
         result['checks'].append('Fresh installed first boot opens the same three real panes and records onboarding only once')
         result['checks'].append('Installed first use preserves hn’s full status bar and never reopens networking after the connection succeeds')
-        saved_trial = vm.read_file(trial_project)
-        assert saved_trial == (folder / 'trial-project.html').read_bytes(), 'The installed home lost or changed the agent-created trial project'
-        vm.command('test ! -e /home/me/.config/hn-trial-credential && test "$(stat -c %u ' + shlex.quote(trial_project) + ')" -eq 1000')
-        transfer = json.loads(vm.read_file('/home/me/.local/state/harness-os/trial-projects.json'))
-        relative_trial = str(Path(trial_project).relative_to('/home/me/projects'))
-        assert transfer['entries'][relative_trial]['sha256'] == hashlib.sha256(saved_trial).hexdigest()
-        result['checks'].append('Agent-created USB trial project survives offline installation and installed boot byte-for-byte')
+        if not direct:
+            saved_trial = vm.read_file(trial_project)
+            assert saved_trial == (folder / 'trial-project.html').read_bytes(), 'The installed home lost or changed the agent-created trial project'
+            vm.command('test ! -e /home/me/.config/hn-trial-credential && test "$(stat -c %u ' + shlex.quote(trial_project) + ')" -eq 1000')
+            transfer = json.loads(vm.read_file('/home/me/.local/state/harness-os/trial-projects.json'))
+            relative_trial = str(Path(trial_project).relative_to('/home/me/projects'))
+            assert transfer['entries'][relative_trial]['sha256'] == hashlib.sha256(saved_trial).hexdigest()
+            result['checks'].append('Agent-created USB trial project survives offline installation and installed boot byte-for-byte')
         result['deliberate_unlock_delay_seconds'] = unlock_delay
         if unlock_delay:
             result['installed_unlock_prompt_seconds'] = vm.unlock_prompt_seconds
@@ -955,7 +1013,7 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
             budget = installed['pbkdf_memory_limit_kib']
             assert 64 * 1024 <= result['installed_pbkdf']['memory'] <= budget <= 1024 * 1024
             result['pbkdf_memory_limit_kib'] = budget
-            result['checks'].append('Encrypted installation after the agent trial retains benchmarked Argon2id within its RAM budget and unlocks after reboot')
+            result['checks'].append('Encrypted installation retains benchmarked Argon2id within its RAM budget and unlocks after reboot')
         vm.command('test "$(id -un)" = ' + shlex.quote(config['username']) +
                    ' && test "$HOME" = ' + shlex.quote('/home/' + config['username']) +
                    ' && test "$(uname -n)" = ' + shlex.quote(config['hostname']))
@@ -971,6 +1029,9 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         vm.command('test "$(npm prefix -g)" = "$HOME/.local"')
         vm.command('findmnt -n -o FSTYPE / | grep -qx btrfs')
         vm.command('findmnt -n -o FSTYPE /boot | grep -qx vfat')
+        if direct:
+            from install_first import check_installed_controls
+            check_installed_controls(vm, result, folder)
         output, _ = vm.command('cat /var/lib/harness-os/install.json; hn-os measure')
         (folder / 'installed-measurement.txt').write_text(output)
         vm.screenshot('04-installed-hn')

@@ -332,6 +332,24 @@ class Screen:
 
 
 class InstallationCompletion(unittest.TestCase):
+    def test_usb_success_has_only_shutdown_and_cannot_return_to_trial(self):
+        screen = Screen()
+        screen.keys = ['\x1b', '\x03', '\t', '\n']
+        with patch.object(installer.curses, 'curs_set'), patch.object(installer.curses, 'flushinp'), \
+             patch.object(installer.curses, 'raw'):
+            self.assertTrue(installer.completion(screen, boot=True))
+        self.assertNotIn('Back to Harness', '\n'.join(screen.frames))
+
+    def test_failed_usb_shutdown_keeps_success_and_does_not_reinstall(self):
+        with patch.object(installer.curses, 'wrapper', return_value=True) as view, \
+             patch.object(installer, 'run', side_effect=[OSError('fixture poweroff failure'), None]) as command, \
+             patch.object(installer, 'install') as install, patch('builtins.input'), \
+             patch.object(installer.sys, 'stderr'):
+            installer.finish_installation(boot=True)
+        self.assertEqual(view.call_count, 2)
+        self.assertEqual(command.call_count, 2)
+        install.assert_not_called()
+
     def test_success_stays_visible_until_shutdown_or_return_is_chosen(self):
         for keys, shutdown in [(['\n'], True), (['\t', '\n'], False), (['\x1b'], False)]:
             screen = Screen()
@@ -547,6 +565,20 @@ class InteractiveInstall(unittest.TestCase):
 
 
 class InstallerExit(unittest.TestCase):
+    def test_usb_cancel_or_failure_returns_to_installer(self):
+        for failure in [KeyboardInterrupt(), ValueError('Fixture disk disappeared')]:
+            with self.subTest(failure=failure), \
+                 patch.object(installer, 'arguments', return_value=installer.argparse.Namespace(config=None, boot=True)), \
+                 patch.object(installer, 'main', side_effect=[failure, None]) as main, \
+                 patch.object(installer.sys.stdin, 'isatty', return_value=True), \
+                 patch.object(installer.sys, 'stderr'), patch('builtins.input') as acknowledge:
+                self.assertEqual(installer.entrypoint(), 0)
+                self.assertEqual(main.call_count, 2)
+                if isinstance(failure, ValueError):
+                    acknowledge.assert_called_once_with('Press Enter to try again.')
+                else:
+                    acknowledge.assert_not_called()
+
     def exercise(self, failure, config=None, tty=True):
         with patch.object(installer, 'arguments', return_value=installer.argparse.Namespace(config=config)), \
              patch.object(installer, 'main', side_effect=failure), \

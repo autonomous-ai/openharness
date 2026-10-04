@@ -86,6 +86,25 @@ class PublicationGuards(unittest.TestCase):
             with self.assertRaises(ValueError):
                 publish.validate_examples(root, 'dsh')
 
+    def test_install_first_requires_the_new_journey_and_installed_agent(self):
+        manifest = {'source_commit': 'source-one', 'iso': {'sha256': 'image-one'}, 'capabilities': ['install-first']}
+        extras = ['Harness unlock screen renders, masks input, accepts a retry',
+                  'Claude Code, Codex and pi install on demand; bundled OpenCode',
+                  'On-demand gcc/make installation']
+        receipts = [dict(firmware=fw, encrypted=encrypted, status='passed', iso_sha256='image-one',
+                         image_source_commit='source-one', checks=publish.INSTALL_FIRST_CHECKS + extras)
+                    for fw, encrypted in [('bios', False), ('uefi', True)]]
+        publish.validate_receipts(manifest, receipts)
+        for required in publish.INSTALL_FIRST_CHECKS:
+            bad = copy.deepcopy(receipts)
+            bad[0]['checks'].remove(required)
+            with self.subTest(missing=required), self.assertRaises(ValueError):
+                publish.validate_receipts(manifest, bad)
+        for row in receipts:
+            row['checks'] = publish.REQUIRED_CHECKS + extras
+        with self.assertRaises(ValueError):
+            publish.validate_receipts(manifest, receipts)
+
     def test_only_complete_matching_machine_evidence_can_publish(self):
         manifest = {'source_commit': 'source-one', 'iso': {'sha256': 'image-one'}}
         receipts = [dict(firmware=fw, encrypted=encrypted, status='passed', iso_sha256='image-one',

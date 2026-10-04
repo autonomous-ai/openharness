@@ -30,7 +30,11 @@ restore_tty() {
 }
 trap restore_tty EXIT
 if [ -n "$tty_state" ]; then stty -echo -icanon -isig; fi
-if labwc -C /usr/share/harness-os/labwc > "$HOME/.local/state/harness-os/display.log" 2>&1; then
+compositor_config=/usr/share/harness-os/labwc
+if [ -f /etc/harness-live ]; then
+    compositor_config=/usr/share/harness-os/labwc-install
+fi
+if labwc -C "$compositor_config" > "$HOME/.local/state/harness-os/display.log" 2>&1; then
     exit 0
 fi
 restore_tty
@@ -38,6 +42,9 @@ trap - EXIT
 # A missing/broken GPU driver must not strand the programmer at a blank screen.
 # Stay in hn on the Linux console; an agent can install drivers and arrange a reboot.
 systemctl --user stop harness-os.target || true
+if [ -f /etc/harness-live ]; then
+    exec sudo /usr/bin/python3 /usr/lib/harness-os/install.py --boot
+fi
 systemctl --user start harness-daemon.service || true
 printf '%s\n' 'Graphics unavailable; continuing in hn on the console.'
 cd "$HOME/projects"

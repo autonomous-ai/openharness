@@ -689,9 +689,11 @@ def interactive(username='me', hostname='harness', encrypt=True):
     return curses.wrapper(lambda screen: InstallForm(screen, candidates, username, hostname, encrypt).run())
 
 
-def completion(screen):
+def completion(screen, boot=False):
     """Keep success visible when the installer owns an hn pane, then shut down on request."""
     screen.keypad(True)
+    if boot:
+        curses.raw()
     curses.flushinp()
     view = InstallForm(screen, [], 'me', 'harness', True)
     view.cursor(False)
@@ -702,12 +704,13 @@ def completion(screen):
         view.line(4, 'Remove the USB after shutdown.')
         view.line(5, 'Then turn on this computer.')
         view.line(8, '[ Shut down ]', active=selected == 0)
-        view.line(10, 'Back to Harness', active=selected == 1)
+        if not boot:
+            view.line(10, 'Back to Harness', active=selected == 1)
         screen.refresh()
         key = screen.get_wch()
-        if key in ('\x1b', '\x03'):
+        if key in ('\x1b', '\x03') and not boot:
             return False
-        if key in ('\t', curses.KEY_BTAB, curses.KEY_UP, curses.KEY_DOWN):
+        if key in ('\t', curses.KEY_BTAB, curses.KEY_UP, curses.KEY_DOWN) and not boot:
             selected = 1 - selected
         elif InstallForm.enter(key):
             return selected == 0
@@ -756,7 +759,27 @@ def arguments():
     parser.add_argument('--no-encryption', action='store_true', help='Explicitly install without disk encryption')
     parser.add_argument('--yes-erase-disk', action='store_true')
     parser.add_argument('--source', type=Path, help='Override the automatically detected live system image')
-    return parser.parse_args()
+    parser.add_argument('--boot', action='store_true', help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    if args.boot and (args.config or not Path('/etc/harness-live').is_file()):
+        parser.error('--boot is only for the interactive Harness USB installer.')
+    return args
+
+
+def finish_installation(boot=False):
+    # A failed poweroff must return to success, never restart disk installation.
+    while curses.wrapper(lambda screen: completion(screen, boot=boot)):
+        try:
+            run('systemctl', 'poweroff')
+            return
+        except (OSError, subprocess.SubprocessError) as error:
+            if not boot:
+                raise
+            print(f'Harness is installed. Could not shut down: {error}', file=sys.stderr)
+            try:
+                input('Press Enter to try shutting down again.')
+            except (EOFError, KeyboardInterrupt):
+                pass
 
 
 def main(args=None):
@@ -783,32 +806,34 @@ def main(args=None):
         install(config, source, Path('/mnt/harness-os'))
     else:
         curses.wrapper(lambda screen: install_with_progress(screen, config, source, Path('/mnt/harness-os')))
-        if curses.wrapper(completion):
-            run('systemctl', 'poweroff')
+        finish_installation(boot=getattr(args, 'boot', False))
 
 
 def entrypoint():
     args = arguments()
-    try:
-        main(args)
-    except KeyboardInterrupt:
-        return 130
-    except (ValueError, OSError, curses.error, subprocess.SubprocessError) as error:
-        print(f'Installation stopped: {error}', file=sys.stderr, flush=True)
-        for note in getattr(error, '__notes__', ()):
-            print(note, file=sys.stderr, flush=True)
-        if not args.config and LAST_LOG is not None:
-            print(f'Details: {LAST_LOG}', file=sys.stderr, flush=True)
-        # An installer launched from the USB welcome owns its pane. Retain the
-        # error until it has been read instead of closing the pane immediately.
-        # Unattended configuration files and piped callers never wait for input.
-        if not args.config and sys.stdin.isatty() and sys.stderr.isatty():
-            try:
-                input('Press Enter to return to Harness.')
-            except (EOFError, KeyboardInterrupt):
-                pass
-        return 1
-    return 0
+    boot = getattr(args, 'boot', False)
+    while True:
+        try:
+            main(args)
+            return 0
+        except KeyboardInterrupt:
+            if not boot:
+                return 130
+        except (ValueError, OSError, curses.error, subprocess.SubprocessError) as error:
+            print(f'Installation stopped: {error}', file=sys.stderr, flush=True)
+            for note in getattr(error, '__notes__', ()):
+                print(note, file=sys.stderr, flush=True)
+            if not args.config and LAST_LOG is not None:
+                print(f'Details: {LAST_LOG}', file=sys.stderr, flush=True)
+            # Interactive failures stay visible until acknowledged. On USB,
+            # cancellation or failure returns to a fresh form, never a trial.
+            if not args.config and sys.stdin.isatty() and sys.stderr.isatty():
+                try:
+                    input('Press Enter to try again.' if boot else 'Press Enter to return to Harness.')
+                except (EOFError, KeyboardInterrupt):
+                    pass
+            if not boot:
+                return 1
 
 
 if __name__ == '__main__':
