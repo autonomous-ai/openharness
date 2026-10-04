@@ -16,6 +16,15 @@ Official docs, read 2026-09-29 (source files in github.com/lmstudio-ai/docs):
 Tested: LM Studio 0.4.25 (`brew install --cask lm-studio`), MacBook Pro M1 Pro 32 GB, macOS 26.6, 2026-09-29.
 Tags: `[doc]` official page above, `[run]` seen on the tested machine, `[?]` unverified.
 
+> ⚠️ **`lms` commands are writes, not probes.** Every `lms` command — `lms ls --json`, `lms server status`,
+> `lms ps`, `lms get`, `lms load`/`lms unload`, as well as `lms server start` / `lms daemon up` — wakes
+> LM Studio's service if it is stopped and runs it as `LM Studio --run-as-service` (`Waking up LM Studio
+> service...`) [doc][run]. The person may have closed it on purpose, so never run an `lms` command just to
+> look. To read what LM Studio has, or whether its server is up, use `"$GRID_FLEET" models` (it reads the
+> folders on disk and lists an answering server by its port, starting nothing) and, to confirm an already-up
+> server, `"$GRID_FLEET" verify`. Only run `lms` when the task deliberately starts, loads or unloads LM
+> Studio, and say what you are about to wake.
+
 ## When to use it
 
 - **A model in LM Studio's folder**, GGUF or MLX (`fleet models` → START WITH `lm-studio`): LM Studio runs
@@ -33,17 +42,26 @@ Tags: `[doc]` official page above, `[run]` seen on the tested machine, `[?]` unv
 - `~/.lmstudio/models/<publisher>/<model>/<file>` — it keeps Hugging Face's layout [doc]. The folder can be
   moved in the app's My Models tab [doc]; no documented setting file or env var [?]. Older versions used
   `~/.cache/lm-studio/models` [?]. `fleet models` scans both.
-- `lms ls --json` → `modelKey`, `path`, `format` (gguf/mlx), `sizeBytes` [run]. Keys prefix-match: a short
-  key matched two downloaded models and loaded "the first one" [run] — always pass the exact key.
+- **To read it without waking it, run `"$GRID_FLEET" models`** (the same command you already use for every
+  engine). It reads `~/.lmstudio/models` on disk and, for a server already answering, lists it as
+  `kind: lm-studio` on its port. Nothing is started.
+- `lms ls --json` → `modelKey`, `path`, `format` (gguf/mlx), `sizeBytes` [run] — **only when its service is
+  already running**; the `lms` command itself wakes LM Studio when it is stopped (see the warning above),
+  never run it just to look. Keys prefix-match: a short key matched two downloaded models and loaded "the
+  first one" [run] — always pass the exact key.
 - A fresh install holds only an embedding model, no chat model [run].
 
 ## Installed? Running?
 
 - App: `/Applications/LM Studio.app`. `lms` lives in `~/.lmstudio/bin` and appears only after the app ran
   once [run]. Headless servers use **llmster** instead of the app: `curl -fsSL https://lmstudio.ai/install.sh | bash` [doc].
-- `lms server status` → "The server is not running." or its port [run]. Launching the app does not
-  start the server [run]. `fleet models` lists a running one as `kind: lm-studio` (its `owned_by` is
-  `organization_owner` [run]).
+- **To tell whether it is running, read `"$GRID_FLEET" models`, not `lms`.** A running server answers its
+  port and is listed as `kind: lm-studio` (its `owned_by` is `organization_owner` [run]); an installed-but-
+  off one shows its `lm-studio` engine row and its model files, but no server row. `fleet models` never
+  starts anything.
+- `lms server status` → "The server is not running." or its port [run] — but it is an `lms` command and
+  wakes the service when it is stopped, so run it only when you intend the service to be (or become)
+  running. Launching the app does not start the server [run].
 
 ## Start an already-downloaded model
 
@@ -62,12 +80,15 @@ Port P from outside `machine.listeningPorts`. Always `--port`: without it the la
 
 ## Ready means
 
-Run `"$GRID_FLEET" verify --at http://127.0.0.1:P/v1 --model <id> --kind lm-studio` — it performs the
-request checks with deadlines and prints each one. Also:
-
-1. `lms server status` shows port P [run]. 2. `GET http://127.0.0.1:P/v1/models` lists `<id>` [doc][run].
-3. LM Studio reports `<id>` loaded with ≥ 65536 (`/api/v0/models`, the CONTEXT `lms ps` shows) [run]. 4. One bounded `/v1/chat/completions` request with
-`model: <id>`, `max_tokens` 16 → non-empty `content` [run].
+The service is either already up (a port answers, listed by `"$GRID_FLEET" models` as `kind: lm-studio`) or
+you just started it. Run `"$GRID_FLEET" verify --at http://127.0.0.1:P/v1 --model <id> --kind lm-studio` —
+it performs the request checks with deadlines and prints each one. The `lms`-free confirmations (they talk
+straight to `/v1` and never wake anything):
+1. `GET http://127.0.0.1:P/v1/models` lists `<id>` [doc][run]. 2. `GET http://127.0.0.1:P/api/v0/models`
+reports `<id>` loaded with ≥ 65536 [run]. 3. One bounded `/v1/chat/completions` request with `model: <id>`,
+`max_tokens` 16 → non-empty `content` [run].
+Only once you deliberately opened the service, `lms server status` shows port P [run] and `lms ps` shows
+`<id>` with CONTEXT ≥ 65536 [run].
 A 401 means the person turned on "Require Authentication" [doc]: do not change their setting; say so and
 serve the file with Grid's engine instead.
 
