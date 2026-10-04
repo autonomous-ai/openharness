@@ -36,9 +36,7 @@ describe('the agy idle backstop', () => {
     expect(String(log.mock.calls[0][0])).toContain('closed by the agy idle backstop')
   })
 
-  // Pinned defect: the check that fires deletes its own entry, count included, before re-arming, so the
-  // count starts over at every check and a busy pane is polled every 15 s for ever. Fixed next.
-  it.fails('keeps watching a busy or unreadable pane, up to forty checks', async () => {
+  it('keeps watching a busy or unreadable pane, up to forty checks, then stops', async () => {
     const { deps, backstop } = setup()
     vi.mocked(deps.captureTerminal).mockResolvedValueOnce(null).mockResolvedValue(BUSY)
     backstop.armAgyIdleWatch('s1')

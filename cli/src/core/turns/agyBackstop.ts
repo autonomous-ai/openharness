@@ -39,8 +39,9 @@ export function createAgyBackstop({ agyNormalizers, bySession, captureTerminal, 
     agyIdleWatch.delete(sessionId)
   }
 
-  const armAgyIdleWatch = (sessionId: string): void => {
-    const checks = agyIdleWatch.get(sessionId)?.checks ?? 0
+  // `checks` carries the count into the re-arm a check makes: the check deletes its own entry first,
+  // so reading the count back from the map started it over every time and the poll never stopped.
+  const armAgyIdleWatch = (sessionId: string, checks = agyIdleWatch.get(sessionId)?.checks ?? 0): void => {
     clearAgyIdleWatch(sessionId)
     if (checks >= AGY_IDLE_WATCH_MAX) return
     const timer = setTimeout(() => {
@@ -51,7 +52,7 @@ export function createAgyBackstop({ agyNormalizers, bySession, captureTerminal, 
         const entry = bySession(sessionId)
         if (!entry) return
         const capture = await captureTerminal(entry.agentId, 60)
-        if (!capture || !agyPaneIdle(capture)) { armAgyIdleWatch(sessionId); return }
+        if (!capture || !agyPaneIdle(capture)) { armAgyIdleWatch(sessionId, checks + 1); return }
         await drain(sessionId)
         if (!normalizer.turnOpen) return
         console.log(`[turn] ${sid(sessionId)} closed by the agy idle backstop · no final Stop arrived`)
