@@ -228,6 +228,8 @@ describe('attaching a session', () => {
       vi.mocked(run.deps.watcher.tails).mockReturnValue(false)
       await run.attach.attachSession(s, true)
       expect(run.deps.watcher.addSession).toHaveBeenCalledTimes(1)
+      // The prompt left a turn open, but the held tail had delivered its start already: never again.
+      expect(run.deps.emit).not.toHaveBeenCalledWith(s.sessionId, [expect.objectContaining({ type: 'turn_started' })], { resumed: true })
     })
 
     it('keeps the live normalizer when the re-read fails or outlasts its hold', async () => {

@@ -381,7 +381,11 @@ export function createAttach({
     // A first prompt that lands while this attach is running is already in the transcript we just
     // folded, so its turn_started was consumed as history and the live turn would end up untracked.
     // Replay that one event, after the attach log, so the recovery is visible in order.
-    if (historyTurnOpen) {
+    // Not for a tail this attach took over: everything before the hold was delivered live, the turn's
+    // start included. Claude Code announces its session again when it compacts, often in the middle of
+    // a long turn, and replaying the start showed every window that turn starting twice
+    // (e2e/compaction.e2e.ts).
+    if (historyTurnOpen && !handover.hold) {
       const opened = historyEvents.findLast((event) => event.type === 'turn_started')
       if (opened) {
         console.log(`[agent] ${sid(session.agentId)} resumed the turn already open at attach`)
