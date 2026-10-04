@@ -68,6 +68,12 @@ export interface RuntimeState {
   observedAt: number | null
 }
 
+/** The runtime axes a transcript record can set — see `RuntimeProfileManager.transcriptFields`. */
+export type RuntimeField = 'model' | 'effort' | 'mode'
+
+/** The scratch session `transcriptFields` reads into. No engine session id is empty or starts with NUL. */
+const FIELD_PROBE = '\u0000transcript-fields'
+
 export interface CursorModelTarget {
   rawId: string
   modelKey: string
@@ -706,6 +712,33 @@ export class RuntimeProfileManager {
     this.wake(session.sessionId)
     if (!silent && this.suppressNotifications === 0 && before !== after && !this.controls.has(session.sessionId)) this.scheduleChanged(session.sessionId)
     return before !== after
+  }
+
+  /**
+   * Which of model, effort and mode one Claude or Codex transcript record sets — asked of the same
+   * readers `ingest` uses, on a scratch state, so the two cannot disagree. An attach that reads only the
+   * end of a transcript (lib/attachTranscript.ts) reaches back to the newest record that set each one.
+   *
+   * It can only under-report (the session's own model-switch control is not consulted), and the attach
+   * replays every record from the oldest one it reached, so under-reporting costs a longer reach, never
+   * a wrong value.
+   */
+  transcriptFields(session: RegisteredSession, rawLine: string): RuntimeField[] {
+    if (session.engine !== 'claude' && session.engine !== 'codex') return []
+    let raw: Record<string, unknown> | null
+    try { raw = record(JSON.parse(rawLine)) } catch { return [] }
+    if (!raw) return []
+    const probe: RegisteredSession = { ...session, sessionId: FIELD_PROBE }
+    this.states.delete(FIELD_PROBE)
+    if (session.engine === 'codex') this.ingestCodex(probe, raw)
+    else this.ingestClaude(probe, raw)
+    const state = this.state(FIELD_PROBE)
+    this.states.delete(FIELD_PROBE)
+    const fields: RuntimeField[] = []
+    if (state.model !== null) fields.push('model')
+    if (state.effort !== null) fields.push('effort')
+    if (state.mode !== 'unknown') fields.push('mode')
+    return fields
   }
 
   async ingestConfig(session: RegisteredSession, silent = false): Promise<boolean> {

@@ -586,6 +586,30 @@ export function selectCodexRecapLine(line: string): 'keep' | 'skip' | 'stop' {
   return AGENT_TEXT_TYPES.has(itemType) ? 'keep' : 'skip'
 }
 
+/**
+ * The record `CodexNormalizer.ingest` opens a turn on — a user message with text, or a `/goal` context
+ * injection — decided from the record alone, as `ingest` decides it whatever came before. Attaching
+ * folds from the last one of these (lib/attachTranscript.ts); see `startsClaudeTurn`.
+ */
+export function startsCodexTurn(line: string): boolean {
+  const raw = parse(line)
+  if (!raw || raw.type === 'compacted') return false
+  const item = payload(raw)
+  if (!item) return false
+  const type = string(item.type)
+  if (raw.type === 'event_msg') return USER_TURN_TYPES.has(type) && !!messageText(item)
+  return raw.type === 'response_item' && type === 'message' && goalObjective(item) !== null
+}
+
+/** The objective a `/goal` turn opener carries, or null. Whether that turn reads as the submission or a
+ *  continuation depends on the goal record before it, which is the one older record a fold from the
+ *  last turn has to be shown. */
+export function codexGoalOf(line: string): string | null {
+  const raw = parse(line)
+  const item = raw && raw.type === 'response_item' ? payload(raw) : null
+  return item && string(item.type) === 'message' ? goalObjective(item) : null
+}
+
 export function lastCodexTurnText(rawLines: string[]): LastTurnText | null {
   let userMessage = ''
   let assistantText = ''

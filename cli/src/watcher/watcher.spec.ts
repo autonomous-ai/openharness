@@ -209,3 +209,47 @@ describe('Watcher.pollAll', () => {
     await watcher.stop()
   })
 })
+
+describe('Watcher.addSession fromOffset', () => {
+  const setup = async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'machine-watcher-offset-'))
+    cleanup.push(dir)
+    const transcriptPath = join(dir, 'session.jsonl')
+    const watcher = new Watcher()
+    const lines: string[] = []
+    const history: string[] = []
+    watcher.on('line', (event: LineEvent) => lines.push(event.text))
+    watcher.on('history', (event: HistoryEvent) => history.push(...event.lines.map((line) => line.text)))
+    return { transcriptPath, watcher, lines, history }
+  }
+
+  it('tails from where the attach stopped reading, so a record written meanwhile is streamed live', async () => {
+    const { transcriptPath, watcher, lines, history } = await setup()
+    await writeFile(transcriptPath, '{"n":1}\n{"n":2}\n')
+    await watcher.addSession({ sessionId: 's1', engine: 'codex', transcriptPath }, { fromOffset: 8 })
+    await watcher.pollSession('s1')
+    expect(lines).toEqual(['{"n":2}'])
+    expect(history).toEqual([])
+    await watcher.stop()
+  })
+
+  it('starts at the new end when the file shrank since the attach read it', async () => {
+    const { transcriptPath, watcher, lines } = await setup()
+    await writeFile(transcriptPath, '{"n":1}\n')
+    await watcher.addSession({ sessionId: 's1', engine: 'claude', transcriptPath }, { fromOffset: 500 })
+    await appendFile(transcriptPath, '{"n":2}\n')
+    await watcher.pollSession('s1')
+    expect(lines).toEqual(['{"n":2}'])
+    await watcher.stop()
+  })
+
+  it('lets fromStart win, reading the existing content as history', async () => {
+    const { transcriptPath, watcher, lines, history } = await setup()
+    await writeFile(transcriptPath, '{"n":1}\n{"n":2}\n')
+    await watcher.addSession({ sessionId: 's1', engine: 'codex', transcriptPath }, { fromStart: true, fromOffset: 8 })
+    await watcher.pollSession('s1')
+    expect(history).toEqual(['{"n":1}', '{"n":2}'])
+    expect(lines).toEqual([])
+    await watcher.stop()
+  })
+})

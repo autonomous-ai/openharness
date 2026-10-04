@@ -69,8 +69,10 @@ export class Watcher extends EventEmitter {
     if (this.files.size) this.watcher.add([...this.files.keys()])
   }
 
-  /** Attach one trusted transcript. Runtime hydration is handled by cli.ts; the tail starts at EOF. */
-  async addSession(session: WatchedSession, opts: { fromStart?: boolean } = {}): Promise<void> {
+  /** Attach one trusted transcript. Runtime hydration is handled by cli.ts; the tail starts at EOF, or at
+   *  `fromOffset` — where that hydration stopped reading — so a record written while it read is tailed
+   *  rather than lost between the two. */
+  async addSession(session: WatchedSession, opts: { fromStart?: boolean; fromOffset?: number } = {}): Promise<void> {
     const oldPath = this.bySession.get(session.sessionId)
     if (oldPath && oldPath !== session.transcriptPath) await this.removeSession(session.sessionId)
 
@@ -79,7 +81,8 @@ export class Watcher extends EventEmitter {
     let size = 0
     try { size = (await stat(session.transcriptPath)).size } catch { size = 0 }
     if (!opts.fromStart) {
-      offset = size
+      // A file that shrank since is a rewrite; its tail starts at the new end, as without an offset.
+      offset = opts.fromOffset !== undefined && opts.fromOffset <= size ? opts.fromOffset : size
       if (session.engine === 'cursor') {
         try { cursorLines = completeLines(await readFile(session.transcriptPath, 'utf8')) } catch { cursorLines = [] }
       }
@@ -108,7 +111,7 @@ export class Watcher extends EventEmitter {
     })
     this.bySession.set(session.sessionId, session.transcriptPath)
     this.watcher?.add(session.transcriptPath)
-    if (opts.fromStart) this.schedule(session.transcriptPath)
+    if (opts.fromStart || offset < size) this.schedule(session.transcriptPath)
   }
 
   /** Move a byte-tailed session's read cursor to a known length after the file was rewritten in place

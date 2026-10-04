@@ -791,6 +791,37 @@ export function foldTranscript(
   }
 }
 
+/**
+ * `foldTranscript` one record at a time, for a transcript streamed in rather than loaded
+ * (lib/attachTranscript.ts). History keeps only its last `turn_started` — the one event an attach ever
+ * replays from it — so folding a long turn holds nothing but that.
+ */
+export class TranscriptFold {
+  private lastStarted: LiveEvent | null = null
+  private readonly folded: LiveEvent[] = []
+
+  constructor(
+    private readonly ingest: (line: string) => LiveEvent[],
+    private readonly turnOpenAfter: () => boolean,
+    private readonly live: boolean,
+  ) {}
+
+  push(line: string): void {
+    for (const event of this.ingest(line)) {
+      if (this.live) this.folded.push(event)
+      else if (event.type === 'turn_started') this.lastStarted = event
+    }
+  }
+
+  finish(): { history: LiveEvent[]; live: LiveEvent[]; turnOpen: boolean } {
+    return {
+      history: this.lastStarted ? [this.lastStarted] : [],
+      live: this.folded,
+      turnOpen: !this.live && this.turnOpenAfter(),
+    }
+  }
+}
+
 // Terminal assistant stop reasons that close a turn. `tool_use` is deliberately absent (the turn
 // continues into the tool). `pause_turn` is absent too — it may legitimately resume; the Stop hook
 // (which only fires when the agent is truly done) is the authoritative catch-all for that case.
@@ -867,4 +898,38 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
     events.push({ type: 'turn_ended', payload: {} })
   }
   return events
+}
+
+function parseRecord(rawLine: string): Record<string, unknown> | null {
+  if (!rawLine.trim()) return null
+  try {
+    const raw = JSON.parse(rawLine) as unknown
+    return raw && typeof raw === 'object' ? raw as Record<string, unknown> : null
+  } catch { return null }
+}
+
+/**
+ * The record `lineToEvents` opens a turn on — a real user prompt — decided from the record alone, as
+ * `lineToEvents` decides it whatever came before. Attaching reads a transcript backward to the last
+ * one of these and folds only from there (lib/attachTranscript.ts): every turn-scoped piece of
+ * `TurnState` is reset by it, so the fold from here ends exactly where the whole-history fold does.
+ */
+export function startsClaudeTurn(rawLine: string): boolean {
+  const raw = parseRecord(rawLine)
+  if (!raw || compactEventFromRaw(raw) || taskNotificationEvent(raw)) return false
+  const msg = transformLine(raw)
+  if (!msg?.message || msg.type !== 'user' || isInterruptLine(msg)) return false
+  return realUserText(msg) !== null
+}
+
+/** `tailFileUntil` selector for `lastTurnTextFromRawLines`: stop on the prompt it resets on, keep the
+ *  assistant records it reads after that, and drop everything else it ignores — so a recap reads the
+ *  last turn's text instead of the whole conversation. */
+export function selectClaudeRecapLine(line: string): 'keep' | 'skip' | 'stop' {
+  const raw = parseRecord(line)
+  if (!raw || compactEventFromRaw(raw) !== undefined) return 'skip'
+  const msg = transformLine(raw)
+  if (!msg?.message) return 'skip'
+  if (realUserText(msg) !== null) return 'stop'
+  return msg.type === 'assistant' ? 'keep' : 'skip'
 }

@@ -186,7 +186,9 @@ import { WindowVisit } from './cable/windowVisit.js'
 import { WindowForm } from './cable/windowForm.js'
 import { RemoteRelayPool } from './lib/remoteRelay.js'
 import { TERMINAL_BINARY_VERSION } from './lib/terminalBinary.js'
-import { foldTranscript, lastTurnTextFromRawLines, lineToEvents, newTurnState, type LiveEvent, type TurnState } from './lib/normalize.js'
+import { foldTranscript, lastTurnTextFromRawLines, lineToEvents, newTurnState, selectClaudeRecapLine, TranscriptFold, type LiveEvent, type TurnState } from './lib/normalize.js'
+import { attachTranscript, claudeAttachRules, codexAttachRules, type AttachRead } from './lib/attachTranscript.js'
+import { tailFileUntil } from './lib/transcriptTail.js'
 import { AskQuestionController, parseEngineQuestionPane, pollsQuestions, QuestionWatcher } from './lib/askQuestion.js'
 import { teamWriteHold } from './teams/preflight.js'
 import { TeamError } from './teams/model.js'
@@ -269,7 +271,7 @@ import { SessionInputController } from './lib/sessionInput.js'
 import { DeviceResultJournal } from './lib/autonomous-device/resultJournal.js'
 import { AutonomousDeviceInput, isDeviceInputBoundary } from './lib/autonomous-device/input.js'
 import { adaptSlashCommand } from './lib/goalCommand.js'
-import { RuntimeProfileManager, parseRuntimeProfile } from './lib/runtimeProfile.js'
+import { RuntimeProfileManager, parseRuntimeProfile, type RuntimeField } from './lib/runtimeProfile.js'
 import { RuntimeProfileController, inspectRuntimePane } from './lib/runtimeProfileController.js'
 import { deviceErrorText } from './lib/deviceErrors.js'
 import { correlateAgentEvent, turnHeartbeatFrame } from './lib/agentEvent.js'
@@ -2417,7 +2419,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       console.log(`[agent] ${sid(session.agentId)} re-attached · engine=${session.engine} · terminal=${primaryTerminalLabel(session)} · session=${sid(session.sessionId)}`)
       return true
     }
-    const lines = session.transcriptPath ? await tailFile(session.transcriptPath, Infinity) : []
     const initialEvents: LiveEvent[] = []
     // Folding the transcript in below is deliberately silent — old turns must never replay live. But
     // when the history ENDS mid-turn the turn is still running, and dropping its `turn_started` costs
@@ -2432,15 +2433,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       || (session.engine === 'cursor' && replayCursorFromStart)
     const historyEvents: LiveEvent[] = []
     let historyTurnOpen = false
-    if (autonomousDeviceService?.needsTranscript(session.agentId, session.sessionId, session.engine)) {
-      for (const line of lines) autonomousDeviceService.observeTranscript(session.agentId, session.sessionId, session.engine, line)
-    }
-    runtimeProfiles.hydrate(session, lines)
-    await runtimeProfiles.ingestConfig(session, true)
+    const observe = autonomousDeviceService?.needsTranscript(session.agentId, session.sessionId, session.engine)
+      ? (line: string): void => autonomousDeviceService?.observeTranscript(session.agentId, session.sessionId, session.engine, line)
+      : undefined
     // Returns `turnOpen` rather than assigning it: every engine folds exactly once, and a second call
     // quietly overwriting the first is the kind of mistake a returned value makes impossible to write.
-    const fold = (ingest: (line: string) => LiveEvent[], turnOpenAfter: () => boolean): boolean => {
-      const out = foldTranscript(ingest, lines, turnOpenAfter, { live: replayLive })
+    const take = (out: { history: LiveEvent[]; live: LiveEvent[]; turnOpen: boolean }): boolean => {
       // One at a time, not `push(...arr)`: spreading passes every element as a separate argument and Node
       // throws RangeError somewhere past 100k of them. Real transcripts are nowhere near that (measured:
       // 1194 events out of a 25.6 MB rollout) — but the per-line spread this replaced had no ceiling at
@@ -2449,11 +2447,46 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       for (const event of out.live) initialEvents.push(event)
       return out.turnOpen
     }
-    if (session.engine === 'codex') {
-      const normalizer = new CodexNormalizer('live', codexSubagentResolverFor(session.codexHome))
+    // Claude Code and Codex read their transcript from the END: the last turn, plus the few older records
+    // the chips and a continuing /goal still need — never the whole conversation, which on a long session
+    // cost the daemon more memory than it has (lib/attachTranscript.ts). Their normalizers exist before
+    // the read because they fold as the records stream in. The other engines still fold everything.
+    const codexNormalizer = session.engine === 'codex'
+      ? new CodexNormalizer('live', codexSubagentResolverFor(session.codexHome))
+      : null
+    const claudeState = session.engine === 'claude' ? newTurnState() : null
+    const fields = (line: string): readonly RuntimeField[] => runtimeProfiles.transcriptFields(session, line)
+    const fromEndFold = codexNormalizer
+      ? { rules: codexAttachRules(fields), ingest: (line: string) => codexNormalizer.ingest(line), turnOpen: () => codexNormalizer.turnOpen }
+      : claudeState
+        ? { rules: claudeAttachRules(fields), ingest: (line: string) => lineToEvents(line, claudeState), turnOpen: () => claudeState.turnOpen }
+        : null
+    let fromEnd: AttachRead | null = null
+    if (session.transcriptPath && fromEndFold) {
+      const stream = new TranscriptFold(fromEndFold.ingest, fromEndFold.turnOpen, replayLive)
+      runtimeProfiles.hydrate(session, [])
+      const read = await attachTranscript(
+        session.transcriptPath,
+        fromEndFold.rules,
+        { profile: (line) => { runtimeProfiles.ingest(session, line, true) }, fold: (line) => stream.push(line), observe },
+        replayLive,
+      )
+      fromEnd = read
+      historyTurnOpen = take(stream.finish())
+      console.log(`[agent] ${sid(session.agentId)} read the transcript from its end · turn @${read.turnFrom} · profile @${read.profileFrom} · ${read.end} bytes`)
+    }
+    const lines = session.transcriptPath && !fromEnd ? await tailFile(session.transcriptPath, Infinity) : []
+    if (!fromEnd) {
+      if (observe) for (const line of lines) observe(line)
+      runtimeProfiles.hydrate(session, lines)
+    }
+    await runtimeProfiles.ingestConfig(session, true)
+    const fold = (ingest: (line: string) => LiveEvent[], turnOpenAfter: () => boolean): boolean =>
+      take(foldTranscript(ingest, lines, turnOpenAfter, { live: replayLive }))
+    if (codexNormalizer) {
       // Hydrate state silently; never replay history live — except a turn left open, below.
-      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
-      codexNormalizers.set(session.sessionId, normalizer)
+      if (!fromEnd) historyTurnOpen = fold((line) => codexNormalizer.ingest(line), () => codexNormalizer.turnOpen)
+      codexNormalizers.set(session.sessionId, codexNormalizer)
     } else if (session.engine === 'cursor') {
       const normalizer = new CursorNormalizer('live', session.sessionId)
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
@@ -2574,8 +2607,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
       commandcodeNormalizers.set(session.sessionId, normalizer)
     } else {
-      const state = newTurnState()
-      historyTurnOpen = fold((line) => lineToEvents(line, state), () => state.turnOpen)
+      const state = claudeState ?? newTurnState()
+      if (!fromEnd) historyTurnOpen = fold((line) => lineToEvents(line, state), () => state.turnOpen)
       turnStates.set(session.sessionId, state)
     }
     if (session.transcriptPath) {
@@ -2584,8 +2617,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // file into the normalizer above, so replaying it from byte 0 emits every line a second time.
       // Measured: a claude turn opened, closed after 44ms and opened again, because the fold replayed the
       // open turn and the watcher then re-read the same bytes. `fromStart` belongs to the re-attach path,
-      // which folds nothing.
-      await watcher.addSession({ ...session, transcriptPath: session.transcriptPath })
+      // which folds nothing. A transcript read from its end hands the tail the exact byte it stopped at.
+      await watcher.addSession({ ...session, transcriptPath: session.transcriptPath }, fromEnd ? { fromOffset: fromEnd.next } : {})
     } else if (session.engine === 'cursor') {
       await cursorDiscovery.add(session.sessionId)
     } else {
@@ -2600,12 +2633,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // is the same duplicate-turn class this whole change exists to remove.
     // Any fold of a transcript with content counts too: the watcher now tails it from the end, so a later
     // replay could only send history out again as if it were live.
-    if (replayLive || lines.length) replayedFirstTurn.add(session.sessionId)
+    if (replayLive || lines.length || fromEnd?.content) replayedFirstTurn.add(session.sessionId)
     if (initialEvents.length) {
       emitSessionEvents(session.sessionId, initialEvents)
       console.log(`[agent] ${sid(session.agentId)} replayed the first turn its transcript already held · ${initialEvents.length} events`)
     }
-    console.log(`[agent] ${sid(session.agentId)} attached · engine=${session.engine} · terminal=${primaryTerminalLabel(session)} · session=${sid(session.sessionId)} · lines=${lines.length}`)
+    console.log(`[agent] ${sid(session.agentId)} attached · engine=${session.engine} · terminal=${primaryTerminalLabel(session)} · session=${sid(session.sessionId)} · lines=${fromEnd ? fromEnd.records : lines.length}`)
     // A first prompt that lands while this attach is running is already in the transcript we just
     // folded, so its turn_started was consumed as history and the live turn would end up untracked.
     // Replay that one event, after the attach log, so the recovery is visible in order.
@@ -2931,6 +2964,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (s.engine === 'devin') return lastDevinTurnText(await readDevinMessages(DEVIN_DB, sessionId))
       if (!s.transcriptPath) return null
       if (s.engine === 'codex') return readLastCodexTurnText(s.transcriptPath)
+      // Its last turn, read backward — not the whole conversation once per turn end.
+      if (s.engine === 'claude') return lastTurnTextFromRawLines(await tailFileUntil(s.transcriptPath, selectClaudeRecapLine))
       const lines = await tailFile(s.transcriptPath, Infinity)
       if (s.engine === 'cursor') return lastCursorTurnText(lines)
       if (s.engine === 'muse') return lastMuseTurnText(lines)
