@@ -119,12 +119,26 @@ Ubuntu's 4.6.1 extractor uses explicit 32 MiB data and fragment queues; these
 match the queue allocation of `-mem 64M` in newer SquashFS tools. The installed
 OS keeps its existing extractor and command.
 
-This uses an unconstrained Linux host with a warm/uncontrolled page cache. It does
-not measure a complete installation, low-memory boot, or the final ISO size.
-Any promising compression change still needs an actual image build and the
-normal plain/encrypted installation and boot journeys. Run it through Actions
-with the existing image's `image_run_id` and independently trusted `iso_sha256`;
-it retains evidence, not candidate images, and changes no release defaults.
+The default assessment uses an unconstrained Linux host with a warm/uncontrolled
+page cache. It does not measure a complete installation or low-memory boot.
+Enable `native_comparison` to repack the same source ISO at levels 6 and 19,
+preserving its boot layout and regenerating its payload checksum. It runs three
+alternating BIOS/plain installations per level and one UEFI/encrypted installation
+per level. Every trial uses a fresh 1 GiB KVM guest, Nehalem CPU profile, private
+disk and USB overlay, and disconnected network. It verifies the actual media
+checksum, saves a trial project, installs offline, reboots, checks that project
+and sends real keyboard input through the graphical terminal. Guest caches are
+dropped after the integrity read and before installation. Guest memory/swap is
+sampled every 250 ms; install, live boot and installed boot measurements remain
+separate. Retain every trial, including failures.
+
+The native comparison still uses an unthrottled virtual USB and uncontrolled host
+cache; it cannot establish physical USB throughput or laptop boot time. It calls
+no models and does not replace the full release journey. Run either assessment
+through Actions with the existing image's `image_run_id` and independently trusted
+`iso_sha256`. It retains receipts/screenshots, discards candidate images and changes
+no release defaults. Adopting a candidate requires a production image build and
+the normal plain/encrypted installation, agent trial and recovery checks.
 
 ## The feedback loop
 

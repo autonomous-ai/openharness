@@ -132,11 +132,66 @@ def tool_versions():
     return versions
 
 
+def repack(iso, payload, destination, folder, label):
+    """Keep the original boot layout while replacing only payload and checksum."""
+    # xorriso's documented replay operation must follow file modifications:
+    # https://www.gnu.org/software/xorriso/man_1_xorriso.html
+    checksum = payload.with_suffix('.sha512')
+    with payload.open('rb') as handle:
+        checksum.write_text(hashlib.file_digest(handle, 'sha512').hexdigest() + '  airootfs.sfs\n')
+    measured(['xorriso', '-no_rc', '-indev', iso, '-outdev', destination,
+              '-map', payload, '/arch/x86_64/airootfs.sfs',
+              '-map', checksum, '/arch/x86_64/airootfs.sha512',
+              '-boot_image', 'any', 'replay'], folder, label)
+    measured(['xorriso', '-no_rc', '-indev', destination, '-report_el_torito', 'plain',
+              '-report_system_area', 'plain'], folder, label + '-boot-layout')
+    return dict(bytes=destination.stat().st_size, sha256=digest(destination))
+
+
+def compare_native(variants, folder):
+    from compression_vm import run_trial
+    # Alternate ordering to expose host drift; every row gets a new guest, disk,
+    # USB overlay and guest page cache. Host caches remain uncontrolled.
+    sequence = [('bios', n) for n in [6, 19, 19, 6, 6, 19]] + [('uefi', 6), ('uefi', 19)]
+    result = dict(status='running', sequence=sequence, trials=[], summaries=[],
+                  limits=['Fresh 1 GiB guests on one shared native CI host; not physical laptops.',
+                          'Guest file caches are dropped after integrity checks, before installation.',
+                          'Virtual USB is unthrottled; host page cache is uncontrolled.',
+                          'Boot timings include fixture login and readiness probes.',
+                          'No models are called; installation and shell input are offline.',
+                          'No automatic adoption or publication.'])
+    path = folder / 'native-comparison.json'
+    try:
+        for index, (firmware, level) in enumerate(sequence, 1):
+            name = f'{index:02}-{firmware}-level-{level}'
+            print('Measuring fresh 1 GiB USB installation: ' + name, flush=True)
+            trial = run_trial(variants[level], folder / name, firmware)
+            result['trials'].append(dict(level=level, **trial))
+            path.write_text(json.dumps(result, indent=2) + '\n')
+        for firmware in ['bios', 'uefi']:
+            for level in [6, 19]:
+                rows = [r for r in result['trials'] if r['firmware'] == firmware and r['level'] == level]
+                result['summaries'].append(dict(firmware=firmware, level=level, repetitions=len(rows),
+                    median_install_seconds=statistics.median(r['install_receipt']['duration_seconds'] for r in rows),
+                    median_live_ready_seconds=statistics.median(r['live_harness_ready_seconds'] for r in rows),
+                    median_installed_ready_seconds=statistics.median(r['installed_harness_ready_seconds_including_test_login'] for r in rows),
+                    max_install_used_mib=max(r['installation']['peak_used_mib'] for r in rows),
+                    max_install_swap_mib=max(r['installation']['peak_swap_used_mib'] for r in rows)))
+        result['status'] = 'passed'
+    except BaseException as error:
+        result.update(status='failed', error=repr(error))
+        raise
+    finally:
+        path.write_text(json.dumps(result, indent=2) + '\n')
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--iso', type=Path, required=True)
     parser.add_argument('--sha256', required=True)
     parser.add_argument('--output', type=Path, default=Path('os/test-results/compression'))
+    parser.add_argument('--vm', action='store_true', help='Compare rebuilt 6/19 with fresh 1 GiB USB installs')
     args = parser.parse_args()
     if platform.system() != 'Linux' or os.geteuid() != 0:
         parser.error('Use root on a disposable native Linux runner to preserve filesystem metadata')
@@ -148,6 +203,12 @@ def main():
     for tool in ['mksquashfs', 'unsquashfs', 'xorriso', '/usr/bin/time']:
         if not shutil.which(tool):
             parser.error('Missing required tool: ' + tool)
+    if args.vm:
+        if not os.access('/dev/kvm', os.R_OK | os.W_OK):
+            parser.error('The native comparison requires accessible KVM')
+        for tool in ['qemu-system-x86_64', 'qemu-img', 'tesseract']:
+            if not shutil.which(tool):
+                parser.error('Missing native VM tool: ' + tool)
     folder = args.output.resolve()
     folder.parent.mkdir(parents=True, exist_ok=True)
     if shutil.disk_usage(folder.parent).free < 18 * 1024**3:
@@ -193,6 +254,7 @@ def main():
                                                            for row in expected['entries'].values())))
             result['package_installed_sizes'] = package_sizes(root)
             original.unlink()
+            variants = {}
             for level in [6, 15, 19]:
                 print(f'Compressing unchanged filesystem at zstd level {level}', flush=True)
                 image = work / f'level-{level}.sfs'
@@ -216,6 +278,9 @@ def main():
                 profile['median_extract_seconds'] = statistics.median(
                     row['command_seconds'] for row in profile['extractions'])
                 profile['max_extract_rss_kib'] = max(row['peak_rss_kib'] for row in profile['extractions'])
+                if args.vm and level in (6, 19):
+                    variants[level] = work / f'level-{level}.iso'
+                    profile['repacked_iso'] = repack(iso, image, variants[level], folder, f'iso-{level}')
                 image.unlink()
                 print(json.dumps({key: value for key, value in profile.items()
                                   if key not in ['compression', 'extractions']}), flush=True)
@@ -225,6 +290,8 @@ def main():
                 row['saved_bytes_vs_control'] = control['bytes'] - row['bytes']
                 row['saved_percent_vs_control'] = 100 * (1 - row['bytes'] / control['bytes'])
                 row['extraction_ratio_vs_control'] = row['median_extract_seconds'] / control['median_extract_seconds']
+            if args.vm:
+                result['native_comparison'] = compare_native(variants, folder)
             result['status'] = 'passed'
     except BaseException as error:
         result.update(status='failed', error=repr(error))
