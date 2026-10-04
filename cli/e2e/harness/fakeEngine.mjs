@@ -12,8 +12,9 @@
 // `!tool <command>` runs a tool call first, `!grow <MiB>` appends that much compaction history
 // before answering (the transcripts that crashed the daemon on 2026-10-03), `!hold` leaves the turn
 // open until the next prompt, `!ask` asks the person which drink they would like in the engine's own
-// dialog and answers with their choice, `!exit` ends the process. Everything else is echoed as the
-// answer.
+// dialog and answers with their choice, `!permit <command>` asks permission to run a command the way
+// the engine does and runs it only if allowed, `!exit` ends the process. Everything else is echoed as
+// the answer.
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -101,7 +102,16 @@ export async function run(engine, config) {
   const drawDialog = () => {
     const rule = '─'.repeat(60)
     const mark = (i, on) => (dialog.cursor === i ? on : ' ')
-    const lines = engine === 'claude'
+    // A permission prompt, as the CLIs draw one (__fixtures__/permission-claude.txt, permission-codex.txt).
+    const command = dialog.command
+    const lines = dialog.kind === 'permit' ? (engine === 'claude'
+      ? [rule, ' Bash command', `   ${command}`, '   Run the command', ' This command requires approval', ' Do you want to proceed?',
+          ...['Yes', `Yes, and don’t ask again for: ${command} *`, 'No'].map((label, i) => `${dialog.cursor === i ? ' ❯ ' : '   '}${i + 1}. ${label}`),
+          ' Esc to cancel · Tab to amend · ctrl+e to explain']
+      : [`  $ ${command}`, '',
+          `${mark(0, '›')} 1. Yes, proceed (y)`, `${mark(1, '›')} 2. Yes, and don't ask again for commands that start with \`${command}\` (p)`,
+          `${mark(2, '›')} 3. No, and tell Codex what to do differently (esc)`, '', '  Press enter to confirm or esc to cancel'])
+      : engine === 'claude'
       ? [rule, ' ☐ Drink', '', QUESTION, '',
           ...CHOICES.flatMap(([label, description], i) => [`${mark(i, '❯')} ${i + 1}. ${label}`, `     ${description}`]),
           '  3. Type something.', rule, '  4. Chat about this', '', 'Enter to select · ↑/↓ to navigate · Esc to cancel']
@@ -122,7 +132,15 @@ export async function run(engine, config) {
     for (const key of chunk.match(/\x1b\[[AB]|\x1b|\r|\n|./gs) ?? []) {
       if (!dialog) return
       const settle = (choice) => { eraseDialog(); const asked = dialog; dialog = null; asked.resolve(choice) }
-      const rows = engine === 'claude' ? CHOICES.length : CHOICES.length + 1
+      const rows = dialog.kind === 'permit' ? 3 : engine === 'claude' ? CHOICES.length : CHOICES.length + 1
+      if (dialog.kind === 'permit') {
+        // Both CLIs take a row's digit (and Codex its letter) as the decision; Esc declines.
+        if (key === '\x1b') settle(null)
+        else if (key === 'y' && engine === 'codex') settle(0)
+        else if (key === '\r' || key === '\n') settle(dialog.cursor)
+        else if (/^[1-3]$/.test(key)) settle(Number(key) - 1)
+        continue
+      }
       if (key === '\x1b[B') { dialog.cursor = Math.min(dialog.cursor + 1, rows - 1); drawDialog() }
       else if (key === '\x1b[A') { dialog.cursor = Math.max(dialog.cursor - 1, 0); drawDialog() }
       else if (key === '\x1b') settle(null)
@@ -187,6 +205,24 @@ export async function run(engine, config) {
       }
     }
     if (directive?.[1] === 'hold') return
+    if (directive?.[1] === 'permit') {
+      const command = directive[2] || 'printf hi'
+      await new Promise((resolve) => setTimeout(resolve, 2_000))
+      const row = await new Promise((resolve) => { dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve }; drawDialog() })
+      const allowed = row === 0 || row === 1
+      const id = `call_${turn}_p`
+      if (allowed) {
+        if (engine === 'claude') {
+          claude({ type: 'assistant', message: { id: `msg_${turn}_p`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }], stop_reason: 'tool_use' } })
+          claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `ran ${command}` }] } })
+        } else {
+          codex('response_item', { type: 'function_call', call_id: id, name: 'exec_command', arguments: JSON.stringify({ cmd: command }) })
+          codex('response_item', { type: 'function_call_output', call_id: id, output: `ran ${command}` })
+        }
+      }
+      finish(allowed ? `ran ${command}` : `did not run ${command}`)
+      return
+    }
     if (directive?.[1] === 'ask') {
       // A real engine thinks before it asks; a dialog already on screen when its turn began reads to the
       // daemon as the previous turn's (askQuestion.ts `noteTurnStart`).

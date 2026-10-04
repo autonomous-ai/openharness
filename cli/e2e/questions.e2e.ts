@@ -1,7 +1,8 @@
 /**
  * An agent's question, end to end, for Claude Code and Codex: the dialog the engine draws reaches the
  * window as a question, the answer chosen there is typed into the dialog and is the one the agent gets,
- * and an answer to a question that is no longer the one on screen types nothing.
+ * and an answer to a question that is no longer the one on screen types nothing. A permission prompt
+ * is a question too: Yes in the window runs the command, No leaves it unrun.
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -69,6 +70,26 @@ describe('an agent asks a question', () => {
     await ended
     expect(await d.capture(agent.tmuxPane)).toContain('you chose Coffee')
     await turn(client, agent.id, 'after the question')
+    client.close()
+  })
+
+  it.each(engines)('%s: a permission the agent asks for reaches the window, and Yes there runs the command, No does not', async (engine) => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, engine, `permit-${engine}`)
+    for (const [choice, outcome] of [[0, 'ran printf hi'], [2, 'did not run printf hi']] as const) {
+      const asked = client.next((frame) => frame.type === 'commander_question' && frame.agentId === agent.id, 30_000, 'commander_question')
+      client.send('message', { agentId: agent.id, content: '!permit printf hi' })
+      const question = await asked
+      const shaped = question.payload?.questions?.[0]
+      expect(shaped?.q).toContain('printf hi')
+      expect(shaped?.options).toHaveLength(3)
+      const ended = client.next(isTurn('turn_ended', agent.id), 45_000, 'turn_ended')
+      const result = await answer(client, agent.id, question.payload.requestId, { [shaped.q]: shaped.options[choice] })
+      expect(result.error, JSON.stringify(result)).toBeUndefined()
+      await ended
+      expect(await d.capture(agent.tmuxPane)).toContain(outcome)
+    }
     client.close()
   })
 
