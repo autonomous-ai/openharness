@@ -481,7 +481,20 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     vm.keys('meta_l', 'm')
     time.sleep(1)
     vm.screenshot('01d-connect-computer')
-    vm.keys('esc')
+    # Fresh USB users are signed out. The connection panel must lead to the
+    # normal local sign-in flow, with a cancellable return to the trial.
+    vm.type_probe('sign in')
+    vm.keys('ret')
+    login_process = '[/]usr/lib/harness/cli.mjs login'
+    vm.command('for n in $(seq 1 20); do pgrep -u 1000 -f ' + shlex.quote(login_process) +
+               ' >/dev/null && exit 0; sleep 1; done; exit 1', timeout=30)
+    time.sleep(2)
+    vm.screenshot('01d-connect-sign-in')
+    vm.keys('ctrl', 'c')
+    vm.command('for n in $(seq 1 20); do ! pgrep -u 1000 -f ' + shlex.quote(login_process) +
+               ' >/dev/null && exit 0; sleep 1; done; exit 1', timeout=30)
+    vm.keys('ret')
+    time.sleep(1)
     # F10 reaches the dock without consuming the agent's ordinary Tab key.
     vm.keys('f10')
     vm.keys('ret')

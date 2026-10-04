@@ -69,7 +69,7 @@ impl View {
     }
     pub fn of(id: &str) -> Option<View> { View::ALL.into_iter().find(|v| v.id() == id) }
     pub fn title(self) -> &'static str {
-        match self { View::Connect => "Connect a machine", View::Phone => "Add your phone", View::Machines => "Machines & devices" }
+        match self { View::Connect => "Connect a computer", View::Phone => "Add your phone", View::Machines => "Machines & devices" }
     }
     fn placeholder(self) -> &'static str {
         match self {
@@ -454,7 +454,7 @@ fn enter(app: &mut App, view: View) {
 /// What a view needs read when it opens.
 fn opened(app: &mut App, view: View) {
     match view {
-        View::Connect => load_account(app),
+        View::Connect => { load_me(app); load_account(app) }
         View::Machines => { load_password(app); load_links(app); load_account(app); load_me(app) }
         View::Phone => {
             load_me(app);
@@ -539,7 +539,10 @@ fn load_me(app: &mut App) {
                 app.devices.phone.email = v.pointer("/user/email").and_then(Value::as_str).map(str::trim).filter(|e| e.contains('@')).map(str::to_string);
                 app.devices.phone.signed_out = false;
             }
-            Reply::Http(Err((code, _))) if code == "HTTP_401" => app.devices.phone.signed_out = true,
+            Reply::Http(Err((code, _))) if matches!(code.as_str(), "HTTP_401" | "NOT_SIGNED_IN") => {
+                app.devices.phone.email = None;
+                app.devices.phone.signed_out = true;
+            }
             _ => {}
         }
         again(app);
@@ -892,6 +895,25 @@ pub fn choose(app: &mut App, view: View, picker: Picker, enter: bool) {
     let (what, rest) = id.split_once(':').unwrap_or((id.as_str(), ""));
     let rest = rest.to_string();
     match (view, what) {
+        (View::Connect, "here") if rest == "login" => {
+            if app.read_only() { return app.error("This client is read-only.") }
+            if app.link(&crate::input::shell_machine(app, None)).is_none() {
+                return app.error("This computer is still starting. Try again in a moment.")
+            }
+            // Use the existing sign-in flow on THIS computer, never whichever
+            // remote agent happens to have focus. Leave its outcome readable.
+            let executable = std::env::var("HARNESS_CLI").unwrap_or_else(|_| "harness".into());
+            let args: Vec<String> = std::env::var("HARNESS_CLI_ARGS").ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+            let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+            let command = std::iter::once(executable).chain(args).chain(std::iter::once("login".into())).map(|s| quote(&s)).collect::<Vec<_>>().join(" ");
+            let command = format!("{command}; printf '\\nOpen Connect a computer again after signing in.\\nPress Enter to return to Harness. '; read -r harness_login_done");
+            app.new_tab();
+            app.rename_tab("Sign in");
+            let tab = app.tab().id.clone();
+            crate::input::new_shell_from(app, None, crate::app::Placement::Fill(tab), None, Some(command));
+            return;
+        }
+        (View::Connect, "here") if rest == "setup" => switch(app, View::Machines),
         (View::Connect, "m") => { let name = name_of(app, &rest); start_link(app, rest, name) }
         (_, "m") => sub(app, format!("m:{rest}")),
         (_, "act") => machine_action(app, &rest),
@@ -937,7 +959,7 @@ fn switch(app: &mut App, view: View) {
         *kind = PickerKind::Devices(view);
         picker.placeholder = view.placeholder().into();
         picker.clear_query();
-        picker.rows.clear();
+        picker.set_rows(Vec::new());
     }
     again(app);
     if let Some(p) = picker_mut(app) { p.scroll = 0; p.vset(0, 1) }
@@ -1016,6 +1038,11 @@ pub fn fill(app: &App, view: View, picker: &mut Picker) {
 }
 
 fn connect_rows(app: &App) -> Vec<Row> {
+    let setup = || Row::new("here:setup", "Set up another computer").group("Get connected").lead(dot("→", theme::TEAL));
+    if app.devices.phone.signed_out && !app.daemon_down {
+        return vec![Row::new("here:login", "Sign in on this computer").group("Get connected")
+            .lead(dot("→", theme::TEAL)).detail(vec![span("Use the same Harness account on both computers.", fg(theme::MUTED))]), setup()];
+    }
     let (mut ready, mut done, mut away) = (Vec::new(), Vec::new(), Vec::new());
     for m in app.fleet.machines.iter().filter(|m| !m.local) {
         let (glyph, color, word) = reach(app, m);
@@ -1031,9 +1058,10 @@ fn connect_rows(app: &App) -> Vec<Row> {
             away.push(r);
         }
     }
-    if ready.is_empty() { ready.push(info("none", if app.daemon_down { "Harness is not running on this computer" } else { "Every machine on your account that is online is linked" }, "Not linked yet")) }
+    if ready.is_empty() { ready.push(info("none", if app.daemon_down { "Harness is not running on this computer" } else { "No computers ready to connect" }, "Not linked yet")) }
     ready.extend(done);
     ready.extend(away);
+    ready.push(setup());
     ready
 }
 
@@ -1139,7 +1167,14 @@ pub fn preview(app: &App, view: View, id: &str) -> Vec<Line<'static>> {
     let (what, rest) = id.split_once(':').unwrap_or((id, ""));
     match what {
         _ if app.daemon_down && matches!(id, "none" | "m-none") => vec![Line::raw("Harness is not running on this computer."), Line::raw(""), dim("Start it with `harness start`, then come back.").into()],
-        "none" => vec![Line::raw("Every machine on your account that is online is linked."), Line::raw(""), dim("To add another: Machines & devices… › Add a machine.").into()],
+        "none" => vec![Line::raw("No computers are ready to connect."), Line::raw(""), dim("Open Harness on the other computer and sign in to the same account.").into()],
+        "here" if rest == "login" => vec![Line::raw("Sign in to see your other computers."), Line::raw(""),
+            dim("Use the same Harness account on both. Your local agents work without signing in.").into(),
+            Line::raw(""), dim("After signing in, open Connect a computer again.").into(),
+            Line::raw(""), dim("Enter opens the normal Harness sign-in flow in a local terminal.").into()],
+        "here" => vec![Line::raw("Set up Harness on your other computer."), Line::raw(""),
+            dim("The setup guide covers sign-in, the remote password and servers.").into(),
+            Line::raw(""), dim("Enter opens Machines & devices.").into()],
         "m" => {
             let mut out = machine_lines(app, rest);
             if view == View::Connect {
@@ -1192,7 +1227,7 @@ pub fn preview(app: &App, view: View, id: &str) -> Vec<Line<'static>> {
         "add" => {
             let (text, copies): (&str, String) = match rest {
                 "download" => ("Download Harness on your other computer and sign in with the same account.", DOWNLOAD_URL.into()),
-                "connect" => ("On the other computer: Machines → Set password. Back here, Connect a machine and enter that password.", String::new()),
+                "connect" => ("On the other computer: Machines → Set password. Back here, Connect a computer and enter that password.", String::new()),
                 "install" => ("Run these on your server over SSH:", INSTALL.into()),
                 "login" => ("Open the printed sign-in link in a browser on any device.", LOGIN.into()),
                 "start" => ("Start Harness and set a remote password.", START.into()),
@@ -1200,7 +1235,7 @@ pub fn preview(app: &App, view: View, id: &str) -> Vec<Line<'static>> {
             };
             let mut out = vec![Line::raw(text.to_string()), Line::raw("")];
             for l in copies.lines() { out.push(Line::from(vec![Span::styled(l.to_string(), fg(theme::TEAL))])) }
-            out.extend(enter_does(if copies.is_empty() { "opens Connect a machine".to_string() } else { "copies it — to the clipboard of the computer you sit at".to_string() }));
+            out.extend(enter_does(if copies.is_empty() { "opens Connect a computer".to_string() } else { "copies it — to the clipboard of the computer you sit at".to_string() }));
             out
         }
         "ph" => {
@@ -1548,8 +1583,29 @@ mod tests {
         crate::input::run(&mut app, "connect-machine");
         let Some(Modal::Picker { picker, .. }) = &app.modal else { panic!() };
         let usable: Vec<&str> = picker.rows.iter().filter(|r| !r.disabled).map(|r| r.id.as_str()).collect();
-        assert_eq!(usable, vec![format!("m:{REMOTE}").as_str()]);
+        assert_eq!(usable, vec![format!("m:{REMOTE}").as_str(), "here:setup"]);
         assert!(picker.rows.iter().any(|r| r.id == format!("m:{OFF}") && r.disabled), "an offline one is shown, not chosen");
+    }
+
+    #[test]
+    fn signed_out_connect_explains_the_next_step_and_setup_stays_reachable() {
+        for code in ["HTTP_401", "NOT_SIGNED_IN"] {
+            let mut app = app((150, 42));
+            app.fleet.machines.retain(|m| m.local);
+            app.devices.runner = Some(Box::new(move |req| match req {
+                Req::Http { path, .. } if path == "/api/auth/me" => Some(Reply::Http(Err((code.into(), "Sign in".into())))),
+                _ => world(req),
+            }));
+            open(&mut app, View::Connect);
+            assert_eq!(ids(&app), vec!["here:login", "here:setup"]);
+            go_to(&mut app, "here:login");
+            let (text, _) = screen(&mut app, 150, 42);
+            assert!(text.contains("Sign in on this computer") && text.contains("local agents work without"), "{text}");
+            assert!(!text.contains("Every machine on your account"));
+            go_to(&mut app, "here:setup");
+            press(&mut app, KeyCode::Enter);
+            assert!(matches!(app.modal, Some(Modal::Picker { kind: PickerKind::Devices(View::Machines), .. })));
+        }
     }
 
     #[test]

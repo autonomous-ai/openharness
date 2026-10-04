@@ -205,7 +205,7 @@ pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
     ("machines", "Machines", "⌥M", "", "Machines"),
     ("store", "Harness store", "⌥S", "", "Machines"),
     // ── machines & devices ──
-    ("connect-machine", "Connect a machine…", "", "a machine not linked yet, with its remote password", "Machines"),
+    ("connect-machine", "Connect a computer…", "", "a computer not linked yet, with its remote password", "Machines"),
     ("add-phone", "Add phone…", "", "a QR code your phone scans to sign in and pair", "Machines"),
     ("devices", "Machines & devices…", "", "this computer's password, your machines, links, add a machine", "Machines"),
     // (hn itself: how it looks, its keys, and closing it.)

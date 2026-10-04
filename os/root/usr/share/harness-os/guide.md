@@ -87,7 +87,9 @@ new line in compatible agent prompts. Do not intercept agent shortcuts needlessl
 
 The **Connect a computer** action opens Harness's existing connection flow.
 This computer works without a Harness account. Connecting other computers uses
-the existing sign-in/link flow; guide the user there when needed rather than
+the existing sign-in/link flow. If signed out, choose **Sign in on this computer**,
+complete the normal sign-in flow, then open **Connect a computer** again.
+**Set up another computer** explains the other computer's setup. Guide the user there rather than
 collecting passwords in chat. The other computer needs Harness running and its
 connection configured. A sleeping/offline computer cannot run a new task for us.
 

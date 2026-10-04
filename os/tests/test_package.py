@@ -29,6 +29,11 @@ class PackageIdentity(unittest.TestCase):
             settings = json.loads((config / 'opencode.json').read_text())
             self.assertEqual(settings['update'], 'disable')
             self.assertFalse(set(settings) & {'model', 'provider', 'providers', 'instructions'})
+            self.assertEqual(settings['permissions'], [
+                {'action': 'external_directory', 'resource': '/usr/share/harness-os/*', 'effect': 'allow'},
+                {'action': 'read', 'resource': '/usr/share/harness-os/*', 'effect': 'allow'},
+                {'action': 'edit', 'resource': '/usr/share/harness-os/*', 'effect': 'deny'},
+            ], 'Only the packaged reference directory gets a read exception, never arbitrary filesystem access')
 
     def test_same_source_is_byte_identical_across_build_times_and_output_names(self):
         with tempfile.TemporaryDirectory() as temp:
