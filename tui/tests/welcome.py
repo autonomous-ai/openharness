@@ -26,7 +26,7 @@ HN = BASE / 'hn'
 shutil.copy2(os.environ.get('HN_WELCOME_TEST_BINARY', ROOT / 'target/release/harness-tui'), HN)
 TMUX = shutil.which('tmux')
 assert TMUX
-ENV = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'TZ', 'NODE_PATH') if k in os.environ}
+ENV = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'TZ', 'NODE_PATH', 'LLVM_PROFILE_FILE') if k in os.environ}
 ENV.update(HOME=str(BASE), HN_TMPDIR=str(BASE), HN_SOCKET_NAME=PREFIX, PORT=str(PORT),
            TERM='xterm-256color', COLORTERM='truecolor', SHELL='/bin/sh', RUST_BACKTRACE='1',
            HARNESS_TUI_DESK='off', HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off',
@@ -193,6 +193,16 @@ try:
     snapshot('new-window-draft')
     print('PASS welcome: immediate first task, duplicate prevention, delayed placement and independent drafts', flush=True)
 
+    keys('Down'); shows('Search agents and harnesses')
+    keys('Up'); type_text('!'); shows('second window draft!')
+    keys('BSpace')
+    wait(lambda: 'second window draft!' not in screen(), 'Backspace edits the task after returning from Agent')
+    keys('Escape', 'Escape'); shows('Mock opencode (mock)')
+    assert window() == first, 'Escape returns to the previous window'
+    keys('C-b', 'l'); shows('second window draft')
+    click('Task')
+    print('PASS welcome: task arrow navigation, Escape back and preserved draft', flush=True)
+
     keys('C-b', 'N'); shows('New Harness')
     type_text('a separate modal task')
     shows('a separate modal task'); snapshot('new-harness-immediate-task')
@@ -215,14 +225,14 @@ try:
         shows(text)
     snapshot('new-window-80x24')
     click('Project'); shows('Search projects'); snapshot('new-window-picker-narrow')
-    keys('Escape', 'Escape'); shows('second window draft')
+    keys('Escape'); shows('second window draft')
     for width, height in [(45, 14), (22, 5), (1, 1), (150, 42)]: resize(width, height)
     shows('second window draft')
     anchor = position('Task')
     click('Project'); shows('Search projects')
     assert position('Task') == anchor
     snapshot('new-window-picker-right')
-    keys('Escape', 'Escape')
+    keys('Escape')
     raw('\x1b]10;rgb:2020/2020/2020\x1b\\\x1b]11;rgb:ffff/ffff/ffff\x1b\\')
     snapshot('new-window-light')
     print('PASS welcome: modal separation, keyboard ownership, wide/narrow/light rendering and resize', flush=True)
@@ -253,9 +263,12 @@ try:
     wait(lambda: len(state().get('deleted', [])) > deleted, 'closing Open Terminal ends its shell')
     keys('C-b', 'c'); shows('New Window')
     type_text('Keep this task away from the terminal')
-    choose('Agent', 'Terminal'); shows('Mock terminal (mock)')
-    assert len(created()) == count + 1, 'the Terminal picker action never starts a coding agent'
-    assert not state('reconnect')['inputs'], 'the Terminal picker action never sends the task'
+    click('Agent'); type_text('Terminal')
+    shows('No matches')
+    keys('Escape')
+    click('Open Terminal'); shows('Mock terminal (mock)')
+    assert len(created()) == count + 1, 'Open Terminal never starts a coding agent'
+    assert not state('reconnect')['inputs'], 'Open Terminal never sends the task'
     keys('C-b', 'N'); shows('a separate modal task')
     keys('Escape'); hn('kill-window')
     print('PASS welcome: discovery recovery, browse all, existing-session resume and explicit terminal', flush=True)
@@ -311,9 +324,15 @@ try:
     mock.terminate(); mock.wait(timeout=5); mock = None
     offline = BASE / 'offline'
     offline.mkdir()
+    # Upgrading a user who last chose Terminal must start with a real agent,
+    # without retaining Terminal's name or specialized harness identity.
+    defaults = offline / '.harness/tui/new-harness.json'
+    defaults.parent.mkdir(parents=True, exist_ok=True)
+    defaults.write_text(json.dumps({'engine': 'terminal', 'label': 'Terminal', 'dsh': 'old/shell'}))
     ENV.update(HOME=str(offline), HN_TMPDIR=str(offline))
     launch()
-    shows('Welcome to Harness')
+    shows('New Window')
+    shows('Start OpenCode')
     shows('Run `harness start` to connect agents.')
     type_text('Preserve this offline task')
     keys('Enter')
@@ -321,7 +340,7 @@ try:
     shows('Preserve this offline task')
     snapshot('welcome-offline')
     click('Open Terminal')
-    wait(lambda: 'Welcome to Harness' not in screen(), 'local terminal opened')
+    wait(lambda: 'Start OpenCode' not in screen(), 'local terminal opened')
     assert 'Preserve this offline task' not in hn('capture-pane', '-p'), 'draft leaked into the local shell'
     type_text("printf 'HN_OFFLINE_TERMINAL_%s\\n' OK")
     keys('Enter'); shows('HN_OFFLINE_TERMINAL_OK')

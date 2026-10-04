@@ -261,6 +261,92 @@ mod tests {
         crate::input::handle(app, crossterm::event::Event::Key(KeyEvent::new(code, modifiers)));
     }
 
+    fn render(app: &mut App) {
+        let area = Rect::new(0, 0, 150, 41);
+        draw(&mut Buffer::empty(area), app, area);
+    }
+
+    #[tokio::test]
+    async fn task_arrows_leave_at_visual_edges_and_keep_multiline_editing_inside() {
+        let mut app = app();
+        ensure(&mut app, None, None);
+        let tab = app.tab().id.clone();
+        crate::input::handle(&mut app, crossterm::event::Event::Paste("first\nsecond".into()));
+        render(&mut app);
+        event(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Task);
+        assert_eq!(app.welcome.forms[&tab].task_editor.cursor, "first".len());
+        event(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Task);
+        assert_eq!(app.welcome.forms[&tab].task_editor.cursor, "first\nsecond".len());
+        event(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Agent);
+        event(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Task);
+        event(&mut app, KeyCode::Home, KeyModifiers::CONTROL);
+        event(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Browse);
+        assert_eq!(app.welcome.forms[&tab].draft.task, "first\nsecond");
+    }
+
+    #[tokio::test]
+    async fn escape_leaves_a_rejected_task_and_restores_plain_prefix_navigation() {
+        let mut app = app();
+        ensure(&mut app, None, None);
+        let tab = app.tab().id.clone();
+        let mut form = take_active(&mut app).unwrap();
+        form.task_editor.insert(&mut form.draft.task, "fsf");
+        set_engine(&mut form, "terminal");
+        form.focus = Field::Task;
+        store_form(&mut app, form);
+        render(&mut app);
+        event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(app.welcome.forms[&tab].error.contains("cannot start with a task"));
+        event(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Agent);
+        assert!(!editing(&app));
+        assert_eq!(app.welcome.forms[&tab].draft.task, "fsf");
+        assert!(app.welcome.forms[&tab].error.is_empty());
+        app.keymap.prefix = crate::keys::parse("`").unwrap();
+        event(&mut app, KeyCode::Char('`'), KeyModifiers::NONE);
+        assert!(app.prefix, "Escape must release the task's ownership of plain keys");
+    }
+
+    #[tokio::test]
+    async fn unsupported_empty_task_rejects_text_and_paste_but_allows_navigation() {
+        let mut app = app();
+        ensure(&mut app, None, None);
+        let tab = app.tab().id.clone();
+        let mut form = take_active(&mut app).unwrap();
+        set_engine(&mut form, "terminal");
+        form.focus = Field::Task;
+        store_form(&mut app, form);
+        render(&mut app);
+        event(&mut app, KeyCode::Char('x'), KeyModifiers::NONE);
+        crate::input::handle(&mut app, crossterm::event::Event::Paste("do not execute this".into()));
+        assert!(app.welcome.forms[&tab].draft.task.is_empty());
+        event(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Agent);
+    }
+
+    #[tokio::test]
+    async fn escape_returns_to_the_previous_window_without_discarding_the_new_window_draft() {
+        let mut app = app();
+        let first = app.tab().id.clone();
+        app.new_tab();
+        ensure(&mut app, None, None);
+        let second = app.tab().id.clone();
+        crate::input::handle(&mut app, crossterm::event::Event::Paste("unfinished task".into()));
+        event(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.tab().id, second, "first Escape leaves text editing");
+        event(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.tab().id, first, "second Escape returns to the previous window");
+        assert_eq!(app.welcome.forms[&second].draft.task, "unfinished task");
+        let index = app.tabs.iter().position(|t| t.id == second).unwrap();
+        app.select_tab(index);
+        assert_eq!(app.welcome.forms[&second].draft.task, "unfinished task");
+    }
+
     #[tokio::test]
     async fn each_window_keeps_its_task_and_paste_never_reaches_the_backing_shell() {
         let mut app = app();

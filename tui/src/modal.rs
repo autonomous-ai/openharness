@@ -768,11 +768,10 @@ pub fn new_machine_rows(app: &App, prefer: &str) -> Vec<Row> {
 }
 
 pub fn new_what_rows(catalog: &[Value]) -> Vec<Row> {
-    let mut rows: Vec<Row> = ENGINES.iter().map(|e| {
+    let mut rows: Vec<Row> = ENGINES.iter().filter(|e| **e != "terminal").map(|e| {
         let (mark, color) = engine_mark(e);
         Row::new(format!("engine:{e}"), engine_label(e)).extra(*e).group("Agents")
             .lead(vec![span(mark, fg(color)), span(" ", Style::default())])
-            .detail(vec![span(if *e == "terminal" { "a plain shell" } else { "" }, fg(theme::MUTED))])
     }).collect();
     for row in catalog {
         if row.get("installed").and_then(Value::as_bool) == Some(false) || row.get("kind").and_then(Value::as_str) == Some("viewer") { continue }
@@ -780,6 +779,7 @@ pub fn new_what_rows(catalog: &[Value]) -> Vec<Row> {
         let name = row.get("name").and_then(Value::as_str).unwrap_or(id);
         let description = row.get("description").and_then(Value::as_str).unwrap_or("");
         let engine = row.get("engine").and_then(Value::as_str).unwrap_or("claude");
+        if engine == "terminal" { continue }
         rows.push(Row::new(format!("dsh:{id}:{engine}"), name).extra(format!("{id} {description}")).group("From the Store")
             .lead(vec![span("◆ ", fg(theme::TEAL))]).detail(vec![span(description.to_string(), fg(theme::MUTED))]));
     }
