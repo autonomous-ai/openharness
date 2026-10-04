@@ -227,7 +227,7 @@ def main():
                                   source_date_epoch=os.environ.get('SOURCE_DATE_EPOCH')),
                   limits=['Host extraction is not a complete installation or boot test.',
                           'The 64 MiB SquashFS cache does not constrain total host memory.',
-                          'Published level 6 uses a different toolchain; use rebuilt level 6 as control.',
+                          'Published payload may use a different toolchain; use rebuilt level 6 as control.',
                           'No candidate is promoted by this assessment.'])
     try:
         result['test_source_commit'] = subprocess.check_output(

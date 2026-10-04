@@ -70,7 +70,8 @@ iso_publisher="OpenHarness"
 iso_application="Harness: boot into hn"
 iso_version="$VERSION"
 airootfs_image_type="squashfs"
-airootfs_image_tool_options=("-comp" "zstd" "-Xcompression-level" "6" "-b" "1M")
+# Match the measured compression profile and bound builder CPU/cache use.
+airootfs_image_tool_options=("-comp" "zstd" "-Xcompression-level" "19" "-b" "1M" "-processors" "2" "-mem" "1G")
 file_permissions=(
   ["/root"]="0:0:750"
 )

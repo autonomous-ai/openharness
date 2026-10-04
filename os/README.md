@@ -11,7 +11,7 @@ audience, not its name.
 
 Product names and interface copy follow the [Naming System](../docs/naming-system.md).
 
-**Preview 7 candidate (not yet published):** the USB opens a short network step
+**Preview 8:** the USB opens a short network step
 or goes straight into bundled OpenCode when already connected. **Install without
 connecting** opens the same native installer offline. The agent works beside
 **New Harness** and **Connect a computer** starter panels; a persistent install
@@ -19,18 +19,21 @@ dock keeps the USB's temporary state clear. Saved `~/Projects` files are copied
 and verified during installation. The full TUI reference and OS guide are bundled
 for agent questions. **Super+n/t/m/i/w** require no Shift; Ctrl+b bindings still work.
 
-**Preview 6:** the USB welcome offers **Install Harness** or **Try without installing**.
-Install works offline. Try opens Wi-Fi setup when needed, then bundled OpenCode
-with its upstream default settings. The installer has four fields and one Install
-action; encrypted boot shows the Harness wordmark and a masked password prompt.
+The installer has four fields and one Install action; encrypted boot shows the
+Harness wordmark and a masked password prompt.
 Both the live and installed system use `me@harness`.
 `Super+u` opens Updates. Frequent hn/CLI releases download in the background;
 you choose when to reconnect the screen. Running agents and terminals stay alive.
 
-[Download preview 6](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.6)
+[Download preview 8](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.8)
 · [Mac → USB → ThinkPad installation guide](INSTALL.md)
 · [Standalone HTML/CSS landing page](../website/public/os/README.md)
 · [Development feedback loop and Mac support targets](DEVELOPMENT.md)
+
+Preview 8 uses stronger USB payload compression. The installed software and
+agent-led experience introduced in preview 7 are unchanged; existing installations
+do not need updating or reflashing for this download-size improvement. The installed
+system update feed remains independent from ISO packaging.
 
 Each published image includes its matching installation guide and exact validation
 evidence. Preview 6 passed BIOS/plain and UEFI/encrypted USB installation, boot,

@@ -1,6 +1,6 @@
 # Install Harness on a ThinkPad
 
-These instructions are for **0.1.0-preview.7**, using a Mac to prepare the USB.
+These instructions are for **0.1.0-preview.8**, using a Mac to prepare the USB.
 The USB starts a live session. Installation begins only when you choose **Install**
 in the installer; it erases the entire selected disk.
 
@@ -21,20 +21,20 @@ compute still need testing on the actual hardware.
 
 ## 2. Download and verify on the Mac
 
-From the [preview 7 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.7),
+From the [preview 8 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.8),
 download both files into the same folder:
 
-- `harness-0.1.0-preview.7-x86_64.iso`
-- `harness-0.1.0-preview.7-x86_64.iso.sha256`
+- `harness-0.1.0-preview.8-x86_64.iso`
+- `harness-0.1.0-preview.8-x86_64.iso.sha256`
 
 If they are in Downloads, open Terminal and run:
 
 ```sh
 cd ~/Downloads
-shasum -a 256 -c harness-0.1.0-preview.7-x86_64.iso.sha256
+shasum -a 256 -c harness-0.1.0-preview.8-x86_64.iso.sha256
 ```
 
-The result must say `harness-0.1.0-preview.7-x86_64.iso: OK`.
+The result must say `harness-0.1.0-preview.8-x86_64.iso: OK`.
 If it does not, download the files again before flashing.
 
 ## 3. Flash the USB

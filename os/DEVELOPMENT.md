@@ -5,9 +5,10 @@ boot changes. Reflashing is a release/install test, not the intended way to try
 every interface fix. Keep the development tools on the build/test host; the
 installed OS keeps the same minimal interface.
 
-This plan was recorded on October 3, 2026. Preview 6 and its small bootstrap bundle
-and update channel are published. Native upgrades from previews 4 and 5 passed; remote-launcher
-argument tests passed but remote display/SSH interaction is still unverified.
+This plan was recorded on October 3, 2026. Preview 7 and its small bootstrap bundle
+and update channel are published. Its native upgrade from preview 6 passed; earlier
+preview 6 coverage includes upgrades from previews 4 and 5. Remote-launcher argument
+tests passed but remote display/SSH interaction is still unverified.
 
 ## Next release priorities
 
@@ -139,6 +140,21 @@ through Actions with the existing image's `image_run_id` and independently trust
 `iso_sha256`. It retains receipts/screenshots, discards candidate images and changes
 no release defaults. Adopting a candidate requires a production image build and
 the normal plain/encrypted installation, agent trial and recovery checks.
+
+The [October 4 preview 7 comparison](https://github.com/autonomous-ai/openharness/actions/runs/37177303376)
+verified 87,985 paths and 1,035 hardlink groups through all nine extractions. All
+eight native installations passed. Level 19 saved 80.14 MiB (5.30%) versus the
+same-tool level-6 payload. Full BIOS install medians were 31.937/32.684 seconds;
+the encrypted pair was 56.353/57.787 seconds, including final sync and unmount.
+Preview 8 adopts level 19 for the USB only; installed Btrfs compression is unchanged.
+
+Both encrypted trials fell below 128 MiB available RAM (69.20/94.07 MiB minimum),
+with 105.34/91.69 MiB peak swap. That baseline pressure is not a regression caused
+by the new compression in these samples, nor proof of a memory improvement.
+Cryptsetup calibration is a plausible cause, but per-command timing was not
+captured. Keep encryption defaults unchanged and measure phases before adjusting
+them. One encrypted pair and shared-host VMs do not establish physical 1 GiB
+hardware reliability.
 
 ## The feedback loop
 
