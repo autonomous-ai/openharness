@@ -58,6 +58,22 @@ keys, and checks DHCP, DNS, HTTP, reconnection and non-silent audio output. Acce
 point tools are installed only inside the disposable guest, never in the ISO.
 Physical radio, backlight, speaker and microphone tests remain separate.
 
+The **Harness OS laptop input** workflow exercises both compositor configurations
+on an exact image: USB installation, then an encrypted installed session. A
+test-only uinput keyboard sends real display/keyboard brightness events. The
+packaged brightnessctl writes a synthetic panel fixture and a real kernel
+`uleds` keyboard light. The latter retains normal device permissions, so the test
+also checks access from the active graphical session. It checks a nonzero display
+floor, small-range panels, independent keyboard illumination, absent displays,
+unrelated LEDs and ordinary typing afterward. No test devices or tools enter the
+image. This establishes input routing and driver-interface behavior, not physical
+panel brightness or Apple firmware support.
+
+Display controls explicitly select the backlight class and keep a minimum value
+of one; keyboard controls select only `*::kbd_backlight` LEDs. These use the
+existing [brightnessctl options](https://github.com/Hummer12007/brightnessctl).
+No extra daemon, package, widget or screen is required.
+
 `checks=browser` with an `image_run_id` exercises the installed terminal/browser
 session in BIOS/plain and UEFI/encrypted VMs. It records and applies only the
 candidate `hn-browser` script and labwc configuration over the checksum-verified

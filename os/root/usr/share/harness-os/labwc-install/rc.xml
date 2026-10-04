@@ -5,8 +5,10 @@
   <desktops><number>1</number><popupTime>0</popupTime></desktops>
   <keyboard>
     <repeatRate>35</repeatRate><repeatDelay>250</repeatDelay>
-    <keybind key="XF86MonBrightnessUp"><action name="Execute" command="brightnessctl set +5%" /></keybind>
-    <keybind key="XF86MonBrightnessDown"><action name="Execute" command="brightnessctl set 5%-" /></keybind>
+    <keybind key="XF86MonBrightnessUp"><action name="Execute" command="brightnessctl --class=backlight --min-value=1 set +5%" /></keybind>
+    <keybind key="XF86MonBrightnessDown"><action name="Execute" command="brightnessctl --class=backlight --min-value=1 set 5%-" /></keybind>
+    <keybind key="XF86KbdBrightnessUp"><action name="Execute" command="brightnessctl --class=leds --device='*::kbd_backlight' set +10%" /></keybind>
+    <keybind key="XF86KbdBrightnessDown"><action name="Execute" command="brightnessctl --class=leds --device='*::kbd_backlight' set 10%-" /></keybind>
   </keyboard>
   <mouse><context name="Root"><mousebind button="Right" action="Press"><action name="None" /></mousebind></context></mouse>
   <windowRules><windowRule identifier="hn" serverDecoration="no" /></windowRules>

@@ -1,0 +1,54 @@
+name: Harness OS laptop input
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_run_id:
+        description: 'Exact Harness OS image artifact to assess'
+        type: string
+        default: '37222390225'
+        required: true
+  push:
+    branches: ['os-polish/laptop-input']
+    paths: ['os/tests/input_*.py', 'os/root/usr/share/harness-os/labwc*/rc.xml', '.github/workflows/os-input.yml']
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: harness-input-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  input:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id || '37222390225' }}
+          github-token: ${{ github.token }}
+      - name: Check source and install native VM tools
+        run: |
+          make -C os check
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os-input.yml
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+      - name: Check actual media-key input on USB and installed sessions
+        run: python3 os/tests/input_vm.py --iso os/dist/*.iso
+      - name: Retain actual input, module and display evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-laptop-input
+          path: |
+            os/test-results/input/
+            !os/test-results/input/*.qcow2
+            !os/test-results/input/OVMF_VARS.fd
+          retention-days: 14
+          compression-level: 0

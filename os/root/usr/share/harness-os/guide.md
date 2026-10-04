@@ -112,7 +112,9 @@ conversation history. Describe only collaboration controls present in this TUI.
 - Super+w opens Wi-Fi. Ethernet connects automatically when available.
 - Super+n opens New Harness; Super+t opens a terminal; Super+m connects a computer.
 - Super+b switches between Harness and the browser. Super+Enter focuses Harness.
-- Super+l locks the screen. Brightness and volume keys operate supported hardware.
+- Super+l locks the screen. Brightness, keyboard-backlight and volume keys operate
+  supported hardware. Display brightness keys keep a nonzero minimum; keyboard
+  illumination can be turned off independently.
 - Super+u starts updates after installation; the Update button is clickable too.
   No confirmation or password is needed. Restart only when ready. Updates keep projects and running
   work; flashing another USB is not the everyday update workflow.
