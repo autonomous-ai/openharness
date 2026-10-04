@@ -18,6 +18,7 @@ import { AgentStopError } from './lib/stopAgentService.js'
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
 import * as mediaPreview from './lib/mediaPreview.js'
 import * as gitProject from './lib/gitProject.js'
+import * as scmProjects from './scm/scmProjects.js'
 import * as machineResources from './lib/machineResources.js'
 import * as projectFolder from './lib/projectFolder.js'
 import * as claudeTrust from './lib/claudeTrust.js'
@@ -1009,6 +1010,54 @@ describe('BackendSocket outbound queue', () => {
       type: 'git_project_info_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-preview' } },
     } }))
     expect(JSON.stringify(parseSent(ws))).not.toContain('private-branch')
+    await socket.stop()
+  })
+
+  it.each([false, true])('answers scm_project_info (refresh=%s) through the SCM seam, to the requesting encrypted connection only', async refresh => {
+    const preview = { kind: 'git' as const, git: { isGit: true, root: '/remote/workspace', branch: 'main', branches: [{ ref: 'refs/heads/private-branch', name: 'private-branch', remote: false }] } }
+    const detect = vi.spyOn(scmProjects, 'detectScmProject').mockResolvedValue(preview)
+    const socket = new BackendSocket('token')
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({ type: 'scm_project_info', payload: {
+      requestId: 'preview-2', path: '/remote/workspace', refresh,
+    } })
+    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
+    const wrap = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+      type: 'scm_project_info_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-preview' } },
+    })
+    ws.message({ t: 'down', connId: 'viewer-a', frame: {
+      type: 'scm_project_info', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-request' } },
+    } })
+    await vi.waitFor(() => expect(wrap).toHaveBeenCalledWith('viewer-a', 'scm_project_info_result', 'preview-2', preview))
+    // The same fence git_project_info passes: no registered agents here, so the home folder alone.
+    expect(detect).toHaveBeenCalledWith('/remote/workspace', { refresh, knownRoots: [] })
+    expect(parseSent(ws)).toContainEqual(expect.objectContaining({ targetConnId: 'viewer-a', frame: {
+      type: 'scm_project_info_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-preview' } },
+    } }))
+    expect(JSON.stringify(parseSent(ws))).not.toContain('private-branch')
+    await socket.stop()
+  })
+
+  it('answers scm_project_info for a malformed path as the git probe does, correlated', async () => {
+    const read = vi.spyOn(gitProject, 'readGitProject')
+    const socket = new BackendSocket('token')
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({ type: 'scm_project_info', payload: {
+      requestId: 'scm-error', path: 42,
+    } })
+    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
+    const wrap = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+      type: 'scm_project_info_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-error' } },
+    })
+    ws.message({ t: 'down', connId: 'viewer-a', frame: {
+      type: 'scm_project_info', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-request' } },
+    } })
+    await vi.waitFor(() => expect(wrap).toHaveBeenCalledWith('viewer-a', 'scm_project_info_result', 'scm-error', { kind: 'none', error: 'INVALID_PATH' }))
+    expect(read).toHaveBeenCalledWith('', { refresh: false, knownRoots: [] })
     await socket.stop()
   })
 

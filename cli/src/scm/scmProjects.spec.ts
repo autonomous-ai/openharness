@@ -5,6 +5,7 @@ import { basename, join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { agentProject } from '../lib/agentProject.js'
+import { encryptDownFrame, encryptRpcResult } from '../lib/e2ee/applicationFrames.js'
 import { readGitProject } from '../lib/gitProject.js'
 import { sweepWorktrees } from '../lib/worktreeSweep.js'
 import { GitScmProject } from './gitScmProject.js'
@@ -72,6 +73,11 @@ describe('the SCM seam, with git as its only implementation', { timeout: 30_000 
     const throws = { kind: 'git', detect: async () => { throw new Error('boom') } }
     expect(await detectScmProject(repo, { knownRoots: [root] }, [throws as unknown as ScmProject, new GitScmProject()])).toMatchObject({ kind: 'git' })
     expect(await detectScmProject(repo, {}, [throws as unknown as ScmProject])).toEqual(none('UNAVAILABLE'))
+  })
+
+  it('travels encrypted end to end, as git_project_info does: the answer names private branches', () => {
+    expect(encryptDownFrame('scm_project_info')).toBe(true)
+    expect(encryptRpcResult('scm_project_info_result')).toBe(true)
   })
 
   it('renames through the seam and answers null where git would', async () => {
