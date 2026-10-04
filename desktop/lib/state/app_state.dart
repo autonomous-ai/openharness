@@ -9710,23 +9710,41 @@ class AppNotifier extends ChangeNotifier {
     int limit = 30,
   }) async {
     if (!searchableMachineIds.contains(machineId)) return null;
+    final elapsed = Stopwatch()..start();
+    const budget = Duration(seconds: 4);
+    List<SessionContentHit>? hits;
     try {
-      final reply = await _conn(machineId).request(
-        'session_search',
-        payload: {
-          'query': query,
-          'limit': limit,
-          if (when != null) ...{
-            'from': when.from.millisecondsSinceEpoch,
-            'to': when.to.millisecondsSinceEpoch,
+      // Discovery is asynchronous. An unfinished index is not a final empty
+      // answer; ask again briefly, within the same budget as one slow request.
+      for (var attempt = 0; attempt < 20; attempt++) {
+        if (_disposed || !searchableMachineIds.contains(machineId)) return hits;
+        final remaining = budget - elapsed.elapsed;
+        if (remaining <= Duration.zero) return hits;
+        final reply = await _conn(machineId).request(
+          'session_search',
+          payload: {
+            'query': query,
+            'limit': limit,
+            if (when != null) ...{
+              'from': when.from.millisecondsSinceEpoch,
+              'to': when.to.millisecondsSinceEpoch,
+            },
           },
-        },
-        timeout: const Duration(seconds: 4),
-      );
-      if (reply['error'] != null) return null;
-      return SessionContentHit.listFromReply(machineId, reply);
+          timeout: remaining,
+        );
+        if (reply['error'] != null) return hits;
+        hits = SessionContentHit.listFromReply(machineId, reply);
+        // Older daemons omit ready; retain their single-request behavior.
+        if (reply['ready'] != false || reply['discoveryError'] == true)
+          return hits;
+        if (attempt == 19 ||
+            budget - elapsed.elapsed < const Duration(milliseconds: 200))
+          return hits;
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      return hits;
     } catch (_) {
-      return null;
+      return hits;
     }
   }
 

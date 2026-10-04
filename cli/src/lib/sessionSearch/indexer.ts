@@ -147,6 +147,7 @@ export class SessionSearchIndex {
   private discovering = false
   private discoveryFailed = false
   private discoveryStartedAt: number | undefined
+  private discoveryFinishedAt: number | undefined
   /** Callers waiting for a session's next pass (`tail`). */
   private readonly waiters = new Map<string, Array<() => void>>()
 
@@ -217,6 +218,7 @@ export class SessionSearchIndex {
       }
       this.initialized = true
       this.discovering = false
+      this.discoveryFinishedAt = Date.now()
     }
     if (this.opts.discover) {
       // Which of them are open, looked at now: a search reads it without waiting.
@@ -244,9 +246,10 @@ export class SessionSearchIndex {
 
   search(query: string, options: { limit?: number; from?: number; to?: number } = {}): SessionSearchResult {
     const started = performance.now()
-    // Opening welcome/search is an explicit demand for history. Start the first scan now,
-    // without blocking this request or waiting for the daemon's deferred boot sweep.
-    if ((!this.initialized || this.discoveryFailed) && !this.discovering &&
+    // Opening welcome/search is an explicit demand for current history, including sessions
+    // started since boot. Keep a short cache across typing/retries, not the ten-minute idle sweep.
+    const stale = this.discoveryFinishedAt === undefined || Date.now() - this.discoveryFinishedAt >= 5_000
+    if ((!this.initialized || this.discoveryFailed || stale) && !this.discovering && !this.running &&
         (this.discoveryStartedAt === undefined || Date.now() - this.discoveryStartedAt >= 1_000)) this.sweep()
     const hits = this.opts.store.search(query, options)
     // Whether a terminal still has it, as last looked: a search never waits for a process table.

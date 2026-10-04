@@ -78,6 +78,72 @@ Agent _agent(String id, String name, Duration ago) => Agent(
 
 void main() {
   test(
+    'a fresh tab waits for a newly discovered terminal conversation',
+    () async {
+      final connection = SearchConnection(
+        {},
+        replies: [
+          {'ready': false, 'hits': []},
+          {'ready': false, 'hits': []},
+          {
+            'ready': true,
+            'hits': [
+              _external(
+                'new-terminal',
+                'New terminal conversation',
+                Duration.zero,
+                open: true,
+                openIn: 'terminal',
+              ),
+            ],
+          },
+        ],
+      );
+      final app = createApp(
+        connected: true,
+        connectionForTest: (_) => connection,
+      );
+      addTearDown(app.dispose);
+      final sessions = WelcomeSessions(app, now: () => _now);
+      addTearDown(sessions.dispose);
+
+      await sessions.load();
+
+      expect(sessions.rows.single.external?.sessionId, 'new-terminal');
+      expect(connection.asked, ['', '', '']);
+      expect(sessions.loading, isFalse);
+    },
+  );
+
+  test(
+    'a failed discovery retains cached conversations without retrying',
+    () async {
+      final connection = SearchConnection(
+        {},
+        replies: [
+          {
+            'ready': false,
+            'discoveryError': true,
+            'hits': [_external('known', 'Known conversation', Duration.zero)],
+          },
+        ],
+      );
+      final app = createApp(
+        connected: true,
+        connectionForTest: (_) => connection,
+      );
+      addTearDown(app.dispose);
+      final sessions = WelcomeSessions(app, now: () => _now);
+      addTearDown(sessions.dispose);
+
+      await sessions.load();
+
+      expect(sessions.rows.single.external?.sessionId, 'known');
+      expect(connection.asked, ['']);
+    },
+  );
+
+  test(
     'discovered sessions never opened by the user stay out of recents',
     () async {
       final (:sessions, connection: _) = _setup();
