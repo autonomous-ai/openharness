@@ -1,4 +1,6 @@
 """Native checks for installer-only USB startup and the installed workspace."""
+import json
+import os
 import re
 import shlex
 import subprocess
@@ -9,9 +11,23 @@ def wait_installer_screen(vm, pattern, name, timeout=30):
     deadline = time.monotonic() + timeout
     while True:
         vm.screenshot(name)
-        text = subprocess.check_output(['tesseract', str(vm.folder / (name + '.png')),
-                                        'stdout', '--psm', '11'], text=True,
-                                       stderr=subprocess.DEVNULL, timeout=10)
+        started = time.monotonic()
+        remaining = deadline - started
+        if remaining <= 0:
+            raise AssertionError('Screen did not render ' + pattern + ' before its deadline')
+        try:
+            # OCR is a host observer. A slow early frame must not shorten the
+            # browser's readiness budget or compete with QEMU for every CPU.
+            text = subprocess.check_output(['tesseract', str(vm.folder / (name + '.png')),
+                                            'stdout', '--psm', '11'], text=True,
+                                           stderr=subprocess.DEVNULL, timeout=min(10, remaining),
+                                           env=dict(os.environ, OMP_THREAD_LIMIT='1'))
+        except subprocess.TimeoutExpired:
+            text = '[OCR exceeded the per-frame deadline]'
+        with (vm.folder / (name + '-ocr.jsonl')).open('a') as log:
+            log.write(json.dumps({'seconds': round(time.monotonic() - started, 3),
+                                  'matched': bool(re.search(pattern, text, re.I)),
+                                  'text': text}) + '\n')
         (vm.folder / (name + '.txt')).write_text(text)
         if re.search(pattern, text, re.I):
             return text
