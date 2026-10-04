@@ -39,10 +39,10 @@ pub fn handle(app: &mut App, event: CEvent) {
         }
         // (A resize also writes the whole screen again: other diff renderers do the same, since a
         // terminal reflows its own cells and the diff then trusts a screen that is not there.)
-        CEvent::Resize(cols, rows) => { app.size = (cols, rows); app.redraw_all = true; app.fit_panes(); crate::commands::notify(app, "client-resized", None, None) }
+        CEvent::Resize(cols, rows) => { app.size = (cols, rows); app.redraw_all = true; app.fit_panes(); crate::workspace_menu::resize(app); crate::commands::notify(app, "client-resized", None, None) }
         // The terminal in front: the dial follows its pane again (and hears it is in front).
         // (A repaint of the whole screen too: whatever the terminal drew wrongly while it was behind goes.)
-        CEvent::FocusGained => { app.terminal_focused = true; app.redraw_all = true; app.welcome_back(); crate::dial::announce(app, false); app.announce_focus(); crate::commands::notify(app, "client-focus-in", None, None) }
+        CEvent::FocusGained => { app.terminal_focused = true; app.redraw_all = true; app.welcome_back(); crate::account::refresh(app, false); crate::dial::announce(app, false); app.announce_focus(); crate::commands::notify(app, "client-focus-in", None, None) }
         CEvent::FocusLost => { app.terminal_focused = false; app.away = Some((Instant::now(), app.fleet_counts())); crate::dial::announce(app, false); crate::commands::notify(app, "client-focus-out", None, None) }
         _ => {}
     }
@@ -279,11 +279,30 @@ pub(crate) fn paste_form(app: &mut App, text: &str) -> bool {
 }
 
 fn on_mouse(app: &mut App, mouse: MouseEvent) {
+    if crate::workspace_controls::finish_press(app, &mouse) { return }
     // tmux asks the terminal for bare motion only when a pane here wants it (or a menu opened by
     // the mouse): the rest of the motion hn is sent never happened, as far as tmux is concerned.
     if matches!(mouse.kind, MouseEventKind::Moved) && !app.wants_motion() { return }
     // hn's lists and prompts keep the mouse as they have it; copy mode and a menu are tmux's.
-    if app.modal.is_some() && !matches!(app.modal, Some(Modal::Copy { .. }) | Some(Modal::Menu(_))) { return modal_mouse(app, mouse) }
+    if app.modal.is_some() && !matches!(app.modal, Some(Modal::Copy { .. }) | Some(Modal::Menu(_))) {
+        if matches!(mouse.kind, MouseEventKind::Down(_)) { crate::mouse::cancel_clicks(app); }
+        modal_mouse(app, mouse);
+        // A panel may close on the press. Its release still belongs to the panel, not to
+        // the program revealed beneath it. While it stays open, keep its scrollbar drags.
+        if app.modal.is_none() { if let MouseEventKind::Down(button) = mouse.kind { crate::workspace_controls::begin_press(app, button); } }
+        return;
+    }
+    // A menu over an empty window owns its click too; the welcome form underneath must not
+    // swallow it or launch whatever happens to be at the same coordinates.
+    if matches!(app.modal, Some(Modal::Menu(_))) {
+        // Harness menus choose/dismiss on the press; ordinary tmux display-menu keeps its
+        // own release semantics. Neither a menu action nor dismissal may leak a half-click.
+        if matches!(&app.modal, Some(Modal::Menu(menu)) if menu.responsive.is_some()) {
+            if let MouseEventKind::Down(button) = mouse.kind { crate::workspace_controls::begin_press(app, button); }
+        }
+        return crate::mouse::on_event(app, mouse);
+    }
+    if crate::workspace_controls::mouse(app, &mouse) { return }
     // ── status bar ──
     // (The bar down a side and the tabs over the panes: theirs, unless a menu is open.)
     if !matches!(app.modal, Some(Modal::Menu(_))) && crate::bar::mouse(app, &mouse) { return }
@@ -677,7 +696,7 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.right_half = true;
             picker.hints = vec![("enter", "use · get"), ("C-s", "stop a local model")];
             picker.empty = if crate::models::target(app).is_none() { crate::models::no_target_why(app) } else { "Loading its models…".into() };
-            picker.status = app.focused().and_then(|f| app.panes.get(&f)).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone()).unwrap_or_default();
+            picker.status = crate::models::target(app).and_then(|t| app.fleet.agent(&t.machine, &t.agent)).map(|a| a.name.clone()).unwrap_or_default();
         }
         PickerKind::Inbox => {
             picker.live = true;
@@ -770,6 +789,9 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
         }
         // ── machines & devices ──
         PickerKind::Devices(view) => crate::devices::fill(app, *view, picker),
+        PickerKind::Account => crate::account::fill(app, picker),
+        PickerKind::AgentSwitch => crate::agent_switch::fill(app, picker),
+        PickerKind::Hardware => crate::hardware::fill(app, picker),
     }
 }
 
@@ -851,10 +873,13 @@ fn remode(app: &App, kind: PickerKind, picker: &mut Picker) -> (PickerKind, bool
 
 pub fn run(app: &mut App, command: &str) {
     match command {
+        "account" | "login" => crate::account::open(app),
+        "hardware-devices" => crate::hardware::open(app),
         "open" => launch(app, "", Filter::All),
         "palette" => launch(app, ">", Filter::All),
         "projects" => launch(app, "#", Filter::All),
         "models" => launch(app, ":", Filter::All),
+        "change-agent" => if let Some(pane) = app.focused() { crate::agent_switch::open(app, pane); },
         // Nobody asking: said, as C-b a says it, not an empty list.
         "inbox" => if app.fleet.agents.values().any(|a| a.question.is_some()) { picker(app, PickerKind::Inbox, "needs input", "Filter…") } else { app.say("Nobody is waiting on you", theme::WARN) },
         "machines" => launch(app, "@", Filter::All),
@@ -873,8 +898,8 @@ pub fn run(app: &mut App, command: &str) {
         "send" => prompt(app, PromptKind::Send, "Send to harness", "What should be done?", "Harness picks the harness that fits best; you confirm.", "", false),
         "broadcast" => {
             let n = app.tab().panes().len();
-            if n == 0 { app.say("No harnesses in this swarm", theme::MUTED); return }
-            prompt(app, PromptKind::Broadcast, &format!("Broadcast to {n} harness{}", if n == 1 { "" } else { "es" }), "Message", "Sent as a turn to every harness in this swarm.", "", false)
+            if n == 0 { app.say("No harnesses in this tab", theme::MUTED); return }
+            prompt(app, PromptKind::Broadcast, &format!("Broadcast to {n} harness{}", if n == 1 { "" } else { "es" }), "Message", "Sent as a turn to every harness in this tab.", "", false)
         }
         "clone" => {
             let Some((machine, agent)) = focused_agent(app) else { app.say("This pane has no harness in it", theme::MUTED); return };
@@ -897,8 +922,12 @@ pub fn run(app: &mut App, command: &str) {
             prompt(app, PromptKind::RenameHarness { machine, agent }, "Rename Harness", "New name", "", &name, false)
         }
         "tab" => app.new_tab(),
-        "rename-tab" => { let name = app.tab().name.clone(); prompt(app, PromptKind::RenameTab, "Rename Swarm", "Swarm name", "", &name, false) }
-        "close-tab" => { let i = app.active; app.close_tab(i) }
+        "rename-tab" => {
+            let name = app.tab().name.clone();
+            let target = PromptKind::RenameTab { session:app.session_id, window:app.tab().id.clone(), owner:app.fleet.local_id.clone() };
+            prompt(app, target, "Rename Tab", "Tab name", "", &name, false);
+        }
+        "close-tab" => crate::session_close::tab(app, app.active),
         "next-tab" => { let n = app.tabs.len(); let i = (app.active + 1) % n; app.select_tab(i) }
         "prev-tab" => { let n = app.tabs.len(); let i = (app.active + n - 1) % n; app.select_tab(i) }
         "split-right" | "split-down" => {
@@ -909,7 +938,7 @@ pub fn run(app: &mut App, command: &str) {
             if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.title = if dir == Dir::Horizontal { "split right".into() } else { "split down".into() }; picker.placeholder = "Which harness goes beside it?".into() }
             SPLIT.with(|s| s.set(Some(dir)));
         }
-        "close-pane" => { if let Some(f) = app.focused() { app.close_pane(f) } else if app.tabs.len() > 1 { let i = app.active; app.close_tab(i) } }
+        "close-pane" => { if let Some(f) = app.focused() { crate::session_close::pane(app, f) } else if app.tabs.len() > 1 { crate::session_close::tab(app, app.active) } }
         "zoom" => {
             let tab = app.tab_mut();
             if tab.panes().len() > 1 { tab.zoomed = !tab.zoomed; app.fit_panes(); let t = app.active; app.view_layout_changed(t) } else { app.fit_panes() }
@@ -1771,7 +1800,7 @@ fn prompt_menu(app: &App, p: &Prompt, items: Vec<crate::modal::MenuItem>, list: 
     let y = if app.status_top { lines } else { app.size.1.saturating_sub(3 + height) };
     let x = (offset + unicode_width::UnicodeWidthStr::width(p.label.as_str())).saturating_sub(2) as u16;
     let x = x.min(app.size.0.saturating_sub(width + 4));
-    crate::modal::Menu { title: String::new(), items, choice: Some(0), x, y, width, stay_open: false, no_mouse: true, mouse: None, tree: None,
+    crate::modal::Menu { title: String::new(), items, choice: Some(0), x, y, width, stay_open: false, no_mouse: true, mouse: None, tree: None, responsive: None,
         complete: Some(Box::new(crate::modal::Complete { prompt: p.clone(), list, flag, window_target })) }
 }
 
@@ -1991,7 +2020,8 @@ fn schedule_said(app: &mut App, kind: &PickerKind, picker: &Picker) {
 /// Tab marks; C-t/C-x/C-v open in a new window / below / beside (fzf.vim); C-/ the preview.
 fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, picker: Picker) {
     // ── machines & devices ── (a line typed or a y/n answered in the panel; Esc/← a level back)
-    let (kind, mut picker) = match crate::devices::key(app, kind, picker, key) { Ok(()) => return, Err(back) => back };
+    let (kind, picker) = match crate::devices::key(app, kind, picker, key) { Ok(()) => return, Err(back) => back };
+    let (kind, mut picker) = match crate::hardware::key(app, kind, picker, key) { Ok(()) => return, Err(back) => back };
     // A key: the list follows the cursor again (the wheel had left it where it put it).
     picker.free_scroll = false;
     // A row a key goes to is one you chose to look at (the list moving it there is not).
@@ -2813,6 +2843,9 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             } else if let Some(view) = id.strip_prefix("cmd:").and_then(crate::devices::View::of) {
                 // ── machines & devices ── (in this same panel too; Esc comes back here)
                 return crate::devices::from_commands(app, picker, view);
+            } else if id == "cmd:hardware-devices" {
+                crate::hardware::open(app);
+                if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.from_commands = true; }
             } else if let Some(cmd) = id.strip_prefix("cmd:") {
                 run(app, cmd)
             }
@@ -2856,6 +2889,18 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
         }
         // ── machines & devices ──
         PickerKind::Devices(view) => crate::devices::choose(app, view, picker, choice == Choice::Enter),
+        PickerKind::Account => {
+            if choice == Choice::Enter { crate::account::choose(app, picker, id.as_deref().unwrap_or("")); }
+            else { app.modal = Some(Modal::Picker { kind, picker }); }
+        }
+        PickerKind::AgentSwitch => {
+            if choice == Choice::Enter { crate::agent_switch::choose(app, picker, id.as_deref().unwrap_or("")); }
+            else { app.modal = Some(Modal::Picker { kind, picker }); }
+        }
+        PickerKind::Hardware => {
+            if choice == Choice::Enter { crate::hardware::choose(app, picker, id.as_deref().unwrap_or("")); }
+            else { app.modal = Some(Modal::Picker { kind, picker }); }
+        }
     }
 }
 
@@ -2891,7 +2936,18 @@ fn submit_prompt(app: &mut App, p: Prompt) {
             // answer itself as a command).
             commands::execute_template(app, template.as_deref().unwrap_or("%1"), &answers);
         }
-        PromptKind::RenameTab => { if !value.is_empty() { app.rename_tab(&value) } }
+        PromptKind::RenameTab { session, window, owner } => {
+            if value.is_empty() { return }
+            if owner != app.fleet.local_id { app.error("The account changed. Open Rename Tab again."); return }
+            let before = app.session_id;
+            if before != session {
+                if !app.sessions.iter().any(|s| s.id == session && s.tabs.iter().any(|t| t.id == window)) { app.error("That tab has closed."); return }
+                app.swap_session(session);
+            }
+            if let Some(index) = app.tabs.iter().position(|t| t.id == window) { app.rename_tab_at(index, &value); }
+            else { app.error("That tab has closed."); }
+            if before != session { app.swap_session(before); }
+        }
         PromptKind::Message { machine, agent } => {
             if value.trim().is_empty() { return }
             if let Some(link) = app.link(&machine) {
@@ -2982,7 +3038,7 @@ pub fn is_command(id: &str) -> bool {
         | "last-tab" | "next-waiting" | "prev-waiting" | "resume-focused" | "last-harness" | "tree" | "info" | "messages" | "keys"
         | "theme" | "appearance" | "commands" | "choose-buffer" | "quit" | "keybinds"
         // ── machines & devices ──
-        | "connect-machine" | "add-phone" | "devices")
+        | "connect-machine" | "add-phone" | "devices" | "hardware-devices" | "account" | "login" | "change-agent")
 }
 
 
@@ -3253,15 +3309,56 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
         app.modal = Some(Modal::Menu(menu));
         return;
     }
-    let chosen = if !menu.stay_open { is_release(m.b) } else { !is_wheel(m.b) && !is_drag(m.b) };
-    if chosen { return menu_chosen(app, menu) }
+    let chosen = if !menu.stay_open { is_release(m.b) } else { !is_release(m.b) && !is_wheel(m.b) && !is_drag(m.b) };
+    // The click's row is authoritative even if no mouse-motion report preceded it.
+    // In particular, a menu opened by the keyboard must not run its previous selection.
     menu.choice = Some((m.y - (py + 1)) as usize);
+    if chosen { return menu_chosen(app, menu) }
     app.modal = Some(Modal::Menu(menu));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn clicking_a_menu_over_welcome_uses_that_row_without_prior_motion() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (100, 30));
+        app.mouse = true;
+        app.tab_mut().home = true;
+        crate::workspace_menu::open(&mut app, "Choose", vec![
+            crate::workspace_menu::note("Choose an action"),
+            crate::workspace_menu::item("First", "a", "set -g @clicked first"),
+            crate::workspace_menu::item("Second", "b", "set -g @clicked second"),
+        ], Some((3, 2)), Some(1));
+        handle(&mut app, CEvent::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 5, row: 5, modifiers: KeyModifiers::NONE }));
+        assert_eq!(app.options.get("@clicked", "", None).as_deref(), Some("second"));
+        assert!(app.modal.is_none());
+    }
+
+    #[tokio::test]
+    async fn menu_mouse_release_and_disabled_rows_do_not_run_an_action() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (100, 30));
+        app.mouse = true;
+        crate::workspace_menu::open(&mut app, "Choose", vec![
+            crate::workspace_menu::note("Information"),
+            crate::workspace_menu::item("Run", "r", "set -g @clicked yes"),
+        ], Some((3, 2)), Some(1));
+        let mut mouse = MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), column: 5, row: 4, modifiers: KeyModifiers::NONE };
+        handle(&mut app, CEvent::Mouse(mouse));
+        assert!(app.options.get("@clicked", "", None).is_none());
+        assert!(matches!(app.modal, Some(Modal::Menu(_))));
+        mouse.kind = MouseEventKind::Down(MouseButton::Left);
+        mouse.row = 3;
+        handle(&mut app, CEvent::Mouse(mouse));
+        assert!(app.options.get("@clicked", "", None).is_none());
+        assert!(matches!(app.modal, Some(Modal::Menu(_))));
+        mouse.row = 4;
+        handle(&mut app, CEvent::Mouse(mouse));
+        assert_eq!(app.options.get("@clicked", "", None).as_deref(), Some("yes"));
+    }
 
     #[test]
     fn os_actions_are_unavailable_in_ordinary_hn_and_install_is_live_only() {
@@ -3424,7 +3521,7 @@ mod tests {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19789, sink, (80, 24));
         app.fleet.local_id = "local".into();
-        app.fleet.machines.push(crate::fleet::Machine {
+        app.fleet.machines.push(crate::fleet::Machine { shared: false,
             id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready,
         });
         app.homes.insert("local".into(), "/home/dev".into());
@@ -3460,7 +3557,7 @@ mod tests {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19789, sink, (80, 24));
         app.fleet.local_id = "local".into();
-        app.fleet.machines.push(crate::fleet::Machine {
+        app.fleet.machines.push(crate::fleet::Machine { shared: false,
             id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready,
         });
         app.homes.insert("local".into(), "/home/dev".into());

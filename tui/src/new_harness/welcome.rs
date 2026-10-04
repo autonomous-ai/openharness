@@ -18,6 +18,22 @@ struct Search {
     next: Instant,
 }
 
+/// Changing a tab's sole harness gives its shared desk identity a fresh key; its local draft
+/// and any receipt still belong to the same visible tab.
+pub(crate) fn remap(app: &mut App, old: &str, new: &str) {
+    if let Some(mut form) = app.welcome.forms.remove(old) {
+        if matches!(&form.surface, Surface::Window(id) if id == old) { form.surface = Surface::Window(new.into()); }
+        if let Some(target) = &mut form.launch_target { if target.tab == old { target.tab = new.into(); } }
+        if let Some(target) = form.attempt.as_mut().and_then(|a| a.target.as_mut()) { if target.tab == old { target.tab = new.into(); } }
+        app.welcome.forms.insert(new.into(), form);
+    }
+}
+
+pub(super) fn account_changed(app: &mut App) {
+    app.welcome.generation = app.welcome.generation.wrapping_add(1);
+    app.welcome.searches.clear(); app.welcome.shown = false;
+}
+
 /// Context is captured before creating the window; switching windows never replaces its draft.
 pub(crate) fn ensure(app: &mut App, from: Option<(String, String)>, cwd: Option<String>) {
     if crate::input::os_home(app) { return }
@@ -235,7 +251,7 @@ mod tests {
         let mut app = App::new(19789, sink, (150, 42));
         app.fleet.local_id = "local".into();
         app.fleet.machines.push(crate::fleet::Machine {
-            id: "local".into(), name: "office".into(), local: true,
+            id: "local".into(), name: "office".into(), local: true, shared: false,
             status: "online".into(), reach: crate::fleet::Reach::Ready,
         });
         app.tab_mut().home = true;
@@ -243,6 +259,92 @@ mod tests {
     }
     fn event(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         crate::input::handle(app, crossterm::event::Event::Key(KeyEvent::new(code, modifiers)));
+    }
+
+    fn render(app: &mut App) {
+        let area = Rect::new(0, 0, 150, 41);
+        draw(&mut Buffer::empty(area), app, area);
+    }
+
+    #[tokio::test]
+    async fn task_arrows_leave_at_visual_edges_and_keep_multiline_editing_inside() {
+        let mut app = app();
+        ensure(&mut app, None, None);
+        let tab = app.tab().id.clone();
+        crate::input::handle(&mut app, crossterm::event::Event::Paste("first\nsecond".into()));
+        render(&mut app);
+        event(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Task);
+        assert_eq!(app.welcome.forms[&tab].task_editor.cursor, "first".len());
+        event(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Task);
+        assert_eq!(app.welcome.forms[&tab].task_editor.cursor, "first\nsecond".len());
+        event(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Agent);
+        event(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Task);
+        event(&mut app, KeyCode::Home, KeyModifiers::CONTROL);
+        event(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Browse);
+        assert_eq!(app.welcome.forms[&tab].draft.task, "first\nsecond");
+    }
+
+    #[tokio::test]
+    async fn escape_leaves_a_rejected_task_and_restores_plain_prefix_navigation() {
+        let mut app = app();
+        ensure(&mut app, None, None);
+        let tab = app.tab().id.clone();
+        let mut form = take_active(&mut app).unwrap();
+        form.task_editor.insert(&mut form.draft.task, "fsf");
+        set_engine(&mut form, "terminal");
+        form.focus = Field::Task;
+        store_form(&mut app, form);
+        render(&mut app);
+        event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(app.welcome.forms[&tab].error.contains("cannot start with a task"));
+        event(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Agent);
+        assert!(!editing(&app));
+        assert_eq!(app.welcome.forms[&tab].draft.task, "fsf");
+        assert!(app.welcome.forms[&tab].error.is_empty());
+        app.keymap.prefix = crate::keys::parse("`").unwrap();
+        event(&mut app, KeyCode::Char('`'), KeyModifiers::NONE);
+        assert!(app.prefix, "Escape must release the task's ownership of plain keys");
+    }
+
+    #[tokio::test]
+    async fn unsupported_empty_task_rejects_text_and_paste_but_allows_navigation() {
+        let mut app = app();
+        ensure(&mut app, None, None);
+        let tab = app.tab().id.clone();
+        let mut form = take_active(&mut app).unwrap();
+        set_engine(&mut form, "terminal");
+        form.focus = Field::Task;
+        store_form(&mut app, form);
+        render(&mut app);
+        event(&mut app, KeyCode::Char('x'), KeyModifiers::NONE);
+        crate::input::handle(&mut app, crossterm::event::Event::Paste("do not execute this".into()));
+        assert!(app.welcome.forms[&tab].draft.task.is_empty());
+        event(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Agent);
+    }
+
+    #[tokio::test]
+    async fn escape_returns_to_the_previous_window_without_discarding_the_new_window_draft() {
+        let mut app = app();
+        let first = app.tab().id.clone();
+        app.new_tab();
+        ensure(&mut app, None, None);
+        let second = app.tab().id.clone();
+        crate::input::handle(&mut app, crossterm::event::Event::Paste("unfinished task".into()));
+        event(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.tab().id, second, "first Escape leaves text editing");
+        event(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.tab().id, first, "second Escape returns to the previous window");
+        assert_eq!(app.welcome.forms[&second].draft.task, "unfinished task");
+        let index = app.tabs.iter().position(|t| t.id == second).unwrap();
+        app.select_tab(index);
+        assert_eq!(app.welcome.forms[&second].draft.task, "unfinished task");
     }
 
     #[tokio::test]
@@ -333,7 +435,7 @@ mod tests {
         assert_eq!(app.welcome.forms[&tab].draft.machine, crate::local::MACHINE);
         app.fleet.local_id = "registered-local".into();
         app.fleet.machines.push(crate::fleet::Machine {
-            id: "registered-local".into(), name: "office".into(), local: true,
+            id: "registered-local".into(), name: "office".into(), local: true, shared: false,
             status: "online".into(), reach: crate::fleet::Reach::Ready,
         });
         super::super::refresh(&mut app);

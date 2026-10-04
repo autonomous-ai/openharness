@@ -153,6 +153,7 @@ fn box_set(lines: &str) -> (&'static str, &'static str, &'static str, &'static s
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    crate::workspace_controls::begin_frame(app);
     theme::begin_animation_frame(app.options.animations());
     app.renumber();
     // automatic-rename as of this frame: a pane that went into a mode ([tmux]) or out of one is
@@ -515,6 +516,7 @@ fn border_style(app: &App, active: bool) -> Style {
 /// writes nothing.
 fn title_line(buf: &mut Buffer, app: &App, id: u64, area: Rect, style: Style) {
     if area.width == 0 { return }
+    let area = crate::workspace_controls::title(buf, app, id, area, style);
     let Some(fmt) = app.options.get("pane-border-format", &app.tab().id, Some(id)) else { return };
     let expanded = crate::format::expand(app, &fmt, app.active, Some(id), true);
     for (i, cell) in crate::draw::format_draw_over(&expanded, style, area.width).into_iter().enumerate() {
@@ -555,7 +557,8 @@ fn boxes(buf: &mut Buffer, app: &App) {
         let words = if active { style.add_modifier(Modifier::BOLD) } else if app.pane_state(id) == Some(crate::fleet::State::NeedsInput) { style } else { style.fg(theme::paint(theme::pane_palette().muted)) };
         let Some(fmt) = app.options.get("pane-border-format", &tab.id, Some(id)) else { continue };
         let expanded = crate::format::expand(app, &fmt, app.active, Some(id), true);
-        let cells = crate::draw::format_draw_over(&expanded, words, t.width.saturating_sub(1));
+        let t = crate::workspace_controls::title(buf, app, id, Rect::new(t.x, t.y, t.width.saturating_sub(1), 1), words);
+        let cells = crate::draw::format_draw_over(&expanded, words, t.width);
         // ` title `: a blank after the words where the line would run on.
         let end = cells.iter().position(|c| c.is_none()).unwrap_or(cells.len());
         for (i, cell) in cells.into_iter().enumerate() {
@@ -2891,7 +2894,7 @@ mod theme_render_tests {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19789, sink, (150, 42));
         app.fleet.local_id = "local".into();
-        app.fleet.machines.push(crate::fleet::Machine {
+        app.fleet.machines.push(crate::fleet::Machine { shared: false,
             id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready,
         });
         app.homes.insert("local".into(), "/home/dev".into());
@@ -2931,7 +2934,7 @@ mod theme_render_tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _in = rt.enter();
         let mut app = app();
-        app.fleet.machines.push(crate::fleet::Machine { id: "far".into(), name: "Macbooks-MacBook-Pro-5.local".into(), local: false, status: "online".into(), reach: crate::fleet::Reach::Ready });
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "far".into(), name: "Macbooks-MacBook-Pro-5.local".into(), local: false, status: "online".into(), reach: crate::fleet::Reach::Ready });
         for (i, (name, project, m)) in [("autonomous-harness", "autonomous-harness", "far"), ("grid-mac-lmstudio3", "autonomous-grid", "far"), ("grid-mac-ollama", "autonomous-grid", "local")].iter().enumerate() {
             let a = crate::fleet::agent_from(m, &serde_json::json!({"id": format!("a{i}"), "name": name, "engine": "claude", "state": "idle", "cwd": format!("/home/dev/{project}"), "project": {"name": project}}), None);
             app.fleet.agents.insert((m.to_string(), format!("a{i}")), a);
@@ -3062,7 +3065,7 @@ mod theme_render_tests {
         assert_eq!(bound(KeyCode::Char(' ')).as_deref(), Some("next-layout"));
         crate::commands::execute_bound(&mut app, "choose-command");
         let s = screen(&mut app);
-        assert!(s.contains("Commands") && s.contains("New harness"), "{s}");
+        assert!(s.contains("Commands") && s.contains("New Harness"), "{s}");
         let at = match &app.modal { Some(Modal::Picker { picker, .. }) => picker.screen_area.get(), _ => panic!("no panel") };
         // (A few letters are enough: the best match comes first.)
         for c in "appe".chars() { crate::input::modal_key(&mut app, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)) }
@@ -3178,7 +3181,7 @@ mod theme_render_tests {
         let s = screen(&mut app);
         let (kind, inside, _, _, _) = picker(&app);
         assert!(matches!(kind, PickerKind::Commands) && inside.as_deref() == Some("tmux"), "one click opened it");
-        assert!(s.contains("tmux commands") && s.contains("tmux · Windows") && !s.contains("New harness"), "{s}");
+        assert!(s.contains("tmux commands") && s.contains("tmux · Windows") && !s.contains("New Harness"), "{s}");
         crate::input::modal_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         let (kind, inside, at, _, _) = picker(&app);
         assert!(matches!(kind, PickerKind::Commands) && inside.is_none() && at.as_deref() == Some("cmd:tmux-commands"), "Esc back to hn's, on its row");
@@ -3252,12 +3255,12 @@ mod theme_render_tests {
         assert!(app.capturing.is_some() && said(&app).starts_with("Prefix: press"), "{}", said(&app));
         key(&mut app, KeyCode::Esc);
         assert!(app.capturing.is_none() && said(&app) == "Unchanged", "{}", said(&app));
-        // Split right onto n (Next swarm's): named first, replaced on the second press.
+        // Split right onto n (Next Tab's): named first, replaced on the second press.
         if let Some(Modal::Picker { picker, .. }) = &mut app.modal { let i = crate::modal::KEYBINDS.iter().position(|k| k.0 == "Split right").unwrap(); picker.select(&format!("key:{i}")) }
         key(&mut app, KeyCode::Enter);
         assert_eq!(said(&app), "Split right: press a key · Esc cancels");
         key(&mut app, KeyCode::Char('n'));
-        assert_eq!(said(&app), "C-b n is Next swarm — n again to replace · Esc to keep");
+        assert_eq!(said(&app), "C-b n is Next Tab — n again to replace · Esc to keep");
         key(&mut app, KeyCode::Char('n'));
         assert!(said(&app).starts_with("Split right: C-b n"), "{}", said(&app));
         let s = screen(&mut app);
@@ -3294,7 +3297,7 @@ mod which_key_tests {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19789, sink, (150, 42));
         app.fleet.local_id = "local".into();
-        app.fleet.machines.push(crate::fleet::Machine {
+        app.fleet.machines.push(crate::fleet::Machine { shared: false,
             id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready,
         });
         app.homes.insert("local".into(), "/home/dev".into());

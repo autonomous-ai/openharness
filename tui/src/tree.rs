@@ -1271,7 +1271,7 @@ fn display_menu(app: &mut App, t: &Tree, pane: u64, x: u32, y: u32, outside: boo
     let mut y = y;
     if x + w > sx { x = sx - w }
     if y + h > sy { y = sy - h }
-    app.modal = Some(Modal::Menu(crate::modal::Menu { title, items, choice: None, x: x as u16, y: y as u16, width, stay_open: false, no_mouse: false, mouse: None, tree: Some((pane, line)), complete: None }));
+    app.modal = Some(Modal::Menu(crate::modal::Menu { title, items, choice: None, x: x as u16, y: y as u16, width, stay_open: false, no_mouse: false, mouse: None, tree: Some((pane, line)), complete: None, responsive: None }));
 }
 
 /// mode_tree_menu_callback and window_tree_menu: the menu's line made current, its item's key

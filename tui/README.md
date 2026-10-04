@@ -45,12 +45,21 @@ PTY supervisor keeps them running through detach, reconnect and a client crash. 
 sessions stay on this computer and remain intact when Harness reconnects.
 
 On a fresh computer `hn` starts your local daemon and opens without requiring an account.
-Sign in with `harness login` when you want your other machines and shared desk. If daemon startup
+Choose **Sign in** in the status bar, or run `account` from `C-b :`, when you want your other
+machines, shared desk and access from your phone. The Account panel explains these benefits and
+offers browser sign-in or a phone QR code; you confirm the account before connecting it.
+`harness login` remains available from a shell. Signing in keeps local work in place; changing
+accounts removes the previous account's views without stopping its harnesses. If daemon startup
 fails, hn still opens a local shell. Each OS user connects through their own private Unix socket;
 hn never attaches to another user's daemon merely because it occupies the default TCP port.
 Like `tmux new -A`, it restores your swarms if the desk has any,
-else window 0 is a shell on this computer, in the folder you ran `hn` in. `C-b s` finds every
+else window 0 shows the task-first welcome form, with the folder you ran `hn` in selected.
+Choose Open Terminal for a shell there. `C-b s` finds every
 harness. Closing the last window ends `hn` (`[exited]`, as tmux says it); `C-b d` detaches.
+
+![Optional sign-in with local work still available](docs/account.png)
+
+<sub>Rendered from the isolated native fixture in `tests/workspace-controls.py`.</sub>
 
 **Sessions** are tmux's: `hn new -A -s main` (in a shell's rc, or a terminal profile) starts or
 attaches, `hn attach -t work` goes back to one, and a plain `hn` returns to where you were.
@@ -99,8 +108,9 @@ sessions retain tmux's resize behavior.
 
 Splits, `resize-pane`, the seven layouts, `swap-pane`, `rotate-window`, `join-pane`, `break-pane`
 and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same split sizes, the same
-pane numbers and the same active pane after each. hn draws these layouts as pane surfaces
-with one-cell gaps and inset terminal content. Panes have no drawn borders: background
+pane numbers and the same active pane after each. The default classic appearance draws thin
+pane borders. Choose **Appearance** from the workspace menu, or use `set -g @hn-look panes`,
+for pane surfaces with one-cell gaps and inset terminal content. In that appearance, panes have no drawn borders: background
 contrast identifies focus. The margins and gaps keep the terminal's native background. The focused
 pane uses a subtly contrasting fill (`#181818` on a black terminal), while inactive dark panes use
 `rgb(64, 64, 64)` with softer text. A lone or zoomed pane keeps the same focused surface. Light
@@ -149,8 +159,8 @@ sends a plain Enter).
 | `C-b o` `C-b ;` `C-b ←↑→↓` `C-b q` | next pane, last pane, pane in a direction, pane numbers |
 | `C-b z` `C-b space` `C-b M-1…7` `C-b { }` `C-b C-o` | zoom, next layout, a layout, swap, rotate |
 | `C-b C-←↑→↓` `C-b M-←↑→↓` | resize (repeatable, like tmux's `-r`) |
-| `C-b n` `C-b p` `C-b l` `C-b 0…9` `C-b w` `C-b ,` `C-b &` | windows |
-| `C-b x` | close the pane (the harness keeps running) |
+| `C-b n` `C-b p` `C-b l` `C-b 0…9` `C-b w` `C-b ,` | windows |
+| `C-b x` / `C-b &` | Stop Harness / Close Tab. Owned harnesses are saved and stopped; idle ones stop directly, while working, unknown or draft sessions ask first with Cancel selected. A failed save keeps the pane. Plain terminals ask before closing; shared or already-stopped harnesses only close their view. |
 | `C-b [` `C-b ]` | copy mode (tmux's, vi or emacs keys as `mode-keys` says), paste |
 | `C-b <` `C-b >` | the window and pane menus |
 | `C-b /` | what a key does |
@@ -158,7 +168,11 @@ sends a plain Enter).
 | `C-b ?` | every key and what it does (`list-keys -N`) — or just pause after `C-b` and they show |
 | `C-b d` | detach — everything keeps running |
 
-Harness's own, only on keys tmux leaves unbound (every tmux key does what tmux does):
+Harness's additional actions use keys tmux leaves unbound. The stock close bindings above use
+Harness's save-and-stop behavior; custom bindings and explicit `kill-pane` / `kill-window`
+commands keep their existing tmux behavior.
+A confirmed Stop removes that harness's other views across tabs and sessions too. Switching
+agents from another attached hn client updates both views, with one replacement process.
 
 | | |
 |---|---|
@@ -175,14 +189,19 @@ All settings are visible without expanding Options. Project reads `project @ loc
 The initial destination is the connected local Harness machine, with successful agent
 and project choices remembered. Explicit project commands keep their destination. Enter starts
 with the displayed choices; the action names the selected agent (for example, Start Codex).
-Tab/Shift-Tab moves between fields. Outside the task editor, Up/Down also moves between fields
-and previews their choices on the right. Enter, Right or typing enters a chooser; Enter accepts
+Tab/Shift-Tab moves between fields. Up/Down edits multiline tasks and moves to the previous/next
+field at the first/last visual line. On other fields, it moves between fields and previews
+their choices on the right. Enter, Right or typing enters a chooser; Enter accepts
 an item and focuses Start. Enter in the task editor starts immediately. The harness opens in
 the window that requested it, splitting beside the focused pane when needed. Switching windows
 while it starts leaves your new window focused. Lowercase `C-b n` remains next window.
+Escape backs out of a chooser or closes the popup without losing its draft. On New Window,
+Escape leaves task editing; another Escape returns to the previous window and keeps the draft.
 
 Agent combines coding agents and installed Store harnesses; a Store harness then offers its
-compatible coding agents. Project offers Clone Repository, Open Folder, New Folder and recent
+compatible coding agents. Terminal is a separate action: `C-b T` opens a shell directly,
+and Open Terminal on New Window is available by mouse. Neither sends task text to the shell.
+Project offers Clone Repository, Open Folder, New Folder and recent
 machine/folder pairs. Folder actions choose a machine first. Ctrl-L in the folder browser edits
 a path. Project search includes the 50 most recently active distinct folders per machine;
 duplicate sessions in one folder count once. Combine a machine name and folder, such as
@@ -402,10 +421,30 @@ keys to search as you type, fzf-style, is `C-b :keys` (or `hn keys` from a shell
 
 ## Mouse and clipboard
 
-tmux's mouse: a click selects a pane or a window, a drag on a border (or a title row) resizes, a
+The keyboard remains the primary path, and the same actions are reachable by mouse. Pane
+headers show the agent and model as plain text controls, followed by `…` and `×` when there
+is room. The menu keeps these actions available in narrow panes. Changing agents saves a
+handoff and replaces the agent in the same pane; changing models targets the pane you chose,
+even if focus moves while the picker is open. `×` uses the same safe Stop behavior as `C-b x`.
+Right-click a pane header or window tab for its actions.
+
+The status bar adds just `+` and `…`, plus **Sign in** when needed. `+` opens the task-first
+New Tab screen. `…` opens New Harness, New Tab, the harness/machine/model counts and their lists,
+Devices, Account, Appearance and Commands. Physical Harness devices are separate from machine
+connections. Devices shows each owned host's connected devices and reported brightness, sound,
+scrolling direction and voice language; settings are confirmed by the device before being shown
+as saved. These settings use the existing firmware and CLI interfaces.
+
+These controls follow `mouse on`, respect custom mouse bindings and leave custom status and
+pane-title formats intact. Add `#{hn_controls}` to a custom status format to opt its footer into
+the controls. `mouse off`, or the tmux appearance, keeps the keyboard-only presentation.
+Commands such as `workspace-menu`, `change-agent`, `models`, `hardware-devices` and `account`
+are also available from `C-b :`.
+
+The terminal body keeps tmux's mouse: a click selects a pane or a window, a drag on a border (or a title row) resizes, a
 drag in a pane selects and copies, a double-click copies a word and a triple-click a line, the
-wheel scrolls back in copy mode, and the right button opens tmux's pane, window and session
-menus. Each is a key binding you can change, as in tmux (`bind -n WheelUpPane …`, `bind -T
+wheel scrolls back in copy mode, and the right button opens tmux's pane menu. Each is a key
+binding you can change, as in tmux (`bind -n WheelUpPane …`, `bind -T
 copy-mode-vi MouseDragEnd1Pane …`); a program that asks for the mouse gets it. Hold `⇧` to select
 with your terminal instead. Copying uses OSC 52, so it lands on the clipboard of the computer you
 are sitting at, over SSH too.
@@ -498,6 +537,10 @@ arm64, musl) with a checksummed manifest that `harness tui --install` verifies.
 | `app.rs` | all state: machines, streams, tabs, desk sync |
 | `fleet.rs` | machines and harnesses, kept live from the daemon's frames |
 | `input.rs` | keys, mouse, the launcher's modes and actions |
+| `workspace_controls.rs` / `workspace_menu.rs` | pane and footer controls, stable action targets and compact menus |
+| `session_close.rs` / `agent_switch.rs` / `workspace_events.rs` | save-and-stop lifecycle, agent handoff and view updates between local clients |
+| `account.rs` / `account_scope.rs` | optional sign-in and account-aware workspace restoration |
+| `hardware.rs` / `workspace_resources.rs` | physical device settings and workspace counts |
 | `dial.rs` | the Harness device: the ring and windows it turns through, its focus, scroll, taps and spoken tasks |
 | `modal.rs` / `picker.rs` | the launcher's rows and its fzf matching (fzf.rs, ported from fzf) |
 | `ui.rs` | drawing |

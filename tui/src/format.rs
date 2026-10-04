@@ -1156,14 +1156,15 @@ pub fn clip_middle(text: &str, cols: usize) -> String {
 
 /// Columns available to pane-border-format inside its frame.
 fn pane_heading_columns(app: &App, window: usize, pane: u64) -> usize {
-    if app.options.pane_look() {
+    let columns = if app.options.pane_look() {
         let Some(tab) = app.tabs.get(window) else { return 0 };
         let Some(tile) = tab_rect(app, window, pane) else { return 0 };
         crate::pane_frame::frame(tile, app.window_area(tab), app.box_inner(tab), app.pane_status(tab)).title
             .map(|r| r.width.saturating_sub(2) as usize).unwrap_or(0)
     } else {
         content_rect(app, window, pane).map(|r| r.width.saturating_sub(4) as usize).unwrap_or(0)
-    }
+    };
+    columns.saturating_sub(crate::workspace_controls::title_reserve(app, window, pane, columns as u16) as usize)
 }
 
 fn pane_heading(app: &App, window: usize, pane: u64) -> String {
@@ -1289,6 +1290,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "pane_index" => focus.and_then(|f| tab.and_then(|t| t.panes().iter().position(|p| *p == f))).map(|i| (i + app.pane_base(window)).to_string()).unwrap_or_default(),
         "pane_title" => focus.map(|f| pane_title(app, window, f)).unwrap_or_else(|| host.clone()),
         "pane_heading" => focus.map(|f| pane_heading(app, window, f)).unwrap_or_default(),
+        "hn_controls" => crate::workspace_controls::status(app),
         "pane_id" => focus.map(crate::pane::tag).unwrap_or_default(),
         // What tmux on the pane's machine says (terminal_info), then what the shell said (OSC 7),
         // then where the harness started.
@@ -1770,7 +1772,7 @@ mod tests {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = crate::app::App::new(19789, sink, (200, 60));
         app.fleet.local_id = "render-test".into();
-        app.fleet.machines.push(crate::fleet::Machine { id: "render-test".into(), name: "Render test".into(), local: true, status: "running".into(), reach: crate::fleet::Reach::Ready });
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "render-test".into(), name: "Render test".into(), local: true, status: "running".into(), reach: crate::fleet::Reach::Ready });
         for i in 0..agents {
             let row = serde_json::json!({ "id": format!("agent-{i}"), "name": format!("Review project {i}"), "engine": "codex", "status": "active" });
             let mut agent = crate::fleet::agent_from("render-test", &row, None);

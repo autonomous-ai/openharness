@@ -22,7 +22,7 @@ pub fn set_fzf_lists(on: bool) { FZF_LISTS.store(on, std::sync::atomic::Ordering
 /// The lists drawn as this panel rather than as fzf's full-screen list: every one, unless
 /// `@hn-lists fzf` asks for fzf's.
 pub fn is_panel(kind: &PickerKind) -> bool {
-    matches!(kind, PickerKind::Theme | PickerKind::Commands | PickerKind::Keybinds | PickerKind::Devices(_) | PickerKind::Models) || !FZF_LISTS.load(std::sync::atomic::Ordering::Relaxed)
+    matches!(kind, PickerKind::Theme | PickerKind::Commands | PickerKind::Keybinds | PickerKind::Devices(_) | PickerKind::Models | PickerKind::Account | PickerKind::AgentSwitch | PickerKind::Hardware) || !FZF_LISTS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Whether [kind]'s list reads top-down (↑ toward its first row): fzf's under --layout=reverse,
@@ -395,7 +395,7 @@ impl PickerKind {
         match self {
             // (Every launcher tab is the same size — Help too — so ←/→ on the tab row never moves it.)
             PickerKind::Open { .. } | PickerKind::Palette | PickerKind::Projects | PickerKind::Models | PickerKind::Inbox | PickerKind::Machines | PickerKind::Store | PickerKind::Help | PickerKind::Theme
-                | PickerKind::Route { .. } | PickerKind::Messages | PickerKind::Keys | PickerKind::Buffers | PickerKind::Output { .. } | PickerKind::Devices(_) => PanelSize::Large,
+                | PickerKind::Route { .. } | PickerKind::Messages | PickerKind::Keys | PickerKind::Buffers | PickerKind::Output { .. } | PickerKind::Devices(_) | PickerKind::Account | PickerKind::AgentSwitch | PickerKind::Hardware => PanelSize::Large,
             PickerKind::Commands | PickerKind::Keybinds | PickerKind::Layout => PanelSize::Palette,
         }
     }
@@ -423,6 +423,7 @@ pub fn draw(buf: &mut Buffer, app: &App, body: Rect, kind: &PickerKind, picker: 
     // ── machines & devices ── (the same panel, laid out by devices.rs: Add phone's QR code takes
     // the panel's whole height, and each view draws its own right side)
     if let PickerKind::Devices(view) = kind { return (crate::devices::draw(buf, app, body, *view, picker), None) }
+    if matches!(kind, PickerKind::Account) { return (crate::account::draw(buf, app, body, picker), None) }
     let c = chrome();
     backdrop(buf, body, c.backdrop);
     if body.width < 24 || body.height < 8 {
@@ -1008,7 +1009,7 @@ mod tests {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19789, sink, size);
         app.fleet.local_id = "local".into();
-        app.fleet.machines.push(crate::fleet::Machine { id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready });
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready });
         app
     }
 

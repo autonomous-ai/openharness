@@ -61,11 +61,17 @@ pub enum PickerKind {
     // ── machines & devices ──
     /// Connect a machine, Add phone, Machines & devices: the desktop's machine screens in the panel.
     Devices(crate::devices::View),
+    /// Optional Harness account and its browser/phone sign-in flow.
+    Account,
+    /// Software selection for one captured harness, sharing the desktop handoff lifecycle.
+    AgentSwitch,
+    /// Physical USB devices on owned computers; distinct from machine connections.
+    Hardware,
 }
 
 #[derive(Clone, Debug)]
 pub enum PromptKind {
-    RenameTab,
+    RenameTab { session: u32, window: String, owner: String },
     RenameHarness { machine: String, agent: String },
     Send,
     Broadcast,
@@ -138,6 +144,9 @@ pub struct Menu {
     /// A prompt's completion menu (status_prompt_complete_list_menu): the prompt under it, back
     /// when it closes, the chosen word put in it.
     pub complete: Option<Box<Complete>>,
+    /// Harness menus reflow from their original labels when the terminal changes size.
+    /// Explicit tmux display-menu coordinates keep tmux's existing behavior.
+    pub responsive: Option<Box<crate::workspace_menu::Layout>>,
 }
 
 /// What a completion menu completes: the prompt, the words its items stand for, the flag they
@@ -167,38 +176,40 @@ pub enum Modal {
     Copy { pane: u64 },
 }
 
-pub const ENGINES: [&str; 14] = ["claude", "codex", "opencode", "cursor", "pi", "amp", "hermes", "kilo", "grok", "devin", "copilot", "commandcode", "muse", "terminal"];
+pub const ENGINES: [&str; 15] = ["claude", "codex", "opencode", "cursor", "pi", "amp", "hermes", "kilo", "grok", "devin", "copilot", "commandcode", "muse", "agy", "terminal"];
 
 /// The palette's commands: (id, title, keys, hint, group).
 pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
+    ("account", "Account / sign in…", "", "connect computers, sync your workspace and add your phone", "General"),
     ("open", "Harnesses…", "⌥P", "every harness on every machine", "Harness"),
     ("projects", "Projects…", "⌥O", "a project, then one of its harnesses", "Harness"),
     ("models", "Models…", "⌥I", "local, shared, subscriptions, APIs — use one on this harness", "Harness"),
-    ("new", "New harness…", "⌥N", "", "Harness"),
+    ("change-agent", "Change agent…", "", "continue this project with another agent", "Harness"),
+    ("new", "New Harness…", "⌥N", "", "Harness"),
     ("terminal", "New terminal", "⌥⇧T", "a shell on this pane's machine", "Harness"),
     ("inbox", "Harnesses needing input", "⌥⇧I", "", "Harness"),
     ("next-waiting", "Next harness waiting on you", "⌥A", "oldest question first", "Harness"),
     ("send", "Send to harness…", "⌥B", "type a task — Harness picks who", "Harness"),
-    ("broadcast", "Broadcast to this swarm…", "", "one message to every harness in the swarm", "Harness"),
+    ("broadcast", "Broadcast to this tab…", "", "one message to every harness in the tab", "Harness"),
     ("clone", "Clone harness", "⌥⇧N", "a second one with this one's history", "Harness"),
     ("restart", "Restart harness", "⌥⇧E", "", "Harness"),
     ("pause", "Pause harness", "", "stop the engine, keep the conversation", "Harness"),
     ("rename", "Rename harness…", "", "", "Harness"),
     ("take", "Take control", "", "reclaim all panes across every tab", "General"),
-    ("tab", "New swarm", "⌥T", "", "Swarms"),
-    ("rename-tab", "Rename swarm…", "⌥⇧R", "", "Swarms"),
-    ("close-tab", "Close swarm", "⌥⇧W", "harnesses keep running", "Swarms"),
-    ("next-tab", "Next swarm", "⌥}", "", "Swarms"),
-    ("prev-tab", "Previous swarm", "⌥{", "", "Swarms"),
-    ("tab-left", "Move swarm left", "⌥<", "", "Swarms"),
-    ("tab-right", "Move swarm right", "⌥>", "", "Swarms"),
+    ("tab", "New Tab", "⌥T", "", "Tabs"),
+    ("rename-tab", "Rename Tab…", "⌥⇧R", "", "Tabs"),
+    ("close-tab", "Close Tab", "⌥⇧W", "save and stop; confirm active work", "Tabs"),
+    ("next-tab", "Next Tab", "⌥}", "", "Tabs"),
+    ("prev-tab", "Previous Tab", "⌥{", "", "Tabs"),
+    ("tab-left", "Move Tab left", "⌥<", "", "Tabs"),
+    ("tab-right", "Move Tab right", "⌥>", "", "Tabs"),
     ("split-right", "Split right", "⌥\\", "", "Panes"),
     ("split-down", "Split down", "⌥-", "", "Panes"),
-    ("close-pane", "Close pane", "⌥W", "the harness keeps running", "Panes"),
+    ("close-pane", "Stop harness", "⌥W", "save its history; confirm active work", "Panes"),
     ("zoom", "Zoom pane", "⌥Z", "", "Panes"),
     ("layout", "Layout…", "⌥L", "grid, columns, main + stack…", "Panes"),
     ("equalize", "Equalize panes", "⌥=", "", "Panes"),
-    ("pane-tab", "Move pane to a new swarm", "", "", "Panes"),
+    ("pane-tab", "Move pane to a new tab", "", "", "Panes"),
     ("find", "Find in pane…", "⌥⇧F", "search this pane's history", "Panes"),
     // (Not "keyboard": `keyb` is Keybinds.)
     ("copy-mode", "Copy mode", "⌥V", "move over the pane's text, select and copy", "Panes"),
@@ -207,7 +218,8 @@ pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
     // ── machines & devices ──
     ("connect-machine", "Connect a machine…", "", "a machine not linked yet, with its remote password", "Machines"),
     ("add-phone", "Add phone…", "", "a QR code your phone scans to sign in and pair", "Machines"),
-    ("devices", "Machines & devices…", "", "this computer's password, your machines, links, add a machine", "Machines"),
+    ("devices", "Machines…", "", "this computer's password, your machines, links, add a machine", "Machines"),
+    ("hardware-devices", "Devices…", "", "Harness hardware, brightness, sound and voice language", "Machines"),
     // (hn itself: how it looks, its keys, and closing it.)
     ("theme", "Appearance…", "", "theme, status bar, borders, focus, layout — settings", "Settings & help"),
     ("keybinds", "Keybinds…", "", "every command's key after the prefix — Enter changes one", "Settings & help"),
@@ -387,7 +399,7 @@ pub fn launcher_title(app: &App, kind: &PickerKind) -> (String, String) {
         PickerKind::Projects => ("projects".into(), "Choose a project, then one of its harnesses".into()),
         // (Which harness Enter moves, in the title: the focused one, or the only one on screen.)
         PickerKind::Models => (crate::models::target(app).and_then(|t| app.fleet.agent(&t.machine, &t.agent)).map(|a| format!("models · for {}", a.name)).unwrap_or_else(|| "models".into()),
-            "Search models — Enter uses one on the focused harness".into()),
+            "Search models — Enter uses one on this harness".into()),
         PickerKind::Store => ("store".into(), "Find a harness in the Store".into()),
         PickerKind::Help => ("quick access".into(), "What this box can do".into()),
         _ => (String::new(), String::new()),
@@ -563,9 +575,9 @@ pub const KEYBINDS: &[(&str, &str, &str)] = &[
     ("Pane right", "select-pane -R", "Navigation"),
     ("Pane up", "select-pane -U", "Navigation"),
     ("Pane down", "select-pane -D", "Navigation"),
-    ("Next swarm", "next-window", "Navigation"),
-    ("Previous swarm", "previous-window", "Navigation"),
-    ("Last swarm", "last-window", "Navigation"),
+    ("Next Tab", "next-window", "Navigation"),
+    ("Previous Tab", "previous-window", "Navigation"),
+    ("Last Tab", "last-window", "Navigation"),
     ("Split right", "split-window -h", "Panes"),
     ("Split down", "split-window", "Panes"),
     ("Close pane", "kill-pane", "Panes"),
@@ -574,11 +586,11 @@ pub const KEYBINDS: &[(&str, &str, &str)] = &[
     ("Next layout", "next-layout", "Panes"),
     ("Copy mode", "copy-mode", "Panes"),
     ("Find in pane…", "find-window", "Panes"),
-    ("New swarm", "new-window", "Swarms (windows)"),
-    ("Rename swarm…", "rename-window", "Swarms (windows)"),
-    ("Close swarm", "kill-window", "Swarms (windows)"),
-    ("Move pane to a new swarm", "break-pane", "Swarms (windows)"),
-    ("New harness…", "new-harness", "Harnesses"),
+    ("New Tab", "new-window", "Tabs (tmux windows)"),
+    ("Rename Tab…", "rename-window", "Tabs (tmux windows)"),
+    ("Close Tab", "kill-window", "Tabs (tmux windows)"),
+    ("Move pane to a new tab", "break-pane", "Tabs (tmux windows)"),
+    ("New Harness…", "new-harness", "Harnesses"),
     ("New terminal", "new-terminal", "Harnesses"),
     ("Models…", "choose-tree -i", "Harnesses"),
     ("Send to harness…", "send-task", "Harnesses"),
@@ -756,11 +768,10 @@ pub fn new_machine_rows(app: &App, prefer: &str) -> Vec<Row> {
 }
 
 pub fn new_what_rows(catalog: &[Value]) -> Vec<Row> {
-    let mut rows: Vec<Row> = ENGINES.iter().map(|e| {
+    let mut rows: Vec<Row> = ENGINES.iter().filter(|e| **e != "terminal").map(|e| {
         let (mark, color) = engine_mark(e);
         Row::new(format!("engine:{e}"), engine_label(e)).extra(*e).group("Agents")
             .lead(vec![span(mark, fg(color)), span(" ", Style::default())])
-            .detail(vec![span(if *e == "terminal" { "a plain shell" } else { "" }, fg(theme::MUTED))])
     }).collect();
     for row in catalog {
         if row.get("installed").and_then(Value::as_bool) == Some(false) || row.get("kind").and_then(Value::as_str) == Some("viewer") { continue }
@@ -768,6 +779,7 @@ pub fn new_what_rows(catalog: &[Value]) -> Vec<Row> {
         let name = row.get("name").and_then(Value::as_str).unwrap_or(id);
         let description = row.get("description").and_then(Value::as_str).unwrap_or("");
         let engine = row.get("engine").and_then(Value::as_str).unwrap_or("claude");
+        if engine == "terminal" { continue }
         rows.push(Row::new(format!("dsh:{id}:{engine}"), name).extra(format!("{id} {description}")).group("From the Store")
             .lead(vec![span("◆ ", fg(theme::TEAL))]).detail(vec![span(description.to_string(), fg(theme::MUTED))]));
     }
@@ -813,7 +825,7 @@ mod theme_row_tests {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19789, sink, (150, 42));
         app.fleet.local_id = "local".into();
-        app.fleet.machines.push(crate::fleet::Machine {
+        app.fleet.machines.push(crate::fleet::Machine { shared: false,
             id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready,
         });
         app.homes.insert("local".into(), "/home/dev".into());
@@ -911,7 +923,7 @@ mod theme_row_tests {
         let tmux: Vec<&Row> = inside.iter().collect();
         // Sentence case: no word after the first starts with a capital (but hn and names).
         for r in &own {
-            let caps: Vec<&str> = r.label.split_whitespace().skip(1).filter(|w| w.starts_with(|c: char| c.is_uppercase())).collect();
+            let caps: Vec<&str> = r.label.split_whitespace().skip(1).filter(|w| w.starts_with(|c: char| c.is_uppercase()) && !["Tab", "Tab…", "Harness…"].contains(w)).collect();
             assert!(caps.is_empty(), "{:?} {caps:?}", r.label);
         }
         // Grouped: each group's rows together, every group named for tmux.
@@ -940,7 +952,7 @@ mod theme_row_tests {
         assert_eq!((rows[1].id.as_str(), rows[1].right.as_str()), ("prefix2", "none"));
         let mut groups: Vec<String> = Vec::new();
         for g in rows.iter().filter_map(|r| r.group.clone()) { if groups.last() != Some(&g) { groups.push(g) } }
-        assert_eq!(groups, ["Prefix", "Navigation", "Panes", "Swarms (windows)", "Harnesses", "General"]);
+        assert_eq!(groups, ["Prefix", "Navigation", "Panes", "Tabs (tmux windows)", "Harnesses", "General"]);
         assert_eq!(right(&app, "Split right"), "C-b %");
         assert!(theme_sections(&app).iter().all(|r| r.id != "section:keys") && theme_options(&app, "keys").is_empty());
     }
@@ -985,7 +997,7 @@ mod theme_row_tests {
         assert_eq!(runs(&app, KeyCode::Char('%'), KeyModifiers::NONE), None);
         assert_eq!(right(&app, "Split right"), "C-b h");
         assert!(app.capturing.is_none());
-        let _ = change(&mut app, "Rename swarm…");
+        let _ = change(&mut app, "Rename Tab…");
         press(&mut app, KeyCode::F(5), KeyModifiers::NONE);
         assert!(runs(&app, KeyCode::F(5), KeyModifiers::NONE).is_some_and(|c| c.contains("command-prompt") && c.contains("rename-window")));
         assert_eq!(runs(&app, KeyCode::Char(','), KeyModifiers::NONE), None);
@@ -997,14 +1009,14 @@ mod theme_row_tests {
     fn a_key_in_use_needs_a_second_press() {
         let mut app = app();
         let _ = change(&mut app, "Split right");
-        assert_eq!(press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE), "C-b n is Next swarm — n again to replace · Esc to keep");
+        assert_eq!(press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE), "C-b n is Next Tab — n again to replace · Esc to keep");
         assert!(app.capturing.is_some(), "still waiting");
         assert_eq!(runs(&app, KeyCode::Char('n'), KeyModifiers::NONE).as_deref(), Some("next-window"));
         assert_eq!(runs(&app, KeyCode::Char('%'), KeyModifiers::NONE).as_deref(), Some("split-window -h"));
         assert!(press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE).starts_with("Split right: C-b n"));
         assert!(app.capturing.is_none());
         assert_eq!(runs(&app, KeyCode::Char('n'), KeyModifiers::NONE).as_deref(), Some("split-window -h"));
-        assert_ne!(right(&app, "Next swarm"), "C-b n");
+        assert_ne!(right(&app, "Next Tab"), "C-b n");
         // A command with no title of its own is named by its command.
         let _ = change(&mut app, "Split down");
         assert!(press(&mut app, KeyCode::Char('t'), KeyModifiers::NONE).starts_with("C-b t is clock-mode — t again"));
