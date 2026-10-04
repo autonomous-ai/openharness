@@ -42,7 +42,10 @@ def check_usb_installer(vm, user, folder):
         vm.command('for n in $(seq 1 60); do ! pgrep -x labwc && ! pgrep -x foot && '
                    'pgrep -f "[/]usr/lib/harness-os/install.py --boot" >/dev/null && exit 0; '
                    'sleep .5; done; exit 1', timeout=40)
-        wait_installer_screen(vm, 'Repeat password', '01-usb-console-installer')
+        # The kernel console's bitmap font is correctly rendered, but OCR can
+        # read its "w" as "u". Keep the exact form label with that one known
+        # glyph ambiguity; the retained framebuffer remains the visual evidence.
+        wait_installer_screen(vm, r'Repeat pass[wu]ord', '01-usb-console-installer')
         vm.keys('esc')
         vm.command('test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
     finally:
