@@ -118,7 +118,12 @@ def main():
         receipt['error'] = str(error)
         try:
             vm.screenshot('failure')
-            output, _ = vm.command('sudo journalctl _UID=1000 --no-pager; '
+            # Collect diagnostics after the failed assertion. The actual update
+            # test cleared credentials; never block its error path on a prompt.
+            vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+            output, _ = vm.command('sudo -n journalctl _UID=1000 --no-pager; '
+                'sudo -n cat /var/lib/harness-os/runtime-updates/*/receipt.json; '
+                'tail -n 100 /var/log/pacman.log; hn capture-pane -p -S -200 -t Updates; '
                 'cat ~/.local/state/harness-os/updates/*.json; hn list-windows -a; hn list-panes -a; '
                 'ps -u 1000 -o pid,ppid,args --width 200', timeout=30, check=False)
             (folder / 'update-diagnostics.log').write_text(output)
