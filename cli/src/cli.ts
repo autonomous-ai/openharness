@@ -51,7 +51,7 @@ import { DeviceLink } from './device/deviceLink.js'
 import { DeviceFleet } from './device/deviceFleet.js'
 import { registry, projectDisplayName, sessionDisplayTitle, validTranscriptPath, type RegisteredSession } from './lib/registry.js'
 import { engineSessionTitle } from './lib/sessionTitle.js'
-import { installAmpPlugin, installCodexHooks, installCommandCodeHooks, installCursorHooks, installDevinHooks, installGrokHooks, installAgyHooks, installCopilotHooks, installHermesHooks, installKiloPlugin, installOpencodePlugin, installPiExtension, installSessionHooks } from './lib/hooks.js'
+import { installCodexHooks } from './lib/hooks.js'
 import { PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
 import { clearSafeModeMarker, readSafeModeMarker, runBootHandoff, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from './lib/daemonSafeMode.js'
 import { awakeTimeout } from './lib/sleepAware.js'
@@ -135,17 +135,13 @@ import { TerminalBackendCoordinator } from './lib/terminalBackendCoordinator.js'
 import { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { terminalRouteKey, terminalRuntimeLabel } from './lib/terminalRuntime.js'
 import { TerminalAgentReconciler } from './lib/terminalAgentReconciler.js'
-import { processRows } from './lib/terminalAgentDiscovery.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { newCommand } from './lib/newCommand.js'
 import { gridSetupCommand } from './lib/gridSetupCommand.js'
 import { WebSocket as NewCommandSocket } from 'ws'
-import {
-  type TerminalRuntimeRef,
-} from './lib/terminalTypes.js'
 import { Watcher } from './watcher/watcher.js'
-import { chooseHookAgent, startHookServer } from './hookServer.js'
+import { startHookServer } from './hookServer.js'
 import { connectToMaster } from './harnessd/coreLink.js'
 import { createTerminalControl } from './core/terminals/control.js'
 import { createAgentEvents } from './core/agents/events.js'
@@ -175,6 +171,8 @@ import { createAgentRetargeter } from './core/agents/retarget.js'
 import { createAgentRestarter } from './core/agents/restart.js'
 import { createAgentLifecycle } from './core/agents/lifecycle.js'
 import { createAgentClosing } from './core/agents/close.js'
+import { createEngineHooks, installEngineHooks } from './core/engines/hooks.js'
+import { createCursorTaskHooks } from './core/engines/cursorTasks.js'
 import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
@@ -215,11 +213,8 @@ import { updateManagedTui } from './tui/manage.js'
 import { startTuiUpdater } from './tui/update.js'
 import { ensureHnLauncher, ensureLauncher, ensureManagedGrid, ensureManagedRuntime, startGridPinRecheck } from './lib/runtimeInstall.js'
 import { type ActivityFrame } from './lib/turnActivity.js'
-import { CursorNormalizer } from './engines/cursor/normalizer.js'
 import { CursorTranscriptDiscovery } from './engines/cursor/discovery.js'
-import { cursorConfigDir, cursorDataDir } from './engines/cursor/home.js'
-import { CursorSubagentManager } from './engines/cursor/subagent.js'
-import { CursorTaskHookQueue } from './engines/cursor/taskHookQueue.js'
+import { cursorDataDir } from './engines/cursor/home.js'
 import { loadCursorPendingTasks } from './engines/cursor/pendingTasks.js'
 import { readOpencodeMessages } from './engines/opencode/reader.js'
 import { opencodeMajorVersion } from './engines/opencode/version.js'
@@ -2416,26 +2411,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     questionWatcher,
     mirror,
   })
-  const cursorSubagents = new CursorSubagentManager(cursorConfigDir(), emitSessionEvents, cursorDataDir())
-  const cursorTaskHooks = new CursorTaskHookQueue({
-    drainTranscript: (sessionId) => watcher.pollSession(sessionId),
-    emit: emitSessionEvents,
-    register: (sessionId, hook, normalizer) => cursorSubagents.register(sessionId, hook, normalizer),
-    isActive: (sessionId) => registry.bySession(sessionId)?.engine === 'cursor',
-    onError: (sessionId, error) => {
-      console.error(`[cursor] Task hook queue failed (${sessionId}):`, error instanceof Error ? error.message : error)
-    },
-  })
-  const onCursorTaskStart = (sessionId: string, toolUseId: string, toolInput: unknown): void => {
-    const session = registry.resolve(sessionId)
-    if (!session || session.engine !== 'cursor') return
-    let normalizer = cursorNormalizers.get(sessionId)
-    if (!normalizer) {
-      normalizer = new CursorNormalizer('live', sessionId)
-      cursorNormalizers.set(sessionId, normalizer)
-    }
-    cursorTaskHooks.enqueue(sessionId, { toolUseId, input: toolInput }, normalizer)
-  }
+  // Cursor's Task hooks and the sub-agents they start (core/engines/cursorTasks.ts).
+  const cursorTasks = createCursorTaskHooks({ emitSessionEvents, watcher, registry, cursorNormalizers })
+  const cursorSubagents = cursorTasks.cursorSubagents
+  const cursorTaskHooks = cursorTasks.cursorTaskHooks
+  const onCursorTaskStart = cursorTasks.onCursorTaskStart
 
   // Release a session's binding, or remove a process-owned agent everywhere (core/agents/forget.ts).
   const forgetSession = createForgetSession({
@@ -2529,12 +2509,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       discoveryError = status.error
     },
   })
-
-  // SessionEnd describes the mutable engine session, never process lifetime. Reconcile now; discovery
-  // decides whether the agent still exists from terminal inventory + ps.
-  const onSessionEnd = (_sessionId: string, _reason: string | undefined): void => {
-    void agentReconciler.trigger()
-  }
 
   /** Proxy a control-plane call to backend using THIS daemon's own SSO session — the local caller
    *  (e.g. the desktop app) never needs a bearer token of its own, loopback trust does the
@@ -2709,6 +2683,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     mirror,
     dataDir: env.ADAPTER_DATA_DIR,
   })
+  // Which agent a hook belongs to, and what a SessionEnd means (core/engines/hooks.ts).
+  const engineHooks = createEngineHooks({ tmuxBackend, agentReconciler, registry })
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
     onCommandBar: commandBarService,
     onAutonomousDeviceRequest: async (method, target, body) => {
@@ -2731,71 +2707,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         receipt: target => ({ receipt: autonomousDeviceService!.receipt(target.deviceId, target.idempotencyKey) }),
       }, method, target, body)
     },
-    resolveHookAgent: async ({ engine, runtimeHints, callerPid }) => {
-      if (!callerPid) return null
-      const resolved: TerminalRuntimeRef[] = []
-      for (const hint of runtimeHints ?? []) {
-        if (tmuxBackend) resolved.push({ backend: 'tmux', paneId: hint.paneId })
-      }
-      for (const runtime of resolved) await agentReconciler.triggerHint(runtime, engine)
-
-      const rows = await processRows()
-      if (!rows) return null
-      const callerBelongsTo = (session: RegisteredSession): boolean => {
-        const expectedPid = session.processIdentity?.pid
-        if (!expectedPid) return false
-        const byPid = new Map(rows.map((row) => [row.pid, row.parentPid]))
-        let pid = callerPid
-        const visited = new Set<number>()
-        while (pid > 0 && !visited.has(pid)) {
-          if (pid === expectedPid) return true
-          visited.add(pid)
-          pid = byPid.get(pid) ?? 0
-        }
-        return false
-      }
-      const candidates = new Map<string, RegisteredSession>()
-      /**
-       * Agents the hint points at whose ancestry we could NOT confirm.
-       *
-       * Caller ancestry is the strongest evidence and stays the first choice, but it assumes every engine
-       * spawns its hook from inside its own process tree — and Cursor does not. Measured on both
-       * backends: `agent` in a pane registers fine, then every one of its hooks is rejected because the
-       * process that POSTs is not a descendant of the pane's engine, so no session ever binds.
-       *
-       * Keep that exception specific to Cursor. A delayed hook from an exited process can still name
-       * a pane now owned by its replacement; the pane and hook credential alone cannot prove that a
-       * Codex (or other engine's) old transcript belongs to the new process.
-       */
-      const onHintedRuntime = new Map<string, RegisteredSession>()
-      for (const runtime of resolved) {
-        const candidate = registry.byRuntimeEngine(runtime, engine)
-        if (!candidate) continue
-        if (callerBelongsTo(candidate)) candidates.set(candidate.agentId, candidate)
-        else onHintedRuntime.set(candidate.agentId, candidate)
-      }
-      const choice = chooseHookAgent([...candidates.values()], [...onHintedRuntime.values()], engine)
-      if (choice.agent) {
-        if (choice.reason === 'runtime') {
-          console.log(`[hooks] ${engine} hook accepted on runtime evidence alone`
-            + ` · agent=${sid(choice.agent.agentId)} · caller=${callerPid} is outside that engine's process tree`)
-        }
-        return choice.agent
-      }
-      // Say WHY, once per rejected hook. "no_matching_engine_process" alone sent two people down the
-      // wrong path already: the interesting question is never "did it match" but which of the three
-      // gates closed — no runtime resolved from the hint, no registered agent on that runtime, or the
-      // hook's own process is not a descendant of the engine we registered.
-      const onRuntime = resolved.map((runtime) => registry.byRuntimeEngine(runtime, engine)).filter(Boolean)
-      console.log(`[hooks] unmatched ${engine} hook · hints=${(runtimeHints ?? []).map((hint) => `${hint.backend}:${hint.paneId}`).join(',') || 'none'}`
-        + ` · resolvedRuntimes=${resolved.length} · agentsOnRuntime=${onRuntime.length}`
-        + ` · callerPid=${callerPid}${onRuntime.length && !candidates.size ? ' · caller is not a descendant of that engine process' : ''}`
-        + `${candidates.size > 1 ? ` · ambiguous (${candidates.size} candidates)` : ''}`)
-      return null
-    },
+    resolveHookAgent: engineHooks.resolveHookAgent,
     onRegistered: handleRegistered,
     onPromptSubmitted: (id, text) => backend.swarmPromptScopes.started(id, text, 'hook', registry.byAgent(id)?.engine),
-    onSessionEnd,
+    onSessionEnd: engineHooks.onSessionEnd,
     // What the engines' own hooks say about a turn (core/turns/turnHooks.ts).
     onTurnStart: turnHooks.onTurnStart,
     onToolStart: turnHooks.onToolStart,
@@ -3409,33 +3324,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Cut to the wire's limit here rather than let the far daemon drop the whole claim over a long name.
     localClient: () => ({ kind: 'desktop', name: terminalHintMachineName().slice(0, 64), machineId: backend.machineId }),
   })
-  // Install both CLI hooks with the port the local server actually bound.
-  //
-  // One vendor at a time, each behind its own guard: these write into thirteen different settings
-  // files owned by thirteen different CLIs, and one that is malformed, read-only or mid-write is not
-  // a reason for the other twelve to go uninstalled — let alone for the daemon not to come up.
-  const hookStep = (vendor: string, install: () => void): void => {
-    try { install() } catch (error) {
-      console.warn(`[hooks] ${vendor} install skipped · ${error instanceof Error ? error.message : error}`)
-    }
-  }
-  if (!env.DISABLE_HOOK_INSTALL) {
-    hookStep('claude', () => installSessionHooks(hookPort))
-    hookStep('codex', () => installCodexHooks(hookPort))
-    hookStep('cursor', () => installCursorHooks(hookPort))
-    hookStep('opencode', () => installOpencodePlugin(hookPort))
-    hookStep('kilo', () => installKiloPlugin(hookPort))
-    hookStep('pi', () => installPiExtension(hookPort))
-    // A self-update refreshes plugin files here; running engine processes pick them up according to each
-    // vendor's own plugin reload lifecycle.
-    hookStep('amp', () => installAmpPlugin(hookPort))
-    hookStep('hermes', () => installHermesHooks(hookPort))
-    hookStep('devin', () => installDevinHooks(hookPort))
-    hookStep('commandcode', () => installCommandCodeHooks(hookPort))
-    hookStep('grok', () => installGrokHooks(hookPort))
-    hookStep('agy', () => installAgyHooks(hookPort))
-    hookStep('copilot', () => installCopilotHooks(hookPort))
-  }
+  // Every engine's hooks, pointed at the port the local server actually bound (core/engines/hooks.ts).
+  if (!env.DISABLE_HOOK_INSTALL) installEngineHooks(hookPort)
   backend.setDashboardPort(hookPort) // surfaced to the web (e2e_status) so it can link here to approve
   console.log(`[cli] local dashboard → http://127.0.0.1:${hookPort}`)
 
