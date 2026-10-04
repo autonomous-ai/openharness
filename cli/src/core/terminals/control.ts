@@ -9,7 +9,7 @@
  */
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
-import { terminalActionNotStarted, type TerminalActionResult } from '../../lib/terminalTypes.js'
+import { TERMINAL_LEASE_REFUSED, terminalActionNotStarted, type TerminalActionResult } from '../../lib/terminalTypes.js'
 
 export type TerminalControlBackend = Pick<TerminalBackendCoordinator,
   'acquireLease' | 'validateLease' | 'capture' | 'captureLease' | 'submitText' | 'submitTextLease'
@@ -85,7 +85,7 @@ export function createTerminalControl({ resolve, terminals }: TerminalControlDep
     const session = terminalSession(target)
     if (!session) return terminalActionNotStarted('terminal agent is unavailable')
     const lease = await leasedTerminal(session)
-    if (!lease) return terminalActionNotStarted('terminal control lease is unavailable or changed')
+    if (!lease) return terminalActionNotStarted(TERMINAL_LEASE_REFUSED)
     const result = pinnedControls.has(session.agentId)
       ? await terminals.submitTextLease(lease.value, text)
       : await terminals.submitTextForLease(session, lease.value, text)
@@ -108,7 +108,7 @@ export function createTerminalControl({ resolve, terminals }: TerminalControlDep
     const session = terminalSession(target)
     if (!session) return terminalActionNotStarted('terminal session is unavailable')
     const lease = await leasedTerminal(session)
-    if (!lease) return terminalActionNotStarted('terminal control lease is unavailable or changed')
+    if (!lease) return terminalActionNotStarted(TERMINAL_LEASE_REFUSED)
     const result = await terminals.sendLegacyKeyLease(lease.value, key)
     if (result.state !== 'succeeded' && pinnedControls.has(session.agentId)) invalidateTerminalControl(session.agentId)
     return result

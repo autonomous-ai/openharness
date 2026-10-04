@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionInputController } from './sessionInput.js'
 import type { RegisteredSession } from './registry.js'
-import type { TerminalActionResult } from './terminalTypes.js'
+import { TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
 
 function session(engine: 'claude' | 'codex' | 'cursor' | 'commandcode' = 'codex'): RegisteredSession {
   return {
@@ -16,6 +16,82 @@ function session(engine: 'claude' | 'codex' | 'cursor' | 'commandcode' = 'codex'
 
 describe('SessionInputController', () => {
   afterEach(() => vi.useRealTimers())
+
+  describe('a paste the control lease refuses before a byte is written', () => {
+    const refused: TerminalActionResult = { state: 'failed', dispatch: 'not_started', reason: TERMINAL_LEASE_REFUSED }
+    const done: TerminalActionResult = { state: 'succeeded', dispatch: 'executed' }
+    /** A clock that moves only when the controller sleeps. */
+    const clock = () => {
+      let at = 0
+      return { now: () => at, sleep: vi.fn(async (ms: number) => { at += ms }) }
+    }
+
+    it('waits for the lease — a resume whose new process is not confirmed yet — and then delivers, once', async () => {
+      const time = clock(), onError = vi.fn(), onSubmitted = vi.fn()
+      const inject = vi.fn<() => Promise<TerminalActionResult>>().mockResolvedValueOnce(refused).mockResolvedValueOnce(refused).mockResolvedValue(done)
+      const controller = new SessionInputController({ getSession: () => session('claude'), validateRuntime: async () => true,
+        inject, sendKey: async () => true, onError, onSubmitted, ...time })
+      controller.submit('s1', 'right after the resume')
+      await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalledWith('s1', 'right after the resume'))
+      expect(inject).toHaveBeenCalledTimes(3)
+      expect(time.sleep).toHaveBeenCalledWith(250)
+      expect(onError).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
+    it('gives up at fifteen seconds, says the message was not delivered, and wrote nothing', async () => {
+      const time = clock(), onError = vi.fn()
+      const inject = vi.fn(async () => refused)
+      const controller = new SessionInputController({ getSession: () => session('claude'), validateRuntime: async () => true,
+        inject, sendKey: async () => true, onError, ...time })
+      controller.submit('s1', 'never leased')
+      await vi.waitFor(() => expect(onError).toHaveBeenCalledWith('s1', 'The message could not be delivered to the agent.'))
+      expect(time.now()).toBeGreaterThanOrEqual(15_000)
+      expect(inject.mock.calls.length).toBe(61)
+      controller.forget('s1')
+    })
+
+    it('stops waiting when the agent goes, and never waits on any other refusal', async () => {
+      const time = clock(), onError = vi.fn()
+      let present = true
+      const inject = vi.fn(async () => { present = false; return refused })
+      const gone = new SessionInputController({ getSession: () => (present ? session('claude') : undefined), validateRuntime: async () => true,
+        inject, sendKey: async () => true, onError, ...time })
+      gone.submit('s1', 'to an agent that left')
+      await vi.waitFor(() => expect(onError).toHaveBeenCalled())
+      expect(inject).toHaveBeenCalledTimes(1)
+
+      const other = vi.fn(async (): Promise<TerminalActionResult> => ({ state: 'failed', dispatch: 'not_started', reason: 'terminal agent is unavailable' }))
+      const elsewhere = new SessionInputController({ getSession: () => session('claude'), validateRuntime: async () => true,
+        inject: other, sendKey: async () => true, onError: vi.fn(), ...time })
+      elsewhere.submit('s1', 'to an agent with no terminal')
+      await vi.waitFor(() => expect(other).toHaveBeenCalledTimes(1))
+      expect(time.sleep).toHaveBeenCalledTimes(1)
+      elsewhere.forget('s1')
+    })
+
+    it('waits the same way for a message that wants a receipt, until it is cancelled', async () => {
+      const time = clock(), onDelivery = vi.fn()
+      const inject = vi.fn<() => Promise<TerminalActionResult>>().mockResolvedValueOnce(refused).mockResolvedValue(done)
+      const controller = new SessionInputController({ getSession: () => session('codex'), validateRuntime: async () => true,
+        inject, sendKey: async () => true, onError: vi.fn(), onDelivery, ...time })
+      controller.submit('s1', 'with a receipt', 'delivery-1')
+      await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(2))
+      controller.forget('s1')
+
+      const cancelled = vi.fn(async () => refused)
+      let cancel: () => void = () => {}
+      const waiting = new SessionInputController({ getSession: () => session('codex'), validateRuntime: async () => true,
+        inject: cancelled, sendKey: async () => true, onError: vi.fn(), onDelivery,
+        now: time.now, sleep: async (ms) => { time.sleep(ms); cancel() } })
+      cancel = () => waiting.forget('s1')
+      waiting.submit('s1', 'cancelled while waiting', 'delivery-2')
+      await vi.waitFor(() => expect(cancelled).toHaveBeenCalledTimes(1))
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(cancelled).toHaveBeenCalledTimes(1)
+    })
+  })
+
 
   it('retains the submitted swarm through the input queue and records it only at dispatch', async () => {
     const beforeSubmit = vi.fn(() => vi.fn())
