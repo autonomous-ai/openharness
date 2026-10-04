@@ -1,0 +1,78 @@
+name: Harness OS compression assessment
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_run_id:
+        description: 'Exact existing image artifact to assess'
+        type: string
+        default: '37175252094'
+        required: true
+      iso_sha256:
+        description: 'Trusted SHA-256 of that image'
+        type: string
+        default: 'd7fe30c65310904decb67a03dc14a85afc48ed76e3b2f62de5431f9354beed6f'
+        required: true
+      native_comparison:
+        description: 'Also compare real 1 GiB USB installs and boots (levels 6/19)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  compression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate the assessment and install filesystem tools
+        run: |
+          python3 -m py_compile os/tests/payload_compression.py os/tests/compression_vm.py os/tests/test_compression.py
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os-compression.yml
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends squashfs-tools xorriso time libcap2-bin
+          sudo python3 -m unittest discover -s os/tests -p test_compression.py -v |& tee /tmp/harness-compression-tests.log
+      - name: Prepare native VM comparison
+        if: ${{ inputs.native_comparison }}
+        run: |
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          test -e /dev/kvm
+          sudo chmod a+rw /dev/kvm
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id }}
+          github-token: ${{ github.token }}
+      - name: Measure unchanged filesystem at three compression levels
+        env:
+          ISO_SHA256: ${{ inputs.iso_sha256 }}
+          NATIVE_COMPARISON: ${{ inputs.native_comparison }}
+        run: |
+          options=()
+          if [[ "$NATIVE_COMPARISON" == true ]]; then options+=(--vm); fi
+          sudo python3 os/tests/payload_compression.py --iso os/dist/*.iso --sha256 "$ISO_SHA256" "${options[@]}"
+      - name: Retain evidence without images or extracted files
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-compression
+          path: |
+            /tmp/harness-compression-tests.log
+            os/test-results/compression/*.json
+            os/test-results/compression/*.json.gz
+            os/test-results/compression/*.log
+            os/test-results/compression/*.time
+            os/test-results/compression/*/*.json
+            os/test-results/compression/*/*.jsonl
+            os/test-results/compression/*/*.png
+            os/test-results/compression/*/*.txt
+            os/test-results/compression/*/*.log
+          retention-days: 14
+          compression-level: 0

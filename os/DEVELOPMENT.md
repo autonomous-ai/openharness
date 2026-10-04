@@ -105,6 +105,41 @@ establish a precise causal difference. It provides no evidence for a saving from
 these flags; the shipped defaults remain unchanged. Retain raw per-round data
 and use representative long-running agent work before adopting a memory limit.
 
+The **Harness OS compression assessment** workflow compares Zstandard levels 6,
+15, and 19 on the same checksum-verified ISO filesystem. It rebuilds level 6 with
+the same runner tools as the alternatives, then measures three extractions per
+level using the installer's 64 MiB SquashFS cache. Receipts include compression
+time and peak process memory, payload bytes, extraction timings, tool versions,
+and a filesystem manifest. Every extraction must preserve file hashes, ownership,
+permissions, timestamps, symlink targets, hardlink groups, device numbers and
+extended attributes, including capabilities. A small native roundtrip checks the
+verifier before the full image download.
+
+Ubuntu's 4.6.1 extractor uses explicit 32 MiB data and fragment queues; these
+match the queue allocation of `-mem 64M` in newer SquashFS tools. The installed
+OS keeps its existing extractor and command.
+
+The default assessment uses an unconstrained Linux host with a warm/uncontrolled
+page cache. It does not measure a complete installation or low-memory boot.
+Enable `native_comparison` to repack the same source ISO at levels 6 and 19,
+preserving its boot layout and regenerating its payload checksum. It runs three
+alternating BIOS/plain installations per level and one UEFI/encrypted installation
+per level. Every trial uses a fresh 1 GiB KVM guest, Nehalem CPU profile, private
+disk and USB overlay, and disconnected network. It verifies the actual media
+checksum, saves a trial project, installs offline, reboots, checks that project
+and sends real keyboard input through the graphical terminal. Guest caches are
+dropped after the integrity read and before installation. Guest memory/swap is
+sampled every 250 ms; install, live boot and installed boot measurements remain
+separate. Retain every trial, including failures.
+
+The native comparison still uses an unthrottled virtual USB and uncontrolled host
+cache; it cannot establish physical USB throughput or laptop boot time. It calls
+no models and does not replace the full release journey. Run either assessment
+through Actions with the existing image's `image_run_id` and independently trusted
+`iso_sha256`. It retains receipts/screenshots, discards candidate images and changes
+no release defaults. Adopting a candidate requires a production image build and
+the normal plain/encrypted installation, agent trial and recovery checks.
+
 ## The feedback loop
 
 | Work being tested | Best environment | What it proves |
