@@ -68,6 +68,7 @@ def exercise(vm, fixture, host_url):
     vm.command('hn new-window -n live-agent opencode')
     vm.command('for n in $(seq 1 80); do pgrep -u 1000 -x opencode > /tmp/fast-original-agent && exit 0; sleep .25; done; exit 1')
     vm.command('cat /proc/sys/kernel/random/boot_id > /tmp/fast-original-boot')
+    vm.command('hn hn-list-clients -F "#{session_id}" > /tmp/fast-visible-session')
     vm.command('mkdir -p ~/.config/systemd/user/harness-update.service.d ~/.config/systemd/user/harness-update.timer.d')
     put(vm, '/tmp/update-service.conf', '[Service]\nExecStart=\nExecStart=/usr/bin/python3 /usr/lib/harness-os/live_update.py check --feeds /tmp/fast-updates/feeds-hn.json\n')
     # systemd's default AccuracySec=1min can coalesce the one-second fixture
@@ -111,6 +112,8 @@ assert (root/'heartbeat').stat().st_mtime_ns != before
         vm.command('python3 -c ' + shlex.quote(expression))
         vm.command('while read -r pid; do kill -0 "$pid" || exit 1; done < /tmp/fast-original-agent; '
                    'cmp /tmp/fast-original-boot /proc/sys/kernel/random/boot_id')
+        vm.command('hn hn-list-clients -F "#{session_id}" > /tmp/fast-restored-session; '
+                   'cmp /tmp/fast-visible-session /tmp/fast-restored-session')
         vm.command('for n in $(seq 1 80); do hn select-window -t update-probe && exit 0; sleep .25; done; exit 1')
         wait_text(vm, 'visible lock probe', name + '-restored')
         vm.type_probe(name)

@@ -369,6 +369,54 @@ def restart(cli_changed):
     run('systemctl', '--user', 'is-active', '--quiet', 'hn-screen.service')
 
 
+def capture_view():
+    """Remember the OS screen, without selecting an unrelated SSH client."""
+    try:
+        rows = run('/usr/bin/hn', 'list-clients', '-F',
+                   '#{client_pid}\t#{session_id}\t#{window_id}\t#{pane_id}\t#{client_tty}', timeout=3)
+        for row in rows.splitlines():
+            parts = row.split('\t')
+            if len(parts) != 5 or not parts[0].isdigit():
+                continue
+            groups = Path('/proc') / parts[0] / 'cgroup'
+            try:
+                belongs = any(line.split(':', 2)[-1].endswith('/hn-screen.service')
+                              for line in groups.read_text().splitlines())
+            except OSError:
+                continue
+            if not belongs:
+                continue
+            if all(re.fullmatch(pattern, value) for pattern, value in
+                   zip([r'\$\d+', r'@\d+', r'%\d+', r'/dev/pts/\d+'], parts[1:])):
+                return dict(zip(['session', 'window', 'pane', 'tty'], parts[1:]))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def restore_view(view):
+    if view is None:
+        return
+    for name, pattern in [('session', r'\$\d+'), ('window', r'@\d+'), ('pane', r'%\d+')]:
+        if not isinstance(view, dict) or not isinstance(view.get(name), str) or not re.fullmatch(pattern, view[name]):
+            raise ValueError('Invalid saved Harness screen selection.')
+    # A task may finish while the screen reconnects. Restore only objects that
+    # still exist, without resurrecting a closed terminal or creating a session.
+    sessions = run('/usr/bin/hn', 'list-sessions', '-F', '#{session_id}').splitlines()
+    if view['session'] not in sessions:
+        return
+    current = capture_view()
+    if current is None:
+        return
+    run('/usr/bin/hn', 'switch-client', '-c', current['tty'], '-t', view['session'])
+    windows = run('/usr/bin/hn', 'list-windows', '-t', view['session'], '-F', '#{window_id}').splitlines()
+    if view['window'] in windows:
+        run('/usr/bin/hn', 'select-window', '-t', view['window'])
+        panes = run('/usr/bin/hn', 'list-panes', '-t', view['window'], '-F', '#{pane_id}').splitlines()
+        if view['pane'] in panes:
+            run('/usr/bin/hn', 'select-pane', '-t', view['pane'])
+
+
 def screen_ready(target):
     """Wait for an attached client executing the selected binary, not just foot."""
     deadline = time.monotonic() + 30
@@ -414,6 +462,7 @@ def recover_interrupted():
     # Restore its known runtime even if a power cut lost its final receipt.
     restart(True)
     screen_ready(previous)
+    restore_view(transaction.get('view'))
     write(STATE / 'transaction.json', {'status': 'interrupted', 'previous': str(previous)})
 
 
@@ -436,15 +485,19 @@ def apply(rollback=False):
         else:
             candidate = versions(BUNDLED)
         old = versions(previous)
-        write(STATE / 'transaction.json', {'previous': str(previous), 'target': str(target), 'status': 'applying'})
+        view = capture_view()
+        write(STATE / 'transaction.json', {'previous': str(previous), 'target': str(target), 'status': 'applying', 'view': view})
         select(target)
         try:
             restart(candidate['cli'] != old['cli'])
             screen_ready(target)
+            restore_view(view)
         except BaseException:
             select(previous)
             write(STATE / 'transaction.json', {'status': 'failed', 'previous': str(previous)})
             restart(candidate['cli'] != old['cli'])
+            screen_ready(previous)
+            restore_view(view)
             notice('Update failed · Super+u')
             raise
         write(STATE / 'applied.json', {'previous': str(previous), 'current': str(target), 'at': time.time()})

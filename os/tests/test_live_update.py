@@ -32,6 +32,7 @@ class FastUpdates(unittest.TestCase):
                         patch.object(update, 'SYSTEM_LOCK', self.root / 'system.lock'),
                         patch.object(update, 'check_system', return_value={}),
                         patch.object(update, 'screen_ready'),
+                        patch.object(update, 'capture_view', return_value=None),
                         patch.object(update, 'notice'), patch.object(update, 'versions', side_effect=self.versions)]
         for item in self.patches:
             item.start()
@@ -326,6 +327,40 @@ class FastUpdates(unittest.TestCase):
         with self.feed():
             self.assertEqual(self.show([], refresh=True), 'update')
         self.assertFalse((self.state / 'request.json').exists())
+
+
+class ScreenSelection(unittest.TestCase):
+    def test_capture_chooses_os_screen_among_other_clients_and_rejects_bad_ids(self):
+        rows = '201\t$1\t@2\t%3\t/dev/pts/8\n202\t$4\t@5\t%6\t/dev/pts/9'
+        def groups(path):
+            if path == Path('/proc/201/cgroup'):
+                return '0::/user.slice/ssh-session.scope\n'
+            return '0::/user.slice/app.slice/hn-screen.service\n'
+        with patch.object(update, 'run', return_value=rows), \
+                patch.object(update.Path, 'read_text', autospec=True, side_effect=groups):
+            self.assertEqual(update.capture_view(), {'session': '$4', 'window': '@5', 'pane': '%6', 'tty': '/dev/pts/9'})
+        with patch.object(update, 'run', return_value=rows.replace('$4', '--all')), \
+                patch.object(update.Path, 'read_text', autospec=True, side_effect=groups):
+            self.assertIsNone(update.capture_view())
+
+    def test_restore_targets_reconnected_os_client_and_existing_objects(self):
+        view = {'session': '$4', 'window': '@5', 'pane': '%6', 'tty': '/dev/pts/9'}
+        commands = []
+        def run(*args, **kwargs):
+            commands.append(args)
+            return {'list-sessions': '$0\n$4', 'list-windows': '@5', 'list-panes': '%6'}.get(args[1], '')
+        with patch.object(update, 'run', side_effect=run), \
+                patch.object(update, 'capture_view', return_value=dict(view, tty='/dev/pts/20')):
+            update.restore_view(view)
+        self.assertIn(('/usr/bin/hn', 'switch-client', '-c', '/dev/pts/20', '-t', '$4'), commands)
+        self.assertIn(('/usr/bin/hn', 'select-window', '-t', '@5'), commands)
+        self.assertIn(('/usr/bin/hn', 'select-pane', '-t', '%6'), commands)
+        with patch.object(update, 'run', return_value='$0') as run:
+            update.restore_view(view)
+        run.assert_called_once_with('/usr/bin/hn', 'list-sessions', '-F', '#{session_id}')
+        with patch.object(update, 'run') as run, self.assertRaises(ValueError):
+            update.restore_view(dict(view, pane='--all'))
+        run.assert_not_called()
 
 
 if __name__ == '__main__':
