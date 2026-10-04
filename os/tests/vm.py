@@ -365,6 +365,16 @@ def check_console_fallback(vm, user, folder):
                    'sleep 1; done; exit 1', timeout=75)
         vm.command('! pgrep -u 1000 -x labwc && ! pgrep -u 1000 -x foot')
         vm.command(user('/usr/lib/harness-os/wait-runtime'), timeout=160)
+        # A process attached to tty1 is not yet its command endpoint. During
+        # takeover the named socket can still belong to the departing renderer.
+        # Wait for a reply from this VT's actual client before creating a pane.
+        vm.command(user('sh -c ' + shlex.quote(
+            'for n in $(seq 1 60); do '
+            'p=$(hn display-message -p "#{client_pid}") || p=; '
+            'case "$p" in ""|*[!0-9]*) ;; *) '
+            'if test "$(readlink /proc/$p/fd/0)" = /dev/tty1; then '
+            'printf "HN_CONSOLE_READY=%s\\n" "$p"; exit 0; fi ;; esac; '
+            'sleep .25; done; exit 1')), timeout=75)
         vm.command('kill -0 "$(cat /tmp/hn-survivor.pid)"')
         probe = ('printf "Console input ready\\n"; touch /tmp/hn-console-input-ready; '
                  'read -r answer; test "$answer" = ready && '
@@ -381,6 +391,8 @@ def check_console_fallback(vm, user, folder):
         output, _ = vm.command('cat /home/me/.local/state/harness-os/display.log; '
                                'ps -u 1000 -o pid,ppid,tty,comm; cat /dev/vcs1', check=False)
         (folder / 'console-fallback.log').write_text(output)
+        output, _ = vm.command(user('hn hn-list-clients; hn show-messages'), check=False)
+        (folder / 'console-client.log').write_text(output)
         vm.command('rm -f ' + override + '; systemctl restart getty@tty1.service')
     vm.command(user("sh -c 'for n in $(seq 1 60); do systemctl --user is-active --quiet hn-screen && "
                     "pgrep -x labwc >/dev/null && pgrep -x foot >/dev/null && exit 0; "
