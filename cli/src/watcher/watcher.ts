@@ -48,19 +48,34 @@ export interface TailHold {
   release(offset?: number | null): void
 }
 
+/** A transcript rewritten in place with more history than one batch should hold — a long one whose
+ *  owner rewrote it. The tail now starts at its new end; the session's state is rebuilt by attaching it
+ *  again, from its end. */
+export interface RewrittenEvent {
+  sessionId: string
+  engine: AgentEngine
+  transcriptPath: string
+}
+
+/** How much the tail reads at once: a tail that fell behind reads its backlog a chunk at a time, never
+ *  in one buffer as large as everything appended since. */
+export const READ_CHUNK_BYTES = 8 * 1024 * 1024
+/** The most history replayed as one batch. A file that shrank to more than this is attached again. */
+export const HISTORY_MAX_BYTES = 32 * 1024 * 1024
+
 /** The longest a session's live delivery may stay held. An attach still running by then lets it go
  *  (`TailHold.expired`) and must keep the normalizer delivery went back to. */
 export const HOLD_TIMEOUT_MS = 30_000
-
-const EMPTY = Buffer.alloc(0)
 
 interface FileState extends WatchedSession {
   offset: number
   /** Bytes below this were on disk before the current read cursor was placed — history, not live. */
   historicalUntil: number
   /** The end of the file not yet ending in a newline: raw bytes, decoded only once the line is whole,
-   *  so a character split between two reads is not mangled and positions stay byte-exact. */
-  partial: Buffer
+   *  so a character split between two reads is not mangled and positions stay byte-exact. Kept as the
+   *  pieces read, joined once when the line ends: a long line is not copied again at every read. */
+  partial: Buffer[]
+  partialBytes: number
   seq: number
   debounce: NodeJS.Timeout | null
   reading: boolean
@@ -81,6 +96,18 @@ export class Watcher extends EventEmitter {
   private watcher: FSWatcher | null = null
   private files = new Map<string, FileState>()
   private bySession = new Map<string, string>()
+
+  private readonly readChunkBytes: number
+  private readonly historyMaxBytes: number
+  private readonly openFile: (filePath: string) => ReturnType<typeof open>
+
+  /** `openFile` is how a transcript is opened for reading: swapped in tests for one cut short as it is read. */
+  constructor(options: { readChunkBytes?: number; historyMaxBytes?: number; openFile?: (filePath: string) => ReturnType<typeof open> } = {}) {
+    super()
+    this.readChunkBytes = options.readChunkBytes ?? READ_CHUNK_BYTES
+    this.historyMaxBytes = options.historyMaxBytes ?? HISTORY_MAX_BYTES
+    this.openFile = options.openFile ?? ((filePath) => open(filePath, 'r'))
+  }
 
   start(): void {
     if (this.watcher) return
@@ -129,7 +156,8 @@ export class Watcher extends EventEmitter {
       offset,
       // A `fromStart` tail of a file that already has content reads that content as history.
       historicalUntil: opts.fromStart ? size : 0,
-      partial: EMPTY,
+      partial: [],
+      partialBytes: 0,
       seq: 0,
       debounce: null,
       reading: false,
@@ -173,7 +201,8 @@ export class Watcher extends EventEmitter {
       state.holds.delete(hold)
       if (to !== null && state.moves === moves) {
         state.offset = to
-        state.partial = EMPTY
+        state.partial = []
+        state.partialBytes = 0
       }
       if (state.holds.size) return
       state.settleUnheld?.()
@@ -195,7 +224,7 @@ export class Watcher extends EventEmitter {
     }
     state.holds.add(hold)
     while (state.reading) await new Promise((resolve) => setTimeout(resolve, 5))
-    offset = state.offset - state.partial.length
+    offset = state.offset - state.partialBytes
     return hold
   }
 
@@ -218,7 +247,8 @@ export class Watcher extends EventEmitter {
     if (!state) return
     if (state.debounce) { clearTimeout(state.debounce); state.debounce = null }
     state.offset = offset
-    state.partial = EMPTY
+    state.partial = []
+    state.partialBytes = 0
     // An attach holding the tail read the file as it was; where it stopped is no position in this one.
     state.moves++
   }
@@ -315,43 +345,61 @@ export class Watcher extends EventEmitter {
     let size: number
     try { size = (await stat(filePath)).size } catch { return }
     if (size < state.offset) {
+      state.partial = []
+      state.partialBytes = 0
+      if (size > this.historyMaxBytes) {
+        // Too much to replay as one batch of history: the tail starts at the new end, and the session is
+        // attached again, which reads what it needs from that end (lib/attachTranscript.ts).
+        state.offset = size
+        state.historicalUntil = 0
+        this.emit('rewritten', { sessionId: state.sessionId, engine: state.engine, transcriptPath: filePath } satisfies RewrittenEvent)
+        return
+      }
       // The file shrank: rewritten in place (or recreated). Whatever it holds now is read from byte 0,
       // and none of it is new to the world — it is history until the write that grows it past this.
       state.offset = 0
-      state.partial = EMPTY
       state.historicalUntil = size
     }
     if (size <= state.offset) return
 
-    const start = state.offset
-    let fresh: Buffer
+    const history: LineEvent[] = []
     try {
-      const fh = await open(filePath, 'r')
+      const fh = await this.openFile(filePath)
       try {
-        const buf = Buffer.alloc(size - start)
-        const { bytesRead } = await fh.read(buf, 0, buf.length, start)
-        fresh = buf.subarray(0, bytesRead)
-        state.offset = start + bytesRead
+        while (state.offset < size) {
+          const start = state.offset
+          const chunk = Buffer.alloc(Math.min(this.readChunkBytes, size - start))
+          const { bytesRead } = await fh.read(chunk, 0, chunk.length, start)
+          if (!bytesRead) break
+          state.offset = start + bytesRead
+          this.takeChunk(filePath, state, chunk.subarray(0, bytesRead), start, history)
+          // A hold taken meanwhile stops the read here; `release` reads what is left.
+          if (state.holds.size) break
+        }
       } finally {
         await fh.close()
       }
     } catch (err) {
       console.error(`[watcher] read failed (${basename(filePath)}):`, err)
-      return
     }
+    if (history.length) this.flushHistory(state, history)
+  }
 
-    // Lines are cut on the newline BYTE and decoded only once whole. Each line's byte position tells
-    // the historical prefix of this read from the live rest: a file appended to between the cursor
-    // being placed and this read has both. The carried partial line began that many bytes before `start`.
-    const base = start - state.partial.length
-    const combined = state.partial.length ? Buffer.concat([state.partial, fresh]) : fresh
+  /**
+   * Lines are cut on the newline BYTE and decoded only once whole. Each line's byte position tells the
+   * historical prefix of a read from its live rest: a file appended to between the cursor being placed
+   * and this read has both. A line carried over from the last chunk began `partialBytes` before `start`.
+   */
+  private takeChunk(filePath: string, state: FileState, chunk: Buffer, start: number, history: LineEvent[]): void {
     let lineStart = 0
-    const history: LineEvent[] = []
-    for (let newline = combined.indexOf(10); newline >= 0; newline = combined.indexOf(10, lineStart)) {
-      const linePos = base + lineStart
-      const raw = combined.subarray(lineStart, newline).toString('utf8')
+    for (let newline = chunk.indexOf(10); newline >= 0; newline = chunk.indexOf(10, lineStart)) {
+      const linePos = lineStart === 0 ? start - state.partialBytes : start + lineStart
+      const piece = chunk.subarray(lineStart, newline)
+      const bytes = state.partial.length ? Buffer.concat([...state.partial, piece]) : piece
+      state.partial = []
+      state.partialBytes = 0
       lineStart = newline + 1
-      const text = raw.replace(/\r$/, '')
+      const text = bytes.toString('utf8').replace(/\r$/, '')
       if (!text.trim()) continue
       const evt: LineEvent = {
         sessionId: state.sessionId,
@@ -365,9 +413,12 @@ export class Watcher extends EventEmitter {
       if (history.length) this.flushHistory(state, history)
       this.emit('line', evt)
     }
-    if (history.length) this.flushHistory(state, history)
-    // A copy: the read buffer can be large, and only its unfinished last line is kept.
-    state.partial = lineStart < combined.length ? Buffer.from(combined.subarray(lineStart)) : EMPTY
+    if (lineStart < chunk.length) {
+      // A copy of a chunk's tail, so the rest of the chunk is not kept for it; a chunk that is all one
+      // line is kept as read.
+      state.partial.push(lineStart ? Buffer.from(chunk.subarray(lineStart)) : chunk)
+      state.partialBytes += chunk.length - lineStart
+    }
   }
 
   private flushHistory(state: FileState, lines: LineEvent[]): void {
@@ -381,7 +432,8 @@ export class Watcher extends EventEmitter {
     while (common < state.cursorLines.length && common < next.length && state.cursorLines[common] === next[common]) common++
     state.cursorLines = next
     state.offset = 0
-    state.partial = EMPTY
+    state.partial = []
+    state.partialBytes = 0
     state.historicalUntil = 0
     // `completeLines` has already dropped blank lines.
     for (const text of next.slice(common)) {

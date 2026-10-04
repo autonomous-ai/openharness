@@ -170,7 +170,7 @@ import {
   type TerminalRuntimeRef,
   type TmuxRuntimeRef,
 } from './lib/terminalTypes.js'
-import { Watcher, type HistoryEvent, type LineEvent, type TailHold } from './watcher/watcher.js'
+import { Watcher, type HistoryEvent, type LineEvent, type RewrittenEvent, type TailHold } from './watcher/watcher.js'
 import { chooseHookAgent, startHookServer } from './hookServer.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
 import { legacyDaemonStatus, localDaemonStatus, saveDaemonPort } from './lib/daemonEndpoint.js'
@@ -4939,6 +4939,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // A transcript catch-up is history, including an unfinished last turn.
   // Its content still streams, but only fresh events or live inspection can
   // establish Working; replay cannot create a new completion notification.
+  // A transcript rewritten in place with too much history to replay: its tail already starts at the new
+  // end, and the session is attached again, from that end, so its turn state is rebuilt from the file.
+  watcher.on('rewritten', (event: RewrittenEvent) => {
+    const session = registry.bySession(event.sessionId)
+    if (!session || session.transcriptPath !== event.transcriptPath) return
+    console.log(`[watcher] ${sid(event.sessionId)} transcript rewritten in place — attaching it again from its end`)
+    void attachSession(session, true).catch((err) => console.error(`[cli] re-attach after rewrite failed (session ${sid(event.sessionId)}):`, err instanceof Error ? err.message : err))
+  })
   watcher.on('history', (batch: HistoryEvent) => {
     try {
       type Events = ReturnType<CursorNormalizer['ingest']>

@@ -3,7 +3,7 @@
  * daemon at its 4 GB heap: attaching read the whole transcript. These run the daemon under a heap far
  * smaller than the transcripts it serves.
  */
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, statSync, truncateSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -71,6 +71,20 @@ describe('bounded memory', () => {
     const whole = await client.request('session_get', { sessionId }, 60_000)
     expect(whole).toMatchObject({ hasMore: true })
     expect(d.child, 'the daemon survived the paging').not.toBeNull()
+    expect(await d.rssMiB()).toBeLessThan(HEAP_MIB + 200)
+
+    // The transcript rewritten in place, two thirds of it left: more history than the heap holds, so it
+    // cannot be replayed in one batch. The tail moves to the new end and the session is attached again,
+    // from that end.
+    const transcript = engine === 'claude'
+      ? join(d.env.CLAUDE_PROJECTS_DIR!, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
+      : join(d.env.CODEX_HOME!, 'sessions', '2026', '10', '03', `rollout-2026-10-03T00-00-00-${sessionId}.jsonl`)
+    truncateSync(transcript, Math.floor(statSync(transcript).size * 2 / 3))
+    const after = client.next(isEnd, 60_000, 'a turn after the rewrite')
+    client.send('message', { agentId, content: 'and after a rewrite?' })
+    await after
+    await until('the rewrite to be attached again', () => /transcript rewritten in place — attaching it again/.test(d.log()), 30_000)
+    expect(d.child, 'the daemon survived the rewrite').not.toBeNull()
     expect(await d.rssMiB()).toBeLessThan(HEAP_MIB + 200)
   })
 })

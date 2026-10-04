@@ -1,9 +1,9 @@
 import { chmodSync } from 'fs'
-import { appendFile, mkdtemp, rm, writeFile } from 'fs/promises'
+import { appendFile, mkdtemp, open, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Watcher, type HistoryEvent, type LineEvent } from './watcher.js'
+import { Watcher, type HistoryEvent, type LineEvent, type RewrittenEvent } from './watcher.js'
 
 const cleanup: string[] = []
 
@@ -639,3 +639,88 @@ describe('Watcher, at its edges', () => {
     await watcher.stop()
   })
 })
+
+describe('Watcher, reading a backlog', () => {
+  const backlog = async (options: ConstructorParameters<typeof Watcher>[0], content = '') => {
+    const dir = await mkdtemp(join(tmpdir(), 'machine-watcher-backlog-'))
+    cleanup.push(dir)
+    const transcriptPath = join(dir, 'session.jsonl')
+    await writeFile(transcriptPath, content)
+    const watcher = new Watcher(options)
+    const lines: string[] = []
+    const history: string[] = []
+    const rewritten: RewrittenEvent[] = []
+    watcher.on('line', (event: LineEvent) => lines.push(event.text))
+    watcher.on('history', (event: HistoryEvent) => history.push(...event.lines.map((line) => line.text)))
+    watcher.on('rewritten', (event: RewrittenEvent) => rewritten.push(event))
+    await watcher.addSession({ sessionId: 's1', engine: 'codex', transcriptPath })
+    return { transcriptPath, watcher, lines, history, rewritten }
+  }
+  const records = [
+    '{"n":1}', '{"n":2,"text":"漢字 📘 across a chunk"}', `{"n":3,"long":"${'x'.repeat(200)}"}`, '{"n":4}', '', '   ', '{"n":5}',
+  ]
+
+  it('reads what fell behind a chunk at a time: lines and characters split between chunks, a line longer than many', async () => {
+    for (const chunk of [1, 3, 16, 64, 1 << 20]) {
+      const { transcriptPath, watcher, lines } = await backlog({ readChunkBytes: chunk })
+      await appendFile(transcriptPath, records.join('\r\n') + '\r\n{"n":6, still')
+      await watcher.pollSession('s1')
+      expect(lines, `chunks of ${chunk}`).toEqual(records.filter((record) => record.trim()))
+      await appendFile(transcriptPath, ' being written}\n')
+      await watcher.pollSession('s1')
+      expect(lines.at(-1)).toBe('{"n":6, still being written}')
+      await watcher.stop()
+    }
+  })
+
+  it('stops a long read at a hold that lands in it, and hands over every line exactly once', async () => {
+    const all = Array.from({ length: 400 }, (_, i) => `{"n":${i},"pad":"${'y'.repeat(i % 37)}"}`)
+    const { transcriptPath, watcher, lines } = await backlog({ readChunkBytes: 32 })
+    await appendFile(transcriptPath, all.join('\n') + '\n')
+    const reading = watcher.pollAll()
+    const hold = (await watcher.hold('s1', transcriptPath))!
+    await reading
+    const size = Buffer.byteLength(all.join('\n') + '\n')
+    expect(hold.offset).toBeLessThan(size)
+    // Delivery stopped exactly at a line: what came out is everything before that byte.
+    expect(Buffer.byteLength(lines.map((line) => line + '\n').join(''))).toBe(hold.offset)
+    hold.release(hold.offset)
+    await watcher.pollSession('s1')
+    expect(lines).toEqual(all)
+    await watcher.stop()
+  })
+
+  it('attaches a file that shrank to more history than one batch should hold, instead of replaying it', async () => {
+    const { transcriptPath, watcher, lines, history, rewritten } = await backlog({ historyMaxBytes: 40 }, records.join('\n') + '\n')
+    await writeFile(transcriptPath, records.slice(0, 4).join('\n') + '\n')
+    await watcher.pollSession('s1')
+    expect(rewritten).toEqual([{ sessionId: 's1', engine: 'codex', transcriptPath }])
+    expect({ lines, history }).toEqual({ lines: [], history: [] })
+    // The tail goes on from the new end.
+    await appendFile(transcriptPath, '{"n":7}\n')
+    await watcher.pollSession('s1')
+    expect(lines).toEqual(['{"n":7}'])
+    // A shrink small enough is still read as history.
+    await writeFile(transcriptPath, '{"n":8}\n')
+    await watcher.pollSession('s1')
+    expect(history).toEqual(['{"n":8}'])
+    await watcher.stop()
+  })
+
+  it('stops where a file cut short under the read ends', async () => {
+    const shorted = async (path: string) => {
+      const handle = await open(path, 'r')
+      let reads = 0
+      return Object.assign(Object.create(handle), {
+        read: (...args: Parameters<typeof handle.read>) => (++reads > 1 ? Promise.resolve({ bytesRead: 0, buffer: args[0] }) : handle.read(...args)),
+        close: () => handle.close(),
+      })
+    }
+    const { transcriptPath, watcher, lines } = await backlog({ readChunkBytes: 8, openFile: shorted })
+    await appendFile(transcriptPath, '{"n":1}\n{"n":2}\n')
+    await watcher.pollSession('s1')
+    expect(lines).toEqual(['{"n":1}'])
+    await watcher.stop()
+  })
+})
+
