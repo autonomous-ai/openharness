@@ -100,10 +100,8 @@ import { sessionCheckpoints } from './lib/sessionCheckpoint.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
 import { prepareAgentHandoff } from './lib/agentHandoff.js'
-import { SessionSearchIndex, folderWords, type SearchSource } from './lib/sessionSearch/indexer.js'
 import { ExternalSessions, OpenSessions } from './lib/sessionSearch/external.js'
 import { externalProviders } from './lib/sessionSearch/externals/index.js'
-import { SessionSearchStore } from './lib/sessionSearch/store.js'
 import { SESSION_SEARCH_FILE, searchCommand } from './lib/sessionSearch/command.js'
 import { sweepWorktrees } from './lib/worktreeSweep.js'
 import { nameBranchAfterSession } from './lib/branchNaming.js'
@@ -173,6 +171,9 @@ import { createAgentLifecycle } from './core/agents/lifecycle.js'
 import { createAgentClosing } from './core/agents/close.js'
 import { createEngineHooks, installEngineHooks } from './core/engines/hooks.js'
 import { createCursorTaskHooks } from './core/engines/cursorTasks.js'
+import { databaseHistory } from './core/transcripts/databaseHistory.js'
+import { createCoreApi, emptyPorts } from './core/api.js'
+import { startSearch } from './services/search.js'
 import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
@@ -189,7 +190,6 @@ import { WindowVisit } from './cable/windowVisit.js'
 import { WindowForm } from './cable/windowForm.js'
 import { RemoteRelayPool } from './lib/remoteRelay.js'
 import { TERMINAL_BINARY_VERSION } from './lib/terminalBinary.js'
-import { type LiveEvent } from './lib/normalize.js'
 import { TeamError } from './teams/model.js'
 import { routeVoiceTask, setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter, type RouterAgent } from './lib/voiceRouter.js'
 import { E2eeStore, identitySpent, peekIdentityPub } from './lib/e2ee/store.js'
@@ -216,16 +216,8 @@ import { type ActivityFrame } from './lib/turnActivity.js'
 import { CursorTranscriptDiscovery } from './engines/cursor/discovery.js'
 import { cursorDataDir } from './engines/cursor/home.js'
 import { loadCursorPendingTasks } from './engines/cursor/pendingTasks.js'
-import { readOpencodeMessages } from './engines/opencode/reader.js'
 import { opencodeMajorVersion } from './engines/opencode/version.js'
-import { opencodeMessagesToEvents } from './engines/opencode/normalizer.js'
-import { readKiloMessages } from './engines/kilo/reader.js'
-import { kiloMessagesToEvents } from './engines/kilo/normalizer.js'
-import { readHermesMessages } from './engines/hermes/reader.js'
 import { hermesDbForSession } from './lib/hermesHome.js'
-import { readDevinMessages } from './engines/devin/reader.js'
-import { hermesMessagesToEvents } from './engines/hermes/normalizer.js'
-import { devinMessagesToEvents } from './engines/devin/normalizer.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { DeviceResultJournal } from './lib/autonomous-device/resultJournal.js'
@@ -2244,18 +2236,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.recentProvider = recaps.recent
   backend.recentAsksProvider = recaps.recentAsks
 
-  // The engines that keep a conversation in a database instead of a transcript file, read through
-  // the same readers and replay normalizers as `session_get`.
-  const databaseHistory = (s: RegisteredSession): (() => Promise<readonly LiveEvent[]>) | undefined => {
-    switch (s.engine) {
-      case 'opencode': return async () => opencodeMessagesToEvents(await readOpencodeMessages(join(env.OPENCODE_DATA_DIR, 'opencode.db'), s.sessionId))
-      case 'kilo': return async () => kiloMessagesToEvents(await readKiloMessages(join(env.KILO_DATA_DIR, 'kilo.db'), s.sessionId))
-      case 'devin': return async () => devinMessagesToEvents(await readDevinMessages(join(env.DEVIN_HOME, 'sessions.db'), s.sessionId))
-      case 'hermes': return async () => hermesMessagesToEvents(await readHermesMessages(await hermesDbForSession(s), s.sessionId))
-      default: return undefined
-    }
-  }
-
   // "Change agent": the desktop asks for the structured handoff file (lib/agentHandoff.ts) before it
   // closes the old engine; the new one is then told to read it.
   // Built ONCE: its discovery keeps "one search per agent" across requests.
@@ -2276,66 +2256,25 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   backend.handoffProvider = (req) => prepareAgentHandoff(handoffDeps, req)
 
-  // Session search: every turn of every conversation on this machine, live and stopped, indexed from
-  // its transcript and searched by `session_search` (lib/sessionSearch/). Nothing leaves the machine
-  // but the hits for a query. A Node without `node:sqlite` has no index; the RPC then says so.
   // Conversations on this machine that Harness did not start, found where each engine keeps them so
   // Cmd-P can find them and open one here; and which sessions a process has open right now. Harness's
   // own byproducts (recaps run in its data folder) are never among them.
   const externalEngines = externalProviders()
   const externalSessions = new ExternalSessions({ providers: externalEngines, excluded: [env.ADAPTER_DATA_DIR], log: (line) => console.warn(line) })
   const openSessions = new OpenSessions({ providers: externalEngines, log: (line) => console.warn(line) })
-  const sessionSearch = (() => {
-    try {
-      const store = SessionSearchStore.open(join(env.ADAPTER_DATA_DIR, SESSION_SEARCH_FILE))
-      if (!store) {
-        console.warn('[search] node:sqlite is not available on this Node — session search is off')
-        return null
-      }
-      const index = new SessionSearchIndex({
-        store,
-        sources: () => {
-          const own = [...registry.list(), ...stoppedAgents.list()]
-          const sources = own.flatMap((s): SearchSource[] => {
-            const readHistory = s.transcriptPath ? undefined : databaseHistory(s)
-            if (!s.sessionId || (!s.transcriptPath && !readHistory)) return []
-            return [{
-              agentId: s.agentId,
-              sessionId: s.sessionId,
-              engine: s.engine,
-              transcriptPath: s.transcriptPath || null,
-              header: [projectDisplayName(s), s.title, folderWords(s.cwd)].filter(Boolean).join(' · '),
-              // Conversation stamps only: the row's `touchedAt` includes discovery bookkeeping.
-              changedAt: Math.max(s.lastTranscriptAt || 0, s.lastHookAt || 0) || s.boundAt || s.registeredAt || 0,
-              readHistory,
-            }]
-          })
-          // Conversations Harness did not start — any Harness agent's, earlier ones included, are not.
-          const known = store.ownedSessionIds()
-          for (const s of own) if (s.sessionId) known.add(s.sessionId)
-          for (const e of externalSessions.list()) {
-            // A conversation Harness holds under any of its ids is Harness's.
-            if (known.has(e.sessionId) || e.aliases?.some((id) => known.has(id)) || (!e.transcriptPath && !e.readHistory)) continue
-            sources.push({
-              agentId: '', sessionId: e.sessionId, engine: e.engine, transcriptPath: e.transcriptPath,
-              header: '', changedAt: e.mtime, external: { cwd: e.cwd, origin: e.origin, title: e.title },
-              ...(e.readHistory ? { readHistory: e.readHistory } : {}),
-            })
-          }
-          return sources
-        },
-        agents: () => [...registry.list(), ...stoppedAgents.list()].map((s) => s.agentId),
-        discover: () => externalSessions.scan(),
-        openSessions,
-        log: (line) => console.log(line),
-      })
-      index.start()
-      return index
-    } catch (error) {
-      console.error('[search] could not open the session index:', error instanceof Error ? error.message : error)
-      return null
-    }
-  })()
+  // The core's side of the boundary its services stand on, and the ports it reaches them through (core/api.ts).
+  const coreApi = createCoreApi({
+    dataDir: env.ADAPTER_DATA_DIR,
+    registry,
+    stoppedAgents,
+    databaseHistory,
+    externalSessions,
+    openSessions,
+  })
+  const ports = emptyPorts()
+  // Session search (services/search.ts).
+  startSearch(coreApi, ports)
+  const sessionSearch = ports.search
   backend.sessionSearchProvider = sessionSearch ? (query, options) => sessionSearch.search(query, options) : null
   backend.sessionTailProvider = sessionSearch ? (sessionId, options) => sessionSearch.tail(sessionId, options) : null
 
