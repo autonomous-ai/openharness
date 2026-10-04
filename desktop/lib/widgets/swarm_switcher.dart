@@ -29,9 +29,11 @@ import '../state/session_content_search.dart';
 import '../state/session_activity.dart';
 import '../state/swarm_search.dart';
 import '../models/model_search_catalog.dart';
-import '../state/harness_sessions.dart' show SessionFilter, harnessActivityTooltip;
+import '../state/harness_sessions.dart'
+    show SessionFilter, harnessActivityTooltip;
 import '../store/store_mark.dart';
 import 'engine_identity.dart';
+import 'session_activity_label.dart';
 import 'swarm_icon.dart';
 import 'swarm_search_preview.dart';
 import 'swarm_resource_preview.dart';
@@ -1744,8 +1746,8 @@ class _SearchRowContentState extends State<_SearchRowContent> {
       final modelStatus = row.isModel
           ? widget.search.modelRowStatus(row)
           : null;
-      final status =
-          unavailable ?? api?.hint ?? modelStatus ?? widget.activity.status;
+      final status = unavailable ?? api?.hint ?? modelStatus;
+      final spokenStatus = status ?? widget.activity.status?.label;
       // One line a model: a local model's size and speed sit muted before its word at the right.
       final facts = row.isModel
           ? widget.search
@@ -1791,7 +1793,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
       );
       return Semantics(
         label:
-            '$title\n$detail${status == null ? '' : ', $status'}'
+            '$title\n$detail${spokenStatus == null ? '' : ', $spokenStatus'}'
             '${activity != null ? ', ${harnessActivityTooltip(activity)}' : ''}'
             '${snippet == null ? '' : ', Found in conversation: ${snippet.plainSnippet}'}',
         excludeSemantics: true,
@@ -1858,14 +1860,19 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                     ),
                   ),
                 ],
-                if (status ?? age case final trailing?) ...[
+                if (!row.isModel &&
+                    (activity != null || widget.activity.status != null)) ...[
                   const SizedBox(width: 12),
-                  if (activity != null && unavailable == null && !row.isModel)
-                    Tooltip(
-                      message: sessionActivityTooltip(widget.activity),
-                      child: trailingLabel(trailing),
-                    )
-                  else if (row.isModel && api == null)
+                  SessionActivityLabel(
+                    activity: widget.activity,
+                    age: age,
+                    style: DesktopChrome.metadata(color: muted),
+                    markColor: widget.highlighted ? muted : null,
+                    reason: unavailable,
+                  ),
+                ] else if (status ?? age case final trailing?) ...[
+                  const SizedBox(width: 12),
+                  if (row.isModel && api == null)
                     SizedBox(
                       width: MediaQuery.textScalerOf(context).scale(96),
                       child: trailingLabel(trailing),
@@ -2077,16 +2084,14 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                           style: terminalContentStyle(color: muted),
                         ),
                       ),
-                    ] else if (widget.activityAge case final age?) ...[
+                    ] else if (widget.activity.at != null ||
+                        widget.activity.status != null) ...[
                       SizedBox(width: cell.width * 2),
-                      Tooltip(
-                        message: sessionActivityTooltip(widget.activity),
-                        child: Text(
-                          age,
-                          maxLines: 1,
-                          style: terminalContentStyle(
-                            color: theme.foreground.withValues(alpha: .38),
-                          ),
+                      SessionActivityLabel(
+                        activity: widget.activity,
+                        age: widget.activityAge,
+                        style: terminalContentStyle(
+                          color: theme.foreground.withValues(alpha: .38),
                         ),
                       ),
                     ],

@@ -12,6 +12,7 @@ import '../state/welcome_sessions.dart';
 import '../state/session_activity.dart';
 import 'engine_identity.dart';
 import 'desktop_chrome.dart';
+import 'session_activity_label.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/prompt_style.dart';
 import '../shared/theme/status_line_style.dart';
@@ -455,14 +456,10 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
 
   Widget _activityLabel(SwarmDestination row) {
     final activity = _activity!.read(row);
-    final label = sessionActivityLabel(activity, widget.now());
-    if (label == null) return const SizedBox.shrink();
-    return Tooltip(
-      message: sessionActivityTooltip(activity),
-      child: Text(
-        label,
-        style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
-      ),
+    return SessionActivityLabel(
+      activity: activity,
+      age: sessionActivityLabel(activity, widget.now()),
+      style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
     );
   }
 
@@ -694,15 +691,12 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
               textAlign: TextAlign.left,
             ),
           ),
-          SizedBox(
-            width: cell * 8,
-            child: Tooltip(
-              message: sessionActivityTooltip(activity),
-              child: Text(
-                age,
-                textAlign: TextAlign.right,
-                style: TextStyle(color: muted),
-              ),
+          Padding(
+            padding: EdgeInsets.only(left: cell),
+            child: SessionActivityLabel(
+              activity: activity,
+              age: age,
+              style: style.copyWith(color: muted),
             ),
           ),
         ],

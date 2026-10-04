@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/notify/alert_sounds.dart';
+import 'package:harness/state/harness_activity.dart';
 import 'package:harness/state/session_activity.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
+import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 import 'package:harness/widgets/workspace_welcome.dart';
 
@@ -79,6 +82,10 @@ void main() {
         if (picker) search.setQuery('Pane');
         await tester.pumpWidget(
           MaterialApp(
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(disableAnimations: true),
+              child: child!,
+            ),
             home: DesktopChrome(
               child: Scaffold(
                 body: picker
@@ -105,36 +112,51 @@ void main() {
         await tester.pumpAndSettle();
         final title = find.text('Pane connection losses');
         final position = tester.getTopLeft(title);
-        expect(find.text('Working'), findsOneWidget);
-        expect(find.text('12m'), findsNothing);
+        expect(_mark(HarnessActivity.working), findsOneWidget);
+        expect(find.text('12m'), findsOneWidget);
+        expect(find.text('Working'), findsNothing);
         final selected = search.selected?.id;
 
         // A quiet tool can work for minutes without writing another message.
         await tester.pump(const Duration(minutes: 2));
         await tester.pumpAndSettle();
-        expect(find.text('Working'), findsOneWidget);
+        expect(_mark(HarnessActivity.working), findsOneWidget);
+        expect(find.text('14m'), findsOneWidget);
         expect(tester.getTopLeft(title), position);
+
+        // A newer conversation event updates the time without moving the row.
+        lastAt = tester.binding.clock.now();
+        await tester.pump(const Duration(seconds: 5));
+        await tester.pumpAndSettle();
+        expect(_mark(HarnessActivity.working), findsOneWidget);
+        expect(find.text('now'), findsOneWidget);
+        expect(tester.getTopLeft(title), position);
+        expect(search.selected?.id, selected);
 
         working = false;
         lastAt = tester.binding.clock.now();
         await tester.pump(const Duration(seconds: 5));
         await tester.pumpAndSettle();
-        expect(find.text('Working'), findsNothing);
+        expect(_mark(HarnessActivity.working), findsNothing);
         expect(find.text('now'), findsOneWidget);
         expect(tester.getTopLeft(title), position);
         expect(search.selected?.id, selected);
 
-        // Older daemons know the process is open, but cannot say it is working.
+        // Unknown status and read failures retain the latest known time.
         working = null;
         await tester.pump(const Duration(seconds: 5));
         await tester.pumpAndSettle();
-        expect(find.text('Open'), findsOneWidget);
-        expect(find.text('Working'), findsNothing);
+        expect(find.text('now'), findsOneWidget);
+        expect(find.text('Open'), findsNothing);
+        expect(_mark(HarnessActivity.working), findsNothing);
+        expect(_mark(HarnessActivity.unknown), findsOneWidget);
         fail = true;
         await tester.pump(const Duration(seconds: 5));
         await tester.pumpAndSettle();
         expect(find.text('Open'), findsNothing);
-        expect(find.text('Working'), findsNothing);
+        expect(_mark(HarnessActivity.working), findsNothing);
+        expect(_mark(HarnessActivity.unknown), findsOneWidget);
+        expect(find.text('now'), findsOneWidget);
 
         await tester.pumpWidget(const SizedBox());
         final finishedReads = reads;
@@ -150,7 +172,15 @@ void main() {
     final machine = app.machineStates['m']!;
     final old = DateTime.utc(2026, 10, 4, 10);
     final latest = old.add(const Duration(minutes: 12));
-    machine.agents = [Agent(id: 'a', name: 'Work', engine: 'codex', terminalAvailable: true, lastActivityAt: old)];
+    machine.agents = [
+      Agent(
+        id: 'a',
+        name: 'Work',
+        engine: 'codex',
+        terminalAvailable: true,
+        lastActivityAt: old,
+      ),
+    ];
     final search = SwarmSearchController(
       app,
       const [],
@@ -163,11 +193,31 @@ void main() {
     final activity = SessionActivityController(app);
     addTearDown(activity.dispose);
     activity.watch([row]);
-    machine.agents = [Agent(id: 'a', name: 'Work', engine: 'codex', terminalAvailable: true, lastActivityAt: latest)];
+    machine.agents = [
+      Agent(
+        id: 'a',
+        name: 'Work',
+        engine: 'codex',
+        terminalAvailable: true,
+        lastActivityAt: latest,
+      ),
+    ];
     machine.processingAgentIds.add('a');
-    expect(activity.read(row), (at: latest, status: 'Working'));
+    expect(activity.read(row), (at: latest, status: HarnessActivity.working));
     expect(search.activityOf(row), old);
     machine.processingAgentIds.clear();
-    expect(activity.read(row), (at: latest, status: null));
+    expect(activity.read(row), (at: latest, status: HarnessActivity.idle));
+    var notifications = 0;
+    activity.addListener(() => notifications++);
+    app.agentUnread.mark('m', 'a', AlertKind.done);
+    expect(activity.read(row), (at: latest, status: HarnessActivity.done));
+    expect(notifications, 1, reason: 'unread state shares the pane indicator');
+    app.markAgentSeen('m', 'a');
+    expect(activity.read(row), (at: latest, status: HarnessActivity.idle));
+    expect(search.activityOf(row), old);
   });
 }
+
+Finder _mark(HarnessActivity activity) => find.byWidgetPredicate(
+  (widget) => widget is ActivityMark && widget.activity == activity,
+);

@@ -4,16 +4,18 @@ import 'package:flutter/foundation.dart';
 
 import '../core/models.dart';
 import 'app_state.dart';
+import 'harness_activity.dart';
 import 'harness_sessions.dart';
 import 'swarm_navigation.dart';
 
-typedef SessionActivity = ({DateTime? at, String? status});
+typedef SessionActivity = ({DateTime? at, HarnessActivity? status});
 
 /// Fresh display metadata for visible sessions. Ranking keeps its own snapshot;
 /// a long-running turn must not look idle just because its last message is old.
 class SessionActivityController extends ChangeNotifier {
   SessionActivityController(this.app) {
     app.addListener(_appChanged);
+    app.agentUnread.addListener(_appChanged);
   }
 
   final AppNotifier app;
@@ -34,21 +36,23 @@ class SessionActivityController extends ChangeNotifier {
     if (row.external case final external?) {
       final value =
           _external[row.id] ??
-          (at: row.lastActivityAt, status: external.open ? 'Open' : null);
-      return (at: value.at, status: online ? value.status : null);
+          (
+            at: row.lastActivityAt,
+            status: external.open ? HarnessActivity.unknown : null,
+          );
+      return (
+        at: value.at,
+        status: online ? value.status : HarnessActivity.offline,
+      );
     }
     final agent = machine?.agents
         .where((agent) => agent.id == row.agentId)
         .firstOrNull;
-    final working =
-        online &&
-        agent != null &&
-        !agent.isStopped &&
-        machine!.processingAgentIds.contains(agent.id) &&
-        !machine.blockedAgents.containsKey(agent.id);
     return (
       at: agent?.lastActivityAt ?? row.lastActivityAt,
-      status: working ? 'Working' : null,
+      status: row.machineId != null && row.agentId != null
+          ? harnessActivity(app, row.machineId!, row.agentId!)
+          : null,
     );
   }
 
@@ -108,7 +112,7 @@ class SessionActivityController extends ChangeNotifier {
     if (_disposed || revision != _revision) return;
     if (reply == null) {
       // A failed read cannot keep claiming work is still in progress.
-      _external[row.id] = (at: read(row).at, status: null);
+      _external[row.id] = (at: read(row).at, status: HarnessActivity.unknown);
       return;
     }
     final at = reply['lastAt'];
@@ -117,11 +121,13 @@ class SessionActivityController extends ChangeNotifier {
     final working = external is Map ? external['working'] : null;
     _external[row.id] = (
       at: at is int ? DateTime.fromMillisecondsSinceEpoch(at) : read(row).at,
-      status: open && working == true
-          ? 'Working'
-          : open && working is! bool
-          ? 'Open'
-          : null,
+      status: !open
+          ? null
+          : working == true
+          ? HarnessActivity.working
+          : working == false
+          ? HarnessActivity.idle
+          : HarnessActivity.unknown,
     );
   }
 
@@ -138,15 +144,15 @@ class SessionActivityController extends ChangeNotifier {
     _disposed = true;
     _timer?.cancel();
     app.removeListener(_appChanged);
+    app.agentUnread.removeListener(_appChanged);
     super.dispose();
   }
 }
 
 String? sessionActivityLabel(SessionActivity activity, DateTime now) =>
-    activity.status ??
-    (activity.at == null ? null : harnessActivityAge(activity.at, now));
+    activity.at == null ? null : harnessActivityAge(activity.at, now);
 
 String sessionActivityTooltip(SessionActivity activity) => [
-  ?activity.status,
+  ?activity.status?.label,
   if (activity.at case final at?) harnessActivityTooltip(at),
 ].join(' · ');
