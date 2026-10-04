@@ -620,12 +620,13 @@ if status:
     vm.command(f"printf %s {shlex.quote(encoded)} | base64 -d > /run/hn-interactive-test.py; chmod 600 /run/hn-interactive-test.py")
     user = lambda command: 'runuser -u me -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus ' + command
     _, progress_status = vm.command("grep -q '^def install_with_progress(' /usr/lib/harness-os/install.py", check=False)
-    vm.command(user('hn new-window -n Install ' + shlex.quote('sudo python3 /run/hn-interactive-test.py')))
+    vm.command(user('sh -c ' + shlex.quote('hn new-window -P -F "#{pane_id}" -n Install '
+               + shlex.quote('sudo python3 /run/hn-interactive-test.py') + ' > /tmp/hn-install-pane')))
     transcript = []
 
     def wait_screen(pattern, timeout=30):
         command = ('for n in $(seq 1 ' + str(timeout * 2) + '); do '
-                   'hn capture-pane -p > /tmp/hn-install-screen; '
+                   'hn capture-pane -p -t "$(cat /tmp/hn-install-pane)" > /tmp/hn-install-screen || exit 1; '
                    'grep -Eq ' + shlex.quote(pattern) + ' /tmp/hn-install-screen && exit 0; '
                    'test ! -e /run/hn-interactive-status || exit 1; sleep .5; done; exit 1')
         _, status = vm.command(user('sh -c ' + shlex.quote(command)), timeout=timeout + 15, check=False)
@@ -818,6 +819,15 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         install_interactively(vm, config, folder)
         result['checks'].append('Keyboard disk selection, encryption checkbox, masked password entry and a single Install action work on the guest terminal')
         result['checks'].append('Offline installer completed on disposable disk')
+        if config['encrypt']:
+            # Retain costs, not keyslot salts/digests or the full encrypted header.
+            script = ('import json,sys; d=json.load(sys.stdin); k=d["keyslots"]["0"]["kdf"]; '
+                      'print(json.dumps({key:k[key] for key in ["type","time","memory","cpus"]}))')
+            vm.command('cryptsetup luksDump --dump-json-metadata /dev/vda3 | python3 -c '
+                       + shlex.quote(script) + ' > /tmp/hn-install-pbkdf.json')
+            result['installed_pbkdf'] = json.loads(vm.read_file('/tmp/hn-install-pbkdf.json'))
+            assert result['installed_pbkdf']['type'] == 'argon2id', 'Encryption must retain Argon2id'
+            assert result['installed_pbkdf']['time'] >= 4, 'Encryption must retain benchmarked iterations'
         vm.command('sync')
         vm.stop()
         vm.start(live=False)
@@ -836,6 +846,12 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         result['installed_hn_ready_seconds_including_test_login'] = round(time.monotonic() - vm.started, 3)
         result['installed_keyboard_readiness'] = check_graphical_keyboard(vm, 'installed')
         result['checks'].append('Installed graphical hn accepts physical-keyboard shell input, returns output and returns home after closing the pane')
+        if config['encrypt']:
+            installed = json.loads(vm.read_file('/var/lib/harness-os/install.json'))
+            budget = installed['pbkdf_memory_limit_kib']
+            assert 64 * 1024 <= result['installed_pbkdf']['memory'] <= budget <= 1024 * 1024
+            result['pbkdf_memory_limit_kib'] = budget
+            result['checks'].append('Encrypted installation after the agent trial retains benchmarked Argon2id within its RAM budget and unlocks after reboot')
         vm.command('test "$(id -un)" = ' + shlex.quote(config['username']) +
                    ' && test "$HOME" = ' + shlex.quote('/home/' + config['username']) +
                    ' && test "$(uname -n)" = ' + shlex.quote(config['hostname']))

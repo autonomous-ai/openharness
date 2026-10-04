@@ -151,10 +151,21 @@ Preview 8 adopts level 19 for the USB only; installed Btrfs compression is uncha
 Both encrypted trials fell below 128 MiB available RAM (69.20/94.07 MiB minimum),
 with 105.34/91.69 MiB peak swap. That baseline pressure is not a regression caused
 by the new compression in these samples, nor proof of a memory improvement.
-Cryptsetup calibration is a plausible cause, but per-command timing was not
-captured. Keep encryption defaults unchanged and measure phases before adjusting
-them. One encrypted pair and shared-host VMs do not establish physical 1 GiB
-hardware reliability.
+Per-command timing was not captured in that assessment. A later full preview 8
+journey ([37181312268](https://github.com/autonomous-ai/openharness/actions/runs/37181312268))
+identified the failure directly: during encryption after an agent trial, the
+kernel killed `cryptsetup luksFormat` at 485,232 KiB anonymous RSS. The 1 GiB guest's
+RAM-backed swap was almost full. The plain and separate hardware installations passed.
+
+The installer now limits PBKDF memory to half of available RAM, leaves at least
+128 MiB for the live session, and retains cryptsetup's 1 GiB ceiling. It refuses
+to erase the disk if the resulting budget is below 64 MiB. Cipher, key size,
+Argon2id and the normal time/iteration benchmark remain intact; lower-memory
+machines can get a lower memory cost. Existing encrypted disks are never changed.
+This follows cryptsetup's supported [memory budgeting](https://gitlab.com/cryptsetup/cryptsetup/-/blob/main/man/common_options.adoc)
+and accounts for its [swap-dependent free-memory check](https://gitlab.com/cryptsetup/cryptsetup/-/blob/main/lib/utils_pbkdf.c).
+The native journey records actual keyslot costs and checks unlock/recovery.
+Shared-host VMs do not establish physical 1 GiB hardware reliability.
 
 ## The feedback loop
 

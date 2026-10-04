@@ -32,7 +32,9 @@ you choose when to reconnect the screen. Running agents and terminals stay alive
 
 Preview 8 uses stronger USB payload compression and fixes a startup race: opening
 a terminal immediately can no longer send the USB welcome into that new window.
-Both changes concern the live USB; existing installations do not need updating or
+Encrypted installation also budgets key derivation against available RAM,
+without treating RAM-backed swap as extra capacity after the agent trial.
+These changes concern the live USB; existing installations do not need updating or
 reflashing for them. The installed system update feed remains independent from
 ISO packaging.
 

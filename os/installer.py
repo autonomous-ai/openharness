@@ -27,6 +27,26 @@ INSTALL_LOG = Path('/var/log/harness-install.log')
 LAST_LOG = None
 
 
+def encryption_memory(meminfo=Path('/proc/meminfo')):
+    """Budget Argon2 against RAM, not zram advertised as additional swap."""
+    try:
+        values = {name: int(value) for name, value in re.findall(
+            r'^(MemTotal|MemAvailable):\s+(\d+) kB$', meminfo.read_text(), re.M)}
+        total, available = values['MemTotal'], values['MemAvailable']
+        if not 0 < available <= total:
+            raise ValueError('Invalid memory information')
+    except (OSError, KeyError, ValueError) as error:
+        raise ValueError('Cannot check available memory for encryption. No disk has been erased.') from error
+    # Cryptsetup normally uses at most half of physical RAM, up to 1 GiB.
+    # Its extra free-memory limit applies only without swap. Zram is RAM too:
+    # leave half of available RAM and at least 128 MiB for the live session.
+    budget = min(1024 * 1024, total // 2, available // 2, available - 128 * 1024)
+    budget = budget // 1024 * 1024
+    if budget < 64 * 1024:
+        raise ValueError('Not enough free memory for encryption. Close other harnesses and browser windows, then try again. No disk has been erased.')
+    return budget
+
+
 @contextmanager
 def command_log(path):
     """Keep command output off the form. Never record stdin (which may be a password)."""
@@ -224,6 +244,7 @@ def install(config, source, target, progress=None):
     kernel = preflight(config, source)
     trial = trial_source(config)
     selected_disk(config)
+    pbkdf_memory = encryption_memory() if config['encrypt'] else None
     started = time.monotonic()
     disk = config['disk']
     _, boot, root_partition = partitions(disk)
@@ -242,8 +263,10 @@ def install(config, source, target, progress=None):
         root_device = root_partition
         luks_uuid = None
         if config['encrypt']:
+            report('Setting up encryption…')
             secret = config['password'].encode()
-            run('cryptsetup', 'luksFormat', '--type', 'luks2', '--batch-mode', '--key-file=-', root_partition, input=secret)
+            run('cryptsetup', 'luksFormat', '--type', 'luks2', '--batch-mode',
+                '--pbkdf-memory', pbkdf_memory, '--key-file=-', root_partition, input=secret)
             run('cryptsetup', 'open', '--key-file=-', root_partition, mapper, input=secret)
             opened = True
             root_device = f'/dev/mapper/{mapper}'
@@ -365,6 +388,8 @@ def install(config, source, target, progress=None):
         receipt = {'version': lock['version'], 'installed_at': datetime.now(timezone.utc).isoformat(),
                    'duration_seconds': round(time.monotonic() - started, 3), 'encrypted': config['encrypt'],
                    'disk_bytes': selected_size(config), 'root_uuid': root_uuid, 'boot_uuid': boot_uuid}
+        if pbkdf_memory is not None:
+            receipt['pbkdf_memory_limit_kib'] = pbkdf_memory
         if trial_receipt is not None:
             receipt['trial_projects'] = trial_receipt
         write(target, '/var/lib/harness-os/install.json', json.dumps(receipt, indent=2) + '\n')

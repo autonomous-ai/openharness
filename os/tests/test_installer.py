@@ -115,6 +115,90 @@ class LivePayload(unittest.TestCase):
                 self.assertEqual(installer.live_payload(explicit), explicit)
 
 
+class EncryptionMemory(unittest.TestCase):
+    def budget(self, total_mib, available_mib, swap_mib=0):
+        with tempfile.TemporaryDirectory() as temp:
+            info = Path(temp) / 'meminfo'
+            info.write_text(f'MemTotal: {total_mib * 1024} kB\nMemAvailable: {available_mib * 1024} kB\nSwapFree: {swap_mib * 1024} kB\n')
+            return installer.encryption_memory(info)
+
+    def test_ram_backed_swap_does_not_increase_encryption_budget(self):
+        self.assertEqual(self.budget(960, 400, swap_mib=480), 200 * 1024)
+        self.assertEqual(self.budget(960, 400, swap_mib=4096), 200 * 1024)
+        self.assertEqual(self.budget(960, 400), 200 * 1024)
+
+    def test_budget_preserves_headroom_and_the_normal_one_gib_ceiling(self):
+        self.assertEqual(self.budget(960, 224), 96 * 1024)
+        self.assertEqual(self.budget(960, 192), 64 * 1024)
+        self.assertEqual(self.budget(16384, 12000), 1024 * 1024)
+        with self.assertRaisesRegex(ValueError, 'Close other harnesses'):
+            self.budget(960, 191)
+
+    def test_missing_or_invalid_memory_is_not_treated_as_available(self):
+        with tempfile.TemporaryDirectory() as temp:
+            info = Path(temp) / 'meminfo'
+            for content in [None, '', 'MemTotal: 1000 kB\n',
+                            'MemTotal: 1000 kB\nMemAvailable: 1001 kB\n']:
+                if content is not None:
+                    info.write_text(content)
+                with self.assertRaisesRegex(ValueError, 'No disk has been erased'):
+                    installer.encryption_memory(info)
+
+    def test_insufficient_memory_stops_before_creating_or_erasing_the_target(self):
+        config = dict(username='me', hostname='harness', password='test-password',
+                      encrypt=True, disk='/dev/vda', confirm_erase='/dev/vda')
+        with tempfile.TemporaryDirectory() as temp:
+            source, target = Path(temp) / 'payload', Path(temp) / 'target'
+            source.touch()
+            with patch.object(installer, 'selected_disk'), \
+                 patch.object(installer, 'preflight'), \
+                 patch.object(installer, 'trial_source'), \
+                 patch.object(installer, 'encryption_memory', side_effect=ValueError('Not enough free memory')), \
+                 patch.object(installer, 'run') as commands:
+                with self.assertRaisesRegex(ValueError, 'Not enough free memory'):
+                    installer.install(config, source, target)
+                commands.assert_not_called()
+                self.assertFalse(target.exists())
+
+    def test_format_uses_the_budget_without_overriding_time_or_algorithm(self):
+        config = dict(username='me', hostname='harness', password='test-password',
+                      encrypt=True, disk='/dev/vda', confirm_erase='/dev/vda')
+        def stop_at_open(*args, **kwargs):
+            if args[:2] == ('cryptsetup', 'open'):
+                raise OSError('stop before mapping a real disk')
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'payload'
+            source.touch()
+            with patch.object(installer, 'selected_disk'), \
+                 patch.object(installer, 'preflight'), \
+                 patch.object(installer, 'trial_source', return_value=None), \
+                 patch.object(installer, 'encryption_memory', return_value=192 * 1024), \
+                 patch.object(installer, 'run', side_effect=stop_at_open) as commands:
+                with self.assertRaisesRegex(OSError, 'stop before mapping'):
+                    installer.install(config, source, Path(temp) / 'target')
+            call = next(c for c in commands.call_args_list if c.args[:2] == ('cryptsetup', 'luksFormat'))
+            self.assertEqual(call.args[call.args.index('--pbkdf-memory') + 1], 192 * 1024)
+            self.assertEqual(call.args[call.args.index('--type') + 1], 'luks2')
+            self.assertEqual(call.kwargs['input'], b'test-password')
+            for option in ['--iter-time', '--pbkdf-force-iterations', '--pbkdf', '--cipher', '--key-size']:
+                self.assertNotIn(option, call.args)
+
+    def test_plain_install_does_not_require_an_encryption_budget(self):
+        config = dict(username='me', hostname='harness', password='test-password',
+                      encrypt=False, disk='/dev/vda', confirm_erase='/dev/vda')
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'payload'
+            source.touch()
+            with patch.object(installer, 'selected_disk'), \
+                 patch.object(installer, 'preflight'), \
+                 patch.object(installer, 'trial_source', return_value=None), \
+                 patch.object(installer, 'encryption_memory') as budget, \
+                 patch.object(installer, 'run', side_effect=OSError('stop before erasing')):
+                with self.assertRaisesRegex(OSError, 'stop before erasing'):
+                    installer.install(config, source, Path(temp) / 'target')
+                budget.assert_not_called()
+
+
 class Screen:
     """Capture drawn text and supply keys; never expose a real disk or terminal."""
     def __init__(self):
