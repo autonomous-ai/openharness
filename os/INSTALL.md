@@ -1,6 +1,6 @@
 # Install Harness on a ThinkPad
 
-These instructions are for **0.1.0-preview.9**, using a Mac to prepare the USB.
+These instructions are for **0.1.0-preview.10**, using a Mac to prepare the USB.
 The USB starts a live session. Installation begins only when you choose **Install Harness**
 in the installer; it erases the entire selected disk.
 
@@ -21,20 +21,20 @@ compute still need testing on the actual hardware.
 
 ## 2. Download and verify on the Mac
 
-From the [preview 9 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.9),
+From the [preview 10 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.10),
 download both files into the same folder:
 
-- `harness-0.1.0-preview.9-x86_64.iso`
-- `harness-0.1.0-preview.9-x86_64.iso.sha256`
+- `harness-0.1.0-preview.10-x86_64.iso`
+- `harness-0.1.0-preview.10-x86_64.iso.sha256`
 
 If they are in Downloads, open Terminal and run:
 
 ```sh
 cd ~/Downloads
-shasum -a 256 -c harness-0.1.0-preview.9-x86_64.iso.sha256
+shasum -a 256 -c harness-0.1.0-preview.10-x86_64.iso.sha256
 ```
 
-The result must say `harness-0.1.0-preview.9-x86_64.iso: OK`.
+The result must say `harness-0.1.0-preview.10-x86_64.iso: OK`.
 If it does not, download the files again before flashing.
 
 ## 3. Flash the USB
@@ -174,8 +174,8 @@ install the tools the project needs. Save work under `~/projects`.
 
 ## 8. Updates
 
-A small **Update ready · Super+u** notice appears when a new hn or CLI release
-has downloaded and passed its checks. Press **Super+u**, then Enter to apply it.
+Press **Super+u** to see available hn, CLI and system updates. New hn/CLI
+releases download in the background; press Enter in Updates to apply a ready runtime.
 The screen reconnects; your running agents and terminal processes remain.
 Use **r** in Updates to restore the previous runtime if needed.
 
@@ -184,15 +184,16 @@ They retain a recovery checkpoint and rebuild the boot image. When the screen
 offers **Restart now**, save your work and press Enter when ready. Downloads do
 not restart the computer, and routine updates do not require another USB flash.
 
-Preview 5 through 8 can receive preview 9 through **Super+u**, then **s**.
+Preview 5 through 9 can receive preview 10 through **Super+u**, then **s**.
 It includes the new network page, first-use workspace, lowercase project folders,
 and the fix preventing older public CLI releases from replacing the bundled
 OpenCode compatibility code. Running work is preserved; save before restarting.
 No reinstallation or USB flash is needed for these installed-system changes.
 
-Preview 9 also fixes a transient encrypted-disk cleanup failure in the USB
-installer. A computer that already boots successfully needs no reinstallation
-for that cleanup fix.
+Preview 10 fixes repeated Wi-Fi setup and the final encrypted-device cleanup
+timeout. The USB bar is green; installed Harness keeps its normal status bar.
+Ctrl+b, then c opens a terminal tab. USB improvements require flashing the new ISO;
+an already installed computer can receive the OS changes through Updates.
 
 Preview 4 needs the 7.2 MB [preview 7 bootstrap bundle](https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.7/harness-update-0.1.0-preview.7-47872670a-x86_64.zip)
 once. Verify and extract that bundle, open a terminal in its folder, and run:

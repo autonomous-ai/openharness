@@ -156,16 +156,25 @@ class NetworkPage:
         self.networks, self.wired, self.selected, self.message = [], [], 0, ''
         screen.keypad(True)
         screen.timeout(800)
+        self.accent = curses.A_BOLD
+        try:
+            if curses.has_colors():
+                curses.start_color()
+                curses.use_default_colors()
+                curses.init_pair(1, curses.COLOR_YELLOW, -1)
+                self.accent = curses.color_pair(1) | curses.A_BOLD
+        except curses.error:
+            pass
         try:
             curses.curs_set(0)
         except curses.error:
             pass
 
-    def line(self, row, text, selected=False):
+    def line(self, row, text, selected=False, accent=False):
         height, width = self.screen.getmaxyx()
         if 0 <= row < height - 1 and width > 3:
             self.screen.addnstr(row, self.left, fit(text, self.width), self.width,
-                                curses.A_REVERSE if selected else curses.A_NORMAL)
+                                curses.A_REVERSE if selected else self.accent if accent else curses.A_NORMAL)
 
     def begin(self):
         self.screen.erase()
@@ -173,14 +182,15 @@ class NetworkPage:
         self.width = max(1, min(64, width - 4))
         self.left = max(0, (width - self.width) // 2)
         for row, text in enumerate(WORDMARK):
-            self.line(row + 1, text.center(self.width))
-        self.line(4, 'Welcome to Harness' if self.first_use else 'Connect to Wi-Fi')
-        self.line(5, 'Connect to Wi-Fi to get started.' if self.first_use else 'Choose a network.')
+            self.line(row + 1, text.center(self.width), accent=True)
+        if self.first_use:
+            self.line(4, 'The operating system built by agents, for agents.'.center(self.width))
+        self.line(7, 'Connect to Wi-Fi to get started' if self.first_use else 'Connect to Wi-Fi')
         return height
 
     def refresh(self):
         self.begin()
-        self.line(8, 'Finding Wi-Fi…')
+        self.line(9, 'Finding Wi-Fi…')
         self.screen.refresh()
         self.message = ''
         try:
@@ -262,10 +272,10 @@ class NetworkPage:
                 elif kind == 'wired':
                     label = 'Ethernet  ' + value[0]
                 else:
-                    label = {'rescan': 'Rescan', 'install': 'Install without connecting', 'offline': 'Continue offline'}[kind]
-                self.line(8 + index - offset, label, index == self.selected)
+                    label = '[ Rescan ]'
+                self.line(9 + index - offset, label, index == self.selected)
             if self.first_use:
-                self.line(height - 4, 'Install without connecting' if self.live else 'Continue offline',
+                self.line(height - 4, '[ Install without connecting ]' if self.live else '[ Continue offline ]',
                           self.selected == len(rows) - 1)
             self.line(height - 2, self.message or ('' if self.networks else 'No Wi-Fi networks found. Rescan or use Ethernet.'))
             self.screen.refresh()

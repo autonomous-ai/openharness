@@ -200,40 +200,39 @@ class EncryptionMemory(unittest.TestCase):
 
 
 class InstallerCleanup(unittest.TestCase):
-    def test_transient_reader_is_retried_without_force_or_deferred_removal(self):
-        attempts = []
-        def command(*args, **kwargs):
-            if args[:2] == ('cryptsetup', 'close'):
-                attempts.append(args)
-                if len(attempts) < 3:
-                    raise subprocess.CalledProcessError(5, args)
-            elif args[0] == 'udevadm':
-                # A queued unrelated event can outlast settle's brief budget.
-                raise subprocess.CalledProcessError(1, args)
-        with patch.object(installer, 'run', side_effect=command), patch.object(installer.time, 'sleep'):
+    def test_deferred_close_does_not_wait_for_or_force_a_remaining_reader(self):
+        with patch.object(installer, 'run') as command:
             installer.close_install_mapping('hn-install-test')
-        self.assertEqual(attempts, [('cryptsetup', 'close', 'hn-install-test')] * 3)
+        command.assert_called_once_with('cryptsetup', 'close', '--deferred', 'hn-install-test', timeout=10)
 
-    def test_persistent_holder_remains_an_error_with_a_bounded_wait(self):
-        error = subprocess.CalledProcessError(5, ['cryptsetup', 'close', 'hn-install-test'])
-        def command(*args, **kwargs):
-            if args[0] == 'cryptsetup':
-                raise error
-        started = installer.time.monotonic()
-        with patch.object(installer, 'run', side_effect=command):
+    def test_slow_udev_or_busy_close_queues_kernel_removal_without_waiting_for_udev(self):
+        for error in [subprocess.CalledProcessError(5, ['cryptsetup', 'close']),
+                      subprocess.TimeoutExpired(['cryptsetup', 'close'], 4.66)]:
+            with self.subTest(error=error), patch.object(installer.Path, 'exists', return_value=True), \
+                 patch.object(installer, 'run', side_effect=[error, None]) as command:
+                installer.close_install_mapping('hn-install-test')
+                self.assertEqual(command.call_args_list[-1].args,
+                                 ('dmsetup', 'remove', '--deferred', '--noudevsync', 'hn-install-test'))
+                self.assertEqual(command.call_args_list[-1].kwargs, {'timeout': 3})
+
+    def test_timeout_after_successful_removal_is_already_clean(self):
+        with patch.object(installer.Path, 'exists', return_value=False), \
+             patch.object(installer, 'run', side_effect=subprocess.TimeoutExpired(['cryptsetup'], 10)) as command:
+            installer.close_install_mapping('hn-install-test')
+            self.assertEqual(command.call_count, 1)
+
+    def test_unexpected_close_error_and_failed_deferred_removal_remain_errors(self):
+        error = subprocess.CalledProcessError(4, ['cryptsetup', 'close'])
+        with patch.object(installer, 'run', side_effect=error) as command:
             with self.assertRaises(subprocess.CalledProcessError) as caught:
-                installer.close_install_mapping('hn-install-test', timeout=0.02)
-        self.assertIs(caught.exception, error)
-        self.assertLess(installer.time.monotonic() - started, 1)
-
-    def test_unexpected_close_error_and_timeout_are_not_retried(self):
-        for error in [subprocess.CalledProcessError(4, ['cryptsetup', 'close']),
-                      subprocess.TimeoutExpired(['cryptsetup', 'close'], 10)]:
-            with self.subTest(error=error), patch.object(installer, 'run', side_effect=error) as command:
-                with self.assertRaises(type(error)) as caught:
-                    installer.close_install_mapping('hn-install-test')
-                self.assertIs(caught.exception, error)
-                self.assertEqual(command.call_count, 1)
+                installer.close_install_mapping('hn-install-test')
+            self.assertIs(caught.exception, error)
+            self.assertEqual(command.call_count, 1)
+        with patch.object(installer.Path, 'exists', return_value=True), \
+             patch.object(installer, 'run', side_effect=[subprocess.TimeoutExpired(['cryptsetup'], 10), error]):
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                installer.close_install_mapping('hn-install-test')
+            self.assertIs(caught.exception, error)
 
     def failed_install(self, unmount_failure=False, log_failure=False):
         config = dict(username='me', hostname='harness', password='private-password',
@@ -292,7 +291,7 @@ class Screen:
 
     clear = erase
 
-    def addnstr(self, row, column, text, length, attr):
+    def addnstr(self, row, column, text, length, attr=0):
         self.drawn.append(text[:length])
 
     def addstr(self, row, column, text, attr):

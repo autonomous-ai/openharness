@@ -7,7 +7,6 @@ import subprocess
 
 def welcome():
     live = Path('/etc/harness-live').is_file()
-    offline = False
     while True:
         # The network page advances as soon as connected. The live account can
         # run it without an administrator password.
@@ -15,7 +14,6 @@ def welcome():
         if result.returncode == 0:
             break
         if result.returncode == 11 and not live:
-            offline = True
             break
         if result.returncode == 10 and live:
             try:
@@ -34,7 +32,7 @@ def welcome():
             (state / 'onboarded').touch()
     except (OSError, subprocess.TimeoutExpired):
         pass
-    os.execv('/usr/bin/hn-os', ['hn-os', 'try', *(['--offline'] if offline else [])])
+    os.execv('/usr/bin/hn-os', ['hn-os', 'try'])
 
 
 if __name__ == '__main__':

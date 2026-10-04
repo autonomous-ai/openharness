@@ -103,6 +103,7 @@ configuration where it affects a decision.
 | Surface | Wording |
 | --- | --- |
 | Boot and unlock branding | **Harness** |
+| First-use description | **The operating system built by agents, for agents.** |
 | Disk unlock prompt | **Enter your password** |
 | USB install action | **Install Harness** |
 | Offline USB action | **Install without connecting** |

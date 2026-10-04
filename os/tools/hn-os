@@ -19,12 +19,6 @@ def cpu_ticks():
     return sum(values), values[3] + values[4]
 
 
-def connected():
-    result = subprocess.run(['nmcli', '--wait', '5', '-t', '-f', 'STATE', 'general'],
-                            text=True, capture_output=True, timeout=8, env=dict(os.environ, LC_ALL='C'))
-    return result.returncode == 0 and result.stdout.strip() == 'connected'
-
-
 def wifi():
     return subprocess.call(['sudo', '/usr/bin/python3', '/usr/lib/harness-os/network.py'])
 
@@ -52,19 +46,17 @@ def prepare_opencode_guidance():
         pass
 
 
-def try_harness(offline=False):
+def try_harness():
     if not opencode_cpu_ready():
         print('The bundled OpenCode needs a newer CPU (SSE4.2).')
         print('Open a terminal to work locally or connect to a remote agent.')
         if sys.stdin.isatty():
             input('Press Enter to return to Harness.')
         return
-    if not offline and not connected():
-        if wifi() != 0 or not connected():
-            print('OpenCode needs an internet connection. Connect to Wi-Fi or plug in Ethernet, then try again.')
-            if sys.stdin.isatty():
-                input('Press Enter to return to Harness.')
-            return
+    # First-use networking belongs to onboarding.py. Rechecking here used to
+    # reject NetworkManager's "connected (site/local only)" state after a
+    # successful Wi-Fi step and reopen the form in the agent's new pane.
+    # Later launches also need to support local models and offline work.
     project = subprocess.check_output(['/usr/bin/python3', '/usr/lib/harness-os/projects.py', 'new', 'opencode'], text=True).strip()
     prepare_opencode_guidance()
     os.chdir(project)
@@ -81,7 +73,7 @@ def main():
     if command == 'wifi':
         raise SystemExit(wifi())
     if command == 'try':
-        try_harness(offline='--offline' in args)
+        try_harness()
         return
     if command == 'welcome':
         os.execv('/usr/bin/python3', ['python3', '/usr/lib/harness-os/onboarding.py'])

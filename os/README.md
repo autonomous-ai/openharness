@@ -11,17 +11,17 @@ audience, not its name.
 
 Product names and interface copy follow the [Naming System](../docs/naming-system.md).
 
-**Preview 9:** the USB opens a short network step
+**Preview 10:** the USB opens a short network step
 or goes straight into bundled OpenCode when already connected. **Install without
 connecting** opens the same native installer offline. OpenCode starts on the left with two real terminal panes on the right.
-The single footer holds the window list on the left and **Make Harness your OS.
+The single green USB footer holds the window list on the left and **Make Harness your OS.
 [ Install Harness ]** on the right. Installed first boot uses the same workspace;
-later launches restore existing work. Saved `~/projects` files are copied
+later launches restore existing work. The installed system keeps hn’s standard status bar. Ctrl+b, then c opens a terminal in a new tab. Saved `~/projects` files are copied
 and verified during installation. The full TUI reference and OS guide are bundled
 for agent questions. **Super+n/t/m/i/w** require no Shift; Ctrl+b bindings still work.
 
 The installer selects a disk, focuses Password, and has one full-width
-**Install Harness** action. Progress shows only the current step; encrypted boot shows the
+**Install Harness** action, one row tall and aligned with the fields. Progress shows the Harness wordmark above the current step; encrypted boot shows the
 Harness wordmark and a masked password prompt.
 Both the live and installed system use `me@harness`.
 `Super+u` opens Updates. Frequent hn/CLI releases download in the background;
@@ -29,15 +29,16 @@ you choose when to reconnect the screen. Running agents and terminals stay alive
 The update checker records release ancestry so a source-built runtime cannot be
 replaced by an older public CLI with a higher development version number.
 
-[Download preview 9](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.9)
+[Download preview 10](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.10)
 · [Mac → USB → ThinkPad installation guide](INSTALL.md)
 · [Standalone HTML/CSS landing page](../website/public/os/README.md)
 · [Development feedback loop and Mac support targets](DEVELOPMENT.md)
 
-Preview 9 briefly retries a busy encrypted-device close after the installed disk
-has been unmounted. A persistent holder still reports an error; cleanup failures
-also preserve any earlier installation error. A ThinkPad running preview 8 reached
-Harness after normal shutdown and USB removal despite this final cleanup error.
+Preview 10 removes a second connection check that reopened Wi-Fi after successful
+setup. Encrypted installation now requests deferred device removal after syncing
+and unmounting the disk. A remaining device reader can finish without making a
+completed installation appear to fail; a slow udev wait has a bounded fallback.
+Write, sync and unmount failures still stop installation and remain visible.
 
 Preview 8 introduced stronger USB payload compression and fixed a startup race: opening
 a terminal immediately can no longer send the USB welcome into that new window.
@@ -147,9 +148,8 @@ In the current source, the USB asks for a network connection before opening
 OpenCode. Choose **Install without connecting** to install immediately offline.
 Ethernet skips the network step when already connected. During a trial, click
 **Install Harness**, press **Super+i**, or ask the agent to open installation.
-F10 focuses Install Harness in the footer; Enter opens the form. New Harness
-and Connect a computer introduce multiple agents and computers; dismiss those
-starter panels with their close button when the agent needs the whole screen.
+F10 focuses Install Harness in the footer; Enter opens the form. Use Super+n for another agent or Super+m to connect a computer. The two right
+panes are ordinary terminals.
 
 Saved files under `~/projects`, including Git history, are transferred into the
 installed home and verified by hash. Work elsewhere remains temporary. Running
@@ -160,7 +160,7 @@ trial files; use the installation guide shipped with your image.
 
 The installer uses `me@harness`. Choose **Disk**, leave **Encryption** enabled or
 change it, then enter **Password** and **Repeat password**. **Install immediately
-erases the selected disk**, as disclosed in the form. There is no second
+erases the selected disk**, when you activate Install Harness. There is no second
 confirmation screen. The live USB and mounted disks are excluded. Selecting a
 disk alone does not write to it. Passwords must be nonempty; this preview uses a
 US keyboard layout, including at disk unlock.
