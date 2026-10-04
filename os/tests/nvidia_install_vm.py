@@ -88,7 +88,8 @@ def main():
         for module in ['nvidia', 'nvidia_modeset', 'nvidia_drm']:
             assert re.search(r'/' + module + r'\.ko(?:\.(?:zst|xz|gz))?(?:\s|$)', output), module
         firmware, _ = vm.command('modinfo -F firmware nvidia')
-        names = [line.strip() for line in firmware.splitlines() if line.strip().startswith('nvidia/')]
+        # Serial shell-integration escapes may precede the first output line.
+        names = re.findall(r'nvidia/[A-Za-z0-9._/-]+', firmware)
         assert names and all(name in output for name in names), 'GSP firmware missing from initramfs'
         receipt['early_display_modules_and_firmware'] = 'passed'
         output, status = vm.command('nvidia-smi', check=False)
