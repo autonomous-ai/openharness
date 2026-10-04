@@ -207,7 +207,11 @@ export class Supervisor {
     this.coreSafeMode = null
     this.ending = null
     this.killReason = null
-    const env: Record<string, string> = { HARNESSD_SUPERVISED: '1', HARNESSD_RESTARTS: String(this.restarts) }
+    // The core is told how long a silence the master allows, and beats well inside it (systemd passes
+    // WATCHDOG_USEC the same way): a timeout shorter than the core's own beat would kill a healthy core.
+    const env: Record<string, string> = {
+      HARNESSD_SUPERVISED: '1', HARNESSD_RESTARTS: String(this.restarts), HARNESSD_WATCHDOG_MS: String(this.options.heartbeatTimeoutMs),
+    }
     if (this.lastExit) env.HARNESSD_LAST_EXIT = this.lastExit
     if (this.safeMode) env.HARNESSD_SAFE_MODE = this.safeMode
     const core = this.deps.spawnCore(env)

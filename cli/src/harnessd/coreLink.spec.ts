@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { connectToMaster, processChannel, processLoopDelay, type LoopDelay, type MasterChannel } from './coreLink.js'
+import { connectToMaster, HEARTBEAT_INTERVAL_MS, heartbeatInterval, processChannel, processLoopDelay, type LoopDelay, type MasterChannel } from './coreLink.js'
 import { HARNESSD_PROTOCOL, type CoreMessage } from './protocol.js'
 
 class FakeChannel implements MasterChannel {
@@ -83,6 +83,16 @@ describe('connectToMaster', () => {
     expect(loop.made[0].stopped).toBe(true)
   })
 
+  it('beats well inside the silence its master allows', () => {
+    const channel = new FakeChannel()
+    const link = connectToMaster(channel, { ...supervised, HARNESSD_WATCHDOG_MS: '3000' }, undefined, delays().factory)
+    link.startHeartbeat()
+    vi.advanceTimersByTime(2_999)
+    link.close()
+    // One at once, then one a second: three inside the master's three seconds.
+    expect(channel.sent.filter((message) => message.type === 'harnessd:heartbeat')).toHaveLength(3)
+  })
+
   it('says why when start-up gave way to safe mode', () => {
     const channel = new FakeChannel()
     connectToMaster(channel, supervised).ready('no tmux')
@@ -123,5 +133,19 @@ describe('connectToMaster', () => {
     expect(Number.isInteger(first) && first >= 0).toBe(true)
     expect(delay.take()).toBeGreaterThanOrEqual(0)
     delay.stop()
+  })
+})
+
+describe('heartbeatInterval', () => {
+  it('is a third of the master\'s watchdog, every 5 s at most and every 250 ms at the fastest', () => {
+    expect(heartbeatInterval({ HARNESSD_WATCHDOG_MS: '30000' })).toBe(HEARTBEAT_INTERVAL_MS)
+    expect(heartbeatInterval({ HARNESSD_WATCHDOG_MS: '3000' })).toBe(1000)
+    expect(heartbeatInterval({ HARNESSD_WATCHDOG_MS: '600' })).toBe(250)
+  })
+
+  it('is every 5 s without a watchdog, or with one that is not a positive number', () => {
+    for (const watchdog of [undefined, '', 'soon', '0', '-3000']) {
+      expect(heartbeatInterval(watchdog === undefined ? {} : { HARNESSD_WATCHDOG_MS: watchdog }), String(watchdog)).toBe(HEARTBEAT_INTERVAL_MS)
+    }
   })
 })

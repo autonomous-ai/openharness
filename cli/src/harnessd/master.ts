@@ -66,7 +66,8 @@ export function supervisorOptions(env: NodeJS.ProcessEnv, execArgv: readonly str
   return {
     bindTimeoutMs: read('HARNESSD_BIND_TIMEOUT_MS', d.bindTimeoutMs, 1),
     readyTimeoutMs: read('HARNESSD_READY_TIMEOUT_MS', d.readyTimeoutMs, 1),
-    heartbeatTimeoutMs: read('HARNESSD_HEARTBEAT_TIMEOUT_MS', d.heartbeatTimeoutMs, 1),
+    // A second at least: below that a GC pause reads as a hang.
+    heartbeatTimeoutMs: read('HARNESSD_HEARTBEAT_TIMEOUT_MS', d.heartbeatTimeoutMs, 1_000),
     stopGraceMs: read('HARNESSD_STOP_GRACE_MS', d.stopGraceMs, 1),
     initialBackoffMs: read('HARNESSD_INITIAL_BACKOFF_MS', d.initialBackoffMs, 0),
     maxBackoffMs: read('HARNESSD_MAX_BACKOFF_MS', d.maxBackoffMs, 0),

@@ -14,13 +14,13 @@ describe('supervisorOptions', () => {
   it('reads valid overrides and keeps the defaults for anything unset or invalid', () => {
     expect(supervisorOptions({})).toEqual(DEFAULT_SUPERVISOR_OPTIONS)
     expect(supervisorOptions({
-      HARNESSD_BIND_TIMEOUT_MS: '100', HARNESSD_READY_TIMEOUT_MS: '150', HARNESSD_HEARTBEAT_TIMEOUT_MS: '200',
+      HARNESSD_BIND_TIMEOUT_MS: '100', HARNESSD_READY_TIMEOUT_MS: '150', HARNESSD_HEARTBEAT_TIMEOUT_MS: '1000',
       HARNESSD_STOP_GRACE_MS: '300', HARNESSD_INITIAL_BACKOFF_MS: '0', HARNESSD_MAX_BACKOFF_MS: '50',
       HARNESSD_BACKOFF_RESET_MS: '0', HARNESSD_HEAP_LIMIT_MIB: '512', HARNESSD_HEAP_RESTART_PERCENT: '90',
       HARNESSD_RSS_LIMIT_MIB: '0', HARNESSD_UPDATE_PROBATION_MS: '10', HARNESSD_CRASH_LOOP_CRASHES: '5',
       HARNESSD_CRASH_LOOP_WINDOW_MS: '1000',
     })).toEqual({
-      bindTimeoutMs: 100, readyTimeoutMs: 150, heartbeatTimeoutMs: 200, stopGraceMs: 300, initialBackoffMs: 0,
+      bindTimeoutMs: 100, readyTimeoutMs: 150, heartbeatTimeoutMs: 1000, stopGraceMs: 300, initialBackoffMs: 0,
       maxBackoffMs: 50, backoffResetMs: 0, heapLimitMiB: 512, heapRestartPercent: 90, rssLimitMiB: 0,
       updateProbationMs: 10, crashLoopCrashes: 5, crashLoopWindowMs: 1000,
     })
@@ -28,6 +28,11 @@ describe('supervisorOptions', () => {
       HARNESSD_BIND_TIMEOUT_MS: '0', HARNESSD_HEARTBEAT_TIMEOUT_MS: 'soon', HARNESSD_RSS_LIMIT_MIB: '-1',
       HARNESSD_HEAP_RESTART_PERCENT: '101', HARNESSD_CRASH_LOOP_CRASHES: '0',
     })).toEqual(DEFAULT_SUPERVISOR_OPTIONS)
+  })
+
+  it('allows no hang timeout under a second, where a GC pause would read as a hang', () => {
+    expect(supervisorOptions({ HARNESSD_HEARTBEAT_TIMEOUT_MS: '999' }).heartbeatTimeoutMs).toBe(DEFAULT_SUPERVISOR_OPTIONS.heartbeatTimeoutMs)
+    expect(supervisorOptions({ HARNESSD_HEARTBEAT_TIMEOUT_MS: '1000' }).heartbeatTimeoutMs).toBe(1000)
   })
 
   it('takes the heap limit from the flags the master was given, unless the environment names one', () => {

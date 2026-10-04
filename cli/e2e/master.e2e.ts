@@ -72,16 +72,26 @@ describe('harnessd', () => {
     await turnWorks(d, agentId)
   })
 
-  it('kills and restarts a core that hangs', async () => {
+  it('kills and restarts a core that hangs, and only one that hangs', async () => {
+    // A timeout shorter than the core's default beat (5 s): the core is told it and beats inside it.
+    // Before, every healthy core here was "hung" three seconds after binding.
     const d = await make({ HARNESSD_HEARTBEAT_TIMEOUT_MS: '3000' })
     const { agentId } = await withAgent(d)
     const hung = d.corePid()!
+    const hangs = () => [...d.log().matchAll(/it is hung/g)].length
+    await new Promise((done) => setTimeout(done, 6_000))
+    expect(hangs(), 'a healthy core outlives twice the timeout').toBe(0)
+    expect(d.corePid()).toBe(hung)
     const wired = wiredCount(d)
     process.kill(hung, 'SIGSTOP')
-    await until('the master to notice', () => d.log().includes('it is hung'), 20_000)
+    await until('the master to notice', () => hangs() > 0, 20_000)
     await until('a new core to finish starting', () => wiredCount(d) > wired, 60_000)
     expect(IsolatedDaemon.alive(hung)).toBe(false)
     await turnWorks(d, agentId)
+    const next = d.corePid()
+    await new Promise((done) => setTimeout(done, 6_000))
+    expect(d.corePid(), 'the new core stays up').toBe(next)
+    expect(hangs()).toBe(1)
   })
 
   it('takes the core down with it when the master is killed, and starts clean again', async () => {

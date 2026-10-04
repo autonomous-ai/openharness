@@ -33,6 +33,18 @@ export function processLoopDelay(): LoopDelay {
 /** How often a core tells its master it is alive. The master's patience is several of these. */
 export const HEARTBEAT_INTERVAL_MS = 5_000
 
+/**
+ * How often this core beats: a third of the silence its master allows (`HARNESSD_WATCHDOG_MS`), so a
+ * busy event loop still lands one inside it — systemd pings at half its WatchdogSec — and never less
+ * often than every 5 s, which keeps the memory figures the beats carry fresh. 250 ms at the fastest.
+ * Without a watchdog (an older master), every 5 s, which its 30 s default allows.
+ */
+export function heartbeatInterval(env: NodeJS.ProcessEnv): number {
+  const watchdog = Number(env.HARNESSD_WATCHDOG_MS)
+  if (!Number.isFinite(watchdog) || watchdog <= 0) return HEARTBEAT_INTERVAL_MS
+  return Math.min(HEARTBEAT_INTERVAL_MS, Math.max(250, Math.floor(watchdog / 3)))
+}
+
 export interface MasterChannel {
   send?: (message: CoreMessage) => unknown
   once(event: 'disconnect', listener: () => void): unknown
@@ -53,7 +65,7 @@ export interface CoreLink {
   /** Start-up is done and requests are served — or it gave way to safe mode, and why: the master stops
    *  waiting for it either way, and rolls back an update whose first core ends up in safe mode. */
   ready(safeMode?: string): void
-  /** Tell the master, every `HEARTBEAT_INTERVAL_MS`, that this core is alive and how big it is. */
+  /** Tell the master, every `heartbeatInterval`, that this core is alive and how big it is. */
   startHeartbeat(): void
   /** The master is gone. A core without one stops, so nothing is left holding the port. */
   onMasterGone(listener: () => void): void
@@ -74,7 +86,7 @@ export const processChannel: MasterChannel = {
 export function connectToMaster(
   channel: MasterChannel = processChannel,
   env: NodeJS.ProcessEnv = process.env,
-  intervalMs = HEARTBEAT_INTERVAL_MS,
+  intervalMs = heartbeatInterval(env),
   loopDelay: () => LoopDelay = processLoopDelay,
 ): CoreLink {
   const supervised = env.HARNESSD_SUPERVISED === '1' && typeof channel.send === 'function'
