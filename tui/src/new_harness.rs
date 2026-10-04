@@ -129,6 +129,7 @@ pub struct Form {
     git: Value,
     git_key: Option<(String, String)>,
     git_loading: bool,
+    submit_after_git: bool,
     git_generation: String,
     models: Value,
     profiles: Value,
@@ -452,8 +453,9 @@ pub fn open(app: &mut App, machine: Option<String>, cwd: Option<String>) {
 
 fn make_form(app: &mut App, machine: Option<String>, cwd: Option<String>, surface: Surface) -> Option<Box<Form>> {
     let saved = defaults();
+    // A window inherits its pane's machine and folder together. A temporarily offline
+    // machine must not redirect that folder (and the next task) to another computer.
     let machine = machine
-        .filter(|id| app.fleet.machines.iter().any(|m| m.id == *id && m.usable()))
         .or_else(|| app.fleet.registered_local_machine().filter(|m| m.usable()).map(|m| m.id.clone()))
         .or_else(|| {
             app.fleet
@@ -534,6 +536,7 @@ fn make_form(app: &mut App, machine: Option<String>, cwd: Option<String>, surfac
         git: Value::Null,
         git_key: None,
         git_loading: false,
+        submit_after_git: false,
         git_generation: String::new(),
         models: Value::Null,
         profiles: Value::Null,
@@ -751,11 +754,13 @@ fn sync_git(app: &mut App, form: &mut Form, force: bool) {
             .await
         },
         move |app, reply| {
+            let mut submit = false;
             with_form(app, &id, |app, form| {
                 if form.git_generation != generation {
                     return;
                 }
                 form.git_loading = false;
+                submit = std::mem::take(&mut form.submit_after_git);
                 if form.error == "Checking the project…" { form.error.clear(); }
                 form.git = reply.unwrap_or_else(|_| json!({"error":"UNAVAILABLE"}));
                 if let Some(main) = form.git["mainFolder"].as_str().map(str::to_string)
@@ -772,6 +777,12 @@ fn sync_git(app: &mut App, form: &mut Form, force: bool) {
                 }
                 refresh_form(app, form);
             });
+            // Enter may arrive before the initial project check. Honor it once,
+            // only while this form is still visible and no later input cancelled it.
+            let visible = matches!(&app.modal, Some(Modal::NewHarness(f)) if f.id == id)
+                || app.modal.is_none() && app.home_visible()
+                    && app.welcome.forms.get(&app.tab().id).is_some_and(|f| f.id == id);
+            if submit && visible { start(app); }
         },
     );
 }
@@ -797,7 +808,7 @@ pub(crate) fn account_changed(app: &mut App, local_before: Option<&str>, machine
         let local = local_before == Some(form.draft.machine.as_str());
         if !local && !crate::local::is_local(&form.draft.machine) { continue }
         form.id = uuid::Uuid::new_v4().to_string();
-        form.starting = false; form.checking = false; form.git_loading = false;
+        form.starting = false; form.checking = false; form.git_loading = false; form.submit_after_git = false;
         form.git_key = None; form.git = Value::Null; form.models = Value::Null; form.profiles = Value::Null;
         form.child = None; form.child_active = false; form.trail.clear(); form.projects.clear();
         form.recent.clear(); form.recent_labels.clear(); form.recent_status.clear();
@@ -812,6 +823,7 @@ pub(crate) fn account_changed(app: &mut App, local_before: Option<&str>, machine
     }
 }
 fn dismiss(app: &mut App, mut form: Box<Form>) {
+    form.submit_after_git = false;
     if let Some(tab) = form.recovery_page.take().filter(|_| form.starting || form.attempt.is_some()) {
         form.surface = Surface::Window(tab);
     } else if matches!(form.surface, Surface::Window(_)) {
@@ -1333,6 +1345,9 @@ fn back(app: &mut App, form: &mut Form) -> bool {
     }
 }
 pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
+    if key.code != KeyCode::Enter || key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) {
+        form.submit_after_git = false;
+    }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     if key.code == KeyCode::Esc || (ctrl && matches!(key.code, KeyCode::Char('c' | 'g'))) {
         if back(app, &mut form) {
@@ -1501,6 +1516,7 @@ pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
     }
 }
 pub fn paste(form: &mut Form, text: &str) {
+    form.submit_after_git = false;
     if form.starting || form.attempt.is_some() {
         return;
     }
@@ -1531,6 +1547,9 @@ pub fn paste(form: &mut Form, text: &str) {
 }
 pub fn mouse(app: &mut App, mouse: MouseEvent) {
     let Some(mut form) = take_active(app) else { return };
+    if matches!(mouse.kind, MouseEventKind::Down(_) | MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
+        form.submit_after_git = false;
+    }
     let pos = Position::new(mouse.column, mouse.row);
     let mut launch = false;
     if !form.starting && form.attempt.is_some() {
@@ -1619,7 +1638,10 @@ pub fn start(app: &mut App) {
     } else if let Some(error) = task::error(&form.draft.what.engine, &form.draft.task) {
         Some(error)
     } else if form.git_loading {
+        form.submit_after_git = true;
         Some("Checking the project…".into())
+    } else if form.git["error"] == "OFFLINE" {
+        Some("That machine is not connected. Reconnect or choose another project.".into())
     } else if form.git["error"].is_string() {
         Some("Could not read this project. Choose Branch to retry.".into())
     } else {
@@ -2259,6 +2281,34 @@ mod tests {
         f.child_active = true;
         paste(&mut f, "owner/\r\nrepository");
         assert_eq!(f.child.as_ref().unwrap().picker.query, "owner/ repository");
+    }
+
+    #[tokio::test]
+    async fn submitting_during_git_discovery_can_be_cancelled_without_losing_the_draft() {
+        for action in ["escape", "arrow", "typing", "paste", "dismiss"] {
+            let mut app = app();
+            open(&mut app, None, Some("/home/dev/repo".into()));
+            let Some(Modal::NewHarness(f)) = &mut app.modal else { panic!() };
+            f.git_loading = true;
+            f.draft.task = "Keep this task".into();
+            start(&mut app);
+            let Some(Modal::NewHarness(f)) = app.modal.take() else { panic!() };
+            assert!(f.submit_after_git);
+            assert!(!f.starting && f.attempt.is_none());
+            key(&mut app, f, KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Repeat));
+            let Some(Modal::NewHarness(mut f)) = app.modal.take() else { panic!() };
+            assert!(f.submit_after_git, "holding Enter keeps one pending submission");
+            match action {
+                "paste" => { paste(&mut f, " more"); store_form(&mut app, f); }
+                "dismiss" => dismiss(&mut app, f),
+                action => key(&mut app, f, KeyEvent::new(match action {
+                    "escape" => KeyCode::Esc, "arrow" => KeyCode::Down, _ => KeyCode::Char('!'),
+                }, KeyModifiers::NONE)),
+            }
+            let f = if let Some(Modal::NewHarness(f)) = &app.modal { f } else { app.new_harness_draft.as_ref().unwrap() };
+            assert!(!f.submit_after_git, "{action} must cancel pending submission");
+            assert!(f.draft.task.contains("Keep this task"));
+        }
     }
 
     #[tokio::test]

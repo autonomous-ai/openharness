@@ -231,7 +231,11 @@ never reaches a working pane.
 
 A fresh startup and `C-b c` use the same form, with a separate draft per window. The welcome
 screen explains the first task; later windows inherit the machine and folder they were opened
-from. Up to three recent sessions appear below the creation actions; Browse All Sessions opens
+from. An offline remote machine keeps that context until it reconnects or you choose another
+project; starting an agent or terminal never silently falls back to a different machine.
+Submitting while the initial project check runs starts once it finishes. Escape, further
+editing, or leaving the form cancels that pending start and keeps the draft.
+Up to three recent sessions appear below the creation actions; Browse All Sessions opens
 the full launcher. Existing Claude Code, Codex and other supported histories are discovered on
 connected machines. Loading, empty and unavailable history have distinct states; Ctrl-R retries
 discovery. Digits and plain-key bindings belong to the task while you type. Your modified prefix

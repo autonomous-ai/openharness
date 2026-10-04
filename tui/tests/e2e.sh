@@ -230,7 +230,42 @@ tmux_ send-keys -t t C-b 0
 expect "back to window 0" "Mock Codex (mock)"
 tmux_ send-keys -t t C-b w
 expect "C-b w: choose-tree" "windows (attached)"
+tree_pane=$(hn display -p '#{pane_id}')
+tree_window=$(hn display -p '#{window_id}')
+# Navigation and resize must stay in the chooser rather than type into its pane.
+tmux_ send-keys -t t End Home NPage PPage Right Left t T C-t O r v v
+for size in '40 12' '1 1' '120 32'; do
+  read -r width height <<< "$size"
+  tmux_ resize-window -t t -x "$width" -y "$height"
+  tmux_ send-keys -t t End Home
+done
+wait_eq "window chooser survives navigation and tiny resizes" 1 hn display -p '#{pane_in_mode}'
 tmux_ send-keys -t t q
+wait_eq "q leaves window chooser on its original pane" "$tree_pane" hn display -p '#{pane_id}'
+wait_eq "chooser navigation never changes the active window" "$tree_window" hn display -p '#{window_id}'
+# A paste-buffer chooser is still keyboard-first, including Unicode and a buffer
+# that disappears while it is open. Cancelling it must never paste the selection.
+while IFS= read -r buffer; do
+  [ -z "$buffer" ] || hn delete-buffer -b "$buffer"
+done < <(hn list-buffers -F '#{buffer_name}')
+hn choose-buffer
+wait_eq "empty paste-buffer chooser does not capture input" 0 hn display -p '#{pane_in_mode}'
+hn set-buffer -b audit-text 'BUFFER_CAFE_界'
+hn choose-buffer -N -F '#{buffer_name}:#{buffer_sample}'
+expect "paste-buffer chooser shows Unicode contents" 'audit-text:BUFFER_CAFE_界'
+tmux_ send-keys -t t Escape
+wait_eq "Escape leaves paste-buffer chooser" 0 hn display -p '#{pane_in_mode}'
+hn capture-pane -p | grep -qF 'BUFFER_CAFE_界' && fail "cancel pasted the selected buffer"
+hn choose-buffer -N -F '#{buffer_name}:#{buffer_sample}'
+expect "paste-buffer chooser reopens" 'audit-text:BUFFER_CAFE_界'
+tmux_ send-keys -t t Enter
+expect "Enter pastes the selected Unicode buffer" 'BUFFER_CAFE_界'
+wait_eq "pasting leaves chooser mode" 0 hn display -p '#{pane_in_mode}'
+hn choose-buffer -N
+wait_eq "buffer chooser is active before deletion" 1 hn display -p '#{pane_in_mode}'
+hn delete-buffer -b audit-text
+tmux_ send-keys -t t End Enter Escape
+wait_eq "deleting the final buffer leaves no trapped mode" 0 hn display -p '#{pane_in_mode}'
 tmux_ send-keys -t t C-b x
 expect "C-b x asks first" "(y/n)"
 tmux_ send-keys -t t n

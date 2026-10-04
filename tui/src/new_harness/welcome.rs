@@ -267,6 +267,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_new_window_keeps_its_remote_machine_and_folder_while_disconnected() {
+        for known in [true, false] {
+            let mut app = app();
+            if known {
+                app.fleet.machines.push(crate::fleet::Machine {
+                    id: "remote".into(), name: "remote-server".into(), local: false, shared: false,
+                    status: "offline".into(), reach: crate::fleet::Reach::Offline,
+                });
+            }
+            ensure(&mut app, Some(("remote".into(), "previous-pane".into())), Some("/srv/remote-project".into()));
+            let tab = app.tab().id.clone();
+            assert_eq!(app.welcome.forms[&tab].draft.machine, "remote",
+                "an explicit remote context must never fall back to the local machine");
+            assert!(matches!(&app.welcome.forms[&tab].draft.project,
+                Project::Folder(path) if path == "/srv/remote-project"));
+            crate::input::handle(&mut app, crossterm::event::Event::Paste("keep this remote task".into()));
+            event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            let form = &app.welcome.forms[&tab];
+            assert_eq!(form.draft.machine, "remote");
+            assert_eq!(form.draft.task, "keep this remote task");
+            assert!(form.error.contains("machine is not connected"), "{}", form.error);
+            assert!(!form.starting);
+            assert!(form.attempt.is_none());
+            event(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+            assert!(!editing(&app));
+        }
+    }
+
+    #[tokio::test]
     async fn task_arrows_leave_at_visual_edges_and_keep_multiline_editing_inside() {
         let mut app = app();
         ensure(&mut app, None, None);
