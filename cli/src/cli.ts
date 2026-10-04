@@ -184,6 +184,7 @@ import { createRecaps } from './core/turns/recaps.js'
 import { createHeartbeats } from './core/turns/heartbeats.js'
 import { createEventFunnel } from './core/turns/funnel.js'
 import { createAgyBackstop } from './core/turns/agyBackstop.js'
+import { createIngest } from './core/transcripts/ingest.js'
 import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
@@ -4416,116 +4417,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.setDashboardPort(hookPort) // surfaced to the web (e2e_status) so it can link here to approve
   console.log(`[cli] local dashboard → http://127.0.0.1:${hookPort}`)
 
-  // JSONL watcher → normalize each appended line → stream up. ONE lineToEvents pass feeds BOTH
-  // audiences: web (send, ServerEvents) and device (mirror.ingest → curated commander_event cards).
-  /** One transcript line through its engine's normalizer. The events, not yet emitted — the two
-   *  callers below differ only in what they know about the line's age. */
-  const ingestLine = (evt: LineEvent): ReturnType<CursorNormalizer['ingest']> | null => {
-    if (!registry.has(evt.sessionId)) return null // scope to terminal-registered sessions
-    const session = registry.bySession(evt.sessionId)
-    if (!session || session.engine !== evt.engine) return null
-    agentTokenUsage.changed(session)
-    if (autonomousDeviceService?.needsTranscript(session.agentId, evt.sessionId, session.engine)) {
-      autonomousDeviceService.observeTranscript(session.agentId, evt.sessionId, session.engine, evt.text)
-    }
-    runtimeProfiles.ingest(session, evt.text)
-    let events
-    if (session.engine === 'codex') {
-      let normalizer = codexNormalizers.get(evt.sessionId)
-      if (!normalizer) { normalizer = new CodexNormalizer('live', codexSubagentResolverFor(session.codexHome)); codexNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer.ingest(evt.text)
-      // Codex rides its failure ON task_complete, so the turn closes by itself — but with no text and
-      // no reason, which reads as "the agent answered nothing". Announce the reason ahead of the
-      // turn_ended that `events` carries.
-      const taskError = codexTaskError(evt.text)
-      if (taskError !== null) announceTurnAborted(evt.sessionId, 'codex', taskError)
-    } else if (session.engine === 'cursor') {
-      let normalizer = cursorNormalizers.get(evt.sessionId)
-      if (!normalizer) {
-        normalizer = new CursorNormalizer('live', evt.sessionId)
-        cursorNormalizers.set(evt.sessionId, normalizer)
-      }
-      events = normalizer.ingest(evt.text)
-    } else if (session.engine === 'muse') {
-      let normalizer = museNormalizers.get(evt.sessionId)
-      if (!normalizer) { normalizer = new MuseNormalizer(); museNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer.ingest(evt.text)
-    } else if (session.engine === 'amp') {
-      let normalizer = ampNormalizers.get(evt.sessionId)
-      if (!normalizer) { normalizer = new AmpNormalizer(); ampNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer.ingest(evt.text)
-    } else if (session.engine === 'grok') {
-      let normalizer = grokNormalizers.get(evt.sessionId)
-      if (!normalizer) { normalizer = new GrokNormalizer(); grokNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer.ingest(evt.text)
-    } else if (session.engine === 'agy') {
-      let normalizer = agyNormalizers.get(evt.sessionId)
-      if (!normalizer) { normalizer = new AgyNormalizer(); agyNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer.ingest(evt.text)
-    } else if (session.engine === 'copilot') {
-      let normalizer = copilotNormalizers.get(evt.sessionId)
-      if (!normalizer) { normalizer = new CopilotNormalizer(); copilotNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer.ingest(evt.text)
-    } else if (session.engine === 'pi') {
-      let normalizer = piNormalizers.get(evt.sessionId)
-      if (!normalizer) { normalizer = new PiNormalizer('live'); piNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer.ingest(evt.text)
-    } else if (session.engine === 'commandcode') {
-      let normalizer = commandcodeNormalizers.get(evt.sessionId)
-      if (!normalizer) { normalizer = new CommandCodeNormalizer('live'); commandcodeNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer.ingest(evt.text)
-      // Command Code fires no Stop hook for a failed turn: this record IS the notification. `ingest`
-      // already closed the turn (its turn_ended is in `events`, emitted just below) — announce the
-      // reason first so the web/device show the error ahead of the turn closing.
-      const runError = commandCodeRunError(evt.text)
-      if (runError !== null) {
-        announceTurnAborted(evt.sessionId, 'commandcode', runError, commandCodeRunErrorSummary(runError))
-      }
-    } else {
-      let st = turnStates.get(evt.sessionId)
-      if (!st) { st = newTurnState(); turnStates.set(evt.sessionId, st) }
-      events = lineToEvents(evt.text, st)
-    }
-    return events
-    return events
-  }
-  watcher.on('line', (evt: LineEvent) => {
-    // This runs from a void-discarded async read, so a throw here would be an unhandledRejection. A
-    // single malformed line must never take the daemon down — contain it per line and move on.
-    try {
-      const events = ingestLine(evt)
-      if (events) emitSessionEvents(evt.sessionId, events)
-    } catch (err) {
-      console.error(`[cli] line handler error (session ${evt.sessionId}):`, err instanceof Error ? err.message : err)
-    }
+  // Each transcript line, through its engine's normalizer, into the funnel (core/transcripts/ingest.ts).
+  const ingest = createIngest({
+    has: (sessionId) => registry.has(sessionId),
+    bySession: (sessionId) => registry.bySession(sessionId),
+    tokenUsage: agentTokenUsage,
+    device: () => autonomousDeviceService,
+    runtimeProfiles,
+    normalizers,
+    announceTurnAborted,
+    emit: (sessionId, events, opts) => emitSessionEvents(sessionId, events, opts),
+    attachSession: (session, reset) => attachSession(session, reset),
   })
-  // A transcript catch-up is history, including an unfinished last turn.
-  // Its content still streams, but only fresh events or live inspection can
-  // establish Working; replay cannot create a new completion notification.
-  // A transcript rewritten in place with too much history to replay: its tail already starts at the new
-  // end, and the session is attached again, from that end, so its turn state is rebuilt from the file.
-  watcher.on('rewritten', (event: RewrittenEvent) => {
-    const session = registry.bySession(event.sessionId)
-    if (!session || session.transcriptPath !== event.transcriptPath) return
-    console.log(`[watcher] ${sid(event.sessionId)} transcript rewritten in place — attaching it again from its end`)
-    void attachSession(session, true).catch((err) => console.error(`[cli] re-attach after rewrite failed (session ${sid(event.sessionId)}):`, err instanceof Error ? err.message : err))
-  })
-  watcher.on('history', (batch: HistoryEvent) => {
-    try {
-      type Events = ReturnType<CursorNormalizer['ingest']>
-      const all: Events = []
-      for (const evt of batch.lines) {
-        const events = ingestLine(evt)
-        if (events) all.push(...events)
-      }
-      if (!all.length) return
-      // Every line in this batch was already on disk. An unclosed last turn
-      // is not a fresh prompt; live runtime inspection can establish activity.
-      emitSessionEvents(batch.sessionId, all, { replay: true })
-    } catch (err) {
-      console.error(`[cli] history handler error (session ${batch.sessionId}):`, err instanceof Error ? err.message : err)
-    }
-  })
+  ingest.wireWatcher(watcher)
   // Nothing re-attaches the registry's agents here. Every one of them is dormant from the moment the
   // registry loads (see the `setActive(false)` transaction at the top of this function), and the first
   // reconcile pass is what reactivates each one it finds a live process for — and attaches it, in the
