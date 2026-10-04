@@ -187,6 +187,7 @@ import { createAgyBackstop } from './core/turns/agyBackstop.js'
 import { createIngest } from './core/transcripts/ingest.js'
 import { createTurnHooks } from './core/turns/turnHooks.js'
 import { createAttach } from './core/transcripts/attach.js'
+import { createForgetSession } from './core/agents/forget.js'
 import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
@@ -2525,53 +2526,29 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     cursorTaskHooks.enqueue(sessionId, { toolUseId, input: toolInput }, normalizer)
   }
 
-  /** Release a mutable session binding, or remove the process-owned agent everywhere. */
-  const forgetSession = (
-    id: string,
-    opts: { force?: boolean; keepAgent?: boolean; agentId?: string } = {},
-  ): void => {
-    const doomed = registry.resolve(id)
-    const sessionId = doomed?.sessionId || id
-    // Clients key on the AGENT id. Normally it is read off the entry, but an
-    // agent already removed from the registry cannot be looked up — and
-    // announcing its sessionId instead is silently useless: the app takes
-    // payload.agentId verbatim, matches nothing, and leaves the dead row on
-    // screen. Callers who know the id pass it.
-    const announceId = doomed?.agentId ?? opts.agentId ?? sessionId
-
-    console.log(opts.keepAgent
-      ? `[agent] ${sid(announceId)} released session ${sid(sessionId)}`
-      : `[agent] ${sid(announceId)} forgotten`)
-
-    if (!opts.keepAgent && doomed) stoppedAgents.save(doomed)
-    if (opts.keepAgent) registry.unbindSession(sessionId)
-    else if (doomed) registry.removeAgent(doomed.agentId)
-    else registry.remove(sessionId)
-    syncRecapPool()
-    normalizers.forget(sessionId)
-    turnStartedAt.delete(sessionId)
-    neverFoldedHistory.delete(sessionId)
-    // Both sets are per-session and must die with it: left behind they grow without bound in a daemon
-    // that runs for days, and a session forgotten then re-registered under the same id would inherit a
-    // stale "already replayed" and lose a first turn it was entitled to.
-    replayedFirstTurn.delete(sessionId)
-    clearAgyIdleWatch(sessionId)
-    cursorDiscovery.remove(sessionId)
-    cursorSubagents.forget(sessionId)
-    void removeCursorPendingTasks(env.ADAPTER_DATA_DIR, sessionId)
-    runtimeProfiles.forget(sessionId)
-    void watcher.removeSession(sessionId)
-    stopHeartbeat(sessionId)
-    backend.swarmPromptScopes.forget(doomed?.agentId ?? sessionId)
-    input.forget(doomed?.agentId ?? sessionId)
-    deviceInput.forget(doomed?.agentId ?? sessionId)
-    if (!opts.keepAgent) detachDsh(announceId)
-    mirror.forget(sessionId) // aborts any in-flight recap + clears busy; KEEPS the persisted summary
-    if (opts.keepAgent) return
-    backend.send({ type: 'agent_deleted', payload: { agentId: announceId, retained: !!doomed } }) // web tab
-    backend.sendCommander({ type: 'agent_deleted', payload: { agentId: announceId } })
-
-  }
+  // Release a session's binding, or remove a process-owned agent everywhere (core/agents/forget.ts).
+  const forgetSession = createForgetSession({
+    registry,
+    stoppedAgents,
+    syncRecapPool,
+    normalizers,
+    turnStartedAt,
+    neverFoldedHistory,
+    replayedFirstTurn,
+    clearAgyIdleWatch,
+    cursorDiscovery,
+    cursorSubagents,
+    runtimeProfiles,
+    watcher,
+    stopHeartbeat,
+    teams: backend.swarmPromptScopes,
+    input,
+    deviceInput,
+    detachDsh,
+    mirror,
+    clients: backend,
+    dataDir: env.ADAPTER_DATA_DIR,
+  })
 
   const retainExitedSession = createRetainExitedSession({
     stoppedAgents,
