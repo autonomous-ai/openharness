@@ -1287,6 +1287,7 @@ fn shell_placed(app: &mut App, machine: String, placement: Placement, reply: Res
         p.queued.extend(typed);
         p.start_command = reply.pointer("/agent/startCommand").and_then(serde_json::Value::as_str).map(str::to_string);
     }
+    crate::os_welcome::shell_created(app, pane);
     // A new session's first pane may belong to a session not currently in front.
     let (back, before) = (app.session_id, app.swap_back);
     if session != back { app.swap_back = Some(back); app.swap_session(session); }

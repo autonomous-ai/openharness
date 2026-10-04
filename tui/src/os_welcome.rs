@@ -12,6 +12,9 @@ pub struct State {
     pub dock_focus: Option<Action>,
     pub hits: Vec<(Rect, Action)>,
     pub network: Option<bool>,
+    welcome_panes: Vec<u64>,
+    install_pane: Option<u64>,
+    wifi_pane: Option<u64>,
     install_tab: Option<String>,
     wifi_tab: Option<String>,
 }
@@ -22,6 +25,7 @@ pub fn dock_height(app: &App) -> u16 { u16::from(live(app) && app.size.1 > 2) }
 
 pub fn tick(app: &mut App) {
     if !live(app) || app.tick % 8 != 0 { return }
+    app.os_welcome.welcome_panes.retain(|id| app.panes.contains_key(id));
     app.os_welcome.network = std::fs::read_to_string("/run/harness-network").ok().and_then(|text| match text.trim() {
         "connected" => Some(true), "offline" => Some(false), _ => None,
     });
@@ -41,12 +45,34 @@ fn this_computer(app: &App, machine: &str) -> bool {
     machine == app.fleet.local_id || crate::local::is_local(machine)
 }
 
+/// Record the originating request once. Terminal discovery can later replace
+/// start_command with the underlying login shell's command, so it is not an ID.
+pub fn shell_created(app: &mut App, id: u64) {
+    if !app.os_session { return }
+    let Some(pane) = app.panes.get(&id) else { return };
+    if !this_computer(app, &pane.machine_id) { return }
+    match pane.start_command.as_deref() {
+        Some("/usr/bin/hn-os welcome") if live(app) => {
+            if !app.os_welcome.welcome_panes.contains(&id) { app.os_welcome.welcome_panes.push(id); }
+        }
+        Some("sudo /usr/bin/harness install") if live(app) => app.os_welcome.install_pane = Some(id),
+        Some("/usr/bin/hn-os wifi") => app.os_welcome.wifi_pane = Some(id),
+        _ => {}
+    }
+}
+
 /// Always create system forms on this computer, even while a remote pane has focus.
 fn local_dialog(app: &mut App, name: &str, command: &str, install: bool) {
     let held = if install { &app.os_welcome.install_tab } else { &app.os_welcome.wifi_tab };
-    let existing = app.tabs.iter().position(|tab| (held.as_ref() == Some(&tab.id) && app.shell_inputs.contains_key(&tab.id)) || tab.panes().iter().any(|id|
-        app.panes.get(id).is_some_and(|pane| this_computer(app, &pane.machine_id) && pane.start_command.as_deref() == Some(command))));
-    if let Some(index) = existing { app.modal = None; app.select_tab(index); return }
+    let pane = if install { app.os_welcome.install_pane } else { app.os_welcome.wifi_pane };
+    let existing = app.tabs.iter().position(|tab| (held.as_ref() == Some(&tab.id) && app.shell_inputs.contains_key(&tab.id))
+        || pane.is_some_and(|id| tab.panes().contains(&id) && app.panes.get(&id).is_some_and(|p| this_computer(app, &p.machine_id))));
+    if let Some(index) = existing {
+        app.modal = None;
+        if let Some(id) = pane.filter(|id| app.tabs[index].panes().contains(id)) { app.focus_pane(index, id); }
+        else { app.select_tab(index); }
+        return;
+    }
     if app.link(&crate::input::shell_machine(app, None)).is_none() { return app.error("This computer is still starting. Try again in a moment.") }
     app.new_tab();
     app.rename_tab(name);
@@ -76,11 +102,15 @@ pub fn command(app: &mut App, args: &[String]) {
     if app.read_only() { return app.error("This client is read-only.") }
     if args.first().map(String::as_str) == Some("ready") {
         if !live(app) { return app.error("The USB welcome is not active.") }
-        let pane = args.get(1).and_then(|id| id.strip_prefix('%')).and_then(|n| n.parse::<u64>().ok()).and_then(|n| n.checked_add(1));
-        let Some(pane) = pane else { return app.error("The USB welcome must identify its pane.") };
-        if !app.panes.get(&pane).is_some_and(|p| this_computer(app, &p.machine_id) && p.start_command.as_deref() == Some("/usr/bin/hn-os welcome")) {
-            return app.error("That pane is not the USB welcome on this computer.");
-        }
+        let Some(hint) = args.get(1).filter(|id| id.strip_prefix('%').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))) else {
+            return app.error("The USB welcome must identify its pane.");
+        };
+        // A tmux-backed shell sees the backend's %N, not hn's independent pane
+        // number. Native fallback shells deliberately export hn's own number.
+        let pane = app.os_welcome.welcome_panes.iter().copied().find(|id| app.panes.get(id).is_some_and(|p|
+            this_computer(app, &p.machine_id) && if crate::local::is_local(&p.machine_id) { crate::pane::tag(*id) == *hint }
+            else { app.fleet.agent(&p.machine_id, &p.agent_id).is_some_and(|a| a.tmux_pane == *hint) }));
+        let Some(pane) = pane else { return app.error("That pane is not the USB welcome on this computer.") };
         app.os_welcome.guide_pane = Some(pane);
         app.fit_panes();
         return;
@@ -274,7 +304,12 @@ mod tests {
         app.open_agent("local-daemon", "installer", Placement::Auto(None));
         let installer = app.focused().unwrap();
         app.panes.get_mut(&installer).unwrap().start_command = Some("sudo /usr/bin/harness install".into());
+        shell_created(&mut app, installer);
+        // Discovery reports the original login shell after it has exec'd the
+        // form. Its new title/command must not cause a second installer.
+        app.panes.get_mut(&installer).unwrap().start_command = Some("/bin/bash -l".into());
         let install_tab = app.tab().id.clone();
+        app.open_agent("remote", "same-tab-work", Placement::Auto(None));
         app.new_tab();
         app.open_agent("remote", "work", Placement::Auto(None));
         act(&mut app, Action::Install);
@@ -309,12 +344,33 @@ mod tests {
         let pane = app.focused().unwrap();
         command(&mut app, &["ready".into(), format!("%{}", pane - 1)]);
         assert!(app.os_welcome.guide_pane.is_none());
-        let local = app.fleet.local_id.clone();
+        let local = crate::local::MACHINE.to_string();
         let p = app.panes.get_mut(&pane).unwrap();
         p.machine_id = local;
         p.start_command = Some("/usr/bin/hn-os welcome".into());
+        shell_created(&mut app, pane);
         command(&mut app, &["ready".into(), format!("%{}", pane - 1)]);
         assert_eq!(app.os_welcome.guide_pane, Some(pane));
         assert!(crate::commands::is_command_name("os-action"));
+    }
+
+    #[tokio::test]
+    async fn readiness_maps_the_backend_pane_instead_of_assuming_the_same_number() {
+        let mut app = fixture(120, 40);
+        app.fleet.local_id = "local-daemon".into();
+        let row = serde_json::json!({"id": "welcome", "engine": "terminal", "tmuxPane": "%997"});
+        app.fleet.agents.insert(("local-daemon".into(), "welcome".into()), crate::fleet::agent_from("local-daemon", &row, None));
+        app.open_agent("local-daemon", "welcome", Placement::Auto(None));
+        let pane = app.focused().unwrap();
+        app.panes.get_mut(&pane).unwrap().start_command = Some("/usr/bin/hn-os welcome".into());
+        shell_created(&mut app, pane);
+        app.panes.get_mut(&pane).unwrap().start_command = Some("/bin/bash -l".into());
+        assert_ne!(crate::pane::tag(pane), "%997");
+        app.new_tab();
+        app.open_agent("remote", "other-work", Placement::Auto(None));
+        let current = app.focused();
+        command(&mut app, &["ready".into(), "%997".into()]);
+        assert_eq!(app.os_welcome.guide_pane, Some(pane));
+        assert_eq!(app.focused(), current, "readiness must not change the current work");
     }
 }
