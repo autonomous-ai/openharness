@@ -108,6 +108,8 @@ def main():
             vm.start(live=False)
             vm.login_installed(config)
             vm.command('test ! -e /run/harness-os-restart-required; test -s ~/projects/update-survivor/keep.txt')
+            from release_update_vm import finish_after_reboot
+            receipt['system_channel']['checks'].append(finish_after_reboot(vm))
             receipt['system_channel']['reboot_keyboard'] = check_graphical_keyboard(vm, 'system-channel-reboot')
             receipt['checks'].append('The OS-channel update boots its rebuilt encrypted image and accepts keyboard input')
         receipt['status'] = 'passed'

@@ -1,6 +1,7 @@
 """Exercise the actual OS release transport on a disposable installed VM."""
 import json
 import shlex
+import time
 from session_vm import put
 
 
@@ -8,7 +9,8 @@ def exercise(vm, manifest):
     # Retain the new bootstrap outside pacman-owned paths before restoring the
     # public preview. It has no updater; this is its one-time migration path.
     vm.command('mkdir -p /tmp/system-channel; cp /usr/lib/harness-os/release_update.py '
-               '/usr/lib/harness-os/runtime_update.py /tmp/system-channel/')
+               '/usr/lib/harness-os/runtime_update.py /usr/lib/harness-os/live_update.py '
+               '/usr/lib/harness-os/open-updates /etc/sudoers.d/30-harness-updates /tmp/system-channel/')
     vm.command('cp /home/me/update-bundle/package-manifest.json /tmp/fast-updates/; '
                'cp /home/me/update-bundle/' + shlex.quote(manifest['package']['name']) + ' /tmp/fast-updates/')
     builder = '''import hashlib, json, pathlib
@@ -37,18 +39,59 @@ metadata = dict(schema=1, channel='preview', architecture='x86_64',
     assert status != 0, 'A corrupt channel package was accepted'
     checks.append('A corrupt download is rejected before the package transaction')
     vm.command('cp /tmp/good-os-package ' + shlex.quote(package))
-    output, _ = vm.command('sudo ' + updater + 'apply' + feed, timeout=180)
-    (vm.folder / 'system-channel-apply.log').write_text(output)
+    # Restore the candidate UI on the old package solely to exercise its new
+    # combined action. Only the root helper's parser default uses the private
+    # loopback feed; the shipped helper never accepts a user-owned feed cache.
+    vm.command('sudo install -m 644 /tmp/system-channel/live_update.py /usr/lib/harness-os/live_update.py; '
+               'sudo install -m 755 /tmp/system-channel/open-updates /usr/lib/harness-os/open-updates; '
+               'sudo install -m 440 /tmp/system-channel/30-harness-updates /etc/sudoers.d/30-harness-updates')
+    helper = vm.read_file('/tmp/system-channel/release_update.py').decode().replace(
+        "parser.add_argument('--feed', default=FEED,", "parser.add_argument('--feed', default='http://127.0.0.1:19447/os-metadata.json',")
+    put(vm, '/tmp/system-channel/test-release-helper.py', helper)
+    vm.command('sudo install -m 644 /tmp/system-channel/test-release-helper.py /usr/lib/harness-os/release_update.py; '
+               'sudo visudo -c -f /etc/sudoers')
+    vm.command('mkdir -p ~/.local/state/harness-os/updates; printf %s ' + shlex.quote(json.dumps(
+        {'available': True, 'checked_at': time.time(), 'version': manifest['package']['version']})) +
+        ' > ~/.local/state/harness-os/updates/system.json')
+    # A live Updates window may still be executing the pre-rollback module.
+    # Close only that fixture's UI pane before opening the candidate with Super+u.
+    vm.command('hn kill-window -t Updates 2>/dev/null || true')
+    vm.command('sudo -K')
+    for denied in ['/usr/bin/true', '/usr/bin/harness upgrade /tmp/untrusted-update']:
+        output, status = vm.command('sudo -n ' + denied, check=False)
+        assert status != 0 and 'password' in output.lower(), output
+    vm.keys('meta_l', 'u')
+    vm.command('for n in $(seq 1 360); do test -s ~/.local/state/harness-os/updates/approved.json && '
+               'grep -q after-reboot ~/.local/state/harness-os/updates/approved.json && exit 0; sleep .5; done; exit 1', timeout=190)
+    vm.screenshot('system-channel-single-action-no-password')
     vm.command('test "$(pacman -Q harness-os)" = ' + shlex.quote('harness-os ' + manifest['package']['version']))
     vm.command('while read -r pid; do kill -0 "$pid" || exit 1; done < /tmp/fast-original-agent; '
                'kill -0 "$(cat /tmp/fast-original-pid)"; cmp /tmp/fast-original-boot /proc/sys/kernel/random/boot_id')
     vm.command('python3 -c ' + shlex.quote("import json; assert json.load(open('/run/harness-os-restart-required'))['status'] == 'ready'"))
     available(False)
-    checks.append('Private root download applies offline from loopback, rebuilds initramfs, preserves live processes and offers no duplicate update')
+    checks.append('Super+u alone applies the verified OS package with no sudo credential, confirmation or password; unrelated root commands and local bundles remain denied')
+    checks.append('Private root download rebuilds initramfs and preserves live processes; no duplicate update is offered')
     _, status = vm.command('harness updates apply', check=False)
     assert status != 0, 'Fast runtime changed before the OS restart'
     checks.append('Fast activation stays paused until the OS reboot')
+    # Keep the private release server outside volatile /tmp for the one approved
+    # post-reboot runtime step. This is test-only, never part of the OS image.
+    vm.command('mkdir -p ~/update-test; cp -R /tmp/fast-updates/. ~/update-test/; '
+               'printf %s ' + shlex.quote('[Service]\nExecStart=\nExecStart=/usr/bin/python3 /usr/lib/harness-os/live_update.py check --feeds /home/me/update-test/feeds-both.json\n') +
+               ' > ~/.config/systemd/user/harness-update.service.d/fixture.conf; systemctl --user daemon-reload')
     receipt = {'status': 'passed', 'source_commit': manifest['source_commit'],
                'package': manifest['package'], 'checks': checks}
     (vm.folder / 'system-channel-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
     return receipt
+
+
+def finish_after_reboot(vm):
+    vm.command('systemd-run --user --collect --unit=harness-test-feed python3 -m http.server 19447 '
+               '--bind 127.0.0.1 --directory /home/me/update-test')
+    vm.command('for n in $(seq 1 30); do curl -fsS http://127.0.0.1:19447/fixture.json && exit 0; sleep .2; done; exit 1')
+    # The original approval authorizes this once. No second shortcut is sent.
+    vm.command('systemctl --user start harness-update.service', timeout=240)
+    vm.command('test ! -e ~/.local/state/harness-os/updates/approved.json; '
+               'hn --version | grep -F 999.0.1; test "$(harness version)" = 999.0.1')
+    vm.screenshot('system-channel-approved-runtime-finished')
+    return 'The same update request finishes hn/CLI against the new OS base after encrypted reboot, without another confirmation or shortcut'

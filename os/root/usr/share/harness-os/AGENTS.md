@@ -10,10 +10,12 @@ is required.
 
 ## System operations
 
-- `Super+u` opens Updates inside hn; `harness updates` is the shell equivalent.
+- `Super+u` starts the update inside hn. `harness updates` opens its screen;
+  click Update to start the same action. No confirmation or password is needed.
   The user timer checks hn and CLI releases and prepares verified downloads.
   Activation is explicit. An hn-only change restarts its screen, keeping terminal
-  owners and agents alive. System packages use the separate checkpointed action.
+  owners and agents alive. The same action handles checkpointed system packages. A restart is always
+  deferred until the user chooses it; Done keeps working processes alive.
   Do not replace `/usr/lib/harness` manually or enable the CLI's independent
   daemon handoff updater: this OS supervises activation with systemd.
 - This is Arch Linux with systemd, the LTS kernel, labwc, foot and Chromium.
@@ -41,7 +43,8 @@ is required.
   first use `sudo cryptsetup open /dev/sda3 hn-recovery`, then use
   `/dev/mapper/hn-recovery` in the recovery command. Device names vary; inspect
   `lsblk -f` first. Recovery changes the installed system, not user projects.
-- The user's account has password-protected sudo. Do not disable authentication,
+- The user's account has password-protected sudo, with narrow exceptions for
+  the root-owned network form and official update/recovery commands. Do not disable authentication,
   browser sandboxing, disk encryption or the session lock to make a task easier.
 
 ## Network and hardware

@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 
 MIN_DISK_BYTES = 12 * 1024**3
@@ -507,15 +508,26 @@ class InstallForm:
         except curses.error:
             pass
 
-    def line(self, row, text, active=False, bold=False, accent=False):
+    def line(self, row, text, active=False, bold=False, accent=False, offset=0, span=None):
         height, width = self.screen.getmaxyx()
         row += self.top
-        if row >= height or width < 5:
+        length = min(self.width - offset, width - self.left - offset - 1)
+        if span is not None:
+            length = min(length, span)
+        if not 0 <= row < height or length <= 0:
             return
         attr = (curses.A_REVERSE if active else self.accent if accent else curses.A_NORMAL) | (curses.A_BOLD if bold else 0)
         if active:
-            text = text.ljust(self.width)
-        self.screen.addnstr(row, self.left, text, min(self.width, width - self.left - 1), attr)
+            text = text.ljust(length)
+        self.screen.addnstr(row, self.left + offset, text, length, attr)
+
+    def field(self, row, label, value, active=False):
+        self.line(row, f'{label:18}', span=18)
+        self.line(row, value, active=active, offset=18)
+
+    def button(self, row, text, active=False):
+        label = '[ ' + text + ' ]'
+        self.line(row, label, active=active, offset=(self.width - len(label)) // 2, span=len(label))
 
     def cursor(self, visible):
         if visible == self.cursor_visible:
@@ -621,14 +633,14 @@ class InstallForm:
             duplicate = sum(disk_label(d) == disk_label(disk) for d in self.disks) > 1
             suffix = '  ' + Path(disk['name']).name if duplicate else ''
             label = disk_label(disk, self.width - 18 - len(suffix)) + suffix
-            self.line(4, f"{'Disk':18}{label}", self.focus == 0)
-            self.line(6, f"{'Encryption':18}[{'x' if self.encrypt else ' '}]", self.focus == 1)
+            self.field(4, 'Disk', label, self.focus == 0)
+            self.field(6, 'Encryption', f"[{'x' if self.encrypt else ' '}]", self.focus == 1)
             capacity = self.width - 20
             for index, label in enumerate(('Password', 'Repeat password')):
                 position = self.positions[index]
                 offset = max(0, position - capacity + 1)
                 mask = '*' * len(self.passwords[index][offset:offset + capacity])
-                self.line(8 + index * 2, f'{label:<18}[{mask:<{capacity}}]', self.focus == index + 2)
+                self.field(8 + index * 2, label, f'[{mask:<{capacity}}]', self.focus == index + 2)
             self.line(12, self.error)
             self.line(14, 'Install Harness'.center(self.width), active=True, bold=self.focus == 4)
             self.cursor(self.focus in (2, 3))
@@ -699,13 +711,14 @@ def completion(screen, boot=False):
     view.cursor(False)
     selected = 0
     while True:
-        if not view.begin('Harness is installed.'):
+        if not view.begin(''):
             continue
-        view.line(4, 'Remove the USB after shutdown.')
-        view.line(5, 'Then turn on this computer.')
-        view.line(8, '[ Shut down ]', active=selected == 0)
+        paragraph = 'Harness is installed. Shut down, remove the USB, then turn on your computer.'
+        for row, line in enumerate(textwrap.wrap(paragraph, min(48, view.width))):
+            view.line(4 + row, line.center(view.width))
+        view.button(8, 'Shut down', active=selected == 0)
         if not boot:
-            view.line(10, 'Back to Harness', active=selected == 1)
+            view.button(10, 'Back to Harness', active=selected == 1)
         screen.refresh()
         key = screen.get_wch()
         if key in ('\x1b', '\x03') and not boot:

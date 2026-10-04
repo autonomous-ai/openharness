@@ -5,5 +5,7 @@ ConditionPathExists=!/etc/harness-live
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 /usr/lib/harness-os/live_update.py check
-TimeoutStartSec=3min
+# One requested system update may finish its runtime activation after reboot.
+# Allow the bounded download and activation checks to finish before terminating.
+TimeoutStartSec=6min
 Nice=10

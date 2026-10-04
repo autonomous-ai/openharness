@@ -35,6 +35,8 @@ FILES = ('harness-tui', 'cli.mjs', 'notify.mjs')
 LIMIT = 64 * 1024 * 1024
 RESTART_REQUIRED = Path('/run/harness-os-restart-required')
 SYSTEM_LOCK = Path('/run/lock/hn-os.lock')
+BOOT_ID = Path('/proc/sys/kernel/random/boot_id')
+WORDMARK = ('█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀', '█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█')
 
 
 def version(value):
@@ -340,7 +342,7 @@ def check(feeds=None, progress=lambda _: None, force_system=False):
         system = check_system(force_system) if feeds is None else {}
         notice('Update ready · Super+u' if available or system.get('available') else '')
         prune()
-        if errors and not available:
+        if errors and not available and not system.get('available'):
             raise ValueError('Could not check for updates. Connect to the internet and try again.')
         return available
 
@@ -454,89 +456,194 @@ def apply(rollback=False):
         prune()
 
 
-def screen(window):
+def finish_approved_update():
+    """Finish one explicitly approved update after its OS package reboot.
+
+    A new OS base must prepare its own compatible runtime before activation.
+    Ordinary timer checks still only download; this receipt is written solely
+    after an update request and a successful privileged update, and is consumed once.
+    """
+    approval = read(STATE / 'approved.json', {})
+    if approval.get('status') != 'after-reboot' or RESTART_REQUIRED.exists():
+        return
+    if approval.get('boot_id') == BOOT_ID.read_text().strip():
+        return
+    try:
+        if approval.get('base_sha256') != digest(BASE_ID):
+            raise ValueError('The system changed since this update. Open Updates to check again.')
+        ready = prepared()
+        if ready and ready != selected():
+            apply()
+        if read(STATE / 'check.json', {}).get('errors') or read(STATE / 'system.json', {}).get('error'):
+            raise ValueError('Some updates could not be checked. Open Updates to try again.')
+        (STATE / 'approved.json').unlink(missing_ok=True)
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        write(STATE / 'approved.json', dict(approval, status='failed', error=str(error)))
+        notice('Update needs attention · Super+u')
+        raise
+
+
+def update_all():
+    """One user decision; root still verifies its own official release assets."""
+    if RESTART_REQUIRED.exists():
+        raise ValueError('Restart when ready to finish the update.')
+    if read(STATE / 'system.json', {}).get('available'):
+        # Do not reconnect an old session using a new OS package. Its included
+        # runtime takes effect on reboot; finish any independent public release
+        # against that new base afterward, under this same explicit approval.
+        subprocess.run(['sudo', '-n', '/usr/bin/harness', 'upgrade'], check=True)
+        (STATE / 'system.json').unlink(missing_ok=True)
+        if read(RESTART_REQUIRED, {}).get('status') == 'ready':
+            write(STATE / 'approved.json', dict(status='after-reboot',
+                boot_id=BOOT_ID.read_text().strip(), base_sha256=digest(BASE_ID)))
+            return
+    ready = prepared()
+    if ready and ready != selected():
+        # The unit survives reconnecting the screen. The Updates terminal
+        # process waits for its real result and survives with the other panes.
+        run('systemd-run', '--user', '--wait', '--collect', '--unit=harness-apply-update',
+            '/usr/bin/python3', '/usr/lib/harness-os/live_update.py', 'apply', timeout=240)
+    (STATE / 'approved.json').unlink(missing_ok=True)
+
+
+def screen(window, message='', refresh=False):
     curses.curs_set(0)
     window.keypad(True)
-    message = ''
+    window.timeout(500)
+    curses.mousemask(curses.ALL_MOUSE_EVENTS)
+    curses.mouseinterval(150)
+    choice = 0
+    targets = []
+    accent = curses.A_BOLD
+    try:
+        if curses.has_colors():
+            curses.start_color()
+            curses.use_default_colors()
+            curses.init_pair(1, curses.COLOR_YELLOW, -1)
+            accent |= curses.color_pair(1)
+    except curses.error:
+        pass
+
     def draw(status=''):
         window.erase()
         height, width = window.getmaxyx()
         ready = prepared()
-        available = ready is not None and ready != selected()
+        available = (ready is not None and ready != selected()) or read(STATE / 'system.json', {}).get('available')
         checked = read(STATE / 'check.json', {})
-        system = read(STATE / 'system.json', {})
-        failed = read(STATE / 'transaction.json', {}).get('status') == 'failed'
         system_state = read(RESTART_REQUIRED, {}).get('status')
-        reboot = system_state == 'ready'
-        recovery = system_state == 'failed'
-        if system_state:
-            available = False
-        summary = 'Could not check for updates.' if checked.get('errors') else (
-            'Harness is up to date.' if checked.get('checked_at') else 'Updates are checked automatically.')
-        lines = ['harness', '', status or message or (
-                 'Restore the previous system to recover.' if recovery else
-                 'Restart to finish the system update.' if reboot else
-                 'The system is updating…' if system_state else
-                 'Update failed. Previous version restored.' if failed else 'An update is ready.' if available else summary), '',
-                 'Enter   Restart now' if reboot else 'Enter   Try update again' if available and failed else
-                 'Enter   Update now' if available else 'C       Check for updates',
-                 'R       Restore previous system' if recovery else
-                 'R       Restore previous version' if not system_state and read(STATE / 'applied.json') else '',
-                 'S       System update ready' if system.get('available') else 'S       System updates', '', 'Esc     Back']
-        top, left = max(0, (height - len(lines)) // 2), max(0, (width - 46) // 2)
+        errors = checked.get('errors') or read(STATE / 'system.json', {}).get('error') or read(STATE / 'approved.json', {}).get('status') == 'failed'
+        if system_state == 'failed':
+            title, choices = 'The update needs recovery.', [('Restore', 'restore-system'), ('Back', None)]
+        elif system_state == 'ready':
+            title, choices = 'Updated. Restart when ready.', [('Done', None), ('Restart', 'reboot')]
+        elif system_state:
+            title, choices = 'The system is updating…', [('Back', None)]
+        elif available:
+            title, choices = 'Update available.', [('Update', 'update')]
+        elif errors or message:
+            title, choices = 'Could not finish checking for updates.', [('Retry', 'check'), ('Back', None)]
+        else:
+            title, choices = 'Harness is up to date.', [('Done', None)]
+        lines = [*WORDMARK, '', '', status or title]
+        if message and not status:
+            lines += ['', message]
+        top = max(0, (height - len(lines) - 4) // 2)
         for index, line in enumerate(lines):
             if top + index < height - 1:
-                window.addnstr(top + index, left, line, max(0, width - left - 1), curses.A_BOLD if index == 0 else 0)
+                left = max(0, (width - len(line)) // 2)
+                window.addnstr(top + index, left, line, max(0, width - left - 1), accent if index < 2 else 0)
+        labels = ['[ ' + label + ' ]' for label, _ in choices]
+        left = max(0, (width - sum(map(len, labels)) - 4 * (len(labels) - 1)) // 2)
+        row = top + len(lines) + 2
+        targets.clear()
+        if row < height - 1 and not status:
+            for index, label in enumerate(labels):
+                window.addnstr(row, left, label, max(0, width - left - 1),
+                               curses.A_REVERSE if index == choice % len(choices) else 0)
+                targets.append((row, left, min(width - 1, left + len(label)), choices[index][1]))
+                left += len(label) + 4
         window.refresh()
-        return available
+        return choices
+
+    if refresh and not RESTART_REQUIRED.exists():
+        draw('Checking for updates…')
+        try:
+            check(progress=draw, force_system=True)
+        except (ValueError, OSError, subprocess.SubprocessError) as error:
+            message = str(error)
     while True:
-        available = draw()
+        choices = draw()
+        requested = STATE / 'request.json'
+        if requested.exists():
+            requested.unlink(missing_ok=True)
+            if not RESTART_REQUIRED.exists():
+                # The shortcut starts updating. A ready download needs no
+                # further network round trip; otherwise discover it now.
+                if choices[0][1] != 'update' and not refresh:
+                    draw('Checking for updates…')
+                    try:
+                        check(progress=draw, force_system=True)
+                        message = ''
+                    except (ValueError, OSError, subprocess.SubprocessError) as error:
+                        message = str(error)
+                    choices = draw()
+                if choices[0][1] == 'update':
+                    return 'update'
+        refresh = False
         key = window.getch()
         if key in (27, ord('q')):
             return
-        try:
-            if key in (10, 13) and read(RESTART_REQUIRED, {}).get('status') == 'ready':
-                return 'reboot'
-            if key in (ord('r'), ord('R')) and read(RESTART_REQUIRED, {}).get('status') == 'failed':
-                return 'restore-system'
-            if key in (ord('c'), ord('C')) or key in (10, 13) and not available:
-                draw('Checking for updates…')
-                check(progress=draw, force_system=True)
-                message = ''
-            elif key in (10, 13) and available or key in (ord('r'), ord('R')):
-                action = 'rollback' if key in (ord('r'), ord('R')) else 'apply'
-                draw('Updating… Your agents keep running.')
-                # A transient unit survives the screen it restarts; no extra daemon.
-                run('systemd-run', '--user', '--collect', '--unit=harness-apply-update',
-                    '/usr/bin/python3', '/usr/lib/harness-os/live_update.py', action)
-                return
-            elif key in (ord('s'), ord('S')):
-                return 'system'
-        except (ValueError, OSError, subprocess.SubprocessError) as error:
-            message = str(error)
+        if key in (9, curses.KEY_BTAB, curses.KEY_LEFT, curses.KEY_RIGHT):
+            choice = (choice + 1) % len(choices)
+        elif key in (10, 13, curses.KEY_ENTER):
+            return choices[choice % len(choices)][1]
+        elif key == curses.KEY_MOUSE:
+            try:
+                _, x, y, _, buttons = curses.getmouse()
+                if buttons & (curses.BUTTON1_CLICKED | curses.BUTTON1_RELEASED):
+                    for row, left, right, action in targets:
+                        if y == row and left <= x < right:
+                            return action
+            except curses.error:
+                pass
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['check', 'screen', 'apply', 'rollback', 'status'], nargs='?', default='screen')
+    parser.add_argument('action', choices=['check', 'screen', 'request', 'apply', 'rollback', 'status'], nargs='?', default='screen')
     parser.add_argument('--feeds', type=Path, help='Explicit developer feed map; never used by the installed timer')
     args = parser.parse_args(argv)
     if os.geteuid() == 0 or Path('/etc/harness-live').exists():
         parser.error('Open Updates as your normal user on an installed Harness system.')
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if args.action == 'check':
+    if args.action == 'request':
+        write(STATE / 'request.json', {'requested_at': time.time()})
+    elif args.action == 'check':
         check(read(args.feeds) if args.feeds else None)
+        finish_approved_update()
     elif args.action == 'screen':
+        message = ''
+        # A prepared release can be applied immediately. Otherwise check now
+        # instead of exposing another command or making the user wait for a timer.
+        refresh = not (prepared() or read(STATE / 'system.json', {}).get('available'))
         while True:
-            action = curses.wrapper(screen)
-            if action == 'reboot':
-                subprocess.run(['systemctl', 'reboot'], check=True)
+            action = curses.wrapper(screen, message, refresh)
+            if action is None:
                 break
-            if action not in ('system', 'restore-system'):
-                break
-            subprocess.run(['sudo', '/usr/bin/harness', 'rollback' if action == 'restore-system' else 'upgrade'], check=False)
-            (STATE / 'system.json').unlink(missing_ok=True)
-            input('Press Enter to return to Updates.')
+            message, refresh = '', action == 'check'
+            try:
+                if action == 'reboot':
+                    subprocess.run(['systemctl', 'reboot'], check=True)
+                    break
+                if action == 'update':
+                    print('Updating Harness… Your agents keep running.', flush=True)
+                    update_all()
+                elif action == 'restore-system':
+                    subprocess.run(['sudo', '-n', '/usr/bin/harness', 'rollback'], check=True)
+                    (STATE / 'system.json').unlink(missing_ok=True)
+                    (STATE / 'approved.json').unlink(missing_ok=True)
+            except (ValueError, OSError, subprocess.SubprocessError) as error:
+                message = str(error)
     elif args.action in ('apply', 'rollback'):
         apply(rollback=args.action == 'rollback')
     else:

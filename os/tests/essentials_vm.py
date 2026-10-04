@@ -100,7 +100,7 @@ def wireless(vm, result, installed=False):
     vm.command('! ip route show default | grep -v "dev $(cat /run/harness-station)"')
     form = 'sudo python3 /usr/lib/harness-os/network.py --first-use; result=$?; printf %s "$result" > /tmp/wifi-form-result; exec bash -l'
     vm.command(USER_ENV + 'hn new-window -n Wi-Fi ' + shlex.quote(form))
-    offline_label = 'continue offline' if installed else 'install without connecting'
+    offline_label = 'set up later' if installed else 'install without connecting'
     wait_screen(vm, ['harness-test', offline_label], 'wifi-01-networks')
     vm.keys('esc')
     wait_screen(vm, ['harness-test'], 'wifi-01-escape-keeps-welcome')

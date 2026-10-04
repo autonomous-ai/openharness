@@ -271,31 +271,36 @@ OS windows use hn's local session storage (`HARNESS_TUI_DESK=off`), so their
 layout and pane references survive reconnects without signing into the cloud.
 This setting is confined to the OS launcher; ordinary hn installs are unchanged.
 
-The installed system keeps hn's standard status bar. Super+u opens the keyboard
-update action (Ctrl+b, Shift+u remains an alias). Enter applies the prepared
-runtime through a transient user service. An hn-only change reconnects just the
-screen; a CLI change also restarts its supervised service. Failure restores the
-previous selection. Restore previous version holds the rejected versions until
-a newer release arrives. Ordinary macOS/Linux hn shortcuts are unchanged.
+The installed system keeps hn's standard status bar. Super+u records an update
+request and selects the Updates terminal; the request starts checking/applying
+without another key. `harness updates` opens the same screen for inspection,
+with a clickable **Update** button. An hn-only change reconnects the screen;
+a CLI change also restarts its supervised service. Failure restores the previous
+selection. `harness updates rollback` restores the previous runtime and holds
+rejected versions until a newer release arrives. Ordinary macOS/Linux hn is unchanged.
 
-This fast track is independent of OS releases. The system channel is checked
-once daily; S in Updates installs the published OS package with an administrator
-password. Root independently fetches the official release metadata, verifies a
-private download, makes a checkpoint, updates any required Arch base first, and
-rebuilds the encrypted boot image. System packages never apply or reboot on a
-timer. After an OS package changes, fast updates wait for a reboot. Publishing an
-ISO is not a requirement for a TUI update. The public preview
-4 ISO predates this feature and needs the small integration bundle from the
-validated preview 5 release; it does not need to be flashed again.
+The system channel is checked daily. The same action applies an available OS
+package first, using `sudo -n harness upgrade`. A narrowly scoped sudoers rule
+permits only that exact command and `harness rollback`, with no extra arguments.
+Root independently fetches official metadata, verifies a private download,
+creates a checkpoint, updates any required Arch base and rebuilds initramfs.
+A local bundle, custom feed or arbitrary administrator command still requires
+normal authentication. No blanket passwordless sudo is installed.
 
-`development_update=true` builds a private, deliberately unpublished `999.0.1`
-hn/CLI fixture. The installed VM's actual timer stages it, then real Super+u and
-Enter keys apply hn and CLI independently. Acceptance checks the same terminal
-process, a live OpenCode process, keyboard input, rollback and an unchanged boot
-ID. Those fixture binaries are never included in the package or public channel.
-The same installed VM restores the public package and upgrades through a private
-loopback OS channel, rejects a corrupt asset, keeps its running agent alive, and
-reboots the rebuilt encrypted image. This does not depend on a public test release.
+A system update leaves the current processes alone. **Done** is selected by
+default; **Restart** is a separate deliberate action. The user's update request
+is retained with the new base identity and original boot ID. After a real reboot,
+the timer prepares compatible hn/CLI releases against that base and completes
+that one requested update. Failures require attention, not repeated activation.
+Ordinary later checks download without activating. Publishing an ISO remains
+independent from frequent TUI releases.
+
+`development_update=true` builds private, unpublished `999.0.1` hn/CLI releases.
+The native fixture exercises timer staging, Super+u alone, a real mouse click on
+Update, failed activation/rollback, live terminal and OpenCode PIDs, keyboard input
+and boot identity. The same installed VM tests the OS channel, cleared sudo
+credentials, a corrupt asset and the encrypted reboot. Fixture binaries and
+loopback feeds never enter a published package.
 
 The OS feed is `os-preview-updates/metadata.json` in the repository's release
 assets. It names the exact package and manifest, their byte sizes and SHA-256

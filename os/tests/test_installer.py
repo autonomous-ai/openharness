@@ -300,6 +300,7 @@ class Screen:
     """Capture drawn text and supply keys; never expose a real disk or terminal."""
     def __init__(self):
         self.keys, self.frames, self.drawn = [], [], []
+        self.drawn_rows, self.attributes = {}, []
         self.size = (24, 80)
 
     def getmaxyx(self):
@@ -307,17 +308,21 @@ class Screen:
 
     def erase(self):
         self.drawn = []
+        self.drawn_rows = {}
 
     clear = erase
 
     def addnstr(self, row, column, text, length, attr=0):
         self.drawn.append(text[:length])
+        self.drawn_rows.setdefault(row, []).append((column, text[:length]))
+        self.attributes.append((row, column, text[:length], attr))
 
     def addstr(self, row, column, text, attr):
         self.drawn.append(text)
 
     def refresh(self):
-        self.frames.append('\n'.join(self.drawn))
+        self.frames.append('\n'.join(''.join(text for _, text in sorted(parts))
+                                     for _, parts in sorted(self.drawn_rows.items())))
 
     def keypad(self, enabled):
         pass
@@ -358,7 +363,7 @@ class InstallationCompletion(unittest.TestCase):
                 self.assertEqual(installer.completion(screen), shutdown)
                 flush.assert_called_once()
                 self.assertIn('Harness is installed.', screen.frames[0])
-                self.assertIn('Remove the USB after shutdown.', screen.frames[0])
+                self.assertIn('remove the USB', screen.frames[0])
 
 
 class InteractiveInstall(unittest.TestCase):
@@ -405,6 +410,9 @@ class InteractiveInstall(unittest.TestCase):
         self.assertEqual(config['expected_serial'], 'HN_TEST')
         self.assertEqual(config['password'], self.secret)
         self.assertIn('Encryption        [x]', self.screen.frames[0])
+        for _, _, text, attr in self.screen.attributes:
+            if text.strip() in ('Disk', 'Encryption', 'Password', 'Repeat password'):
+                self.assertFalse(attr & installer.curses.A_REVERSE)
         first = self.screen.frames[0]
         for clutter in ('me@', '/dev/', 'HN_TEST', 'Tab move', 'Space toggle', 'eight characters'):
             self.assertNotIn(clutter, first)

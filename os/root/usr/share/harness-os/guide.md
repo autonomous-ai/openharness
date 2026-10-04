@@ -113,7 +113,8 @@ conversation history. Describe only collaboration controls present in this TUI.
 - Super+n opens New Harness; Super+t opens a terminal; Super+m connects a computer.
 - Super+b switches between Harness and the browser. Super+Enter focuses Harness.
 - Super+l locks the screen. Brightness and volume keys operate supported hardware.
-- Super+u opens Updates after installation. Updates keep projects and running
+- Super+u starts updates after installation; the Update button is clickable too.
+  No confirmation or password is needed. Restart only when ready. Updates keep projects and running
   work; flashing another USB is not the everyday update workflow.
 
 These shortcuts require no Shift and no Ctrl+b prefix. Super is the Windows-logo key on a PC keyboard and the Command key on a Mac

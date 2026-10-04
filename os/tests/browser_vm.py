@@ -33,11 +33,12 @@ def observe(vm, *args):
     return 'systemd-run --user --quiet --wait --pipe --collect /tmp/harness-wlrctl ' + shlex.join(args)
 
 
-def focused(vm, app, name, maximized=False, timeout=15):
+def focused(vm, app, name, timeout=15):
     started = time.monotonic()
     criteria = ['app_id:' + app, 'state:active']
-    if maximized:
-        criteria += ['state:maximized']
+    # wlrctl 0.2.2's contains_value rejects enum zero, which is the Wayland
+    # maximized state. Observe focus here; actual page pixels independently
+    # verify display coverage instead of trusting that broken query.
     wait_command(vm, observe(vm, 'toplevel', 'find', *criteria), timeout)
     vm.screenshot(name)
     return round(time.monotonic() - started, 3)
@@ -87,7 +88,7 @@ def check_browser(vm, result):
 
     terminal('before-browser')
     vm.keys('meta_l', 'b')
-    result['cold_start_seconds_including_observer'] = focused(vm, 'chromium', 'browser-shortcut-cold', maximized=True, timeout=45)
+    result['cold_start_seconds_including_observer'] = focused(vm, 'chromium', 'browser-shortcut-cold', timeout=45)
     vm.keys('ctrl', 'l')
     vm.type_probe('http://127.0.0.1:18782/first')
     vm.keys('ret')
@@ -103,7 +104,7 @@ def check_browser(vm, result):
         terminal('terminal-' + str(index))
         state(vm, value='browser' + 'x'*index)
         vm.keys('meta_l', 'b')
-        to_browser = focused(vm, 'chromium', 'toggle-browser-' + str(index), maximized=True)
+        to_browser = focused(vm, 'chromium', 'toggle-browser-' + str(index))
         vm.type_probe('x')
         state(vm, value='browser' + 'x'*(index+1))
         result['toggles'].append(dict(to_terminal_seconds=to_terminal, to_browser_seconds=to_browser))
@@ -114,25 +115,30 @@ def check_browser(vm, result):
     # An explicit URL from an agent/terminal must display its result even while
     # the existing browser is behind the fullscreen terminal.
     vm.command('hn-browser http://127.0.0.1:18782/second')
-    focused(vm, 'chromium', 'explicit-url-browser', maximized=True)
+    focused(vm, 'chromium', 'explicit-url-browser')
     state(vm, path='/second')
     page_fills_display(vm, 'explicit-url-full-display')
     result['checks'].append('An explicit hn-browser URL raises the already running browser from behind Harness')
     vm.keys('ctrl', 'n')
-    focused(vm, 'chromium', 'new-browser-window', maximized=True)
+    focused(vm, 'chromium', 'new-browser-window')
     vm.keys('ctrl', 'l')
     vm.type_probe('http://127.0.0.1:18782/new-window')
     vm.keys('ret')
     state(vm, path='/new-window')
     page_fills_display(vm, 'new-window-full-display')
     vm.keys('ctrl', 'shift', 'w')
-    focused(vm, 'chromium', 'original-browser-restored', maximized=True)
+    focused(vm, 'chromium', 'original-browser-restored')
     vm.keys('ctrl', 'shift', 'w')
     focused(vm, 'hn', 'browser-closed-terminal')
     terminal('after-browser-close')
     wait_command(vm, '! pgrep -u "$(id -u)" -x chromium')
     vm.keys('meta_l', 'b')
-    focused(vm, 'chromium', 'browser-reopened', maximized=True, timeout=45)
+    focused(vm, 'chromium', 'browser-reopened', timeout=45)
+    vm.keys('ctrl', 'l')
+    vm.type_probe('http://127.0.0.1:18782/reopened')
+    vm.keys('ret')
+    state(vm, path='/reopened')
+    page_fills_display(vm, 'reopened-full-display')
     vm.keys('meta_l', 'b')
     focused(vm, 'hn', 'browser-final-return')
     terminal('after-browser-reopen')

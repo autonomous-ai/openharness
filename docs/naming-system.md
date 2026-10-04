@@ -115,6 +115,10 @@ configuration where it affects a decision.
 | Installer action | **Install Harness** |
 | Installation completion | **Harness is installed.** |
 | Completion actions | **Shut down**, **Back to Harness** |
+| Defer installed Wi-Fi setup | **Set up later** |
+| Apply available OS/runtime releases | **Update** |
+| Update needs a reboot | **Updated. Restart when ready.** |
+| Update completion actions | **Done**, **Restart** |
 | Default account | `me` |
 | Default computer name | `harness` |
 | Default shell identity | `me@harness` |
