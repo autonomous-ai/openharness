@@ -248,7 +248,8 @@ def main():
             pid = int((project / 'shell.pid').read_text())
             start_time = Path(f'/proc/{pid}/stat').read_text().split()[21]
             receipt['checks'].append('Three real hn shell panes open; the attached terminal accepts native PTY keyboard input')
-            prompt = ('Create sum.py here using only the Python standard library. It must accept zero or more '
+            prompt = (f'Use your file tools to create {project / "sum.py"} using only the Python standard library. '
+                      'Write the actual file to that absolute path. It must accept zero or more '
                       'signed integer command-line arguments, print their sum as one integer, and exit successfully. '
                       'No arguments must print 0. Test it. Do the work now without questions or subagents.')
             # Keep the agent open as it is on the OS. A completed `opencode run`
@@ -257,6 +258,9 @@ def main():
             type_into_screen(agent, 'printf "%s" "$$" > agent.pid; exec ' + agent_command)
 
             def project_passes():
+                identity = project / 'agent.pid'
+                if identity.is_file() and not Path('/proc/' + identity.read_text().strip()).exists():
+                    raise RuntimeError('The agent exited before completing its project')
                 if not (project / 'sum.py').is_file():
                     return False
                 before = checksum(project / 'sum.py')
@@ -311,6 +315,17 @@ def main():
             raise
         finally:
             cleanup_errors = []
+            if 'agent' in locals():
+                try:
+                    (output / 'agent-final.txt').write_text(hn('capture-pane', '-p', '-t', agent) + '\n')
+                except (OSError, subprocess.SubprocessError) as error:
+                    (output / 'agent-capture-error.txt').write_text(str(error) + '\n')
+            # This isolated home has no user account or credentials. Retain the
+            # agent's own diagnostic logs, never auth/provider configuration.
+            agent_logs = home / '.local/share/opencode/log'
+            if agent_logs.is_dir():
+                shutil.copytree(agent_logs, output / 'opencode-logs')
+            receipt['discovered_project_files'] = [str(path.relative_to(base)) for path in base.rglob('sum.py')]
             if screen:
                 (output / 'terminal.ansi').write_bytes(screen.data)
                 try:
