@@ -142,6 +142,12 @@ def wireless(vm, result):
     # The AP has DHCP, DNS and HTTP but no upstream Internet. NM can report
     # "connected (site only)"; this must not reopen Wi-Fi in the agent pane.
     # Run the complete packaged onboarding, not just its network sub-form.
+    vm.command('nmcli connection modify ' + SSID + ' ipv4.never-default yes ipv6.never-default yes; '
+               'nmcli connection up ' + SSID, timeout=45)
+    vm.command('LC_ALL=C nmcli -t -f STATE general > /tmp/wifi-local-state.txt')
+    state = vm.read_file('/tmp/wifi-local-state.txt').decode().strip()
+    assert state.startswith('connected (') and state != 'connected', state
+    (vm.folder / 'wifi-local-state.txt').write_text(state + '\n')
     vm.command(USER_ENV + 'hn new-window -n Connected ' + shlex.quote('/usr/bin/hn-os welcome'))
     vm.command(USER_ENV + 'sh -c ' + shlex.quote('for n in $(seq 1 60); do '
                'test "$(hn list-panes -F "#{pane_id}" | wc -l)" -eq 3 && exit 0; sleep .5; done; exit 1'), timeout=40)
@@ -150,6 +156,7 @@ def wireless(vm, result):
     assert b'Connect to Wi-Fi' not in vm.read_file('/tmp/wifi-onboarded.txt')
     vm.screenshot('wifi-04-onboarded-without-second-prompt')
     result['checks'].append('Full onboarding opens three panes on a saved local-only Wi-Fi connection without asking for Wi-Fi again')
+    vm.command('nmcli connection modify ' + SSID + ' ipv4.never-default no ipv6.never-default no')
     # The full-page offline action returns an explicit install result; Esc does
     # not strand a first-time user in an empty shell.
     vm.command('nmcli device disconnect "$(cat /run/harness-station)"')
