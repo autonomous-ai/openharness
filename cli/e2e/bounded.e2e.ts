@@ -3,9 +3,10 @@
  * daemon at its 4 GB heap: attaching read the whole transcript. These run the daemon under a heap far
  * smaller than the transcripts it serves.
  */
-import { mkdirSync, statSync, truncateSync } from 'node:fs'
+import { mkdirSync, statSync, statfsSync, truncateSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 
@@ -14,6 +15,13 @@ const TRANSCRIPT_MIB = 300
 
 describe('bounded memory', () => {
   let daemon: IsolatedDaemon | undefined
+  // Each test writes a transcript this size, and on a nearly full disk the fake engine dies mid-write:
+  // the turn then never ends and the test times out saying nothing about why (measured: 499 MiB free).
+  beforeAll(() => {
+    const disk = statfsSync(tmpdir())
+    const freeMiB = Math.floor(disk.bavail * disk.bsize / (1024 * 1024))
+    if (freeMiB < 4 * TRANSCRIPT_MIB) throw new Error(`these tests need ${4 * TRANSCRIPT_MIB} MiB free in ${tmpdir()}; ${freeMiB} MiB is`)
+  })
   afterEach(async () => { await daemon?.close(); daemon = undefined })
 
   it.each(['claude', 'codex'] as const)(`%s: a ${TRANSCRIPT_MIB} MiB transcript re-attaches under a ${HEAP_MIB} MiB heap`, async (engine) => {
