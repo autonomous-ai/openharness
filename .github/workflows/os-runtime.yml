@@ -43,8 +43,23 @@ jobs:
       - name: Native build tools and portable OS checks
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends musl-tools tmux
+          sudo apt-get install -y --no-install-recommends musl-tools libevent-dev libncurses-dev libutf8proc-dev bison
           make -C os check
+      - name: Use the OS tmux release for native comparison
+        run: |
+          curl --fail --location --retry 3 --max-time 120 \
+            https://github.com/tmux/tmux/releases/download/3.7c/tmux-3.7c.tar.gz \
+            --output "$RUNNER_TEMP/tmux.tar.gz"
+          echo '7c60cae9a0e25288e2e24750aafc9e8800fc7fd4555e447e1b29ee4201cfb3bf  tmux.tar.gz' > "$RUNNER_TEMP/tmux.sha256"
+          (cd "$RUNNER_TEMP" && sha256sum --check tmux.sha256)
+          mkdir "$RUNNER_TEMP/tmux-source"
+          tar -xzf "$RUNNER_TEMP/tmux.tar.gz" -C "$RUNNER_TEMP/tmux-source" --strip-components=1
+          cd "$RUNNER_TEMP/tmux-source"
+          ./configure --prefix="$RUNNER_TEMP/tmux-reference"
+          make -j2
+          make install
+          "$RUNNER_TEMP/tmux-reference/bin/tmux" -V
+          echo "$RUNNER_TEMP/tmux-reference/bin" >> "$GITHUB_PATH"
       - name: Build the exact native Harness runtime
         run: bash os/tools/build-runtime.sh
       - name: Existing native terminal acceptance

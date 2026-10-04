@@ -112,9 +112,18 @@ def main():
     assert subprocess.check_output(['node', '-p', 'process.arch'], text=True).strip() == {
         'x86_64': 'x64', 'aarch64': 'arm64'}[args.architecture]
     with (runtime / 'harness-tui').open('rb') as handle:
-        header = handle.read(20)
+        header = handle.read(64)
+        phoff = struct.unpack_from('<Q', header, 32)[0]
+        phsize, phcount = struct.unpack_from('<HH', header, 54)
+        assert phsize == 56 and 0 < phcount < 100
+        handle.seek(phoff)
+        phdrs = handle.read(phsize * phcount)
     assert header[:6] == b'\x7fELF\x02\x01'
     assert int.from_bytes(header[18:20], 'little') == {'x86_64': 62, 'aarch64': 183}[args.architecture]
+    load_alignments = [struct.unpack_from('<IIQQQQQQ', phdrs, index * phsize)[-1]
+                       for index in range(phcount) if struct.unpack_from('<I', phdrs, index * phsize)[0] == 1]
+    assert load_alignments and all(value >= (16384 if args.architecture == 'aarch64' else 4096)
+                                   for value in load_alignments)
     spec = importlib.util.spec_from_file_location('package', ROOT / 'os/tools/build-package.py')
     package = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(package)
@@ -129,6 +138,8 @@ def main():
             raise AssertionError('The PC image must reject an ARM runtime')
     receipt = {'status': 'running', 'scope': 'native userspace; no boot, drivers or platform installation',
                'architecture': args.architecture, 'kernel': platform.release(), 'runtime': info,
+               'page_size': os.sysconf('SC_PAGE_SIZE'), 'hn_load_alignments': load_alignments,
+               'tmux': subprocess.check_output(['tmux', '-V'], text=True).strip(),
                'checks': ['Exact source, native ELF/Node architecture, complete hashes and PC packaging boundary verified'],
                'started_at_unix': time.time()}
     report = output / 'receipt.json'
@@ -202,15 +213,21 @@ def main():
             daemon = start_daemon()
             wait(ready, 'Native daemon readiness', 90)
             receipt['checks'].append('The exact bundled CLI starts without an account and becomes discovery-ready')
-            shell = hn('new-session', '-d', '-s', 'runtime', '-x', '100', '-y', '32', '-P', '-F', '#{pane_id}',
+            shell = hn('new-session', '-d', '-s', 'runtime', '-c', str(project),
+                       '-x', '100', '-y', '32', '-P', '-F', '#{pane_id}',
                        'bash --noprofile --norc')
-            right = hn('split-window', '-h', '-p', '50', '-t', shell, '-P', '-F', '#{pane_id}',
+            right = hn('split-window', '-h', '-p', '50', '-t', shell, '-c', str(project), '-P', '-F', '#{pane_id}',
                        'bash --noprofile --norc')
-            agent = hn('split-window', '-v', '-p', '50', '-t', right, '-P', '-F', '#{pane_id}',
+            agent = hn('split-window', '-v', '-p', '50', '-t', right, '-c', str(project), '-P', '-F', '#{pane_id}',
                        'bash --noprofile --norc')
             screen = Screen([*command, 'attach-session', '-t', 'runtime'], env, project)
             wait(lambda: screen.data, 'Native screen output')
-            type_into_screen(shell, 'printf before > keyboard.txt')
+            # The daemon adopts pending shells asynchronously; a first escape
+            # sequence is not proof that a terminal is ready for input yet.
+            for pane in [shell, right, agent]:
+                wait(lambda: hn('display-message', '-p', '-t', pane, '#{pane_current_path}') == str(project),
+                     'Project working directory in ' + pane)
+            type_into_screen(shell, 'printf before > ' + shlex.quote(str(project / 'keyboard.txt')))
             wait(lambda: (project / 'keyboard.txt').read_text() == 'before', 'PTY keyboard input')
             pid = int(hn('display-message', '-p', '-t', shell, '#{pane_pid}'))
             start_time = Path(f'/proc/{pid}/stat').read_text().split()[21]

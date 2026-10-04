@@ -498,6 +498,11 @@ Raspberry Pi board boot and Apple Silicon's Asahi kernel, firmware, partitioning
 graphics and audio integration remain required. An ARM Ubuntu runner does not
 establish compatibility with either device, or with a different distribution's
 packages. Retain that boundary when reporting the workflow's results.
+The reference tmux uses the OS's checksum-pinned 3.7c source on both runners.
+The receipt records the actual kernel page size and hn's ELF load alignment.
+An aligned ARM executable still needs execution on a 16 KiB-page kernel before
+claiming Apple Silicon userspace compatibility; see
+[Asahi's page-size requirements](https://asahilinux.org/docs/sw/broken-software/).
 
 ## Mac support targets
 
