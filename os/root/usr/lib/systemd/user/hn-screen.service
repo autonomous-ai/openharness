@@ -19,6 +19,9 @@ Environment=BROWSER=hn-browser
 ExecStartPre=/usr/bin/python3 /usr/lib/harness-os/projects.py prepare
 WorkingDirectory=-%h/projects
 ExecStart=/usr/bin/foot --config=/usr/share/harness-os/foot.ini /usr/bin/hn
+# Old saved hn servers retain OS settings even after a package update. Migrate
+# those defaults via hn's API; a failed migration must not stop the terminal.
+ExecStartPost=-/usr/bin/python3 /usr/lib/harness-os/session-settings.py
 Restart=always
 RestartSec=1
 RestartSteps=5

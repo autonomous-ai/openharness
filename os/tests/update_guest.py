@@ -69,6 +69,10 @@ while True:
             time.sleep(0.1)
         run('systemctl', '--user', 'is-active', '--quiet', 'hn-screen')
         alive()
+    def updated_settings():
+        bar = run('hn', 'show-options', '-gv', 'status-right').stdout
+        assert 'local_machine' in bar and '%H:%M' in bar and '@harness-update' not in bar, bar
+        assert run('hn', 'show-options', '-gv', '@hn-new-window').stdout.strip() == 'shell'
     receipt = {'status': 'running', 'checks': [], 'previous_package': original_version,
                'candidate': manifest['package'], 'source_commit': manifest['source_commit']}
     broken = bundle.parent / 'broken-bundle'
@@ -104,6 +108,8 @@ while True:
     alive()
     receipt['checks'].append('Repeated apply recognizes the installed build without another transaction')
     restart()
+    updated_settings()
+    receipt['checks'].append('An older saved hn session migrates to the standard TUI footer and terminal-tab default')
     assert (Path.home() / 'projects/update-survivor/keep.txt').read_text() == (project / 'keep.txt').read_text()
     receipt['checks'].append('Legacy Projects migrates to lowercase projects while existing session paths remain valid'
                              if legacy else 'Existing lowercase projects stays in place through the update')
