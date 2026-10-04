@@ -14,8 +14,9 @@
 // open until the next prompt, `!ask` asks the person which drink they would like in the engine's own
 // dialog and answers with their choice, `!permit <command>` asks permission to run a command the way
 // the engine does and runs it only if allowed, `!flood <KiB>` prints that much to the terminal, in
-// numbered lines, the way a build log or a long diff does, `!exit` ends the process. Everything else is
-// echoed as the answer.
+// numbered lines, the way a build log or a long diff does, `!clear` starts a new conversation in the
+// same pane as Claude Code's `/clear` and Codex's `/new` do, `!exit` ends the process. Everything else
+// is echoed as the answer.
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -52,9 +53,9 @@ export async function run(engine, config) {
   const resumeAt = engine === 'claude' ? args.indexOf('--resume') : args.indexOf('resume')
   const resumed = resumeAt >= 0 && args[resumeAt + 1] && !args[resumeAt + 1].startsWith('-') ? args[resumeAt + 1] : null
   const fork = args.includes('--fork-session')
-  const sessionId = resumed && !fork ? resumed : randomUUID()
+  let sessionId = resumed && !fork ? resumed : randomUUID()
   const cwd = process.cwd()
-  const transcript = engine === 'claude'
+  let transcript = engine === 'claude'
     ? join(config.claudeProjectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
     : resumed && !fork && config.rolloutFor?.[resumed]
       ? config.rolloutFor[resumed]
@@ -174,6 +175,25 @@ export async function run(engine, config) {
     const prompt = raw.trim()
     if (!prompt) { draw(); return }
     if (prompt === '!exit') { process.stdout.write('\x1b[?2004l\r\n'); process.exit(0) }
+    if (prompt === '!clear') {
+      // The old conversation ends (its open turn first), a new id and transcript begin, and the engine
+      // says both through its hooks, as the real CLIs do.
+      if (open) finish('(interrupted by a new conversation)')
+      await hook('session-end', { reason: 'clear' })
+      sessionId = randomUUID()
+      transcript = engine === 'claude'
+        ? join(config.claudeProjectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
+        : join(config.codexHome, 'sessions', '2026', '10', '03', `rollout-2026-10-03T00-00-00-${sessionId}.jsonl`)
+      mkdirSync(dirname(transcript), { recursive: true })
+      writeFileSync(transcript, '')
+      parent = null
+      turn = 0
+      if (engine === 'codex') codex('session_meta', { id: sessionId, cli_version: '0.159.0', cwd, source: 'cli' })
+      process.stdout.write('\r\n(new conversation)\r\n')
+      draw()
+      await hook('session-start', { hookEvent: 'SessionStart', source: 'clear' })
+      return
+    }
     if (open) finish('(interrupted by a new prompt)')
     turn++
     open = `turn-${turn}`
