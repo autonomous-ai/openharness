@@ -6391,6 +6391,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'pane.focus_$i': () => app.focusPaneByIndex(i - 1),
     'navigation.commands': _showSearchCommands,
     'app.customize': () => unawaited(_customize()),
+    'pane.toggle_shading': () => unawaited(
+      appearancePrefsStore.setShadeInactivePanes(
+        !appearancePrefsStore.value.shadeInactivePanes,
+      ),
+    ),
     'app.add_phone': () => unawaited(_addPhone()),
     'app.store': _openStore,
     'app.daemon': _openCompanions,

@@ -75,8 +75,15 @@ behavior and data rules; the desktop design system controls presentation.
 
 ## Focused panes
 
-The selected pane stays at full contrast. Other visible panes receive the
-approved 30% neutral-gray veil; Graphite's inactive background is RGB 64,64,64.
+All panes stay at full contrast by default. **Cmd+Shift+F** toggles shading on
+and off while working (**Ctrl+Alt+F** on Linux; **Alt+Shift+F** in the browser).
+When enabled, panes outside the current focus receive the approved 30%
+neutral-gray veil; Graphite's inactive background is RGB 64,64,64.
+Customize Harness → Appearance → **Shade inactive panes** toggles this veil
+through the same saved preference and shows the current shortcut, including
+remaps. **Toggle pane shading** is also available in the command search and
+keyboard shortcuts. Turning it off leaves
+all panes at full contrast, with the existing focus and waiting-question borders.
 A single or zoomed pane stays clear. Existing click and keyboard focus actions
 own selection. Keep the current pane clear while a menu or the tab strip has
 keyboard focus. Waiting-question borders remain visible above the veil.

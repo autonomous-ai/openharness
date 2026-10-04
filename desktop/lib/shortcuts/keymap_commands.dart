@@ -510,6 +510,13 @@ final harnessCommands = <HarnessCommand>[
     nativeAction: 'customize',
   ),
   const HarnessCommand(
+    'pane.toggle_shading',
+    'Toggle pane shading',
+    ShortcutGroup.panes,
+    extraKeys: ['cmd+shift+f'],
+    keywords: ['focus', 'shade', 'dim', 'appearance'],
+  ),
+  const HarnessCommand(
     'app.store',
     'Harness Store',
     ShortcutGroup.actions,

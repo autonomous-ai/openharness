@@ -31,6 +31,7 @@ The defaults, in the workspace:
 | ⌘I | Models — subscriptions, local models, shared models, and APIs |
 | ⇧⌘L | Layout palette |
 | ⌘F · ⌘G · ⇧⌘G | Find in terminal · next · previous match |
+| ⇧⌘F / Ctrl+Alt+F (Linux) / Alt+Shift+F (browser) | Toggle inactive pane shading. Off by default; also available in Customize Harness → Appearance |
 | ⇧⌘I | Harnesses needing input |
 | ⌘, · ⌘/ | Settings · keyboard shortcuts |
 
