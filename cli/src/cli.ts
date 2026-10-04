@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import './config/loadEnv.js'
-import { MODEL_MANAGER_ID, ensureBundledCoreHarnesses } from './dsh/builtins.js'
+import { ensureBundledCoreHarnesses } from './dsh/builtins.js'
 import { runDevicesCommand } from './devices/client.js'
 import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
 import { mutateDsh } from './dsh/service.js'
@@ -27,17 +27,15 @@ import { AutonomousDeviceDirect } from './lib/autonomous-device/direct.js'
  */
 
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, openSync, existsSync, rmSync, statSync, renameSync } from 'fs'
-import { dirname, join, resolve } from 'path'
+import { join, resolve } from 'path'
 import { fileURLToPath } from 'url'
-import { execFile as execFileCb, spawn } from 'child_process'
+import { spawn } from 'child_process'
 import { createServer, type Server } from 'http'
 import { createInterface, emitKeypressEvents } from 'readline'
 import { homedir, hostname } from 'os'
 import { env } from './config/env.js'
 import { VERSION } from './version.js'
 import { sqlitePreflightMessage } from './lib/sqliteAvailability.js'
-import { AttachTracker } from './lib/attachTracker.js'
-import { binaryOnPath } from './lib/binaryOnPath.js'
 import { warmLoginShellEnvironment } from './lib/loginShellEnv.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
 import { DialLog } from './cable/dialLog.js'
@@ -77,78 +75,57 @@ import { ensureHarnessGrid, type EnsureStatus } from './lib/gridEnsure.js'
 import { passThroughToGridLogout } from './lib/gridLogout.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { warnIfGridSignInRemains } from './lib/gridCredentials.js'
-import { reconcileGridAttach, gridNamesLocal, createGridAccess, setUpWithin } from './lib/gridAttach.js'
+import { reconcileGridAttach, gridNamesLocal, createGridAccess } from './lib/gridAttach.js'
 import { signedInGridEmail, resetGridDeriveMemo } from './lib/gridDerive.js'
 import { forgetGridModels, gridAnnotation, keystrokePrewarm, observeMachineList, onGridModelsChanged, warmGridModels } from './lib/gridModels.js'
 import { gridAvailable, managedGridPath } from './lib/gridExec.js'
-import { ENGINE_CLI_COMMANDS, ENGINES, PROCESS_ENGINES, engineBin, enginePathOverride } from './lib/engineBin.js'
-import { isTerminalEngine, type AgentEngine } from './engines/types.js'
-import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from './lib/harnessDefaults.js'
-import { probeEngines } from './lib/engineProbe.js'
-import { randomUUID } from 'node:crypto'
+import { ENGINE_CLI_COMMANDS, ENGINES, PROCESS_ENGINES, enginePathOverride } from './lib/engineBin.js'
+import { isTerminalEngine } from './engines/types.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
-import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, dropPermissionFlagIfUnsupported, namedAgentArgs, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent } from './lib/engineLaunch.js'
+import { buildEngineLaunchArgv } from './lib/engineLaunch.js'
 import { workspaceMissing } from './lib/workspaceCheck.js'
-import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, gridEnvVarNames, isApiLaunch, type GridLaunchMachine, type GridWebSearchStatus } from './lib/gridLaunch.js'
+import { type GridLaunchMachine } from './lib/gridLaunch.js'
 import { HERMES_SYSTEM_MANAGED_DIR } from './lib/gridWebMcp.js'
 import { writeGridConfigDir } from './lib/gridConfigDir.js'
-import { tmuxSupportsSessionEnv, TMUX_SESSION_ENV_MIN } from './lib/tmuxVersion.js'
+import { tmuxSupportsSessionEnv } from './lib/tmuxVersion.js'
 import { clearDeleted, isRecentlyDeleted, markDeleted } from './lib/deletedSessions.js'
-import { terminateDeletedAgent, checkPidRuntime } from './lib/deleteAgentFallback.js'
-import { AgentRestartCoordinator, bypassPermissionFor, restartAgent, type RestartAgentDeps } from './lib/restartAgent.js'
-import { claudeContinuation, claudeProcessSession, findLiveSession, findResumedTranscript } from './lib/sessionRepair.js'
+import { claudeProcessSession, findLiveSession, findResumedTranscript } from './lib/sessionRepair.js'
 import { handoffProviderDeps } from './lib/handoffDiscovery.js'
 import { TmuxBackend } from './lib/tmuxBackend.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from './lib/hostTheme.js'
-import { describeAgentCreateFailure, summarizePaneOutput } from './lib/agentCreateDiagnosis.js'
-import { createAndRegisterPane } from './lib/createAgentPane.js'
-import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
 import { createRetainExitedSession } from './lib/retainExitedSession.js'
-import { createSessionSync } from './lib/sessionSync.js'
-import { CloseAgentService, inspectCloseActivity } from './lib/closeAgentService.js'
 import { OpenTabProtection } from './lib/openTabProtection.js'
-import { PurgeAgentService } from './lib/purgeAgentService.js'
 import { sessionCheckpoints } from './lib/sessionCheckpoint.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
 import { prepareAgentHandoff } from './lib/agentHandoff.js'
 import { SessionSearchIndex, folderWords, type SearchSource } from './lib/sessionSearch/indexer.js'
-import { ExternalSessions, OpenSessions, processAlive, stopSessionOwner, type SessionOwner } from './lib/sessionSearch/external.js'
+import { ExternalSessions, OpenSessions } from './lib/sessionSearch/external.js'
 import { externalProviders } from './lib/sessionSearch/externals/index.js'
-import { engineLabel } from './lib/agentNames.js'
 import { SessionSearchStore } from './lib/sessionSearch/store.js'
 import { SESSION_SEARCH_FILE, searchCommand } from './lib/sessionSearch/command.js'
 import { sweepWorktrees } from './lib/worktreeSweep.js'
 import { nameBranchAfterSession } from './lib/branchNaming.js'
 import { forgetAgentProject } from './lib/agentProject.js'
-import { createStopAgentService } from './lib/stopAgentService.js'
-import { createResumeAgentService } from './lib/resumeAgentService.js'
-import { buildLaunchOverrides, validateLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from './lib/launchOverrides.js'
-import { prepareCodexResume } from './engines/codex/portableHistory.js'
+import { type LaunchOverridesDeps } from './lib/launchOverrides.js'
 import { buildHarnessSessionLabel } from './lib/harnessSessionLabel.js'
 import { adoptLegacyHarnessSessions, listTmuxPanes } from './lib/tmuxAgentDiscovery.js'
 import { installedDsh } from './dsh/installed.js'
-import { dshPinnedPermissionMode, dshVerdictPath, dshViewerName } from './dsh/manifest.js'
+import { dshVerdictPath, dshViewerName } from './dsh/manifest.js'
 import { catalogEntry } from './dsh/catalog.js'
 import { removeDsh } from './dsh/install.js'
-import { preTrustClaudeProject, preTrustCodexProject } from './lib/claudeTrust.js'
-import { materializeWorkspace } from './dsh/materialize.js'
-import { harnessEnvToClear, type DshAccount } from './dsh/launch.js'
-import { forkRuntimeKey, harnessLaunchOrRefusal, incompatibleHarnessEngine, prepareHarnessLaunch } from './dsh/runtime.js'
+import { prepareHarnessLaunch } from './dsh/runtime.js'
 import { DshViewerManager } from './dsh/viewer.js'
 import { ViewerLedger } from './dsh/viewerLedger.js'
 import { DshVerdictWatcher, type DshVerdict } from './dsh/verdict.js'
 import { dshCommand, dshUsage } from './dsh/command.js'
-import { ApiConnectionError, ApiConnections } from './lib/apiConnections.js'
-import { refreshApiLaunch, rememberSavedApis } from './lib/apiModels.js'
+import { ApiConnections } from './lib/apiConnections.js'
+import { rememberSavedApis } from './lib/apiModels.js'
 import { apiCommand, apiUsage } from './lib/apiCommand.js'
 import { prepareApiInstructions } from './lib/apiInstructions.js'
 import type { AgentDshContext } from './lib/agentFrame.js'
-import { basename } from 'node:path'
 import {
-  bypassPermissionActive,
-  permissionModeFromArgv,
   clearPaneRemainOnExit,
   resolvePaneEngineProcess,
   tmuxPaneState,
@@ -156,21 +133,18 @@ import {
 import { ALL_TERMINAL_BACKENDS } from './config/terminalConfig.js'
 import { TerminalBackendCoordinator } from './lib/terminalBackendCoordinator.js'
 import { TerminalStreamManager } from './lib/terminalStreamManager.js'
-import { processIdentityKey, terminalRouteKey, terminalRuntimeLabel } from './lib/terminalRuntime.js'
+import { terminalRouteKey, terminalRuntimeLabel } from './lib/terminalRuntime.js'
 import { TerminalAgentReconciler } from './lib/terminalAgentReconciler.js'
-import { processRows, type DiscoveredTerminalAgent } from './lib/terminalAgentDiscovery.js'
+import { processRows } from './lib/terminalAgentDiscovery.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { newCommand } from './lib/newCommand.js'
 import { gridSetupCommand } from './lib/gridSetupCommand.js'
 import { WebSocket as NewCommandSocket } from 'ws'
 import {
-  terminalActionNotStarted,
-  type TerminalActionResult,
   type TerminalRuntimeRef,
-  type TmuxRuntimeRef,
 } from './lib/terminalTypes.js'
-import { Watcher, type HistoryEvent, type LineEvent, type RewrittenEvent, type TailHold } from './watcher/watcher.js'
+import { Watcher } from './watcher/watcher.js'
 import { chooseHookAgent, startHookServer } from './hookServer.js'
 import { connectToMaster } from './harnessd/coreLink.js'
 import { createTerminalControl } from './core/terminals/control.js'
@@ -217,18 +191,9 @@ import { WindowVisit } from './cable/windowVisit.js'
 import { WindowForm } from './cable/windowForm.js'
 import { RemoteRelayPool } from './lib/remoteRelay.js'
 import { TERMINAL_BINARY_VERSION } from './lib/terminalBinary.js'
-import { foldTranscript, lastTurnTextFromRawLines, lineToEvents, newTurnState, selectClaudeRecapLine, TranscriptFold, type LiveEvent, type TurnState } from './lib/normalize.js'
-import { attachTranscript, claudeAttachRules, codexAttachRules, type AttachRead } from './lib/attachTranscript.js'
-import { tailFileUntil } from './lib/transcriptTail.js'
-import { AskQuestionController, parseEngineQuestionPane, pollsQuestions, QuestionWatcher } from './lib/askQuestion.js'
-import { teamWriteHold } from './teams/preflight.js'
+import { type LiveEvent } from './lib/normalize.js'
 import { TeamError } from './teams/model.js'
-import { CommanderMirror, SUBAGENT_IDLE_MS, type CommanderMirrorOpts } from './lib/commander.js'
-import { AgentNotifications } from './lib/agentNotifications.js'
-import { deriveTurnSummary } from './lib/deviceRecap.js'
-import type { CableAgent } from './cable/cableSession.js'
 import { routeVoiceTask, setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter, type RouterAgent } from './lib/voiceRouter.js'
-import { tailFile } from './lib/sessions.js'
 import { E2eeStore, identitySpent, peekIdentityPub } from './lib/e2ee/store.js'
 import { confirmsRemoval, deviceRegistration, deviceStatusValue, formatDeviceDetail, formatDeviceHistory, formatDeviceList, logOrder, removeConfirmation } from './lib/e2ee/deviceDisplay.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
@@ -249,64 +214,38 @@ import { managedNodePath } from './lib/nodeRuntime.js'
 import { updateManagedTui } from './tui/manage.js'
 import { startTuiUpdater } from './tui/update.js'
 import { ensureHnLauncher, ensureLauncher, ensureManagedGrid, ensureManagedRuntime, startGridPinRecheck } from './lib/runtimeInstall.js'
-import { readdir, stat } from 'fs/promises'
-import { CodexNormalizer, codexTaskError } from './engines/codex/normalizer.js'
-import { readLastCodexTurnText } from './engines/codex/lastTurn.js'
-import { TurnActivity, type ActivityFrame } from './lib/turnActivity.js'
-import { CodexActivityReader, RuntimeActivityReader, activityRuntimeKey } from './lib/runtimeActivity.js'
-import { codexSubagentResolverFor } from './engines/codex/subagent.js'
-import { CursorNormalizer, lastCursorTurnText } from './engines/cursor/normalizer.js'
-import { CursorTranscriptDiscovery, findCursorTranscript } from './engines/cursor/discovery.js'
+import { type ActivityFrame } from './lib/turnActivity.js'
+import { CursorNormalizer } from './engines/cursor/normalizer.js'
+import { CursorTranscriptDiscovery } from './engines/cursor/discovery.js'
 import { cursorConfigDir, cursorDataDir } from './engines/cursor/home.js'
 import { CursorSubagentManager } from './engines/cursor/subagent.js'
 import { CursorTaskHookQueue } from './engines/cursor/taskHookQueue.js'
-import { loadCursorPendingTasks, removeCursorPendingTasks } from './engines/cursor/pendingTasks.js'
-import { OpencodeReader, readOpencodeMessages } from './engines/opencode/reader.js'
-import { applyOpencodeSessionModel, parseOpencodeModelId } from './engines/opencode/sessionModel.js'
-import { isOpencodeV2, opencodeMajorVersion } from './engines/opencode/version.js'
-import { lastOpencodeTurnText, opencodeMessagesToEvents } from './engines/opencode/normalizer.js'
-import { KiloReader, readKiloMessages } from './engines/kilo/reader.js'
-import { kiloMessagesToEvents, lastKiloTurnText } from './engines/kilo/normalizer.js'
-import { MuseNormalizer, lastMuseTurnText, museMessagesToEvents } from './engines/muse/normalizer.js'
-import { AmpNormalizer, lastAmpTurnText, ampMessagesToEvents } from './engines/amp/normalizer.js'
-import { GrokNormalizer, lastGrokTurnText } from './engines/grok/normalizer.js'
-import { findGrokTranscript } from './engines/grok/session.js'
-import { AgyNormalizer, lastAgyTurnText } from './engines/agy/normalizer.js'
-import { findAgyTranscript } from './engines/agy/session.js'
-import { agyPaneIdle } from './engines/agy/runtimeProfile.js'
-import { CopilotNormalizer, copilotHistoryTurnOpen, lastCopilotTurnText } from './engines/copilot/normalizer.js'
-import { copilotSessionForPid, findCopilotTranscript } from './engines/copilot/session.js'
-import { PiNormalizer, lastPiTurnText } from './engines/pi/normalizer.js'
-import { HermesReader, readHermesMessages } from './engines/hermes/reader.js'
+import { loadCursorPendingTasks } from './engines/cursor/pendingTasks.js'
+import { readOpencodeMessages } from './engines/opencode/reader.js'
+import { opencodeMajorVersion } from './engines/opencode/version.js'
+import { opencodeMessagesToEvents } from './engines/opencode/normalizer.js'
+import { readKiloMessages } from './engines/kilo/reader.js'
+import { kiloMessagesToEvents } from './engines/kilo/normalizer.js'
+import { readHermesMessages } from './engines/hermes/reader.js'
 import { hermesDbForSession } from './lib/hermesHome.js'
-import { DevinReader, readDevinMessages } from './engines/devin/reader.js'
-import { hermesMessagesToEvents, lastHermesTurnText } from './engines/hermes/normalizer.js'
-import { devinMessagesToEvents, lastDevinTurnText } from './engines/devin/normalizer.js'
-import {
-  CommandCodeNormalizer,
-  commandCodeRunError,
-  commandCodeRunErrorSummary,
-  lastCommandCodeTurnText,
-} from './engines/commandcode/normalizer.js'
-import { probeGatewayRuntime } from './lib/gatewayRuntime.js'
-import { probeGridAssignment, sameGridAssignment } from './lib/gridAssignment.js'
+import { readDevinMessages } from './engines/devin/reader.js'
+import { hermesMessagesToEvents } from './engines/hermes/normalizer.js'
+import { devinMessagesToEvents } from './engines/devin/normalizer.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
-import { SessionInputController } from './lib/sessionInput.js'
 import { DeviceResultJournal } from './lib/autonomous-device/resultJournal.js'
-import { AutonomousDeviceInput, isDeviceInputBoundary } from './lib/autonomous-device/input.js'
 import { adaptSlashCommand } from './lib/goalCommand.js'
-import { RuntimeProfileManager, parseRuntimeProfile, type RuntimeField } from './lib/runtimeProfile.js'
-import { RuntimeProfileController, inspectRuntimePane } from './lib/runtimeProfileController.js'
-import { deviceErrorText } from './lib/deviceErrors.js'
-import { correlateAgentEvent, turnHeartbeatFrame } from './lib/agentEvent.js'
-import { transcriptIsFirstTurn } from './lib/firstTurnReplay.js'
+import { RuntimeProfileManager } from './lib/runtimeProfile.js'
+import { RuntimeProfileController } from './lib/runtimeProfileController.js'
 // Before ANY child is spawned: on Linux an absent locale makes tmux and ps mangle their output,
 // which silently costs the daemon every pane it would have discovered. See lib/childLocale.ts.
 ensureUtf8Locale()
 import {
-  installTimestampedConsole, sid, preview,
-  prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS,
+  installTimestampedConsole,
+  sid,
+  prepareLogFile,
+  trimLogFile,
+  LOG_CHECK_INTERVAL_MS,
 } from './lib/log.js'
 
 
@@ -1798,13 +1737,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Reading and writing panes through control leases (core/terminals/control.ts).
   const terminalControl = createTerminalControl({ resolve: (target) => registry.resolve(target), terminals })
   const pinnedControls = terminalControl.pinnedControls
-  const pinTerminalControl = terminalControl.pinTerminalControl
   const invalidateTerminalControl = terminalControl.invalidateTerminalControl
   const captureTerminal = terminalControl.captureTerminal
-  const submitTerminalAction = terminalControl.submitTerminalAction
   const submitTerminal = terminalControl.submitTerminal
   const typeTerminal = terminalControl.typeTerminal
-  const keyTerminalAction = terminalControl.keyTerminalAction
   const keyTerminal = terminalControl.keyTerminal
   const validateTerminal = terminalControl.validateTerminal
   // Persisted records are not trusted blindly. The process reconciler below adopts a matching live
@@ -2147,19 +2083,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Each session's engine state, in one table (core/transcripts/normalizers.ts).
   const normalizers = createSessionNormalizers()
-  const turnStates = normalizers.turnStates
-  const codexNormalizers = normalizers.codexNormalizers
   const cursorNormalizers = normalizers.cursorNormalizers
-  const opencodeReaders = normalizers.opencodeReaders
-  const kiloReaders = normalizers.kiloReaders
-  const piNormalizers = normalizers.piNormalizers
-  const museNormalizers = normalizers.museNormalizers
-  const ampNormalizers = normalizers.ampNormalizers
-  const grokNormalizers = normalizers.grokNormalizers
   const agyNormalizers = normalizers.agyNormalizers
-  const copilotNormalizers = normalizers.copilotNormalizers
-  const hermesReaders = normalizers.hermesReaders
-  const devinReaders = normalizers.devinReaders
   const commandcodeNormalizers = normalizers.commandcodeNormalizers
   const sessionTurnState = normalizers.sessionTurnState
   const sessionTurnOpen = normalizers.sessionTurnOpen
