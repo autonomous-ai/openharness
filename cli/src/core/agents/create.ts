@@ -40,6 +40,7 @@ import { clearPaneRemainOnExit } from '../../lib/tmux.js'
 import type { TmuxBackend } from '../../lib/tmuxBackend.js'
 import { TMUX_SESSION_ENV_MIN, tmuxSupportsSessionEnv } from '../../lib/tmuxVersion.js'
 import type { Adoption } from './adopt.js'
+import { scmLaunchEnv } from '../../scm/scmProjects.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'
 
@@ -79,7 +80,7 @@ export function createAgentCreator({
   prepareApiTools, hookPort, hooksDisabled, gridLaunchMachine, terminalHintMachineName, blocksFolder, gridSetup,
   privateGridName,
 }: CreateAgentDeps) {
-  const createAgent: CreateAgent = async ({ engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, resumeSessionId, takeOver }) => {
+  const createAgent: CreateAgent = async ({ engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, resumeSessionId, takeOver, scmLaunchRecord }) => {
     if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
     // A conversation Harness did not start opens in its own folder, under its own title — taken over
     // from the terminal that has it, when asked to.
@@ -285,10 +286,12 @@ export function createAgentCreator({
       cwd,
       sessionLabel: label,
       argv,
-      env: freshHarnessEnvironment(engine, mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? { CODEX_HOME: codexHome } : undefined), dshEnv), !!grid || !!resumeSessionId,
+      env: freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? { CODEX_HOME: codexHome } : undefined), dshEnv),
+        scmLaunchEnv(scmLaunchRecord)), !!grid || !!resumeSessionId,
         permissionMode ?? (bypassPermission ? DEFAULT_HARNESS_PERMISSION : 'ask')),
       grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
       gridLaunchRecord: grid && gridLaunch ? { override: grid, webSearch: gridLaunch.webSearch } : null,
+      scmLaunchRecord: scmLaunchRecord ?? null,
       codexHome,
       dsh,
       dshRuntime: dsh ? label : null,

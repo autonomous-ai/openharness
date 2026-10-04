@@ -68,6 +68,7 @@ import { claudeTrusts, codexTrusts, preTrustClaudeProject, preTrustCodexProject 
 import { projectPreview } from './lib/projectPreview.js'
 import { readGitProject } from './lib/gitProject.js'
 import { detectScmProject } from './scm/scmProjects.js'
+import type { ScmLaunchRecord } from './scm/types.js'
 import { agentFrame, lastActivityAt, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { installedDsh, listInstalledDsh } from './dsh/installed.js'
@@ -568,6 +569,9 @@ export class BackendSocket {
      *  only between turns, `now` whatever it is doing (then tells it to continue), `wait` when its
      *  turn ends. Absent, one open elsewhere is refused and the refusal says whether it is busy. */
     takeOver?: 'idle' | 'now' | 'wait' | null
+    /** What the SCM that prepared `cwd` needs on every relaunch (registry `scmLaunch`). Present only
+     *  when this create prepared a folder, and null when no SCM made it (a new folder, a clone). */
+    scmLaunchRecord?: ScmLaunchRecord | null
   }) =>
     Promise<{ ok: true; session: RegisteredSession } | { ok: false; error: string; detail?: string }>) | null = null
   /** Called on `dsh_install` — cli.ts clones/sets up/doctors the harness and reports each phase. */
@@ -2948,8 +2952,12 @@ export class BackendSocket {
                   input.grid = target
                 }
                 let preparedFolder: string | undefined
+                let scmLaunchRecord: ScmLaunchRecord | null = null
                 if (projectFolder) {
-                  try { preparedFolder = await prepareProjectFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine) }) }
+                  try {
+                    preparedFolder = await prepareProjectFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine),
+                      onPrepared: prepared => { scmLaunchRecord = prepared.scmLaunchRecord } })
+                  }
                   catch (error) {
                     return { state: 'failed', error: error instanceof ProjectFolderError ? error.code : 'PROJECT_PREPARATION_FAILED',
                       detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.' }
@@ -2988,7 +2996,7 @@ export class BackendSocket {
                     }
                   } catch (error) { console.warn(`[agent] pre-trust ${input.cwd} · ${error instanceof Error ? error.message : error}`) }
                 }
-                const result = await create(preparedFolder ? { ...input, cwd: preparedFolder } : input)
+                const result = await create(preparedFolder ? { ...input, cwd: preparedFolder, scmLaunchRecord } : input)
                 if (result.ok) return { state: 'created', agentId: result.session.agentId }
                 // tmux may have executed before a timeout; registration cleanup is best-effort.
                 // Neither can prove that no process started, so never encourage another launch.

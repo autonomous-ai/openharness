@@ -92,6 +92,19 @@ describe('GitScmProject wraps the git path without changing it', { timeout: 30_0
     expect(placeholder.launchRecord).toEqual({ kind: 'git' })
   })
 
+  it('prepareProjectFolder reports the record a worktree needs at relaunch, and nothing for the folder itself or a new one', async () => {
+    const harnesses = join(root, 'harnesses')
+    const reported: unknown[] = []
+    const onPrepared = (prepared: unknown) => { reported.push(prepared) }
+    const cwd = await prepareProjectFolder({ source: 'worktree', gitSource: repo, branchRef: 'refs/heads/main' }, { root: harnesses, onPrepared })
+    expect(reported).toEqual([{ cwd, scmLaunchRecord: { kind: 'git' } }])
+    await git(repo, 'branch', 'aside')
+    expect(await prepareProjectFolder({ source: 'branch', gitSource: repo, branchRef: 'refs/heads/aside' }, { root: harnesses, onPrepared })).toBe(repo)
+    expect(await git(repo, 'branch', '--show-current')).toBe('aside')
+    expect(await prepareProjectFolder({ source: 'new', name: 'fresh' }, { root: harnesses, onPrepared })).toBe(join(harnesses, 'fresh'))
+    expect(reported).toHaveLength(1)
+  })
+
   it('rename names a placeholder branch after the session once, as nameBranchAfterSession does', async () => {
     const { cwd } = await scm.prepareIsolated(repo, { root: join(root, 'harnesses'), base: 'refs/heads/main' })
     const renamed = await scm.rename(cwd, 'Fix the login page')

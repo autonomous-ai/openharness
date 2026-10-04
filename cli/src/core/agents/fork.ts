@@ -23,6 +23,7 @@ import { forkName, planFork } from '../../lib/forkAgent.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../../lib/registry.js'
 import type { TmuxBackend } from '../../lib/tmuxBackend.js'
+import { scmLaunchEnv } from '../../scm/scmProjects.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'
 
@@ -123,9 +124,11 @@ export function createAgentForker({
       cwd: source.cwd,
       sessionLabel: label,
       argv,
-      env: mergedLaunchEnv(source.codexHome ? { CODEX_HOME: source.codexHome } : undefined, dshEnv),
+      env: mergedLaunchEnv(mergedLaunchEnv(source.codexHome ? { CODEX_HOME: source.codexHome } : undefined, dshEnv), scmLaunchEnv(source.scmLaunch)),
       grid: null,
       gridLaunchRecord: null,
+      // Same folder as the source, so the same workspace binding.
+      scmLaunchRecord: source.scmLaunch ?? null,
       codexHome: source.codexHome ?? null,
       dshRuntime: source.dsh ? label : null,
       dsh: source.dsh ?? null,

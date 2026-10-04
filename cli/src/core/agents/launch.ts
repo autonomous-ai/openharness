@@ -45,7 +45,7 @@ export function createLaunchHelpers({ prepareApiTools, savedApis, launchOverride
         }
       }
     }
-    return buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, cwd: session.cwd, agent: session.agent ?? null, ...source, gridLaunch }, session.agentId)
+    return buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, cwd: session.cwd, agent: session.agent ?? null, scmLaunch: session.scmLaunch ?? null, ...source, gridLaunch }, session.agentId)
   }
 
   /**

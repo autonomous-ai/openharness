@@ -1833,6 +1833,37 @@ describe('BackendSocket outbound queue', () => {
     }
   })
 
+  it('hands the launch the SCM record the prepared workspace reported, and none for a folder no SCM made', async () => {
+    const socket = new BackendSocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:scm', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    const prepare = vi.spyOn(projectFolder, 'prepareProjectFolder').mockImplementation(async (project, options) => {
+      if (project.source === 'worktree') options?.onPrepared?.({ cwd: '/remote/harnesses/worktrees/repo/brave-otter', scmLaunchRecord: { kind: 'git' } })
+      return project.source === 'worktree' ? '/remote/harnesses/worktrees/repo/brave-otter' : '/remote/harnesses/codex-2026-09-24-12-00'
+    })
+    const create = vi.fn(async (_input: Record<string, unknown>) => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
+    socket.onCreateAgent = create
+    const ask = (requestId: string, choices: Record<string, unknown>) =>
+      socket.handleLocalFrame('local:scm', { type: 'agent_create', payload: { requestId, creationId: randomUUID(), engine: 'claude', ...choices } })
+    try {
+      ask('worktree', { projectSource: 'worktree', gitSource: '/remote/repo', branchRef: 'refs/heads/main' })
+      await vi.waitFor(() => expect(frames).toContainEqual(expect.objectContaining({ payload: expect.objectContaining({ requestId: 'worktree', state: 'failed' }) })))
+      expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: '/remote/harnesses/worktrees/repo/brave-otter', scmLaunchRecord: { kind: 'git' } }))
+      ask('new', { projectSource: 'new' })
+      await vi.waitFor(() => expect(frames).toContainEqual(expect.objectContaining({ payload: expect.objectContaining({ requestId: 'new', state: 'failed' }) })))
+      expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: '/remote/harnesses/codex-2026-09-24-12-00', scmLaunchRecord: null }))
+      // A create that names its own folder prepared nothing, and says nothing about an SCM.
+      ask('cwd', { cwd: '/remote/own' })
+      await vi.waitFor(() => expect(frames).toContainEqual(expect.objectContaining({ payload: expect.objectContaining({ requestId: 'cwd' }) })))
+      expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: '/remote/own' }))
+      expect(create.mock.lastCall?.[0]).not.toHaveProperty('scmLaunchRecord')
+      expect(prepare).toHaveBeenCalledTimes(2)
+    } finally {
+      await socket.unregisterLocalClient('local:scm')
+      await socket.stop()
+    }
+  })
+
   it('checks an unknown creation without spawning and rejects malformed creation ids before launch', async () => {
     const socket = new BackendSocket('token')
     const frames: Array<Record<string, unknown>> = []
