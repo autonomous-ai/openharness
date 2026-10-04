@@ -69,7 +69,10 @@ metadata = dict(schema=1, channel='preview', architecture='x86_64',
     # loopback feed; the shipped helper never accepts a user-owned feed cache.
     vm.command('sudo install -m 644 /tmp/system-channel/live_update.py /usr/lib/harness-os/live_update.py; '
                'sudo install -m 755 /tmp/system-channel/open-updates /usr/lib/harness-os/open-updates; '
-               'sudo install -m 440 /tmp/system-channel/30-harness-updates /etc/sudoers.d/30-harness-updates')
+               # The old package does not own the new policy path. Use a
+               # fixture-only name so pacman can install its actual owned file
+               # without an unrelated "exists in filesystem" collision.
+               'sudo install -m 440 /tmp/system-channel/30-harness-updates /etc/sudoers.d/99-harness-test-updates')
     helper = vm.read_file('/tmp/system-channel/release_update.py').decode().replace(
         "parser.add_argument('--feed', default=FEED,", "parser.add_argument('--feed', default='http://127.0.0.1:19447/os-metadata.json',")
     put(vm, '/tmp/system-channel/test-release-helper.py', helper)
@@ -90,6 +93,10 @@ metadata = dict(schema=1, channel='preview', architecture='x86_64',
                'grep -q after-reboot ~/.local/state/harness-os/updates/approved.json && exit 0; sleep .5; done; exit 1', timeout=190)
     vm.screenshot('system-channel-single-action-no-password')
     vm.command('test "$(pacman -Q harness-os)" = ' + shlex.quote('harness-os ' + manifest['package']['version']))
+    # The new package now owns its real policy. Remove the bootstrap fixture
+    # only after passwordless activation has been independently established.
+    vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v; '
+               'sudo rm /etc/sudoers.d/99-harness-test-updates; sudo -K')
     vm.command('while read -r pid; do kill -0 "$pid" || exit 1; done < /tmp/fast-original-agent; '
                'kill -0 "$(cat /tmp/fast-original-pid)"; cmp /tmp/fast-original-boot /proc/sys/kernel/random/boot_id')
     vm.command('python3 -c ' + shlex.quote("import json; assert json.load(open('/run/harness-os-restart-required'))['status'] == 'ready'"))
