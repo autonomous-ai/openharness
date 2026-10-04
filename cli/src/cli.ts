@@ -176,6 +176,7 @@ import { connectToMaster } from './harnessd/coreLink.js'
 import { createTerminalControl } from './core/terminals/control.js'
 import { createAgentEvents } from './core/agents/events.js'
 import { createSessionNormalizers } from './core/transcripts/normalizers.js'
+import { createInput } from './core/input.js'
 import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
@@ -2609,66 +2610,29 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         handover.hold?.release(handover.next)
       }
     })
-  const input: SessionInputController = new SessionInputController({
-    beforeSubmit: (id, text, tabId, deliveryId) => backend.swarmPromptScopes.prepare(id, text, tabId, deliveryId),
-    getSession: (id) => registry.resolve(id),
-    onDelivery: (event) => {
-      autonomousDeviceService?.delivery(event)
-      backend.orchestratorDelivery(event)
-      backend.teamDelivery(event)
+  // Everything the core writes into a pane, and the device's pane lock (core/input.ts).
+  const inputs = createInput({
+    resolve: (id) => registry.resolve(id),
+    byAgent: (agentId) => registry.byAgent(agentId),
+    terminal: terminalControl,
+    teams: {
+      prepare: (id, text, tabId, deliveryId) => backend.swarmPromptScopes.prepare(id, text, tabId, deliveryId),
+      delivery: (event) => {
+        backend.orchestratorDelivery(event)
+        backend.teamDelivery(event)
+      },
+      canWrite: (deliveryId) => backend.teamCanWrite(deliveryId),
     },
-    beforeTeamWrite: async session => {
-      const capture = await captureTerminal(session.agentId)
-      return teamWriteHold(session.engine, capture)
-    },
-    validateRuntime: validateTerminal,
-    inject: (id, text) => deviceInput.legacyWrite(id, () => submitTerminalAction(id, text)),
-    injectTeam: (id, text, deliveryId) => deviceInput.legacyWrite(id, async () => {
-      const session = registry.resolve(id)
-      const reason = session ? teamWriteHold(session.engine, await captureTerminal(id)) : 'team_waiting_unavailable'
-      if (reason) return { state: 'failed', dispatch: 'not_started', reason }
-      if (!backend.teamCanWrite(deliveryId)) return terminalActionNotStarted('team_waiting_control')
-      return submitTerminalAction(id, text)
-    }),
-    sendKey: (id, key) => deviceInput.legacyWrite(id, () => keyTerminalAction(id, key)),
-    capture: captureTerminal,
-    onError: (sessionId, message) => {
-      backend.send({ type: 'error', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { message } })
-      const engine = registry.resolve(sessionId)?.engine
-      backend.sendCommander({ type: 'commander_event', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { kind: 'error', text: deviceErrorText(message, engine) } })
-    },
-    // Command Code writes its transcript only once the turn is OVER, so a turn that calls no tool has
-    // nothing to announce it: measured on 1.28.4, "hi" produced turn_started and turn_ended 1ms apart
-    // and neither web nor device ever showed the agent working. Our own paste is the one moment a turn
-    // is known to have started — and the only one that also knows the text.
-    onSubmitted: (id, content) => {
-      // `id` is whatever the caller addressed the agent by — in the inject path it is the AGENT id, not
-      // the session id, and the normalizer map is keyed by session. Resolve before looking anything up.
-      const session = registry.resolve(id)
-      if (session?.engine !== 'commandcode' || !session.sessionId) return
-      const normalizer = commandcodeNormalizers.get(session.sessionId)
-      if (!normalizer) return
-      emitSessionEvents(session.sessionId, normalizer.openTurn(content))
-    },
+    device: () => autonomousDeviceService,
+    clients: backend,
+    // Declared further down: read when an error is reported, never now.
+    agentIdFor: (sessionId) => agentIdFor(sessionId),
+    commandcode: (sessionId) => commandcodeNormalizers.get(sessionId),
+    // Reassigned further down (the funnel): always the current one.
+    emit: (sessionId, events) => emitSessionEvents(sessionId, events),
   })
-  const deviceInput: AutonomousDeviceInput = new AutonomousDeviceInput({
-    getSession: id => registry.resolve(id),
-    validateRuntime: validateTerminal,
-    inject: submitTerminalAction,
-    sendKey: keyTerminalAction,
-    capture: captureTerminal,
-    isAwaitingUser: async session => {
-      const pane = await captureTerminal(session.agentId)
-      return pane === null || parseEngineQuestionPane(session.engine, pane) !== null
-    },
-    acquireControl: id => input.acquireControl(id, { forAnswer: true }),
-    legacySubmit: (id, text, deliveryId) => input.submit(id, text, deliveryId),
-    legacyCancel: id => input.cancelDelivery(id),
-    onDelivery: event => autonomousDeviceService?.delivery(event),
-    onDispatch: (id, deliveryId, text) => autonomousDeviceService?.inputDispatched(id, deliveryId, text, registry.byAgent(id)?.sessionId),
-    onInputStatus: event => autonomousDeviceService?.inputStatus(event),
-    onForget: id => autonomousDeviceService?.agentGone(id),
-  })
+  const input = inputs.input
+  const deviceInput = inputs.deviceInput
 
   /**
    * agy only: close a turn whose final `Stop` never came.
@@ -2718,20 +2682,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     agyIdleWatch.set(sessionId, { timer, checks: checks + 1 })
   }
 
-  const acquireTerminalControl = (id: string, opts?: { forAnswer?: boolean }): (() => void) | null => {
-    const agentId = registry.resolve(id)?.agentId ?? id
-    const releaseInput = input.acquireControl(agentId, opts)
-    if (!releaseInput) return null
-    const releaseTerminal = pinTerminalControl(agentId)
-    if (!releaseTerminal) {
-      releaseInput()
-      return null
-    }
-    return () => {
-      releaseTerminal()
-      releaseInput()
-    }
-  }
+  const acquireTerminalControl = inputs.acquireTerminalControl
   // AskUserQuestion bridge: mirrors the question to the device's question screen, and keys the device's
   // answer back into the CLI's own terminal dialog.
   const questions = new AskQuestionController({
@@ -6218,21 +6169,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     }
   })
 
-  const submitAgent = (id: string, content: string, deliveryId?: string, tabId?: string): void => {
-    const record = registry.resolve(id)
-    const sessionId = record?.sessionId ?? id
-    const engine = record?.engine ?? 'claude'
-    // The backend prepends `/goal ` or `/loop ` without knowing the engine (on the routed path it has
-    // not picked an agent yet when the mode is chosen). This is the one place that always knows, so the
-    // per-engine adaptation happens here — an unknown slash command would otherwise land as a visible
-    // error in the user's terminal instead of running their turn.
-    const adapted = adaptSlashCommand(content, engine)
-    if (adapted !== content) {
-      console.log(`[msg] ${sid(sessionId)} slash-command adapted for engine=${engine}`)
-    }
-    console.log(`[msg] ${sid(sessionId)} recv · engine=${engine} · bytes=${Buffer.byteLength(adapted, 'utf8')}`)
-    input.submit(record?.agentId ?? sessionId, adapted, deliveryId, tabId)
-  }
+  const submitAgent = inputs.submitAgent
   backend.onMessage = (id, content, deliveryId, tabId) => submitAgent(id, content, deliveryId, tabId)
   backend.onCancelOrchestratorMessage = id => input.cancelDelivery(id)
   backend.readChannelDesk = async () => {
