@@ -31,6 +31,19 @@ def wait_text(vm, text, name, status_bar=False):
 
 
 def exercise(vm, fixture, host_url):
+    # Observe the actual curses event and hit targets without changing mouse
+    # modes, coordinates or dispatch. This runs only in the disposable guest;
+    # restore the packaged module before the separate system-channel checks.
+    source_path = '/usr/lib/harness-os/live_update.py'
+    original = vm.read_file(source_path).decode()
+    marker = '                _, x, y, _, buttons = curses.getmouse()\n'
+    assert original.count(marker) == 1
+    traced = original.replace(marker, marker +
+        "                with open('/tmp/harness-update-mouse.jsonl', 'a') as trace:\n" +
+        "                    trace.write(json.dumps(dict(x=x, y=y, buttons=buttons, targets=targets)) + '\\n')\n")
+    put(vm, '/tmp/live-update-observed.py', traced)
+    put(vm, '/tmp/live-update-packaged.py', original)
+    vm.command('sudo install -m 755 /tmp/live-update-observed.py ' + source_path)
     vm.command('sudo nmcli networking on')
     vm.command('nm-online -q --timeout=30', timeout=35)
     vm.command('mkdir -p /tmp/fast-updates')
@@ -115,8 +128,19 @@ assert (root/'heartbeat').stat().st_mtime_ns != before
             vm.keys('meta_l', 'u')
         condition = ('grep -q ' + shlex.quote('"status": "failed"') + ' ' + state + '/transaction.json' if expect_failure else
                      'test ! -e ' + state + '/ready.json && test -s ' + state + '/applied.json')
-        vm.command('for n in $(seq 1 120); do ' + condition + ' && systemctl --user is-active --quiet hn-screen && exit 0; sleep .5; done; '
-                   'sudo journalctl _UID=1000 --no-pager; exit 1', timeout=90)
+        try:
+            vm.command('for n in $(seq 1 120); do ' + condition + ' && systemctl --user is-active --quiet hn-screen && exit 0; sleep .5; done; '
+                       'sudo journalctl _UID=1000 --no-pager; exit 1', timeout=90)
+        finally:
+            if mouse:
+                vm.command('touch /tmp/harness-update-mouse.jsonl')
+                observed = vm.read_file('/tmp/harness-update-mouse.jsonl')
+                (vm.folder / 'update-mouse-events.log').write_bytes(observed)
+        if mouse:
+            events = [json.loads(line) for line in observed.splitlines()]
+            assert any(event['y'] == row and left <= event['x'] < right and action == 'update'
+                       for event in events for row, left, right, action in event['targets']), \
+                'The actual curses mouse event did not reach the Update hit target'
 
     # A real systemd start failure for the new binary must restore the old
     # selection and layout. The fault is a private guest-only unit override.
@@ -150,6 +174,7 @@ assert (root/'heartbeat').stat().st_mtime_ns != before
     output, _ = vm.command('harness updates status; systemctl --user status harness-update.timer --no-pager; '
                            'sudo journalctl _UID=1000 --no-pager')
     (vm.folder / 'fast-updates.log').write_text(output)
+    vm.command('sudo install -m 755 /tmp/live-update-packaged.py ' + source_path)
     receipt = {'status': 'passed', 'fixture': json.loads((fixture / 'fixture.json').read_text()), 'checks': checks}
     (vm.folder / 'fast-update-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
     return receipt

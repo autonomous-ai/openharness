@@ -287,6 +287,10 @@ class VM:
             {'type': 'abs', 'data': {'axis': 'x', 'value': x}},
             {'type': 'abs', 'data': {'axis': 'y', 'value': y}},
         ])
+        # Move before pressing, as a person does. A QMP acknowledgement queues
+        # input; it does not establish that the guest compositor has delivered
+        # the pointer's enter/motion before the following button event.
+        time.sleep(.2)
         for down in [True, False]:
             self.monitor('input-send-event', events=[{'type': 'btn', 'data': {'button': 'left', 'down': down}}])
             time.sleep(.15)
