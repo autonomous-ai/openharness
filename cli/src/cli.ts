@@ -198,6 +198,9 @@ import { createAgentCreator } from './core/agents/create.js'
 import { createAgentForker } from './core/agents/fork.js'
 import { createPaneSwap } from './core/agents/swap.js'
 import { createAgentRetargeter } from './core/agents/retarget.js'
+import { createAgentRestarter } from './core/agents/restart.js'
+import { createAgentLifecycle } from './core/agents/lifecycle.js'
+import { createAgentClosing } from './core/agents/close.js'
 import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
@@ -3907,178 +3910,67 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     opencodeDb: OPENCODE_DB,
   })
 
-  /**
-   * Stop Harness (`agent_delete`) archives its conversation and launch settings, removes the live
-   * registry entry, and closes only its exact tmux pane. Exact PID/start-marker validation guards the engine's
-   * SIGTERM/SIGKILL fallback. Engine conversation files, recaps and the Harness name remain on disk.
-   */
-  const stopJobs = new Map<string, Promise<void>>()
-  const stopAgent = createStopAgentService({
-    registry, stoppedAgents, restartJobs, stopJobs, tmuxBackend, agentReconciler,
-    forgetSession, markDeleted, clearDeleted,
-  })
-  backend.onDeleteAgent = stopAgent
-  backend.purgeAgentService = new PurgeAgentService({
-    live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stoppedAgents.list()],
-    stopped: stoppedAgents, checkpoints: sessionCheckpoints, stop: stopAgent,
-    restarting: id => restartJobs.busy(id) || stopJobs.has(id),
-    deleted: s => {
-      if (s.sessionId) { mirror.deleteHistory(s.sessionId); sessionSearch?.deleteHistory(s.sessionId) }
-      registry.deleteSavedNames([s.agentId, s.sessionId].filter(Boolean))
-      backend.send({ type: 'agent_deleted', payload: { agentId: s.agentId, retained: false } })
-    },
-  })
-  backend.closeAgentService = new CloseAgentService({
+  // Stopping, purging and resuming an agent (core/agents/lifecycle.ts).
+  const lifecycle = createAgentLifecycle({
     registry,
-    openTabs: cleanupTabs,
-    activity: async s => {
-      if (s.sessionId) await watcher.pollSession(s.sessionId)
-      const screen = await captureTerminal(s.agentId, 80)
-      return inspectCloseActivity(s, screen, sessionTurnState(s.sessionId), openQuestions.has(s.sessionId))
-    },
-    checkpoint: async (s, phase) => {
-      const captured = phase === 'before' ? await terminals.captureRetained(s, { historyLines: 2000 }) : null
-      await sessionCheckpoints.save(s, { screen: captured?.state === 'succeeded' ? captured.value : null })
-    },
-    stop: stopAgent,
-    changed: announceSession,
+    stoppedAgents,
+    restartJobs,
+    tmuxBackend,
+    agentReconciler,
+    forgetSession,
+    markDeleted,
+    clearDeleted,
+    sessionCheckpoints,
+    mirror,
+    sessionSearch,
+    send: (frame) => backend.send(frame),
+    pinnedControls,
+    retainExitedSession,
+    announceSession,
+    relaunchOverrides,
+    prepareSessionResume,
+    refreshGridWebSearch,
+    attachDsh,
   })
+  const stopJobs = lifecycle.stopJobs
+  const stopAgent = lifecycle.stopAgent
+  backend.onDeleteAgent = stopAgent
+  backend.purgeAgentService = lifecycle.purgeAgentService
+  // Closing agents no window shows, and the cleanup preview (core/agents/close.ts).
+  const closing = createAgentClosing({
+    registry,
+    cleanupTabs,
+    watcher,
+    captureTerminal,
+    sessionTurnState,
+    openQuestions,
+    terminals,
+    sessionCheckpoints,
+    stopAgent,
+    announceSession,
+  })
+  backend.closeAgentService = closing.closeAgentService
   backend.closeAgentService.start()
-  backend.cleanupPreview = async () => {
-    await cleanupTabs.refresh()
-    const sessions = registry.advertised()
-    const agents = []
-    for (const s of sessions) {
-      if (!cleanupTabs.isHidden(s)) continue
-      const target = { agentId: s.agentId, sessionId: s.sessionId, createdAt: new Date(s.registeredAt).toISOString() }
-      const inspected = await backend.closeAgentService!.request({ ...target, mode: 'inspect' })
-      if (inspected.error) continue // A changing session is never added to a reviewed batch.
-      agents.push({ ...target, name: projectDisplayName(s), engine: s.engine, activity: inspected.activity ?? 'unknown' })
-    }
-    return { version: 1, agents, kept: sessions.length - agents.length }
-  }
+  backend.cleanupPreview = closing.cleanupPreview
+  backend.onResumeAgent = lifecycle.resumeAgent
 
-  const resumeAgent = createResumeAgentService({
-    registry, stoppedAgents, tmuxBackend, restartJobs, stopJobs, pinnedControls,
-    retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume,
-    refreshGridWebSearch, clearDeleted, attachDsh,
-  })
-  backend.onResumeAgent = (id, permissionMode) => backend.purgeAgentService?.busy(id) || backend.purgeAgentService?.blocksFolder(stoppedAgents.get(id)?.cwd)
-    ? Promise.resolve({ ok: false, error: 'AGENT_BUSY' }) : resumeAgent(id, permissionMode)
-
-  /**
-   * Web or device restarted an agent (`agent_restart`): exit the live engine process and relaunch it in
-   * the SAME tmux pane, keeping the SAME agentId/session — restart must never look like delete+create to
-   * the registry or the UI. Two things guard that identity:
-   *
-   *  - `remain-on-exit` is re-armed on the pane before the old process is killed (mirrors what
-   *    `create()` does at spawn time), or tmux would tear the pane — and with it the whole one-pane
-   *    session — down the instant that process exits.
-   *  - the periodic reconciler is told to ignore this pane's ROUTE for the duration of the swap
-   *    (`agentReconciler.holdRoute`/`releaseRoute`), or it would either flicker the agent dormant
-   *    mid-kill, or — worse — mint a brand-new agent for the relaunched process the instant it appears,
-   *    before this handler gets to rebind it.
-   *
-   * The permission mode comes from the registry row (`bypassPermissionFor`): what create recorded, or
-   * what discovery read off the live argv since — the live process is probed only for a row that has
-   * neither, and before anything is signalled. The sessionId to resume comes from the registry's
-   * live-synced field, not from the original launch argv (the user may have resumed/switched sessions
-   * from inside the engine's own terminal since launch).
-   */
-  backend.onRestartAgent = (agentId) => restartJobs.run(registry.resolve(agentId)?.agentId ?? agentId, async (operationCurrent) => {
-    if (backend.purgeAgentService?.busy(agentId) || stopJobs.has(agentId) || pinnedControls.has(agentId)) return { ok: false, error: 'AGENT_BUSY' }
-    const session = registry.resolve(agentId)
-    if (!session) return { ok: false, error: 'AGENT_NOT_FOUND' }
-    if (!session.tmuxPane || !tmuxBackend) return { ok: false, error: 'RESTART_UNSUPPORTED_BACKEND' }
-    const target = { ...session }
-    const current = () => operationCurrent() && sameRestartTarget(target)
-    const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during restart.' } as const
-    if (!current()) return changed
-    // Both branches below `cd` into the row's folder before they exec, and both have already killed
-    // (or respawned over) the old process by the time that `cd` fails. Ask first, over a live agent.
-    const missing = workspaceMissing(session.cwd)
-    if (missing) return missing
-    const pane = session.tmuxPane
-    const engine = session.engine
-    const runtime: TmuxRuntimeRef = { backend: 'tmux', paneId: pane }
-    const routeKey = terminalRouteKey(runtime)
-    // Restarting a terminal is a fresh shell in the same pane — `respawn-pane -k` over whatever the
-    // old one was doing. There is no engine to wait for and no session to resume, so none of the
-    // process-swap choreography below applies. A terminal that ADOPTED an engine restarts the
-    // engine, like any agent: the tile said Restart about the engine it shows.
-    if (isTerminalEngine(engine)) {
-      agentReconciler.holdRoute(routeKey)
-      try {
-        // The same opening a fresh terminal tile prints (`onCreateAgent`'s `terminalHint`): a
-        // restarted tile is a fresh shell too, and should look like one.
-        const respawned = await tmuxBackend.respawn(runtime, {
-          command: buildEngineLaunchArgv(engine, {
-            ...(session.cwd ? { cwd: session.cwd } : {}),
-            terminalHint: { machineName: terminalHintMachineName() },
-          }),
-          cwd: homedir(),
-        })
-        if (!current()) return changed
-        if (respawned.state !== 'succeeded') return { ok: false, error: 'RESTART_FAILED', detail: respawned.reason }
-        await clearPaneRemainOnExit(pane)
-        if (!current()) return changed
-        registry.setActive(session.agentId, true)
-        const refreshed = registry.byAgent(session.agentId)
-        if (!refreshed) return { ok: false, error: 'RESTART_FAILED', detail: 'agent vanished from the registry mid-restart' }
-        announceSession(refreshed)
-        console.log(`[restart] ${sid(session.agentId)} terminal · fresh shell`)
-        return { ok: true, session: refreshed, resumed: false }
-      } finally {
-        agentReconciler.releaseRoute(routeKey)
-      }
-    }
-    if (!session.processIdentity) return { ok: false, error: 'NO_ACTIVE_PROCESS' }
-
-    // The replacement is launched WITH what the original was: its grid's env and argv (a bare
-    // respawn would inherit the tmux session's variables but never the codex `-c …` / pi `--model`
-    // half, and an agent moved here by a retarget has nothing in the session env at all), or its
-    // Codex profile. Refused before anything is killed, so a restart that cannot honour the grid
-    // leaves the running process alone.
-    const built = await relaunchOverrides(session)
-    if (!current()) return changed
-    if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
-
-    agentReconciler.holdRoute(routeKey)
-    try {
-      const restartPermission = await downgradedPermission(session,
-        await bypassPermissionFor(session, () => liveBypassPermission(session)), 'restart')
-      const outcome = await restartAgent(
-        { engine, sessionId: session.sessionId },
-        restartPermission.bypassPermission === true,
-        { ...paneSwapDeps(session, runtime, built.overrides, restartPermission.permissionMode ?? null), isCurrent: current },
-      )
-
-      if (!current()) return changed
-      if (!outcome.ok) return { ok: false, error: 'RESTART_FAILED', detail: outcome.detail }
-      refreshGridWebSearch(session.agentId, built.overrides)
-
-      // Address the CANONICAL agentId from the resolved session, not the raw RPC input — `resolve()`
-      // accepts either an agentId or a bare sessionId, but `setActive`/`byAgent` only ever key on the
-      // real agentId. Gateway and grid are re-read off the new pid now (one cached env read) rather
-      // than left to the next scan, so the announce below already says where the engine came back.
-      const [gateway, assignment] = await Promise.all([
-        probeGatewayRuntime(outcome.processIdentity),
-        probeGridAssignment(outcome.processIdentity, engine, outcome.processIdentity.executable),
-      ])
-      if (!current()) return changed
-      registry.updateProcessIdentity(session.agentId, outcome.processIdentity, gateway.kind, assignment)
-      registry.setActive(session.agentId, true)
-      await clearPaneRemainOnExit(pane)
-      if (!current()) return changed
-      const refreshed = registry.byAgent(session.agentId)
-      if (!refreshed) return { ok: false, error: 'RESTART_FAILED', detail: 'agent vanished from the registry mid-restart' }
-      announceSession(refreshed)
-      console.log(`[restart] ${sid(session.agentId)} ${engine} · ${outcome.resumed ? 'resumed' : 'fresh session'}`
-        + (session.gridLaunch ? ` · grid ${session.gridLaunch.networkName}` : ''))
-      return { ok: true, session: refreshed, resumed: outcome.resumed }
-    } finally {
-      agentReconciler.releaseRoute(routeKey)
-    }
+  // Restarting an agent in its own pane (core/agents/restart.ts).
+  backend.onRestartAgent = createAgentRestarter({
+    restartJobs,
+    registry,
+    purgeBusy: (agentId) => backend.purgeAgentService?.busy(agentId),
+    stopJobs,
+    pinnedControls,
+    tmuxBackend,
+    sameRestartTarget,
+    agentReconciler,
+    terminalHintMachineName,
+    announceSession,
+    relaunchOverrides,
+    downgradedPermission,
+    refreshGridWebSearch,
+    liveBypassPermission,
+    paneSwapDeps,
   })
 
   const submitAgent = inputs.submitAgent
