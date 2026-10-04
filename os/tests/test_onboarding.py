@@ -47,7 +47,7 @@ class Onboarding(unittest.TestCase):
              patch.object(onboarding.subprocess, 'run', side_effect=[result(11), result()]), \
              patch.object(onboarding.os, 'execv') as execute:
             onboarding.welcome()
-            execute.assert_called_once_with('/usr/bin/hn-os', ['hn-os', 'try', '--offline'])
+            execute.assert_called_once_with('/usr/bin/hn-os', ['hn-os', 'try'])
 
     def test_failed_layout_request_does_not_mark_first_use_complete(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(onboarding.Path, 'is_file', return_value=False), \

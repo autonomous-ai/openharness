@@ -82,7 +82,7 @@ class Network(unittest.TestCase):
         screen, page = self.page(['\x1b', '\x03', 'r', 'i'])
         self.assertEqual(page.run(), network.INSTALL)
         text = '\n'.join(text for _, text in screen.lines)
-        self.assertIn('Welcome to Harness', text)
+        self.assertIn('The operating system built by agents, for agents.', text)
         self.assertLess(text.index('a:network'), text.index('Ethernet'))
         self.assertIn('Rescan', text)
         self.assertIn('Install without connecting', text)
@@ -98,6 +98,13 @@ class Network(unittest.TestCase):
         self.assertNotIn('wrong-password', text)
         self.assertNotIn('right-password', text)
         self.assertIn('*****', text)
+
+    def test_connected_site_or_local_network_skips_setup_without_an_internet_probe(self):
+        for state, expected in [('connected', True), ('connected (site only)', True),
+                                ('connected (local only)', True), ('connecting', False),
+                                ('disconnected', False), ('asleep', False)]:
+            with self.subTest(state=state), patch.object(network, 'nmcli', return_value=result(output=state)):
+                self.assertEqual(network.connected(), expected)
 
     def test_working_ethernet_skips_the_form(self):
         screen, page = self.page([])

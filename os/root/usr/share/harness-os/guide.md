@@ -65,7 +65,7 @@ Useful terminal defaults (verify with `hn list-keys` if customized):
 | Ctrl+b, then Shift+n | New Harness |
 | Ctrl+b, then Shift+t | New terminal |
 | Ctrl+b, then s | Find harnesses across connected computers |
-| Ctrl+b, then c | New tab |
+| Ctrl+b, then c | New tab with a terminal |
 | Ctrl+b, then n / p | Next / previous tab |
 | Ctrl+b, then o / arrow | Next pane / pane in that direction |
 | Ctrl+b, then z | Zoom or restore the focused pane |

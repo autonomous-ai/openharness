@@ -139,6 +139,17 @@ def wireless(vm, result):
                'grep -Fx harness-wifi-success; then exit 0; fi; sleep 1; done; exit 1', timeout=100)
     vm.command('find /etc/NetworkManager/system-connections -name "*.nmconnection" -exec stat -c "%a %U %n" {} \\;')
     result['checks'].append('Wireless reconnects after a radio off/on cycle using its stored profile')
+    # The AP has DHCP, DNS and HTTP but no upstream Internet. NM can report
+    # "connected (site only)"; this must not reopen Wi-Fi in the agent pane.
+    # Run the complete packaged onboarding, not just its network sub-form.
+    vm.command(USER_ENV + 'hn new-window -n Connected ' + shlex.quote('/usr/bin/hn-os welcome'))
+    vm.command(USER_ENV + 'sh -c ' + shlex.quote('for n in $(seq 1 60); do '
+               'test "$(hn list-panes -F "#{pane_id}" | wc -l)" -eq 3 && exit 0; sleep .5; done; exit 1'), timeout=40)
+    vm.command("! pgrep -f '[/]usr/lib/harness-os/network[.]py'")
+    vm.command(USER_ENV + 'hn capture-pane -p > /tmp/wifi-onboarded.txt')
+    assert b'Connect to Wi-Fi' not in vm.read_file('/tmp/wifi-onboarded.txt')
+    vm.screenshot('wifi-04-onboarded-without-second-prompt')
+    result['checks'].append('Full onboarding opens three panes on a saved local-only Wi-Fi connection without asking for Wi-Fi again')
     # The full-page offline action returns an explicit install result; Esc does
     # not strand a first-time user in an empty shell.
     vm.command('nmcli device disconnect "$(cat /run/harness-station)"')

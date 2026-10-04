@@ -464,6 +464,17 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do '
         'hn list-panes -a -F "#{pane_id}" | grep -Fx ' + shlex.quote(pane.group(1)) +
         ' >/dev/null || exit 0; sleep .25; done; exit 1')), timeout=15)
+    # The OS opts into hn's existing shell-tab setting; test real prefix keys,
+    # since invoking new-window through the CLI already opened a shell before.
+    vm.keys('ctrl', 'b')
+    vm.keys('c')
+    time.sleep(1)
+    vm.type_probe('echo PREFIX_TAB_READY')
+    vm.keys('ret')
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 20); do hn capture-pane -p | grep -qx PREFIX_TAB_READY && exit 0; sleep .5; done; exit 1')), timeout=15)
+    vm.screenshot('01c-prefix-terminal-tab')
+    vm.keys('ctrl', 'd')
+    time.sleep(.5)
     vm.monitor('set_link', name='hnnet', up=True)
     vm.command('nmcli networking on; for n in $(seq 1 30); do test "$(nmcli -t -f STATE general)" = connected && exit 0; sleep 1; done; exit 1', timeout=40)
     vm.command('for n in $(seq 1 90); do pgrep -u 1000 -x opencode >/dev/null && exit 0; sleep 1; done; exit 1', timeout=100)
@@ -497,6 +508,9 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     vm.command(user('hn display-message -p "#{E:status-right}"') + ' > /tmp/hn-first-footer.txt')
     footer = vm.read_file('/tmp/hn-first-footer.txt').decode()
     assert 'Make Harness your OS.' in footer and '[ Install Harness ]' in footer, footer
+    vm.command(user('hn show-options -gv status-style') + ' > /tmp/hn-first-footer-style.txt')
+    assert vm.read_file('/tmp/hn-first-footer-style.txt').strip() == b'fg=black,bg=green'
+    vm.command("! pgrep -f '[/]usr/lib/harness-os/network[.]py'")
     for index, row in enumerate(right):
         vm.command(user('hn select-pane -t ' + row[0]))
         vm.type_probe('echo starter-terminal-' + str(index))
@@ -737,7 +751,7 @@ def check_installer_cleanup(vm, folder):
         (folder / 'cleanup-native.log').write_text(output)
     finally:
         failure = sys.exception()
-        for name in ['receipt.json', 'baseline-close.txt', 'transient-close.log', 'persistent-close.log']:
+        for name in ['receipt.json', 'baseline-close.txt', 'transient-close.log', 'persistent-close.log', 'timeout-close.log']:
             try:
                 (folder / ('cleanup-' + name)).write_bytes(vm.read_file('/run/hn-cleanup-result/' + name, timeout=10))
             except Exception as error:
@@ -887,7 +901,7 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
             return
         if args.encrypt:
             result['installer_cleanup'] = check_installer_cleanup(vm, folder)
-            result['checks'].append('Packaged installer closes a transiently busy encrypted mapping, preserves its filesystem and rejects a persistent holder')
+            result['checks'].append('Packaged installer safely defers transient/persistent encrypted-device readers, recovers a close timeout and preserves the filesystem')
         config = dict(disk='/dev/vda', expected_serial='HN_OS_TEST', confirm_erase='/dev/vda',
                       username='me', hostname='harness', password='test-password-123',
                       encrypt=args.encrypt, serial_console=True)
@@ -916,7 +930,12 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
                    'test "$(hn list-panes -F "#{pane_id}" | wc -l)" -eq 3 && exit 0; sleep .5; done; exit 1', timeout=40)
         vm.screenshot('installed-first-workspace')
         vm.command('hn capture-pane -p | grep -qv "Enter.*Start OpenCode"; test -d ~/projects')
+        vm.command('hn show-options -gv status-right > /tmp/hn-installed-status.txt')
+        installed_bar = vm.read_file('/tmp/hn-installed-status.txt').decode()
+        assert 'local_machine' in installed_bar and '%H:%M' in installed_bar and 'Install Harness' not in installed_bar, installed_bar
+        vm.command("! pgrep -f '[/]usr/lib/harness-os/network[.]py'")
         result['checks'].append('Fresh installed first boot opens the same three real panes and records onboarding only once')
+        result['checks'].append('Installed first use preserves hn’s full status bar and never reopens networking after the connection succeeds')
         saved_trial = vm.read_file(trial_project)
         assert saved_trial == (folder / 'trial-project.html').read_bytes(), 'The installed home lost or changed the agent-created trial project'
         vm.command('test ! -e /home/me/.config/hn-trial-credential && test "$(stat -c %u ' + shlex.quote(trial_project) + ')" -eq 1000')

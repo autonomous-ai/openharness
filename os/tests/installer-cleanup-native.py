@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from unittest.mock import patch
 
 
 def main():
@@ -75,6 +76,12 @@ def main():
                 assert mapped.exists()
                 result['checks'].append('Unmodified close returns 5 with the filesystem unmounted and a device reader open')
 
+                def wait_removed():
+                    deadline = time.monotonic() + 5
+                    while mapped.exists() and time.monotonic() < deadline:
+                        time.sleep(.05)
+                    assert not mapped.exists(), 'Kernel did not remove the mapping after its last reader closed'
+
                 timer = threading.Timer(1.5, os.close, args=(holder,))
                 timer.start()
                 holder = None  # The joined timer owns this descriptor now.
@@ -83,34 +90,47 @@ def main():
                     installer.close_install_mapping(mapper)
                 timer.join()
                 timer = None
-                assert not mapped.exists()
+                wait_removed()
                 result['transient_close_seconds'] = round(time.monotonic() - retried, 3)
-                result['checks'].append('Cleanup waits for the temporary reader and removes the mapping normally')
+                result['checks'].append('Cleanup schedules safe removal while a temporary reader finishes')
 
                 open_mapping()
                 holder = os.open(mapped, os.O_RDONLY)
                 persistent = time.monotonic()
-                try:
-                    with installer.command_log(output / 'persistent-close.log'):
-                        installer.close_install_mapping(mapper, timeout=1)
-                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                    pass
-                else:
-                    raise AssertionError('A persistent holder must not become success')
+                with installer.command_log(output / 'persistent-close.log'):
+                    installer.close_install_mapping(mapper, timeout=2)
                 assert mapped.exists()
                 result['persistent_close_seconds'] = round(time.monotonic() - persistent, 3)
                 assert result['persistent_close_seconds'] < 3
-                result['checks'].append('A persistent reader remains an error within the deadline and is never forcibly removed')
+                result['checks'].append('An unmounted device with a persistent reader is queued for removal, never forced closed')
                 os.close(holder)
                 holder = None
+                wait_removed()
+                # Inject the actual subprocess timeout seen on the ThinkPad;
+                # the fallback still operates on a real held dm-crypt device.
+                open_mapping()
+                holder = os.open(mapped, os.O_RDONLY)
+                original_run = installer.run
+                def slow_cryptsetup(*command, **kwargs):
+                    if command[0] == 'cryptsetup':
+                        subprocess.run(['sleep', '2'], check=True, timeout=.05)
+                    return original_run(*command, **kwargs)
+                with installer.command_log(output / 'timeout-close.log'), patch.object(installer, 'run', side_effect=slow_cryptsetup):
+                    installer.close_install_mapping(mapper)
+                assert mapped.exists()
+                os.close(holder)
+                holder = None
+                wait_removed()
+                result['checks'].append('A real subprocess timeout falls back to deferred kernel removal without udev synchronization')
                 # Reopen the same filesystem and verify the completed data was
                 # not modified by either failed or retried close operation.
+                open_mapping()
                 run('mount', mapped, mount)
                 assert (mount / 'marker').read_text() == 'keep the completed installation\n'
                 assert (mount / 'home' / 'project').read_text() == 'keep the trial project\n'
                 run('umount', '-R', mount)
                 installer.close_install_mapping(mapper)
-                result['checks'].append('The filesystem remains intact after the failed close and closes after its reader leaves')
+                result['checks'].append('The filesystem and project remain intact after deferred removal and timeout recovery')
             finally:
                 if timer is not None:
                     timer.join(timeout=5)

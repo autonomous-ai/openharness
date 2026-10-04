@@ -86,26 +86,21 @@ def log_diagnostic(message):
 
 
 def close_install_mapping(mapper, timeout=10):
-    """Wait briefly for device probes; never force removal of an active mapping."""
-    deadline = time.monotonic() + timeout
-    while True:
-        try:
-            run('cryptsetup', 'close', mapper, timeout=max(0.01, deadline - time.monotonic()))
-            return
-        except subprocess.CalledProcessError as error:
-            # cryptsetup documents 5 as a busy/existing device. Other failures
-            # are not transient and must retain their original diagnostics.
-            if error.returncode != 5 or time.monotonic() >= deadline:
-                raise
-            # udev may still be inspecting the filesystem after unmount. Wait
-            # for queued probes without allowing an unrelated stuck event to
-            # hold up shutdown forever. A persistent holder remains an error.
-            try:
-                run('udevadm', 'settle', '--timeout=1',
-                    timeout=max(0.01, min(2, deadline - time.monotonic())))
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                pass
-            time.sleep(max(0, min(0.25, deadline - time.monotonic())))
+    """After successful unmount, let the kernel close any remaining device reader."""
+    try:
+        # A filesystem probe may outlive unmount. Deferred removal is immediate
+        # when unused, otherwise the kernel removes the device on its last close.
+        # Never force removal, and never call this after a failed unmount.
+        run('cryptsetup', 'close', '--deferred', mapper, timeout=timeout)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        if isinstance(error, subprocess.CalledProcessError) and error.returncode != 5:
+            raise
+        log_diagnostic(f'Device close is waiting for a reader or udev: {error}')
+        if not (Path('/dev/mapper') / mapper).exists():
+            return  # The ioctl completed before cryptsetup's udev wait timed out.
+        # Do not wait for unrelated udev work again. This uses the same deferred
+        # kernel removal, with no force, table replacement or skipped disk flush.
+        run('dmsetup', 'remove', '--deferred', '--noudevsync', mapper, timeout=3)
 
 
 def partitions(disk):
@@ -193,7 +188,7 @@ def validate_image_account(passwd, username):
 
 
 def preflight(config, source):
-    for command in ['sgdisk', 'udevadm', 'mkfs.fat', 'mkfs.btrfs', 'cryptsetup',
+    for command in ['sgdisk', 'udevadm', 'mkfs.fat', 'mkfs.btrfs', 'cryptsetup', 'dmsetup',
                     'mount', 'umount', 'btrfs', 'unsquashfs', 'arch-chroot', 'blkid']:
         if not shutil.which(command):
             raise ValueError(f'The installer is missing {command}. Boot an intact Harness image.')
@@ -604,15 +599,14 @@ class InstallForm:
             label = disk_label(disk, self.width - 18 - len(suffix)) + suffix
             self.line(4, f"{'Disk':18}{label}", self.focus == 0)
             self.line(6, f"{'Encryption':18}[{'x' if self.encrypt else ' '}]", self.focus == 1)
-            capacity = min(32, self.width - 21)
+            capacity = self.width - 20
             for index, label in enumerate(('Password', 'Repeat password')):
                 position = self.positions[index]
                 offset = max(0, position - capacity + 1)
                 mask = '*' * len(self.passwords[index][offset:offset + capacity])
                 self.line(8 + index * 2, f'{label:<18}[{mask:<{capacity}}]', self.focus == index + 2)
             self.line(12, self.error)
-            for row, text in [(13, ''), (14, 'Install Harness'), (15, '')]:
-                self.line(row, text.center(self.width), active=True, bold=self.focus == 4)
+            self.line(14, 'Install Harness'.center(self.width), active=True, bold=self.focus == 4)
             self.cursor(self.focus in (2, 3))
             if self.focus in (2, 3):
                 position = self.positions[self.focus - 2]
@@ -705,7 +699,12 @@ def install_with_progress(screen, config, source, target):
         screen.erase()
         height, width = screen.getmaxyx()
         if height > 0 and width > 1:
-            screen.addnstr(height // 2, max(0, (width - len(message)) // 2), message, width - 1)
+            middle = height // 2
+            if height >= 8:
+                for row, word in enumerate(WORDMARK):
+                    screen.addnstr(middle - 3 + row, max(0, (width - len(word)) // 2), word,
+                                   width - 1, view.accent)
+            screen.addnstr(min(height - 1, middle + 1), max(0, (width - len(message)) // 2), message, width - 1)
         screen.refresh()
 
     def progress(message):
