@@ -255,7 +255,7 @@ def prune():
 def check(feeds=None, progress=lambda _: None, force_system=False):
     with locked():
         if RESTART_REQUIRED.exists():
-            notice(('Restart ready' if read(RESTART_REQUIRED, {}).get('status') == 'ready' else 'System update needs attention') + ' · Super+U')
+            notice(('Restart ready' if read(RESTART_REQUIRED, {}).get('status') == 'ready' else 'System update needs attention') + ' · Super+u')
             return False
         recover_interrupted()
         current = selected()
@@ -333,7 +333,7 @@ def check(feeds=None, progress=lambda _: None, force_system=False):
         write(STATE / 'check.json', {'checked_at': time.time(), 'errors': errors})
         available = ready is not None and ready != current
         system = check_system(force_system) if feeds is None else {}
-        notice('Update ready · Super+U' if available or system.get('available') else '')
+        notice('Update ready · Super+u' if available or system.get('available') else '')
         prune()
         if errors and not available:
             raise ValueError('Could not check for updates. Connect to the internet and try again.')
@@ -438,7 +438,7 @@ def apply(rollback=False):
             select(previous)
             write(STATE / 'transaction.json', {'status': 'failed', 'previous': str(previous)})
             restart(candidate['cli'] != old['cli'])
-            notice('Update failed · Super+U')
+            notice('Update failed · Super+u')
             raise
         write(STATE / 'applied.json', {'previous': str(previous), 'current': str(target), 'at': time.time()})
         if rollback:

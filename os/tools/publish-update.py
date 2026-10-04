@@ -135,7 +135,7 @@ def main():
         if '404' not in result.stderr:
             raise ValueError('Cannot read the OS channel: ' + result.stderr)
         notes = output / 'channel-notes.md'
-        notes.write_text('Harness OS preview update metadata. The computer checks this channel automatically; open Updates with Super+U to install.\n')
+        notes.write_text('Harness OS preview update metadata. The computer checks this channel automatically; open Updates with Super+u to install.\n')
         gh('release', 'create', CHANNEL, '--repo', REPO, '--target', manifest['source_commit'], '--draft', '--prerelease',
            '--title', 'Harness OS preview updates', '--notes-file', notes)
     gh('release', 'upload', CHANNEL, '--repo', REPO, '--clobber', feed)
