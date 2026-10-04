@@ -5,10 +5,11 @@ boot changes. Reflashing is a release/install test, not the intended way to try
 every interface fix. Keep the development tools on the build/test host; the
 installed OS keeps the same minimal interface.
 
-Preview 10, its small update bundle, and the installed system update channel are
-published. Its native upgrade from preview 9 passed; earlier preview 6 coverage
-includes upgrades from previews 4 and 5. Remote-launcher argument
-tests passed but remote display/SSH interaction is still unverified.
+The USB image and the small installed-system update bundle ship separately.
+Each candidate must pass native installation and upgrade checks before publication.
+Preview 12 adds one-action updates, including mouse activation, while preserving
+running agents and terminals. Remote-launcher argument tests passed but remote
+display/SSH interaction is still unverified.
 
 ## Next release priorities
 
