@@ -95,10 +95,10 @@ def main():
         CONFIG.parent.mkdir(parents=True, exist_ok=True)
         # Isolate the missing host dependency, even if keyboard autodetection
         # correctly includes applespi on an actual Mac.
-        FIXTURE_CONFIG.write_text('MODULES+=(virtio_blk applespi)\n')
+        FIXTURE_CONFIG.write_text('MODULES+=(virtio_net applespi)\n')
         result['images']['baseline'] = image_record(folder, 'baseline',
-            ['virtio_blk', 'applespi'], APPLE_MODULES - {'applespi'})
-        FIXTURE_CONFIG.write_text('MODULES+=(virtio_blk)\n')
+            ['virtio_net', 'applespi'], APPLE_MODULES - {'applespi'})
+        FIXTURE_CONFIG.write_text('MODULES+=(virtio_net)\n')
         CONFIG.write_bytes(args.candidate.read_bytes())
         CONFIG.chmod(0o644)
         run('bash', '-n', str(CONFIG))
@@ -111,15 +111,15 @@ def main():
         for model, modules in expected.items():
             fixture.write_text(model + '\n')
             selected = run('bash', '-c',
-                'MODULES=(virtio_blk); source "$1"; printf "%s\n" "${MODULES[@]}"',
+                'MODULES=(virtio_net); source "$1"; printf "%s\n" "${MODULES[@]}"',
                 'apple-selection', str(CONFIG)).stdout.splitlines()
-            assert selected == ['virtio_blk'] + modules, (model, selected, modules)
+            assert selected == ['virtio_net'] + modules, (model, selected, modules)
             result['selection'][model or '<empty>'] = selected
         for model, modules in [('MacBook8,1', PXA), ('MacBookPro14,1', LPSS)]:
             fixture.write_text(model + '\n')
             name = model.replace(',', '-')
             result['images'][model] = image_record(folder, name,
-                ['virtio_blk'] + modules, APPLE_MODULES - set(modules))
+                ['virtio_net'] + modules, APPLE_MODULES - set(modules))
         # Leave only the candidate on disk and generate the ordinary PC image
         # that the host will actually boot, without any fixture modules forced.
         FIXTURE_CONFIG.unlink()
