@@ -317,6 +317,73 @@ try:
     ENV.pop('HARNESS_OS'); ENV.pop('HARNESS_OS_LIVE'); ENV.pop('ADAPTER_DATA_DIR')
     print('PASS welcome: USB startup and concurrent terminal creation stay in their own windows in both reply orders', flush=True)
 
+    # A disconnected remote pane still owns the next window's project. Never carry
+    # its absolute folder across to the local machine merely because it is online.
+    keys('C-b', 'c'); shows('New Window')
+    choose('Agent', 'codex')
+    choose('Project', 'open folder'); shows('Choose a machine')
+    type_text('mock-remote'); keys('Enter'); shows('Use this folder')
+    keys('C-l', 'C-a', 'C-k'); type_text('/srv/remote-project'); keys('Enter')
+    shows('Use this folder'); keys('Enter'); shows('remote-project @ mock-remote')
+    shows('[x]'); click('Worktree'); click('Start Codex'); shows('Mock codex (mock)')
+    assert state()['created'][-1]['gitSource'] == '/srv/remote-project'
+    assert hn('display', '-p', '#{pane_machine}') == 'mock-remote'
+    remote_pane = hn('display', '-p', '#{pane_id}')
+    remote = 'mock0000000000000000000000000002'
+    state('reconnect', {'action': 'offline', 'machine': remote})
+    wait(lambda: hn('display', '-p', '-t', remote_pane, '#{pane_agent_state}') == 'offline', 'remote disconnect reaches the client')
+    count = len(state().get('created', []))
+    keys('C-b', 'c'); shows('New Window'); shows('remote-project @ mock-remote')
+    type_text('Keep this task on the remote machine')
+    keys('Enter'); shows('That machine is not connected.')
+    assert len(state().get('created', [])) == count, 'offline creation must not fall back locally'
+    click('Open Terminal')
+    assert len(state().get('created', [])) == count, 'offline terminal must not fall back locally'
+    shows('Keep this task on the remote machine')
+    snapshot('new-window-remote-offline')
+    state('reconnect', {'action': 'online', 'machine': remote})
+    wait(lambda: '[x]' in screen(), 'remote Git state recovers without replacing the draft', 20)
+    click('Worktree'); click('Start Codex'); shows('Mock codex (mock)')
+    assert hn('display', '-p', '#{pane_machine}') == 'mock-remote'
+    request = state()['created'][-1]
+    assert request['gitSource'] == '/srv/remote-project' and request['projectSource'] == 'branch', request
+    assert request['prompt'] == 'Keep this task on the remote machine', request
+    assert len(state()['created']) == count + 1, 'one remote launch after reconnect'
+    print('PASS welcome: offline remote context, no local agent/shell fallback, reconnect and one launch', flush=True)
+
+    # An immediate submit must survive a slow initial Git check. Later input or
+    # leaving the form cancels the pending start instead of launching edited work.
+    state('welcome', {'gitDelay': 1800, 'delay': 0})
+    for trigger in ['keyboard', 'mouse']:
+        count = len(created())
+        keys('C-b', 'c'); shows('New Window'); shows('Checking Git')
+        text = 'Start after checking Git by ' + trigger
+        type_text(text)
+        if trigger == 'keyboard': keys('Enter', 'Enter')
+        else: click('Start Codex')
+        shows('Checking the project')
+        shows('Mock codex (mock)')
+        assert len(created()) == count + 1 and created()[-1]['prompt'] == text
+    for cancel in ['escape', 'typing', 'paste', 'mouse', 'another-window']:
+        count = len(created())
+        keys('C-b', 'c'); shows('New Window'); shows('Checking Git')
+        type_text('Keep this draft after ' + cancel)
+        keys('Enter'); shows('Checking the project')
+        if cancel == 'escape': keys('Escape')
+        elif cancel == 'typing': type_text('!')
+        elif cancel == 'paste': paste(' more')
+        elif cancel == 'mouse': click('Agent')
+        else: keys('C-b', 'p')
+        if cancel == 'another-window':
+            time.sleep(2)
+            keys('C-b', 'l')
+        shows('[x]')
+        assert len(created()) == count, 'cancelled project check launched a harness: ' + cancel
+        shows('Keep this draft after ' + cancel)
+        hn('kill-window')
+    state('welcome', {'gitDelay': 0})
+    print('PASS welcome: submit during Git discovery once, keyboard/mouse cancellation and hidden windows', flush=True)
+
     # A new user can arrive without the daemon. Keep the task, explain how to connect,
     # and let Open Terminal use a real local PTY without executing any draft text.
     hn('kill-server', ok=False)
