@@ -116,9 +116,9 @@ class VM:
                 time.sleep(0.1)
         raise TimeoutError(f'QEMU did not expose {name}')
 
-    def monitor(self, name, **arguments):
+    def monitor(self, command, /, **arguments):
         identity = uuid.uuid4().hex
-        self.qmp.sendall((json.dumps({'execute': name, 'arguments': arguments, 'id': identity}) + '\n').encode())
+        self.qmp.sendall((json.dumps({'execute': command, 'arguments': arguments, 'id': identity}) + '\n').encode())
         while True:
             result = json.loads(self.qmp_file.readline())
             if result.get('id') == identity:
