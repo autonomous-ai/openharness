@@ -183,6 +183,7 @@ import { createLastTurnReader } from './core/transcripts/lastTurn.js'
 import { createRecaps } from './core/turns/recaps.js'
 import { createHeartbeats } from './core/turns/heartbeats.js'
 import { createEventFunnel } from './core/turns/funnel.js'
+import { createAgyBackstop } from './core/turns/agyBackstop.js'
 import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
@@ -2605,53 +2606,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const input = inputs.input
   const deviceInput = inputs.deviceInput
 
-  /**
-   * agy only: close a turn whose final `Stop` never came.
-   *
-   * agy reports `fullyIdle: false` when it pauses for sub-agents, and normally sends one more Stop with
-   * `fullyIdle: true` once they report — measured, and that is the path a healthy turn takes. But one
-   * measured run completed its sub-agents, wrote its summary, and sent nothing further; the turn stayed
-   * open with no recap. The pane is the only other place the answer exists (`? for shortcuts` idle vs
-   * `esc to cancel` busy), so a waiting Stop arms a bounded poll of it.
-   *
-   * Bounded on purpose: it stops after AGY_IDLE_WATCH_MAX checks (~10 min) rather than polling a pane
-   * forever, and any real Stop clears it first.
-   */
-  const AGY_IDLE_WATCH_MS = 15_000
-  const AGY_IDLE_WATCH_MAX = 40
-  const agyIdleWatch = new Map<string, { timer: NodeJS.Timeout; checks: number }>()
-
-  const clearAgyIdleWatch = (sessionId: string): void => {
-    const watch = agyIdleWatch.get(sessionId)
-    if (!watch) return
-    clearTimeout(watch.timer)
-    agyIdleWatch.delete(sessionId)
-  }
-
-  const armAgyIdleWatch = (sessionId: string): void => {
-    const checks = agyIdleWatch.get(sessionId)?.checks ?? 0
-    clearAgyIdleWatch(sessionId)
-    if (checks >= AGY_IDLE_WATCH_MAX) return
-    const timer = setTimeout(() => {
-      void (async () => {
-        agyIdleWatch.delete(sessionId)
-        const normalizer = agyNormalizers.get(sessionId)
-        if (!normalizer?.turnOpen) return
-        const entry = registry.bySession(sessionId)
-        if (!entry) return
-        const capture = await captureTerminal(entry.agentId, 60)
-        if (!capture || !agyPaneIdle(capture)) { armAgyIdleWatch(sessionId); return }
-        await watcher.pollSession(sessionId)
-        if (!normalizer.turnOpen) return
-        console.log(`[turn] ${sid(sessionId)} closed by the agy idle backstop · no final Stop arrived`)
-        emitSessionEvents(sessionId, normalizer.closeTurn())
-      })().catch((err) => {
-        console.error('[agy] idle backstop failed:', err instanceof Error ? err.message : err)
-      })
-    }, AGY_IDLE_WATCH_MS)
-    timer.unref?.()
-    agyIdleWatch.set(sessionId, { timer, checks: checks + 1 })
-  }
+  // agy's turn closed from its pane when its final Stop never comes (core/turns/agyBackstop.ts).
+  const agyBackstop = createAgyBackstop({
+    agyNormalizers,
+    bySession: (sessionId) => registry.bySession(sessionId),
+    captureTerminal,
+    drain: (sessionId) => watcher.pollSession(sessionId),
+    emit: (sessionId, events) => emitSessionEvents(sessionId, events),
+  })
+  const clearAgyIdleWatch = agyBackstop.clearAgyIdleWatch
+  const armAgyIdleWatch = agyBackstop.armAgyIdleWatch
 
   const acquireTerminalControl = inputs.acquireTerminalControl
   // Questions an agent asks the person: shown on the dial and the window, answered from anywhere
