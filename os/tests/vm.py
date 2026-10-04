@@ -466,7 +466,9 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     # below independently checks that the agent knows the Harness shortcuts.
     agent_config = json.loads(config_sources)
     assert isinstance(agent_config, list) and any(row.get('path') == '/home/me/.config/opencode' for row in agent_config), 'OpenCode did not discover its global configuration'
-    assert vm.read_file('/home/me/.config/opencode/AGENTS.md') == vm.read_file('/usr/share/harness-os/guide.md'), 'OpenCode global instructions differ from the packaged guide'
+    instructions = vm.read_file('/home/me/.config/opencode/AGENTS.md')
+    assert instructions == vm.read_file('/etc/skel/.config/opencode/AGENTS.md'), 'OpenCode global instructions differ from the packaged entry point'
+    assert b'/usr/share/harness-os/guide.md' in instructions, 'OpenCode must discover the current packaged guide'
     vm.command('test ! -e /home/me/.config/opencode/plugin/launcher-register.js && test -s /home/me/.config/opencode/plugins/launcher-register/tui.js')
     screen, _ = vm.command(user('hn capture-pane -p'))
     (folder / 'bundled-opencode-screen.txt').write_text(screen)

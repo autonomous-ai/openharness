@@ -61,9 +61,8 @@ def stage(source, runtime, destination, commit):
         path.chmod(0o644)
     (destination / 'usr/share/harness-os/guide/source.json').write_text(
         json.dumps({'source_commit': commit, 'tui_reference': 'tui/README.md'}, indent=2) + '\n')
-    # OpenCode 2 discovers the global AGENTS.md; its legacy instructions array
-    # is accepted but not loaded. Keep guidance linked to the updated package.
-    (destination / 'etc/skel/.config/opencode/AGENTS.md').symlink_to('/usr/share/harness-os/guide.md')
+    # The regular skel AGENTS.md points OpenCode to the current packaged guide.
+    # Archive symlinks outside their directory are rejected by the updater.
     library = destination / 'usr/lib/harness'
     library.mkdir(parents=True)
     for local, target in [('harness-tui', 'harness-tui'), ('cli.js', 'cli.mjs'), ('notify.mjs', 'notify.mjs')]:
