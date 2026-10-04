@@ -1410,7 +1410,8 @@ async function downloadCanaryStage(entry: UpdateEntry, dir: string, log: (m: str
   const cliBuf = await downloadVerified(entry.cli)
   const notifyBuf = await downloadVerified(entry.notify)
   if (!canary(cliBuf, dir)) { log(`  ✗ the new build failed its self-check — keeping v${VERSION}`); return false }
-  stage(dir, cliBuf, notifyBuf)
+  // Asked for by name, so a version this machine once rolled back is installed and no longer rejected.
+  stage(dir, cliBuf, notifyBuf, entry.version)
   confirmUpdate(dir) // canary passed + bytes already verified ⇒ drop the .prev backups
   return true
 }
