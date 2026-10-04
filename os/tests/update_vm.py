@@ -102,7 +102,7 @@ def main():
             from fast_update_vm import exercise
             receipt['fast_updates'] = exercise(vm, args.fast_fixture, url)
             from release_update_vm import exercise as release_exercise
-            receipt['system_channel'] = release_exercise(vm, manifest)
+            receipt['system_channel'] = release_exercise(vm, manifest, config)
             vm.command('sync')
             vm.stop()
             vm.start(live=False)

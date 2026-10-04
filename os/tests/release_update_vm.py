@@ -2,10 +2,10 @@
 import json
 import shlex
 import time
-from session_vm import put
+from session_vm import put, PROBE
 
 
-def exercise(vm, manifest):
+def exercise(vm, manifest, config):
     # Retain the new bootstrap outside pacman-owned paths before restoring the
     # public preview. It has no updater; this is its one-time migration path.
     vm.command('mkdir -p /tmp/system-channel; cp /usr/lib/harness-os/release_update.py '
@@ -25,14 +25,38 @@ metadata = dict(schema=1, channel='preview', architecture='x86_64',
 '''
     put(vm, '/tmp/system-channel/make-feed.py', builder)
     vm.command('python3 /tmp/system-channel/make-feed.py')
+    vm.command('systemctl --user stop harness-update.timer harness-update.service; '
+               'mkdir -p ~/update-test; cp -R /tmp/system-channel ~/update-test/; '
+               'cp -R /tmp/fast-updates ~/update-test/')
     vm.command('sudo harness rollback', timeout=180)
+    # A rollback requires a real reboot just like an upgrade. Keep this guard
+    # intact, then start fresh running-work probes on the restored OS.
+    vm.command('sync')
+    vm.stop()
+    vm.start(live=False)
+    vm.login_installed(config)
+    vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+    vm.command('systemctl --user stop harness-update.timer harness-update.service; '
+               'cp -R ~/update-test/system-channel ~/update-test/fast-updates /tmp/; '
+               'test ! -e /run/harness-os-restart-required')
+    vm.command('systemd-run --user --collect --unit=harness-test-feed python3 -m http.server 19447 '
+               '--bind 127.0.0.1 --directory /tmp/fast-updates')
+    vm.command('for n in $(seq 1 30); do curl -fsS http://127.0.0.1:19447/fixture.json && exit 0; sleep .2; done; exit 1')
+    put(vm, '/tmp/update-session-probe.py', PROBE)
+    vm.command('rm -f ~/projects/session-probe/pid; '
+               'hn new-window -n channel-probe ' + shlex.quote('python3 /tmp/update-session-probe.py'))
+    vm.command('for n in $(seq 1 40); do test -s ~/projects/session-probe/pid && exit 0; sleep .25; done; exit 1;')
+    vm.command('cp ~/projects/session-probe/pid /tmp/fast-original-pid; '
+               'cat /proc/sys/kernel/random/boot_id > /tmp/fast-original-boot; '
+               'hn new-window -n channel-agent opencode')
+    vm.command('for n in $(seq 1 80); do pgrep -u 1000 -x opencode > /tmp/fast-original-agent && exit 0; sleep .25; done; exit 1')
     feed = ' --feed http://127.0.0.1:19447/os-metadata.json'
     updater = 'python3 /tmp/system-channel/release_update.py '
     def available(expected):
         vm.command(updater + 'check' + feed + ' > /tmp/system-channel/discovery.json')
         vm.command('python3 -c ' + shlex.quote("import json; assert json.load(open('/tmp/system-channel/discovery.json'))['available'] is " + str(expected)))
     available(True)
-    checks = ['Restored public preview discovers the newer real OS package through the verified release manifest']
+    checks = ['Restored public preview reboots and discovers the newer real OS package through the verified release manifest']
     package = '/tmp/fast-updates/' + manifest['package']['name']
     vm.command('cp ' + shlex.quote(package) + ' /tmp/good-os-package; printf broken > ' + shlex.quote(package))
     _, status = vm.command('sudo ' + updater + 'apply' + feed, timeout=180, check=False)
