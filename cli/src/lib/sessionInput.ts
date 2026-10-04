@@ -82,6 +82,8 @@ interface QueuedInput {
 }
 
 interface InputState {
+  /** The writes this agent's messages are making, one after another in the order they arrived. */
+  writes?: Promise<void>
   deliveryId?: string
   deliveryFingerprint?: string
   dispatching?: boolean
@@ -243,7 +245,18 @@ export class SessionInputController {
       return
     }
     this.delivery(sessionId, deliveryId, 'queued')
-    void this.inject(sessionId, session, content, deliveryId, tabId)
+    // One write at a time per agent, in the order the messages arrived. Claude Code and Codex take
+    // typing while a turn runs, so a message is not held for the turn — but two pastes into one pane at
+    // once interleave: one message's text lands between another's paste and its Enter, and the engine
+    // receives a single prompt made of both. Found end to end: five messages sent within 30 ms became
+    // two turns, "one" and "three" run together and the rest, out of order. Each write starts with the
+    // agent as it is by then, which a restart in between may have changed.
+    // With nothing in flight the write starts at once, so a cancel or a control request that follows
+    // the submit sees it, as before.
+    const write = (): Promise<void> => this.inject(sessionId, this.controlSession(sessionId) ?? session, content, deliveryId, tabId)
+    const running = state.writes ? state.writes.then(write, write) : write()
+    const settled: Promise<void> = running.catch(() => {}).then(() => { if (state.writes === settled) state.writes = undefined })
+    state.writes = settled
   }
 
   /** Reserve this pane for a short native control interaction such as `/model`. */

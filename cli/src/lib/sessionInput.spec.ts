@@ -819,9 +819,11 @@ describe('delivery correlation', () => {
 describe('optional lamp delivery preserves legacy behavior', () => {
   afterEach(() => vi.useRealTimers())
 
-  it('keeps concurrent untracked Claude submits out of the new lamp queue', async () => {
+  it('keeps untracked Claude submits out of the new lamp queue, writing them one after another', async () => {
+    // Not held for the turn — Claude takes typing while it works — but never two writes into the pane at
+    // once: the second waits for the first's paste, not for the first's turn.
     const validations: Array<(valid: boolean) => void> = []
-    const inject = vi.fn(async () => true)
+    const inject = vi.fn(async (_target: string, _text: string) => true)
     const controller = new SessionInputController({
       getSession: () => session('claude'),
       validateRuntime: () => new Promise<boolean>(resolve => validations.push(resolve)),
@@ -830,10 +832,40 @@ describe('optional lamp delivery preserves legacy behavior', () => {
     controller.setTurnOpen('s1', true)
     controller.submit('s1', 'first local prompt')
     controller.submit('s1', 'second local prompt')
-    expect(validations).toHaveLength(2)
-    validations.forEach(resolve => resolve(true))
+    expect(validations).toHaveLength(1)
+    validations[0](true)
+    await vi.waitFor(() => expect(validations).toHaveLength(2))
+    expect(inject.mock.calls.map(([, text]) => text)).toEqual(['first local prompt'])
+    validations[1](true)
     await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(2))
+    expect(inject.mock.calls.map(([, text]) => text)).toEqual(['first local prompt', 'second local prompt'])
     controller.forget('s1')
+  })
+
+  it('writes messages that arrive together in the order they arrived, whichever check finishes first', async () => {
+    const checks: Array<(valid: boolean) => void> = []
+    const inject = vi.fn(async (_target: string, _text: string) => true)
+    const controller = new SessionInputController({
+      getSession: () => session('codex'),
+      validateRuntime: () => new Promise<boolean>(resolve => checks.push(resolve)),
+      inject, sendKey: async () => true, onError: vi.fn(),
+    })
+    for (const text of ['one', 'two', 'three']) controller.submit('s1', text)
+    for (let i = 0; i < 3; i++) {
+      await vi.waitFor(() => expect(checks.length).toBe(i + 1))
+      checks[i](true)
+    }
+    await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(3))
+    expect(inject.mock.calls.map(([, text]) => text)).toEqual(['one', 'two', 'three'])
+    // A write that fails does not hold up the ones behind it.
+    const failing = vi.fn(async (_target: string, text: string) => { if (text === 'bad') throw new Error('pane gone'); return true })
+    const next = new SessionInputController({ getSession: () => session('codex'), validateRuntime: async () => true,
+      inject: failing, sendKey: async () => true, onError: vi.fn() })
+    next.submit('s1', 'bad')
+    next.submit('s1', 'good')
+    await vi.waitFor(() => expect(failing).toHaveBeenCalledTimes(2))
+    controller.forget('s1')
+    next.forget('s1')
   })
 
   it('keeps native control available during untracked runtime validation', async () => {
