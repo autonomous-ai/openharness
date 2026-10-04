@@ -199,6 +199,85 @@ class EncryptionMemory(unittest.TestCase):
                 budget.assert_not_called()
 
 
+class InstallerCleanup(unittest.TestCase):
+    def test_transient_reader_is_retried_without_force_or_deferred_removal(self):
+        attempts = []
+        def command(*args, **kwargs):
+            if args[:2] == ('cryptsetup', 'close'):
+                attempts.append(args)
+                if len(attempts) < 3:
+                    raise subprocess.CalledProcessError(5, args)
+            elif args[0] == 'udevadm':
+                # A queued unrelated event can outlast settle's brief budget.
+                raise subprocess.CalledProcessError(1, args)
+        with patch.object(installer, 'run', side_effect=command), patch.object(installer.time, 'sleep'):
+            installer.close_install_mapping('hn-install-test')
+        self.assertEqual(attempts, [('cryptsetup', 'close', 'hn-install-test')] * 3)
+
+    def test_persistent_holder_remains_an_error_with_a_bounded_wait(self):
+        error = subprocess.CalledProcessError(5, ['cryptsetup', 'close', 'hn-install-test'])
+        def command(*args, **kwargs):
+            if args[0] == 'cryptsetup':
+                raise error
+        started = installer.time.monotonic()
+        with patch.object(installer, 'run', side_effect=command):
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                installer.close_install_mapping('hn-install-test', timeout=0.02)
+        self.assertIs(caught.exception, error)
+        self.assertLess(installer.time.monotonic() - started, 1)
+
+    def test_unexpected_close_error_and_timeout_are_not_retried(self):
+        for error in [subprocess.CalledProcessError(4, ['cryptsetup', 'close']),
+                      subprocess.TimeoutExpired(['cryptsetup', 'close'], 10)]:
+            with self.subTest(error=error), patch.object(installer, 'run', side_effect=error) as command:
+                with self.assertRaises(type(error)) as caught:
+                    installer.close_install_mapping('hn-install-test')
+                self.assertIs(caught.exception, error)
+                self.assertEqual(command.call_count, 1)
+
+    def failed_install(self, unmount_failure=False, log_failure=False):
+        config = dict(username='me', hostname='harness', password='private-password',
+                      encrypt=True, disk='/dev/vda', confirm_erase='/dev/vda')
+        original = subprocess.CalledProcessError(1, ['unsquashfs', 'payload.sfs'])
+        cleanup = subprocess.CalledProcessError(5, ['cryptsetup', 'close', 'hn-install-test'])
+        def command(*args, **kwargs):
+            if args[0] == 'unsquashfs':
+                raise original
+            if unmount_failure and args[:2] == ('umount', '-R'):
+                raise OSError('target is still mounted')
+            return 'test-uuid'
+        with tempfile.TemporaryDirectory() as temp:
+            source, target, log = (Path(temp) / name for name in ('payload', 'target', 'install.log'))
+            source.touch()
+            with patch.object(installer, 'selected_disk'), \
+                 patch.object(installer, 'preflight'), \
+                 patch.object(installer, 'trial_source', return_value=None), \
+                 patch.object(installer, 'encryption_memory', return_value=128 * 1024), \
+                 patch.object(installer, 'run', side_effect=command), \
+                 patch.object(installer, 'close_install_mapping', side_effect=cleanup) as close, \
+                 installer.command_log(log), redirect_stdout(io.StringIO()) as output, ExitStack() as stack:
+                if log_failure:
+                    stack.enter_context(patch.object(installer.COMMAND_LOG, 'write', side_effect=OSError('log is full')))
+                with self.assertRaises(subprocess.CalledProcessError) as caught:
+                    installer.install(config, source, target)
+            self.assertIs(caught.exception, original)
+            self.assertIn('Disk cleanup also failed', original.__notes__[0])
+            if not log_failure:
+                self.assertIn('unsquashfs', log.read_text())
+            self.assertNotIn('private-password', log.read_text())
+            self.assertNotIn('Installed in', output.getvalue())
+            self.assertEqual(close.call_count, 0 if unmount_failure else 1)
+
+    def test_close_failure_never_hides_the_original_installation_error(self):
+        self.failed_install()
+
+    def test_failed_unmount_never_closes_a_still_mounted_mapping_or_hides_the_error(self):
+        self.failed_install(unmount_failure=True)
+
+    def test_failed_diagnostic_write_preserves_the_error_and_still_attempts_cleanup(self):
+        self.failed_install(log_failure=True)
+
+
 class Screen:
     """Capture drawn text and supply keys; never expose a real disk or terminal."""
     def __init__(self):
@@ -473,6 +552,15 @@ class InstallerExit(unittest.TestCase):
                 self.assertEqual(status, 1)
                 self.assertIn('fixture read failure', error)
                 acknowledge.assert_not_called()
+
+    def test_cleanup_context_and_command_timeout_remain_visible(self):
+        failure = subprocess.TimeoutExpired(['cryptsetup', 'close', 'hn-install-test'], 10)
+        failure.add_note('Harness was written and synced. Shut down normally.')
+        status, acknowledge, error = self.exercise(failure)
+        self.assertEqual(status, 1)
+        self.assertIn('cryptsetup', error)
+        self.assertIn('Harness was written and synced. Shut down normally.', error)
+        acknowledge.assert_called_once()
 
     def test_deliberate_cancel_does_not_open_an_error_prompt(self):
         status, acknowledge, error = self.exercise(KeyboardInterrupt())

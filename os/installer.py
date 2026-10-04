@@ -65,14 +65,47 @@ def command_log(path):
             os.close(fd)
 
 
-def run(*args, input=None, capture=False):
+def run(*args, input=None, capture=False, timeout=None):
     if COMMAND_LOG:
         COMMAND_LOG.write('\n$ ' + shlex.join(str(a) for a in args) + '\n')
         COMMAND_LOG.flush()
-    result = subprocess.run([str(a) for a in args], input=input, check=True,
+    result = subprocess.run([str(a) for a in args], input=input, check=True, timeout=timeout,
                             stdout=subprocess.PIPE if capture else COMMAND_LOG,
                             stderr=COMMAND_LOG if capture else subprocess.STDOUT if COMMAND_LOG else None)
     return result.stdout.decode().strip() if capture else None
+
+
+def log_diagnostic(message):
+    if COMMAND_LOG:
+        try:
+            COMMAND_LOG.write(message + '\n')
+            COMMAND_LOG.flush()
+        except OSError:
+            # A failed diagnostic write must not replace the installation error.
+            pass
+
+
+def close_install_mapping(mapper, timeout=10):
+    """Wait briefly for device probes; never force removal of an active mapping."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            run('cryptsetup', 'close', mapper, timeout=max(0.01, deadline - time.monotonic()))
+            return
+        except subprocess.CalledProcessError as error:
+            # cryptsetup documents 5 as a busy/existing device. Other failures
+            # are not transient and must retain their original diagnostics.
+            if error.returncode != 5 or time.monotonic() >= deadline:
+                raise
+            # udev may still be inspecting the filesystem after unmount. Wait
+            # for queued probes without allowing an unrelated stuck event to
+            # hold up shutdown forever. A persistent holder remains an error.
+            try:
+                run('udevadm', 'settle', '--timeout=1',
+                    timeout=max(0.01, min(2, deadline - time.monotonic())))
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                pass
+            time.sleep(max(0, min(0.25, deadline - time.monotonic())))
 
 
 def partitions(disk):
@@ -395,13 +428,26 @@ def install(config, source, target, progress=None):
         write(target, '/var/lib/harness-os/install.json', json.dumps(receipt, indent=2) + '\n')
         report('Finishing installation…')
         run('sync')
-        if progress is None:
-            print(f"Installed in {receipt['duration_seconds']:.1f}s. Shut down, remove the USB, and boot the disk.", flush=True)
     finally:
-        if mounted:
-            run('umount', '-R', target)
-        if opened:
-            run('cryptsetup', 'close', mapper)
+        original_error = sys.exception()
+        if original_error is not None:
+            log_diagnostic(f'\nInstallation failed: {original_error}')
+        try:
+            if mounted:
+                run('umount', '-R', target)
+            if opened:
+                close_install_mapping(mapper)
+        except (OSError, subprocess.SubprocessError) as cleanup_error:
+            if original_error is None:
+                cleanup_error.add_note('Harness was written and synced. Shut down normally before removing the USB, then try booting the installed disk.')
+                raise
+            # Keep the actual installation failure visible. Cleanup is still
+            # attempted and its failure is retained as additional information.
+            detail = f'Disk cleanup also failed: {cleanup_error}'
+            original_error.add_note(detail)
+            log_diagnostic(detail)
+    if progress is None:
+        print(f"Installed in {receipt['duration_seconds']:.1f}s. Shut down, remove the USB, and boot the disk.", flush=True)
 
 
 def selected_size(config):
@@ -731,8 +777,10 @@ def entrypoint():
         main(args)
     except KeyboardInterrupt:
         return 130
-    except (ValueError, OSError, curses.error, subprocess.CalledProcessError) as error:
+    except (ValueError, OSError, curses.error, subprocess.SubprocessError) as error:
         print(f'Installation stopped: {error}', file=sys.stderr, flush=True)
+        for note in getattr(error, '__notes__', ()):
+            print(note, file=sys.stderr, flush=True)
         if not args.config and LAST_LOG is not None:
             print(f'Details: {LAST_LOG}', file=sys.stderr, flush=True)
         # An installer launched from the USB welcome owns its pane. Retain the

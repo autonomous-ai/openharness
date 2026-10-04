@@ -11,7 +11,7 @@ audience, not its name.
 
 Product names and interface copy follow the [Naming System](../docs/naming-system.md).
 
-**Preview 8:** the USB opens a short network step
+**Preview 9:** the USB opens a short network step
 or goes straight into bundled OpenCode when already connected. **Install without
 connecting** opens the same native installer offline. The agent works beside
 **New Harness** and **Connect a computer** starter panels; a persistent install
@@ -25,12 +25,17 @@ Both the live and installed system use `me@harness`.
 `Super+u` opens Updates. Frequent hn/CLI releases download in the background;
 you choose when to reconnect the screen. Running agents and terminals stay alive.
 
-[Download preview 8](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.8)
+[Download preview 9](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.9)
 · [Mac → USB → ThinkPad installation guide](INSTALL.md)
 · [Standalone HTML/CSS landing page](../website/public/os/README.md)
 · [Development feedback loop and Mac support targets](DEVELOPMENT.md)
 
-Preview 8 uses stronger USB payload compression and fixes a startup race: opening
+Preview 9 briefly retries a busy encrypted-device close after the installed disk
+has been unmounted. A persistent holder still reports an error; cleanup failures
+also preserve any earlier installation error. A ThinkPad running preview 8 reached
+Harness after normal shutdown and USB removal despite this final cleanup error.
+
+Preview 8 introduced stronger USB payload compression and fixed a startup race: opening
 a terminal immediately can no longer send the USB welcome into that new window.
 Encrypted installation also budgets key derivation against available RAM,
 without treating RAM-backed swap as extra capacity after the agent trial.

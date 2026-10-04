@@ -19,6 +19,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import tarfile
 import time
@@ -675,6 +676,33 @@ if status:
         assert config['password'] not in output, 'Installation diagnostics must not contain the password'
 
 
+def check_installer_cleanup(vm, folder):
+    """Exercise the actual packaged cleanup against a real temporary dm device."""
+    encoded = base64.b64encode(Path(__file__).with_name('installer-cleanup-native.py').read_bytes()).decode()
+    vm.command('install -m 600 /dev/null /run/hn-cleanup-native.b64')
+    for offset in range(0, len(encoded), 3000):
+        vm.command('printf %s ' + encoded[offset:offset + 3000] + ' >> /run/hn-cleanup-native.b64')
+    vm.command('base64 -d /run/hn-cleanup-native.b64 > /run/hn-cleanup-native.py')
+    try:
+        output, _ = vm.command('python3 /run/hn-cleanup-native.py --installer /usr/lib/harness-os/install.py '
+                               '--output /run/hn-cleanup-result', timeout=90)
+        (folder / 'cleanup-native.log').write_text(output)
+    finally:
+        failure = sys.exception()
+        for name in ['receipt.json', 'baseline-close.txt', 'transient-close.log', 'persistent-close.log']:
+            try:
+                (folder / ('cleanup-' + name)).write_bytes(vm.read_file('/run/hn-cleanup-result/' + name, timeout=10))
+            except Exception as error:
+                if failure is None:
+                    raise
+                failure.add_note(f'Could not retain cleanup {name}: {error}')
+    receipt = json.loads((folder / 'cleanup-receipt.json').read_text())
+    assert receipt['status'] == 'passed'
+    expected = hashlib.sha256(Path(__file__).resolve().parents[1].joinpath('installer.py').read_bytes()).hexdigest()
+    assert receipt['installer_sha256'] == expected, 'Cleanup evidence must exercise this exact installer'
+    return receipt
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--iso', required=True, type=Path)
@@ -809,6 +837,9 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         if args.live_only:
             result['status'] = 'passed'
             return
+        if args.encrypt:
+            result['installer_cleanup'] = check_installer_cleanup(vm, folder)
+            result['checks'].append('Packaged installer closes a transiently busy encrypted mapping, preserves its filesystem and rejects a persistent holder')
         config = dict(disk='/dev/vda', expected_serial='HN_OS_TEST', confirm_erase='/dev/vda',
                       username='me', hostname='harness', password='test-password-123',
                       encrypt=args.encrypt, serial_console=True)

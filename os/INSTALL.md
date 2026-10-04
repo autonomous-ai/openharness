@@ -1,6 +1,6 @@
 # Install Harness on a ThinkPad
 
-These instructions are for **0.1.0-preview.8**, using a Mac to prepare the USB.
+These instructions are for **0.1.0-preview.9**, using a Mac to prepare the USB.
 The USB starts a live session. Installation begins only when you choose **Install**
 in the installer; it erases the entire selected disk.
 
@@ -21,20 +21,20 @@ compute still need testing on the actual hardware.
 
 ## 2. Download and verify on the Mac
 
-From the [preview 8 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.8),
+From the [preview 9 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.9),
 download both files into the same folder:
 
-- `harness-0.1.0-preview.8-x86_64.iso`
-- `harness-0.1.0-preview.8-x86_64.iso.sha256`
+- `harness-0.1.0-preview.9-x86_64.iso`
+- `harness-0.1.0-preview.9-x86_64.iso.sha256`
 
 If they are in Downloads, open Terminal and run:
 
 ```sh
 cd ~/Downloads
-shasum -a 256 -c harness-0.1.0-preview.8-x86_64.iso.sha256
+shasum -a 256 -c harness-0.1.0-preview.9-x86_64.iso.sha256
 ```
 
-The result must say `harness-0.1.0-preview.8-x86_64.iso: OK`.
+The result must say `harness-0.1.0-preview.9-x86_64.iso: OK`.
 If it does not, download the files again before flashing.
 
 ## 3. Flash the USB
@@ -183,8 +183,9 @@ They retain a recovery checkpoint and rebuild the boot image. When the screen
 offers **Restart now**, save your work and press Enter when ready. Downloads do
 not restart the computer, and routine updates do not require another USB flash.
 
-Preview 8 reduces the USB download size; it does not require an update or reflash
-on an installed preview 7 computer. The installed-system feed remains on preview 7.
+Preview 9 fixes a transient encrypted-disk cleanup failure after installation.
+An installed computer that boots successfully needs no update or reflash for this
+fix. The installed-system feed remains on preview 7.
 
 Preview 4 needs the 7.2 MB [preview 7 bootstrap bundle](https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.7/harness-update-0.1.0-preview.7-47872670a-x86_64.zip)
 once. Verify and extract that bundle, open a terminal in its folder, and run:
@@ -219,6 +220,14 @@ If something fails, keep the exact error and ThinkPad model. `hn-os status` and
 The [OS README](https://github.com/autonomous-ai/openharness/blob/main/os/README.md#updates-and-recovery) describes updates and recovery.
 
 ## Older USB images
+
+Preview 8 can finish writing the system, run `sync`, and successfully unmount
+`/mnt/harness-os`, then report `cryptsetup close ... returned non-zero exit status 5`
+with `Device ... is still in use`. Check `/var/log/harness-install.log`: if those
+are the final steps, shut down normally with `sudo systemctl poweroff`, remove the
+USB once off, and try the installed disk. Reinstallation is usually unnecessary.
+If an earlier installation step failed, that error still needs diagnosis; reaching
+the cleanup command alone does not prove that installation finished.
 
 Preview 2 may report `Live system payload is missing` after copying the image into
 RAM. If `/run/archiso/copytoram/airootfs.sfs` exists, its workaround is:
