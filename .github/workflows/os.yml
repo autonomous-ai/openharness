@@ -266,6 +266,39 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+  nvidia:
+    needs: image
+    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && (needs.image.result == 'success' || inputs.checks == 'hardware' && inputs.image_run_id != '') && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Check the fixture and install VM tools
+        run: |
+          python3 -m py_compile os/tests/nvidia_install_guest.py os/tests/nvidia_install_vm.py
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+      - name: Install the selected NVIDIA driver offline and reboot encrypted
+        run: python3 os/tests/nvidia_install_vm.py --iso os/dist/*.iso
+      - name: Retain exact-image NVIDIA installation evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-nvidia-install
+          path: |
+            os/test-results/nvidia-install/
+            !os/test-results/nvidia-install/*.qcow2
+            !os/test-results/nvidia-install/OVMF_VARS.fd
+          retention-days: 14
+          compression-level: 0
+
   essentials:
     needs: image
     if: ${{ always() && inputs.checks == 'essentials' && !inputs.publish_run_id && !inputs.development_update && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}

@@ -11,6 +11,37 @@ spec.loader.exec_module(publish)
 
 
 class PublicationGuards(unittest.TestCase):
+    def test_nvidia_requires_exact_image_authenticated_offline_install_and_reboot(self):
+        manifest = {'source_commit': 'source-one', 'iso': {'sha256': 'image-one'},
+                    'hardware': {'nvidia': {'kernel': 'exact-kernel', 'driver_version': '615.71.09',
+                    'packages': {'driver.pkg.tar.zst': {'name': 'driver', 'version': '1'}}}}}
+        receipt = dict(status='passed', iso_sha256='image-one', image_source_commit='source-one',
+                       test_source_commit='source-one', candidate_injected=False,
+                       keyboard={'confirmed_seconds_since_boot': 20}, return_keyboard={'confirmed_seconds_since_boot': 40},
+                       early_display_modules_and_firmware='passed', generic_browser_after_driver_reboot='passed',
+                       installation=dict(status='passed', kernel='exact-kernel', driver_version='615.71.09',
+                           optional_packages={'driver': '1'}, cache_extraction_excluded=True,
+                           corrupted_archive_rejected=True, invalid_signature_rejected=True,
+                           negative_selections_unchanged=True, cache_absent=True, base_packages_unchanged=True))
+        publish.validate_nvidia(manifest, receipt)
+        for key, value in receipt.items():
+            bad = copy.deepcopy(receipt)
+            bad.pop(key)
+            with self.subTest(missing=key), self.assertRaises(ValueError):
+                publish.validate_nvidia(manifest, bad)
+            if key.endswith('commit') or key == 'iso_sha256':
+                bad[key] = 'other'
+                with self.subTest(different=key), self.assertRaises(ValueError):
+                    publish.validate_nvidia(manifest, bad)
+        bad = dict(receipt, candidate_injected=True)
+        with self.assertRaises(ValueError):
+            publish.validate_nvidia(manifest, bad)
+        for key in receipt['installation']:
+            bad = copy.deepcopy(receipt)
+            bad['installation'].pop(key)
+            with self.subTest(missing=key), self.assertRaises(ValueError):
+                publish.validate_nvidia(manifest, bad)
+
     def test_optional_hardware_requires_matching_native_install_and_rebuild(self):
         manifest = {'source_commit': 'source-one', 'iso': {'sha256': 'image-one'},
                     'hardware': {'broadcom': {'kernel': 'exact-kernel',
@@ -121,6 +152,13 @@ class PublicationGuards(unittest.TestCase):
         for row in hardware_receipts:
             row['checks'].append('Unrelated hardware receives no optional Wi-Fi packages and retains no USB driver cache')
         publish.validate_receipts(hardware_manifest, hardware_receipts)
+        gpu_manifest = dict(manifest, capabilities=['nvidia-offline'])
+        with self.assertRaisesRegex(ValueError, 'NVIDIA-driver exclusion'):
+            publish.validate_receipts(gpu_manifest, receipts)
+        gpu_receipts = copy.deepcopy(receipts)
+        for row in gpu_receipts:
+            row['checks'].append('Unrelated hardware receives no NVIDIA packages, boot configuration or USB GPU cache')
+        publish.validate_receipts(gpu_manifest, gpu_receipts)
         for change in [dict(status='failed'), dict(scope='live session only'), dict(iso_sha256='another-image'),
                        dict(image_source_commit='another-source'), dict(checks=['Live hn ready;']), dict(encrypted=False)]:
             bad = copy.deepcopy(receipts)

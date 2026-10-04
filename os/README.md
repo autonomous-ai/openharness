@@ -32,7 +32,7 @@ a confirmation or password prompt. Running agents and terminals stay alive.
 The update checker records release ancestry so a source-built runtime cannot be
 replaced by an older public CLI with a higher development version number.
 
-[Download preview 12](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.12)
+[Download preview 13](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.13)
 · [Mac → USB → ThinkPad installation guide](INSTALL.md)
 · [Standalone HTML/CSS landing page](../website/public/os/README.md)
 · [Development feedback loop and Mac support targets](DEVELOPMENT.md)
@@ -232,15 +232,31 @@ This initial recovery path requires the USB; it is not an automatic boot fallbac
 
 ## NVIDIA and local AI
 
-The small base image carries Intel/AMD graphics and Linux firmware. NVIDIA's
-compute driver is installed on demand with
-`sudo pacman -S --needed nvidia-open-lts nvidia-utils`, followed by
-`sudo mkinitcpio -P` and a reboot. These are the matching packages for the included
-LTS kernel and supported Turing-or-newer GPUs, including the intended RTX targets.
+The base package set carries Intel/AMD graphics and Linux firmware. Image builds
+with the `nvidia-offline` capability also carry signed, snapshot-matched NVIDIA
+packages on the USB. During installation, exact PCI IDs from the packaged current
+support table select `nvidia-open-lts` and `nvidia-utils` for supported GPUs.
+The installer configures early display modules and firmware for encrypted boot.
+The compressed cache is excluded from the disk copy; generic installations gain
+no NVIDIA packages, boot settings or package cache. No compiler or DKMS is needed.
+
+If any NVIDIA display needs a legacy driver, or is already assigned to VFIO, the
+installer leaves the GPU configuration alone. Existing installations made with
+older images can install `nvidia-open-lts nvidia-utils` from the same repository
+snapshot, regenerate initramfs with `sudo mkinitcpio -P`, and reboot. Updating the
+OS does not silently change their GPU driver. The current open modules support
+Turing and newer; older GPUs need a separate driver assessment.
 See [Arch's package](https://archlinux.org/packages/extra/x86_64/nvidia-open-lts/)
 and [NVIDIA's supported GPUs](https://github.com/NVIDIA/open-gpu-kernel-modules).
 No NVIDIA hardware validation has been performed yet. Verify `nvidia-smi` and the
 actual AI workload on each physical machine before treating it as supported.
+
+`os/tests/nvidia_install_vm.py` exercises offline installation, damaged archive
+and signature rejection, unchanged base packages, early modules/GSP firmware,
+encrypted reboot, keyboard input and a browser on a virtual GPU. PCI discovery
+uses explicit fixtures; none of those checks establishes physical rendering,
+CUDA, sleep/wake or local-agent performance. The publication gate requires this
+evidence from the exact ISO and separate generic-install exclusion checks.
 
 OpenCode is bundled; other agent executables are installed through hn's existing
 engine install recipes when selected. Accounts, API credentials and model downloads are supplied by the

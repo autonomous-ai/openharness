@@ -74,6 +74,32 @@ def validate_hardware(manifest, receipt):
         raise ValueError('Installed driver dependencies have not passed an offline rebuild.')
 
 
+def validate_nvidia(manifest, receipt):
+    if (receipt.get('status') != 'passed' or receipt.get('iso_sha256') != manifest['iso']['sha256'] or
+            receipt.get('image_source_commit') != manifest['source_commit'] or
+            receipt.get('test_source_commit') != manifest['source_commit'] or
+            receipt.get('candidate_injected') is not False):
+        raise ValueError('NVIDIA evidence must pass against the exact unmodified image.')
+    bundle = manifest['hardware']['nvidia']
+    installed = receipt.get('installation', {})
+    if (installed.get('status') != 'passed' or installed.get('kernel') != bundle['kernel'] or
+            installed.get('driver_version') != bundle['driver_version']):
+        raise ValueError('The NVIDIA installation does not match the bundled kernel and driver.')
+    for check in ['cache_extraction_excluded', 'corrupted_archive_rejected', 'invalid_signature_rejected',
+                  'negative_selections_unchanged', 'cache_absent', 'base_packages_unchanged']:
+        if installed.get(check) is not True:
+            raise ValueError('Missing NVIDIA installation check: ' + check)
+    expected = {value['name']: value['version'] for value in bundle['packages'].values()}
+    if installed.get('optional_packages') != expected:
+        raise ValueError('Installed NVIDIA packages differ from the image manifest.')
+    for check in ['keyboard', 'return_keyboard']:
+        if not isinstance(receipt.get(check), dict) or receipt[check].get('confirmed_seconds_since_boot', 0) <= 0:
+            raise ValueError('NVIDIA package acceptance has not passed actual keyboard input.')
+    for check in ['early_display_modules_and_firmware', 'generic_browser_after_driver_reboot']:
+        if receipt.get(check) != 'passed':
+            raise ValueError('Missing NVIDIA boot or browser acceptance: ' + check)
+
+
 def validate_receipts(manifest, receipts):
     rows = {(r['firmware'], r['encrypted']): r for r in receipts}
     if set(rows) != {('bios', False), ('uefi', True)} or len(receipts) != 2:
@@ -90,6 +116,9 @@ def validate_receipts(manifest, receipts):
         if 'broadcom-offline' in manifest.get('capabilities', []) and not any(
                 check.startswith('Unrelated hardware receives no optional Wi-Fi packages') for check in checks):
             raise ValueError('The generic installation has not passed optional-driver exclusion.')
+        if 'nvidia-offline' in manifest.get('capabilities', []) and not any(
+                check.startswith('Unrelated hardware receives no NVIDIA packages, boot configuration or USB GPU cache') for check in checks):
+            raise ValueError('The generic installation has not passed NVIDIA-driver exclusion.')
     if not any(check.startswith('Harness unlock screen renders, masks input, accepts a retry') for check in rows[('uefi', True)]['checks']):
         raise ValueError('The encrypted graphical unlock and retry checks have not passed.')
     if not any(check.startswith('Claude Code, Codex and pi install on demand; bundled OpenCode') for check in rows[('bios', False)]['checks']):
@@ -158,6 +187,13 @@ def main():
         gh('run', 'download', args.image, '--repo', args.repo, '--name', 'harness-os-hardware', '--dir', root / 'hardware')
         hardware = read(root / 'hardware/receipt.json')
         validate_hardware(manifest, hardware)
+    nvidia = None
+    if 'nvidia-offline' in manifest.get('capabilities', []):
+        if not any(j['name'] == 'nvidia' and j['conclusion'] == 'success' for j in jobs['jobs']):
+            raise ValueError('The image build has no successful NVIDIA installation job.')
+        gh('run', 'download', args.image, '--repo', args.repo, '--name', 'harness-os-nvidia-install', '--dir', root / 'nvidia')
+        nvidia = read(root / 'nvidia/receipt.json')
+        validate_nvidia(manifest, nvidia)
     examples = {}
     if list((root / 'machines').rglob('workloads/reports')):
         examples['workloads'] = {'run': run['html_url'], 'browser_checks': validate_examples(root / 'machines', 'workloads')}
@@ -176,6 +212,8 @@ def main():
                   'machines': receipts, 'examples': examples, 'limitations': limitations}
     if hardware is not None:
         validation['hardware'] = hardware
+    if nvidia is not None:
+        validation['nvidia'] = nvidia
     (folder / 'validation.json').write_text(json.dumps(validation, indent=2) + '\n')
     manifest['validation'] = {'status': 'passed', 'receipt': 'validation.json', 'machine_run': run['html_url'], 'limitations': limitations}
     (folder / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
@@ -183,7 +221,7 @@ def main():
     validate_install_guide(manifest, guide)
     (folder / 'INSTALL.md').write_text(guide)
     with zipfile.ZipFile(folder / 'machine-evidence.zip', 'w', compression=zipfile.ZIP_DEFLATED) as archive:
-        for directory in ['machines', 'dsh-machines', 'hardware']:
+        for directory in ['machines', 'dsh-machines', 'hardware', 'nvidia']:
             for path in sorted((root / directory).rglob('*')):
                 include = path.suffix in {'.png', '.json', '.txt', '.jsonl'} or path.name.endswith('-boot-journal.log')
                 if path.is_file() and include and not {'Projects', 'projects'} & set(path.relative_to(root / directory).parts):
@@ -224,6 +262,8 @@ To install: follow the included `INSTALL.md` for Mac → USB → ThinkPad instru
 BIOS/plain and UEFI/encrypted VM boot, clipboard, browser switching, offline installation and package-checkpoint recovery passed. The BIOS VM uses a Nehalem CPU profile without AVX2, starts bundled OpenCode, installs the other agent executables, installs a compiler on demand, builds C, and serves a local Node preview. See `validation.json` and `machine-evidence.zip` for the exact checks and measurements.
 
 {'The USB carries an optional Broadcom Wi-Fi module and signed offline dependencies for selected BCM4331/BCM4360 radios. Fresh installations retain those packages only when needed; other computers receive no additional compiler or driver packages. The exact module and offline installation/rebuild path passed native VM checks with synthetic PCI selection. Physical Mac radio association and sleep/wake remain unverified.' if hardware is not None else ''}
+
+{'Supported NVIDIA machines install a snapshot-matched open kernel driver and userspace offline. The installer uses the bundled driver support table and leaves mixed legacy GPUs and passthrough assignments unchanged. Other computers receive no NVIDIA packages or package cache. Signed package installation, early display modules and firmware, encrypted reboot and a browser on a virtual GPU passed; physical NVIDIA rendering and inference remain unverified.' if nvidia is not None else ''}
 
 {'Real free OpenCode agents built a Python CLI, a conference website, a keyboard game and a Fastify/SQLite application. Their unit tests and independent browser/API checks passed. The retained projects are in `harness-examples.zip`, separate from the minimal ISO.' if 'workloads' in examples else ''}
 

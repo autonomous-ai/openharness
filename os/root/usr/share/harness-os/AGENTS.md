@@ -68,9 +68,14 @@ is required.
   `Super+l` locks the screen. `sudo systemctl poweroff` shuts down cleanly.
 - On supported NVIDIA Turing and newer GPUs, including RTX 4090/5090 and RTX 6000
   generations, the LTS-kernel packages are `nvidia-open-lts nvidia-utils`.
-  Install both from the same repository snapshot, regenerate initramfs with
-  `sudo mkinitcpio -P`, reboot, and verify `nvidia-smi` before claiming GPU compute
-  works. Older NVIDIA GPUs need a different driver assessment.
+  New USB images carrying the NVIDIA bundle install them offline when the exact
+  GPU IDs match the bundled support table. Check `pacman -Q` and
+  `/var/lib/harness-os/hardware.json` before installing anything. Other machines
+  receive no NVIDIA packages. Mixed legacy GPUs and passthrough assignments are
+  left alone. On older installations, install both from the same repository
+  snapshot, regenerate initramfs with `sudo mkinitcpio -P`, and reboot. Verify
+  `nvidia-smi` and the actual workload before claiming GPU compute works.
+  Older NVIDIA GPUs need a different driver assessment.
 - CUDA SDKs, model weights and model servers are installed only when a task needs
   them. A driver working is not evidence that a particular AI framework supports
   the GPU; test the actual framework and workload.

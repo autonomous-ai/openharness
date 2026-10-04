@@ -8,9 +8,6 @@ on:
         type: string
         default: '37222390225'
         required: true
-  push:
-    branches: ['os-polish/nvidia-install']
-    paths: ['os/**', '.github/workflows/os-nvidia.yml']
 
 permissions:
   contents: read
