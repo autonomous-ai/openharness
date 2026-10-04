@@ -64,15 +64,16 @@ The exact menu wording varies by model. See Lenovo's
 [boot-menu instructions](https://docs.lenovocdrt.com/ref/bios/startup_menu/).
 If the USB is absent, try another USB port and check that USB boot is enabled.
 
-The USB opens **Connect to Wi-Fi** and **Install without connecting** when offline.
-Choose Wi-Fi and enter its password in the system form to try an agent. Ethernet
+The USB opens a full-page Wi-Fi list with **Install without connecting** always
+visible. Choose a network and enter its password; a successful connection advances
+automatically. Ethernet
 skips this step when already connected. No Harness account is needed.
 
-OpenCode starts with its default model selection. Beside it are **New Harness**
-and **Connect a computer**, for trying multiple agents and computers. Ask the agent
+OpenCode starts with its default model selection on the left, beside two real
+terminal panes on the right. **Super+n** starts another harness; **Super+m**
+connects a computer. Ask the agent
 about Harness, its shortcuts, or something you want to build. The footer keeps
-**Install Harness** visible throughout the trial; **Temporary USB** reminds you
-that work has not yet been saved to an installed system.
+**Install Harness** visible throughout the trial, beside the window list on one row.
 
 Create projects under `~/projects`. The installer preserves and verifies these
 saved files, including Git history. Files elsewhere, running processes and agent
@@ -105,10 +106,10 @@ in the footer, press **Super+i**, or ask the agent to open installation.
 F10 focuses Install Harness in the footer; Enter opens it. All routes open
 the same native form, with four fields:
 
-1. **Disk:** press Enter, choose the internal disk by its model and capacity, and
-   press Enter again. The live USB is excluded from the choices.
+1. **Disk:** the first eligible disk is selected. Check its model and capacity.
+   To change it, focus Disk and press Enter. The live USB is excluded.
 2. **Encryption:** enabled initially. Use Space to change it if needed.
-3. **Password:** enter the password for your new system.
+3. **Password:** focused when the form opens; type your new system password.
 4. **Repeat password:** enter it again.
 
 Use Tab or the arrow keys to move between fields. This preview uses a **US keyboard
@@ -138,9 +139,9 @@ The password initially protects both the account and, when enabled, the encrypte
 disk. Changing the account password later does not change the disk password.
 There is no cloud account that resets the disk password.
 
-On the empty home screen, press **Enter** to start OpenCode. If there is no network
-connection, the keyboard network picker opens first. Select your Wi-Fi network
-and enter its password there. **Super+w** opens network setup from any
+First boot opens OpenCode on the left and two terminal panes on the right.
+If disconnected, Wi-Fi opens first; you can connect or continue offline.
+Subsequent launches restore your existing work. **Super+w** opens network setup from any
 pane. Ethernet connects automatically when available.
 
 OpenCode is already installed and uses its upstream defaults. Available models

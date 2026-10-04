@@ -16,7 +16,7 @@ OFFLINE = 11
 
 def nmcli(*args, secret=None, wait=8):
     # Secrets travel through stdin, never argv, shell text or diagnostic logs.
-    return subprocess.run(['nmcli', '--colors', 'no', '--wait', str(wait), *args],
+    return subprocess.run(['/usr/bin/nmcli', '--colors', 'no', '--wait', str(wait), *args],
                           input=secret, capture_output=True, text=True, timeout=wait + 3,
                           env=dict(os.environ, LC_ALL='C'))
 

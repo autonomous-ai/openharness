@@ -31,6 +31,11 @@ class Screen:
 
 
 class Network(unittest.TestCase):
+    def test_privileged_form_uses_a_fixed_executable_not_the_callers_path(self):
+        with patch.object(network.subprocess, 'run', return_value=result()) as run:
+            network.nmcli('general')
+        self.assertEqual(run.call_args.args[0][0], '/usr/bin/nmcli')
+
     def test_scans_escape_ssids_and_deduplicate_radios_without_hiding_open_networks(self):
         rows = 'a\\:network:60:WPA2:wlan0:aa\\:bb:\nopen:90:--:wlan0:bb\\:cc:\na\\:network:88:WPA2:wlan0:cc\\:dd:*\n:80:WPA2:wlan0:dd\\:ee:\n'
         with patch.object(network, 'nmcli', return_value=result(output=rows)):
