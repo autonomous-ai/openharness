@@ -667,6 +667,19 @@ export function lastCodexTurnText(rawLines: string[]): LastTurnText | null {
   return text ? { userMessage, assistantText: text } : null
 }
 
+/**
+ * Whether a Codex history page may start at this line: a user's message, or the injected context a goal
+ * turn starts on — so a turn is never split. Shared by `windowCodexLines` and the bounded pager
+ * (lib/transcriptPages.ts), so the two cannot drift apart.
+ */
+export function codexPageStart(line: string): boolean {
+  const raw = parse(line)
+  const item = raw ? payload(raw) : null
+  if (raw?.type === 'event_msg' && item && USER_TURN_TYPES.has(string(item.type))) return true
+  // A goal turn starts on the injected goal context, not on a `user_message`.
+  return raw?.type === 'response_item' && !!item && string(item.type) === 'message' && !!goalObjective(item)
+}
+
 export function windowCodexLines(
   rawLines: string[],
   opts: { limit: number; before?: string },
@@ -682,14 +695,7 @@ export function windowCodexLines(
   }
 
   let start = Math.max(0, endIndex - opts.limit)
-  while (start > 0) {
-    const raw = parse(rawLines[start])
-    const item = raw ? payload(raw) : null
-    if (raw?.type === 'event_msg' && item && USER_TURN_TYPES.has(string(item.type))) break
-    // A goal turn starts on the injected goal context, not on a `user_message`.
-    if (raw?.type === 'response_item' && item && string(item.type) === 'message' && goalObjective(item)) break
-    start--
-  }
+  while (start > 0 && !codexPageStart(rawLines[start])) start--
   return {
     window: rawLines.slice(start, endIndex),
     hasMore: start > 0,

@@ -491,36 +491,48 @@ export function lastTurnTextFromRawLines(rawLines: string[]): LastTurnText | nul
 /** Aggregates computed from a sub-agent's OWN transcript. Async/background agents never get totals
  *  in the launcher's toolUseResult (it only records `{isAsync, status:'async_launched', agentId}` at
  *  launch) — the real numbers live in `<session>/subagents/agent-<id>.jsonl`. totalTokens mirrors the
- *  CLI's definition: input + output + cache_read + cache_creation summed over assistant turns. */
-export function subagentStatsFromRawLines(rawLines: string[]): { totalToolUseCount: number; totalDurationMs?: number; totalTokens?: number } {
-  let toolCount = 0
-  let tokens = 0
-  let first: number | undefined
-  let last: number | undefined
-  for (const line of rawLines) {
-    if (!line.trim()) continue
+ *  CLI's definition: input + output + cache_read + cache_creation summed over assistant turns. Taken a
+ *  line at a time, so a long transcript is never held whole. */
+export class SubagentStats {
+  private toolCount = 0
+  private tokens = 0
+  private first: number | undefined
+  private last: number | undefined
+
+  push(line: string): void {
+    if (!line.trim()) return
     let raw: Record<string, unknown>
-    try { raw = JSON.parse(line) as Record<string, unknown> } catch { continue }
-    if (!raw || typeof raw !== 'object') continue
+    try { raw = JSON.parse(line) as Record<string, unknown> } catch { return }
+    if (!raw || typeof raw !== 'object') return
     const ts = typeof raw.timestamp === 'string' ? Date.parse(raw.timestamp) : NaN
-    if (!Number.isNaN(ts)) { if (first === undefined) first = ts; last = ts }
-    if (raw.type !== 'assistant') continue
+    if (!Number.isNaN(ts)) { if (this.first === undefined) this.first = ts; this.last = ts }
+    if (raw.type !== 'assistant') return
     const msg = raw.message as { content?: unknown; usage?: Record<string, unknown> } | undefined
-    if (!msg) continue
+    if (!msg) return
     if (Array.isArray(msg.content)) {
-      for (const b of msg.content) if ((b as { type?: string }).type === 'tool_use') toolCount++
+      for (const b of msg.content) if ((b as { type?: string }).type === 'tool_use') this.toolCount++
     }
     const u = msg.usage
     if (u) {
-      tokens += (Number(u.input_tokens) || 0) + (Number(u.output_tokens) || 0)
+      this.tokens += (Number(u.input_tokens) || 0) + (Number(u.output_tokens) || 0)
         + (Number(u.cache_read_input_tokens) || 0) + (Number(u.cache_creation_input_tokens) || 0)
     }
   }
-  return {
-    totalToolUseCount: toolCount,
-    totalDurationMs: first !== undefined && last !== undefined && last > first ? last - first : undefined,
-    totalTokens: tokens || undefined,
+
+  result(): { totalToolUseCount: number; totalDurationMs?: number; totalTokens?: number } {
+    const { first, last } = this
+    return {
+      totalToolUseCount: this.toolCount,
+      totalDurationMs: first !== undefined && last !== undefined && last > first ? last - first : undefined,
+      totalTokens: this.tokens || undefined,
+    }
   }
+}
+
+export function subagentStatsFromRawLines(rawLines: string[]): { totalToolUseCount: number; totalDurationMs?: number; totalTokens?: number } {
+  const stats = new SubagentStats()
+  for (const line of rawLines) stats.push(line)
+  return stats.result()
 }
 
 /** Emit tool_end events for a user message's tool_result blocks. */
@@ -713,19 +725,28 @@ export function messagesToEvents(rawLines: string[]): SessionEvent[] {
  * would drop tool names. A user-prompt line never sits between a tool_use and its tool_result, so
  * snapping there keeps every turn whole.
  */
+/**
+ * What a Claude history page knows of one line: the cursor that names it, and whether a page may start
+ * there — a real user prompt, so a turn is never split. Shared by `windowRawLines` and the bounded pager
+ * (lib/transcriptPages.ts), so the two cannot drift apart.
+ */
+export function claudePageLine(line: string): { cursor: string | null; startsPage: boolean } {
+  if (!line.trim()) return { cursor: null, startsPage: false }
+  let raw: Record<string, unknown>
+  try { raw = JSON.parse(line) as Record<string, unknown> } catch { return { cursor: null, startsPage: false } }
+  const cursor = (raw.uuid ?? raw.id ?? raw.message_id ?? null) as string | null
+  const msg = transformLine(raw)
+  return { cursor, startsPage: msg ? realUserText(msg) !== null : false }
+}
+
 export function windowRawLines(
   rawLines: string[],
   opts: { limit: number; before?: string },
 ): { window: string[]; hasMore: boolean; oldestCursor: string | null; staleCursor?: boolean } {
   // Per-line uuid + whether the line is a real user-prompt turn start (parse each line once).
   const meta = rawLines.map((line) => {
-    if (!line.trim()) return { uuid: null as string | null, turnStart: false }
-    let raw: Record<string, unknown>
-    try { raw = JSON.parse(line) as Record<string, unknown> } catch { return { uuid: null as string | null, turnStart: false } }
-    const uuid = (raw.uuid ?? raw.id ?? raw.message_id ?? null) as string | null
-    const msg = transformLine(raw)
-    const turnStart = msg ? realUserText(msg) !== null : false
-    return { uuid, turnStart }
+    const { cursor, startsPage } = claudePageLine(line)
+    return { uuid: cursor, turnStart: startsPage }
   })
 
   let endIndex = rawLines.length

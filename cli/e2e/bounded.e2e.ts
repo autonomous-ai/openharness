@@ -48,6 +48,30 @@ describe('bounded memory', () => {
     await next
     expect(d.child, 'the daemon survived the attach').not.toBeNull()
     expect(await d.rssMiB()).toBeLessThan(HEAP_MIB + 200)
+
+    // A phone or the web opening the thread: its length, then page after page back into the turn that
+    // wrote the 300 MiB — each page read on its own, never the whole file (lib/transcriptPages.ts).
+    const sessionId: string = (await row(client))!.sessionId
+    const listed = await client.request('sessions_list', { agentId })
+    expect(listed.sessions[0].messageCount).toBeGreaterThan(TRANSCRIPT_MIB)
+    let before: string | undefined
+    let pages = 0
+    for (; pages < 8; pages++) {
+      const page = await client.request('session_get', { sessionId, limit: 50, before }, 60_000)
+      expect(page.staleCursor, `page ${pages}`).toBeUndefined()
+      // Compaction records render nothing, so a page inside the long turn can hold no events: what
+      // matters is that every page moves back.
+      expect(Array.isArray(page.events), `page ${pages}`).toBe(true)
+      expect(page.oldestCursor, `page ${pages}`).not.toBe(before)
+      if (!page.hasMore || !page.oldestCursor) break
+      before = page.oldestCursor
+    }
+    expect(pages, 'pages read back into the long turn').toBe(8)
+    // An app from before paging asks for the whole thread: it gets the newest page's worth, and a cursor.
+    const whole = await client.request('session_get', { sessionId }, 60_000)
+    expect(whole).toMatchObject({ hasMore: true })
+    expect(d.child, 'the daemon survived the paging').not.toBeNull()
+    expect(await d.rssMiB()).toBeLessThan(HEAP_MIB + 200)
   })
 })
 

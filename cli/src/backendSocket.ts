@@ -24,7 +24,7 @@ import type { AutonomousDeviceService, AutonomousDeviceFrame } from './lib/auton
 
 import { WebSocket } from 'ws'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } from './lib/wsLiveness.js'
-import { stat, readFile, readdir } from 'fs/promises'
+import { stat, readdir } from 'fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'path'
 import { hostname, homedir } from 'os'
@@ -91,13 +91,15 @@ import { terminalHandoffRequest } from './lib/terminalHandoff.js'
 import { routeVoiceTask } from './lib/voiceRouter.js'
 import { tailFile } from './lib/sessions.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
-import { messagesToEvents, windowRawLines, subagentStatsFromRawLines, type SessionEvent } from './lib/normalize.js'
+import { messagesToEvents, windowRawLines, SubagentStats, type SessionEvent } from './lib/normalize.js'
+import { TranscriptPager } from './lib/transcriptPages.js'
+import { streamRecords } from './lib/transcriptTail.js'
 import { MediaPreviewError, readMediaPreviewChunk } from './lib/mediaPreview.js'
 import { ViewerForwarder } from './lib/viewerForwarder.js'
 import { InteractiveViewers } from './lib/interactiveViewer.js'
 import { OwnerCommands, OWNER_COMMAND_TYPES } from './lib/ownerCommands.js'
 import { VIEWER_DOWN_TYPES } from './lib/viewerWire.js'
-import { codexMessagesToEvents, windowCodexLines } from './engines/codex/normalizer.js'
+import { codexMessagesToEvents } from './engines/codex/normalizer.js'
 import { codexSubagentResolverFor } from './engines/codex/subagent.js'
 import { parseHostTheme, type HostTheme } from './lib/hostTheme.js'
 import { cursorMessagesToEvents, windowCursorLines } from './engines/cursor/normalizer.js'
@@ -150,6 +152,8 @@ import {
 
 // OpenCode has no per-session transcript file — its history is read from this SQLite store.
 const OPENCODE_DB = join(env.OPENCODE_DATA_DIR, 'opencode.db')
+/** History pages and line counts for the threads clients read (lib/transcriptPages.ts). */
+const transcriptPages = new TranscriptPager()
 // Kilo keeps history the same way opencode does, in its own store.
 const KILO_DB = join(env.KILO_DATA_DIR, 'kilo.db')
 const DEVIN_DB = join(env.DEVIN_HOME, 'sessions.db')
@@ -398,8 +402,11 @@ async function enrichSubagentStats(events: SessionEvent[], transcriptPath: strin
     const sub = e.payload.subagent
     if (!sub?.agentId || typeof sub.totalToolUseCount === 'number') continue
     try {
-      const txt = await readFile(join(subagentsDir, `agent-${sub.agentId}.jsonl`), 'utf8')
-      const stats = subagentStatsFromRawLines(txt.split('\n'))
+      // A line at a time: a long sub-agent's transcript is never held whole to count its calls.
+      const file = join(subagentsDir, `agent-${sub.agentId}.jsonl`)
+      const totals = new SubagentStats()
+      await streamRecords(file, 0, (await stat(file)).size, (line) => { totals.push(line) }, () => true)
+      const stats = totals.result()
       sub.totalToolUseCount = stats.totalToolUseCount
       if (sub.totalDurationMs === undefined) sub.totalDurationMs = stats.totalDurationMs
       if (sub.totalTokens === undefined) sub.totalTokens = stats.totalTokens
@@ -2157,13 +2164,14 @@ export class BackendSocket {
           // plainly beats inventing one: the web then shows the tab with an empty thread until the bind
           // lands, instead of pinning `currentSessionId` to an id no event will ever carry.
           if (!s || !s.sessionId) { reply(type, requestId, { sessions: [] }); return }
-          const lines = s.transcriptPath ? await tailFile(s.transcriptPath, Infinity) : []
+          // Counted from an index kept as the file grows (lib/transcriptPages.ts), not by reading it whole.
+          const messageCount = s.transcriptPath ? await transcriptPages.lineCount(s.transcriptPath) : 0
           reply(type, requestId, {
             sessions: [{
               id: s.sessionId,
               title: projectDisplayName(s),
               timestamp: new Date(s.registeredAt).toISOString(),
-              messageCount: lines.length,
+              messageCount,
               lastActivity: new Date(await lastActivityAt(s)).toISOString(),
               participants: [],
             }],
@@ -2284,14 +2292,42 @@ export class BackendSocket {
           const rawLimit = payload.limit
           const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
           const before = typeof payload.before === 'string' ? payload.before : undefined
+          if (s.engine === 'claude' || s.engine === 'codex') {
+            // Only the page asked for is read (lib/transcriptPages.ts): the whole history of a long session
+            // is more memory than the daemon has. Without a limit, the newest lines that fit a page, and
+            // the cursor to the rest when they do not all fit — a cursor the full-transcript reply never had.
+            const opts = limit ? { limit, before } : {}
+            const page = s.engine === 'codex'
+              ? await transcriptPages.codex(s.transcriptPath, opts)
+              : await transcriptPages.claude(s.transcriptPath, opts)
+            const st = await stat(s.transcriptPath).catch(() => null)
+            const timestamp = new Date(st?.mtimeMs ?? Date.now()).toISOString()
+            if (page.staleCursor) {
+              reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true })
+              return
+            }
+            const events = s.engine === 'codex'
+              ? codexMessagesToEvents(page.lines, codexSubagentResolverFor(s.codexHome))
+              : messagesToEvents(page.lines)
+            await enrichSubagentStats(events, s.transcriptPath)
+            // Older pages must not inject a spurious end-of-transcript marker mid-scroll.
+            if (limit && before && events[events.length - 1]?.type === 'done') events.pop()
+            reply(type, requestId, {
+              id: sessionId,
+              title: projectDisplayName(s),
+              events,
+              timestamp,
+              engine: s.engine,
+              ...(limit || page.hasMore ? { hasMore: page.hasMore, oldestCursor: page.oldestCursor } : {}),
+            })
+            return
+          }
           const lines = await tailFile(s.transcriptPath, Infinity)
           const st = await stat(s.transcriptPath).catch(() => null)
           const timestamp = new Date(st?.mtimeMs ?? Date.now()).toISOString()
 
           if (!limit) {
-            const fullEvents = s.engine === 'codex'
-              ? codexMessagesToEvents(lines, codexSubagentResolverFor(s.codexHome))
-              : s.engine === 'cursor'
+            const fullEvents = s.engine === 'cursor'
                 ? cursorMessagesToEvents(lines, sessionId, await loadCursorReplayTaskLinks(cursorConfigDir(), sessionId, cursorDataDir()))
                 : s.engine === 'muse'
                   ? museMessagesToEvents(lines)
@@ -2349,9 +2385,7 @@ export class BackendSocket {
             })
             return
           }
-          const w = s.engine === 'codex'
-            ? windowCodexLines(lines, { limit, before })
-            : s.engine === 'cursor'
+          const w = s.engine === 'cursor'
               ? windowCursorLines(lines, { limit, before })
               : s.engine === 'pi'
                 ? windowPiLines(lines, { limit, before })
@@ -2362,9 +2396,7 @@ export class BackendSocket {
             reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true })
             return
           }
-          const events = s.engine === 'codex'
-            ? codexMessagesToEvents(w.window, codexSubagentResolverFor(s.codexHome))
-            : s.engine === 'cursor'
+          const events = s.engine === 'cursor'
               ? cursorMessagesToEvents(
                   w.window,
                   sessionId,

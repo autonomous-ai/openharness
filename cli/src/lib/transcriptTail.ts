@@ -31,14 +31,16 @@ async function readFully(handle: FileHandle, chunk: Buffer, position: number): P
  *
  * `visit` gets each non-blank record's bytes — valid only during the call — and the offset it starts
  * at; returning true stops the walk. LF, CR and CRLF each end a record, readline's rule. A record over
- * `maxRecordBytes` is passed over unvisited. Resolves false when the file shrank under the walk: what
- * was visited may then mix two versions of it.
+ * `maxRecordBytes` is passed over unvisited, and only told to `passed` (its offset), if given; returning
+ * true from that stops the walk too. Resolves false when the file shrank under the walk: what was
+ * visited may then mix two versions of it.
  */
 export async function scanRecordsBackward(
   filePath: string,
   end: number,
   visit: (record: Buffer, offset: number) => boolean | void,
   maxRecordBytes = MAX_RECORD_BYTES,
+  passed?: (offset: number) => boolean | void,
 ): Promise<boolean> {
   const handle = await open(filePath, 'r')
   try {
@@ -53,7 +55,8 @@ export async function scanRecordsBackward(
       fragments = []
       fragmentBytes = 0
       oversized = false
-      if (skip || isBlank(bytes)) return false
+      if (skip) return passed?.(offset) === true
+      if (isBlank(bytes)) return false
       return visit(bytes, offset) === true
     }
     while (position > 0) {
