@@ -1,5 +1,6 @@
 [Unit]
 Description=Persistent hn terminal surface
+ConditionPathExists=!/etc/harness-live
 PartOf=harness-os.target
 Wants=harness-daemon.service
 After=harness-daemon.service

@@ -362,15 +362,20 @@ change, explicitly approved for all platforms. Publishing the ISO did not releas
 these through the general TUI channel. The small updater adds no changes to `tui/`
 or `cli/`.
 
-## Agent-led USB onboarding
+## Installation and first-use onboarding
 
-The live launcher starts `hn-os welcome` in one real terminal pane. While offline,
-a small curses step offers Wi-Fi or the native installer without needing a model.
-Once connected, it execs packaged OpenCode immediately. The OS-only TUI integration
-adds two starter panels and a one-row install dock. `hn os-action` is a private
-integration command, guarded by OS mode; install additionally requires live mode.
-All install entry points create or focus one local form even if a remote pane has
-focus. Super bindings live in labwc; the shared Ctrl+b key tables are preserved.
+The USB starts `harness-install.service`: foot runs the offline installer directly.
+The agent daemon, hn screen, idle lock and update timer do not start on live media.
+The compositor has a small installation-only key configuration. A failed graphical
+startup opens the same installer on the console. Cancelling resets the form;
+success keeps Shut down visible. A failed shutdown never restarts installation.
+There is no trial choice, network prerequisite, dock or agent session on the USB.
+
+The installed system starts the usual hn screen. On first use, `hn-os welcome`
+opens the existing full-page Wi-Fi form when disconnected. Working Ethernet or a
+saved connection skips that form; connection success advances automatically to
+OpenCode on the left and two terminal panes on the right. Later launches restore
+work. The standard hn footer and shared Ctrl+b shortcuts remain intact.
 
 OpenCode reads the packaged guide through its global
 `~/.config/opencode/AGENTS.md`, linked to `/usr/share/harness-os/guide.md`.
@@ -388,17 +393,15 @@ Independent background agent updates remain future work and must preserve the
 packaged fallback, validate provenance, avoid downgrades, and activate on a later
 launch rather than replacing an active executable.
 
-Trial transfer reads only `~/projects` as the live user, using a private staging
-directory on the destination disk. It preserves saved bytes, modes, times, Git
-history and symlinks without following them. Special files and detected concurrent
-writes fail explicitly. The installed home gets a per-file hash receipt. It is a
-saved-file transfer, not a migration of processes or the live home/credentials.
+The previous trial-file transfer helper remains compatible with explicit installer
+commands from older sessions. It does not create a trial path in the new USB UX.
 
-Validation must cover offline entry/cancellation, Ethernet skip, the real default
-agent answering TUI questions and creating a project, agent-requested installation,
-keyboard and mouse controls, plain/encrypted offline installation, post-boot file
-hashes, and ordinary Mac/Linux TUI isolation. Native VM screenshots are required
-before publication; local unit tests alone do not establish this experience.
+Validation covers boot directly into the installer with networking disabled,
+masked keyboard entry, cancellation and errors, graphical fallback, plain and
+encrypted installation, installed Wi-Fi and Ethernet skip, the three-pane layout,
+real default-agent conversation, browser use, updates and recovery. Image manifests
+identify this journey with `install-first`; historical trial images retain their
+own acceptance checks. Native screenshots are required before publication.
 
 ## Optional remote VM controls
 

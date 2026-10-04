@@ -1,5 +1,5 @@
 #!/bin/sh
-# Agent requests, compositor keys and the dock all open the same local form.
+# Reuse the USB's existing installer; never interrupt an active disk operation.
 set -eu
 [ -f /etc/harness-live ] || { printf '%s\n' 'Installation is available from the Harness USB.' >&2; exit 1; }
-exec hn os-action install
+exec systemctl --user start harness-install.service

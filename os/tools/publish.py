@@ -26,6 +26,14 @@ REQUIRED_CHECKS = ['Live hn ready;', 'Wayland clipboard round trip',
                    'Offline checkpoint restored', 'Recovered disk boots to hn']
 
 
+INSTALL_FIRST_CHECKS = [check for check in REQUIRED_CHECKS if not check.startswith((
+    'Live hn', 'USB ', 'Agent-created USB', 'Bundled OpenCode starts offline'))] + [
+    'USB opens the installer directly with no trial, network page, hn runtime or agent',
+    'Installed Wi-Fi first use advances into three real panes and the bundled default agent answers keyboard input',
+    "Bundled OpenCode's upstream-default clean-profile conversation",
+]
+
+
 def digest(path):
     with path.open('rb') as handle:
         return hashlib.file_digest(handle, 'sha256').hexdigest()
@@ -76,7 +84,8 @@ def validate_receipts(manifest, receipts):
         if receipt['iso_sha256'] != manifest['iso']['sha256'] or receipt['image_source_commit'] != manifest['source_commit']:
             raise ValueError('Machine receipt covers a different image or source.')
         checks = receipt.get('checks', [])
-        if any(not any(check.startswith(prefix) for check in checks) for prefix in REQUIRED_CHECKS):
+        required = INSTALL_FIRST_CHECKS if 'install-first' in manifest.get('capabilities', []) else REQUIRED_CHECKS
+        if any(not any(check.startswith(prefix) for check in checks) for prefix in required):
             raise ValueError('A required live, installation or recovery check is absent.')
         if 'broadcom-offline' in manifest.get('capabilities', []) and not any(
                 check.startswith('Unrelated hardware receives no optional Wi-Fi packages') for check in checks):
@@ -203,7 +212,7 @@ def main():
 
 Arch Linux with the LTS kernel, labwc, foot, and an on-demand browser. No desktop panels or preinstalled development stacks.
 
-To try it: follow the included `INSTALL.md` for Mac → USB → ThinkPad instructions. Verify the ISO's SHA-256, write the whole ISO to a USB stick, and boot an x86-64 PC with Secure Boot disabled. The USB asks for Wi-Fi when needed, then opens bundled OpenCode with its upstream model defaults and a local guide to Harness. Install without connecting works offline. Ask the agent to open installation, press Super+i, or click Install Harness in the persistent bottom dock. The same native form handles all three routes. Saved projects under ~/projects are preserved during installation; temporary account credentials and running processes are not. Super+n opens New Harness, Super+m connects a computer, and Super+t opens a shell directly. All Super shortcuts require no Shift; existing Ctrl+b bindings remain available. This preview's installer erases the entire selected disk; it does not resize another OS. Encryption is enabled by default.
+To install: follow the included `INSTALL.md` for Mac → USB → ThinkPad instructions. Verify the ISO's SHA-256, write the whole ISO to a USB stick, and boot an x86-64 PC with Secure Boot disabled. The USB opens the installer directly; installation works offline. Select the disk, enter the password twice and choose Install Harness. Shut down, remove the USB and boot the installed disk. The existing Wi-Fi page appears when disconnected, then bundled OpenCode opens on the left beside two terminal panes. Working Ethernet skips Wi-Fi setup. OpenCode retains its upstream model defaults and the local Harness guide. Super+n opens New Harness, Super+m connects a computer, and Super+t opens a shell directly. These shortcuts require no Shift; existing Ctrl+b bindings remain available. The installer erases the entire selected disk and does not resize another OS. Encryption is enabled by default.
 
 {'The installer has four aligned fields: disk, encryption, password, repeat password. Disk choices fit on one line. Activate Install to begin; there is no second confirmation screen or minimum password length. Empty passwords are rejected. The account is me@harness. The password initially protects both the local account and, when enabled, the encrypted disk. There is no first-boot account wizard.' if interactive_install else ''}
 

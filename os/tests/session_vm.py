@@ -217,16 +217,17 @@ def main():
         vm.wait(r'root@[^\r\n]*[#] ')
         vm.shell_ready = True
         vm.command('stty -echo')
-        vm.command(user('/usr/lib/harness-os/wait-runtime'))
-        vm.command(user('systemctl --user is-active --quiet hn-screen harness-idle'))
-        time.sleep(2)
-        try:
-            result['live_lock_observations'] = live_lock(vm, user)
-        except Exception as error:
-            result['live_lock_error'] = str(error)
-            vm.screenshot('live-lock-failure')
-            # Recover this disposable fixture so installed locking can still be diagnosed.
-            vm.command('pkill -u 1000 -x swaylock || true')
+        if 'install-first' not in manifest.get('capabilities', []):
+            vm.command(user('/usr/lib/harness-os/wait-runtime'))
+            vm.command(user('systemctl --user is-active --quiet hn-screen harness-idle'))
+            time.sleep(2)
+            try:
+                result['live_lock_observations'] = live_lock(vm, user)
+            except Exception as error:
+                result['live_lock_error'] = str(error)
+                vm.screenshot('live-lock-failure')
+                # Recover this disposable fixture so installed locking can still be diagnosed.
+                vm.command('pkill -u 1000 -x swaylock || true')
         put(vm, '/tmp/install-config.json', json.dumps(config))
         vm.command('nmcli networking off')
         print('Installing offline into the disposable test disk', flush=True)

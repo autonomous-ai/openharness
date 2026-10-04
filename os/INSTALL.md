@@ -1,16 +1,16 @@
 # Install Harness on a ThinkPad
 
-These instructions are for **0.1.0-preview.10**, using a Mac to prepare the USB.
-The USB starts a live session. Installation begins only when you choose **Install Harness**
+These instructions are for **0.1.0-preview.11**, using a Mac to prepare the USB.
+The USB opens the installer directly. Installation begins only when you choose **Install Harness**
 in the installer; it erases the entire selected disk.
 
 ## 1. Prepare
 
 - An x86-64 Intel or AMD ThinkPad with SSE4.2 for bundled OpenCode. Core 2 and
-  32-bit-only CPUs are outside the default agent trial's supported baseline.
+  32-bit-only CPUs are outside the bundled agent's supported baseline.
 - A USB stick of at least 4 GB. Flashing replaces its contents.
 - An internal disk of at least 12 GiB, with important files backed up elsewhere.
-- AC power. Installation works offline; trying a cloud agent needs a connection.
+- AC power. Installation works offline; using a cloud agent after installation needs a connection.
 
 Start with 2 GiB RAM or more. Preview 4 passed installation, reboot, recovery
 and a first OpenCode conversation in 1 GiB VMs; each new image repeats the native
@@ -21,20 +21,20 @@ compute still need testing on the actual hardware.
 
 ## 2. Download and verify on the Mac
 
-From the [preview 10 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.10),
+From the [preview 11 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.11),
 download both files into the same folder:
 
-- `harness-0.1.0-preview.10-x86_64.iso`
-- `harness-0.1.0-preview.10-x86_64.iso.sha256`
+- `harness-0.1.0-preview.11-x86_64.iso`
+- `harness-0.1.0-preview.11-x86_64.iso.sha256`
 
 If they are in Downloads, open Terminal and run:
 
 ```sh
 cd ~/Downloads
-shasum -a 256 -c harness-0.1.0-preview.10-x86_64.iso.sha256
+shasum -a 256 -c harness-0.1.0-preview.11-x86_64.iso.sha256
 ```
 
-The result must say `harness-0.1.0-preview.10-x86_64.iso: OK`.
+The result must say `harness-0.1.0-preview.11-x86_64.iso: OK`.
 If it does not, download the files again before flashing.
 
 ## 3. Flash the USB
@@ -64,36 +64,22 @@ The exact menu wording varies by model. See Lenovo's
 [boot-menu instructions](https://docs.lenovocdrt.com/ref/bios/startup_menu/).
 If the USB is absent, try another USB port and check that USB boot is enabled.
 
-The USB opens a full-page Wi-Fi list with **Install without connecting** always
-visible. Choose a network and enter its password; a successful connection advances
-automatically. Ethernet
-skips this step when already connected. No Harness account is needed.
+The USB opens the install form immediately, with the first eligible disk selected
+and Password focused. Installation needs no network connection or Harness account.
 
-OpenCode starts with its default model selection on the left, beside two real
-terminal panes on the right. **Super+n** starts another harness; **Super+m**
-connects a computer. Ask the agent
-about Harness, its shortcuts, or something you want to build. The footer keeps
-**Install Harness** visible throughout the trial, beside the window list on one row.
-
-Create projects under `~/projects`. The installer preserves and verifies these
-saved files, including Git history. Files elsewhere, running processes and agent
-credentials outside projects are not copied. Save and stop project writes before
-installing, or copy important work to another drive.
-
-### Trying an older Intel Mac
+### Installing on an older Intel Mac
 
 Intel Macs with a 64-bit EFI and no T2 chip are an experimental target. The USB
 includes optional support for selected Broadcom radios, but no physical Mac
 model has passed our complete hardware checks yet. This image is not the
-Apple Silicon or T2 installation path. Core 2 CPUs cannot run bundled OpenCode;
-Try explains that limitation before attempting to start it.
+Apple Silicon or T2 installation path. Core 2 CPUs cannot run bundled OpenCode; this is not a supported bundled-agent target.
 
 Shut down, insert the USB, then hold **Option (⌥)** while turning on the Mac.
 Choose the external **EFI Boot** entry. Apple's
 [startup-key guide](https://support.apple.com/en-us/102603) describes that menu.
-Connect and try the agent first; check built-in keyboard, trackpad,
-Wi-Fi, brightness and sound before choosing the internal disk. Installation uses
-the same form below and erases the whole selected disk, including macOS.
+Installation uses the same form below and erases the whole selected disk, including
+macOS. Keyboard, Wi-Fi, brightness and sound still need physical validation for
+each Mac family; the generic PC image does not establish that compatibility.
 
 For a hardware report, open a terminal and run `harness hardware`. Keep that
 report with the Mac's model and the behavior you observed. It contains device
@@ -101,10 +87,7 @@ IDs and driver names, without serial numbers or Wi-Fi passwords.
 
 ## 5. Install
 
-Choose **Install without connecting** at the network step, click **Install Harness**
-in the footer, press **Super+i**, or ask the agent to open installation.
-F10 focuses Install Harness in the footer; Enter opens it. All routes open
-the same native form, with four fields:
+The USB opens the native form with four fields:
 
 1. **Disk:** the first eligible disk is selected. Check its model and capacity.
    To change it, focus Disk and press Enter. The live USB is excluded.
@@ -118,15 +101,11 @@ length restriction.
 
 Check the selected disk, then choose **Install Harness** and press Enter. **This immediately
 erases that disk. There is no second confirmation screen.** Choosing a disk alone
-does not start installation. Esc leaves the picker or cancels the main form.
+does not start installation. Esc leaves the picker or resets the main form without writing to the disk.
 
 The account and computer name are set to **`me@harness`**. Installation works offline.
 When **Harness is installed.** appears, choose **Shut down**. Once the ThinkPad is
 off, remove the USB and power it on.
-
-The existing **Ctrl+b, then Shift+i** shortcut also opens the installer.
-`harness install` opens the form from a conversation or terminal; disk selection
-and passwords stay in the form. `sudo harness install` runs it directly.
 
 ## 6. First boot
 
@@ -161,7 +140,6 @@ the next key. A capital letter in a prefix binding means Shift + letter.
 | Super+t | New terminal: open a shell directly |
 | Super+m | Connect a computer |
 | Super+w | Connect to Wi-Fi |
-| Super+i | Install Harness (USB only) |
 | Super+b | Open/focus Chromium, or return to Harness |
 | Super+Enter | Focus Harness |
 | Super+l | Lock; unlock with the account password |
@@ -184,16 +162,16 @@ They retain a recovery checkpoint and rebuild the boot image. When the screen
 offers **Restart now**, save your work and press Enter when ready. Downloads do
 not restart the computer, and routine updates do not require another USB flash.
 
-Preview 5 through 9 can receive preview 10 through **Super+u**, then **s**.
+Preview 5 through 10 can receive preview 11 through **Super+u**, then **s**.
 It includes the new network page, first-use workspace, lowercase project folders,
 and the fix preventing older public CLI releases from replacing the bundled
 OpenCode compatibility code. Running work is preserved; save before restarting.
 No reinstallation or USB flash is needed for these installed-system changes.
 
-Preview 10 fixes repeated Wi-Fi setup and the final encrypted-device cleanup
-timeout. The USB bar is green; installed Harness keeps its normal status bar.
-Ctrl+b, then c opens a terminal tab. USB improvements require flashing the new ISO;
-an already installed computer can receive the OS changes through Updates.
+Preview 11 boots the USB directly into installation. Wi-Fi setup happens after
+booting the installed system and advances into OpenCode and two terminals.
+USB startup changes require flashing the new ISO; existing installations keep
+their projects and receive system changes through Updates.
 
 Preview 4 needs the 7.2 MB [preview 7 bootstrap bundle](https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.7/harness-update-0.1.0-preview.7-47872670a-x86_64.zip)
 once. Verify and extract that bundle, open a terminal in its folder, and run:

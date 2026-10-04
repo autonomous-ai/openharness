@@ -19,6 +19,8 @@ with iso.open('rb') as handle:
 packages = (root / 'usr/share/harness-os/packages.txt').read_text()
 (out / 'packages.txt').write_text(packages)
 capabilities = []
+if (root / 'usr/lib/systemd/user/harness-install.service').is_file():
+    capabilities.append('install-first')
 if all((root / path).is_file() for path in [
         'usr/lib/harness-os/live_update.py',
         'usr/lib/systemd/user/harness-update.timer']):

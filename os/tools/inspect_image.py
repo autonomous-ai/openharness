@@ -80,7 +80,7 @@ def inspect(iso):
         expected_version = re.escape(version.replace('-preview.', 'pre')) + r'\.r\d+\.g' + manifest['source_commit'][:10] + '-1'
         assert re.fullmatch(expected_version, package_version), 'OS package version differs from the image source'
         assert package_version == manifest['package_version'], 'OS package version differs from the manifest'
-        assert set(manifest['capabilities']) == {'runtime-updates', 'system-updates', 'broadcom-offline'}, 'Image capabilities differ from the manifest'
+        assert set(manifest['capabilities']) == {'runtime-updates', 'system-updates', 'broadcom-offline', 'install-first'}, 'Image capabilities differ from the manifest'
         hardware_root = 'usr/share/harness-os/hardware/broadcom/'
         hardware = json.loads(read(hardware_root + 'manifest.json'))
         assert hardware == manifest['hardware']['broadcom'], 'Hardware manifest differs from the payload'

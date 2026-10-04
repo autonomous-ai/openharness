@@ -77,6 +77,7 @@ def stage(source, runtime, destination, commit):
                 path.chmod(0o755)
     for name in ['autostart', 'shutdown']:
         (destination / 'usr/share/harness-os/labwc' / name).chmod(0o755)
+    (destination / 'usr/share/harness-os/labwc-install/autostart').chmod(0o755)
     for path in (destination / 'etc/sudoers.d').iterdir():
         path.chmod(0o440)
     info.update(mode='source', files={p.name: {'sha256': digest(p), 'bytes': p.stat().st_size}

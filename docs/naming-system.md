@@ -106,8 +106,8 @@ configuration where it affects a decision.
 | First-use description | **The operating system built by agents, for agents.** |
 | Disk unlock prompt | **Enter your password** |
 | USB install action | **Install Harness** |
-| Offline USB action | **Install without connecting** |
-| USB dock invitation | **Make Harness your OS.** |
+| USB startup | Open **Install Harness** directly; no trial choice or network step. |
+| First installed boot | **Connect to Wi-Fi to get started** when disconnected, then the agent workspace. |
 | USB session label | Omit from the single installation footer. |
 | Connect another execution machine | **Connect a computer** |
 | Installer title | Omit the redundant heading; label the action. |
@@ -123,11 +123,11 @@ configuration where it affects a decision.
 | OS page description | **A Linux operating system built by agents, for agents.** |
 | Audience description | **Built for programmers first.** |
 
-The USB opens network setup when disconnected, with **Install without connecting**
-always available. Once connected, it opens the bundled agent and keeps the
-installation dock visible. An installed system and
-ordinary hn on macOS or another Linux distribution never show the USB installation
-actions. The `harness install` system command belongs to the OS integration.
+The USB opens the installer directly and works offline. There is no trial option.
+After rebooting the installed disk, the existing Wi-Fi page appears when needed;
+a working connection advances to the agent and two terminal panes. Ordinary hn
+on macOS or another Linux distribution never shows OS installation actions.
+The `harness install` system command belongs to the OS integration.
 
 Write OS shortcuts with lowercase letters: **Super+n**, **Super+t**, **Super+m**,
 **Super+i**, **Super+w**, **Super+b**, **Super+u**, **Super+l**. They require no Shift
