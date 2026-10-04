@@ -1,22 +1,36 @@
 /**
  * A client that speaks to the daemon exactly as the desktop app does: the local WebSocket over the
  * daemon's Unix socket (or its loopback port), `machine_select`, request frames answered by
- * `<type>_result`, and the event stream in between.
+ * `<type>_result`, the event stream in between, and the terminals' binary frames beside it.
  */
 import { randomUUID } from 'node:crypto'
 import WebSocket from 'ws'
+import { decodeTerminalLocal, encodeTerminalLocal, type TerminalBinaryClear } from '../../src/lib/terminalBinary.js'
 import type { IsolatedDaemon } from './daemon.js'
 
 export type Frame = { type: string; payload?: Record<string, any>; [key: string]: unknown }
 
 export class LocalClient {
   readonly frames: Frame[] = []
+  /** The terminals' binary frames (keyframes, output, sync), in the order they came. */
+  readonly binaries: TerminalBinaryClear[] = []
   private waiters: Array<{ test: (frame: Frame) => boolean; done: (frame: Frame) => void }> = []
+  private binaryWaiters: Array<{ test: (frame: TerminalBinaryClear) => boolean; done: (frame: TerminalBinaryClear) => void }> = []
   closed = false
+  closeCode: number | null = null
 
   private constructor(private readonly ws: WebSocket) {
     ws.on('message', (raw, binary) => {
-      if (binary) return
+      if (binary) {
+        const bytes = Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw as ArrayBuffer)
+        const frame = decodeTerminalLocal(new Uint8Array(bytes))
+        if (!frame) return
+        this.binaries.push(frame)
+        for (const waiter of [...this.binaryWaiters]) {
+          if (waiter.test(frame)) { this.binaryWaiters.splice(this.binaryWaiters.indexOf(waiter), 1); waiter.done(frame) }
+        }
+        return
+      }
       let frame: Frame
       try { frame = JSON.parse(raw.toString()) as Frame } catch { return }
       this.frames.push(frame)
@@ -24,7 +38,7 @@ export class LocalClient {
         if (waiter.test(frame)) { this.waiters.splice(this.waiters.indexOf(waiter), 1); waiter.done(frame) }
       }
     })
-    ws.on('close', () => { this.closed = true })
+    ws.on('close', (code) => { this.closed = true; this.closeCode = code })
   }
 
   static async connect(daemon: IsolatedDaemon, options: { tcp?: boolean; tool?: boolean } = {}): Promise<LocalClient> {
@@ -44,6 +58,32 @@ export class LocalClient {
 
   send(type: string, payload: Record<string, unknown>): void {
     this.ws.send(JSON.stringify({ type, payload }))
+  }
+
+  /** A terminal frame in the loopback wire format, as the desktop sends keystrokes and pastes. */
+  sendBinary(frame: TerminalBinaryClear): void {
+    const bytes = encodeTerminalLocal(frame)
+    if (!bytes) throw new Error(`a terminal frame that cannot be encoded: ${JSON.stringify({ ...frame, bytes: frame.bytes.length })}`)
+    this.ws.send(bytes, { binary: true })
+  }
+
+  /** Raw bytes on the socket, valid or not: what a broken or hostile client sends. */
+  sendRaw(bytes: Uint8Array, binary: boolean): void {
+    this.ws.send(bytes, { binary })
+  }
+
+  /** Resolves with the first binary frame, past or future, that passes `test`. */
+  waitForBinary(test: (frame: TerminalBinaryClear) => boolean, ms = 20_000, what = 'a terminal frame', since = 0): Promise<TerminalBinaryClear> {
+    const seen = this.binaries.slice(since).find(test)
+    if (seen) return Promise.resolve(seen)
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.binaryWaiters = this.binaryWaiters.filter((waiter) => waiter.done !== done)
+        reject(new Error(`timed out after ${ms}ms waiting for ${what}; ${this.binaries.length} terminal frames so far`))
+      }, ms)
+      const done = (frame: TerminalBinaryClear) => { clearTimeout(timer); resolve(frame) }
+      this.binaryWaiters.push({ test, done })
+    })
   }
 
   /** Resolves with the first frame, past or future, that passes `test`. */

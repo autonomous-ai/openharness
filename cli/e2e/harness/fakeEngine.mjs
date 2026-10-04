@@ -13,8 +13,9 @@
 // before answering (the transcripts that crashed the daemon on 2026-10-03), `!hold` leaves the turn
 // open until the next prompt, `!ask` asks the person which drink they would like in the engine's own
 // dialog and answers with their choice, `!permit <command>` asks permission to run a command the way
-// the engine does and runs it only if allowed, `!exit` ends the process. Everything else is echoed as
-// the answer.
+// the engine does and runs it only if allowed, `!flood <KiB>` prints that much to the terminal, in
+// numbered lines, the way a build log or a long diff does, `!exit` ends the process. Everything else is
+// echoed as the answer.
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -43,6 +44,10 @@ export async function run(engine, config) {
     return
   }
   process.title = engine
+  // Raw at once, as the real CLIs are (Ink and ratatui take the terminal before they draw anything): a
+  // terminal still in line mode keeps at most 1 KiB of a line, so a paste that arrived before the
+  // engine was ready lost the rest of itself (measured: 1,018 of 2,406 characters).
+  process.stdin.setRawMode?.(true)
 
   const resumeAt = engine === 'claude' ? args.indexOf('--resume') : args.indexOf('resume')
   const resumed = resumeAt >= 0 && args[resumeAt + 1] && !args[resumeAt + 1].startsWith('-') ? args[resumeAt + 1] : null
@@ -204,6 +209,18 @@ export async function run(engine, config) {
         codex('response_item', { type: 'function_call_output', call_id: id, output: `ran ${directive[2]}` })
       }
     }
+    if (directive?.[1] === 'flood') {
+      // Numbered, so whoever reads the terminal can tell a lost, repeated or reordered line.
+      const kib = Number(directive[2]) || 256
+      let written = 0
+      for (let line = 0; written < kib * 1024; line++) {
+        const text = `flood ${String(line).padStart(7, '0')} ${'.'.repeat(80)}\r\n`
+        process.stdout.write(text)
+        written += text.length
+      }
+      finish(`flooded ${kib} KiB`)
+      return
+    }
     if (directive?.[1] === 'hold') return
     if (directive?.[1] === 'permit') {
       const command = directive[2] || 'printf hi'
@@ -254,7 +271,6 @@ export async function run(engine, config) {
   }
 
   // Raw input: bracketed paste brackets the text, Enter (\r) submits, Ctrl-C interrupts.
-  process.stdin.setRawMode?.(true)
   process.stdin.setEncoding('utf8')
   let buffer = ''
   let queue = Promise.resolve()
