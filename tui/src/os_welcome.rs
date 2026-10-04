@@ -1,7 +1,7 @@
-//! USB onboarding belongs to the OS launcher. Ordinary hn never enters this module's UI.
+//! OS first-use startup and the USB install action. Ordinary hn never enters this UI.
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::{buffer::Buffer, layout::Rect, text::Line};
-use crate::{app::{App, Placement, Tab}, theme::{self, bold, fg}};
+use ratatui::{buffer::Buffer, layout::Rect, style::Modifier};
+use crate::{app::{App, At, Placement}, layout::Dir, theme::{self, bold}};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action { Install, Wifi, New, Connect, Terminal, Dismiss }
@@ -11,7 +11,7 @@ pub struct State {
     pub guide_pane: Option<u64>,
     pub dock_focus: Option<Action>,
     pub hits: Vec<(Rect, Action)>,
-    pub network: Option<bool>,
+    starter_tab: Option<String>,
     welcome_panes: Vec<u64>,
     install_pane: Option<u64>,
     wifi_pane: Option<u64>,
@@ -21,24 +21,18 @@ pub struct State {
 
 pub fn live(app: &App) -> bool { app.os_session && app.os_live && !app.headless }
 
-pub fn dock_height(app: &App) -> u16 { u16::from(live(app) && app.size.1 > 2) }
-
 pub fn tick(app: &mut App) {
-    if !live(app) || app.tick % 8 != 0 { return }
+    if !app.os_session || app.tick % 8 != 0 { return }
     app.os_welcome.welcome_panes.retain(|id| app.panes.contains_key(id));
-    app.os_welcome.network = std::fs::read_to_string("/run/harness-network").ok().and_then(|text| match text.trim() {
-        "connected" => Some(true), "offline" => Some(false), _ => None,
-    });
 }
 
-pub fn intro(app: &App, tab: &Tab) -> bool {
-    live(app) && app.size.0 >= 80 && app.size.1 >= 18 && !tab.zoomed
-        && app.os_welcome.guide_pane.is_some_and(|id| tab.panes() == [id])
-}
-
-pub fn workspace(app: &App, tab: &Tab, mut area: Rect) -> Rect {
-    if intro(app, tab) { area.width /= 2; }
-    area
+fn split_starter(app: &mut App, pane: u64, dir: Dir, command: &str) {
+    let Some(tab) = app.tabs.iter().find(|tab| tab.panes().contains(&pane)) else { return };
+    let placement = Placement::At(At { tab: tab.id.clone(), pane: Some(pane), dir,
+        before: false, full: false, size: Some((50, true)), detached: true, zoom: false });
+    // Target the original pane explicitly. A delayed create reply must not split
+    // a different tab or steal focus from work opened while networking finished.
+    crate::input::new_shell_from(app, None, placement, None, Some(command.into()));
 }
 
 fn this_computer(app: &App, machine: &str) -> bool {
@@ -51,9 +45,15 @@ pub fn shell_created(app: &mut App, id: u64) {
     if !app.os_session { return }
     let Some(pane) = app.panes.get(&id) else { return };
     if !this_computer(app, &pane.machine_id) { return }
-    match pane.start_command.as_deref() {
-        Some("/usr/bin/hn-os welcome") if live(app) => {
+    let command = pane.start_command.clone();
+    match command.as_deref() {
+        Some("/usr/bin/hn-os welcome") => {
             if !app.os_welcome.welcome_panes.contains(&id) { app.os_welcome.welcome_panes.push(id); }
+        }
+        Some("/usr/bin/hn-os starter upper") if app.os_welcome.starter_tab.as_ref().is_some_and(|tab|
+            app.tabs.iter().any(|t| &t.id == tab && t.panes().contains(&id))) => {
+            app.os_welcome.starter_tab = None;
+            split_starter(app, id, Dir::Vertical, "/usr/bin/hn-os starter lower");
         }
         Some("sudo /usr/bin/harness install") if live(app) => app.os_welcome.install_pane = Some(id),
         Some("/usr/bin/hn-os wifi") => app.os_welcome.wifi_pane = Some(id),
@@ -101,18 +101,23 @@ pub fn command(app: &mut App, args: &[String]) {
     if !app.os_session || app.headless { return app.error("This action belongs to the Harness operating system.") }
     if app.read_only() { return app.error("This client is read-only.") }
     if args.first().map(String::as_str) == Some("ready") {
-        if !live(app) { return app.error("The USB welcome is not active.") }
         let Some(hint) = args.get(1).filter(|id| id.strip_prefix('%').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))) else {
-            return app.error("The USB welcome must identify its pane.");
+            return app.error("The welcome must identify its pane.");
         };
         // A tmux-backed shell sees the backend's %N, not hn's independent pane
         // number. Native fallback shells deliberately export hn's own number.
         let pane = app.os_welcome.welcome_panes.iter().copied().find(|id| app.panes.get(id).is_some_and(|p|
             this_computer(app, &p.machine_id) && if crate::local::is_local(&p.machine_id) { crate::pane::tag(*id) == *hint }
             else { app.fleet.agent(&p.machine_id, &p.agent_id).is_some_and(|a| a.tmux_pane == *hint) }));
-        let Some(pane) = pane else { return app.error("That pane is not the USB welcome on this computer.") };
+        let Some(pane) = pane else { return app.error("That pane is not the welcome on this computer.") };
+        if app.os_welcome.guide_pane == Some(pane) { return }
         app.os_welcome.guide_pane = Some(pane);
-        app.fit_panes();
+        if app.size.0 >= 80 && app.size.1 >= 18 {
+            if let Some(tab) = app.tabs.iter().find(|tab| tab.panes() == [pane]) {
+                app.os_welcome.starter_tab = Some(tab.id.clone());
+                split_starter(app, pane, Dir::Horizontal, "/usr/bin/hn-os starter upper");
+            }
+        }
         return;
     }
     let action = match args.first().map(String::as_str) {
@@ -124,71 +129,29 @@ pub fn command(app: &mut App, args: &[String]) {
     act(app, action);
 }
 
-fn button(buf: &mut Buffer, app: &mut App, area: Rect, text: &str, action: Action, primary: bool) {
-    if area.width == 0 || area.height == 0 { return }
-    let style = if primary || app.os_welcome.dock_focus == Some(action) { bold(theme::accent()) }
-        else if action == Action::Wifi && app.os_welcome.network == Some(false) { fg(theme::WARN) }
-        else { fg(theme::MUTED) };
-    let style = if app.os_welcome.dock_focus == Some(action) { style.add_modifier(ratatui::style::Modifier::REVERSED) } else { style };
-    buf.set_line(area.x, area.y, &Line::styled(text, style), area.width);
-    app.os_welcome.hits.push((area, action));
-}
-
-pub fn draw_intro(buf: &mut Buffer, app: &mut App) {
-    app.os_welcome.hits.clear();
-    if !intro(app, app.tab()) || app.modal.is_some() { return }
-    let body = app.body();
-    let left = body.x + body.width / 2 + 1;
-    let width = body.right().saturating_sub(left + 2);
-    let half = body.height / 2;
-    for y in body.y..body.bottom() { buf.set_string(left - 1, y, "│", fg(theme::MUTED)); }
-    for x in left..body.right() { buf.set_string(x, body.y + half, "─", fg(theme::MUTED)); }
-    button(buf, app, Rect::new(body.right() - 5, body.y, 5, 1), "[ x ]", Action::Dismiss, false);
-    for (row, title, lines, action, label) in [
-        (body.y, "More agents. More possibilities.", ["Give each agent its own work.", "Choose an agent and a project.", "Super+n"], Action::New, "[ New Harness ]"),
-        (body.y + half, "Your computers, together.", ["Run agents on another computer.", "Keep their work here beside you.", "Super+m"], Action::Connect, "[ Connect a computer ]"),
-    ] {
-        let mut y = row + 1;
-        for (text, style) in std::iter::once((title, bold(theme::TEXT)))
-            .chain(std::iter::once(("", fg(theme::TEXT))))
-            .chain(lines.into_iter().map(|line| (line, fg(theme::MUTED)))) {
-            if y >= row + half || y >= body.bottom() { break }
-            buf.set_line(left + 1, y, &Line::styled(text, style), width);
-            y += 1;
-        }
-        if y < body.bottom() { button(buf, app, Rect::new(left + 1, y, width.min(label.len() as u16), 1), label, action, true); }
-    }
-}
-
+/// The install action uses the existing status line's named range. The normal
+/// window list keeps its own space, selection and mouse handling on the left.
 pub fn draw_dock(buf: &mut Buffer, app: &mut App) {
-    if dock_height(app) == 0 { return }
-    let (width, y) = (app.size.0, app.size.1 - 1);
-    let area = Rect::new(0, y, width, 1);
-    buf.set_style(area, fg(theme::TEXT));
-    for x in 0..width { if let Some(cell) = buf.cell_mut((x, y)) { cell.set_symbol(" "); } }
-    let invitation = if width >= 76 { "Make Harness your OS.  " } else { "" };
-    if !invitation.is_empty() { buf.set_line(1, y, &Line::raw(invitation), width.saturating_sub(1)); }
-    let x = 1 + invitation.len() as u16;
-    let install = "[ Install Harness ]";
-    button(buf, app, Rect::new(x, y, width.saturating_sub(x).min(install.len() as u16), 1), install, Action::Install, true);
-    let secondary = if width >= 56 { "Temporary USB  " } else { "USB  " };
-    let wifi = if app.os_welcome.network == Some(false) { "[ Wi-Fi: offline ]" } else { "[ Wi-Fi ]" };
-    let wifi_width = wifi.len() as u16;
-    let tail = secondary.len() as u16 + wifi_width + 1;
-    if width >= x + install.len() as u16 + tail + 2 {
-        let start = width - tail;
-        buf.set_line(start, y, &Line::styled(secondary, fg(theme::MUTED)), secondary.len() as u16);
-        button(buf, app, Rect::new(width - wifi_width - 1, y, wifi_width, 1), wifi, Action::Wifi, false);
+    app.os_welcome.hits.clear();
+    if !live(app) || app.modal.is_some() || app.status_lines() == 0 { return }
+    let y = if app.status_top { 0 } else { app.size.1.saturating_sub(app.status_lines()) };
+    let ranges: Vec<_> = app.status_ranges.iter().filter(|(row, range)| *row == 0 &&
+        matches!(&range.kind, crate::draw::RangeKind::User(name) if name == "os-install")).map(|(_, range)| (range.start, range.end)).collect();
+    for (start, end) in ranges {
+        let area = Rect::new(start, y, end.min(app.size.0).saturating_sub(start), 1);
+        if area.width == 0 { continue }
+        let style = if app.os_welcome.dock_focus.is_some() { bold(theme::accent()).add_modifier(Modifier::REVERSED) }
+            else { bold(theme::accent()) };
+        buf.set_style(area, style);
+        app.os_welcome.hits.push((area, Action::Install));
     }
 }
 
 pub fn mouse(app: &mut App, event: MouseEvent) -> bool {
     if !live(app) || app.modal.is_some() { return false }
-    let in_dock = dock_height(app) > 0 && event.row == app.size.1 - 1;
-    if !matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) { return in_dock }
-    let action = app.os_welcome.hits.iter().find(|(rect, _)| rect.contains((event.column, event.row).into())).map(|(_, action)| *action);
-    if let Some(action) = action { act(app, action); return true }
-    in_dock
+    let hit = app.os_welcome.hits.iter().any(|(rect, _)| rect.contains((event.column, event.row).into()));
+    if hit && matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) { act(app, Action::Install); }
+    hit
 }
 
 pub fn key(app: &mut App, key: KeyEvent) -> bool {
@@ -200,7 +163,7 @@ pub fn key(app: &mut App, key: KeyEvent) -> bool {
     if let Some(action) = app.os_welcome.dock_focus {
         match key.code {
             KeyCode::Esc => app.os_welcome.dock_focus = None,
-            KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right => app.os_welcome.dock_focus = Some(if action == Action::Install { Action::Wifi } else { Action::Install }),
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right => {}
             KeyCode::Enter | KeyCode::Char(' ') => act(app, action),
             _ => { app.os_welcome.dock_focus = None; return false }
         }
@@ -227,59 +190,36 @@ mod tests {
         (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect::<Vec<_>>().join("\n")
     }
 
+    fn render(app: &mut App) -> Buffer {
+        use ratatui::{Terminal, backend::TestBackend};
+        app.options.global_session.insert("status-right".into(), "Make Harness your OS.  #[range=user|os-install bold][ Install Harness ]#[norange]".into());
+        let mut terminal = Terminal::new(TestBackend::new(app.size.0, app.size.1)).unwrap();
+        terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
     #[tokio::test]
-    async fn dock_is_usb_only_and_keeps_its_controls_inside_small_screens() {
-        for (width, height) in [(20, 8), (60, 18), (80, 24), (120, 40)] {
+    async fn footer_shares_one_row_with_windows_and_leaves_pane_space_intact() {
+        for (width, height) in [(40, 8), (80, 24), (120, 40)] {
             let mut app = fixture(width, height);
-            for (os, usb) in [(false, false), (false, true), (true, false), (true, true)] {
-                app.os_session = os;
-                app.os_live = usb;
-                let mut buffer = Buffer::empty(Rect::new(0, 0, width, height));
-                draw_intro(&mut buffer, &mut app);
-                draw_dock(&mut buffer, &mut app);
-                let text = contents(&buffer);
-                assert_eq!(text.contains("Install Harness"), os && usb, "{text}");
-                if os && usb && width >= 80 {
-                    assert!(text.contains("Make Harness your OS."), "{text}");
-                    assert!(text.contains("Temporary USB"), "{text}");
-                    assert!(text.contains("[ Wi-Fi ]"), "{text}");
-                }
-                assert!(app.os_welcome.hits.iter().all(|(rect, _)| rect.right() <= width && rect.bottom() <= height));
-            }
+            let buffer = render(&mut app);
+            let text = contents(&buffer);
+            assert!(text.contains("Install Harness"), "{text}");
+            assert!(!text.contains("Temporary USB") && !text.contains("Wi-Fi: offline"));
+            assert_eq!(app.body().height, height - 1);
+            assert!(app.os_welcome.hits.iter().all(|(rect, _)| rect.right() <= width && rect.y == height - 1));
+            assert!(!app.os_welcome.hits.is_empty(), "install range was lost: {text}");
         }
     }
 
     #[tokio::test]
-    async fn introduction_uses_half_the_screen_only_for_its_one_agent() {
-        let mut app = fixture(120, 40);
-        app.tab_mut().root = Some(crate::layout::Node::new(1, 120, 38));
-        app.os_welcome.guide_pane = Some(1);
-        assert_eq!(app.window_area(app.tab()).width, 60);
-        assert_eq!(app.body().height, 38, "status and install dock each reserve one row");
-        let mut buffer = Buffer::empty(Rect::new(0, 0, 120, 40));
-        draw_intro(&mut buffer, &mut app);
-        let text = contents(&buffer);
-        assert!(text.contains("[ New Harness ]") && text.contains("[ Connect a computer ]"), "{text}");
-        app.tab_mut().zoomed = true;
-        assert_eq!(app.window_area(app.tab()).width, 120);
-        app.tab_mut().zoomed = false;
-        app.os_welcome.guide_pane = Some(2);
-        assert_eq!(app.window_area(app.tab()).width, 120, "unrelated panes keep their full space");
-        app.os_live = false;
-        assert_eq!(app.body().height, 39, "installed Harness has no USB dock");
-    }
-
-    #[tokio::test]
-    async fn keyboard_dock_does_not_steal_the_agents_tab_or_ordinary_hn_f10() {
+    async fn keyboard_footer_does_not_steal_the_agents_tab_or_ordinary_hn_f10() {
         let mut app = fixture(100, 30);
         let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
         assert!(!key(&mut app, press(KeyCode::Tab)));
         assert!(key(&mut app, press(KeyCode::F(10))));
         assert_eq!(app.os_welcome.dock_focus, Some(Action::Install));
-        assert!(key(&mut app, press(KeyCode::Tab)));
-        assert_eq!(app.os_welcome.dock_focus, Some(Action::Wifi));
         assert!(key(&mut app, press(KeyCode::Esc)));
-        assert!(app.os_welcome.dock_focus.is_none());
         app.os_session = false;
         assert!(!key(&mut app, press(KeyCode::F(10))));
     }
@@ -320,21 +260,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mouse_dock_does_not_click_through_modals_or_fall_into_the_status_bar() {
-        let mut app = fixture(100, 30);
-        let mut buffer = Buffer::empty(Rect::new(0, 0, 100, 30));
-        draw_dock(&mut buffer, &mut app);
+    async fn install_click_does_not_steal_window_clicks_or_cross_a_modal() {
+        let mut app = fixture(120, 30);
+        render(&mut app);
         let click = |x| MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: x, row: 29, modifiers: KeyModifiers::NONE };
-        assert!(mouse(&mut app, click(0)), "empty dock cells belong to the dock");
+        assert!(!mouse(&mut app, click(0)), "window list still receives its clicks");
+        let install = app.os_welcome.hits[0].0;
         app.modal = Some(crate::modal::Modal::Confirm { prompt: "existing form".into(), command: "".into(), key: 'y', enter_yes: false });
-        let install = app.os_welcome.hits.iter().find(|(_, a)| *a == Action::Install).unwrap().0;
         assert!(!mouse(&mut app, click(install.x)));
-        assert!(matches!(app.modal, Some(crate::modal::Modal::Confirm { .. })));
         app.modal = None;
-        app.os_welcome.network = Some(false);
-        draw_intro(&mut buffer, &mut app);
-        draw_dock(&mut buffer, &mut app);
-        assert!(contents(&buffer).contains("Wi-Fi: offline"));
+        app.os_live = false;
+        assert!(!mouse(&mut app, click(install.x)));
+        app.os_live = true;
+        assert!(mouse(&mut app, click(install.x)));
     }
 
     #[tokio::test]

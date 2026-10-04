@@ -71,6 +71,8 @@ jobs:
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - name: Record start and capacity
         run: |
           date -u
@@ -291,6 +293,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - name: Check package and updater contracts
         env:
           OS_IMAGE_RUN: ${{ inputs.image_run_id }}

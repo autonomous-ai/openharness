@@ -271,6 +271,10 @@ def check(feeds=None, progress=lambda _: None, force_system=False):
                 ready = None
         base = ready if ready and ready.exists() else current
         base_versions = verify(base)['versions'] if base != BUNDLED else running
+        # The OS is built from source, where the CLI can still call itself 0.0.1.
+        # Releases whose tagged commits are already ancestors of that source are
+        # older, even if their public version number is numerically higher.
+        baselines = read(BASE_ID, {}).get('release_baselines', {})
         changes, target_versions, errors = {}, dict(base_versions), []
         ignored = read(STATE / 'ignored.json', {})
         for component, url in (feeds or FEEDS).items():
@@ -278,7 +282,8 @@ def check(feeds=None, progress=lambda _: None, force_system=False):
                 candidate, refs = release(url, component)
                 if ignored.get(component) == candidate:
                     continue
-                if version(candidate) > version(base_versions[component]):
+                baseline = baselines.get(component, {}).get('version', '0.0.0')
+                if version(candidate) > max(version(base_versions[component]), version(baseline)):
                     progress('Downloading hn…' if component == 'hn' else 'Downloading Harness…')
                     component_files = {}
                     for name, ref in refs.items():

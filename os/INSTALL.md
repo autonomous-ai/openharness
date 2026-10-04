@@ -1,7 +1,7 @@
 # Install Harness on a ThinkPad
 
 These instructions are for **0.1.0-preview.9**, using a Mac to prepare the USB.
-The USB starts a live session. Installation begins only when you choose **Install**
+The USB starts a live session. Installation begins only when you choose **Install Harness**
 in the installer; it erases the entire selected disk.
 
 ## 1. Prepare
@@ -70,13 +70,13 @@ skips this step when already connected. No Harness account is needed.
 
 OpenCode starts with its default model selection. Beside it are **New Harness**
 and **Connect a computer**, for trying multiple agents and computers. Ask the agent
-about Harness, its shortcuts, or something you want to build. The bottom dock keeps
+about Harness, its shortcuts, or something you want to build. The footer keeps
 **Install Harness** visible throughout the trial; **Temporary USB** reminds you
 that work has not yet been saved to an installed system.
 
-Create projects under `~/Projects`. The installer preserves and verifies these
+Create projects under `~/projects`. The installer preserves and verifies these
 saved files, including Git history. Files elsewhere, running processes and agent
-credentials outside Projects are not copied. Save and stop project writes before
+credentials outside projects are not copied. Save and stop project writes before
 installing, or copy important work to another drive.
 
 ### Trying an older Intel Mac
@@ -101,8 +101,8 @@ IDs and driver names, without serial numbers or Wi-Fi passwords.
 ## 5. Install
 
 Choose **Install without connecting** at the network step, click **Install Harness**
-in the bottom dock, press **Super+i**, or ask the agent to open installation.
-F10 focuses the dock; Tab selects a button and Enter activates it. All routes open
+in the footer, press **Super+i**, or ask the agent to open installation.
+F10 focuses Install Harness in the footer; Enter opens it. All routes open
 the same native form, with four fields:
 
 1. **Disk:** press Enter, choose the internal disk by its model and capacity, and
@@ -115,7 +115,7 @@ Use Tab or the arrow keys to move between fields. This preview uses a **US keybo
 layout**, including at disk unlock. Passwords cannot be empty; there is no minimum
 length restriction.
 
-Check the selected disk, then choose **Install** and press Enter. **This immediately
+Check the selected disk, then choose **Install Harness** and press Enter. **This immediately
 erases that disk. There is no second confirmation screen.** Choosing a disk alone
 does not start installation. Esc leaves the picker or cancels the main form.
 
@@ -169,7 +169,7 @@ the next key. A capital letter in a prefix binding means Shift + letter.
 | `sudo systemctl poweroff` | Shut down |
 
 Claude Code, Codex, OpenCode and pi each run in their own pane. Let the agent
-install the tools the project needs. Save work under `~/Projects`.
+install the tools the project needs. Save work under `~/projects`.
 
 ## 8. Updates
 
@@ -203,7 +203,7 @@ same folder before trying again.
 
 1. Boot with the USB removed. Confirm disk unlock and the Harness home screen.
 2. Connect Wi-Fi, open a terminal, type a command, and exit with Ctrl+D.
-3. Start OpenCode and ask it to build a small website in `~/Projects/hello`, run
+3. Start OpenCode and ask it to build a small website in `~/projects/hello`, run
    its server, and give you the address. Open it with `hn-browser ADDRESS`.
 4. Ask an agent to build and test a command-line program, installing tools as needed.
 5. Switch between Harness and the browser. Lock and unlock the computer.

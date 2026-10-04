@@ -26,10 +26,7 @@ def connected():
 
 
 def wifi():
-    # Reuse NetworkManager's keyboard UI; it owns password entry and storage.
-    # Never put a Wi-Fi password in shell arguments, logs, or our own config.
-    subprocess.run(['sudo', 'nmcli', 'radio', 'wifi', 'on'], check=False)
-    return subprocess.call(['sudo', 'nmtui-connect'])
+    return subprocess.call(['sudo', '/usr/bin/python3', '/usr/lib/harness-os/network.py'])
 
 
 def opencode_cpu_ready():
@@ -55,23 +52,22 @@ def prepare_opencode_guidance():
         pass
 
 
-def try_harness():
+def try_harness(offline=False):
     if not opencode_cpu_ready():
         print('The bundled OpenCode needs a newer CPU (SSE4.2).')
         print('Open a terminal to work locally or connect to a remote agent.')
         if sys.stdin.isatty():
             input('Press Enter to return to Harness.')
         return
-    if not connected():
+    if not offline and not connected():
         if wifi() != 0 or not connected():
             print('OpenCode needs an internet connection. Connect to Wi-Fi or plug in Ethernet, then try again.')
             if sys.stdin.isatty():
                 input('Press Enter to return to Harness.')
             return
-    projects = Path.home() / 'Projects'
-    projects.mkdir(exist_ok=True)
+    project = subprocess.check_output(['/usr/bin/python3', '/usr/lib/harness-os/projects.py', 'new', 'opencode'], text=True).strip()
     prepare_opencode_guidance()
-    os.chdir(projects)
+    os.chdir(project)
     os.execv('/usr/bin/opencode', ['opencode'])
 
 
@@ -85,10 +81,12 @@ def main():
     if command == 'wifi':
         raise SystemExit(wifi())
     if command == 'try':
-        try_harness()
+        try_harness(offline='--offline' in args)
         return
     if command == 'welcome':
         os.execv('/usr/bin/python3', ['python3', '/usr/lib/harness-os/onboarding.py'])
+    if command == 'starter':
+        os.execv('/bin/bash', ['bash', '-l'])
     if command == 'hardware':
         os.execv('/usr/bin/python3', ['python3', '/usr/lib/harness-os/hardware.py', 'report', *args])
     if command in ['checkpoint', 'update', 'recover']:

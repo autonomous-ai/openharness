@@ -4,6 +4,9 @@ set -euo pipefail
 REPO_DIR=$(cd -- "$(dirname -- "$0")/../.." && pwd)
 [[ $(uname -sm) == 'Linux x86_64' ]] || { echo 'OS runtimes require an x86_64 Linux build host.' >&2; exit 1; }
 cd "$REPO_DIR"
+# Check ancestry before the expensive build. A source bundle can contain fixes
+# newer than the public CLI even while package.json retains its development version.
+python3 os/tools/runtime-baseline.py >/dev/null
 npm ci --prefix cli --no-audit --no-fund
 (cd cli && node build-bundle.mjs)
 cargo build --manifest-path tui/Cargo.toml --locked --release --target x86_64-unknown-linux-musl
@@ -23,5 +26,6 @@ expected_cli = json.loads(pathlib.Path('cli/package.json').read_text())['version
 assert output('os/work/runtime/harness-tui', '--version').startswith('hn ' + expected_hn + ' ')
 assert output('node', 'cli/dist/cli.js', 'version') == expected_cli
 data['versions'] = {'hn': expected_hn, 'cli': expected_cli}
+data['release_baselines'] = json.loads(output('python3', 'os/tools/runtime-baseline.py'))
 pathlib.Path('os/work/runtime/source.json').write_text(json.dumps(data, indent=2) + '\n')
 PY

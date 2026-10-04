@@ -353,8 +353,8 @@ class InteractiveInstall(unittest.TestCase):
         self.secret = 'test-password-123'
 
     def fill_passwords(self):
-        # Disk -> encryption -> password -> repeat -> Install button via Enter.
-        self.screen.keys.extend(['\t', '\t', *self.secret, '\n', *self.secret, '\n'])
+        # The safe disk is selected and Password is focused immediately.
+        self.screen.keys.extend([*self.secret, '\n', *self.secret, '\n'])
 
     def confirm(self):
         self.screen.keys.append('\n')  # Activate Install; no second confirmation screen.
@@ -415,7 +415,7 @@ class InteractiveInstall(unittest.TestCase):
         self.assertIn('Encryption        [ ]', self.screen.frames[0])
 
     def test_main_form_checkbox_can_disable_encryption(self):
-        self.screen.keys.extend(['\t', ' ', '\t', *self.secret, '\n', *self.secret, '\n'])
+        self.screen.keys.extend([installer.curses.KEY_BTAB, ' ', '\t', *self.secret, '\n', *self.secret, '\n'])
         self.confirm()
         installer.main()
         self.assertFalse(self.install.call_args.args[0]['encrypt'])
@@ -430,7 +430,7 @@ class InteractiveInstall(unittest.TestCase):
 
     def test_selecting_another_disk_does_not_start_installation(self):
         self.inventory.return_value.append(dict(self.disk, name='/dev/vdb', serial='SECOND_DISK'))
-        self.screen.keys.extend(['\n', installer.curses.KEY_DOWN, '\n'])
+        self.screen.keys.extend([installer.curses.KEY_BTAB, installer.curses.KEY_BTAB, '\n', installer.curses.KEY_DOWN, '\n', '\t', '\t'])
         self.fill_passwords()
         self.confirm()
         installer.main()
@@ -446,7 +446,7 @@ class InteractiveInstall(unittest.TestCase):
     def test_long_disk_model_keeps_size_and_device_visible_on_a_small_screen(self):
         self.screen.size = (18, 54)
         self.disk['model'] = 'A very long manufacturer and model name' * 3
-        self.screen.keys.extend(['\n', '\n'])
+        self.screen.keys.extend([installer.curses.KEY_BTAB, installer.curses.KEY_BTAB, '\n', '\n', '\t', '\t'])
         self.fill_passwords()
         self.confirm()
         installer.main()
@@ -459,14 +459,14 @@ class InteractiveInstall(unittest.TestCase):
 
     def test_escaping_disk_picker_preserves_original_selection(self):
         self.inventory.return_value.append(dict(self.disk, name='/dev/vdb', serial='SECOND_DISK'))
-        self.screen.keys.extend(['\n', installer.curses.KEY_DOWN, '\x1b'])
+        self.screen.keys.extend([installer.curses.KEY_BTAB, installer.curses.KEY_BTAB, '\n', installer.curses.KEY_DOWN, '\x1b', '\t', '\t'])
         self.fill_passwords()
         self.confirm()
         installer.main()
         self.assertEqual(self.install.call_args.args[0]['disk'], '/dev/vda')
 
     def test_password_mismatch_can_be_corrected_without_restarting(self):
-        self.screen.keys.extend(['\t', '\t', *self.secret, '\n', *'different', '\n', '\n', installer.curses.KEY_BTAB, '\x15', *self.secret, '\n'])
+        self.screen.keys.extend([*self.secret, '\n', *'different', '\n', '\n', installer.curses.KEY_BTAB, '\x15', *self.secret, '\n'])
         self.confirm()
         installer.main()
         self.assertTrue(any('Passwords do not match.' in frame for frame in self.screen.frames))
@@ -474,7 +474,7 @@ class InteractiveInstall(unittest.TestCase):
 
     def test_live_usb_is_excluded_from_picker(self):
         self.inventory.return_value.insert(0, dict(self.disk, name='/dev/sda', mountpoints=['/run/archiso/bootmnt']))
-        self.screen.keys.extend(['\n', '\n'])
+        self.screen.keys.extend([installer.curses.KEY_BTAB, installer.curses.KEY_BTAB, '\n', '\n', '\t', '\t'])
         self.fill_passwords()
         self.confirm()
         installer.main()

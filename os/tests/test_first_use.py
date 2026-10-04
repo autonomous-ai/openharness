@@ -41,10 +41,11 @@ class FirstUse(unittest.TestCase):
     def test_connected_machine_starts_bundled_agent_without_model_or_config_override(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(hn_os.Path, 'home', return_value=Path(temp)), \
              patch.object(hn_os, 'connected', return_value=True), patch.object(hn_os, 'wifi') as wifi, \
-             patch.object(hn_os.os, 'chdir') as cwd, patch.object(hn_os.os, 'execv') as execute:
+             patch.object(hn_os.os, 'chdir') as cwd, patch.object(hn_os.os, 'execv') as execute, \
+             patch.object(hn_os.subprocess, 'check_output', return_value=str(Path(temp) / 'projects/opencode-2026-10-04-09-05')):
             hn_os.try_harness()
             wifi.assert_not_called()
-            cwd.assert_called_once_with(Path(temp) / 'Projects')
+            cwd.assert_called_once_with(str(Path(temp) / 'projects/opencode-2026-10-04-09-05'))
             execute.assert_called_once_with('/usr/bin/opencode', ['opencode'])
 
     def test_disconnected_or_cancelled_network_setup_never_launches_agent(self):
@@ -61,7 +62,8 @@ class FirstUse(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, patch.object(hn_os.Path, 'home', return_value=Path(temp)), \
              patch.object(hn_os, 'connected', side_effect=[False, True]), \
              patch.object(hn_os, 'wifi', return_value=0), patch.object(hn_os.os, 'chdir'), \
-             patch.object(hn_os.os, 'execv') as execute:
+             patch.object(hn_os.os, 'execv') as execute, \
+             patch.object(hn_os.subprocess, 'check_output', return_value=str(Path(temp) / 'projects/opencode-2026-10-04-09-05')):
             hn_os.try_harness()
             execute.assert_called_once_with('/usr/bin/opencode', ['opencode'])
 

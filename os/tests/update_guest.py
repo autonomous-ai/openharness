@@ -32,7 +32,7 @@ def main():
     original_version = version()
     original_runtime = Path('/usr/share/harness-os/runtime.json').read_text()
     project = Path.home() / 'Projects/update-survivor'
-    project.mkdir()
+    project.mkdir(parents=True, exist_ok=True)
     (project / 'keep.txt').write_text('keep this project through apply, restart and rollback\n')
     (project / 'heartbeat.py').write_text('''import os, pathlib, time
 root = pathlib.Path.home() / 'Projects/update-survivor'
@@ -100,6 +100,8 @@ while True:
     alive()
     receipt['checks'].append('Repeated apply recognizes the installed build without another transaction')
     restart()
+    assert (Path.home() / 'projects/update-survivor/keep.txt').read_text() == (project / 'keep.txt').read_text()
+    receipt['checks'].append('Legacy Projects migrates to lowercase projects while existing session paths remain valid')
     receipt['checks'].append('The same terminal process and project survive restarting both Harness daemon and screen')
     for name, info in manifest['runtime']['files'].items():
         path = Path('/usr/lib/harness') / name

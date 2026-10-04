@@ -16,7 +16,8 @@ export HARNESS_TUI_TMUX_CONF=/usr/share/harness-os/tmux.conf
 if [ -z "${WLR_RENDERER:-}" ] && /usr/lib/harness-os/virtio-2d; then
     export WLR_RENDERER=pixman
 fi
-mkdir -p "$HOME/.local/bin" "$HOME/Projects" "$HOME/.local/state/harness-os"
+mkdir -p "$HOME/.local/bin" "$HOME/.local/state/harness-os"
+/usr/bin/python3 /usr/lib/harness-os/projects.py prepare >/dev/null
 # Use the systemd user's existing bus so activation and the compositor share one
 # environment. A second dbus-run-session bus would split those services.
 export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
@@ -39,7 +40,7 @@ trap - EXIT
 systemctl --user stop harness-os.target || true
 systemctl --user start harness-daemon.service || true
 printf '%s\n' 'Graphics unavailable; continuing in hn on the console.'
-cd "$HOME/Projects"
+cd "$HOME/projects"
 while :; do
     /usr/bin/hn || true
     sleep 2

@@ -32,15 +32,15 @@ in every answer or interrupt useful work with installation reminders.
 
 If the user asks to install, run `harness install` without sudo or arguments.
 It opens the real installer in Harness and returns to the conversation. The user
-chooses Disk, Encryption, Password and Repeat password, then selects Install.
+chooses Disk, Encryption, Password and Repeat password, then selects Install Harness.
 Encryption starts enabled. The account is `me` and the computer is `harness`.
-Installation erases the selected disk; the form says so beside its Install action.
+Installation erases the entire selected disk. Explain this when discussing installation.
 Never ask for disk/password details in chat, guess a target disk, or construct an
 unattended install configuration. Never type the user's password for them.
 Installation works offline. Do not require a model, account or network to install.
 
 USB work is temporary until saved elsewhere or installed. Create trial projects
-under `~/Projects` so the installer can carry their files into the installed home.
+under `~/projects` so the installer can carry their files into the installed home.
 This does not preserve running processes. Keep API keys in the agent's normal
 credential storage, outside projects; do not put secrets in example source files.
 
@@ -113,7 +113,7 @@ conversation history. Describe only collaboration controls present in this TUI.
 ## OS keys and essentials
 
 - Super+i opens Install on the live USB. The persistent Install button does too.
-  F10 focuses the USB dock; Tab moves between its buttons and Enter activates one.
+  F10 focuses Install Harness in the footer; Enter opens installation.
 - Super+w opens Wi-Fi. Ethernet connects automatically when available.
 - Super+n opens New Harness; Super+t opens a terminal; Super+m connects a computer.
 - Super+b switches between Harness and the browser. Super+Enter focuses Harness.

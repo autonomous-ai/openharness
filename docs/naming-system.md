@@ -107,11 +107,11 @@ configuration where it affects a decision.
 | USB install action | **Install Harness** |
 | Offline USB action | **Install without connecting** |
 | USB dock invitation | **Make Harness your OS.** |
-| USB dock session label | **Temporary USB** |
+| USB session label | Omit from the single installation footer. |
 | Connect another execution machine | **Connect a computer** |
-| Installer title | **Install Harness** |
+| Installer title | Omit the redundant heading; label the action. |
 | Installer fields | **Disk**, **Encryption**, **Password**, **Repeat password** |
-| Installer action | **Install** |
+| Installer action | **Install Harness** |
 | Installation completion | **Harness is installed.** |
 | Completion actions | **Shut down**, **Back to Harness** |
 | Default account | `me` |

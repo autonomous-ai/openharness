@@ -16,7 +16,8 @@ Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
 Environment=npm_config_prefix=%h/.local
 Environment=HARNESS_OS=1
 Environment=BROWSER=hn-browser
-WorkingDirectory=%h/Projects
+ExecStartPre=/usr/bin/python3 /usr/lib/harness-os/projects.py prepare
+WorkingDirectory=-%h/projects
 ExecStart=/usr/bin/foot --config=/usr/share/harness-os/foot.ini /usr/bin/hn
 Restart=always
 RestartSec=1

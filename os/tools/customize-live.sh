@@ -12,10 +12,10 @@ ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 useradd -m -G wheel,video,audio -s /bin/bash me
 passwd -d me
 passwd -d root
-mkdir -p /etc/sudoers.d /home/me/Projects /etc/systemd/system/getty@tty1.service.d
+mkdir -p /etc/sudoers.d /home/me/projects /etc/systemd/system/getty@tty1.service.d
 echo 'me ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/10-live
 chmod 440 /etc/sudoers.d/10-live
-chown me:me /home/me/Projects
+chown me:me /home/me/projects
 systemctl enable NetworkManager systemd-resolved systemd-timesyncd getty@tty1.service
 systemctl enable harness-keyring.service
 # hn-screen starts the daemon after labwc has published the display environment.

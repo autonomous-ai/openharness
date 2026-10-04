@@ -41,12 +41,16 @@ def exercise(vm, fixture, host_url):
     vm.command('systemd-run --user --collect --unit=harness-test-feed python3 -m http.server 19447 '
                '--bind 127.0.0.1 --directory /tmp/fast-updates')
     vm.command('for n in $(seq 1 30); do curl -fsS http://127.0.0.1:19447/fixture.json && exit 0; sleep .2; done; exit 1')
+    # Even though a source CLI reports 0.0.1, an already-included public version
+    # must not replace it. The new 999.x fixture below must still be accepted.
+    vm.command('harness updates check --feeds /tmp/fast-updates/feeds-ancestor.json', timeout=60)
+    vm.command('test ! -e ~/.local/state/harness-os/updates/ready.json && test ! -e ~/.local/state/harness-os/updates/current')
     # The radio/network can remain off: only the loopback test release is used.
     vm.command('sudo nmcli networking off')
     put(vm, '/tmp/update-session-probe.py', PROBE)
     vm.command('hn new-window -n update-probe ' + shlex.quote('python3 /tmp/update-session-probe.py'))
-    vm.command('for n in $(seq 1 40); do test -s ~/Projects/session-probe/pid && exit 0; sleep .25; done; exit 1')
-    vm.command('cp ~/Projects/session-probe/pid /tmp/fast-original-pid; cat /proc/$(cat /tmp/fast-original-pid)/stat > /tmp/fast-original-stat')
+    vm.command('for n in $(seq 1 40); do test -s ~/projects/session-probe/pid && exit 0; sleep .25; done; exit 1')
+    vm.command('cp ~/projects/session-probe/pid /tmp/fast-original-pid; cat /proc/$(cat /tmp/fast-original-pid)/stat > /tmp/fast-original-stat')
     vm.command('systemctl --user show harness-daemon -p MainPID --value > /tmp/fast-original-daemon')
     vm.command('hn new-window -n live-agent opencode')
     vm.command('for n in $(seq 1 80); do pgrep -u 1000 -x opencode > /tmp/fast-original-agent && exit 0; sleep .25; done; exit 1')
@@ -64,7 +68,7 @@ def exercise(vm, fixture, host_url):
                'sudo journalctl _UID=1000 _SYSTEMD_USER_UNIT=harness-update.service --no-pager; '
                'systemctl --user status harness-update.timer harness-update.service --no-pager; exit 1', timeout=75)
     wait_text(vm, 'update ready', 'fast-01-notice', status_bar=True)
-    checks = ['User timer discovers, verifies and stages a real hn release without changing the running selection']
+    checks = ['An already-included public CLI release is ignored before staging; independent newer hn and CLI releases remain eligible', 'User timer discovers, verifies and stages a real hn release without changing the running selection']
     vm.command('test ! -e ' + state + '/current')
 
     def alive(name):
@@ -72,7 +76,7 @@ def exercise(vm, fixture, host_url):
 import time
 pid = Path('/tmp/fast-original-pid').read_text().strip()
 assert Path('/proc/'+pid+'/stat').read_text().split()[21] == Path('/tmp/fast-original-stat').read_text().split()[21]
-root = Path.home() / 'Projects/session-probe'
+root = Path.home() / 'projects/session-probe'
 before = (root/'heartbeat').stat().st_mtime_ns
 time.sleep(.6)
 assert (root/'heartbeat').stat().st_mtime_ns != before
@@ -85,7 +89,7 @@ assert (root/'heartbeat').stat().st_mtime_ns != before
         vm.type_probe(name)
         vm.keys('ret')
         vm.command('for n in $(seq 1 30); do grep -Fx ' + shlex.quote(name) +
-                   ' ~/Projects/session-probe/input && exit 0; sleep .1; done; exit 1')
+                   ' ~/projects/session-probe/input && exit 0; sleep .1; done; exit 1')
         vm.screenshot(name + '-accepted-input')
 
     def activate(expect_failure=False):

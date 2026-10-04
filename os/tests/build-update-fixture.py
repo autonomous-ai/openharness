@@ -38,10 +38,13 @@ def ref(name):
     data = (output / name).read_bytes()
     return {'url': base_url + name, 'sha256': hashlib.sha256(data).hexdigest(), 'size': len(data)}
 
+baseline = json.loads((runtime / 'source.json').read_text())['release_baselines']['cli']['version']
 documents = {
     'hn.json': {'version': fixture_version, 'builds': {'linux-x64': ref('harness-tui')}},
     'cli.json': {'cli': {'version': fixture_version, 'cli': ref('cli.mjs'), 'notify': ref('notify.mjs')}},
     'cli-current.json': {'cli': {'version': current_cli, 'cli': ref('cli-current.mjs'), 'notify': ref('notify.mjs')}},
+    'cli-ancestor.json': {'cli': {'version': baseline, 'cli': ref('cli.mjs'), 'notify': ref('notify.mjs')}},
+    'feeds-ancestor.json': {'cli': base_url + 'cli-ancestor.json'},
     'feeds-hn.json': {'hn': base_url + 'hn.json', 'cli': base_url + 'cli-current.json'},
     'feeds-both.json': {'hn': base_url + 'hn.json', 'cli': base_url + 'cli.json'},
 }

@@ -412,18 +412,19 @@ def check_first_use(vm, user, folder):
     defaults = json.loads(vm.read_file('/home/me/.config/opencode/opencode.json'))
     assert not set(defaults) & {'model', 'provider', 'providers'}, 'The image must retain upstream model and provider defaults'
     assert defaults.get('update') == 'disable', 'The packaged agent must remain managed by system updates'
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Connect to start with an agent" && exit 0; sleep 1; done; exit 1')), timeout=40)
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Connect to Wi-Fi to get started" && exit 0; sleep 1; done; exit 1')), timeout=40)
     vm.screenshot('01a-network-first')
-    vm.keys('ret')
-    vm.command('for n in $(seq 1 30); do pgrep -x "nmtui|nmtui-connect" >/dev/null && exit 0; sleep 1; done; exit 1', timeout=40)
     vm.command('! pgrep -u 1000 -x opencode')
-    vm.screenshot('01a-try-needs-network')
+    # Escape cannot leave a first-use dead end. Offline install is in this page.
     vm.keys('esc')
-    vm.command('for n in $(seq 1 15); do ! pgrep -x "nmtui|nmtui-connect" >/dev/null && exit 0; sleep 1; done; exit 1', timeout=20)
-    vm.command('sleep 1; ! pgrep -u 1000 -x opencode')
+    vm.command(user('hn capture-pane -p') + ' | grep -q "Install without connecting"')
+    vm.keys('i')
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Repeat password" && exit 0; sleep 1; done; exit 1')), timeout=40)
+    vm.screenshot('01a-offline-install')
+    vm.keys('esc')
     # The OS shortcut needs neither a prefix nor Shift, and works offline.
     vm.keys('meta_l', 'i')
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "All data on this disk will be erased" && exit 0; sleep 1; done; exit 1')), timeout=40)
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Repeat password" && exit 0; sleep 1; done; exit 1')), timeout=40)
     vm.screenshot('01b-direct-install-offline')
     vm.keys('esc')
     vm.command('sleep 1; test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
@@ -468,10 +469,26 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     vm.command('for n in $(seq 1 90); do pgrep -u 1000 -x opencode >/dev/null && exit 0; sleep 1; done; exit 1', timeout=100)
     time.sleep(5)
     vm.screenshot('01d-bundled-opencode')
+    output, _ = vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do test "$(hn list-panes -F "#{pane_id}" | wc -l)" -eq 3 && break; sleep .5; done; hn list-panes -F "#{pane_id}|#{pane_left}|#{pane_top}|#{pane_width}|#{pane_height}|#{pane_current_path}"')))
+    pane_rows = [line.split('|') for line in output.splitlines() if re.match(r'^%\d+\|', line)]
+    assert len(pane_rows) == 3, 'First use must contain three real terminal panes'
+    left = min(pane_rows, key=lambda row: int(row[1]))
+    right = sorted((row for row in pane_rows if row != left), key=lambda row: int(row[2]))
+    assert int(left[1]) == 0 and right[0][1] == right[1][1] and int(right[1][2]) > int(right[0][2])
+    assert abs(int(left[3]) - int(right[0][3])) <= 2, 'First-use columns must be balanced'
+    assert abs(int(right[0][4]) - int(right[1][4])) <= 2, 'Right terminals must split their column equally'
+    assert re.match(r'/home/me/projects/opencode-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}', left[5]), left
+    for index, row in enumerate(right):
+        vm.command(user('hn select-pane -t ' + row[0]))
+        vm.type_probe('echo starter-terminal-' + str(index))
+        vm.keys('ret')
+        vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -Fx starter-terminal-' + str(index) + ' && exit 0; sleep .2; done; exit 1')))
+    vm.command(user('hn select-pane -t ' + left[0]))
+    vm.screenshot('01d-three-real-panes')
     # runuser changes the account but retains the serial root shell's cwd.
     # OpenCode 2 resolves a project through its service; /root is inaccessible
     # to me. Inspect the same project as the visible agent instead.
-    vm.command(user('sh -c ' + shlex.quote('cd "$HOME/Projects" && /usr/bin/opencode debug config > /tmp/hn-opencode-config.json')), timeout=60)
+    vm.command(user('sh -c ' + shlex.quote('cd "$HOME/projects" && /usr/bin/opencode debug config > /tmp/hn-opencode-config.json')), timeout=60)
     config_sources = vm.read_file('/tmp/hn-opencode-config.json')
     (folder / 'opencode-config-sources.json').write_bytes(config_sources)
     # V2 reports configuration sources, not the resolved V1 object. Its
@@ -513,12 +530,12 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     # F10 reaches the dock without consuming the agent's ordinary Tab key.
     vm.keys('f10')
     vm.keys('ret')
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "All data on this disk will be erased" && exit 0; sleep 1; done; exit 1')), timeout=40)
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Repeat password" && exit 0; sleep 1; done; exit 1')), timeout=40)
     vm.screenshot('01d-dock-install')
     vm.keys('esc')
     time.sleep(1)
     vm.click_word('01d-mouse-install', 'Install')
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "All data on this disk will be erased" && exit 0; sleep 1; done; exit 1')), timeout=40)
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Repeat password" && exit 0; sleep 1; done; exit 1')), timeout=40)
     vm.command('test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
     vm.keys('esc')
     # Exercise what a first-time user actually does after choosing Try: type
@@ -545,24 +562,24 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     (folder / 'first-agent-guide.txt').write_bytes(vm.read_file('/tmp/hn-first-guide.txt'))
     vm.screenshot('01f-agent-explains-harness')
     assert guide_status == 0, 'Bundled OpenCode must explain the actual OS shortcuts from its local guide'
-    vm.type_probe('create a folder named usb-trial in the current folder and an index html page inside it saying hello harness')
+    vm.type_probe('create the folder /home/me/projects/usb-trial and an index html page inside it saying hello harness')
     vm.keys('ret')
-    vm.command('for n in $(seq 1 120); do test -s /home/me/Projects/usb-trial/index.html && '
-               'grep -iq "hello harness" /home/me/Projects/usb-trial/index.html && exit 0; sleep 1; done; exit 1', timeout=140)
-    (folder / 'trial-project.html').write_bytes(vm.read_file('/home/me/Projects/usb-trial/index.html'))
+    vm.command('for n in $(seq 1 120); do test -s /home/me/projects/usb-trial/index.html && '
+               'grep -iq "hello harness" /home/me/projects/usb-trial/index.html && exit 0; sleep 1; done; exit 1', timeout=140)
+    (folder / 'trial-project.html').write_bytes(vm.read_file('/home/me/projects/usb-trial/index.html'))
     vm.screenshot('01g-agent-created-trial-project')
     # Test the agent-led install entry too. It may open the form; it must never
     # choose a disk or perform the destructive action from the conversation.
     vm.type_probe('open the harness installer for me but do not choose a disk or start installation')
     vm.keys('ret')
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 90); do hn capture-pane -p | grep -q "All data on this disk will be erased" && exit 0; sleep 1; done; exit 1')), timeout=100)
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 90); do hn capture-pane -p | grep -q "Repeat password" && exit 0; sleep 1; done; exit 1')), timeout=100)
     vm.command('test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
     vm.screenshot('01h-agent-opened-installer')
     vm.keys('esc')
     # No model flag/config, API key, account, or installer. Validate a real
     # upstream-default reply; preserve all events rather than just the exit code.
     prompt = 'What is six times seven? Reply with only the decimal number. Do not use tools.'
-    command = 'cd "$HOME/Projects" && timeout 120 /usr/bin/opencode run --format json ' + shlex.quote(prompt) + ' > /tmp/hn-first-chat.jsonl 2>/tmp/hn-first-chat.err'
+    command = 'cd "$HOME/projects" && timeout 120 /usr/bin/opencode run --format json ' + shlex.quote(prompt) + ' > /tmp/hn-first-chat.jsonl 2>/tmp/hn-first-chat.err'
     _, status = vm.command(user('sh -c ' + shlex.quote(command)), timeout=140, check=False)
     raw = vm.read_file('/tmp/hn-first-chat.jsonl')
     errors = vm.read_file('/tmp/hn-first-chat.err')
@@ -637,17 +654,24 @@ if status:
         return output
 
     try:
-        wait_screen('All data on this disk will be erased')
+        wait_screen('Repeat password')
         vm.screenshot('install-01-form')
+        # A first typed character must go straight into the masked password.
+        vm.type_probe('x')
+        entered = wait_screen('Repeat password')
+        assert '[*' in entered, 'Installer did not initially focus Password'
+        vm.keys('ctrl', 'u')
+        vm.keys('shift', 'tab')
+        vm.keys('shift', 'tab')
         vm.keys('ret')
         wait_screen('Select disk')
         vm.screenshot('install-02-disks')
         vm.keys('esc')
-        wait_screen('All data on this disk will be erased')
+        wait_screen('Repeat password')
         vm.keys('ret')
         wait_screen('Select disk')
         vm.keys('ret')
-        wait_screen('All data on this disk will be erased')
+        wait_screen('Repeat password')
         vm.keys('tab')
         if not config['encrypt']:
             vm.keys('spc')
@@ -656,14 +680,15 @@ if status:
         vm.keys('ret')
         vm.type_probe(config['password'])
         vm.keys('ret')
-        output = wait_screen('All data on this disk will be erased')
+        output = wait_screen('Repeat password')
         assert config['password'] not in output and '*' * len(config['password']) in output, 'Password fields must be masked'
         vm.screenshot('install-03-ready')
         # Finishing password entry only focuses Install. No disk has changed yet.
         vm.command('test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
         vm.keys('ret')
         if progress_status == 0:
-            wait_screen('Installing Harness', timeout=30)
+            progress = wait_screen('Preparing the disk|Setting up encryption|Copying Harness|Setting up your account', timeout=30)
+            assert 'Keep this computer powered on' not in progress and 'Installing Harness' not in progress
             vm.screenshot('install-04-progress')
         wait_screen('Harness is installed', timeout=900)
         vm.screenshot('install-05-complete')
@@ -844,7 +869,7 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
                       username='me', hostname='harness', password='test-password-123',
                       encrypt=args.encrypt, serial_console=True)
         # Installation must work with the NIC down, using the ISO's immutable payload.
-        (folder / 'trial-project.html').write_bytes(vm.read_file('/home/me/Projects/usb-trial/index.html'))
+        (folder / 'trial-project.html').write_bytes(vm.read_file('/home/me/projects/usb-trial/index.html'))
         vm.command(user('sh -c ' + shlex.quote('mkdir -p "$HOME/.config"; printf trial-only > "$HOME/.config/hn-trial-credential"')))
         vm.command('nmcli networking off')
         install_interactively(vm, config, folder)
@@ -864,9 +889,14 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         vm.start(live=False)
         unlock_delay = 100 if config['encrypt'] else 0
         vm.login_installed(config, unlock_delay=unlock_delay)
-        saved_trial = vm.read_file('/home/me/Projects/usb-trial/index.html')
+        vm.command('for n in $(seq 1 60); do test -f ~/.local/state/harness-os/onboarded && '
+                   'test "$(hn list-panes -F "#{pane_id}" | wc -l)" -eq 3 && exit 0; sleep .5; done; exit 1', timeout=40)
+        vm.screenshot('installed-first-workspace')
+        vm.command('hn capture-pane -p | grep -qv "Enter.*Start OpenCode"; test -d ~/projects')
+        result['checks'].append('Fresh installed first boot opens the same three real panes and records onboarding only once')
+        saved_trial = vm.read_file('/home/me/projects/usb-trial/index.html')
         assert saved_trial == (folder / 'trial-project.html').read_bytes(), 'The installed home lost or changed the agent-created trial project'
-        vm.command('test ! -e /home/me/.config/hn-trial-credential && test "$(stat -c %u /home/me/Projects/usb-trial/index.html)" -eq 1000')
+        vm.command('test ! -e /home/me/.config/hn-trial-credential && test "$(stat -c %u /home/me/projects/usb-trial/index.html)" -eq 1000')
         transfer = json.loads(vm.read_file('/home/me/.local/state/harness-os/trial-projects.json'))
         assert transfer['entries']['usb-trial/index.html']['sha256'] == hashlib.sha256(saved_trial).hexdigest()
         result['checks'].append('Agent-created USB trial project survives offline installation and installed boot byte-for-byte')
@@ -936,7 +966,7 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
         checkpoint = re.search(r'Checkpoint ([A-Za-z0-9_-]+)', output).group(1)
         vm.command('pacman -Q hn-os-recovery-probe && test -f /etc/hn-os-recovery-probe')
         result['checks'].append('A real offline package transaction creates its pre-update checkpoint')
-        vm.command('printf keep-my-project > ~/Projects/recovery-probe.txt')
+        vm.command('printf keep-my-project > ~/projects/recovery-probe.txt')
         vm.command("sudo sh -c 'printf broken > /etc/hn-os-recovery-probe; chmod 000 /usr/lib/harness/harness-tui'")
         vm.command('sync')
         vm.stop()
@@ -960,7 +990,7 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
             result['recovered_unlock_prompt_seconds'] = vm.unlock_prompt_seconds
             if vm.acceleration == 'kvm':
                 assert vm.unlock_prompt_seconds < 30, 'Recovered unlock prompt exceeded 30 seconds; see recovered-boot-journal.log'
-        vm.command('test ! -e /etc/hn-os-recovery-probe && test -x /usr/lib/harness/harness-tui && test "$(cat ~/Projects/recovery-probe.txt)" = keep-my-project')
+        vm.command('test ! -e /etc/hn-os-recovery-probe && test -x /usr/lib/harness/harness-tui && test "$(cat ~/projects/recovery-probe.txt)" = keep-my-project')
         vm.command('test ! -e /var/lib/pacman/db.lck && ! pacman -Q hn-os-recovery-probe')
         result['recovered_keyboard_readiness'] = check_graphical_keyboard(vm, 'recovered')
         result['checks'].append('Recovered graphical hn accepts physical-keyboard shell input, returns output and returns home after closing the pane')
@@ -975,7 +1005,7 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
             vm.command('hn new-window -n development ' + shlex.quote('bash /tmp/hn-os-development.sh > "$HOME/.local/state/harness-os/development.log" 2>&1'))
             output, _ = vm.command('for n in $(seq 1 60); do test -s ~/.local/state/harness-os/development-check/status && break; sleep 1; done; cat ~/.local/state/harness-os/development.log; test "$(cat ~/.local/state/harness-os/development-check/status)" = 0', timeout=75)
             (folder / 'development.log').write_text(output)
-            vm.command('hn new-window -n local-preview ' + shlex.quote('node "$HOME/Projects/os-validation/server.mjs"'))
+            vm.command('hn new-window -n local-preview ' + shlex.quote('node "$HOME/projects/os-validation/server.mjs"'))
             vm.command('curl --fail --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:18781 | grep -F "Local development works."', timeout=30)
             vm.command('hn-browser http://127.0.0.1:18781')
             time.sleep(5)
@@ -999,7 +1029,7 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
             with tarfile.open(fileobj=package, mode='w:gz') as archive:
                 archive.add(Path(__file__).with_name('workloads'), arcname='workloads')
                 if args.workload_seed:
-                    seeds = list(args.workload_seed.rglob('Projects/os-workloads'))
+                    seeds = list(args.workload_seed.rglob('projects/os-workloads'))
                     if len(seeds) != 1:
                         raise RuntimeError('Need exactly one prior generated project tree.')
                     for name in ['terminal-tool', 'website', 'game', 'fullstack']:
@@ -1020,7 +1050,7 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
             (folder / 'workloads.log').write_text(output)
             # Keep both successful and failed model output for review; exclude
             # install caches and dependencies from the small source archive.
-            vm.command('tar --exclude=node_modules --exclude=.git --exclude=__pycache__ -czf /tmp/hn-workloads-results.tgz -C "$HOME" Projects/os-workloads .local/state/harness-os/workloads', timeout=60)
+            vm.command('tar --exclude=node_modules --exclude=.git --exclude=__pycache__ -czf /tmp/hn-workloads-results.tgz -C "$HOME" projects/os-workloads .local/state/harness-os/workloads', timeout=60)
             output, _ = vm.command("printf 'HN_WORKLOAD_ARCHIVE='; base64 -w0 /tmp/hn-workloads-results.tgz; printf '\\n'", timeout=120)
             packed = base64.b64decode(re.search(r'HN_WORKLOAD_ARCHIVE=([A-Za-z0-9+/=]+)', output).group(1), validate=True)
             destination = folder / 'workloads'
@@ -1057,7 +1087,7 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
             vm.command('hn new-window -n dsh-acceptance ' + shlex.quote('bash /tmp/dsh/run.sh > "$HOME/.local/state/harness-os/dsh-check.log" 2>&1'))
             output, _ = vm.command('for n in $(seq 1 2700); do test -s ~/.local/state/harness-os/dsh-check/status && break; sleep 1; done; cat ~/.local/state/harness-os/dsh-check.log', timeout=2720)
             (folder / 'dsh-check.log').write_text(output)
-            vm.command('tar --exclude=node_modules --exclude=.git --exclude=__pycache__ -czf /tmp/hn-dsh-results.tgz -C "$HOME" Projects/os-dsh .local/state/harness-os/dsh-check', timeout=60)
+            vm.command('tar --exclude=node_modules --exclude=.git --exclude=__pycache__ -czf /tmp/hn-dsh-results.tgz -C "$HOME" projects/os-dsh .local/state/harness-os/dsh-check', timeout=60)
             output, _ = vm.command("printf 'HN_DSH_ARCHIVE='; base64 -w0 /tmp/hn-dsh-results.tgz; printf '\\n'", timeout=120)
             packed = base64.b64decode(re.search(r'HN_DSH_ARCHIVE=([A-Za-z0-9+/=]+)', output).group(1), validate=True)
             destination = folder / 'dsh'
