@@ -4699,9 +4699,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const screen = await captureTerminal(s.agentId, 80)
       return inspectCloseActivity(s, screen, sessionTurnState(s.sessionId), openQuestions.has(s.sessionId))
     },
-    checkpoint: async (s, phase) => sessionCheckpoints.save(s, {
-      screen: phase === 'before' ? await captureTerminal(s.agentId, 2000) : null,
-    }),
+    checkpoint: async (s, phase) => {
+      const captured = phase === 'before' ? await terminals.captureRetained(s, { historyLines: 2000 }) : null
+      await sessionCheckpoints.save(s, { screen: captured?.state === 'succeeded' ? captured.value : null })
+    },
     stop: stopAgent,
     changed: announceSession,
   })

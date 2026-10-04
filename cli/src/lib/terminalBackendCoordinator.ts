@@ -156,6 +156,14 @@ export class TerminalBackendCoordinator {
 
   async capture(session: RegisteredSession, options?: TerminalCaptureOptions): Promise<TerminalReadResult<string>> {
     if (!session.active) return { state: 'failed', reason: 'terminal agent is dormant' }
+    return this.captureRetained(session, options)
+  }
+
+  /** Save a retained pane even when no engine is active (for example, a shell
+   * after a daemon restart). This is read-only: control leases and activity
+   * reads keep their active-process guards. Close checks identity again before
+   * stopping anything and still requires a successful durable checkpoint. */
+  async captureRetained(session: RegisteredSession, options?: TerminalCaptureOptions): Promise<TerminalReadResult<string>> {
     let reason = 'no configured terminal runtime is available'
     for (const runtime of this.orderedRuntimes(session)) {
       const result = await this.backendFor(runtime)!.capture(runtime, options)
