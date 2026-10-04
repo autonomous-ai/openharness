@@ -191,6 +191,7 @@ import { createForgetSession } from './core/agents/forget.js'
 import { createBinding } from './core/agents/bind.js'
 import { createDiscoveryHandlers } from './core/agents/discovery.js'
 import { createLaunchHelpers } from './core/agents/launch.js'
+import { createCancel } from './core/turns/cancel.js'
 import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
@@ -3804,22 +3805,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     setVoiceRouterDeviceConnected(connected)
   }
 
-  // Web cancel (C-c) interrupts the turn — claude writes no end_turn line to close it, so stop the
-  // heartbeat and mark the turn closed here (mirrors the hosted runtime stopping its heartbeat on cancel). We do
-  // NOT emit turn_ended: the web clears its own dots on cancel, and a turn_ended would fire a device
-  // recap for a killed turn. The next real prompt reopens a fresh turn.
-  const cancelAgent = (id: string, confirmed = false): Promise<boolean> => {
-    const record = registry.resolve(id)
-    const sessionId = record?.sessionId ?? id
-    normalizers.closeTurns(sessionId)
-    cursorSubagents.forget(sessionId)
-    const cancelled = confirmed ? input.cancelConfirmed(record?.agentId ?? sessionId) : (input.cancel(record?.agentId ?? sessionId), Promise.resolve(true))
-    autonomousDeviceService?.turnEnded(record?.agentId ?? sessionId, true)
-    stopHeartbeat(sessionId)
-    questionWatcher.stop(sessionId)
-    mirror.cancel(sessionId) // close the device's "Working…" tile (bare done, no recap) — a cancel emits no turn_ended
-    return cancelled
-  }
+  // Cancelling a turn (core/turns/cancel.ts).
+  const cancelAgent = createCancel({
+    resolve: (id) => registry.resolve(id),
+    normalizers,
+    cursorSubagents,
+    input,
+    device: () => autonomousDeviceService,
+    stopHeartbeat,
+    questionWatcher,
+    mirror,
+  })
   backend.onCancel = id => { void cancelAgent(id) }
 
   /**
