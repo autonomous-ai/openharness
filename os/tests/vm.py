@@ -436,7 +436,10 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     vm.command('for n in $(seq 1 90); do pgrep -u 1000 -x opencode >/dev/null && exit 0; sleep 1; done; exit 1', timeout=100)
     time.sleep(5)
     vm.screenshot('01d-bundled-opencode')
-    vm.command(user('sh -c ' + shlex.quote('/usr/bin/opencode debug config > /tmp/hn-opencode-config.json')), timeout=60)
+    # runuser changes the account but retains the serial root shell's cwd.
+    # OpenCode 2 resolves a project through its service; /root is inaccessible
+    # to me. Inspect the same project as the visible agent instead.
+    vm.command(user('sh -c ' + shlex.quote('cd "$HOME/Projects" && /usr/bin/opencode debug config > /tmp/hn-opencode-config.json')), timeout=60)
     agent_config = json.loads(vm.read_file('/tmp/hn-opencode-config.json'))
     assert '/usr/share/harness-os/guide.md' in agent_config.get('instructions', []), 'OpenCode did not load the bundled Harness guide'
     assert not agent_config.get('model'), 'The image must keep upstream model selection'
