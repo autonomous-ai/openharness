@@ -15,6 +15,7 @@ import { projectDisplayName, type registry, type RegisteredSession } from '../li
 import type { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
+import type { SwarmPromptScopes } from '../teams/promptScope.js'
 import { FAIL, later, type PortFallbacks } from './serviceHost.js'
 
 export interface CoreApi {
@@ -123,6 +124,14 @@ export interface WorkspacesPort {
 /** What the core gets when workspaces fails: branches keep their names and nothing is swept. */
 export const WORKSPACES_FALLBACKS: PortFallbacks<WorkspacesPort> = { nameBranches: undefined, sweepUnused: undefined }
 
+/** The core's calls into the teams: which team a prompt belongs to, recorded as a message is written,
+ *  as a turn starts (from its hook or its transcript), as it is typed into a scoped terminal, and
+ *  forgotten with its agent. */
+export type TeamsPort = Pick<SwarmPromptScopes, 'prepare' | 'started' | 'raw' | 'forget'>
+
+/** What the core gets when the teams fail: the prompt is written with no team recorded for it. */
+export const TEAMS_FALLBACKS: PortFallbacks<TeamsPort> = { prepare: () => {}, started: undefined, raw: undefined, forget: undefined }
+
 /** Each port is filled by the service that owns it when that service starts, and is null while the
  *  service is off: the core never waits on one. */
 export interface CorePorts {
@@ -130,10 +139,11 @@ export interface CorePorts {
   viewers: ViewersPort | null
   models: ModelsPort | null
   workspaces: WorkspacesPort | null
+  teams: TeamsPort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { search: null, viewers: null, models: null, workspaces: null }
+  return { search: null, viewers: null, models: null, workspaces: null, teams: null }
 }
 
 export interface CoreApiDeps {

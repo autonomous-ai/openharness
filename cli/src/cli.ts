@@ -160,7 +160,7 @@ import { createAgentClosing } from './core/agents/close.js'
 import { createEngineHooks, installEngineHooks } from './core/engines/hooks.js'
 import { createCursorTaskHooks } from './core/engines/cursorTasks.js'
 import { databaseHistory } from './core/transcripts/databaseHistory.js'
-import { createCoreApi, emptyPorts, MODELS_FALLBACKS, SEARCH_FALLBACKS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS } from './core/api.js'
+import { createCoreApi, emptyPorts, MODELS_FALLBACKS, SEARCH_FALLBACKS, TEAMS_FALLBACKS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type TeamsPort } from './core/api.js'
 import { createServiceHost, testFaults } from './core/serviceHost.js'
 import { startSearch } from './services/search.js'
 import { startViewers } from './services/viewers.js'
@@ -1850,6 +1850,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Nothing is answered until start-up is done (see the end of this function).
   backend.holdRequests()
   daemonBoot.openRequests = () => backend.openRequests()
+  // The team prompt scopes are the socket's, and the core reaches them through the service host's guard
+  // (core/serviceHost.ts): a fault there can no longer cost a message its write, a hook its answer or
+  // an event its turn.
+  serviceHost.start('teams', (_core, started) => { started.teams = backend.swarmPromptScopes }, coreApi, TEAMS_FALLBACKS)
+  const teams: TeamsPort = {
+    prepare: (...args) => ports.teams?.prepare(...args) ?? (() => {}),
+    started: (...args) => ports.teams?.started(...args),
+    raw: (...args) => ports.teams?.raw(...args),
+    forget: (agentId) => ports.teams?.forget(agentId),
+  }
   backend.viewerTargetProvider = (agentId) => ports.viewers?.forwardingUrl(agentId) ?? null
 
   ensureBundledCoreHarnesses()
@@ -1920,7 +1930,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return { kind: backend.e2ee.sessionRole(connId) === 'device' ? 'device' : 'web', name: label }
     },
     streamingAvailable: tmuxBackend != null,
-    onScopedInput: (id, bytes, tabId, pasted) => backend.swarmPromptScopes.raw(id, bytes, tabId, pasted),
+    onScopedInput: (id, bytes, tabId, pasted) => teams.raw(id, bytes, tabId, pasted),
     diagnostic: (event, fields) => console.log(`[terminal-stream] ${event}`, fields),
     // The keystroke prewarm (grid-reads-without-waking issue 03): typing into a pane whose agent runs on
     // a sleeping grid starts that grid while the person types. Here, in the daemon's own input path, so
@@ -2030,7 +2040,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     byAgent: (agentId) => registry.byAgent(agentId),
     terminal: terminalControl,
     teams: {
-      prepare: (id, text, tabId, deliveryId) => backend.swarmPromptScopes.prepare(id, text, tabId, deliveryId),
+      prepare: (id, text, tabId, deliveryId) => teams.prepare(id, text, tabId, deliveryId),
       delivery: (event) => {
         backend.orchestratorDelivery(event)
         backend.teamDelivery(event)
@@ -2204,7 +2214,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     search: sessionSearch,
     turnStartedAt,
     input,
-    teams: backend.swarmPromptScopes,
+    teams,
     deviceInput,
     device: () => autonomousDeviceService,
     startHeartbeat,
@@ -2232,7 +2242,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     runtimeProfiles,
     watcher,
     stopHeartbeat,
-    teams: backend.swarmPromptScopes,
+    teams,
     input,
     deviceInput,
     detachDsh,
@@ -2249,7 +2259,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // A terminal is never the dial's business, and `syncSession` forces that for it anyway.
     announceSession: session => announceSession(session, { device: false }),
     invalidateTerminalControl,
-    forgetInput: agentId => { backend.swarmPromptScopes.forget(agentId); input.forget(agentId); deviceInput.forget(agentId) },
+    forgetInput: agentId => { teams.forget(agentId); input.forget(agentId); deviceInput.forget(agentId) },
     detachDsh,
     syncRecapPool,
     warn: (message, error) => console.warn(message, error),
@@ -2267,7 +2277,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession,
     stoppedAgents,
     syncRecapPool,
-    teams: backend.swarmPromptScopes,
+    teams,
     input,
     deviceInput,
     homes: { copilot: env.COPILOT_HOME, grok: env.GROK_HOME, agy: env.AGY_HOME },
@@ -2286,7 +2296,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     syncRecapPool,
     attachSession,
     invalidateTerminalControl,
-    teams: backend.swarmPromptScopes,
+    teams,
     input,
     deviceInput,
     questionWatcher,
@@ -2509,7 +2519,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     resolveHookAgent: engineHooks.resolveHookAgent,
     onRegistered: handleRegistered,
-    onPromptSubmitted: (id, text) => backend.swarmPromptScopes.started(id, text, 'hook', registry.byAgent(id)?.engine),
+    onPromptSubmitted: (id, text) => teams.started(id, text, 'hook', registry.byAgent(id)?.engine),
     onSessionEnd: engineHooks.onSessionEnd,
     // What the engines' own hooks say about a turn (core/turns/turnHooks.ts).
     onTurnStart: turnHooks.onTurnStart,

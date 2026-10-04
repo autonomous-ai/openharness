@@ -90,6 +90,23 @@ describe('a failing service never takes the core down', () => {
     client.close()
   })
 
+  it('with the teams failing on every call, or not starting at all, messages are written and every turn reaches the client', async () => {
+    for (const faults of ['teams.prepare,teams.started,teams.raw,teams.forget', 'teams']) {
+      daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: faults } })
+      const d = daemon
+      onTestFailed(() => { console.log(`---- daemon log (${faults})\n${d.log().split('\n').slice(-80).join('\n')}`) })
+      await d.start()
+      const client = await LocalClient.connect(d)
+      const agentId = await boundAgent(d, client, `teams-${faults.length}`)
+      for (let i = 1; i <= 3; i++) await turn(client, agentId, `with the teams failing ${i}`)
+      expect(d.log()).toContain(faults === 'teams' ? '[services] teams did not start' : '[services] teams.prepare failed')
+      expect(d.coresStarted()).toBe(1)
+      client.close()
+      await d.close()
+      daemon = undefined
+    }
+  })
+
   it('a search request that fails before search is switched off answers that request, and the next one too', async () => {
     daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'search.search' } })
     onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
