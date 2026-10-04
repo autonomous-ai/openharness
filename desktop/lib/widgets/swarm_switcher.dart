@@ -28,7 +28,8 @@ import '../state/swarm_navigation.dart';
 import '../state/session_content_search.dart';
 import '../state/swarm_search.dart';
 import '../models/model_search_catalog.dart';
-import '../state/harness_sessions.dart' show SessionFilter, harnessActivityAge;
+import '../state/harness_sessions.dart'
+    show SessionFilter, harnessActivityAge, harnessActivityTooltip;
 import '../store/store_mark.dart';
 import 'engine_identity.dart';
 import 'swarm_icon.dart';
@@ -510,6 +511,7 @@ class SwarmSearchResults extends StatefulWidget {
     this.header,
     this.previewBuilder,
     this.showPreview = true,
+    this.now = DateTime.now,
   });
   final SwarmSearchController search;
   final ValueChanged<SwarmSearchSelection> onChoose;
@@ -524,6 +526,7 @@ class SwarmSearchResults extends StatefulWidget {
   final Widget? header;
   final Widget Function()? previewBuilder;
   final bool showPreview;
+  final DateTime Function() now;
   @override
   State<SwarmSearchResults> createState() => _SwarmSearchResultsState();
 }
@@ -620,11 +623,11 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
   @override
   void initState() {
     super.initState();
-    if (widget.bios) {
-      _activityClock = Timer.periodic(const Duration(minutes: 1), (_) {
-        if (mounted) setState(() {});
-      });
-    }
+    _activityClock = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted && search.rows.any((row) => row.lastActivityAt != null)) {
+        setState(() {});
+      }
+    });
     search.addListener(_changed);
     terminalFontStore.addListener(_fontChanged);
     _lastPage = search.resultPage.value;
@@ -851,14 +854,11 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           final canSubmit = search.canSubmit(row);
           final unavailableReason = search.sessionUnavailable(row);
           final alreadyHere = search.alreadyHere(row);
-          // As of this opening, like the order: the list does not move while
-          // it is open. Under a minute is "now", not "0m".
-          final activity = widget.bios ? search.activityOf(row) : null;
+          // Age the snapshot without changing the order or selection.
+          final activity = search.activityOf(row);
           final activityAge = activity == null
               ? null
-              : search.openedAt.difference(activity).inMinutes < 1
-              ? 'now'
-              : harnessActivityAge(activity, search.openedAt);
+              : harnessActivityAge(activity, widget.now());
           final presentation = (
             row,
             selected,
@@ -1049,6 +1049,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                     terminal: widget.terminal,
                     stacked: desktop || stacked,
                     highlighted: desktop && highlighted,
+                    activityAge: activityAge,
                   ),
                   trailing: desktop
                       ? row.shortcut == null
@@ -1734,11 +1735,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
             )
           : null;
       final activity = widget.search.activityOf(row);
-      final age = activity == null
-          ? null
-          : widget.search.openedAt.difference(activity).inMinutes < 1
-          ? 'now'
-          : harnessActivityAge(activity, widget.search.openedAt);
+      final age = widget.activityAge;
       final detail = row.terminalDetail ?? row.detail;
       Widget trailingLabel(String text) => Text(
         text,
@@ -1765,7 +1762,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
       return Semantics(
         label:
             '$title\n$detail${status == null ? '' : ', $status'}'
-            '${status == null && activity != null ? ', Last active ${activity.toLocal()}' : ''}'
+            '${status == null && activity != null ? ', ${harnessActivityTooltip(activity)}' : ''}'
             '${snippet == null ? '' : ', Found in conversation: ${snippet.plainSnippet}'}',
         excludeSemantics: true,
         child: Column(
@@ -1835,7 +1832,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                   const SizedBox(width: 12),
                   if (status == null && activity != null)
                     Tooltip(
-                      message: 'Last active ${activity.toLocal()}',
+                      message: harnessActivityTooltip(activity),
                       child: trailingLabel(trailing),
                     )
                   else if (row.isModel && api == null)
@@ -1919,7 +1916,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                   '${modelAction == null ? '' : ', $modelAction'}'
                   '${widget.unavailableReason == null ? '' : ', ${widget.unavailableReason}'}'
                   '${row.shortcut == null ? '' : ', Shortcut ${row.shortcut}'}'
-                  '${widget.activityAge == null ? '' : ', Last used ${widget.activityAge} ago'}',
+                  '${widget.activityAge == null ? '' : ', Last active ${widget.activityAge}'}',
         excludeSemantics: true,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2053,7 +2050,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                     ] else if (widget.activityAge case final age?) ...[
                       SizedBox(width: cell.width * 2),
                       Tooltip(
-                        message: 'Last active ${row.lastActivityAt!.toLocal()}',
+                        message: harnessActivityTooltip(row.lastActivityAt!),
                         child: Text(
                           age,
                           maxLines: 1,

@@ -473,7 +473,7 @@ void _cloneTests() {
   });
 }
 
-/// `lastOpenedAt` and the "last used" order built on it.
+/// Recorded visits remain independent of conversation activity.
 void _lastUsedTests() {
   group('last used', () {
     final active = DateTime.utc(2026, 9, 26, 10);
@@ -504,21 +504,21 @@ void _lastUsedTests() {
       );
     });
 
-    test('lastUsedAt is the later of activity and the last open', () {
+    test('opening a session does not replace its conversation activity', () {
       Agent agent({DateTime? activity, DateTime? open}) => Agent(
         id: 'a',
         name: 'a',
         lastActivityAt: activity,
         lastOpenedAt: open,
       );
-      expect(agent().lastUsedAt, isNull);
-      expect(agent(activity: active).lastUsedAt, active);
-      expect(agent(open: opened).lastUsedAt, opened);
-      expect(agent(activity: active, open: opened).lastUsedAt, opened);
-      expect(agent(activity: opened, open: active).lastUsedAt, opened);
+      expect(agent().lastActivityAt, isNull);
+      expect(agent(activity: active).lastActivityAt, active);
+      expect(agent(open: opened).lastActivityAt, isNull);
+      expect(agent(activity: active, open: opened).lastActivityAt, active);
+      expect(agent(activity: opened, open: active).lastActivityAt, opened);
       expect(
-        agent(activity: active).copyWith(lastOpenedAt: opened).lastUsedAt,
-        opened,
+        agent(activity: active).copyWith(lastOpenedAt: opened).lastActivityAt,
+        active,
       );
     });
 

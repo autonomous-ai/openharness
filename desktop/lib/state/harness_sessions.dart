@@ -1,6 +1,7 @@
 import 'package:collection/collection.dart' show compareNatural;
 
 import '../core/models.dart';
+import '../core/relative_time.dart';
 import 'app_state.dart';
 import 'pending_question.dart';
 import 'swarm_navigation.dart';
@@ -8,7 +9,7 @@ import 'swarm_navigation.dart';
 enum SessionFilter { all, needsInput, running, paused }
 
 enum SessionSort {
-  recent('Recently used'),
+  recent('Recently active'),
   name('Name'),
   machine('Machine'),
   project('Project'),
@@ -59,9 +60,8 @@ class HarnessSession {
   final PendingQuestion? question;
   bool get needsInput => question != null && !agent.isStopped;
 
-  /// Activity or a person opening it in any client, whichever is later — see
-  /// [Agent.lastUsedAt]. What every harness list sorts by and shows.
-  DateTime? get lastUsedAt => agent.lastUsedAt;
+  /// Conversation activity, independent of opening or focusing the session.
+  DateTime? get lastActivityAt => agent.lastActivityAt;
   String get machineId => machine.machine.machineId;
   String get id => agentDestinationId(machineId, agent.id);
   AgentProject? get project => machine.projectOf(agent);
@@ -199,7 +199,7 @@ List<HarnessSession> visibleHarnessSessions(
   final ranks = {for (var i = 0; i < recent.length; i++) recent[i]: i};
   result.sort((a, b) {
     final comparison = switch (sort) {
-      SessionSort.recent => _byLastUse(a, b, ranks, recent.length),
+      SessionSort.recent => _byActivity(a, b, ranks, recent.length),
       SessionSort.name => compareNatural(
         a.agent.displayName.toLowerCase(),
         b.agent.displayName.toLowerCase(),
@@ -225,16 +225,16 @@ List<HarnessSession> visibleHarnessSessions(
   return result;
 }
 
-/// Most recently used first — the same global order as Open Harness — then
+/// Most recently active first — the same global order as Open Harness — then
 /// this window's own visit order for ties and harnesses with no time at all.
-int _byLastUse(
+int _byActivity(
   HarnessSession a,
   HarnessSession b,
   Map<String, int> ranks,
   int fallback,
 ) {
-  final used = (b.lastUsedAt?.millisecondsSinceEpoch ?? 0).compareTo(
-    a.lastUsedAt?.millisecondsSinceEpoch ?? 0,
+  final used = (b.lastActivityAt?.millisecondsSinceEpoch ?? 0).compareTo(
+    a.lastActivityAt?.millisecondsSinceEpoch ?? 0,
   );
   return used != 0
       ? used
@@ -245,7 +245,11 @@ int _byLastUse(
 String harnessActivityAge(DateTime? activity, DateTime now) {
   if (activity == null) return '—';
   final elapsed = now.difference(activity);
+  if (elapsed.inMinutes < 1) return 'now';
   if (elapsed.inDays >= 1) return '${elapsed.inDays}d';
   if (elapsed.inHours >= 1) return '${elapsed.inHours}h';
   return '${elapsed.inMinutes.clamp(0, 59)}m';
 }
+
+String harnessActivityTooltip(DateTime activity) =>
+    'Last active ${fullDateTime(activity)}';

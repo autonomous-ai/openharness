@@ -10830,12 +10830,12 @@ class AppNotifier extends ChangeNotifier {
   (String, String)? _touchedFocus;
 
   /// Tell a harness's own daemon that a person just opened or focused it, so
-  /// its `lastOpenedAt` moves and with it "last used" order in EVERY client
+  /// its `lastOpenedAt` records the visit in every client
   /// (`agent_update {agentId, opened: true}`, sealed like any agent_update).
   ///
   /// Fire-and-forget. Nothing waits on it and nothing is said when it fails:
-  /// an older daemon answers MISSING_UPDATE and the list simply keeps sorting
-  /// by activity; a socket that is down loses one stamp. Never dials a socket
+  /// an older daemon answers MISSING_UPDATE; a socket that is down loses one
+  /// stamp. Conversation recency is independent of this. Never dials a socket
   /// for it, and never for a view-only shared harness — its owner's order is
   /// not this window's to move.
   void touchAgent(String machineId, String agentId) {
@@ -10875,8 +10875,7 @@ class AppNotifier extends ChangeNotifier {
         timeout: const Duration(seconds: 10),
       );
       if (!_machineWorkCurrent(machine, revision)) return;
-      // The daemon's own stamp, taken now rather than on the next push, so the
-      // list this window just opened from is already in its new order. Only
+      // The daemon's own visit stamp, taken now rather than on the next push. Only
       // this one field: the reply is not a frame to rebuild the agent from.
       final returned = result['agent'];
       final raw = returned is Map && (returned['id'] ?? agentId) == agentId

@@ -337,6 +337,9 @@ void main() {
               lastOpenedAt: DateTime.now().subtract(
                 Duration(minutes: index * 23),
               ),
+              lastActivityAt: DateTime.now().subtract(
+                Duration(minutes: index * 23),
+              ),
               project: const AgentProject(
                 name: 'openharness',
                 cwd: '/work/openharness',

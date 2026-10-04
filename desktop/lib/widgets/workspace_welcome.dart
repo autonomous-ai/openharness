@@ -39,12 +39,14 @@ class WorkspaceWelcome extends StatefulWidget {
     this.projects = const [],
     this.onOpen,
     this.composerBuilder,
+    this.now = DateTime.now,
   });
 
   final ValueChanged<String> onCommand;
   final AppNotifier? app;
   final List<SavedSwarmProject> projects;
   final ValueChanged<SwarmDestination>? onOpen;
+  final DateTime Function() now;
 
   /// Embedded creation and the popup supply the exact same form. Welcome
   /// only contributes its existing recent-session data beneath that form.
@@ -59,6 +61,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
   // generated library overflows the browser debug runtime's stack here.
   static const _phoneIcon = AppIcons.smartphone;
   WelcomeSessions? _sessions;
+  Timer? _activityClock;
   int _cursor = 0;
   final _focus = FocusNode(debugLabel: 'Welcome sessions');
 
@@ -69,9 +72,17 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
     super.initState();
     final app = widget.app;
     if (app != null && widget.onOpen != null) {
-      _sessions = WelcomeSessions(app, projects: widget.projects)
-        ..addListener(_changed);
+      _sessions = WelcomeSessions(
+        app,
+        projects: widget.projects,
+        now: widget.now,
+      )..addListener(_changed);
       _sessions!.load();
+      _activityClock = Timer.periodic(const Duration(minutes: 1), (_) {
+        if (mounted && (_sessions?.rows.isNotEmpty ?? false)) {
+          setState(() {});
+        }
+      });
       app.addListener(_appChanged);
       FocusManager.instance.addListener(_claimFocus);
       WidgetsBinding.instance.addPostFrameCallback((_) => _claimFocus());
@@ -104,6 +115,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
 
   @override
   void dispose() {
+    _activityClock?.cancel();
     FocusManager.instance.removeListener(_claimFocus);
     _focus.dispose();
     if (_sessions != null) widget.app?.removeListener(_appChanged);
@@ -429,14 +441,15 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
                   ),
                 ),
                 const SizedBox(width: 16),
-                if (sessions.lastUsedAt(row) case final at?)
-                  Text(
-                    sessions.readAt.difference(at).inMinutes < 1
-                        ? 'now'
-                        : harnessActivityAge(at, sessions.readAt),
-                    style: DesktopChrome.text(
-                      size: 12,
-                      color: DesktopChrome.muted,
+                if (row.lastActivityAt case final at?)
+                  Tooltip(
+                    message: harnessActivityTooltip(at),
+                    child: Text(
+                      harnessActivityAge(at, widget.now()),
+                      style: DesktopChrome.text(
+                        size: 12,
+                        color: DesktopChrome.muted,
+                      ),
                     ),
                   ),
               ],
@@ -631,13 +644,8 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
     final agent = row.agentId == null
         ? null
         : machine?.agents.where((agent) => agent.id == row.agentId).firstOrNull;
-    final at = _sessions!.lastUsedAt(row);
-    final readAt = _sessions!.readAt;
-    final age = at == null
-        ? ''
-        : readAt.difference(at).inMinutes < 1
-        ? 'now'
-        : harnessActivityAge(at, readAt);
+    final at = row.lastActivityAt;
+    final age = at == null ? '' : harnessActivityAge(at, widget.now());
     final selected = index == _cursor;
     return TextButton(
       key: ValueKey('welcome-session-${row.id}'),
@@ -681,10 +689,13 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
           ),
           SizedBox(
             width: cell * 5,
-            child: Text(
-              age,
-              textAlign: TextAlign.right,
-              style: TextStyle(color: muted),
+            child: Tooltip(
+              message: at == null ? '' : harnessActivityTooltip(at),
+              child: Text(
+                age,
+                textAlign: TextAlign.right,
+                style: TextStyle(color: muted),
+              ),
             ),
           ),
         ],

@@ -464,12 +464,10 @@ class SwarmSearchController extends ChangeNotifier {
   /// Open Harness filters by latest activity; commands and splits keep relevance order.
   final bool activityFirst;
 
-  /// When this opening began: the list's ages are measured from it.
-  final DateTime openedAt = DateTime.now();
   final _activity = <String, DateTime?>{};
 
   /// A row's last activity as it was when this opening first listed it. The
-  /// list keeps the order and ages it opened with while agents work on:
+  /// list keeps its activity snapshot and order while agents work on:
   /// rows moving under the cursor as someone arrowed through them was the
   /// confusing part. The next opening reads activity afresh.
   DateTime? activityOf(SwarmDestination row) =>
