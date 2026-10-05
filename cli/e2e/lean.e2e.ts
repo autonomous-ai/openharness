@@ -90,6 +90,10 @@ describe('harnessd\'s master and services lean', () => {
     for (const [name, pid] of [['master', master], ...servicePids(d)] as Array<[string, number]>) {
       expect(rssMiB(pid), `${name} resident MiB`).toBeLessThan(100)
     }
+    // A service's lines are stamped, as the core's and the master's are in the log they share.
+    for (const name of SERVICES) {
+      await until(`${name} to say it is connected`, () => new RegExp(`\\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d:\\d\\d\\.\\d{3} \\[service ${name}\\] connected to the core`).test(d.log()) || null, 30_000, 200)
+    }
     await agentWorks(d, 'claude')
     await agentWorks(d, 'codex')
     expect(d.coresStarted()).toBe(1)

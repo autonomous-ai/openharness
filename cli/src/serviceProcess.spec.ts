@@ -4,6 +4,9 @@ import { KNOWN_SERVICES } from './harnessd/services.js'
 
 const local = vi.hoisted(() => ({ socket: '/data/daemon-18473.sock' as string | null }))
 vi.mock('./lib/localSocket.js', async (real) => ({ ...await real<object>(), localSocketPath: () => local.socket }))
+// The test's own console stays as it is: it is shared with every other test in this worker.
+const stamped = vi.hoisted(() => ({ times: 0 }))
+vi.mock('./lib/log.js', async (real) => ({ ...await real<object>(), installTimestampedConsole: () => { stamped.times++ } }))
 
 describe('a service in its own process', () => {
   const title = process.title
@@ -28,6 +31,8 @@ describe('a service in its own process', () => {
     } finally { delete process.env.HARNESSD_SERVICE_TOKEN }
     expect(loaded).toEqual(['search'])
     expect(process.title).toBe('harnessd search')
+    // Its lines are stamped like the core's and the master's in the log they share.
+    expect(stamped.times).toBe(1)
     expect(seen).toEqual([{ dataDir: expect.any(String), socketPath: '/data/daemon-18473.sock', machineId: expect.any(String), token: 'token' }])
     expect(await startServiceProcess('viewers', { runners })).toBe(handle)
   })

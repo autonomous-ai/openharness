@@ -11,6 +11,7 @@ import { env } from './config/env.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
 import { readOrMintComputerId } from './lib/computerIdentity.js'
 import { localSocketPath } from './lib/localSocket.js'
+import { installTimestampedConsole } from './lib/log.js'
 import type { ServiceProcess } from './services/process.js'
 
 export interface ServiceProcessOptions {
@@ -47,6 +48,9 @@ export async function startServiceProcess(name: string | undefined, deps: Servic
   process.title = `harnessd ${name}`
   // As every daemon process did at load: a service that runs `ps` or `git` must not get mangled output.
   ensureUtf8Locale()
+  // Its lines go to the daemon's log between the core's and the master's, which are stamped: unstamped,
+  // a service's said nothing of when.
+  installTimestampedConsole()
   const run = await load()
   return run({
     dataDir: env.ADAPTER_DATA_DIR,
