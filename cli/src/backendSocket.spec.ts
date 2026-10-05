@@ -872,6 +872,25 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('answers terminal_info, which the terminal streams pass over, and leaves every other terminal frame to them', async () => {
+    const socket = new BackendSocket('token')
+    // As in the daemon: a stream manager that takes its own frames and passes over the rest.
+    const handleFrame = vi.fn(async (_connId: string, type: string) => type !== 'terminal_info' && type !== 'terminal_unknown')
+    socket.setTerminalStreamManager({ handleFrame, closeConnection: vi.fn(async () => {}), stop: vi.fn(async () => {}) } as unknown as TerminalStreamManager)
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:hn', { sendFrame: (frame) => { frames.push(frame as Record<string, unknown>); return true }, sendBinary: () => true })
+    socket.handleLocalFrame('local:hn', { type: 'terminal_info', payload: { requestId: 'i-1', agentId: 'no-such-agent' } })
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'terminal_info_result', payload: { requestId: 'i-1', error: 'AGENT_NOT_FOUND' } }))
+    expect(handleFrame).toHaveBeenCalledWith('local:hn', 'terminal_info', expect.objectContaining({ agentId: 'no-such-agent' }))
+    // A terminal frame the streams take, or one nobody knows, is not answered here.
+    socket.handleLocalFrame('local:hn', { type: 'terminal_resize', payload: { requestId: 'r-1', streamId: 's' } })
+    socket.handleLocalFrame('local:hn', { type: 'terminal_unknown', payload: { requestId: 'u-1' } })
+    await vi.waitFor(() => expect(handleFrame).toHaveBeenCalledTimes(3))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(frames.filter((frame) => frame.type !== 'terminal_info_result')).toEqual([])
+    await socket.stop()
+  })
+
   it('hands theme_set to the host-theme sink and acknowledges it to the requester', async () => {
     const socket = new BackendSocket('token')
     const received: unknown[] = []

@@ -2045,8 +2045,11 @@ export class BackendSocket {
 
     if (type.startsWith('terminal_')) {
       this.noteTerminalInputRoute(connId, type, payload, transport)
-      if (this.terminalStreams) await this.terminalStreams.handleFrame(connId, type, payload)
-      return
+      const taken = this.terminalStreams ? await this.terminalStreams.handleFrame(connId, type, payload) : false
+      // `terminal_info` (what a pane runs and where, which hn asks) is not a stream's: the streams pass
+      // it over, and it is answered below. From hn's first release it stopped here unanswered
+      // (e2e/compat.e2e.ts found it), and hn waited out its three seconds each time.
+      if (taken || type !== 'terminal_info') return
     }
 
     // A request a service answers, in its own process or in this one: routed to it, or answered
