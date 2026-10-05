@@ -119,6 +119,37 @@ def page_fills_display(vm, name):
         time.sleep(.1)
 
 
+def install_zram_candidate(vm, config, source, result):
+    # Change only the private test disk, before its first installed boot. Do
+    # not swapoff a running low-memory workspace to apply a startup setting.
+    assert config['disk'] == '/dev/vda' and config['expected_serial'] == 'HN_OS_TEST'
+    vm.command('test -f /etc/harness-live && test "$(lsblk -dn -o SERIAL /dev/vda)" = HN_OS_TEST')
+    data = source.read_bytes()
+    copy_file(vm, data, '/tmp/harness-zram-candidate')
+    root_device = '/dev/vda3'
+    if config['encrypt']:
+        vm.command('printf %s ' + shlex.quote(config['password']) +
+                   ' | cryptsetup open --key-file=- /dev/vda3 hn-browser-candidate')
+        root_device = '/dev/mapper/hn-browser-candidate'
+    mounted = False
+    try:
+        vm.command('mkdir -p /mnt/harness-browser-candidate && mount -o subvol=@ ' +
+                   root_device + ' /mnt/harness-browser-candidate')
+        mounted = True
+        vm.command('test -f /mnt/harness-browser-candidate/var/lib/harness-os/install.json')
+        target = '/etc/systemd/zram-generator.conf'
+        base = vm.read_file('/mnt/harness-browser-candidate' + target)
+        result['candidates'][target] = dict(source=str(source), sha256=hashlib.sha256(data).hexdigest(),
+                                            original_sha256=hashlib.sha256(base).hexdigest(), changed=data != base)
+        vm.command('install -m 644 /tmp/harness-zram-candidate /mnt/harness-browser-candidate' + target)
+        vm.command('sync')
+    finally:
+        if mounted:
+            vm.command('umount /mnt/harness-browser-candidate')
+        if config['encrypt']:
+            vm.command('dmsetup remove --deferred --noudevsync hn-browser-candidate')
+
+
 def check_browser(vm, result):
     vm.command('! pgrep -u "$(id -u)" -x chromium')
     result['checks'].append('Browser is absent on installed boot')
@@ -240,6 +271,8 @@ def main():
     parser.add_argument('--compositor-config', type=Path, required=True)
     parser.add_argument('--memory-profile', action='store_true',
                         help='Capture finite read-only memory snapshots; separate from ordinary focus acceptance')
+    parser.add_argument('--zram-config', type=Path,
+                        help='Overlay this startup configuration on the private installed disk before boot')
     args = parser.parse_args()
     if not os.access('/dev/kvm', os.R_OK | os.W_OK):
         parser.error('Native x86 KVM is required')
@@ -261,7 +294,7 @@ def main():
                   memory_samples=vm.memory_samples,
                   observer=dict(sha256=hashlib.sha256(args.wlrctl.read_bytes()).hexdigest(),
                                 version=subprocess.check_output([str(args.wlrctl),'--version'],text=True).strip()),
-                  limitations=['Only the two recorded candidate files replace packaged files in the disposable guest.',
+                  limitations=['Only the recorded candidate files replace packaged files in the disposable guest.',
                                'Native virtual display and physical-keyboard events; not a physical laptop or GPU claim.',
                                'Observer and screenshot overhead are included in transition timings.'])
     try:
@@ -273,12 +306,19 @@ def main():
         vm.command('nmcli networking off')
         output, _ = vm.command('harness install --config /tmp/install-config.json --yes-erase-disk', timeout=360)
         (folder / 'install.log').write_text(output)
+        if args.zram_config:
+            install_zram_candidate(vm, config, args.zram_config, result)
         vm.command('sync')
         vm.stop()
         vm.start(live=False)
         vm.login_installed(config)
         result['installed_runtime_ready_seconds_including_test_login'] = round(time.monotonic() - vm.started, 3)
         vm.command('printf %s ' + shlex.quote(config['password']+'\n') + ' | sudo -S -v')
+        if args.zram_config:
+            assert vm.read_file('/etc/systemd/zram-generator.conf') == args.zram_config.read_bytes()
+            output, _ = vm.command('systemctl is-active systemd-zram-setup@zram0.service dev-zram0.swap && '
+                                   'cat /sys/block/zram0/disksize /proc/swaps')
+            (folder / 'zram-startup.txt').write_text(output)
         vm.command('systemctl --user stop harness-update.timer harness-update.service')
         copy_file(vm, args.wlrctl.read_bytes(), '/tmp/harness-wlrctl')
         vm.command('chmod 700 /tmp/harness-wlrctl')
