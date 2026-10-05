@@ -15,6 +15,18 @@ from session_vm import screen_text
 
 
 class BrowserVM(VM):
+    memory_profile = False
+
+    def memory_snapshot(self, phase):
+        if not self.memory_profile:
+            return
+        started = time.monotonic()
+        path = '/tmp/harness-browser-memory-' + phase + '.json'
+        self.command('sudo -n timeout 10 python3 /tmp/harness-browser-memory.py --phase ' +
+                     shlex.quote(phase) + ' --output ' + shlex.quote(path), timeout=15)
+        (self.folder / ('memory-' + phase + '.json')).write_bytes(self.read_file(path, timeout=15))
+        self.memory_samples.append(dict(phase=phase, host_elapsed_seconds=time.monotonic() - started))
+
     def keys(self, *keys):
         # Use explicit press/release events. send-key's delayed release follows
         # the VM clock; a host sleep can finish while the guest is still holding
@@ -110,6 +122,7 @@ def page_fills_display(vm, name):
 def check_browser(vm, result):
     vm.command('! pgrep -u "$(id -u)" -x chromium')
     result['checks'].append('Browser is absent on installed boot')
+    vm.memory_snapshot('workspace')
     vm.command('mkdir -p /tmp/harness-browser-probe')
     copy_file(vm, TERMINAL.encode(), '/tmp/harness-browser-terminal.py')
     copy_file(vm, Path(__file__).with_name('browser_guest.py').read_bytes(), '/tmp/harness-browser-page.py')
@@ -143,6 +156,7 @@ def check_browser(vm, result):
     state(vm, path='/first', ready=True)
     vm.type_probe('browser')
     state(vm, value='browser')
+    vm.memory_snapshot('first-page')
     result['checks'].append('Super+b cold-starts a maximized browser; its local page fills the display and receives real keyboard input')
     result['toggles'] = []
     for index in range(4):
@@ -158,6 +172,7 @@ def check_browser(vm, result):
         page_fills_display(vm, 'toggle-full-display-' + str(index))
         result['toggles'].append(dict(to_terminal_seconds=to_terminal, to_browser_seconds=to_browser))
     result['checks'].append('Repeated Super+b switching routes keyboard input only to the intended surface and preserves the terminal process and browser input')
+    vm.memory_snapshot('after-toggles')
     vm.keys('meta_l', 'ret')
     focused(vm, 'hn', 'explicit-request-terminal')
     terminal('before-explicit-request')
@@ -171,6 +186,7 @@ def check_browser(vm, result):
     state(vm, path='/second', ready=True)
     vm.type_probe('window-one')
     state(vm, path='/second', value='window-one')
+    vm.memory_snapshot('second-page')
     result['checks'].append('An explicit hn-browser URL raises the already running browser from behind Harness')
     vm.keys('ctrl', 'n')
     new_tab_ready(vm, 'new-browser-window')
@@ -192,6 +208,7 @@ def check_browser(vm, result):
     vm.type_probe('-returned')
     state(vm, path='/new-window', value='window-two-returned')
     state(vm, path='/second', value='window-one')
+    vm.memory_snapshot('two-window-return')
     result['checks'].append('With two browser windows open, Super+b returns to the window the user left and typing leaves the other window unchanged')
     vm.keys('ctrl', 'shift', 'w')
     focused(vm, 'chromium', 'original-browser-restored')
@@ -209,6 +226,7 @@ def check_browser(vm, result):
     vm.keys('meta_l', 'b')
     focused(vm, 'hn', 'browser-final-return')
     terminal('after-browser-reopen')
+    vm.memory_snapshot('reopened')
     result['checks'].append('New browser windows maximize; close and reopen restores working keyboard focus without losing the terminal')
 
 
@@ -220,6 +238,8 @@ def main():
     parser.add_argument('--wlrctl', type=Path, required=True)
     parser.add_argument('--browser-script', type=Path, required=True)
     parser.add_argument('--compositor-config', type=Path, required=True)
+    parser.add_argument('--memory-profile', action='store_true',
+                        help='Capture finite read-only memory snapshots; separate from ordinary focus acceptance')
     args = parser.parse_args()
     if not os.access('/dev/kvm', os.R_OK | os.W_OK):
         parser.error('Native x86 KVM is required')
@@ -230,12 +250,15 @@ def main():
     folder = Path(f'os/test-results/{args.firmware}-browser').resolve()
     folder.mkdir(parents=True, exist_ok=False)
     vm = BrowserVM(folder, iso, args.firmware, args.memory_mib, cpu='Nehalem')
+    vm.memory_samples = []
     config = dict(disk='/dev/vda', expected_serial='HN_OS_TEST', confirm_erase='/dev/vda', username='me',
                   hostname='harness', password='test-password-123', encrypt=args.firmware == 'uefi', serial_console=True)
     result = dict(status='running', started_at=time.time(), checks=[], firmware=args.firmware,
                   image_source_commit=manifest['source_commit'], iso_sha256=manifest['iso']['sha256'],
                   test_source_commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
                   memory_mib=args.memory_mib, candidates={},
+                  memory_profile=args.memory_profile, cpu='Nehalem', display='virtio-vga (2D)',
+                  memory_samples=vm.memory_samples,
                   observer=dict(sha256=hashlib.sha256(args.wlrctl.read_bytes()).hexdigest(),
                                 version=subprocess.check_output([str(args.wlrctl),'--version'],text=True).strip()),
                   limitations=['Only the two recorded candidate files replace packaged files in the disposable guest.',
@@ -268,10 +291,21 @@ def main():
             copy_file(vm, data, '/tmp/browser-candidate')
             vm.command('sudo install -m ' + mode + ' /tmp/browser-candidate ' + shlex.quote(target))
         vm.command('systemd-run --user --quiet --wait --pipe --collect labwc --reconfigure')
+        if args.memory_profile:
+            data = Path(__file__).with_name('browser_memory.py').read_bytes()
+            result['memory_observer_sha256'] = hashlib.sha256(data).hexdigest()
+            result['limitations'].append('Memory snapshots add recorded observer cost between phases; this is a diagnostic run.')
+            copy_file(vm, data, '/tmp/harness-browser-memory.py')
+            vm.command('sudo -n touch /run/harness-browser-memory-disposable')
+            vm.memory_profile = True
         check_browser(vm, result)
         result['status'] = 'passed'
     except BaseException as error:
         result.update(status='failed', error=repr(error))
+        try:
+            vm.memory_snapshot('failure')
+        except Exception as diagnostic:
+            result['memory_diagnostic_error'] = repr(diagnostic)
         try:
             vm.screenshot('failure')
             output, _ = vm.command(observe(vm, 'toplevel', 'list'), check=False)
