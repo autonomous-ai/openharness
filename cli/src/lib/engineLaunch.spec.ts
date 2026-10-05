@@ -28,6 +28,7 @@ import {
   refusePermissionFlagIfUnsupported,
   resetCommandFlagSupportCache,
   engineFallbackPrelude,
+  ENGINE_INPUT_DRAIN_SH,
   firstPromptArgs,
   gridPanePrelude,
   harnessNodePrelude,
@@ -166,6 +167,9 @@ describe('buildEngineLaunchArgv', () => {
       const prelude = engineFallbackPrelude('codex', '/bin/bash', '/opt/homebrew/bin/tmux')
       expect(prelude).toContain(`[ -n "\${TMUX_PANE:-}" ] && { '/opt/homebrew/bin/tmux' set-option -p -t "$TMUX_PANE" @harness_engine_exit "$harness_status"`)
       expect(prelude.indexOf('set-option')).toBeLessThan(prelude.indexOf("exec '/bin/bash'"))
+      // What reached the terminal for the engine is dropped after the mark and before any shell reads it.
+      expect(prelude.indexOf('set-option')).toBeLessThan(prelude.indexOf(ENGINE_INPUT_DRAIN_SH))
+      expect(prelude.indexOf(ENGINE_INPUT_DRAIN_SH)).toBeLessThan(prelude.indexOf("exec '/bin/bash'"))
       expect(prelude).toContain('if [ "$harness_status" -eq 127 ]; then exit 127; fi')
       // zsh is a login shell; bash keeps its interactive rc (same rule as a terminal).
       expect(engineFallbackPrelude('codex', '/bin/zsh', null)).toContain("exec '/bin/zsh' -l\n")

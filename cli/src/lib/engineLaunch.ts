@@ -522,6 +522,22 @@ function waitForPidScript(wait: { pid: number; name: string }): string {
 }
 
 /**
+ * Discards what reached the pane's terminal for the engine that just left, before a shell can read it.
+ *
+ * An engine does not leave the moment it is told to: Claude Code runs its SessionEnd hooks first, and
+ * reads no more input meanwhile. A message the daemon typed in that window (it checked the engine was
+ * there just before) sat in the terminal's input, and the shell handed over next ran it as a command:
+ * end to end, a message sent right behind `/exit` became a shell command one run in four once the fake
+ * engines ran the real hooks (e2e/input-safety.e2e.ts). Everything waiting is read and dropped, until
+ * nothing more comes for 0.3 s; it was typed for the engine, and is nobody's to run. The terminal's
+ * settings are put back as they were. Without `stty` (no terminal) nothing is touched.
+ */
+export const ENGINE_INPUT_DRAIN_SH = '  if harness_tty=$(stty -g 2>/dev/null) && stty -icanon -echo min 0 time 3 2>/dev/null; then\n'
+  + '    while harness_waiting=$(dd bs=65536 count=1 2>/dev/null | wc -c) && [ "$((harness_waiting))" -gt 0 ]; do :; done\n'
+  + '    stty "$harness_tty" 2>/dev/null || true\n'
+  + '  fi\n'
+
+/**
  * The shell function every engine launch runs its engine through, instead of a bare `exec`.
  *
  * The engine is a CHILD of the pane's shell, and when it exits — `/exit`, Ctrl-C, a crash — the
@@ -569,6 +585,7 @@ export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tm
     // Only a pane — something with a terminal on stdin — gets a shell to type into. Run without one
     // (a spec exercising the script, a wrapper piped somewhere) the engine's own status is the answer.
     + '  if ! [ -t 0 ]; then exit "$harness_status"; fi\n'
+    + ENGINE_INPUT_DRAIN_SH
     + `  printf '\\n%s\\n' ${shellSingleQuote(`harness: ${command} exited ($harness_status). This pane is a shell now — run ${command} again, or stop the pane.`).replace('($harness_status)', `('"$harness_status"')`)}\n`
     + `  exec ${shellSingleQuote(shellPath)}${loginArgs}\n`
     + '}\n'

@@ -478,7 +478,10 @@ export async function run(engine, config) {
     // The prompt the CLI took, in the conversation, where both CLIs show what was sent.
     say(`> ${prompt.replace(/\n/g, '\r\n  ')}\r\n`)
     if (prompt === '!exit') {
-      // Leaving at the prompt is the end of the session to Claude Code, and it says so to its hooks.
+      // Leaving, the CLI reads no more input, and says so to its hooks first (Claude Code's SessionEnd,
+      // reason prompt_input_exit): what is typed meanwhile stays in the terminal, for whatever runs next.
+      process.stdin.removeAllListeners('data')
+      process.stdin.pause()
       await runHooks('SessionEnd', { reason: 'prompt_input_exit' })
       process.stdout.write('\x1b[?2004l\r\n')
       process.exit(0)
