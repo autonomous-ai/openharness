@@ -6,6 +6,9 @@
  * become requests on the local socket and its port becomes a proxy that sends them; the service's
  * code stays as it is. Members are added as services move behind it, each a call that exists today,
  * never a generic `call(name, args)`.
+ *
+ * The apps reach a service through the requests it answers (`ServiceRequests`), which its start
+ * returns. The core routes them to it; a port is only for what the core itself must ask.
  */
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
@@ -60,18 +63,37 @@ export interface CoreApi {
     viewerChanged(agentId: string): void
     /** The account's grid has a name: the models picker answers with it at once. */
     gridNamed(name: string): void
+    /** A harness being installed or updated moved on (`dsh_install_status`): the apps show it in the
+     *  create dialog. */
+    dshInstallStatus(status: Record<string, unknown>): void
   }
 }
 
-/** The core's calls into session search: index a session at its turn boundaries, forget a purged
- *  conversation, the title it indexed for one being adopted, the two requests it answers
- *  (`session_search`, `session_tail`), and stopping its sweeps. */
-export type SearchPort = Pick<SessionSearchIndex, 'touch' | 'deleteHistory' | 'session' | 'search' | 'tail' | 'stop'>
+/** Who sent a request, as the core established it. A service trusts this, never a field of the
+ *  payload: a payload says whatever its sender wrote. */
+export interface Asker {
+  /** A process on this machine (the desktop app, `hn`, a script), over the local socket. */
+  local: boolean
+  /** Whether it may act as this machine's owner: a local process, or the owner's paired app over the
+   *  relay. A device or an observer may not. */
+  owner: boolean
+}
 
-/** What the core gets when search fails: nothing indexed, no title, and the requests answered with
- *  an error. */
+/** A request a service answers for the apps: the reply, or a promise of it. A throw or a rejection is
+ *  answered `SERVICE_FAILED` by the host and counted against the service. */
+export type ServiceRequest = (payload: Record<string, unknown>, asker: Asker) => Record<string, unknown> | Promise<Record<string, unknown>>
+
+/** The requests a service answers, by frame type: what its start returns. */
+export type ServiceRequests = Readonly<Record<string, ServiceRequest>>
+
+/** The core's calls into session search: index a session at its turn boundaries, forget a purged
+ *  conversation, the title it indexed for one being adopted, and stopping its sweeps. The apps' own
+ *  requests (`session_search`, `session_tail`) are its `ServiceRequests`, not the core's calls. */
+export type SearchPort = Pick<SessionSearchIndex, 'touch' | 'deleteHistory' | 'session' | 'stop'>
+
+/** What the core gets when search fails: nothing indexed and no title. */
 export const SEARCH_FALLBACKS: PortFallbacks<SearchPort> = {
-  touch: undefined, deleteHistory: undefined, session: undefined, search: FAIL, tail: later(FAIL), stop: undefined,
+  touch: undefined, deleteHistory: undefined, session: undefined, stop: undefined,
 }
 
 /** The core's calls into the DSH viewers: each harness agent's viewer server and verdict watch. */
@@ -156,13 +178,14 @@ export interface CoreApiDeps {
   syncSession: CoreApi['agents']['sync']
   viewerChanged: CoreApi['clients']['viewerChanged']
   gridNamed: CoreApi['clients']['gridNamed']
+  dshInstallStatus: CoreApi['clients']['dshInstallStatus']
   mintGridName: CoreApi['account']['mintGridName']
   accessToken: CoreApi['account']['accessToken']
 }
 
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, viewerChanged,
-  gridNamed, mintGridName, accessToken,
+  gridNamed, dshInstallStatus, mintGridName, accessToken,
 }: CoreApiDeps): CoreApi {
   return {
     dataDir,
@@ -178,6 +201,6 @@ export function createCoreApi({
     transcripts: { databaseHistory },
     external: { sessions: externalSessions, open: openSessions },
     account: { mintGridName, accessToken },
-    clients: { viewerChanged, gridNamed },
+    clients: { viewerChanged, gridNamed, dshInstallStatus },
   }
 }

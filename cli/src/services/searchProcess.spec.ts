@@ -11,6 +11,8 @@ vi.mock('./process.js', () => ({ runServiceProcess: vi.fn(() => ({ stop: vi.fn()
 
 const SESSION = '0b0c1d2e-3f40-4a5b-8c6d-7e8f90a1b2c3'
 
+const ASKER = { local: false, owner: true }
+
 describe('search in its own process', () => {
   const dirs: string[] = []
   const services: Array<{ stop(): void }> = []
@@ -57,22 +59,22 @@ describe('search in its own process', () => {
     options.onConnected!(core([agent]))
     options.onEvent!({ kind: 'touch', sessionId: SESSION })
     await vi.waitFor(async () => {
-      expect(JSON.stringify(await options.requests.session_search({ query: 'zebrafish' }))).toContain(SESSION)
+      expect(JSON.stringify(await options.requests.session_search({ query: 'zebrafish' }, ASKER))).toContain(SESSION)
     }, { timeout: 15_000, interval: 250 })
-    const tail = await options.requests.session_tail({ sessionId: SESSION, beforeTurn: 5, maxChars: 2_000 })
+    const tail = await options.requests.session_tail({ sessionId: SESSION, beforeTurn: 5, maxChars: 2_000 }, ASKER)
     expect(tail.error).toBeUndefined()
     // Something it is told that it does not act on changes nothing.
     options.onEvent!({ kind: 'renamed', sessionId: SESSION })
-    expect(JSON.stringify(await options.requests.session_search({ query: 'zebrafish' }))).toContain(SESSION)
+    expect(JSON.stringify(await options.requests.session_search({ query: 'zebrafish' }, ASKER))).toContain(SESSION)
     options.onEvent!({ kind: 'deleteHistory', sessionId: SESSION })
-    expect(JSON.stringify(await options.requests.session_search({ query: 'zebrafish', limit: 5 }))).not.toContain(SESSION)
+    expect(JSON.stringify(await options.requests.session_search({ query: 'zebrafish', limit: 5 }, ASKER))).not.toContain(SESSION)
   })
 
   it('answers what it cannot serve the way the core does', async () => {
     const { options } = setup()
-    expect(await options.requests.session_tail({})).toEqual({ error: 'BAD_SESSION' })
-    expect(await options.requests.session_tail({ sessionId: 'never-indexed' })).toEqual({ error: 'NOT_INDEXED', sessionId: 'never-indexed' })
-    expect((await options.requests.session_search({ query: 7, limit: 'x', from: Number.NaN })).error).toBeUndefined()
+    expect(await options.requests.session_tail({}, ASKER)).toEqual({ error: 'BAD_SESSION' })
+    expect(await options.requests.session_tail({ sessionId: 'never-indexed' }, ASKER)).toEqual({ error: 'NOT_INDEXED', sessionId: 'never-indexed' })
+    expect((await options.requests.session_search({ query: 7, limit: 'x', from: Number.NaN }, ASKER)).error).toBeUndefined()
     // An event naming no session is nothing to act on.
     options.onEvent!({ kind: 'touch' })
   })
@@ -85,14 +87,15 @@ describe('search in its own process', () => {
     options.onConnected!({ query: vi.fn(async () => ({ error: 'UNKNOWN_QUERY' })) })
     options.onEvent!({ kind: 'touch', sessionId: SESSION })
     await vi.waitFor(async () => {
-      expect(JSON.stringify(await options.requests.session_search({ query: 'heron' }))).toContain(SESSION)
+      expect(JSON.stringify(await options.requests.session_search({ query: 'heron' }, ASKER))).toContain(SESSION)
     }, { timeout: 15_000, interval: 250 })
   })
 
-  it('without an index (no node:sqlite) says search is unavailable, as the core would', async () => {
+  it('without an index (no node:sqlite) says search is off, as the core would', async () => {
     const { options } = setup({ start: () => {} })
-    expect(await options.requests.session_search({ query: 'anything' })).toEqual({ error: 'SEARCH_UNAVAILABLE' })
-    expect(await options.requests.session_tail({ sessionId: SESSION })).toEqual({ error: 'SEARCH_UNAVAILABLE' })
+    const off = { error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: false }
+    expect(await options.requests.session_search({ query: 'anything' }, ASKER)).toEqual(off)
+    expect(await options.requests.session_tail({ sessionId: SESSION }, ASKER)).toEqual(off)
     options.onEvent!({ kind: 'touch', sessionId: SESSION })
   })
 
@@ -124,6 +127,7 @@ describe('search in its own process', () => {
     await expect(api.account.accessToken()).rejects.toThrow('search holds no credential')
     api.clients.viewerChanged('live')
     api.clients.gridNamed('grid')
+    api.clients.dshInstallStatus({ phase: 'clone' })
   })
 
   it('runs as a real service process, over the conversations this machine has, by default', () => {

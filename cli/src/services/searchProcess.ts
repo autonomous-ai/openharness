@@ -14,11 +14,7 @@ import { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
-import { startSearch } from './search.js'
-
-type Payload = Record<string, unknown>
-const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : undefined
-const integer = (value: unknown) => typeof value === 'number' && Number.isInteger(value) ? value : undefined
+import { SEARCH_REQUESTS, startSearch } from './search.js'
 
 export interface SearchServiceOptions {
   dataDir: string
@@ -60,7 +56,7 @@ export function searchCoreApi(
     },
     // Search holds no credential and talks to no window: these are never asked of it.
     account: { mintGridName: async () => null, accessToken: () => Promise.reject(new Error('search holds no credential')) },
-    clients: { viewerChanged: () => {}, gridNamed: () => {} },
+    clients: { viewerChanged: () => {}, gridNamed: () => {}, dshInstallStatus: () => {} },
   }
 }
 
@@ -74,27 +70,18 @@ export function runSearchService(options: SearchServiceOptions): ServiceProcess 
   }
   const api = searchCoreApi(options.dataDir, () => agents, options.providers ?? externalProviders())
   const ports = emptyPorts()
-  ;(options.start ?? startSearch)(api, ports)
+  const answers = (options.start ?? startSearch)(api, ports)
   const index = ports.search
+  // No index here (a Node without `node:sqlite`): search is off, as it would be in the core's process.
+  const off = { error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: false }
   const run = options.run ?? runServiceProcess
   const service = run({
     name: 'search',
     socketPath: options.socketPath,
     machineId: options.machineId,
     token: options.token,
-    // The same answers the core's own handlers give (backendSocket.ts `session_search`, `session_tail`).
-    requests: {
-      session_search: (payload: Payload) => index
-        ? { ...index.search(typeof payload.query === 'string' ? payload.query.slice(0, 500) : '', { limit: number(payload.limit), from: number(payload.from), to: number(payload.to) }) }
-        : { error: 'SEARCH_UNAVAILABLE' },
-      session_tail: async (payload: Payload) => {
-        if (!index) return { error: 'SEARCH_UNAVAILABLE' }
-        const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.slice(0, 200) : ''
-        if (!sessionId) return { error: 'BAD_SESSION' }
-        const tail = await index.tail(sessionId, { beforeTurn: integer(payload.beforeTurn), maxChars: integer(payload.maxChars) })
-        return tail ? { ...tail } : { error: 'NOT_INDEXED', sessionId }
-      },
-    },
+    // The same handlers as in the core's process (services/search.ts `searchRequests`).
+    requests: answers ?? Object.fromEntries(SEARCH_REQUESTS.map((type) => [type, () => off])),
     onEvent: (payload) => {
       const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : ''
       if (!sessionId || !index) return

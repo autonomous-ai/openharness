@@ -10,6 +10,7 @@
  * needs to know.
  */
 import WebSocket from 'ws'
+import type { ServiceRequests } from '../core/api.js'
 import { heartbeatInterval, processLoopDelay, type LoopDelay, type MasterChannel } from '../harnessd/coreLink.js'
 
 type Payload = Record<string, unknown>
@@ -28,7 +29,7 @@ export interface ServiceProcessOptions {
   machineId: string
   token: string
   /** The requests the core routes here, by type: each answered under `<type>_result`. */
-  requests: Readonly<Record<string, (payload: Payload) => Payload | Promise<Payload>>>
+  requests: ServiceRequests
   /** What the core tells this service (`service_event`). */
   onEvent?: (payload: Payload) => void
   /** Each time it is connected to a core: the first time, and after every core restart. */
@@ -108,7 +109,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
   }
 
   const onFrame = (raw: WebSocket.RawData): void => {
-    let frame: { type?: unknown; payload?: Payload }
+    let frame: { type?: unknown; payload?: Payload; asker?: { local?: unknown; owner?: unknown } }
     try { frame = JSON.parse(raw.toString()) as typeof frame } catch { return }
     const payload = frame.payload ?? {}
     if (frame.type === 'connected') {
@@ -130,9 +131,11 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
     const handle = Object.hasOwn(options.requests, type) ? options.requests[type] : undefined
     if (!handle) return
     const requestId = payload.requestId
+    // Who asked, as the core established it; read as the least it could be if it is missing.
+    const asker = { local: frame.asker?.local === true, owner: frame.asker?.owner === true }
     // A request that fails here is answered as failed, never left for the core's timeout.
     void Promise.resolve()
-      .then(() => handle(payload))
+      .then(() => handle(payload, asker))
       .catch((error: unknown) => ({ error: 'SERVICE_FAILED', detail: error instanceof Error ? error.message : String(error) }))
       .then((result) => send({ type: `${type}_result`, payload: { ...result, requestId } }))
   }

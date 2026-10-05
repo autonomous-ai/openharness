@@ -1,4 +1,5 @@
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
+import type { Asker } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { readSessionGitPullRequest } from './lib/sessionGitPullRequest.js'
@@ -85,9 +86,6 @@ import type { SessionInputDelivery } from './lib/sessionInput.js'
 import type { QuestionAnswerResult } from './lib/askQuestion.js'
 import { engineLabel } from './lib/agentNames.js'
 import { DSH_ID_RE, dshSupportedEngines } from './dsh/manifest.js'
-import { refreshDshRegistry } from './dsh/catalog.js'
-import type { DshInstallProgress } from './dsh/install.js'
-import { dshInstallReply, dshInstallRequest, dshInstallStatus, dshListRows, dshRemoveId, dshRemoveReply } from './dsh/wire.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
 import { routeVoiceTask } from './lib/voiceRouter.js'
 import { tailFile } from './lib/sessions.js'
@@ -141,8 +139,6 @@ import { shouldReplayCommander } from './lib/commanderReplay.js'
 import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from './lib/runtimeProfileController.js'
 import { parseRuntimeProfile, type RuntimeModelOption } from './lib/runtimeProfile.js'
 import { sid, preview, logFrame } from './lib/log.js'
-import type { SessionSearchResult } from './lib/sessionSearch/indexer.js'
-import type { SessionTail } from './lib/sessionSearch/store.js'
 import {
   TerminalP2pResponderPool,
   TERMINAL_P2P_DOWN_TYPES,
@@ -569,14 +565,6 @@ export class BackendSocket {
     takeOver?: 'idle' | 'now' | 'wait' | null
   }) =>
     Promise<{ ok: true; session: RegisteredSession } | { ok: false; error: string; detail?: string }>) | null = null
-  /** Called on `dsh_install` — cli.ts clones/sets up/doctors the harness and reports each phase. */
-  onDshInstall: ((input: { id?: string; url?: string; ref?: string }, progress: (p: DshInstallProgress) => void) =>
-    Promise<{ ok: true; id: string } | { ok: false; error: string; detail: string }>) | null = null
-  /** An explicit update follows the installed source and retains the previous package on failure. */
-  onDshUpdate: ((id: string, progress: (p: DshInstallProgress) => void) =>
-    Promise<{ ok: true; id: string } | { ok: false; error: string; detail: string }>) | null = null
-  /** Called on `dsh_remove` — cli.ts uninstalls the harness from this machine. */
-  onDshRemove: ((id: string) => { ok: true } | { ok: false; error: string; detail: string }) | null = null
   /** Called on `remote_terminal_handoff` — cli.ts names the agent whose tile is that tmux pane, or null. */
   onTerminalHandoff: ((tmuxPane: string) => string | null) | null = null
   /** What the daemon knows about an agent's DSH companions (viewer URL, verdict); null when nothing. */
@@ -792,11 +780,6 @@ export class BackendSocket {
     Promise<{ file: string | null; gitRepo: boolean; cwd: string; degraded: string[] }>) | null = null
   monitorActivityProvider: ((sessionId: string) => MonitorActivity) | null = null
   private readonly monitorCompletions = new MonitorCompletions()
-  /** Answers `session_search` from this machine's transcript index (lib/sessionSearch/). Null when
-   *  this Node has no `node:sqlite`. */
-  sessionSearchProvider: ((query: string, options: { limit?: number; from?: number; to?: number }) => SessionSearchResult) | null = null
-  /** The end of one session from the same index, for Cmd-P's preview (`session_tail`). */
-  sessionTailProvider: ((sessionId: string, options: { beforeTurn?: number; maxChars?: number }) => Promise<SessionTail | null>) | null = null
   /** Runtime Model/Effort integration, wired by cli.ts for registered tmux sessions. */
   runtimeModelsProvider: ((sessionId?: string) => Promise<RuntimeModelOption[]>) | null = null
   /** Answers `usage_read` — this machine's own agent-account usage (lib/accountUsage.ts). A field
@@ -1435,10 +1418,10 @@ export class BackendSocket {
   /** The windows attached right now — for a listener that arrives after some of them did. */
   localClientIds(): string[] { return [...this.localClients.keys()].filter((connId) => !this.toolClients.has(connId)) }
 
+  /** Routes a request to the service that answers it, in its own process (core/serviceLinks.ts) or in
+   *  this one (core/serviceHost.ts): false when none does and the socket answers it itself. */
+  serviceRouter: ((type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void) => boolean) | null = null
   /** A window (or `hn`) on this computer attached or went away — the pair brain thinks only while one is here. */
-  /** Routes a request to the out-of-process service that answers it (core/serviceLinks.ts `route`):
-   *  false when none does and the socket answers it itself. */
-  serviceRouter: ((type: string, payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => boolean) | null = null
   onLocalClient: ((connId: string, attached: boolean) => void) | null = null
 
   /** Release all connection-scoped state when the loopback WebSocket closes. */
@@ -2067,9 +2050,11 @@ export class BackendSocket {
       return
     }
 
-    // A request a service answers in its own process (core/serviceLinks.ts): routed to it, or answered
-    // SERVICE_UNAVAILABLE while it is down. Never waited on in line: the next frame is not held for it.
-    if (this.serviceRouter?.(type, payload, (result) => reply(type, requestId, result))) return
+    // A request a service answers, in its own process or in this one: routed to it, or answered
+    // SERVICE_UNAVAILABLE while it is off. Never waited on in line: the next frame is not held for it.
+    // Who asked is established here, after the gates above, and the service trusts only that.
+    const asker: Asker = { local, owner: local || this.e2ee.sessionRole(connId) === 'web' }
+    if (this.serviceRouter?.(type, payload, asker, (result) => reply(type, requestId, result))) return
 
     try {
       switch (type) {
@@ -2540,26 +2525,6 @@ export class BackendSocket {
           return
         }
 
-        case 'dsh_list': {
-          // Keep catalog I/O off this connection's ordered RPC queue.
-          void refreshDshRegistry()
-            .then(catalog => reply(type, requestId, { dsh: dshListRows(undefined, catalog) }))
-            .catch(error => reply(type, requestId, { error: 'INTERNAL', detail: error instanceof Error ? error.message : String(error) }))
-          return
-        }
-
-        case 'dsh_remove': {
-          // Uninstall a harness from THIS machine: the clone under ~/.harness/dsh goes (a linked
-          // install loses only its link), the index forgets it, and a `dsh_list` after this no
-          // longer says installed. Agents already running from it keep running — their processes
-          // hold what they need — and the store is what asks; it refreshes the list itself.
-          if (!this.onDshRemove) { reply(type, requestId, { error: 'UNSUPPORTED_ON_REMOTE' }); return }
-          const id = dshRemoveId(payload)
-          if (!id) { reply(type, requestId, { error: 'INVALID_DSH', detail: 'dsh_remove needs an id' }); return }
-          reply(type, requestId, dshRemoveReply(id, this.onDshRemove(id)))
-          return
-        }
-
         case 'remote_terminal_handoff': {
           // `harness remote`, typed INSIDE one of this machine's terminal tiles, opened a terminal on
           // another machine and asks the window showing the tile to swap it over: the tile it was
@@ -2578,29 +2543,6 @@ export class BackendSocket {
           const windows = [...this.localClients.keys()].filter((id) => id !== connId).length + this.commanderCount
           this.send({ type: 'remote_terminal_handoff', payload: { fromAgentId, machineId: handoff.machineId, agentId: handoff.agentId } })
           reply(type, requestId, { ok: true, fromAgentId, windows })
-          return
-        }
-
-        case 'dsh_update': {
-          if (!this.onDshUpdate) { reply(type, requestId, { error: 'UNSUPPORTED_ON_REMOTE' }); return }
-          const id = dshRemoveId(payload)
-          if (!id) { reply(type, requestId, { error: 'INVALID_DSH', detail: 'dsh_update needs an id' }); return }
-          void this.onDshUpdate(id, p => this.send({ type: 'dsh_install_status', payload: dshInstallStatus(p, { id }) }))
-            .then(result => reply(type, requestId, dshInstallReply(result)))
-            .catch(error => reply(type, requestId, { error: 'INTERNAL', detail: error instanceof Error ? error.message : String(error) }))
-          return
-        }
-
-        case 'dsh_install': {
-          // Clone, set up and doctor a harness on THIS machine. Long — minutes, for a toolchain — so
-          // it is detached from the ordered RPC chain like `engines_probe`, and progress travels as
-          // `dsh_install_status` pushes the app renders in the create dialog.
-          if (!this.onDshInstall) { reply(type, requestId, { error: 'UNSUPPORTED_ON_REMOTE' }); return }
-          const request = dshInstallRequest(payload)
-          if (!request) { reply(type, requestId, { error: 'INVALID_DSH', detail: 'dsh_install needs an id or a url' }); return }
-          void this.onDshInstall(request, (p) => this.send({ type: 'dsh_install_status', payload: dshInstallStatus(p, request) }))
-            .then((result) => reply(type, requestId, dshInstallReply(result)))
-            .catch((error) => reply(type, requestId, { error: 'INTERNAL', detail: error instanceof Error ? error.message : String(error) }))
           return
         }
 
@@ -3440,32 +3382,6 @@ export class BackendSocket {
           void this.accountUsageReader()
             .then((providers) => reply(type, requestId, { providers }))
             .catch(() => reply(type, requestId, { error: 'USAGE_READ_FAILED' }))
-          return
-        }
-
-        // Every conversation on this machine, searched by what was said in it (lib/sessionSearch/).
-        // Synchronous and a few milliseconds: the index is local SQLite FTS5. The words searched for
-        // arrive sealed and the hits leave sealed — the relay reads neither.
-        case 'session_search': {
-          if (!this.sessionSearchProvider) { reply(type, requestId, { error: 'SEARCH_UNAVAILABLE' }); return }
-          const query = typeof payload.query === 'string' ? payload.query.slice(0, 500) : ''
-          const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : undefined
-          // `from`/`to`: only sessions worked on in that window (epoch ms) — "the dial one from last
-          // week". The client reads the time words, so every machine searches the same window.
-          reply(type, requestId, { ...this.sessionSearchProvider(query, { limit: number(payload.limit), from: number(payload.from), to: number(payload.to) }) })
-          return
-        }
-
-        // A session's latest rows, newest last; `beforeTurn` pages up from the first row the client
-        // has. The same index as `session_search`, so it reads no transcript for a preview.
-        case 'session_tail': {
-          if (!this.sessionTailProvider) { reply(type, requestId, { error: 'SEARCH_UNAVAILABLE' }); return }
-          const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.slice(0, 200) : ''
-          if (!sessionId) { reply(type, requestId, { error: 'BAD_SESSION' }); return }
-          const integer = (value: unknown) => typeof value === 'number' && Number.isInteger(value) ? value : undefined
-          const tail = await this.sessionTailProvider(sessionId, { beforeTurn: integer(payload.beforeTurn), maxChars: integer(payload.maxChars) })
-          if (!tail) { reply(type, requestId, { error: 'NOT_INDEXED', sessionId }); return }
-          reply(type, requestId, { ...tail })
           return
         }
 

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServiceLinks, HELD_MAX, type ServiceFrame } from './serviceLinks.js'
 
 const TOKEN = 'a'.repeat(48)
+const ASKER = { local: false, owner: true }
 
 function sink(accepting = true) {
   const sent: ServiceFrame[] = []
@@ -43,8 +44,9 @@ describe('service links', () => {
     const search = sink()
     const link = links.accept('search', TOKEN, search, vi.fn())!
     const reply = vi.fn()
-    expect(links.route('session_search', { query: 'zebra', requestId: 'client-1' }, reply)).toBe(true)
-    expect(search.sent).toEqual([{ type: 'session_search', payload: { query: 'zebra', requestId: 'route-1' } }])
+    // Who asked goes beside the payload, so a payload naming its own asker stands for nothing.
+    expect(links.route('session_search', { query: 'zebra', requestId: 'client-1', asker: { local: true } }, ASKER, reply)).toBe(true)
+    expect(search.sent).toEqual([{ type: 'session_search', payload: { query: 'zebra', requestId: 'route-1', asker: { local: true } }, asker: ASKER }])
     // Answers that are not this request's are ignored: another type, an unknown id, no id.
     link.receive({ type: 'session_tail_result', payload: { requestId: 'route-1', rows: [] } })
     link.receive({ type: 'session_search_result', payload: { requestId: 'route-9', hits: [] } })
@@ -56,17 +58,17 @@ describe('service links', () => {
     link.receive({ type: 'session_search_result', payload: { requestId: 'route-1', hits: ['again'] } })
     expect(reply).toHaveBeenCalledOnce()
     // What no service owns is the core's own.
-    expect(links.route('agents_list', {}, reply)).toBe(false)
+    expect(links.route('agents_list', {}, ASKER, reply)).toBe(false)
   })
 
   it('answers SERVICE_UNAVAILABLE at once while the service is down, and when it cannot be sent to', () => {
     const links = make()
     const reply = vi.fn()
-    expect(links.route('session_tail', {}, reply)).toBe(true)
+    expect(links.route('session_tail', {}, ASKER, reply)).toBe(true)
     expect(reply).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
     links.accept('search', TOKEN, sink(false), vi.fn())
     const again = vi.fn()
-    links.route('session_tail', {}, again)
+    links.route('session_tail', {}, ASKER, again)
     expect(again).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
   })
 
@@ -74,7 +76,7 @@ describe('service links', () => {
     const links = make()
     links.accept('search', TOKEN, sink(), vi.fn())
     const reply = vi.fn()
-    links.route('session_search', {}, reply)
+    links.route('session_search', {}, ASKER, reply)
     vi.advanceTimersByTime(4_999)
     expect(reply).not.toHaveBeenCalled()
     vi.advanceTimersByTime(1)
@@ -85,11 +87,11 @@ describe('service links', () => {
     const links = make({ owned: { search: ['session_search'], devices: ['harness_devices_list'] } })
     links.accept('devices', TOKEN, sink(), vi.fn())
     const elsewhere = vi.fn()
-    links.route('harness_devices_list', {}, elsewhere)
+    links.route('harness_devices_list', {}, ASKER, elsewhere)
     const closeOld = vi.fn()
     const old = links.accept('search', TOKEN, sink(), closeOld)!
     const waiting = vi.fn()
-    links.route('session_search', {}, waiting)
+    links.route('session_search', {}, ASKER, waiting)
     const newer = links.accept('search', TOKEN, sink(), vi.fn())!
     expect(closeOld).toHaveBeenCalledWith(4409, 'replaced by a newer connection')
     // The old connection's end does not take the newer one with it.
@@ -97,7 +99,7 @@ describe('service links', () => {
     expect(links.connected('search')).toBe(true)
     expect(waiting).not.toHaveBeenCalled()
     const pending = vi.fn()
-    links.route('session_search', {}, pending)
+    links.route('session_search', {}, ASKER, pending)
     newer.closed()
     expect(links.connected('search')).toBe(false)
     expect(pending).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
@@ -173,7 +175,7 @@ describe('service links', () => {
     const search = sink()
     links.accept('search', TOKEN, search, vi.fn())
     const reply = vi.fn()
-    links.route('session_search', {}, reply)
+    links.route('session_search', {}, ASKER, reply)
     expect(String(search.sent[0].payload?.requestId)).toMatch(/^[0-9a-f-]{36}$/)
     expect(warn).toHaveBeenCalledWith('[services] search connected')
     // Answered, so its timer is cleared rather than left to fire.

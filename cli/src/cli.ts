@@ -3,7 +3,6 @@ import './config/loadEnv.js'
 import { ensureBundledCoreHarnesses } from './dsh/builtins.js'
 import { runDevicesCommand } from './devices/client.js'
 import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
-import { mutateDsh } from './dsh/service.js'
 import { HarnessShareOwner } from './sharing/owner.js'
 import { HarnessGrantStore } from './sharing/grants.js'
 import { HarnessCollaborationStore } from './sharing/collaboration.js'
@@ -103,7 +102,6 @@ import { type LaunchOverridesDeps } from './lib/launchOverrides.js'
 import { buildHarnessSessionLabel } from './lib/harnessSessionLabel.js'
 import { adoptLegacyHarnessSessions, listTmuxPanes } from './lib/tmuxAgentDiscovery.js'
 import { installedDsh } from './dsh/installed.js'
-import { removeDsh } from './dsh/install.js'
 import { prepareHarnessLaunch } from './dsh/runtime.js'
 import { dshCommand, dshUsage } from './dsh/command.js'
 import { ApiConnections } from './lib/apiConnections.js'
@@ -165,9 +163,10 @@ import { databaseHistory } from './core/transcripts/databaseHistory.js'
 import { createCoreApi, emptyPorts, MODELS_FALLBACKS, SEARCH_FALLBACKS, TEAMS_FALLBACKS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type TeamsPort } from './core/api.js'
 import { createServiceHost, testFaults } from './core/serviceHost.js'
 import { createServiceLinks } from './core/serviceLinks.js'
-import { KNOWN_SERVICES, SERVICE_REQUESTS, serviceSpecs } from './harnessd/services.js'
+import { KNOWN_SERVICES, serviceSpecs } from './harnessd/services.js'
 import { runSearchService } from './services/searchProcess.js'
-import { startSearch } from './services/search.js'
+import { SEARCH_REQUESTS, startSearch } from './services/search.js'
+import { STORE_REQUESTS, startStore } from './services/store.js'
 import { startViewers } from './services/viewers.js'
 import { startModels } from './services/models.js'
 import { startWorkspaces } from './services/workspaces.js'
@@ -1797,6 +1796,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       backendRef?.interactiveViewers.refresh(agentId)
     },
     gridNamed: (name) => backendRef?.setHarnessGridName(name),
+    dshInstallStatus: (status) => backendRef?.send({ type: 'dsh_install_status', payload: status }),
     // The backend mints and remembers the account's grid name; this CLI holds neither the account's
     // email nor its id. An older backend (no route) answers nothing, which the grid reconcile treats as
     // "no grid yet". Bounded so a stalled control-plane connection cannot hold the attempt open.
@@ -2178,15 +2178,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // routed to them, and answered SERVICE_UNAVAILABLE while they are down (core/serviceLinks.ts).
   const serviceToken = process.env.HARNESSD_SUPERVISED === '1' ? process.env.HARNESSD_SERVICE_TOKEN : undefined
   const outOfProcess = new Set(serviceToken ? serviceSpecs(process.env, KNOWN_SERVICES).map((spec) => spec.name) : [])
+  // The requests each service that can run in its own process answers (its own module declares them).
+  const requestsOf: Record<string, readonly string[]> = { search: SEARCH_REQUESTS }
   const serviceLinks = createServiceLinks({
     token: serviceToken,
-    owned: Object.fromEntries([...outOfProcess].map((name) => [name, SERVICE_REQUESTS[name] ?? []])),
+    owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
     // Every agent, live then stopped, with the name the apps show for it: what search indexes.
     answer: (_service, query) => query === 'agents'
       ? { agents: coreApi.agents.all().map((session) => ({ ...session, displayName: coreApi.agents.displayName(session) })) }
       : { error: 'UNKNOWN_QUERY' },
   })
-  backend.serviceRouter = (type, payload, reply) => serviceLinks.route(type, payload, reply)
+  // A request a service declared goes to it: in its own process, or in this one (core/serviceHost.ts).
+  backend.serviceRouter = (type, payload, asker, reply) =>
+    serviceLinks.route(type, payload, asker, reply) || serviceHost.route(type, payload, asker, reply)
 
   // Session search (services/search.ts): in this process, or in its own (services/searchProcess.ts),
   // where the core tells it what changed. A purge's forgetting waits for it if it is down.
@@ -2195,20 +2199,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       touch: (sessionId) => { serviceLinks.notify('search', { type: 'service_event', payload: { kind: 'touch', sessionId } }) },
       deleteHistory: (sessionId) => { serviceLinks.notify('search', { type: 'service_event', payload: { kind: 'deleteHistory', sessionId } }, { untilDelivered: true }) },
       session: () => undefined,
-      // Never asked: its requests are routed to its process before they reach a handler here.
-      search: () => { throw new Error('search runs in its own process') },
-      tail: () => Promise.reject(new Error('search runs in its own process')),
       stop: () => {},
     }
   } else {
-    serviceHost.start('search', startSearch, coreApi, SEARCH_FALLBACKS)
+    serviceHost.start('search', startSearch, coreApi, SEARCH_FALLBACKS, SEARCH_REQUESTS)
   }
+  // What the core calls search through: guarded, so it answers its fallbacks once search is switched off.
   const sessionSearch = ports.search
-  const searchHere = sessionSearch && !outOfProcess.has('search') ? sessionSearch : null
-  backend.sessionSearchProvider = searchHere ? (query, options) => searchHere.search(query, options) : null
-  backend.sessionTailProvider = searchHere ? (sessionId, options) => searchHere.tail(sessionId, options) : null
-  // Search switched off: both requests say search is unavailable, as on a Node without an index.
-  serviceHost.onOff('search', () => { backend.sessionSearchProvider = null; backend.sessionTailProvider = null })
+  // The harnesses installed here, and installing, updating and removing one (services/store.ts).
+  serviceHost.serve('store', startStore, coreApi, STORE_REQUESTS)
 
   const runtimeController = new RuntimeProfileController({
     manager: runtimeProfiles,
@@ -2235,13 +2234,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   backend.runtimeProfileProvider = (session) => runtimeProfiles.selectedModel(session)
   backend.dshFrameProvider = (s) => ports.viewers?.frameContext(s) ?? null
-  backend.onDshRemove = (id) => removeDsh(id)
   // `harness remote` names the tile it was typed in by its tmux pane; the registry knows whose it is.
   backend.onTerminalHandoff = (tmuxPane) => registry.advertised()
     .find((session) => session.tmuxPane === tmuxPane
       || session.runtimes.some((runtime) => runtime.backend === 'tmux' && runtime.paneId === tmuxPane))?.agentId ?? null
-  backend.onDshInstall = (input, progress) => mutateDsh(input, progress)
-  backend.onDshUpdate = (id, progress) => mutateDsh({ id, update: true }, progress)
   backend.onAgentRename = (session, name) => { void terminals.setTitle(session, name) }
   backend.onRuntimeProfileUpdate = (sessionId, selectedModel) => runtimeController.setProfile(sessionId, selectedModel)
   runtimeProfiles.onChanged = (sessionId) => {

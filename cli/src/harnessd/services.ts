@@ -289,11 +289,6 @@ export const KNOWN_SERVICES: Readonly<Record<string, Omit<ServiceSpec, 'name'>>>
   search: { heapLimitMiB: 1_024, rssLimitMiB: 2_048 },
 }
 
-/** The requests each of them answers, which the core routes to its process (core/serviceLinks.ts). */
-export const SERVICE_REQUESTS: Readonly<Record<string, readonly string[]>> = {
-  search: ['session_search', 'session_tail'],
-}
-
 /** Service timings from the environment (for tests and support); anything unset or invalid keeps its default. */
 export function serviceOptions(env: NodeJS.ProcessEnv): ServiceSupervisorOptions {
   const read = (name: string, fallback: number, min: number): number => {

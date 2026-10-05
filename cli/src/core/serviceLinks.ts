@@ -10,6 +10,7 @@
  * the few questions a service may ask it (`service_query`), nothing more.
  */
 import { randomUUID, timingSafeEqual } from 'node:crypto'
+import type { Asker } from './api.js'
 
 export interface ServiceFrame {
   type: string
@@ -129,8 +130,9 @@ export function createServiceLinks(options: ServiceLinksOptions) {
       }
     },
 
-    /** Route a request a service owns: false when no service owns `type`, and the core answers it itself. */
-    route(type: string, payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void): boolean {
+    /** Route a request a service owns: false when no service owns `type`, and the core answers it itself.
+     *  The asker goes beside the payload, never in it, so nothing a client writes can stand for it. */
+    route(type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void): boolean {
       const service = ownerOf.get(type)
       if (!service) return false
       const link = links.get(service)
@@ -140,7 +142,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
       // Cleared whenever the entry is settled, so it only ever fires for one still waiting.
       entry.timer = setTimer(() => settle(id, entry, unavailable(service)), timeoutMs)
       waiting.set(id, entry)
-      if (!link.sink.sendFrame({ type, payload: { ...payload, requestId: id } })) settle(id, entry, unavailable(service))
+      if (!link.sink.sendFrame({ type, payload: { ...payload, requestId: id }, asker })) settle(id, entry, unavailable(service))
       return true
     },
 
