@@ -415,11 +415,25 @@ export async function run(engine, config) {
     for (const char of row.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')) width += WIDE.test(char) ? 2 : 1
     return Math.max(1, Math.ceil(width / columns()))
   }
+  // A draft's lines wrapped to the composer, as both engines wrap theirs, two columns in from the edge
+  // where their prompt glyph stands: every row after the first is indented under the text.
+  const wrapDraft = (text) => text.split('\n').flatMap((line) => {
+    const rows = []
+    let row = ''
+    let width = 0
+    for (const char of line) {
+      const w = WIDE.test(char) ? 2 : 1
+      if (width + w > columns() - 3) { rows.push(row); row = ''; width = 0 }
+      row += char
+      width += w
+    }
+    return [...rows, row]
+  })
   /** What the composer draws, row by row. */
   const composerLines = () => {
     if (bottom?.screen) return bottom.screen()
     const text = bottom?.text ?? buffer
-    const [first = '', ...more] = text.split('\n')
+    const [first = '', ...more] = wrapDraft(text)
     const rest = more.map((row) => `  ${row}`)
     if (engine === 'claude') {
       const rule = `\x1b[38;5;244m${'─'.repeat(columns())}\x1b[39m`
@@ -784,6 +798,24 @@ export async function run(engine, config) {
   // Inside a bracketed paste a carriage return or newline is a newline in the prompt, as Ink and
   // ratatui read it; only one typed outside a paste submits. The paste's markers say which.
   let pasting = false
+  // A large paste is shown in the draft as a placeholder and sent whole: Claude Code's
+  // `[Pasted text #1 +4 lines]` past 800 characters or two lines (2.1.289), Codex's
+  // `[Pasted Content 1200 chars]` past 1000 characters (chat_composer.rs LARGE_PASTE_CHAR_THRESHOLD).
+  let pasted = ''
+  const pastes = new Map()
+  const placeholder = (text) => {
+    const lines = (text.match(/\n/g) ?? []).length
+    if (engine === 'claude' ? text.length <= 800 && lines <= 2 : text.length <= 1000) return text
+    const label = engine === 'claude' ? `[Pasted text #${pastes.size + 1}${lines ? ` +${lines} lines` : ''}]` : `[Pasted Content ${text.length} chars]`
+    pastes.set(label, text)
+    return label
+  }
+  const expand = (draft) => {
+    let text = draft
+    for (const [label, content] of pastes) text = text.replace(label, content)
+    pastes.clear()
+    return text
+  }
   process.stdin.on('data', (input) => {
     if (dialog) { dialogKeys(input); return }
     let chunk = input
@@ -871,24 +903,25 @@ export async function run(engine, config) {
     }
     const parts = chunk.split(/(\x1b\[20[01]~|\x1b\[[0-9;]*[A-Za-z~]|\x1b|\x7f|\r|\n|\x03)/)
     for (const [index, part] of parts.entries()) {
-      if (part === '\x1b[200~') { pasting = true; continue }
+      if (part === '\x1b[200~') { pasting = true; pasted = ''; continue }
       if (part === '\x1b[201~') {
         pasting = false
+        buffer += placeholder(pasted)
         draw()
         askOnPaste()
         // What follows the paste goes to the request, once it is up.
         if (dialog) { dialogKeys(parts.slice(index + 1).join('')); return }
         continue
       }
-      if (pasting && (part === '\r' || part === '\n')) { buffer += '\n'; continue }
-      if (!pasting && part.startsWith('\x1b')) {
+      if (pasting) { pasted += part === '\r' ? '\n' : part; continue }
+      if (part.startsWith('\x1b')) {
         // Esc puts the suggestions away, the draft kept; other keys move nothing here.
         const popup = suggestions(buffer)
         if (part === '\x1b' && popup) { dismissed = popup.token; draw() }
         continue
       }
-      if (!pasting && part === '\x7f') { buffer = buffer.slice(0, -1); draw(); continue }
-      if (!pasting && (part === '\r' || part === '\n') && suggestions(buffer)) {
+      if (part === '\x7f') { buffer = buffer.slice(0, -1); draw(); continue }
+      if ((part === '\r' || part === '\n') && suggestions(buffer)) {
         // Enter with suggestions open takes the highlighted one into the draft, and sends nothing.
         const popup = suggestions(buffer)
         buffer = `${buffer.slice(0, buffer.length - popup.token.length)}${popup.token.startsWith('@') ? '@' : ''}${popup.found[0][0]} `
@@ -905,7 +938,7 @@ export async function run(engine, config) {
           say('(interrupted)\r\n')
         } else draw()
       } else if (part === '\r' || part === '\n') {
-        const line = buffer
+        const line = expand(buffer)
         buffer = ''
         // Taken off the composer at once, whatever the engine is doing: a prompt sent while a turn runs
         // waits its turn out of the composer, as both CLIs queue one.

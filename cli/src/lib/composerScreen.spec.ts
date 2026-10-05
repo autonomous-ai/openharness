@@ -36,6 +36,17 @@ describe('Claude Code\'s prompt', () => {
     expect(composerState('claude', `\u001b[48;5;237m❯ an earlier prompt\u001b[49m\n\n⏺ its answer\n\n${CLAUDE_EMPTY}`)).toBe('ready')
   })
 
+  it('is ready with a draft taller than the pane, its top rule and `❯` row scrolled off', () => {
+    // 2.1.289 caps the prompt's height only in its fullscreen renderer; inline, the box outgrows the pane.
+    const rows = Array.from({ length: 20 }, (_, index) => `  line ${index + 2} of a long draft 下一步 🎉`)
+    expect(composerState('claude', [...rows, rule(), ''].join('\n'))).toBe('ready')
+    expect(composerState('claude', [...rows.slice(0, 18), '', '  /mo', rule(), '', '', '', '', '', '  /model          Set the AI model'].join('\n'))).toBe('popup')
+    // Not a dialog's rows (indented by one column), nor the conversation's (at the edge).
+    expect(composerState('claude', [' Bash command', '   printf hi', ' Do you want to proceed?', rule(), ''].join('\n'))).toBe('absent')
+    expect(composerState('claude', ['⏺ the answer', '  more of it', rule(), ''].join('\n'))).toBe('absent')
+    expect(composerState('claude', [rule(), ''].join('\n'))).toBe('absent')
+  })
+
   it('has a popup open while a /command or an @mention is suggested under it, and only then', () => {
     expect(composerState('claude', claudeBox('/mo', ['', '', '', '', '', '  \u001b[38;5;153m/model          Set the AI model\u001b[39m']))).toBe('popup')
     expect(composerState('claude', claudeBox('look at @src/lo', ['', '', '', '', '', '  \u001b[38;5;153msrc/login.ts\u001b[39m']))).toBe('popup')
@@ -89,6 +100,15 @@ describe('Codex\'s composer', () => {
     // The same drafts with nothing drawn above.
     expect(composerState('codex', codexComposer('/m'))).toBe('ready')
     expect(composerState('codex', codexComposer('ask @sa'))).toBe('ready')
+  })
+
+  it('is absent under its session picker, whose highlighted row is drawn two columns in', () => {
+    // resume_picker/layout.rs renders the list at `list.x + 2`, the header and search one column in, a dim
+    // rule over its footer; the selected row is `› ` in the selection style (resume_picker.rs
+    // `selection_marker`), so never at the left edge, bold or not.
+    expect(composerState('codex', [' \u001b[1mResume a previous session\u001b[0m', ' All   This folder', ' \u001b[2mType to search\u001b[0m',
+      '  \u001b[1;7m› \u001b[0m\u001b[7m15m ago     Propose session picker redesign\u001b[0m', '    2h ago      Fix the login bug', '',
+      `\u001b[2m${'─'.repeat(80)}\u001b[0m`, '  enter resume · esc new session'].join('\n'))).toBe('absent')
   })
 
   it('is absent when anything else is on screen: a picker, a screen never seen, a line of the conversation, or nothing yet', () => {
