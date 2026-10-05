@@ -216,9 +216,35 @@ def main():
 
         def type_into_screen(pane, line):
             hn('select-pane', '-t', pane)
-            time.sleep(.2)
+            wait(lambda: hn('display-message', '-p', '-t', pane, '#{pane_active}') == '1',
+                 'Selected input pane ' + pane)
             assert screen.process.poll() is None, 'Native terminal closed'
             screen.write(line + '\r')
+
+        def record_state(label):
+            state = {'at_unix': time.time()}
+            for key, argv in [
+                ('hn', [*command, 'list-panes', '-a', '-F',
+                        '#{pane_id}|#{pane_active}|#{pane_current_path}|#{pane_current_command}']),
+                ('tmux', ['tmux', '-S', str(base / f'tmux-{os.getuid()}' / 'default'),
+                          'list-panes', '-a', '-F',
+                          '#{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}|#{pane_dead}']),
+                ('processes', ['ps', '-eo', 'pid,ppid,pgid,lstart,comm']),
+            ]:
+                try:
+                    result = subprocess.run(argv, env=env, cwd=project, text=True,
+                                            capture_output=True, timeout=15)
+                    state[key] = {'exit': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr}
+                except (OSError, subprocess.SubprocessError) as error:
+                    state[key] = {'error': str(error)}
+            (output / (label + '.json')).write_text(json.dumps(state, indent=2) + '\n')
+
+        def wait_for_shell():
+            # Escape sequences alone are not proof that the reattached screen
+            # has received its terminal replay. Wait for our real shell prompt.
+            wait(lambda: b'HN_NATIVE_READY>' in screen.data, 'Restored shell prompt', 45)
+            wait(lambda: set(hn('list-panes', '-t', 'runtime', '-F', '#{pane_id}').splitlines())
+                 == {shell, right, agent}, 'All three original pane identities', 30)
 
         try:
             receipt['opencode_version'] = subprocess.check_output([str(binaries / 'opencode'), '--version'],
@@ -241,13 +267,30 @@ def main():
                 wait(lambda: hn('display-message', '-p', '-t', pane, '#{pane_current_path}') == str(project),
                      'Project working directory in ' + pane)
             type_into_screen(shell, 'printf "%s" "$$" > ' + shlex.quote(str(project / 'shell.pid')) +
-                             '; printf before > ' + shlex.quote(str(project / 'keyboard.txt')))
+                             '; printf before > ' + shlex.quote(str(project / 'keyboard.txt')) +
+                             "; PS1='HN_NATIVE_READY> '")
             wait(lambda: (project / 'keyboard.txt').read_text() == 'before', 'PTY keyboard input')
             # A daemon-backed pane is not a local PTY owner and need not expose
             # pane_pid. Ask the actual shell, independently of UI metadata.
             pid = int((project / 'shell.pid').read_text())
             start_time = Path(f'/proc/{pid}/stat').read_text().split()[21]
             receipt['checks'].append('Three real hn shell panes open; the attached terminal accepts native PTY keyboard input')
+            # Diagnose idle-terminal restoration before spending time on a model
+            # request. A later restart separately checks a running agent.
+            record_state('idle-before-restart')
+            stop_daemon()
+            daemon = start_daemon()
+            wait(ready, 'Restarted idle daemon readiness', 90)
+            assert Path(f'/proc/{pid}/stat').read_text().split()[21] == start_time
+            screen.close()
+            (output / 'idle-before-reconnect.ansi').write_bytes(screen.data)
+            screen = None
+            screen = Screen([*command, 'attach-session', '-t', 'runtime'], env, project)
+            wait_for_shell()
+            type_into_screen(shell, 'printf restored > keyboard.txt')
+            wait(lambda: (project / 'keyboard.txt').read_text() == 'restored', 'Idle shell input after restart')
+            receipt['checks'].append('Idle shell processes and all three panes survive daemon/screen restart and accept new keyboard input')
+            record_state('idle-after-restart')
             prompt = (f'Use your file tools to create {project / "sum.py"} using only the Python standard library. '
                       'Write the actual file to that absolute path. It must accept zero or more '
                       'signed integer command-line arguments, print their sum as one integer, and exit successfully. '
@@ -288,6 +331,7 @@ def main():
             assert set(before_panes) == expected_panes, ('Before restart', before_panes, expected_panes)
             (output / 'agent-before-restart.txt').write_text(hn('capture-pane', '-p', '-t', agent) + '\n')
             project_digest = checksum(project / 'sum.py')
+            record_state('agent-before-restart')
             stop_daemon()
             daemon = start_daemon()
             wait(ready, 'Restarted native daemon readiness', 90)
@@ -298,7 +342,7 @@ def main():
             (output / 'before-reconnect.ansi').write_bytes(screen.data)
             screen = None
             screen = Screen([*command, 'attach-session', '-t', 'runtime'], env, project)
-            wait(lambda: screen.data, 'Reattached native screen')
+            wait_for_shell()
             type_into_screen(shell, 'printf after > keyboard.txt')
             wait(lambda: (project / 'keyboard.txt').read_text() == 'after', 'Keyboard input after daemon/screen restart')
             assert Path(f'/proc/{pid}/stat').read_text().split()[21] == start_time
@@ -315,6 +359,10 @@ def main():
             raise
         finally:
             cleanup_errors = []
+            try:
+                record_state('final-state')
+            except OSError as error:
+                cleanup_errors.append('State capture: ' + str(error))
             if 'agent' in locals():
                 try:
                     (output / 'agent-final.txt').write_text(hn('capture-pane', '-p', '-t', agent) + '\n')
@@ -323,9 +371,12 @@ def main():
             # This isolated home has no user account or credentials. Retain the
             # agent's own diagnostic logs, never auth/provider configuration.
             agent_logs = home / '.local/share/opencode/log'
-            if agent_logs.is_dir():
-                shutil.copytree(agent_logs, output / 'opencode-logs')
-            receipt['discovered_project_files'] = [str(path.relative_to(base)) for path in base.rglob('sum.py')]
+            try:
+                if agent_logs.is_dir():
+                    shutil.copytree(agent_logs, output / 'opencode-logs')
+                receipt['discovered_project_files'] = [str(path.relative_to(base)) for path in base.rglob('sum.py')]
+            except OSError as error:
+                cleanup_errors.append('Agent log capture: ' + str(error))
             if screen:
                 (output / 'terminal.ansi').write_bytes(screen.data)
                 try:
