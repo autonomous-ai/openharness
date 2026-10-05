@@ -88,11 +88,10 @@ import { engineLabel } from './lib/agentNames.js'
 import { DSH_ID_RE, dshSupportedEngines } from './dsh/manifest.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
 import { routeVoiceTask } from './lib/voiceRouter.js'
-import { tailFile } from './lib/sessions.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
 import { messagesToEvents, windowRawLines, SubagentStats, type SessionEvent } from './lib/normalize.js'
 import { TranscriptPager } from './lib/transcriptPages.js'
-import { streamRecords } from './lib/transcriptTail.js'
+import { streamRecords, tailFileCapped, WHOLE_READ_CAP_BYTES } from './lib/transcriptTail.js'
 import { MediaPreviewError, readMediaPreviewChunk } from './lib/mediaPreview.js'
 import { ViewerForwarder } from './lib/viewerForwarder.js'
 import { InteractiveViewers } from './lib/interactiveViewer.js'
@@ -2358,7 +2357,12 @@ export class BackendSocket {
             })
             return
           }
-          const lines = await tailFile(s.transcriptPath, Infinity)
+          // Read from the end and bounded: these engines have no pages of their own yet, and one huge
+          // transcript read whole would take the whole daemon down (lib/transcriptTail.ts). History past
+          // the cap is not shown, and the reply says so.
+          const { lines, truncated: capped } = await tailFileCapped(s.transcriptPath)
+          if (capped) console.warn(`[backend] session_get ${sid(sessionId)}: the transcript is over ${WHOLE_READ_CAP_BYTES / 1024 / 1024} MB · its oldest history is not shown`)
+          const truncated = capped ? { truncated: true } : {}
           const st = await stat(s.transcriptPath).catch(() => null)
           const timestamp = new Date(st?.mtimeMs ?? Date.now()).toISOString()
 
@@ -2387,6 +2391,7 @@ export class BackendSocket {
               events: fullEvents,
               timestamp,
               engine: s.engine,
+              ...truncated,
             })
             return
           }
@@ -2418,6 +2423,7 @@ export class BackendSocket {
               engine: s.engine,
               hasMore: wholePage?.hasMore ?? false,
               oldestCursor: wholePage?.oldestCursor ?? null,
+              ...truncated,
             })
             return
           }
@@ -2429,7 +2435,7 @@ export class BackendSocket {
                   ? windowCommandCodeLines(lines, { limit, before })
                   : windowRawLines(lines, { limit, before })
           if (w.staleCursor) {
-            reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true })
+            reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true, ...truncated })
             return
           }
           const events = s.engine === 'cursor'
@@ -2457,6 +2463,7 @@ export class BackendSocket {
             engine: s.engine,
             hasMore: w.hasMore,
             oldestCursor: w.oldestCursor,
+            ...truncated,
           })
           return
         }

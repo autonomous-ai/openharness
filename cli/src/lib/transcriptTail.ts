@@ -181,6 +181,35 @@ export async function tailFileUntil(filePath: string, select: (line: string) => 
   }
 }
 
+/** The most of a transcript read at once by a reader that has no pages of its own: its newest records
+ *  up to this many bytes. The October 3 crash was an 803 MB transcript read whole: past what the heap
+ *  holds, one conversation's read takes every agent's daemon down with it. Claude Code and Codex read
+ *  pages instead (lib/transcriptPages.ts); this is the floor under every other engine until they do. */
+export const WHOLE_READ_CAP_BYTES = 64 * 1024 * 1024
+
+/**
+ * A transcript's newest records, up to `maxBytes` of them, in order: what `tailFile(path, Infinity)`
+ * returns for a file under the cap, with `truncated` saying older records were left unread. A record
+ * that alone is bigger than what is left of the cap ends the read there. Empty for a file that cannot
+ * be read.
+ */
+export async function tailFileCapped(filePath: string, maxBytes = WHOLE_READ_CAP_BYTES): Promise<{ lines: string[]; truncated: boolean }> {
+  try {
+    const { size } = await stat(filePath)
+    const lines: string[] = []
+    let bytes = 0
+    let truncated = false
+    await scanRecordsBackward(filePath, size, (record) => {
+      if (bytes + record.length > maxBytes) { truncated = true; return true }
+      bytes += record.length
+      lines.push(record.toString('utf8'))
+    })
+    return { lines: lines.reverse(), truncated }
+  } catch {
+    return { lines: [], truncated: false }
+  }
+}
+
 /** Return the last `n` non-empty raw lines of a specific transcript file. Prefer this over
  *  `tailLines` when the caller already holds a trusted, registered `transcriptPath` — it takes no
  *  request-controlled id, so there is no path to traverse. */
