@@ -226,7 +226,12 @@ describe('what the daemon survives', () => {
     mkdirSync(join(d.dataDir, 'stopped-agents'), { recursive: true, mode: 0o700 })
     writeFileSync(join(d.dataDir, 'stopped-agents', 'garbage.json'), '[[[', { mode: 0o600 })
     writeFileSync(join(d.dataDir, 'registry-boot'), 'not a boot id', { mode: 0o600 })
+    // The Wi-Fi device's (experimental): either one threw out of the core's start, into safe mode.
+    writeFileSync(join(d.dataDir, 'autonomous-device-connections.json'), '{"not": "a list"}', { mode: 0o600 })
+    writeFileSync(join(d.dataDir, 'device-results.json'), '{"version": 1, "entries": [', { mode: 0o600 })
     await d.start()
+    await until('the device pieces to be left out', () => /the Wi-Fi device service could not be started/.test(d.log())
+      && /the Wi-Fi device link could not be started/.test(d.log()), 30_000)
     const client = await LocalClient.connect(d)
     expect(Array.isArray((await client.request('agents_list', { includeStopped: true })).agents)).toBe(true)
     const agent = await boundAgent(d, client, 'after-the-corruption')
