@@ -709,4 +709,106 @@ void main() {
       }
     },
   );
+
+  testWidgets(
+    'Get on a Jev model starts it, never moves the harness, and then it is one Jev row to stop or call',
+    (tester) async {
+      const laya = 'jev:ggml-org/Laya-GGUF';
+      final app = await _localFixture(onModel: 'Qwen3.6-35B-A3B');
+      try {
+        app.localInventory = {
+          ..._inventory(),
+          'models': [
+            ...(_inventory()['models'] as List),
+            {
+              'id': laya,
+              'name': 'laya-english',
+              'kind': 'decision',
+              'state': 'available',
+              'sizeBytes': 449397600,
+              'quant': 'Q8_0',
+              'canStart': true,
+            },
+          ],
+        };
+        await app.modelManager.refresh(force: true);
+        final picker = await _open(tester, app);
+        var row = _row(picker, 'laya-english');
+        expect(picker.modelSection(row), ModelSearchSection.jev);
+        expect(picker.canSelectModel(row), isFalse);
+        expect(picker.canGetModelForUse(row), isFalse);
+        expect(picker.modelRowAction(row), 'Get');
+        expect(picker.actionLabel(row), 'Get');
+        picker.move(picker.rows.indexOf(row) - picker.cursor);
+        await tester.pumpAndSettle();
+        expect(
+          find.descendant(
+            of: find.byType(SwarmResourcePreview),
+            matching: find.textContaining(
+              "updates Grid's model engine first if it is too old to serve Jev models",
+            ),
+          ),
+          findsOneWidget,
+        );
+
+        expect(find.text('Enter Get  ·  Tab controls'), findsOneWidget);
+        // Get is the whole of it — a start, which downloads, updates and runs — not a download alone,
+        // and no harness is moved onto it.
+        await key(tester, LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(app.actions, [(machine: 'm', model: laya, start: true)]);
+        expect(app.downloads, isEmpty);
+        expect(app.selections, isEmpty);
+
+        // Running, and listed by the own grid as a Jev model: one row, under Jev models, to stop or call.
+        final running = app.localInventory;
+        app.localInventory = {
+          ...running,
+          'models': [
+            for (final model in running['models'] as List)
+              if ((model as Map<String, dynamic>)['id'] == laya)
+                {
+                  ...model,
+                  'state': 'running',
+                  'canStart': false,
+                  'canStop': true,
+                }
+              else
+                model,
+          ],
+        };
+        app.inventory = const GridModels(
+          gridName: 'home',
+          models: [
+            GridModel(id: 'Qwen3.6-35B-A3B', node: 'This Mac'),
+            GridModel(id: 'laya-english', node: 'This Mac', decision: true),
+          ],
+        );
+        await app.modelManager.refresh(force: true);
+        await tester.pumpAndSettle();
+        final layas = picker.rows
+            .where((r) => r.title == 'laya-english')
+            .toList();
+        expect(layas, hasLength(1));
+        row = layas.single;
+        expect(picker.modelSection(row), ModelSearchSection.jev);
+        expect(picker.modelRowAction(row), 'Copy');
+        picker.move(picker.rows.indexOf(row) - picker.cursor);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('resource-action:picker.model_stop')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('resource-action:picker.accept')),
+          findsOneWidget,
+        );
+        expect(_inPreview(jevRequest('home', 'laya-english')), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+      }
+    },
+  );
 }

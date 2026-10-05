@@ -19,8 +19,13 @@ class LocalModel {
     this.estTokS,
     this.paramsB,
     this.app,
+    this.decision = false,
   });
   final String id, name, state;
+
+  /// A Jev (System One) decision model (`kind: decision`): Get downloads it, updates Grid's engine when
+  /// it is too old to serve one, and runs it on the grid — it is called, never a harness's model. False
+  /// for every chat model, and from an older daemon.
 
   /// The app this model was downloaded with and starts in (`Ollama`, `LM Studio`, `llama.cpp`): one found
   /// in that app's folder. Null for Grid's own models, and from an older daemon.
@@ -39,6 +44,7 @@ class LocalModel {
   /// itself on the next message, so the row says so rather than reading as a plain `running`. An
   /// older daemon never sends it.
   final bool gridAsleep;
+  final bool decision;
   bool get running => state == 'running';
 
   /// Running, and resting until somebody sends a message — see [gridAsleep].
@@ -85,6 +91,7 @@ class LocalModel {
       final String app when app.trim().isNotEmpty => app.trim(),
       _ => null,
     },
+    decision: data['kind'] == 'decision',
   );
 }
 
@@ -106,6 +113,7 @@ class LocalModelOperation {
   bool get started => phase == 'done' && action == 'start';
   String get label => switch (stage) {
     'downloading' => 'Downloading',
+    'updating' => 'Updating engine',
     'starting' => 'Starting',
     'verifying' => 'Testing',
     'stopping' => 'Stopping',
@@ -119,6 +127,7 @@ class LocalModelOperation {
         ![
           'checking',
           'downloading',
+          'updating',
           'starting',
           'verifying',
           'stopping',
