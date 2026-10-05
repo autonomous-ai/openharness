@@ -17,8 +17,13 @@
 // numbered lines, the way a build log or a long diff does, `!clear` starts a new conversation in the
 // same pane as Claude Code's `/clear` and Codex's `/new` do, `!compact` compacts the conversation as
 // `/compact` does (and Claude Code then announces the same session again), `!compactmid` compacts in the
-// middle of a turn as an automatic compaction does, `!exit` ends the process. Everything else is
-// echoed as the answer.
+// middle of a turn as an automatic compaction does, `!version` answers with the version this
+// process is, `!exit` ends the process. Everything else is echoed as the answer.
+//
+// Which release is installed is the config's business, so a test can update an engine in place by
+// rewriting its wrapper: `version` is what it reports and writes, `without` lists the flags and
+// subcommands that release no longer has, and `startDelayMs` is how long it takes, once started, before
+// it draws or announces anything (an engine's first run after an update).
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
@@ -26,32 +31,48 @@ import { dirname, join } from 'node:path'
 
 export async function run(engine, config) {
   const args = process.argv.slice(2)
+  const version = config.version ?? (engine === 'claude' ? '2.1.270' : '0.159.0')
+  const versionLine = engine === 'claude' ? `${version} (Claude Code)` : `codex-cli ${version}`
+  const without = new Set(config.without ?? [])
   if (args.includes('--version') || args.includes('-V')) {
-    process.stdout.write(engine === 'claude' ? '2.1.270 (Claude Code)\n' : 'codex-cli 0.159.0\n')
+    process.stdout.write(`${versionLine}\n`)
     return
   }
   if (args.includes('--help') || args.includes('-h')) {
-    // The flags the daemon looks for in the real CLIs' help before it launches them.
-    process.stdout.write(engine === 'codex'
+    // The flags the daemon looks for in the real CLIs' help before it launches them, less the ones this
+    // release has dropped.
+    process.stdout.write((engine === 'codex'
       ? [
           'Usage: codex [OPTIONS] [PROMPT]', '',
           '  -c, --config <key=value>', '  -m, --model <MODEL>', '  -s, --sandbox <SANDBOX_MODE>',
           '  -a, --ask-for-approval <APPROVAL_POLICY>', '      --approve-for-me',
           '      --dangerously-bypass-approvals-and-sandbox', '      --no-daemon',
           'Commands:', '  resume  Resume a previous interactive session', '',
-        ].join('\n')
+        ]
       : [
           'Usage: claude [options] [command] [prompt]', '', 'Arguments:', '  prompt  Your prompt', '',
           '  --model <model>', '  --permission-mode <mode>  (choices: "acceptEdits", "auto", "bypassPermissions", "default", "plan")',
           '  --dangerously-skip-permissions', '  -r, --resume [value]', '  --fork-session', '  --session-id <uuid>', '',
-        ].join('\n'))
+        ]).filter((line) => !line.split(/[^A-Za-z0-9-]+/).some((word) => without.has(word))).join('\n'))
     return
+  }
+  // A flag or subcommand this release does not have is refused before anything is drawn, as the real
+  // CLIs' parsers refuse one: Commander (Claude Code) exits 1, clap (Codex) exits 2.
+  const refused = args.find((arg) => without.has(arg))
+  if (refused) {
+    process.stderr.write(engine === 'claude'
+      ? `error: unknown option '${refused}'\n`
+      : `error: unexpected argument '${refused}' found\n\nUsage: codex [OPTIONS] [PROMPT]\n\nFor more information, try '--help'.\n`)
+    process.exit(engine === 'claude' ? 1 : 2)
   }
   process.title = engine
   // Raw at once, as the real CLIs are (Ink and ratatui take the terminal before they draw anything): a
   // terminal still in line mode keeps at most 1 KiB of a line, so a paste that arrived before the
   // engine was ready lost the rest of itself (measured: 1,018 of 2,406 characters).
   process.stdin.setRawMode?.(true)
+  // Slow to start, as an engine is on its first run after an update: the process is there and holds
+  // the terminal, and nothing is drawn, announced or read until it is ready.
+  if (config.startDelayMs) await new Promise((resolve) => setTimeout(resolve, config.startDelayMs))
 
   const resumeAt = engine === 'claude' ? args.indexOf('--resume') : args.indexOf('resume')
   const resumed = resumeAt >= 0 && args[resumeAt + 1] && !args[resumeAt + 1].startsWith('-') ? args[resumeAt + 1] : null
@@ -101,12 +122,12 @@ export async function run(engine, config) {
   let parent = null
   const claude = (record) => {
     const uuid = randomUUID()
-    write({ parentUuid: parent, isSidechain: false, userType: 'external', cwd, sessionId, version: '2.1.270', timestamp: now(), uuid, ...record })
+    write({ parentUuid: parent, isSidechain: false, userType: 'external', cwd, sessionId, version, timestamp: now(), uuid, ...record })
     parent = uuid
   }
   const codex = (type, payload) => write({ timestamp: now(), type, payload })
   if (engine === 'codex' && readFileSync(transcript, 'utf8') === '') {
-    codex('session_meta', { id: sessionId, cli_version: '0.159.0', cwd, source: 'cli' })
+    codex('session_meta', { id: sessionId, cli_version: version, cwd, source: 'cli' })
   }
 
   // The port the daemon actually bound, which it saves beside its data (lib/daemonEndpoint.ts) and
@@ -249,7 +270,7 @@ export async function run(engine, config) {
       writeFileSync(transcript, '')
       parent = null
       turn = 0
-      if (engine === 'codex') codex('session_meta', { id: sessionId, cli_version: '0.159.0', cwd, source: 'cli' })
+      if (engine === 'codex') codex('session_meta', { id: sessionId, cli_version: version, cwd, source: 'cli' })
       announceProcess()
       process.stdout.write('\r\n(new conversation)\r\n')
       draw()
@@ -358,6 +379,7 @@ export async function run(engine, config) {
       finish(`you chose ${choice}`)
       return
     }
+    if (directive?.[1] === 'version') { finish(versionLine); return }
     if (directive?.[1] === 'slow') await new Promise((resolve) => setTimeout(resolve, Number(directive[2]) || 1000))
     finish(`answer ${turn}: ${prompt}`)
   }
