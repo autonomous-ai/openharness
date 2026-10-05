@@ -2115,6 +2115,7 @@ class Registry {
       console.error('[registry] save skipped because the loaded registry requires operator repair')
       return
     }
+    if (this.namesUnsaved) this.saveNames()
     try {
       secureStateDirectory(env.ADAPTER_DATA_DIR)
       const currentRows = new Map(this.list().map((entry) => {
@@ -2228,6 +2229,14 @@ class Registry {
     }
   }
 
+  /**
+   * A names write that failed, tried again on every save until it lands. The rows heal on their own,
+   * because the next save sees them differ from what is on disk; names are written only on a rename,
+   * so a rename the daemon answered while the disk was full was lost to a restart that came before the
+   * next rename (found end to end, e2e/diskfull.e2e.ts).
+   */
+  private namesUnsaved = false
+
   private saveNames(): void {
     try {
       secureStateDirectory(env.ADAPTER_DATA_DIR)
@@ -2239,7 +2248,9 @@ class Registry {
         // no file yet / unreadable — write the in-memory overrides
       }
       atomicWriteJson(NAMES_FILE, { ...existing, ...Object.fromEntries(NAME_OVERRIDES) })
+      this.namesUnsaved = false
     } catch (err) {
+      this.namesUnsaved = true
       console.error('[registry] save names failed:', err)
     }
   }

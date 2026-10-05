@@ -163,7 +163,13 @@ export function createBinding({
     }
     const confirmed = registry.byAgent(entry.agentId)
     if (confirmed?.sessionId === entry.sessionId) {
-      stoppedAgents.save(confirmed)
+      // The record a stop is resumed from, kept current. Best effort: the binding has happened, and a
+      // full disk must not stop the windows hearing of it below (found end to end, e2e/diskfull.e2e.ts).
+      try {
+        stoppedAgents.save(confirmed)
+      } catch (error) {
+        console.error(`[agent] ${sid(entry.agentId)} could not save the record it resumes from: ${error instanceof Error ? error.message : error}`)
+      }
       if (confirmed.resumeOnly) stoppedAgents.finishResume(confirmed.agentId)
     }
     syncRecapPool()
