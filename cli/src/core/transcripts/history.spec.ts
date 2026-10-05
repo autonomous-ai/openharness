@@ -106,13 +106,14 @@ function transcript(lines: string[], name = 'session.jsonl'): string {
   return file
 }
 
-function setup(s?: RegisteredSession) {
+function setup(s?: RegisteredSession, kept: RegisteredSession[] = []) {
   const pages = {
     claude: vi.fn(async (_path: string, _opts: { limit?: number; before?: string }) => page([], false, null)),
     codex: vi.fn(async (_path: string, _opts: { limit?: number; before?: string }) => page([], false, null)),
   }
   const deps = {
     resolve: vi.fn((id: string) => (s && (id === s.sessionId || id === s.agentId) ? s : undefined)),
+    stopped: vi.fn(() => kept),
     pages,
     dbs: { opencode: '/stores/opencode.db', kilo: '/stores/kilo.db', devin: '/stores/sessions.db' },
     hermesDb: vi.fn(async () => '/profiles/work/state.db'),
@@ -142,6 +143,19 @@ describe('what cannot be served', () => {
     expect(reply).toStrictEqual({ ...about(s, TOUCHED), events: [], hasMore: false, oldestCursor: null })
     expect(Object.keys(reply)).toEqual(['id', 'title', 'events', 'timestamp', 'engine', 'hasMore', 'oldestCursor'])
     expect(pages.claude).not.toHaveBeenCalled()
+  })
+
+  it('a conversation kept as a stopped harness, once nothing live holds it, but never by its harness\'s id', async () => {
+    const live = session('claude')
+    const kept = { ...session('claude'), agentId: 'kept-agent', sessionId: 'kept-session' } as RegisteredSession
+    const { sessionGet, deps } = setup(live, [kept])
+    expect(await sessionGet({ sessionId: 'kept-session', limit: 50 })).toMatchObject({ id: 'kept-session', engine: 'claude', events: [] })
+    expect(deps.resolve).toHaveBeenCalledWith('kept-session')
+    // What is live is answered from the registry, without reading the saved ones.
+    deps.stopped.mockClear()
+    expect(await sessionGet({ sessionId: live.sessionId, limit: 50 })).toMatchObject({ id: live.sessionId })
+    expect(deps.stopped).not.toHaveBeenCalled()
+    expect(await sessionGet({ sessionId: 'kept-agent', limit: 50 })).toStrictEqual({ error: 'NOT_FOUND' })
   })
 
   it('found by agent id too, and still answers with the id it was asked for', async () => {

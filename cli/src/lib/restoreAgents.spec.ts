@@ -326,6 +326,19 @@ describe('restoreAgents — waiting for the engine', () => {
     expect(h.rows.get('agent-a')?.launch).toEqual({ state: 'starting' })
   })
 
+  it('keeps the conversation the fresh launch leaves, before it is unbound', async () => {
+    const h = harness([row()])
+    const kept: Array<{ agentId: string; sessionId: string; unbound: boolean }> = []
+    h.deps.keepAbandoned = (left) => { kept.push({ agentId: left.agentId, sessionId: left.sessionId, unbound: h.calls.includes('unbind:session-a') }) }
+    h.probes.set('%0', [null, null, identity(9)])
+    h.states.set('%0', [{ dead: true }, { dead: false }])
+
+    await restoreAgents(h.deps)
+    await settled(h, 1, 1)
+
+    expect(kept).toEqual([{ agentId: 'agent-a', sessionId: 'session-a', unbound: false }])
+  })
+
   it('treats an engine that appears and then exits inside the settling window as a rejected resume', async () => {
     const h = harness([row()], { settleMs: 50 })
     // First probe: the resumed claude is up. Settling poll: the pane is dead. After the fresh

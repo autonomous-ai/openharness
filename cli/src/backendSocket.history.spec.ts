@@ -5,6 +5,7 @@ import { BackendSocket } from './backendSocket.js'
 import { codexMessagesToEvents, windowCodexLines } from './engines/codex/normalizer.js'
 import { messagesToEvents, subagentStatsFromRawLines, windowRawLines } from './lib/normalize.js'
 import { registry } from './lib/registry.js'
+import { stoppedAgents } from './lib/stoppedAgents.js'
 import { tailFile } from './lib/transcriptTail.js'
 import { bindHistory } from './testing/socketHistory.js'
 import { cl, claude, claudeScenario, codexScenario } from './testing/transcriptScenarios.js'
@@ -66,6 +67,20 @@ describe.each([
 
   it('is bound to the transcript under test', () => {
     expect(registry.resolve(sessionId)?.transcriptPath).toBe(file)
+  })
+
+  it('is served from a conversation kept as a stopped one, once nothing live holds it', async () => {
+    const whole = (await ask('session_get', { sessionId })).events
+    // What a stop, or a relaunch that had to leave the conversation for a new one, keeps of it.
+    stoppedAgents.save(registry.resolve(sessionId)!)
+    registry.removeAgent(agentId)
+    try {
+      expect(registry.resolve(sessionId)).toBeUndefined()
+      expect((await ask('session_get', { sessionId })).events).toEqual(whole)
+    } finally {
+      stoppedAgents.remove(agentId)
+    }
+    expect((await ask('session_get', { sessionId })).error).toBe('NOT_FOUND')
   })
 
   it('pages back through the thread exactly as the whole-file read did, cursor for cursor', async () => {

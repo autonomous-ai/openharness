@@ -31,6 +31,7 @@ function deps(over: Overrides = {}): RestartAgentDeps & { calls: string[] } {
     waitForProcess: async () => { calls.push('waitForProcess'); return waitForProcessImpl() },
     buildArgv: (opts) => { calls.push('buildArgv'); return buildArgvImpl(opts) },
     log: () => {},
+    keepAbandoned: () => { calls.push('keepAbandoned') },
   }
 }
 
@@ -103,6 +104,8 @@ describe('restartAgent', () => {
     const d = deps({ buildArgv: (opts) => { argvCalls.push(opts); return ['claude'] } })
     await restartAgent({ engine: 'claude', sessionId: 'sess-42' }, true, d)
     expect(argvCalls).toEqual([{ bypassPermission: true, resumeSessionId: 'sess-42' }])
+    // It reopened the conversation: nothing was left behind.
+    expect(d.calls).not.toContain('keepAbandoned')
   })
 
   it('launches fresh (no resumeSessionId) when the session has none', async () => {
@@ -126,6 +129,8 @@ describe('restartAgent', () => {
       { bypassPermission: false },
     ])
     expect(outcome).toEqual({ ok: true, processIdentity: IDENTITY, resumed: false })
+    // The conversation it could not reopen is kept, once the fresh start is up.
+    expect(d.calls.at(-1)).toBe('keepAbandoned')
     // respawn + waitForProcess ran twice (once per attempt); holdOpen/terminate ran once.
     expect(d.calls.filter((c) => c === 'respawn')).toHaveLength(2)
     expect(d.calls.filter((c) => c === 'holdOpen')).toHaveLength(1)
@@ -136,6 +141,8 @@ describe('restartAgent', () => {
     const d = deps({ waitForProcess: async () => null })
     const outcome = await restartAgent({ engine: 'codex', sessionId: 'sess-1' }, false, d)
     expect(outcome).toEqual({ ok: false, detail: 'codex did not come back up after restart' })
+    // Nothing runs in a new conversation, so the row still holds the one it was in: nothing to keep.
+    expect(d.calls).not.toContain('keepAbandoned')
   })
 
   it('never retries a resume fallback for an engine with no session to resume in the first place', async () => {

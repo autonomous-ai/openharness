@@ -5,8 +5,10 @@
  */
 import { homedir } from 'node:os'
 import type { BackendSocket } from '../../backendSocket.js'
-import { isTerminalEngine } from '../../engines/types.js'
-import { buildEngineLaunchArgv } from '../../lib/engineLaunch.js'
+import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
+import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
+import { engineInstallRecipe } from '../../lib/engineInstall.js'
+import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
 import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import { probeGridAssignment } from '../../lib/gridAssignment.js'
 import { sid } from '../../lib/log.js'
@@ -22,6 +24,24 @@ import type { createLaunchHelpers } from './launch.js'
 import type { PaneSwap } from './swap.js'
 
 type LaunchHelpers = ReturnType<typeof createLaunchHelpers>
+
+/**
+ * Longer than any shell that answered: `commandAvailableInInteractiveShell` gives up after 5s and then
+ * says no. A no that took that long is a slow rc file, not a missing engine, and must not refuse a
+ * restart that would work — the same rule `commandSupportsFlagInInteractiveShell` keeps for `unknown`.
+ */
+const ENGINE_CHECK_GAVE_UP_MS = 4_500
+
+/**
+ * Whether the engine's command is on this machine, asked as create asks of a pane that died: the same
+ * interactive shell, the same command, the same install recipe. Null when the shell gave up first.
+ */
+async function engineInstalled(engine: AgentEngine): Promise<boolean | null> {
+  const startedAt = Date.now()
+  const installed = await commandAvailableInInteractiveShell(engineBin(engine), undefined,
+    enginePathOverride(engine) ? undefined : engineInstallRecipe(engine))
+  return installed || Date.now() - startedAt < ENGINE_CHECK_GAVE_UP_MS ? installed : null
+}
 
 type RestartAgentHandler = NonNullable<BackendSocket['onRestartAgent']>
 
@@ -118,6 +138,17 @@ export function createAgentRestarter({
       }
     }
     if (!session.processIdentity) return { ok: false, error: 'NO_ACTIVE_PROCESS' }
+
+    // The relaunch runs the engine's command again, so an engine uninstalled since the agent started
+    // cannot come back. Asked anyway, the swap killed the working agent and gave up twenty seconds
+    // later with "did not come back up" (updates.e2e.ts, round 24). Asked here, before anything is
+    // touched, the agent goes on running and the person is told why.
+    const installed = await engineInstalled(engine)
+    if (!current()) return changed
+    if (installed === false) {
+      console.warn(`[restart] ${sid(session.agentId)} refused · ${engine} is not installed`)
+      return { ok: false, error: 'ENGINE_NOT_INSTALLED', detail: `${engine} is not installed. Install it, then restart again. Nothing was stopped.` }
+    }
 
     // The replacement is launched WITH what the original was: its grid's env and argv (a bare
     // respawn would inherit the tmux session's variables but never the codex `-c …` / pi `--model`

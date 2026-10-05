@@ -5,7 +5,7 @@ import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import { dirname } from 'node:path'
 import { env } from '../../config/env.js'
 import { adoptEngineHomes, movedEngineHomes } from '../../lib/engineHomes.js'
-import { createEngineHooks, installEngineHooks, type EngineHookDeps } from './hooks.js'
+import { createEngineHooks, installEngineHooks, PROCESS_RECORD_WAIT_MS, type EngineHookDeps } from './hooks.js'
 
 vi.mock('../../lib/engineHomes.js', () => ({
   adoptEngineHomes: vi.fn(() => ({ claude: null, codex: null })),
@@ -85,11 +85,19 @@ describe('which agent a hook belongs to', () => {
       + ' · callerPid=300 · caller is not a descendant of that engine process')
   })
 
-  it('none for an agent with no process to descend from, and a process table that loops', async () => {
-    vi.mocked(processRows).mockResolvedValueOnce(tree([300, 400], [400, 300]) as never)
-    const { hooks } = setup({ '%1': agent('no-pid'), '%2': agent('a2', 100) })
-    expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1'), hint('%2')], callerPid: 300 })).toBeNull()
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('agentsOnRuntime=2 · callerPid=300 · caller is not a descendant'))
+  it('none for an agent with no process to descend from once the wait for one is over, and a process table that loops', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(processRows).mockResolvedValue(tree([300, 400], [400, 300], [100, 1]) as never)
+      const { hooks } = setup({ '%1': agent('no-pid'), '%2': agent('a2', 100) })
+      const answer = hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1'), hint('%2')], callerPid: 300 })
+      await vi.advanceTimersByTimeAsync(PROCESS_RECORD_WAIT_MS)
+      expect(await answer).toBeNull()
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('agentsOnRuntime=2 · callerPid=300 · caller is not a descendant'))
+    } finally {
+      vi.useRealTimers()
+      vi.mocked(processRows).mockReset()
+    }
   })
 
   it('none when two agents could own the hook, saying it is ambiguous', async () => {
@@ -112,6 +120,82 @@ describe('which agent a hook belongs to', () => {
 
     expect(await empty.hooks.resolveHookAgent({ engine: 'claude', runtimeHints: undefined as never, callerPid: 300 })).toBeNull()
     expect(console.log).toHaveBeenLastCalledWith('[hooks] unmatched claude hook · hints=none · resolvedRuntimes=0 · agentsOnRuntime=0 · callerPid=300')
+  })
+
+  describe('a hook that comes in before its agent has recorded the process it came from', () => {
+    afterEach(() => { vi.mocked(processRows).mockReset() })
+    // The new engine is 200 and the hook's process, 300, is its child. Pid 100 was the engine a restart
+    // killed; nothing in the table is it any more.
+    const newEngine = () => tree([300, 200], [200, 1])
+    /** Asks, and says when the hook has started waiting: after it read the process table once. */
+    const ask = (hooks: ReturnType<typeof setup>['hooks'], panes = ['%1']) => {
+      let answer: RegisteredSession | null | undefined
+      const asked = hooks.resolveHookAgent({ engine: 'claude', runtimeHints: panes.map(hint), callerPid: 300 }).then((agent) => { answer = agent })
+      const waiting = () => vi.waitFor(() => expect(processRows).toHaveBeenCalledTimes(1))
+      return { asked, waiting, answer: () => answer }
+    }
+
+    it('in a restart, waits while the recorded process is one that is gone, and belongs to the agent once the new one is recorded', async () => {
+      const onPane: Record<string, RegisteredSession> = { '%1': agent('a1', 100) }
+      vi.mocked(processRows).mockResolvedValue(newEngine() as never)
+      const hook = ask(setup(onPane).hooks, ['%1', '%9'])
+      await hook.waiting()
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      expect(hook.answer()).toBeUndefined()
+      // What restart.ts does once the new process is found and probed.
+      onPane['%1'] = agent('a1', 200)
+      await hook.asked
+      expect(hook.answer()).toEqual(agent('a1', 200))
+      expect(console.log).not.toHaveBeenCalled()
+    })
+
+    it('in a resume, waits while the row has no process yet, and belongs to it once the resume records one', async () => {
+      const onPane: Record<string, RegisteredSession> = { '%1': agent('a1') }
+      vi.mocked(processRows).mockResolvedValue(newEngine() as never)
+      const hook = ask(setup(onPane).hooks)
+      await hook.waiting()
+      expect(hook.answer()).toBeUndefined()
+      // What resumeAgentService.ts does once waitForResumedAgent finds the engine in the pane.
+      onPane['%1'] = agent('a1', 200)
+      await hook.asked
+      expect(hook.answer()).toEqual(agent('a1', 200))
+    })
+
+    it('none when what is recorded is a process it does not come from, or the table cannot be read again', async () => {
+      const onPane: Record<string, RegisteredSession> = { '%1': agent('a1') }
+      vi.mocked(processRows).mockResolvedValue(newEngine() as never)
+      const other = ask(setup(onPane).hooks)
+      await other.waiting()
+      onPane['%1'] = agent('a1', 999)
+      await other.asked
+      expect(other.answer()).toBeNull()
+      expect(console.log).toHaveBeenLastCalledWith('[hooks] unmatched claude hook · hints=tmux:%1 · resolvedRuntimes=1 · agentsOnRuntime=1'
+        + ' · callerPid=300 · caller is not a descendant of that engine process')
+
+      vi.mocked(processRows).mockReset()
+      const pane: Record<string, RegisteredSession> = { '%1': agent('a1') }
+      vi.mocked(processRows).mockResolvedValueOnce(newEngine() as never).mockResolvedValueOnce(null)
+      const unreadable = ask(setup(pane).hooks)
+      await unreadable.waiting()
+      pane['%1'] = agent('a1', 200)
+      await unreadable.asked
+      expect(unreadable.answer()).toBeNull()
+    })
+
+    it('waits no longer than its bound for a record that does not come', async () => {
+      vi.useFakeTimers()
+      try {
+        vi.mocked(processRows).mockResolvedValue(newEngine() as never)
+        const hook = ask(setup({ '%1': agent('a1', 100) }).hooks)
+        await vi.advanceTimersByTimeAsync(PROCESS_RECORD_WAIT_MS - 1)
+        expect(hook.answer()).toBeUndefined()
+        await vi.advanceTimersByTimeAsync(1)
+        await hook.asked
+        expect(hook.answer()).toBeNull()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 
   it('a SessionEnd only asks for a reconcile: discovery decides whether the agent still exists', () => {

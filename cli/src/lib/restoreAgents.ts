@@ -44,6 +44,8 @@ export const GRID_CREDENTIAL_REQUIRED = 'GRID_CREDENTIAL_REQUIRED'
 
 export interface RestoreAgentsDeps {
   retainStopped?: (entry: RegisteredSession, paneAlive: boolean) => void
+  /** Keeps a conversation the restore had to leave for a new one as a stopped harness (keepAbandonedConversation.ts). */
+  keepAbandoned?: (left: RegisteredSession) => void
 
   registry: {
     list(): RegisteredSession[]
@@ -303,6 +305,9 @@ async function watchRestoredPane(
     // along to the agent itself, the stale binding goes, and the engine gets one fresh start.
     mayRetryFresh = false
     deps.log(`[restore] ${engine} · agent ${agentId} · did not come back up resuming its session — retrying fresh`)
+    // Unbound below and replaced by the fresh start's own, the conversation the agent was in is kept as
+    // a stopped harness first, to read and to resume once the engine can again.
+    deps.keepAbandoned?.({ ...entry })
     deps.registry.inheritName(entry.sessionId, agentId)
     deps.registry.unbindSession(entry.sessionId)
     const launch = await deps.buildLaunch(entry, {})
