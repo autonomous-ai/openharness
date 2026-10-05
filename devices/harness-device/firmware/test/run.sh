@@ -186,8 +186,10 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bou
 
 python3 "$here/test_search_ui.py"
 python3 "$here/test_draft_ui.py"
+python3 "$here/test_draft_ui.py" --pro
 python3 "$here/test_question_ui.py"
 python3 "$here/test_voice_ui.py"
+python3 "$here/test_voice_ui.py" --pro
 python3 "$here/test_touch_ui.py"
 python3 "$here/test_brightness_ui.py"
 python3 "$here/test_touch_driver.py"

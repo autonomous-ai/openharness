@@ -1,6 +1,7 @@
+#include "pro_work_intent.h"
 /* Harness Pro sheets. Included by ui_habitat.c after the shared view helpers.
- * The square face changes presentation only: every hit uses an existing action,
- * including its recipient, revision and explicit review guards. */
+ * Controls retain recipient, revision and explicit review guards. Instruction
+ * choices use the existing voice command and draft protocols. */
 #if HT_FACE_PX >= 720
 
 static int pro_hit(int x, int y, int w, int h, action_kind_t action, int value, bool enabled)
@@ -80,8 +81,10 @@ static void pro_row(ht_scene_t *f, int y, const char *name, const char *detail,
 static void pro_launcher(ht_scene_t *f)
 {
     pro_heading(f, PRO_TR("Menu"), A_HOME);
-    pro_control(f, 32, 132, 320, 70, PRO_TR("Voice"), A_VOICE_SAMPLES, 0, true);
-    pro_control(f, 368, 132, 320, 70, PRO_TR("Language"), A_LANGUAGE, 0, true);
+    pro_control(f, 32, 132, 208, 70, PRO_TR("Instruct"), A_WORK_INTENT, 0,
+                s.connected && !s.loading && active() && !carry.active && !carry.error[0]);
+    pro_control(f, 256, 132, 208, 70, PRO_TR("Voice"), A_VOICE_SAMPLES, 0, true);
+    pro_control(f, 480, 132, 208, 70, PRO_TR("Language"), A_LANGUAGE, 0, true);
     static const struct { const char *title, *detail; action_kind_t action; } items[] = {
         {"Panes", "Choose who to talk to", A_AGENTS},
         {"Tabs", "Change your workspace", A_TABS},
@@ -103,6 +106,27 @@ static void pro_launcher(ht_scene_t *f)
         ht_pro_text(f, x + 22, y + 9, 276, &ht_pro_32, enabled ? FG : DIM, PRO_TR(items[i].title));
         ht_pro_wrap(f, x + 22, y + 58, 276, 1, 0, &ht_pro_24, DIM, PRO_TR(items[i].detail));
     }
+}
+
+static void pro_work_intent(ht_scene_t *f)
+{
+    pro_heading(f, PRO_TR("New instruction"), A_LAUNCHER);
+    int recipient = find(s.work_agent);
+    agent_t *a = recipient >= 0 ? &s.agents[recipient] : NULL;
+    bool review = cable_client_supports(CABLE_FEATURE_DRAFT);
+    bool ready = s.connected && !s.loading && a;
+    ht_pro_text(f, 48, 132, 624, &ht_pro_24, DIM, a ? a->name : PRO_TR("Choose a pane"));
+    static const char *details[] = {"One request", "Work toward an objective", "Say a task and an interval"};
+    int row = 0;
+    for (int mode = PRO_WORK_TASK; mode <= PRO_WORK_LOOP; mode++) {
+        if (!pro_work_supported(a ? a->engine : NULL, mode, review)) continue;
+        pro_row(f, 188 + row++ * 118, PRO_TR(pro_work_label(mode)), PRO_TR(details[mode]),
+                A_WORK_MODE, mode, ready, s.work_mode == mode);
+    }
+    bool supported = ready && pro_work_supported(a->engine, s.work_mode, review);
+    pro_control(f, 216, 606, 288, 68, PRO_TR("Speak"), A_WORK_RECORD, 0, supported);
+    pro_note(f, !supported ? PRO_TR("Choose the pane and instruction again.") :
+                s.work_mode == PRO_WORK_TASK ? PRO_TR("Speak to this pane.") : PRO_TR("Review before sending."));
 }
 
 static void pro_language(ht_scene_t *f)
@@ -514,7 +538,7 @@ static void pro_form(ht_scene_t *f)
 static void pro_draft(ht_scene_t *f)
 {
     const ht_draft_page_t *p = &draft.page;
-    pro_heading(f, PRO_TR("Your message"), A_DRAFT_OPTIONS);
+    pro_heading(f, PRO_TR(s.work_voice_mode == PRO_WORK_TASK ? "Your message" : pro_work_label(s.work_voice_mode)), A_DRAFT_OPTIONS);
     char position[64];
     snprintf(position, sizeof position, PRO_TR("Part %d of %d / %s"), p->position, p->total,
         p->locked || draft.failed ? PRO_TR("check delivery") : draft.pending && draft.op == HT_DRAFT_SEND ?
@@ -571,6 +595,7 @@ static bool pro_render_controls(ht_scene_t *f)
 {
     switch (s.view) {
     case LAUNCHER: pro_launcher(f); return true;
+    case WORK_INTENT: pro_work_intent(f); return true;
     case LANGUAGE: pro_language(f); return true;
     case VOICE_SAMPLES: pro_voice_samples(f); return true;
     case VOICE_PARAMS: pro_voice_params(f); return true;

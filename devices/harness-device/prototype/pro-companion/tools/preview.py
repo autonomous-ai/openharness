@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render actual Pro firmware scenes and art on the host, pixel for pixel.
 
-Only platform allocation and zlib decoding are adapted. Layouts, typography,
+Platform allocation and zlib decoding are adapted; audio is unavailable. Layouts, typography,
 RGB565 blending, character selection, and the illustrated asset pack are the
 production sources. Fixture state supplies illustrative desktop content.
 """
@@ -24,10 +24,12 @@ GENERATED = ROOT / "generated"
 OUT = GENERATED / "preview"
 sys.path.insert(0, str(DEVICE / "firmware/test"))
 from native_shapes import defines, typedef  # noqa: E402
+from native_voice import voice_assets  # noqa: E402
 
 STATES = ("idle", "working", "summary", "mail", "needs_answer", "listening",
           "voice_preparing", "voice_sending", "offline", "done", "asleep",
           "carrying", "launcher", "companion", "daemons", "scenes", "updates", "question", "reader", "locked", "updating",
+          "instruction", "goal", "loop", "goal_listening", "loop_listening", "goal_review", "loop_review",
           "speech_pending", "speaking_warm",
           "speaking_happy", "speaking_excited", "speaking_gentle", "speaking_sad",
           "speaking_thoughtful", "speaking_curious", "speaking_angry")
@@ -55,6 +57,8 @@ def native_source():
 #include "draft.h"
 #include "character.h"
 #include "pro_canvas.h"
+#include "../../pro_voice_samples.h"
+#include "../../audio_speech.h"
 #include "pro_visual.h"
 #include "theme.h"
 #include <assert.h>
@@ -83,6 +87,14 @@ static ht_draft_t draft;
 static ht_character_t character;
 static bool recording;
 static uint32_t now=1000;
+// The real audition catalog is linked, but a preview never opens audio devices.
+bool audio_speech_available(void) { return false; }
+bool audio_speech_begin(uint32_t id,uint32_t rate,uint8_t volume) { (void)id;(void)rate;(void)volume;return false; }
+bool audio_speech_push(uint32_t id,uint32_t offset,const void *pcm,size_t bytes) { (void)id;(void)offset;(void)pcm;(void)bytes;return false; }
+bool audio_speech_end(uint32_t id,uint32_t bytes) { (void)id;(void)bytes;return false; }
+bool audio_speech_set_volume(uint32_t id,uint8_t volume) { (void)id;(void)volume;return false; }
+void audio_speech_snapshot(audio_speech_state_t *out) { memset(out,0,sizeof *out); }
+void audio_speech_abort(uint32_t id) { (void)id; }
 static uint32_t ms(void) { return now; }
 static bool audio_client_recording(void) { return recording; }
 static bool audio_client_active(void) { return recording; }
@@ -111,6 +123,7 @@ static void reset(void) {
     memset(&s,0,sizeof s); memset(&character,0,sizeof character); recording=false;
     s.ready=s.connected=true;s.view=HOME;s.count=3;s.active=0;s.pressed=-1;s.brightness=86;
     COPY(s.agents[0].id,"design");COPY(s.agents[0].name,"Design");
+    COPY(s.agents[0].engine,"claude");COPY(s.work_agent,"design");
     COPY(s.agents[1].id,"build");COPY(s.agents[1].name,"Build");
     COPY(s.agents[2].id,"research");COPY(s.agents[2].name,"Research");
     s.tab_count=1;COPY(s.selected_tab,"studio");COPY(s.tabs[0].id,"studio");
@@ -147,6 +160,20 @@ static void fixture(const char *name) {
     else if(!strcmp(name,"asleep")){s.nap=true;}
     else if(!strcmp(name,"carrying")){carry.active=true;carry.rows=4;COPY(carry.source,"Research");COPY(carry.excerpt,"Keep the landscape quiet. Give the creature room to breathe, and let clear words lead whenever there is something to read.");}
     else if(!strcmp(name,"launcher")){s.view=LAUNCHER;}
+    else if(!strcmp(name,"instruction") || !strcmp(name,"goal") || !strcmp(name,"loop")){
+        s.view=WORK_INTENT;s.work_mode=!strcmp(name,"goal")?PRO_WORK_GOAL:!strcmp(name,"loop")?PRO_WORK_LOOP:PRO_WORK_TASK;
+    }
+    else if(!strcmp(name,"goal_listening") || !strcmp(name,"loop_listening")){
+        s.view=VOICE;s.voice_open=s.voice_review=recording=true;s.voice_return=WORK_INTENT;
+        s.work_voice_mode=!strcmp(name,"goal_listening")?PRO_WORK_GOAL:PRO_WORK_LOOP;
+    }
+    else if(!strcmp(name,"goal_review") || !strcmp(name,"loop_review")){
+        s.view=DRAFT;s.work_voice_mode=!strcmp(name,"goal_review")?PRO_WORK_GOAL:PRO_WORK_LOOP;
+        draft.page=(ht_draft_page_t){.active=true,.can_send=true,.revision=1,.position=1,.total=1,.agent="design",.name="Design",.id="example"};
+        COPY(draft.page.text,s.work_voice_mode==PRO_WORK_GOAL?
+            "Make the new layout readable and accessible. Keep working until the contrast and touch checks pass.":
+            "Every 30 minutes, check the build and tell me if a new failure needs my attention.");
+    }
     else if(!strcmp(name,"companion")){s.view=COMPANION;}
     else if(!strcmp(name,"daemons")){s.view=DAEMONS;s.preview_character.id=HT_CHARACTER_TUX;}
     else if(!strcmp(name,"scenes")){s.view=SCENES;s.preview_scene=PRO_SCENE_SHORE;}
@@ -245,9 +272,9 @@ def main():
         executable=temp/"preview"
         command=[os.environ.get("CC","cc"),"-std=gnu11","-O1","-g","-Wall","-Wextra","-Werror",
                  "-Wno-unused-function","-Wno-unused-variable","-fsanitize=address,undefined,bounds",
-                 "-DHT_FACE_PX=720","-DDEVICE_PRO_COMPANION=1","-I",str(temp),"-I",str(NATIVE),"-I",str(GENERATED),
+                 "-DHT_FACE_PX=720","-DDEVICE_PRO_COMPANION=1","-DHT_PANEL_NATIVE=1","-I",str(temp),"-I",str(NATIVE),"-I",str(GENERATED),
                  str(temp/"preview.c"),str(temp/"art.S"),*[str(NATIVE/(name+".c")) for name in ("pro_visual","pro_daemon","character","character_motion","character_layout","pro_canvas","terminal","fonts","workspace","selection")],
-                 str(GENERATED/"pro_fonts.c"),"-lz","-o",str(executable)]
+                 str(GENERATED/"pro_fonts.c"),*voice_assets(temp),"-lz","-o",str(executable)]
         subprocess.run(command,check=True)
         env=dict(os.environ);env.setdefault("ASAN_OPTIONS",("detect_leaks=0:" if sys.platform=="darwin" else "detect_leaks=1:")+"abort_on_error=1")
         env.setdefault("UBSAN_OPTIONS","halt_on_error=1:print_stacktrace=1")
@@ -272,7 +299,7 @@ def main():
         sheet.paste(Image.open(OUT/(state+".png")).resize((360,360),Image.Resampling.LANCZOS),(x,y))
         draw.text((x+12,y+368),state.replace("_"," "),font=font,fill="#263b34")
     sheet.save(OUT/"contact-sheet.png")
-    inputs=[NATIVE/name for name in ("ui_habitat.c","pro_home.inc","pro_controls.inc","pro_canvas.c","pro_visual.c","terminal.c")]
+    inputs=[NATIVE/name for name in ("ui_habitat.c","pro_home.inc","pro_controls.inc","pro_work_intent.h","pro_canvas.c","pro_visual.c","terminal.c")]
     inputs += [GENERATED/"pro_fonts.c",GENERATED/"pro_art.pack"]
     manifest={"description":"Actual production firmware renderer with illustrative state fixtures; RGB565 expanded to PNG.","states":list(states),
               "source_sha256":{str(path.relative_to(DEVICE)):hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}}

@@ -42,6 +42,7 @@ code = r'''
 #include "draft.h"
 #include "character.h"
 #include "pro_canvas.h"
+#include "pro_work_intent.h"
 #include "../../pro_voice_samples.h"
 #include "pro_visual.h"
 #include "pro_art.h"
@@ -597,6 +598,14 @@ static void voice_render_geometry(void) {
     assert(discard && discard->enabled && review && review->enabled);
     assert(discard->rect.h>=64 && review->rect.h>=64);
     tap(630,350,75); assert(stops==1 && !starts);
+    for(int lang=0;lang<2;lang++) for(int mode=PRO_WORK_GOAL;mode<=PRO_WORK_LOOP;mode++) {
+        reset(); COPY(s.voice_language,lang?"vi":"en");
+        s.view=VOICE; s.voice_open=s.voice_review=recording=true;
+        s.voice_return=WORK_INTENT; s.work_voice_mode=mode;
+        copy(s.voice_target,sizeof s.voice_target,"A long pane name for your current project");
+        render_actual(); assert(has_text(PRO_TR(pro_work_label(mode))) && has_text(PRO_TR("Tap to review.")));
+        assert(!has_text(PRO_TR("Tap to send. Hold to review first.")));
+    }
 }
 static void voice_wait_discard(void) {
     reset(); s.view=VOICE; s.voice_open=s.voice_waiting=true; recording=false;

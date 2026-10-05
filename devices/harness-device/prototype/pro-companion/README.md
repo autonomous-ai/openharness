@@ -93,11 +93,13 @@ do not establish those qualities.
 | Home | Drag up or down across the center | Scroll the selected desktop terminal; release can continue with inertia |
 | Home, while scrolling coasts | Tap | Stop that scroll; a subsequent deliberate tap starts voice |
 | Home | Hold the creature, or tap Menu | Open Menu |
+| Menu | Instruct | Choose Task, Goal or Loop for the selected pane, then Speak |
 | Home | Tap the workspace name | Open Tabs |
 | Home | Tap the bottom pane/activity area | Open Panes |
 | Side button | Tap / hold at least 0.8 seconds | Back or stop / toggle the screen |
 | Listening | Tap the creature | Finish capture and send through the existing voice route |
 | Listening | Hold and release, or tap Review first | Read the transcript before sending, when the host supports drafts |
+| Goal or Loop listening | Finish capture | Review the transcript, then explicitly Send |
 | Listening or processing | Discard / Stop sending | Cancel the pending voice operation; cancellation is not an undo for a message already delivered |
 | Speaking | Touch the screen | Stop speech immediately; a deliberate central tap starts voice again |
 | Home with a result | Tap Read | Read more of that result on the Pro |
@@ -138,8 +140,23 @@ sound and companion preferences. Compatible hosts also expose:
 - **Carry text**, allowing a selected passage to accompany speech to another pane.
 - **Latest output** and **Return**, preserving the prior reading place.
 - Voice drafts with re-speaking a part, append, undo, discard and explicit Send.
+- **Instruct** keeps one-shot Task speech available for every engine. With a
+  draft-capable host, Claude exposes Goal and Loop; Codex exposes Goal. Unknown
+  engines expose Task only. A Loop's task and interval are spoken together.
+  Goal and Loop always open transcript review, preserving their mode while
+  re-speaking or appending. The pane is pinned when Instruct opens and checked
+  again before recording and Send; stale touches cannot change its recipient.
+  These use the existing host commands, not an on-device scheduler. Home speech
+  remains a quick Task with optional review.
 - Questions with single or multiple choices, spoken answers where supported,
   answer review and delivery receipts.
+
+Goal/Loop availability currently follows the host's known engine IDs and
+`voice.draft` feature. The protocol has no per-pane command capability, engine
+generation precondition on Send, or goal/loop lifecycle and schedule receipt.
+The device cannot prove a loop was scheduled or show its next run. Atomic host
+validation is still needed to reject an engine change after the device's final
+check; older host fallback must not be presented as successful scheduling.
 
 Unavailable host features stay out of Controls. The larger screen does not
 invent arbitrary desktop commands: sharing, branch/PR management, window
@@ -298,6 +315,8 @@ python3 devices/harness-device/firmware/test/test_pro_language.py
 python3 devices/harness-device/firmware/test/test_pro_controls.py
 python3 devices/harness-device/firmware/test/test_pro_touch_ui.py
 python3 devices/harness-device/firmware/test/test_pro_voice_samples.py
+python3 devices/harness-device/firmware/test/test_voice_ui.py --pro
+python3 devices/harness-device/firmware/test/test_draft_ui.py --pro
 python3 devices/harness-device/firmware/test/test_audio_speech.py
 python3 devices/harness-device/firmware/test/test_cable_speech.py
 python3 devices/harness-device/firmware/test/test_pro_visual.py

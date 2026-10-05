@@ -114,6 +114,7 @@ static void reset(bool stress) {
         COPY(s.tabs[i].name,i==0?"My first workspace":i==1?"A studio for small, wonderful things":"The next chapter");
         if(stress) fill(s.tabs[i].name,sizeof s.tabs[i].name);
     }
+    COPY(s.work_agent,"agent-0");COPY(s.agents[0].engine,"claude");
     COPY(s.selected_tab,"tab-1");ht_tab_carousel_reset(&tab_carousel,s.tab_count,1);
     for(int i=0;i<s.machine_count;i++) {
         snprintf(s.machines[i].id,sizeof s.machines[i].id,"machine-%d",i);
@@ -204,7 +205,7 @@ static void portrait(const ht_scene_t *f,const char *dir,const char *name) {
 int main(int argc,char **argv) {
     const char *dir=argc>1?argv[1]:NULL;
     static const struct { view_t view;const char *name; } screens[]={
-        {LAUNCHER,"launcher"},{LANGUAGE,"language"},{VOICE_SAMPLES,"voice"},{VOICE_PARAMS,"voice-params"},{AGENTS,"panes"},{TABS,"tabs"},{INBOX,"updates"},{MACHINES,"machines"},
+        {LAUNCHER,"launcher"},{WORK_INTENT,"instruction"},{LANGUAGE,"language"},{VOICE_SAMPLES,"voice"},{VOICE_PARAMS,"voice-params"},{AGENTS,"panes"},{TABS,"tabs"},{INBOX,"updates"},{MACHINES,"machines"},
         {MODELS,"models"},{SETTINGS,"controls"},{COMPANION,"companion"},{READER,"read"},
         {QUESTION,"question"},{CHOICE,"choices"},{ANSWER_REVIEW,"answer"},{SELECTION,"selection"},
         {FORM,"form"},{DRAFT,"draft"},{DRAFT_OPTIONS,"draft-options"},{STOP,"stop"},{MESSAGE,"message"},
@@ -220,6 +221,22 @@ int main(int argc,char **argv) {
         assert(pro_render_controls(&voice));inspect(&voice,"voice sample");
         s.view=VOICE_PARAMS;ht_scene_clear(&voice,BG);assert(pro_render_controls(&voice));inspect(&voice,"voice params");
     }
+    const char *engines[]={"claude","codex","opencode","","CLAUDE","claude-extra"};
+    for(unsigned engine=0;engine<sizeof engines/sizeof *engines;engine++) for(int review=0;review<2;review++) {
+        reset(false);COPY(s.agents[0].engine,engines[engine]);features=review?~0u:0;s.view=WORK_INTENT;
+        ht_scene_t work;ht_scene_clear(&work,BG);assert(pro_render_controls(&work));inspect(&work,"instruction capabilities");
+        unsigned expected=1+(review&&engine<2)+(review&&engine==0);
+        assert(action_count(A_WORK_MODE,true)==expected&&action_count(A_WORK_RECORD,true)==1);
+    }
+    features=~0u;
+    reset(false);s.view=WORK_INTENT;s.connected=false;ht_scene_t missing;ht_scene_clear(&missing,BG);
+    assert(pro_render_controls(&missing));inspect(&missing,"instruction offline");assert(!action_count(A_WORK_RECORD,true));
+    reset(false);s.view=WORK_INTENT;s.work_mode=PRO_WORK_LOOP;COPY(s.agents[0].engine,"codex");ht_scene_clear(&missing,BG);
+    assert(pro_render_controls(&missing));inspect(&missing,"instruction changed engine");assert(!action_count(A_WORK_RECORD,true));
+    reset(false);s.view=WORK_INTENT;s.work_mode=PRO_WORK_GOAL;ht_scene_clear(&missing,BG);
+    assert(pro_render_controls(&missing));portrait(&missing,dir,"instruction-goal");
+    s.view=DRAFT;s.work_voice_mode=PRO_WORK_GOAL;ht_scene_clear(&missing,BG);
+    assert(pro_render_controls(&missing));inspect(&missing,"goal draft");portrait(&missing,dir,"goal-draft");
     reset(false);s.view=SETTINGS;s.offset=7;ht_scene_t scene;ht_scene_clear(&scene,BG);
     assert(pro_render_controls(&scene));inspect(&scene,"controls-more");portrait(&scene,dir,"controls-more");
     for(int connected=0;connected<2;connected++) {

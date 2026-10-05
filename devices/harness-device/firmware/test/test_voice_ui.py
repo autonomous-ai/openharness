@@ -7,6 +7,7 @@ from pathlib import Path
 import os
 import re
 import subprocess
+import sys
 import tempfile
 
 native = Path(__file__).resolve().parent / '../main/ui/habitat'
@@ -25,7 +26,7 @@ harness += r'''
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-// This fixture exercises the round renderer, where localization is inert.
+// Localization is covered separately; exercise both shared and Pro handlers.
 #define PRO_TR(text) (text)
 #include <assert.h>
 #include "../../cable_features.h"
@@ -37,12 +38,14 @@ static bool cable_client_supports(uint32_t features) { return (host_features & f
 #include "form.h"
 #include "draft.h"
 #include "workspace.h"
-enum { HOME, AGENTS, AGENT, COMPANION, VOICE, MESSAGE, SELECTION, FORM, QUESTION, CHOICE, ANSWER_REVIEW, DRAFT, DRAFT_OPTIONS, INBOX };
-enum { A_VOICE, A_VOICE_STOP, A_VOICE_ABORT };
-enum { VOICE_CMD_NONE, VOICE_CMD_GOAL };
+#include "pro_work_intent.h"
+enum { HOME, AGENTS, AGENT, COMPANION, VOICE, MESSAGE, SELECTION, FORM, QUESTION, CHOICE, ANSWER_REVIEW, DRAFT, DRAFT_OPTIONS, INBOX, LAUNCHER, WORK_INTENT, VOICE_SAMPLES, VOICE_PARAMS };
+enum { A_VOICE, A_VOICE_STOP, A_VOICE_ABORT, A_WORK_INTENT, A_WORK_MODE, A_WORK_RECORD,
+    A_DRAFT_EDIT, A_DRAFT_APPEND, A_DRAFT_UNDO, A_DRAFT_SEND, A_DRAFT_DISCARD, A_DRAFT_STATE, A_DRAFT_OPTIONS, A_DRAFT_BACK };
+enum { VOICE_CMD_NONE, VOICE_CMD_GOAL, VOICE_CMD_LOOP };
 typedef int view_t;
 typedef struct { int kind, value, dy; uint32_t revision; char id[64], text[192]; } action_t;
-typedef struct { char name[64], id[64]; } agent_t;
+typedef struct { char name[64], id[64], engine[16]; } agent_t;
 static ht_selection_t selection;
 static ht_carry_t carry;
 static ht_visit_t visit;
@@ -56,13 +59,15 @@ static struct {
     uint32_t pet_until, nap_until, voice_retry_until, voice_started, voice_wait_until, voice_generation, voice_question_revision, voice_draft_revision;
     int voice_question_index;
     char title[80], message[256], voice_target[64], pending_focus[64], pending_machine[64], opening_notice[48];
+    char work_agent[64]; uint32_t work_revision; uint8_t work_mode, work_voice_mode;
     struct { bool valid, supported, loading, pending, uncertain; uint32_t revision, deadline; int index; char error[120],speech_error[96],agent[64],token[48]; struct { bool can_text; } item[4]; } q;
     agent_t agents[1];
     struct { bool live_summary; } memory[PANE_MEMORY_MAX];
 } s;
 static uint32_t now;
-static bool audio_active, recording, abort_requested, queue_full;
-static int starts, stops, aborts, cancels, confirms, scroll, gesture, reviews;
+static bool audio_active, recording, abort_requested, queue_full, recipient_missing;
+static int starts, stops, aborts, cancels, confirms, scroll, gesture, reviews, last_cmd;
+static char last_recipient[64];
 static action_t queued;
 static agent_t *active(void) { return &s.agents[0]; }
 #define COPY(dst, src) snprintf(dst, sizeof(dst), "%s", (src) ? (src) : "")
@@ -73,6 +78,10 @@ void surface_tick(uint32_t value) { (void)value; }
 void display_lock(void) {}
 void display_unlock(void) {}
 void display_bump_activity(void) {}
+#ifdef DEVICE_PRO_COMPANION
+static void pro_speech_cancel(bool any) { (void)any; }
+static void pro_voice_sample_stop(void) {}
+#endif
 void ht_scroll_cancel(int *value) { (void)value; }
 void ht_gesture_guard(int *value, uint32_t time) { (void)value; (void)time; }
 void ht_gesture_cancel(int *value) { (void)value; }
@@ -83,7 +92,7 @@ void audio_client_request_review(void) { reviews++; }
 void audio_client_abort(void) { aborts++; abort_requested = true; }
 void audio_client_copy_upload_id(char *dst, size_t cap) { snprintf(dst, cap, "capture-%d", starts); }
 void audio_client_start_cable(const char *id, int cmd) {
-    (void)id; (void)cmd; starts++; audio_active = recording = true; abort_requested = false;
+    COPY(last_recipient,id); last_cmd=cmd; starts++; audio_active = recording = true; abort_requested = false;
 }
 void audio_client_start_search(const char *id, const char *selected, unsigned revision) {
     assert(!strcmp(selected,"search-test") && revision==3); audio_client_start_cable(id,VOICE_CMD_NONE);
@@ -105,14 +114,16 @@ void audio_client_start_carry(const char *id, const char *carried) {
     assert(!strcmp(carried,"carry-test")); audio_client_start_cable(id, VOICE_CMD_NONE);
 }
 void cable_client_voice_confirm(const char *route, const char *id) { (void)route; (void)id; confirms++; }
-int find(const char *id) { return id && !strcmp(id, "agent") ? 0 : -1; }
+int find(const char *id) { return !recipient_missing && id && !strcmp(id, "agent") ? 0 : -1; }
 bool is_question(const char *id) { (void)id; return false; }
 void open_question(void) { assert(false); }
 bool queue(action_t action) { if (queue_full) return false; queued = action; return true; }
 '''
 harness += function('question_view') + function('copy') + function('input_cancel') + function('view') + function('voice_close') + function('workspace_failed')
 dispatch = source.split('case A_VOICE:\n', 1)[1].split('case A_PET:', 1)[0]
-harness += 'static void dispatch(action_t a) { switch (a.kind) { case A_VOICE:\n' + dispatch + '} }\n'
+intent = source.split('case A_WORK_INTENT:\n', 1)[1].split('case A_LANGUAGE:', 1)[0]
+draft_actions = source.split('case A_DRAFT_EDIT:\n', 1)[1].split('case A_HOME:', 1)[0]
+harness += 'static void dispatch(action_t a) { switch (a.kind) {\n#ifdef DEVICE_PRO_COMPANION\ncase A_WORK_INTENT:\n' + intent + '#endif\ncase A_DRAFT_EDIT:\n' + draft_actions + 'case A_VOICE:\n' + dispatch + '} }\n'
 worker = source.split('static void worker(', 1)[1].split('case A_VOICE:\n', 1)[1].split('case A_STOP_YES:', 1)[0]
 harness += 'static void work(action_t a) { switch (a.kind) { case A_VOICE:\n' + worker + '} }\n'
 for name in ['habitat_tick', 'ui_set_connected', 'ui_show_error', 'ui_cable_toast',
@@ -125,7 +136,9 @@ static void reset(void) {
     host_features=31; memset(&draft,0,sizeof draft); reviews=0; memset(&s, 0, sizeof(s)); memset(&visit, 0, sizeof(visit)); memset(&carry,0,sizeof(carry)); now = 1000;
     s.ready = s.connected = true; s.view = HOME;
     strcpy(s.agents[0].name, "Agent");
+    strcpy(s.agents[0].id,"agent"); strcpy(s.agents[0].engine,"claude");
     audio_active = recording = abort_requested = queue_full = false;
+    recipient_missing=false; last_cmd=-1; last_recipient[0]=0;
     starts = stops = aborts = cancels = confirms = 0;
 }
 static void speak(void) { dispatch((action_t){.kind = A_VOICE, .id = "agent"}); }
@@ -133,7 +146,88 @@ static void done(void) { dispatch((action_t){.kind = A_VOICE_STOP}); }
 static void discard(void) { dispatch((action_t){.kind = A_VOICE_ABORT}); }
 static void finish_audio(void) { audio_active = recording = false; }
 static void begin(void) { speak(); work(queued); assert(recording && s.view == VOICE); }
+#ifdef DEVICE_PRO_COMPANION
+static action_t instruction_action(int kind, int mode) {
+    action_t a={.kind=kind,.value=mode,.revision=s.work_revision}; COPY(a.id,s.work_agent); return a;
+}
+static void choose_instruction(int mode) {
+    dispatch((action_t){.kind=A_WORK_INTENT});
+    assert(s.view==WORK_INTENT && s.work_mode==PRO_WORK_TASK && !starts && !s.voice_open);
+    dispatch(instruction_action(A_WORK_MODE,mode));
+}
+static int draft_sends;
+static bool draft_command(const ht_draft_command_t *command, void *ctx) {
+    (void)ctx; if(command->op==HT_DRAFT_SEND) draft_sends++; return true;
+}
+static void test_pro_instructions(void) {
+    reset(); begin(); assert(last_cmd==VOICE_CMD_NONE && !reviews && !s.voice_review);
+    for(int mode=PRO_WORK_GOAL;mode<=PRO_WORK_LOOP;mode++) {
+        reset(); choose_instruction(mode); assert(s.work_mode==mode && !starts);
+        dispatch(instruction_action(A_WORK_RECORD,0));
+        assert(s.voice_start_pending && s.voice_review && s.work_voice_mode==mode && !starts);
+        work(queued); assert(recording && !strcmp(last_recipient,"agent"));
+        assert(last_cmd==(mode==PRO_WORK_GOAL?VOICE_CMD_GOAL:VOICE_CMD_LOOP) && reviews==1);
+        assert(s.voice_return==WORK_INTENT); done(); finish_audio();
+        ui_voice_routed(true,false,"","agent","Agent",1);
+        assert(s.voice_open && s.voice_waiting); // Only a draft reply can release required review.
+        discard(); assert(!s.voice_open);
+    }
+    const char *engines[]={"claude","codex","opencode","","CLAUDE","claude-extra"};
+    for(unsigned i=0;i<sizeof engines/sizeof engines[0];i++) for(int review=0;review<2;review++) {
+        for(int mode=PRO_WORK_GOAL;mode<=PRO_WORK_LOOP;mode++) {
+            reset(); COPY(s.agents[0].engine,engines[i]); host_features=review?CABLE_FEATURE_DRAFT:0;
+            choose_instruction(mode);
+            bool allowed=review && (mode==PRO_WORK_GOAL?i<2:i==0);
+            assert(s.work_mode==(allowed?mode:PRO_WORK_TASK));
+            dispatch((action_t){.kind=A_VOICE,.value=pro_work_voice_value(mode),.id="agent"});
+            assert(s.voice_open==allowed);
+            if(allowed) { work(queued); assert(starts==1 && reviews==1); }
+            else assert(!starts);
+        }
+    }
+    reset(); choose_instruction(PRO_WORK_GOAL);
+    action_t stale=instruction_action(A_WORK_RECORD,0); stale.revision--;
+    dispatch(stale); assert(!s.voice_open); stale=instruction_action(A_WORK_RECORD,0);
+    COPY(stale.id,"other-pane"); dispatch(stale); assert(!s.voice_open);
+    stale=instruction_action(A_WORK_MODE,PRO_WORK_LOOP); stale.revision--;
+    dispatch(stale); assert(s.work_mode==PRO_WORK_GOAL);
+    reset(); choose_instruction(PRO_WORK_GOAL); queue_full=true;
+    dispatch(instruction_action(A_WORK_RECORD,0)); assert(!s.voice_open && !starts);
+    for(int invalidation=0;invalidation<3;invalidation++) {
+        reset(); choose_instruction(PRO_WORK_LOOP); dispatch(instruction_action(A_WORK_RECORD,0));
+        action_t delayed=queued;
+        if(invalidation==0) COPY(s.agents[0].engine,"codex");
+        else if(invalidation==1) recipient_missing=true;
+        else host_features=0;
+        work(delayed); assert(!starts && !s.voice_open && s.view==MESSAGE && s.message[0]);
+    }
+    reset(); choose_instruction(PRO_WORK_LOOP); dispatch(instruction_action(A_WORK_RECORD,0));
+    action_t delayed=queued; discard(); work(delayed); assert(!starts && !s.voice_open);
+    reset(); choose_instruction(PRO_WORK_GOAL); dispatch(instruction_action(A_WORK_RECORD,0));
+    work(queued); now=601000; habitat_tick(); assert(stops==1 && s.voice_waiting && reviews==1 && s.voice_review);
+    for(int invalidation=0;invalidation<5;invalidation++) {
+        reset(); s.work_voice_mode=PRO_WORK_LOOP; COPY(s.work_agent,"agent"); s.view=DRAFT; draft_sends=0;
+        ht_draft_page_t page={.active=true,.can_send=true,.revision=3,.agent="agent",.id="draft-test"};
+        ht_draft_open(&draft,&page,draft_command,NULL);
+        if(invalidation==1) COPY(s.agents[0].engine,"codex");
+        else if(invalidation==2) recipient_missing=true;
+        else if(invalidation==3) host_features=0;
+        else if(invalidation==4) COPY(s.work_agent,"different-pane");
+        dispatch((action_t){.kind=A_DRAFT_SEND,.revision=3,.text="draft-test"});
+        assert(draft_sends==(invalidation==0));
+        if(invalidation) assert(draft.page.error[0] && !draft.pending);
+    }
+    reset(); s.work_voice_mode=PRO_WORK_LOOP; COPY(s.work_agent,"agent"); s.view=DRAFT;
+    draft.page=(ht_draft_page_t){.active=true,.revision=3,.id="draft-test",.agent="agent"};
+    dispatch((action_t){.kind=A_DRAFT_APPEND,.revision=3,.dy=3,.text="draft-test"});
+    work(queued); assert(recording && s.work_voice_mode==PRO_WORK_LOOP && s.voice_review);
+    puts("Pro instructions: PASS (engine/host gates, pinned recipient/revision, explicit review, queued invalidation, cancellation and duration cap)");
+}
+#endif
 int main(void) {
+#ifdef DEVICE_PRO_COMPANION
+    test_pro_instructions();
+#endif
     reset(); host_features=0; begin(); dispatch((action_t){.kind=A_VOICE_STOP,.value=1});
     assert(!reviews && !s.voice_review && s.voice_waiting);
     reset(); begin(); dispatch((action_t){.kind=A_VOICE_STOP,.value=1});
@@ -286,6 +380,7 @@ with tempfile.TemporaryDirectory(prefix='harness-voice-ui-') as directory:
     root = Path(directory)
     (root / 'voice_ui.c').write_text(harness)
     subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-O1', '-g',
+                    *(['-DDEVICE_PRO_COMPANION=1'] if '--pro' in sys.argv else []),
                     '-fsanitize=' + os.environ.get('SANITIZERS', 'undefined,bounds'),
                     '-I', str(native), str(root / 'voice_ui.c'), str(native / 'selection.c'), str(native / 'carry.c'), str(native / 'visit.c'), str(native / 'form.c'), str(native / 'draft.c'), str(native / 'workspace.c'),
                     '-o', str(root / 'voice_ui')], check=True)

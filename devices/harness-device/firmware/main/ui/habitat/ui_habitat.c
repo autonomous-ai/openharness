@@ -18,6 +18,7 @@
 #ifdef DEVICE_PRO_COMPANION
 #include "pro_canvas.h"
 #include "pro_visual.h"
+#include "pro_work_intent.h"
 #include "audio_speech.h"
 #include "../companion_speech.h"
 #endif
@@ -62,7 +63,7 @@ static ht_gallery_t gallery;
 typedef enum {
     HOME,
 #ifdef DEVICE_PRO_COMPANION
-    LAUNCHER,
+    LAUNCHER, WORK_INTENT,
     DAEMONS, SCENES, VOICE_SAMPLES, VOICE_PARAMS, LANGUAGE,
 #endif
     AGENTS,
@@ -91,7 +92,7 @@ typedef enum {
     A_FIND, A_FORM, A_FORM_MAIN, A_FORM_BACK, A_FORM_SEND, A_FORM_SAY,
     A_HOME,
 #ifdef DEVICE_PRO_COMPANION
-    A_LAUNCHER,
+    A_LAUNCHER, A_WORK_INTENT, A_WORK_MODE, A_WORK_RECORD,
     A_LANGUAGE, A_LANGUAGE_SET,
     A_DAEMONS, A_SCENES, A_APPEAR_PREVIOUS, A_APPEAR_NEXT, A_APPEAR_USE, A_APPEAR_SAVE,
     A_VOICE_SAMPLES, A_SAMPLE_PREVIOUS, A_SAMPLE_NEXT, A_SAMPLE_PLAY,
@@ -218,6 +219,9 @@ static EXT_RAM_BSS_ATTR struct {
     bool quiet, nap, locked, lock_armed, rim_enabled, focus_face, straight_title;
 #ifdef DEVICE_PRO_COMPANION
     pro_scene_id_t scene_choice, preview_scene;
+    char work_agent[ID_MAX];
+    uint32_t work_revision;
+    uint8_t work_mode, work_voice_mode;
     ht_character_t preview_character;
     struct {
         uint32_t id, poll_due;
@@ -2245,6 +2249,12 @@ static bool carry_emit(const ht_carry_command_t *c, void *ctx)
 static action_t make_action(hit_t h)
 {
     action_t a = {.kind = h.action, .value = h.value, .revision = s.q.revision};
+#ifdef DEVICE_PRO_COMPANION
+    if (h.action == A_WORK_MODE || h.action == A_WORK_RECORD) {
+        COPY(a.id, s.work_agent); a.revision = s.work_revision;
+        return a;
+    }
+#endif
     if (s.view == DRAFT || s.view == DRAFT_OPTIONS) {
         a.revision = draft.page.revision; a.dy = (int)draft.page.revision;
         copy(a.text, sizeof draft.page.id, draft.page.id);
@@ -2372,6 +2382,29 @@ static void dispatch(action_t a)
     case A_LAUNCHER:
         view(LAUNCHER);
         break;
+    case A_WORK_INTENT:
+        if (!s.connected || s.loading || !active() || s.voice_open || carry.active || carry.error[0]) break;
+        COPY(s.work_agent, active()->id);
+        s.work_mode = PRO_WORK_TASK;
+        s.work_revision++;
+        view(WORK_INTENT);
+        break;
+    case A_WORK_MODE:
+    case A_WORK_RECORD: {
+        if (s.view != WORK_INTENT || !s.connected || s.loading || s.voice_open ||
+            a.revision != s.work_revision || strcmp(a.id, s.work_agent)) break;
+        int recipient = find(s.work_agent);
+        if (recipient < 0) break;
+        int mode = a.kind == A_WORK_MODE ? a.value : s.work_mode;
+        if (!pro_work_supported(s.agents[recipient].engine, mode,
+                                cable_client_supports(CABLE_FEATURE_DRAFT))) break;
+        if (a.kind == A_WORK_MODE) { s.work_mode = (uint8_t)mode; change(); break; }
+        a.kind = A_VOICE; a.value = pro_work_voice_value(mode);
+        a.text[0] = 0; a.dy = 0;
+        ht_gesture_guard(&gesture, ms());
+        dispatch(a);
+        break;
+    }
     case A_LANGUAGE:
         view(LANGUAGE);
         break;
@@ -2447,6 +2480,17 @@ static void dispatch(action_t a)
     case A_DRAFT_BACK:
         if ((s.view != DRAFT && s.view != DRAFT_OPTIONS) || !draft.page.active || draft.pending ||
             a.revision != draft.page.revision || strcmp(a.text, draft.page.id)) break;
+#ifdef DEVICE_PRO_COMPANION
+        if (a.kind == A_DRAFT_SEND && s.work_voice_mode != PRO_WORK_TASK) {
+            int recipient = find(draft.page.agent);
+            if (strcmp(draft.page.agent, s.work_agent) || recipient < 0 ||
+                !pro_work_supported(s.agents[recipient].engine, s.work_voice_mode,
+                                                     cable_client_supports(CABLE_FEATURE_DRAFT))) {
+                COPY(draft.page.error, "Choose the pane and instruction again.");
+                change(); break;
+            }
+        }
+#endif
         if (a.kind == A_DRAFT_OPTIONS) view(DRAFT_OPTIONS);
         else if (a.kind == A_DRAFT_BACK) view(DRAFT);
         else if (a.kind == A_DRAFT_EDIT || a.kind == A_DRAFT_APPEND) {
@@ -2635,6 +2679,13 @@ static void dispatch(action_t a)
         dispatch(a); break;
     case A_VOICE:
 #ifdef DEVICE_PRO_COMPANION
+        // Revalidate the real recipient at dispatch. Never turn an unsupported
+        // Goal/Loop into an ordinary task through the host's legacy fallback.
+        if (a.value == 1 || a.value == 8) {
+            int recipient = find(a.id);
+            if (recipient < 0 || !pro_work_supported(s.agents[recipient].engine,
+                    pro_work_voice_mode(a.value), cable_client_supports(CABLE_FEATURE_DRAFT))) break;
+        }
         pro_speech_cancel(true);
 #endif
         if (a.value != 2 && a.value != 4 && a.value != 5 && a.value != 6 && a.value != 7 && s.view != SELECTION && carry.error[0]) {
@@ -2679,6 +2730,13 @@ static void dispatch(action_t a)
             s.voice_carry = a.value == 3;
             s.voice_search = a.value == 7;
             s.voice_review = a.value == 5 || a.value == 6;
+#ifdef DEVICE_PRO_COMPANION
+            if (a.value != 5 && a.value != 6) s.work_voice_mode = pro_work_voice_mode(a.value);
+            if (a.value == 1 || a.value == 8) {
+                COPY(s.work_agent, a.id);
+                s.voice_review = true;
+            }
+#endif
             s.voice_draft_append = a.value == 6;
             s.voice_draft_revision = (uint32_t)a.dy;
             s.nap = false;
@@ -2697,7 +2755,11 @@ static void dispatch(action_t a)
         break;
     case A_VOICE_STOP:
         if (s.voice_open && !s.voice_start_pending && !s.voice_waiting && audio_client_recording()) {
-            if (a.value == 1 && cable_client_supports(CABLE_FEATURE_DRAFT) && !s.voice_search && (s.voice_return == HOME || s.voice_return == AGENT || s.voice_return == SELECTION)) {
+            if (a.value == 1 && cable_client_supports(CABLE_FEATURE_DRAFT) && !s.voice_search && (s.voice_return == HOME || s.voice_return == AGENT || s.voice_return == SELECTION
+#ifdef DEVICE_PRO_COMPANION
+                || s.voice_return == WORK_INTENT
+#endif
+                )) {
                 s.voice_review = true; audio_client_request_review();
             }
             audio_client_stop();
@@ -2991,6 +3053,20 @@ static void worker(void *unused)
             display_lock();
             if (s.connected && s.voice_open && s.voice_start_pending &&
                 a.revision == s.voice_generation) {
+#ifdef DEVICE_PRO_COMPANION
+                if (a.value == 1 || a.value == 8) {
+                    int recipient = find(a.id);
+                    if (recipient < 0 || !pro_work_supported(s.agents[recipient].engine,
+                            pro_work_voice_mode(a.value), cable_client_supports(CABLE_FEATURE_DRAFT))) {
+                        voice_close();
+                        COPY(s.title, "Instruction unavailable");
+                        COPY(s.message, "Choose the pane and instruction again.");
+                        view(MESSAGE);
+                        display_unlock();
+                        break;
+                    }
+                }
+#endif
                 if (a.value == 7) audio_client_start_search(a.id, a.text, (unsigned)a.dy);
                 else if (a.value == 5 || a.value == 6) audio_client_start_draft(a.text, (unsigned)a.dy, a.value == 6);
                 else if (a.value == 4) audio_client_start_question(a.id,a.text,(unsigned)a.dy);
@@ -2998,7 +3074,16 @@ static void worker(void *unused)
                 else if (a.value == 3) audio_client_start_carry(a.id,a.text);
                 else if (a.text[0] && a.dy > 0) audio_client_start_selection(a.id, a.text, (unsigned)a.dy);
                 else audio_client_start_cable(a.id[0] ? a.id : NULL,
-                                              a.value == 1 ? VOICE_CMD_GOAL : VOICE_CMD_NONE);
+                                              a.value == 1 ? VOICE_CMD_GOAL :
+#ifdef DEVICE_PRO_COMPANION
+                                              a.value == 8 ? VOICE_CMD_LOOP :
+#endif
+                                              VOICE_CMD_NONE);
+#ifdef DEVICE_PRO_COMPANION
+                // Set before yielding to UI input; every finish path, including
+                // the duration cap, then emits voice.end review=true.
+                if (a.value == 1 || a.value == 8) audio_client_request_review();
+#endif
                 s.voice_start_pending = false;
                 change();
             }
@@ -4782,6 +4867,9 @@ void ui_voice_draft(const cJSON *p)
     if (!draft_page(p, &page) || !page.active || !cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "ok"))) return;
     display_lock();
     if (!s.voice_open || !s.voice_waiting || !s.voice_review ||
+#ifdef DEVICE_PRO_COMPANION
+        (s.work_voice_mode != PRO_WORK_TASK && strcmp(page.agent, s.work_agent)) ||
+#endif
         (s.voice_return == DRAFT && (!draft.page.active || strcmp(page.id, draft.page.id) ||
             draft.page.revision != s.voice_draft_revision || page.revision <= s.voice_draft_revision))) {
         display_unlock(); return;

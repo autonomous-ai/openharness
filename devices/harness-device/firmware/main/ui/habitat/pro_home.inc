@@ -78,9 +78,11 @@ static void pro_render_voice(ht_scene_t *f)
 {
     bool recording = !s.voice_start_pending && !s.voice_waiting && audio_client_recording();
     bool can_review = recording && cable_client_supports(CABLE_FEATURE_DRAFT) &&
-        !s.voice_search && (s.voice_return == HOME || s.voice_return == AGENT || s.voice_return == SELECTION);
+        !s.voice_search && (s.voice_return == HOME || s.voice_return == AGENT || s.voice_return == SELECTION || s.voice_return == WORK_INTENT);
     pro_visual_background(f, s.scene_choice, character.id);
     ht_pro_text(f, 44, 36, 632, &ht_pro_32, color(0x365343), s.voice_target);
+    if (s.work_voice_mode != PRO_WORK_TASK)
+        ht_pro_text(f, 44, 83, 632, &ht_pro_24, color(0x627466), PRO_TR(pro_work_label(s.work_voice_mode)));
     pro_visual_character(f, &character, recording ? HT_CHARACTER_LISTENING : HT_CHARACTER_WORKING,
                           false, 185, 132, ms(), s.quiet, false);
     const char *title = s.voice_start_pending ? PRO_TR("Getting ready...") :
@@ -91,7 +93,7 @@ static void pro_render_voice(ht_scene_t *f)
     ht_pro_rect(f, 28, 480, 664, 112, 24, color(0xfbf9ef));
     ht_pro_text(f, 44, 496, 632, &ht_pro_42, color(0x263b34), title);
     ht_pro_text(f, 44, 554, 632, &ht_pro_24, color(0x627466),
-        recording ? (can_review ? PRO_TR("Tap to send. Hold to review first.") : PRO_TR("Tap to finish speaking.")) :
+        recording ? (s.work_voice_mode != PRO_WORK_TASK ? PRO_TR("Tap to review.") : can_review ? PRO_TR("Tap to send. Hold to review first.") : PRO_TR("Tap to finish speaking.")) :
         PRO_TR("Your words stay with the selected pane."));
     ht_pro_rect(f, 0, 596, 720, 124, 0, color(0xfbf9ef));
     pro_control(f, 44, 618, 288, 72, s.voice_waiting ? PRO_TR("Stop sending") : PRO_TR("Discard"), A_VOICE_ABORT, 0, true);

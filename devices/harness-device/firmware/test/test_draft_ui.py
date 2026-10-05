@@ -3,6 +3,7 @@ from pathlib import Path
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from native_shapes import defines
 native = Path(__file__).resolve().parent / '../main/ui/habitat'
@@ -15,12 +16,22 @@ code=r'''
 #include "terminal.h"
 #include "draft.h"
 #include "carry.h"
+#include "pro_work_intent.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#ifdef DEVICE_PRO_COMPANION
+// This fixture checks packet ownership, not Pro typography. The native Pro
+// controls suite compiles the actual proportional fonts and reading layout.
+#define ht_pro_32 ht_nav_32
+#define ht_pro_text_rows ht_text_rows
+void ht_pro_raster(const ht_run_t *run,ht_rect_t clip,uint16_t *out) {
+    (void)run;(void)clip;(void)out;assert(false);
+}
+#endif
 enum {HOME,DRAFT,DRAFT_OPTIONS,VOICE,MESSAGE};
 typedef struct cJSON {const char *string,*valuestring;int type,valueint;double valuedouble;struct cJSON *child,*next;} cJSON;
 enum {STRING=1,TRUE=2,NUMBER=3};
@@ -33,7 +44,7 @@ static const cJSON *cJSON_GetObjectItemCaseSensitive(const cJSON *v,const char *
 static cJSON object(cJSON *children,int n){for(int i=0;i<n;i++)children[i].next=i+1<n?&children[i+1]:NULL;return(cJSON){.child=children};}
 static ht_draft_t draft;
 static ht_carry_t carry;
-static struct {bool voice_open,voice_waiting,voice_review;int voice_return,view,offset;uint32_t voice_draft_revision;char title[80],message[256];} s;
+static struct {bool voice_open,voice_waiting,voice_review;int voice_return,view,offset,work_voice_mode;uint32_t voice_draft_revision;char title[80],message[256],work_agent[64];} s;
 static int gesture,changes;
 static uint32_t ms(void){return 1000;}
 static void change(void){changes++;}
@@ -67,6 +78,11 @@ int main(void){
     ui_voice_draft(&p);assert(!draft.page.active); // Normal tap-to-send cannot consume a draft reply.
     s.voice_review=true;ui_voice_draft(&p);
     assert(draft.page.active && !s.voice_open && s.view==DRAFT && !strcmp(draft.page.name,"Original recipient"));
+#ifdef DEVICE_PRO_COMPANION
+    ht_draft_reset(&draft); s.voice_open=s.voice_waiting=s.voice_review=true;s.work_voice_mode=PRO_WORK_GOAL;
+    strcpy(s.work_agent,"different");ui_voice_draft(&p);assert(!draft.page.active && s.voice_open);
+    strcpy(s.work_agent,"a");ui_voice_draft(&p);assert(draft.page.active && !s.voice_open && s.work_voice_mode==PRO_WORK_GOAL);
+#endif
     // An edit reply must match both the retained draft and the recording's revision.
     s.voice_open=s.voice_waiting=s.voice_review=true;s.voice_return=DRAFT;s.voice_draft_revision=1;
     fields[0].valuestring="wrong";fields[1].valueint=fields[1].valuedouble=2;ui_voice_draft(&p);assert(s.voice_open);
@@ -94,5 +110,6 @@ int main(void){
 with tempfile.TemporaryDirectory(prefix='harness-draft-ui-') as d:
     root=Path(d);(root/'test.c').write_text(code)
     subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-O1','-g','-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),
+        *(['-DDEVICE_PRO_COMPANION=1','-DDRAFT_ROWS=6'] if '--pro' in sys.argv else []),
         '-I',str(native),str(root/'test.c'),str(native/'draft.c'),str(native/'carry.c'),str(native/'terminal.c'),str(native/'fonts.c'),'-o',str(root/'test')],check=True)
     subprocess.run([str(root/'test')],check=True)
