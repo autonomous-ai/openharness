@@ -2,6 +2,7 @@ import importlib.util
 import os
 from pathlib import Path
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,27 @@ import unittest
 spec = importlib.util.spec_from_file_location('runtime_native', Path(__file__).with_name('runtime_native.py'))
 runtime = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runtime)
+
+
+class AgentEvidenceTests(unittest.TestCase):
+    def test_retains_private_conversation_without_auth_or_unrelated_tables(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            folder = home / '.local/share/opencode'
+            folder.mkdir(parents=True)
+            (folder / 'auth.json').write_text('private-auth-must-not-be-retained')
+            with sqlite3.connect(folder / 'opencode.db') as db:
+                db.executescript('CREATE TABLE message (id, session_id, time_created, data);'
+                                 'CREATE TABLE part (id, message_id, session_id, time_created, data);'
+                                 'CREATE TABLE secret (data);'
+                                 "INSERT INTO secret VALUES ('private-secret');")
+                db.execute('INSERT INTO message VALUES (?, ?, ?, ?)', ('m1', 's1', 1, '{"role":"user"}'))
+                db.execute('INSERT INTO part VALUES (?, ?, ?, ?, ?)', ('p1', 'm1', 's1', 1, '{"text":"Create sum.py"}'))
+            evidence = runtime.agent_transcript(home)
+            self.assertEqual(set(evidence), {'messages', 'parts'})
+            self.assertEqual(evidence['parts'][0]['data'], '{"text":"Create sum.py"}')
+            self.assertNotIn('private-', str(evidence))
+            self.assertEqual(runtime.agent_transcript(home / 'absent')['status'], 'unavailable')
 
 
 @unittest.skipUnless(sys.platform == 'linux' and hasattr(os, 'pidfd_open'), 'Linux process ownership check')

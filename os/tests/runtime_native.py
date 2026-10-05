@@ -15,6 +15,7 @@ import shlex
 import shutil
 import signal
 import socket
+import sqlite3
 import struct
 import subprocess
 import tempfile
@@ -42,6 +43,20 @@ def wait(predicate, label, seconds=30):
 def checksum(path):
     with path.open('rb') as handle:
         return hashlib.file_digest(handle, 'sha256').hexdigest()
+
+
+def agent_transcript(home):
+    """Read only conversation rows from the fixture's fresh, isolated agent home."""
+    database = home / '.local/share/opencode/opencode.db'
+    if not database.is_file():
+        return {'status': 'unavailable', 'reason': 'No agent conversation database'}
+    with sqlite3.connect(database.as_uri() + '?mode=ro', uri=True, timeout=2) as db:
+        db.row_factory = sqlite3.Row
+        # Do not archive the database, auth/config files, or unrelated tables.
+        return {table: [dict(row) for row in db.execute(sql)] for table, sql in [
+            ('messages', 'SELECT id, session_id, time_created, data FROM message ORDER BY time_created, id'),
+            ('parts', 'SELECT id, message_id, session_id, time_created, data FROM part ORDER BY time_created, id'),
+        ]}
 
 
 def finish_fixture_processes(home):
@@ -348,6 +363,7 @@ def main():
                       'Write the actual file to that absolute path. It must accept zero or more '
                       'signed integer command-line arguments, print their sum as one integer, and exit successfully. '
                       'No arguments must print 0. Test it. Do the work now without questions or subagents.')
+            receipt['agent_prompt'] = prompt
             # Keep the agent open as it is on the OS. A completed `opencode run`
             # process is archived by Harness; that is not a running pane to retain.
             agent_command = shlex.join(['opencode', '--prompt', prompt])
@@ -427,6 +443,11 @@ def main():
             try:
                 if agent_logs.is_dir():
                     shutil.copytree(agent_logs, output / 'opencode-logs')
+                try:
+                    transcript = agent_transcript(home)
+                except (OSError, sqlite3.Error) as error:
+                    transcript = {'status': 'unavailable', 'reason': str(error)}
+                (output / 'opencode-transcript.json').write_text(json.dumps(transcript, indent=2) + '\n')
                 receipt['discovered_project_files'] = [str(path.relative_to(base)) for path in base.rglob('sum.py')]
             except OSError as error:
                 cleanup_errors.append('Agent log capture: ' + str(error))
