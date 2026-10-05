@@ -92,6 +92,7 @@ class InterruptedUpdates(unittest.TestCase):
         with patch.object(system, 'checkpoint', side_effect=self.save_checkpoint) as save:
             def failed_pacman(argv, **kwargs):
                 self.assertEqual(argv, ['pacman', '-Syyu'])
+                self.assertIsNone(kwargs.get('stdin'))
                 pending = system.pending_update()
                 self.assertIsNone(pending['exit_status'])
                 self.assertEqual(pending['checkpoint'], 'before-update-123')
