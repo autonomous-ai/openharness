@@ -122,6 +122,11 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // already gone before the follow-up command could reach the server.
     // Whoever created the pane owns turning this back off; see `clearPaneRemainOnExit`.
     args.push(';', 'set-option', '-w', 'remain-on-exit', 'on')
+    // An agent's session never has a client attached, so a person's `set -g destroy-unattached on`
+    // (in their ~/.tmux.conf, which this server loads) ended every agent the moment it was made, and
+    // Harness could not run at all on their machine (found end to end, e2e/tmuxconf.e2e.ts). Turned
+    // off for this session only, in this same invocation, before the server can act on it.
+    args.push(';', 'set-option', 'destroy-unattached', 'off')
     // Same invocation, same reason: an engine asks its terminal for its colours (OSC 10/11) in its
     // first milliseconds and never again, so the style has to be there before the engine is.
     const style = windowStyleOf(this.hostTheme())
