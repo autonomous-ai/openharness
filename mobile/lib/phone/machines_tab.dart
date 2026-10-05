@@ -7,7 +7,6 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/empty_state.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
-import 'link_page.dart';
 import 'welcome/connect_computer.dart';
 import 'tty_controls.dart';
 import 'tty.dart';
@@ -155,7 +154,8 @@ class _Body extends StatelessWidget {
   Widget _row(BuildContext context, MachineState state, Tty tty) {
     final status = phoneMachineStatusOf(state);
     final count = state.agents.length;
-    final (String word, Color color, String detail) = switch (status) {
+    final machineId = state.machine.machineId;
+    var (String word, Color color, String detail) = switch (status) {
       PhoneMachineStatus.ready => (
         'ready',
         tty.green,
@@ -175,31 +175,28 @@ class _Body extends StatelessWidget {
         'turn it on, or run harness start there',
       ),
     };
+    // Something asked of it by hand is still on its way: the row says so, rather than the state it
+    // is about to leave.
+    if (notifier.machineRemoving(machineId)) {
+      (word, color) = ('removing…', tty.faint);
+    } else if (notifier.machineRetrying(machineId)) {
+      (word, color) = ('trying…', tty.faint);
+    }
     return FindRow(
       title: state.machine.displayName,
       detail: detail,
       state: word,
       stateColor: color,
-      enabled: status != PhoneMachineStatus.offline,
-      onTap: status == PhoneMachineStatus.offline
-          ? null
-          : () => _open(context, state),
+      // ⚠️ An asleep computer is tappable now. It used to be drawn inert, with nothing a tap could do
+      // for it — and it is exactly the one somebody wants to try again, rename, or take off the
+      // account.
+      onTap: () => _open(context, state),
     );
   }
 
-  void _open(BuildContext context, MachineState state) {
-    if (state.needsLink) {
-      Navigator.of(context).push(
-        phoneRoute(
-          (_) =>
-              LinkPage(notifier: notifier, machineId: state.machine.machineId),
-        ),
-      );
-      return;
-    }
-    // The same sheet the terminal's `⋯` used to open for a machine — reload its agents, re-enter its
-    // password, unlink this phone. One place decides what a machine offers, so a machine tapped here
-    // and a machine tapped from there cannot drift apart.
-    openMachineActions(context, notifier, state.machine.machineId);
-  }
+  /// One sheet for every computer, whatever it reads — see [openMachineActions]. A locked one has
+  /// "Unlock…" at its head, the act its row offers; one place decides what a computer offers, so no
+  /// state can lose the rename or the removal.
+  void _open(BuildContext context, MachineState state) =>
+      openMachineActions(context, notifier, state.machine.machineId);
 }

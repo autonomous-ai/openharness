@@ -30,15 +30,55 @@ Future<void> showAgentRenameDialog(
   String machineId,
   String agentId,
   String currentName,
-) => showAppDialog<void>(
-  context: context,
-  builder: (_) => _RenameAgentDialog(
-    notifier: notifier,
-    machineId: machineId,
-    agentId: agentId,
-    currentName: currentName,
-  ),
-);
+) {
+  final place = _placeOf(notifier, machineId, agentId);
+  final agent = place.agent;
+  return showAppDialog<void>(
+    context: context,
+    builder: (_) => _RenameDialog(
+      title: 'Rename Harness',
+      currentName: currentName,
+      detail: place.detail,
+      leading: agent == null
+          ? null
+          : EngineMark(
+              engine: agent.engine,
+              displayName: agent.engineDisplayName,
+              size: 32,
+            ),
+      onSave: (name) => notifier.renameAgent(machineId, agentId, name),
+    ),
+  );
+}
+
+/// The same dialog for a computer — Settings ▸ Computers. Its name is the account's, kept by the
+/// backend ([AppNotifier.renameMachine]), so it holds to the backend's length.
+Future<void> showMachineRenameDialog(
+  BuildContext context,
+  AppNotifier notifier,
+  String machineId,
+) {
+  final machine = notifier.stateOf(machineId)?.machine;
+  if (machine == null) return Future.value();
+  final hostname = machine.hostname?.trim() ?? '';
+  return showAppDialog<void>(
+    context: context,
+    builder: (_) => _RenameDialog(
+      title: 'Rename Computer',
+      currentName: machine.displayName,
+      // What the computer calls itself, which a rename does not change — the one name left to
+      // tell it by once its own has gone.
+      detail: hostname == machine.displayName ? '' : hostname,
+      leading: Icon(
+        LucideIcons.laptopMinimal300,
+        size: 28,
+        color: grid.AppPalette.textSecondary,
+      ),
+      maxLength: AppNotifier.machineNameMaxLength,
+      onSave: (name) => notifier.renameMachine(machineId, name),
+    ),
+  );
+}
 
 /// The field's corner — the buttons' too. Its focus ring stands 4 outside it,
 /// on the same curve.
@@ -56,24 +96,37 @@ const double _fieldRadius = kDialogControlRadius;
 ///
 /// A `State` disposes on unmount instead, which happens after the transition
 /// has finished and the route is gone, so there is nothing left to rebuild.
-class _RenameAgentDialog extends StatefulWidget {
-  const _RenameAgentDialog({
-    required this.notifier,
-    required this.machineId,
-    required this.agentId,
+class _RenameDialog extends StatefulWidget {
+  const _RenameDialog({
+    required this.title,
     required this.currentName,
+    required this.detail,
+    required this.onSave,
+    this.leading,
+    this.maxLength,
   });
 
-  final AppNotifier notifier;
-  final String machineId;
-  final String agentId;
+  /// The act, small, over the field — "Rename Harness".
+  final String title;
   final String currentName;
 
+  /// Where the thing lives, under the title; empty for nothing.
+  final String detail;
+
+  /// The mark beside the title — an engine's, for an agent.
+  final Widget? leading;
+
+  /// The longest name the field takes; null for no limit of its own.
+  final int? maxLength;
+
+  /// Sends the name. Null when it took, or the refusal to show under the field.
+  final Future<String?> Function(String name) onSave;
+
   @override
-  State<_RenameAgentDialog> createState() => _RenameAgentDialogState();
+  State<_RenameDialog> createState() => _RenameDialogState();
 }
 
-class _RenameAgentDialogState extends State<_RenameAgentDialog> {
+class _RenameDialogState extends State<_RenameDialog> {
   /// Opens with the whole name selected, as the tab rename dialog does: the
   /// name is there to be replaced, so the first key wipes it, and a thumb that
   /// meant to edit it still has the caret.
@@ -85,13 +138,6 @@ class _RenameAgentDialogState extends State<_RenameAgentDialog> {
 
   /// The field's focus, which is what draws the ring around it.
   final _focus = FocusNode();
-
-  /// Where the agent runs, as it stood when the dialog opened — see [_placeOf].
-  late final _place = _placeOf(
-    widget.notifier,
-    widget.machineId,
-    widget.agentId,
-  );
 
   /// The text as of the last edit. The controller also notifies on a caret
   /// move, and only a change to the name itself takes an error back.
@@ -197,11 +243,7 @@ class _RenameAgentDialogState extends State<_RenameAgentDialog> {
       _busy = true;
       _error = null;
     });
-    final result = await widget.notifier.renameAgent(
-      widget.machineId,
-      widget.agentId,
-      _controller.text,
-    );
+    final result = await widget.onSave(_controller.text);
     // ⚠️ `mounted` is not "still open". Cancel, the veil and Escape all stay
     // live while Save spins, and a dialog closed that way is still mounted for
     // the length of its fade — so an answer landing inside those 140ms found
@@ -237,7 +279,7 @@ class _RenameAgentDialogState extends State<_RenameAgentDialog> {
         scopesRoute: true,
         namesRoute: true,
         explicitChildNodes: true,
-        label: 'Rename Harness',
+        label: widget.title,
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 360),
           child: Padding(
@@ -290,18 +332,14 @@ class _RenameAgentDialogState extends State<_RenameAgentDialog> {
     );
   }
 
-  /// What is being renamed: the engine's mark, the act, and where the agent
-  /// runs. Small on purpose — the field under it is what the dialog is for.
+  /// What is being renamed: its mark, the act, and where it lives. Small on
+  /// purpose — the field under it is what the dialog is for.
   Widget _heading() {
-    final agent = _place.agent;
+    final leading = widget.leading;
     return Row(
       children: [
-        if (agent != null) ...[
-          EngineMark(
-            engine: agent.engine,
-            displayName: agent.engineDisplayName,
-            size: 32,
-          ),
+        if (leading != null) ...[
+          SizedBox.square(dimension: 32, child: Center(child: leading)),
           const SizedBox(width: 12),
         ],
         Expanded(
@@ -310,17 +348,17 @@ class _RenameAgentDialogState extends State<_RenameAgentDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Rename Harness',
+                widget.title,
                 style: TextStyle(
                   color: grid.AppPalette.textPrimary,
                   fontSize: 17,
                   fontWeight: grid.AppFont.semibold,
                 ),
               ),
-              if (_place.detail.isNotEmpty) ...[
+              if (widget.detail.isNotEmpty) ...[
                 const SizedBox(height: 2),
                 Text(
-                  _place.detail,
+                  widget.detail,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -368,6 +406,10 @@ class _RenameAgentDialogState extends State<_RenameAgentDialog> {
         // Held still while the machine answers: an edit made under the spinner
         // would be a name nobody sent.
         readOnly: _busy,
+        inputFormatters: [
+          if (widget.maxLength case final max?)
+            LengthLimitingTextInputFormatter(max),
+        ],
         textInputAction: TextInputAction.done,
         style: grid.kFieldTextStyle.copyWith(
           fontSize: 17,

@@ -18,6 +18,7 @@ import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 
 import 'approve_sign_in.dart';
 import 'devices_page.dart';
+import 'machine_profile_picker.dart';
 import 'machines_tab.dart';
 import 'phone_navigation.dart' show phoneRoute;
 import 'phone_name_store.dart';
@@ -164,12 +165,25 @@ class _Body extends StatelessWidget {
           buildUsageSettingsRow(context, notifier),
           // The computers this phone reaches — here rather than a menu of their own: linking one is
           // a once-a-while errand, and Find already reaches every agent on them.
+          // Each computer's sheet there holds what the account can do to it — try it again, rename
+          // it, take it off the account (`machine_actions.dart`).
           SettingsRow(
             title: 'Computers',
             onTap: () => Navigator.of(context).push(
               phoneRoute((_) => MachinesTab(notifier: notifier, large: false)),
             ),
           ),
+          // Which computer's tabs this phone shows — the desktop's Profiles. Beside Computers: it
+          // is a choice among them, and changes nothing on any of them. Only once there IS a choice
+          // — two computers or more — or one is already made, so it can be undone.
+          if (notifier.machines.length > 1 || notifier.machineProfileId != null)
+            SettingsRow(
+              key: const Key('settings-profile'),
+              title: 'Profile',
+              value: machineProfileLabel(notifier),
+              onTap: () =>
+                  unawaited(showMachineProfilePicker(context, notifier)),
+            ),
           // Every device signed in to the account — each trusted by the others because of that, so
           // this is where one that is not yours is seen and taken out.
           // A computer showing its sign-in QR (`harness login`, or the desktop app's "Scan with your

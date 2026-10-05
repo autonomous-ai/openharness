@@ -57,12 +57,15 @@ class DeskGroup {
 ///
 /// Never empty: a phone with no tabs, and even one with no agents, still gets
 /// the single group every caller below is allowed to assume.
+///
+/// Only the tabs the phone SHOWS — [AppNotifier.profileDeskTabs], narrowed to the
+/// computer chosen under Settings ▸ Profile.
 List<DeskGroup> deskGroups(AppNotifier notifier, List<AgentEntry> visible) {
   final openable = [
     for (final entry in visible)
       if (entry.agent.terminalAvailable) entry,
   ];
-  final tabs = notifier.deskTabs;
+  final tabs = notifier.profileDeskTabs;
   // No desk, or a desk with nothing on it: one group over the lot. The strip
   // draws nothing for a single group, so this is the phone as it always was.
   if (tabs.isEmpty) {
@@ -118,8 +121,11 @@ class DeskTabFilter {
 ///
 /// Empty where the desk has no tabs or has not answered — and then there is
 /// nothing to narrow by, so the list draws no filter at all.
+///
+/// The tabs the phone shows ([AppNotifier.profileDeskTabs]): a chip for a tab the
+/// profile hides would narrow the list to a tab nowhere else on the phone.
 List<DeskTabFilter> deskTabFilters(AppNotifier notifier) {
-  final tabs = notifier.deskTabs;
+  final tabs = notifier.profileDeskTabs;
   if (tabs.isEmpty) return const [];
   final names = deskTabNames(notifier);
   return [
@@ -161,6 +167,9 @@ typedef _TabName = ({_TabTrait trait, String label, int count});
 /// session engine when its agent is not listed, and counts repetitions across its window-only tabs
 /// (Store, orchestrator) — neither of which the phone has. Both reach only a tab whose agents the
 /// machine has not listed, or a tie decided by repetitions.
+///
+/// ⚠️ Over the WHOLE desk ([AppNotifier.deskTabs]), never the profile's tabs: a tie is decided by
+/// repetitions across every tab, and a profile hiding some would rename the rest on this phone alone.
 Map<String, String> deskTabNames(AppNotifier notifier) {
   final tabs = notifier.deskTabs;
   final candidates = <String, List<_TabName>>{};
@@ -241,8 +250,12 @@ String? _tabType(String? engine) {
 /// Read from the desk's panes, not from [deskGroups]: an agent of a tab whose
 /// terminal is still being verified is missing from its group for those
 /// seconds, and is not untabbed for it.
+///
+/// Of the tabs the phone SHOWS ([AppNotifier.profileDeskTabs]): an agent whose only
+/// tab the profile hides opens on its own, as one in no tab does, instead of
+/// lighting a tab it is not on.
 bool isUntabbed(AppNotifier notifier, AgentRef agent) {
-  final tabs = notifier.deskTabs;
+  final tabs = notifier.profileDeskTabs;
   if (tabs.isEmpty) return false;
   final key = DeskPaneRef(
     machineId: agent.machineId,

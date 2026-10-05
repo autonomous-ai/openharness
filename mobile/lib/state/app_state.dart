@@ -49,6 +49,7 @@ import 'pane_layout_store.dart';
 import 'session_preview.dart';
 import 'terminal_pane.dart';
 import 'desk_sync.dart';
+import 'machine_profile.dart';
 import 'phone_desk.dart';
 import '../daemons/daemon_habits.dart';
 import '../daemons/individual_art.dart';
@@ -472,6 +473,65 @@ class AppNotifier extends ChangeNotifier {
   /// or has not answered — the phone then swipes the whole account, as it did
   /// before the desk existed.
   List<DeskTab> get deskTabs => _desk.tabs;
+
+  /// The tabs this phone SHOWS: [deskTabs] narrowed to the computer chosen under Settings ▸ Profile
+  /// ([machineProfileId]). What the swipe's groups, Find's tab chips and the launch's choice of tab
+  /// read (`phone/desk_groups.dart`). [deskTabs] stays the whole desk for what has to agree with
+  /// every other computer — what each tab is called, above all.
+  List<DeskTab> get profileDeskTabs =>
+      deskTabsForMachineProfile(_desk.tabs, machineProfileId);
+
+  /// The computer whose tabs this phone shows, or null for every computer.
+  ///
+  /// A choice naming a computer the account no longer has — removed here or elsewhere — reads as
+  /// every computer, rather than hiding tabs behind a machine that is not coming back. Before the
+  /// list has arrived nothing is known either way, so the choice stands.
+  String? get machineProfileId {
+    final chosen = machineProfile.value;
+    if (chosen == null) return null;
+    if (machines.isEmpty || machines.any((m) => m.machineId == chosen)) {
+      return chosen;
+    }
+    return null;
+  }
+
+  /// Show every computer's tabs ([machineId] null), or only [machineId]'s. Only this phone changes:
+  /// the desk keeps every tab, and no other computer's view moves — the desktop's
+  /// `setMachineProfile`.
+  void setMachineProfile(String? machineId) {
+    if (!machineProfile.select(machineId)) return;
+    _keepActiveDeskTabShown();
+    notifyListeners();
+  }
+
+  /// The tab this phone counts itself in, moved to the first one still shown when a profile hides it
+  /// — the desktop's `_ensureProfileFocus`, for the reason that matters most on a phone: a harness
+  /// made here joins that tab ([PhoneDesk.adopt]), and must not land in one the phone no longer
+  /// shows. Silent ([PhoneDesk.note]): the caller notifies.
+  void _keepActiveDeskTabShown() {
+    final active = _desk.activeTabId;
+    if (active == null) return;
+    // ⚠️ Nothing to judge before the desk has answered: the profile lands from disk long before the
+    // tabs do from the network, and an empty list would read as "the tab is hidden" and lose the
+    // tab the last run was in.
+    if (_desk.tabs.isEmpty) return;
+    final shown = profileDeskTabs;
+    if (shown.any((tab) => tab.id == active)) return;
+    final first = shown.firstOrNull?.id;
+    _desk.note(first);
+    _rememberDeskTab(first);
+  }
+
+  /// The profile kept from the last run. Disk only, and off the launch's critical path: the screen
+  /// waits for the desk's network read before it picks a tab (`AgentHome._target`), and this lands
+  /// long before that.
+  Future<void> _loadMachineProfile() async {
+    final before = machineProfile.value;
+    await machineProfile.load();
+    if (_disposed || machineProfile.value == before) return;
+    _keepActiveDeskTabShown();
+    notifyListeners();
+  }
 
   /// The tab the phone is in, or null for an agent no tab holds.
   String? get activeDeskTabId => _desk.activeTabId;
@@ -1006,6 +1066,7 @@ class AppNotifier extends ChangeNotifier {
        agentPreference = AgentPreference(paneLayoutStore?.storage),
        projectHistory = ProjectHistory(paneLayoutStore?.storage),
        lastOpenedAgent = LastOpenedAgent(paneLayoutStore?.storage),
+       machineProfile = MachineProfileStore(paneLayoutStore?.storage),
        searchHistory = PhoneSearchHistory(paneLayoutStore?.storage),
        // On the same terms as the stores above: a layout store means this is a
        // real app with a real Harness home to cache into, and its absence means
@@ -1083,6 +1144,10 @@ class AppNotifier extends ChangeNotifier {
 
   /// The agent the phone's terminal had open, kept across launches — see [LastOpenedAgent].
   final LastOpenedAgent lastOpenedAgent;
+
+  /// Which computer's tabs this phone shows — Settings ▸ Profile. See [MachineProfileStore] and
+  /// [profileDeskTabs].
+  final MachineProfileStore machineProfile;
 
   /// The agents and commands reached from the search, most recent first — what
   /// ranks the box before a word is typed. See [PhoneSearchHistory].
@@ -1354,6 +1419,9 @@ class AppNotifier extends ChangeNotifier {
     // (top of [bootstrap]); a sign-in in this run starts it here. See
     // [LastOpenedAgent.prefetch].
     lastOpenedAgent.prefetch();
+    // Which computer's tabs to show (Settings ▸ Profile). Queued behind the record above on
+    // purpose, and not awaited: nothing picks a tab before the desk's network read lands.
+    unawaited(_loadMachineProfile());
     // No screen from the last run: the agent that record names is drawn as the skeleton until its
     // keyframe lands — see [KeptScreenStore]. What an earlier build kept of it on disk goes. Only in
     // the app, on the store's terms: a test never reaches the real cache directory.
@@ -5214,37 +5282,84 @@ class AppNotifier extends ChangeNotifier {
     return null;
   }
 
+  /// The longest name the backend keeps for a computer — `renameBody` in
+  /// `backend/src/routes/machines.ts` refuses anything longer.
+  static const machineNameMaxLength = 40;
+
   /// Renames a machine via `PATCH /api/machines/:machineId` (control-plane REST — the machine's
   /// `name` is backend-owned, unlike an agent's, which lives on the harness CLI). Returns null on
   /// success, or an error message to show inline in the caller's dialog.
   Future<String?> renameMachine(String machineId, String name) async {
-    final state = machineStates[machineId];
-    if (state == null) return 'Machine not found';
+    final revision = _authRevision;
+    if (machineStates[machineId] == null) {
+      return 'This computer is no longer on your account.';
+    }
     final trimmed = name.trim();
     if (trimmed.isEmpty) return 'Name cannot be empty';
+    if (trimmed.length > machineNameMaxLength) {
+      return 'Use $machineNameMaxLength characters or fewer.';
+    }
     try {
       await api.renameMachine(machineId: machineId, name: trimmed);
     } catch (error) {
-      return 'Rename failed: $error';
+      return 'Rename failed: ${describeApiError(error)}';
     }
+    // Signed out, or into another account, while the request was out: nothing here is theirs.
+    if (!_authWorkCurrent(revision)) return null;
+    // Looked up again — a refresh may have replaced the state while the request was out.
+    final state = machineStates[machineId];
+    if (state == null) return null;
     state.machine = state.machine.copyWith(name: trimmed);
     final index = machines.indexWhere((m) => m.machineId == machineId);
     if (index != -1) machines[index] = state.machine;
+    // The next launch draws its rows from the cache before `/api/machines` answers: the old name
+    // there would come back for those seconds.
+    final cache = _machineCache;
+    if (cache != null) _writeMachineCache(cache);
     notifyListeners();
     return null;
   }
 
+  /// Machines being removed right now ([deleteMachine]). Their rows say so, and a second press joins
+  /// the first rather than sending a second `DELETE`, which the backend would answer with a 404.
+  final Map<String, Future<String?>> _machineDeletes = {};
+
+  bool machineRemoving(String machineId) =>
+      _machineDeletes.containsKey(machineId);
+
   /// Permanently deletes a machine from the account (backend `DELETE /api/machines/:id`) — not to
   /// be confused with [unlinkMachine], which only drops this computer's local E2EE trust pin and
   /// leaves the machine itself intact. Returns null on success, or an error message to show inline.
-  Future<String?> deleteMachine(String machineId) async {
-    final state = machineStates[machineId];
-    if (state == null) return 'Machine not found';
+  ///
+  /// ⚠️ **The backend also signs that computer out.** It pushes `machine_revoked` down to a daemon
+  /// that is connected (`MachineService.destroy`), which clears its session and stops; one that is
+  /// off finds out on its next dial. The confirmation that leads here has to say so.
+  Future<String?> deleteMachine(String machineId) {
+    final inFlight = _machineDeletes[machineId];
+    if (inFlight != null) return inFlight;
+    if (machineStates[machineId] == null) {
+      return Future.value('This computer is no longer on your account.');
+    }
+    late final Future<String?> run;
+    run = _performDeleteMachine(machineId).whenComplete(() {
+      if (identical(_machineDeletes[machineId], run)) {
+        _machineDeletes.remove(machineId);
+      }
+      if (!_disposed) notifyListeners();
+    });
+    _machineDeletes[machineId] = run;
+    notifyListeners();
+    return run;
+  }
+
+  Future<String?> _performDeleteMachine(String machineId) async {
+    final revision = _authRevision;
     try {
       await api.deleteMachine(machineId: machineId);
     } catch (error) {
-      return 'Delete failed: $error';
+      return 'Could not remove it: ${describeApiError(error)}';
     }
+    if (!_authWorkCurrent(revision)) return null;
     // Any tile still showing this machine would otherwise sit forever in the "waiting to answer"
     // busy state, since the machine can never be found again after this.
     for (final pane in panesFor(machineId).toList()) {
@@ -5253,13 +5368,89 @@ class AppNotifier extends ChangeNotifier {
       }
       await _detachSession(pane, sendClose: true);
     }
+    if (!_authWorkCurrent(revision)) return null;
     _persistLayout();
+    // Everything [_refreshMachines] lets go of for a machine that left the account — the SOCKET
+    // above all, which would otherwise go on dialling a machine nothing refers to any more.
+    final state = machineStates[machineId];
+    if (state != null) _clearMachineActivity(state);
+    _stopOfflineRetry(machineId);
     _stopAgentSyncTimer(machineId);
+    unawaited(_pool?.closeMachine(machineId));
     machineStates.remove(machineId);
     machines.removeWhere((m) => m.machineId == machineId);
+    expandedMachines.remove(machineId);
     if (selectedMachineId == machineId) selectedMachineId = null;
+    if (pendingPairing?.machineId == machineId) pendingPairing = null;
+    // A profile on the computer that just left would show its tabs no longer; back to every one.
+    if (machineProfile.value == machineId) machineProfile.select(null);
+    _keepActiveDeskTabShown();
+    final cache = _machineCache;
+    if (cache != null) _writeMachineCache(cache);
     notifyListeners();
     return null;
+  }
+
+  /// Computers being tried again by hand ([retryMachine]) — the row says so while it runs.
+  final Map<String, Future<String?>> _machineRetries = {};
+
+  bool machineRetrying(String machineId) =>
+      _machineRetries.containsKey(machineId);
+
+  /// One computer asked again, by hand — Settings ▸ Computers' "Try again", for a machine that reads
+  /// asleep or is stuck connecting.
+  ///
+  /// ⚠️ **Not [retryOfflineMachine].** That one only polls for a machine somebody is waiting on an
+  /// agent of (`pendingOfflineAgentId`), which on a phone is almost never set — it would do nothing
+  /// here. Nor [retryMachines], which re-reads the account but never dials a machine the account
+  /// calls down ([_autoConnectAndLoadMachines]), and that status is exactly what is being doubted.
+  ///
+  /// So: the account's word on it now, then a dial whatever that word is — the way [reachAllMachines]
+  /// dials for Find — cutting short any backoff and waking a socket the relay parked as offline
+  /// ([_redialNow]). A machine waiting on its password is not dialled: that is refused again until
+  /// one lands.
+  ///
+  /// Returns null, or why the account could not be read; the dial is made either way, on the list
+  /// the phone already has.
+  Future<String?> retryMachine(String machineId) {
+    final inFlight = _machineRetries[machineId];
+    if (inFlight != null) return inFlight;
+    late final Future<String?> run;
+    run = _performRetryMachine(machineId).whenComplete(() {
+      if (identical(_machineRetries[machineId], run)) {
+        _machineRetries.remove(machineId);
+      }
+      if (!_disposed) notifyListeners();
+    });
+    _machineRetries[machineId] = run;
+    notifyListeners();
+    return run;
+  }
+
+  Future<String?> _performRetryMachine(String machineId) async {
+    final revision = _authRevision;
+    if (!_authWorkCurrent(revision) || status == AppStatus.unauthenticated) {
+      return null;
+    }
+    String? failure;
+    try {
+      await refreshMachines();
+    } catch (error) {
+      failure = 'Could not load computers: ${describeApiError(error)}';
+    }
+    if (_disposed || !_authWorkCurrent(revision)) return null;
+    final state = machineStates[machineId];
+    if (state == null) {
+      return failure ?? 'This computer is no longer on your account.';
+    }
+    if (state.needsLink) return failure;
+    // No transport — the same guard [reachAllMachines] keeps: [_conn] would build one out of a
+    // null pool.
+    if (_pool == null && connectionForTest == null) return failure;
+    _connectMachine(state);
+    _redialNow(machineId);
+    await _loadMachineData(state, force: true);
+    return failure;
   }
 
   /// Renames an agent via `agent_update`. Returns null on success, or an error message to show

@@ -1410,7 +1410,10 @@ void main() {
       expect(rig.app.machines.single.displayName, 'Studio');
 
       expect(await rig.app.renameMachine('m', ' '), 'Name cannot be empty');
-      expect(await rig.app.renameMachine('ghost', 'x'), 'Machine not found');
+      expect(
+        await rig.app.renameMachine('ghost', 'x'),
+        'This computer is no longer on your account.',
+      );
       rig.api.renameFailure = StateError('403');
       expect(
         await rig.app.renameMachine('m', 'x'),
@@ -1427,9 +1430,15 @@ void main() {
       await openAgent(rig, 'm', 'a');
 
       rig.api.deleteFailure = StateError('403');
-      expect(await rig.app.deleteMachine('m'), startsWith('Delete failed'));
+      expect(
+        await rig.app.deleteMachine('m'),
+        startsWith('Could not remove it'),
+      );
       rig.api.deleteFailure = null;
-      expect(await rig.app.deleteMachine('ghost'), 'Machine not found');
+      expect(
+        await rig.app.deleteMachine('ghost'),
+        'This computer is no longer on your account.',
+      );
 
       expect(await rig.app.deleteMachine('m'), isNull);
       expect(rig.api.deleted, ['m']);
