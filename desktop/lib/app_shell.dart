@@ -374,6 +374,8 @@ class _RootShellState extends ConsumerState<RootShell>
         // overlay it landed on the rail's head — covering the wordmark and the
         // three buttons beside it, which is the one strip of this window that
         // must stay reachable.
+        // Device bands, most urgent first: a removal (red before neutral), a key that joined and left,
+        // a new device, a held computer id. The mobile app stacks them in the same order.
         return Column(
           children: [
             // The app's commands as a menu strip (Linux only; macOS carries
@@ -384,9 +386,18 @@ class _RootShellState extends ConsumerState<RootShell>
                 app.status != AppStatus.checkingEnvironment &&
                 app.status != AppStatus.preparingEnvironment)
               UpdateNotice(notifier: app),
+            if (app.visibleDeviceRemovals.isNotEmpty &&
+                app.status == AppStatus.authenticated)
+              DeviceRemovalNoticeBand(notifier: app),
+            if (app.departedDevices.isNotEmpty &&
+                app.status == AppStatus.authenticated)
+              DeviceDepartedNoticeBand(notifier: app),
             if (app.newDevices.isNotEmpty &&
                 app.status == AppStatus.authenticated)
               NewDeviceNotice(notifier: app),
+            if (app.deviceConflict != null &&
+                app.status == AppStatus.authenticated)
+              DeviceConflictNoticeBand(notifier: app),
             Expanded(child: framed),
           ],
         );

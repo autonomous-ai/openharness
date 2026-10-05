@@ -433,6 +433,14 @@ impl Pane {
 }
 
 impl Pane {
+    /// A fast replacement process may already have exited before its restart RPC
+    /// callback runs. Only retire the exit that belonged to the old process; a new
+    /// exit must survive stream reopening so pane-died is not emitted twice.
+    pub fn complete_restart(&mut self, previous_exit: Option<&str>, command: Option<String>) {
+        if self.dead.as_ref().map(|exit| exit.id.as_str()) == previous_exit { self.dead = None; }
+        if command.is_some() { self.start_command = command; }
+    }
+
     pub fn new(id: u64, machine_id: &str, agent_id: &str, cols: u16, rows: u16) -> Pane {
         let listener = Listener::default();
         let (cols, rows) = (cols.max(1), rows.max(1));

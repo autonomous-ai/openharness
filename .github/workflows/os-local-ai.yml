@@ -1,0 +1,62 @@
+name: Harness OS optional local AI assessment
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_run_id:
+        description: 'Exact Harness OS image artifact to assess'
+        type: string
+        default: '37149350400'
+        required: true
+      probe:
+        description: 'Assessment to run'
+        type: choice
+        options: [both, local-ai, nvidia]
+        default: both
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: harness-local-ai-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  optional:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        probe: ${{ inputs.probe == 'nvidia' && fromJSON('["nvidia"]') || inputs.probe == 'local-ai' && fromJSON('["local-ai"]') || fromJSON('["local-ai", "nvidia"]') }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id || '37149350400' }}
+          github-token: ${{ github.token }}
+      - name: Check the experiment and install VM tools
+        run: |
+          python3 -m py_compile os/tests/local_ai_guest.py os/tests/local_ai_vm.py
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os-local-ai.yml
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+      - name: Assess optional packages on the installed encrypted image
+        env:
+          PROBE: ${{ matrix.probe }}
+        run: python3 os/tests/local_ai_vm.py --iso os/dist/*.iso --probe "$PROBE"
+      - name: Retain evidence without models or virtual disks
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-${{ matrix.probe }}
+          path: |
+            os/test-results/${{ matrix.probe }}/
+            !os/test-results/${{ matrix.probe }}/*.qcow2
+            !os/test-results/${{ matrix.probe }}/OVMF_VARS.fd
+          retention-days: 14
+          compression-level: 0

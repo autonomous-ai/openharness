@@ -27,9 +27,10 @@ pub fn is_panel(kind: &PickerKind) -> bool {
 
 /// Whether [kind]'s list reads top-down (↑ toward its first row): fzf's under --layout=reverse,
 /// and the panel's menus; the launcher's lists read bottom-up in the panel too, their query
-/// under them, as fzf's do.
+/// under them, as fzf's do — except Models, which reads from the top as the desktop's picker does
+/// (its sections in the desktop's order, and no blank space over a short list).
 pub fn top_down(kind: &PickerKind) -> bool {
-    if is_panel(kind) { !crate::modal::is_launcher(kind) } else { theme::fzf().reverse }
+    if is_panel(kind) { !crate::modal::is_launcher(kind) || matches!(kind, PickerKind::Models) } else { theme::fzf().reverse }
 }
 
 /// Step into [section]: its options in the same list, the cursor on the one in use.
@@ -509,8 +510,10 @@ pub fn draw(buf: &mut Buffer, app: &App, body: Rect, kind: &PickerKind, picker: 
     let side = inner_w >= 64 && kind.size() == PanelSize::Large && (settings || (picker.preview && !matches!(kind, PickerKind::Commands | PickerKind::Theme)));
     // (A list's preview gets at least half: a harness's screen, a machine's, a model's facts —
     // the list room for a row's name and what it says, a harness's doing.)
-    let list_w = if !side { inner_w } else if settings { (inner_w * 2 / 5).clamp(28, 40) } else { (inner_w / 2).clamp(30, 56) };
-    list_from(buf, picker, Rect::new(x, top, list_w, rows as u16), &c, !side, launcher);
+    // (Models: a model's name, its size and speed, and its word side by side, as the desktop's rows.)
+    let widest = if matches!(kind, PickerKind::Models) { 72 } else { 56 };
+    let list_w = if !side { inner_w } else if settings { (inner_w * 2 / 5).clamp(28, 40) } else { (inner_w / 2).clamp(30, widest) };
+    list_from(buf, picker, Rect::new(x, top, list_w, rows as u16), &c, !side, !top_down(kind));
     picker.preview_area.set(None);
     picker.bar.set(None);
     let mut shown = None;
@@ -664,9 +667,10 @@ pub fn list_from(buf: &mut Buffer, picker: &mut Picker, r: Rect, c: &Chrome, det
         }
         // The right column as the row has it for this width (its short form in a narrow list:
         // a harness's age, not its project and machine), and never more than a third of the
-        // row — so it can not run off the panel or over the name.
+        // row — so it can not run off the panel or over the name. (Half, in a list that asks: the
+        // Models view's size, speed and word, side by side as the desktop's rows have them.)
         let right_text = row.right_at(r.width as usize);
-        let right_w = (right_text.width() as u16).min(r.width / 3);
+        let right_w = (right_text.width() as u16).min(if picker.right_half { r.width / 2 } else { r.width / 3 });
         // (The last column is the scroll mark's, with a blank before it.)
         let end = r.right().saturating_sub(if right_w > 0 { right_w + 3 } else { 2 });
         // The hint after the name, in a column of its own, where there is room for both.

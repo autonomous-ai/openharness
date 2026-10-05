@@ -1,0 +1,334 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+  "suiteSha256": "657aae9de4f301b660cc2c57dce0f80ae801f49e71921a2365b862ba15d0023e",
+  "reviewer": {
+    "id": "codex-source-review",
+    "kind": "agent",
+    "independent": false
+  },
+  "cases": [
+    {
+      "id": "default-with-user-override",
+      "records": [
+        {
+          "id": "3355baf2-4d07-4d5b-8f70-3bf06417f2fe",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Preserves the compact-navigation default together with the explicit manual expansion/current-visit allowance, without converting application state into a coding-task filter."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "3355baf2-4d07-4d5b-8f70-3bf06417f2fe"
+          ],
+          "requiredIds": [
+            "3355baf2-4d07-4d5b-8f70-3bf06417f2fe"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The packet preserves the requested behavior and qualifications."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        }
+      ]
+    },
+    {
+      "id": "firm-request-with-unresolved-placement",
+      "records": [
+        {
+          "id": "ee68d515-6fe4-4394-a928-a37223d94cbf",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Retains the explicit log-preservation request and leaves placement undecided rather than choosing the footer or Run location."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "ee68d515-6fe4-4394-a928-a37223d94cbf"
+          ],
+          "requiredIds": [
+            "ee68d515-6fe4-4394-a928-a37223d94cbf"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The packet preserves the requested behavior and qualifications."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        }
+      ]
+    },
+    {
+      "id": "polite-request",
+      "records": [
+        {
+          "id": "9e3a3fdc-d882-46d8-b57d-40a358475a4c",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Retains the concrete behavior requested in a polite question. It stays scoped to the review tool and supplies no invented reason or implementation verification."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "9e3a3fdc-d882-46d8-b57d-40a358475a4c"
+          ],
+          "requiredIds": [
+            "9e3a3fdc-d882-46d8-b57d-40a358475a4c"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The packet preserves the requested behavior and qualifications."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        }
+      ]
+    },
+    {
+      "id": "exploratory-question",
+      "records": [],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        }
+      ]
+    },
+    {
+      "id": "tentative-number",
+      "records": [],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        }
+      ]
+    },
+    {
+      "id": "accepted-number",
+      "records": [
+        {
+          "id": "79efa99a-7151-4502-8d9a-a2e2f53f790c",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Preserves the adopted completed-log retention policy and exact 14-day duration. Treat the present-tense claim as the labelled policy, not a verified implementation observation."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "79efa99a-7151-4502-8d9a-a2e2f53f790c"
+          ],
+          "requiredIds": [
+            "79efa99a-7151-4502-8d9a-a2e2f53f790c"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The packet preserves the requested behavior and qualifications."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        }
+      ]
+    },
+    {
+      "id": "quoted-plan-and-user-correction",
+      "records": [
+        {
+          "id": "35b7d8f2-349c-4143-8d6a-5b18b4807236",
+          "revision": 1,
+          "supported": false,
+          "specific": true,
+          "useful": false,
+          "note": "The source withholds approval and says measurement is pending; it does not verify an unset implementation or permanently rule out a two-second value. The claim/action leave these distinctions insufficiently explicit. Review conservatively rejects the record rather than treating unresolved approval as a prohibition or observed state."
+        },
+        {
+          "id": "7641e7ae-23fa-424f-92b2-39d973c702d0",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "The explicit request to keep showing failures supports this visibility requirement. No particular retry value is adopted in this record."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "7641e7ae-23fa-424f-92b2-39d973c702d0"
+          ],
+          "requiredIds": [
+            "7641e7ae-23fa-424f-92b2-39d973c702d0"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": false,
+          "note": "The packet includes a statement rejected for overstatement or insufficient distinction between undecided, forbidden and observed state."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        }
+      ]
+    },
+    {
+      "id": "limited-control-set",
+      "records": [
+        {
+          "id": "2c41d8af-2d46-46c6-818d-974211f37f20",
+          "revision": 1,
+          "supported": false,
+          "specific": true,
+          "useful": false,
+          "note": "The component boundary is preserved, but the record adds only Cancel and Save copy. Naming two retained options and two removals does not establish an exhaustive inventory in a bounded excerpt. The original only qualifies the scope of the change, not the allowed options."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": true,
+          "faithfulContext": false,
+          "note": "The packet includes a statement rejected for overstatement or insufficient distinction between undecided, forbidden and observed state."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unresolved choice, different project or unrelated topic."
+        }
+      ]
+    }
+  ]
+}

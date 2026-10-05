@@ -1,0 +1,130 @@
+{
+  "run": "https://github.com/autonomous-ai/openharness/actions/runs/37028979450",
+  "sourceCommit": "9de45237607423989a679044164642b292ebb7a7",
+  "kind": "disposable-internal-build",
+  "workflowCreatedAt": "2026-10-02T15:43:29Z",
+  "workflowCompletedAt": "2026-10-02T15:53:23Z",
+  "macosJobStartedAt": "2026-10-02T15:44:03Z",
+  "macosJobCompletedAt": "2026-10-02T15:53:22Z",
+  "productReleasePublished": false,
+  "disposablePrefixDeleted": true,
+  "receipt": {
+    "version": "1.2.55",
+    "started_at": "2026-10-02T15:45:35.515649+00:00",
+    "status": "passed",
+    "checks": [
+      {
+        "name": "universal-build",
+        "started_at": "2026-10-02T15:45:35.515917+00:00",
+        "status": "passed",
+        "exit_code": 0,
+        "duration_seconds": 251.722,
+        "finished_at": "2026-10-02T15:49:47.342212+00:00"
+      },
+      {
+        "name": "copy-intel",
+        "started_at": "2026-10-02T15:49:47.359650+00:00",
+        "status": "passed",
+        "exit_code": 0,
+        "duration_seconds": 7.01,
+        "finished_at": "2026-10-02T15:49:54.408477+00:00"
+      },
+      {
+        "name": "copy-apple-silicon",
+        "started_at": "2026-10-02T15:49:47.392494+00:00",
+        "status": "passed",
+        "exit_code": 0,
+        "duration_seconds": 7.016,
+        "finished_at": "2026-10-02T15:49:54.444318+00:00"
+      },
+      {
+        "name": "renderer-intel",
+        "started_at": "2026-10-02T15:49:54.446441+00:00",
+        "status": "passed",
+        "exit_code": 0,
+        "duration_seconds": 6.115,
+        "finished_at": "2026-10-02T15:50:00.645953+00:00"
+      },
+      {
+        "name": "renderer-apple-silicon",
+        "started_at": "2026-10-02T15:49:54.465058+00:00",
+        "status": "passed",
+        "exit_code": 0,
+        "duration_seconds": 7.528,
+        "finished_at": "2026-10-02T15:50:02.030687+00:00"
+      },
+      {
+        "name": "publish-apple-silicon",
+        "started_at": "2026-10-02T15:50:02.042970+00:00",
+        "status": "passed",
+        "exit_code": 0,
+        "duration_seconds": 175.93,
+        "finished_at": "2026-10-02T15:52:58.037115+00:00"
+      },
+      {
+        "name": "publish-intel",
+        "started_at": "2026-10-02T15:50:02.032567+00:00",
+        "status": "passed",
+        "exit_code": 0,
+        "duration_seconds": 176.268,
+        "finished_at": "2026-10-02T15:52:58.346495+00:00"
+      }
+    ],
+    "artifacts": [
+      {
+        "version": "1.2.55",
+        "url": "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop-internal/b3ae1f966d8a51a8da6f114728ba6136/Harness-macos-1.2.55-9de4523.zip",
+        "sha256": "c7e8d32c7b6718c87fad57bd8b075c68e73290dac710812103a5c93c7904b914",
+        "size": 115436584,
+        "key": "desktop-macos",
+        "started_at": "2026-10-02T15:52:58.950347+00:00",
+        "status": "passed",
+        "actual_size": 115436584,
+        "actual_sha256": "c7e8d32c7b6718c87fad57bd8b075c68e73290dac710812103a5c93c7904b914",
+        "finished_at": "2026-10-02T15:53:01.970287+00:00",
+        "duration_seconds": 3.02
+      },
+      {
+        "version": "1.2.55",
+        "url": "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop-internal/b3ae1f966d8a51a8da6f114728ba6136/Harness-macos-1.2.55-9de4523.dmg",
+        "sha256": "97ef2805bf60964e9f62c6e22710dcdb63186034daf3884430a75a096f037af2",
+        "size": 119332686,
+        "key": "desktop-macos-dmg",
+        "started_at": "2026-10-02T15:52:58.954579+00:00",
+        "status": "passed",
+        "actual_size": 119332686,
+        "actual_sha256": "97ef2805bf60964e9f62c6e22710dcdb63186034daf3884430a75a096f037af2",
+        "finished_at": "2026-10-02T15:53:01.979149+00:00",
+        "duration_seconds": 3.025
+      },
+      {
+        "version": "1.2.55",
+        "url": "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop-internal/b3ae1f966d8a51a8da6f114728ba6136/Harness-macos-arm64-1.2.55-9de4523.zip",
+        "sha256": "42c4c15e8f1a3915b19545bc4d58a1a6a4cc49e2aabb50182448218762fd4e59",
+        "size": 115436574,
+        "key": "desktop-macos-arm64",
+        "started_at": "2026-10-02T15:53:01.971860+00:00",
+        "status": "passed",
+        "actual_size": 115436574,
+        "actual_sha256": "42c4c15e8f1a3915b19545bc4d58a1a6a4cc49e2aabb50182448218762fd4e59",
+        "finished_at": "2026-10-02T15:53:04.953485+00:00",
+        "duration_seconds": 2.982
+      },
+      {
+        "version": "1.2.55",
+        "url": "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop-internal/b3ae1f966d8a51a8da6f114728ba6136/Harness-macos-arm64-1.2.55-9de4523.dmg",
+        "sha256": "12f4c205194a389fd3a0f589929d3e3a7725271134054459a4b189fdfcf545bf",
+        "size": 119332955,
+        "key": "desktop-macos-arm64-dmg",
+        "started_at": "2026-10-02T15:53:01.979345+00:00",
+        "status": "passed",
+        "actual_size": 119332955,
+        "actual_sha256": "12f4c205194a389fd3a0f589929d3e3a7725271134054459a4b189fdfcf545bf",
+        "finished_at": "2026-10-02T15:53:05.086585+00:00",
+        "duration_seconds": 3.107
+      }
+    ],
+    "finished_at": "2026-10-02T15:53:05.087475+00:00",
+    "duration_seconds": 449.572
+  }
+}

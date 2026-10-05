@@ -43,8 +43,20 @@ Future<List<Rect>> _layout(
   );
   await tester.pump();
   final grid = tester.getRect(find.byType(PaneGrid));
+  // Find every cell in one tree walk instead of scanning the whole tree twice
+  // per pane. Preserve the finder's offstage filtering and require each key
+  // exactly once before measuring the same rendered corners as getRect.
+  final cellKeys = {for (final pane in notifier.panes) pane.cellKey};
+  final cells = find
+      .byWidgetPredicate((widget) => cellKeys.contains(widget.key))
+      .evaluate()
+      .toList();
+  expect(cells.map((cell) => cell.widget.key), unorderedEquals(cellKeys));
+  final rectanglesByKey = {
+    for (final cell in cells) cell.widget.key: _cellRect(cell),
+  };
   final rectangles = [
-    for (final pane in notifier.panes) tester.getRect(find.byKey(pane.cellKey)),
+    for (final pane in notifier.panes) rectanglesByKey[pane.cellKey]!,
   ];
   final height = rectangles.fold<double>(
     grid.height,
@@ -61,6 +73,14 @@ Future<List<Rect>> _layout(
         );
       }(),
   ];
+}
+
+Rect _cellRect(Element cell) {
+  final box = cell.renderObject! as RenderBox;
+  return Rect.fromPoints(
+    box.localToGlobal(Offset.zero),
+    box.localToGlobal(box.size.bottomRight(Offset.zero)),
+  );
 }
 
 /// Dividers eat a few pixels, so an edge lands near its fraction, not on it.

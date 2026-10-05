@@ -1,0 +1,37 @@
+# The standard Plymouth/systemd agent handles the password. This theme receives
+# only its length, never the secret. No animation, images or background work.
+Window.SetBackgroundTopColor(0.063, 0.063, 0.063);
+Window.SetBackgroundBottomColor(0.063, 0.063, 0.063);
+
+# ASCII keeps the early-boot wordmark legible on the minimal text renderer.
+logo_text = " _   _    _    ____  _   _ _____ ____ ____ \n| | | |  / \\  |  _ \\| \\ | | ____/ ___/ ___|\n| |_| | / _ \\ | |_) |  \\| |  _| \\___ \\___ \\\n|  _  |/ ___ \\|  _ <| |\\  | |___ ___) |__) |\n|_| |_/_/   \\_\\_| \\_\\_| \\_|_____|____/____/";
+logo_image = Image.Text(logo_text, 0.85, 0.78, 0.1, 1, "monospace 16", "left");
+logo = Sprite(logo_image);
+logo.SetPosition(Window.GetX() + (Window.GetWidth() - logo_image.GetWidth()) / 2,
+                 Window.GetY() + Window.GetHeight() / 2 - logo_image.GetHeight() - 24, 1);
+label = Sprite();
+entry = Sprite();
+
+fun display_password(prompt, bullets) {
+    label_image = Image.Text("Enter your password", 0.86, 0.86, 0.86, 1, "monospace 16", "center");
+    label.SetImage(label_image);
+    label.SetPosition(Window.GetX() + (Window.GetWidth() - label_image.GetWidth()) / 2,
+                      Window.GetY() + Window.GetHeight() / 2 + 16, 1);
+    text = "";
+    for (i = 0; i < bullets && i < 40; i++) text += "*";
+    if (bullets == 0) text = "_";
+    entry_image = Image.Text(text, 0.86, 0.86, 0.86, 1, "monospace 16", "center");
+    entry.SetImage(entry_image);
+    entry.SetPosition(Window.GetX() + (Window.GetWidth() - entry_image.GetWidth()) / 2,
+                      Window.GetY() + Window.GetHeight() / 2 + 56, 1);
+    label.SetOpacity(1);
+    entry.SetOpacity(1);
+}
+
+fun display_normal() {
+    label.SetOpacity(0);
+    entry.SetOpacity(0);
+}
+
+Plymouth.SetDisplayPasswordFunction(display_password);
+Plymouth.SetDisplayNormalFunction(display_normal);

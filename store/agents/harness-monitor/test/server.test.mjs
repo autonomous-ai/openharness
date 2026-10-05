@@ -204,6 +204,34 @@ test('the pane header verdict is written from the same plan the page draws', asy
   assert.ok(verdict.findings.length)
 })
 
+test('workspace inspection binds identity and does not refresh the fleet or write an action receipt', async t => {
+  let reads = 0, inspections = 0
+  const target = row({ id: 'a1', createdAt: 1234 })
+  const { viewer, base } = await serve([target], {
+    collect: async () => { reads++; return { rows: [target], machines: [], problems: [] } },
+    verbs: { inspectWorkspace: async () => { inspections++; return { ok: true, workspace: { kind: 'main', path: '/project' } } } },
+  })
+  t.after(() => viewer.close())
+  const request = payload => post(base, viewer.token, '/api/act', payload)
+  const payload = { verb: 'workspace-inspect', ids: ['a1'], manual: true, expected: [target] }
+  assert.equal((await request({ ...payload, expected: [{ ...target, createdAt: 5678 }] })).results[0].ok, false)
+  assert.equal(inspections, 0)
+  assert.equal((await request(payload)).results[0].workspace.path, '/project')
+  assert.equal(inspections, 1); assert.equal(reads, 1)
+  assert.deepEqual(viewer.snapshot().log, [])
+})
+
+test('selected deletion carries the checkboxes, full path and dirty consent to the owning operation', async t => {
+  const target = row({ id: 'a1', createdAt: 1234 }), received = []
+  const { viewer, base } = await serve([target], { verbs: { deleteHarness: async (row, options) => {
+    received.push(options); return { ok: true, id: row.id, deleted: true, sessionDeleted: false, worktreeDeleted: true }
+  } } })
+  t.after(() => viewer.close())
+  const selection = { reviewId: 'reviewed', choices: { sessionData: false, worktreeData: true }, path: '/full/worktree', discardChanges: true }
+  assert.equal((await post(base, viewer.token, '/api/act', { verb: 'delete', ids: ['a1'], manual: true, expected: [target], ...selection })).results[0].worktreeDeleted, true)
+  assert.deepEqual(received, [selection])
+})
+
 test('the stream opens with the current snapshot', async (t) => {
   const { viewer, base } = await serve()
   t.after(() => viewer.close())

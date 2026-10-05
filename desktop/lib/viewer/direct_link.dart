@@ -93,6 +93,7 @@ class DirectLink implements PeerLinkClient {
       label: label,
       socket: socket,
       devlog: await log?.gossip(),
+      suspended: log?.suspendedPubs,
       onDevlog: log?.heard,
     );
   }

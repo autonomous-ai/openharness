@@ -161,11 +161,15 @@ void main() {
       expect(menu.rows.first['status'], '15% remaining');
       expect(menu.rows.first['details'], contains('Weekly — 70% remaining'));
       expect(menu.rows.first['account'], 'aabbcc');
-      expect(menu.rows.toString(), isNot(contains('Shared Mac')));
+      expect(menu.rows.first['machines'], ['Shared Mac']);
+      expect(menu.rows.first['accountKey'], 'aabbccddeeff0011');
       expect(menu.rows.last['title'], 'Anthropic');
       expect(menu.rows.last['account'], '112233');
       expect(menu.rows.last['status'], '50% remaining');
-      expect(menu.rows.toString(), isNot(contains('aabbccddeeff0011')));
+      expect(
+        menu.rows.map((row) => row['details']).toString(),
+        isNot(contains('aabbccddeeff0011')),
+      );
     },
   );
 

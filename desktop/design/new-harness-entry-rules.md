@@ -8,43 +8,55 @@ composer and picker interactions. Earlier terminal-cell form styling is retired.
 Startup and New Tab embed the same `NewHarnessForm` and controller used by
 Cmd-N, at the same 680-point maximum width. The page has Recent harnesses below
 the composer, without a modal frame or Close button. Opening the page or dialog
-never starts a harness; New Harness submits the reviewed draft.
+never starts a harness; Enter or New Harness starts it, with or without a prompt.
 
-Agent and Repo selectors sit above the message. Model, Approvals, applicable
-Profile, Worktree, and Branch remain visible below it. Fresh and restored task
-drafts focus the prompt. Terminal, which takes no task, focuses New Harness. In the message,
+Agent, Computer, and Repo selectors sit above the message. The local computer is
+**This Mac** on macOS and **This Computer** on Linux; remote computers retain their
+names. Model, Approvals, applicable Account, Worktree, and Branch remain visible
+below the message. Worktree and Branch stay on one line, without explanatory text
+underneath. **From main** identifies the base of a new worktree branch; a tooltip
+explains the operation. Existing branches and worktrees retain their branch name.
+
+The model control retains the provider/subscription picker and shared models.
+Per-agent model selection stays in the agent's own UI. Model, Approvals, Account,
+Worktree, and Branch remain on one row; narrow windows scroll horizontally
+instead of wrapping settings onto another line. Named accounts are currently
+Codex-only; an unnamed account reads **Default account**. Fresh forms and recovered
+launches focus the prompt. Terminal, which takes no task, focuses New Harness. In the message,
 Enter submits and Shift-Enter inserts a newline, respecting composition and the
 active keymap. Tab/Shift-Tab traverse the visible controls. Arrow keys navigate
 an open chooser. Accepting or cancelling returns focus to its originating control.
 
-Outside clicks and Escape close the innermost child picker first, then the main
-popup. The X directly closes the popup. Dismissal preserves its draft; unresolved
-launch receipts retain their close guards. The popup's 95% dark backdrop
-covers the native footer. The full-page entry retains its per-tab draft when
-switching tabs. Choosers use system typography, normal controls, a search field,
+Outside clicks close an open picker but never dismiss the main popup. Escape
+closes the innermost child picker first; with no picker open, it closes the popup.
+The X directly closes the popup. Closing discards an ordinary unfinished task
+and its attachments; unresolved launch receipts retain their close guards and recovery values.
+The popup's 95% dark backdrop covers the native footer. Reopening starts fresh. Choosers use system typography, normal controls, a search field,
 natural row heights, and bounded scrolling.
+
+![Cmd-N composition with a separate computer selector and one settings row](images/new-harness-cmd-n.png)
 
 Agent combines direct coding agents and specialized harnesses in one searchable
 list. A specialized harness then offers compatible coding agents. Repo searches
-recent folders on the selected machine; its search row contains the machine
-picker, with local preselected for a fresh context. Open Folder, New Folder,
+recent folders on the computer selected in the header; the search row does not
+repeat the computer picker. Open Folder, New Folder,
 and GitHub operate on that selected machine. Open invokes the native local
 folder dialog or remote browser; New and Clone offer Change machine inside
-their prompts. Escape retraces child steps. A remote machine appears in the
-closed Repo label, with the full folder path available in its tooltip.
+their prompts. Escape retraces child steps. The computer remains visible in its own header selector, with the full folder
+path available in the Repo tooltip.
 
 Opening, searching, and cancelling never send input to an existing harness.
 
 | Entry | Initial values | Destination after a successful start |
 | --- | --- | --- |
-| Cmd-T, then Cmd-N | Last explicit agent, local machine, last selected project on that machine | The blank tab opened by Cmd-T |
-| Cmd-Shift-P → New Harness | Last explicit agent, local machine, last selected project on that machine | Current tab |
-| Cmd-N or the New Harness command | Last explicit agent, local machine, last selected project on that machine; retain explicit task and destination | Current tab unless its source requests a new tab |
+| Cmd-T, then Cmd-N | Last successful setup and last focused real project with its machine | The blank tab opened by Cmd-T |
+| Cmd-Shift-P → New Harness | Last successful setup and last focused real project with its machine | Current tab |
+| Cmd-N or the New Harness command | Last successful setup and last focused real project with its machine; retain explicit task and destination | Current tab unless its source requests a new tab |
 | Pane-edge split, Split Right/Down command, menu, or shortcut | Opens creation directly with the clicked/focused pane's agent, machine, and project | Requested split in that tab after submission |
 | Store New Harness, or a product's Open action in the pane or native Models menu | Explicit product and machine; suggested project named for that product | New tab |
 | Store Resume Harness | Existing harness and its machine; choose from a menu when several match | Focus its existing tab or reopen a view of the same harness |
 | Store Try this prompt | Same as Open, with the example as the editable task | New tab |
-| First empty workspace / New Tab | Same launch defaults, with a draft owned by that empty tab | That tab when the user submits New Harness |
+| First empty workspace / New Tab | Same successful setup and working project; a suggested local folder on first launch | That tab when the user submits New Harness |
 
 The Store and orchestration tabs cannot host a terminal pane. Generic creation
 from either uses a new tab. Command-bar requests keep the workspace context and
@@ -70,7 +82,7 @@ desktop experiment. Specialized harnesses follow with recent choices, the tuned
 set, and the remaining catalog. Terminal comes last. All are searchable and
 the saved default selection does not move specialized harnesses above coding
 agents. There is no separate Coding category. A specialized harness asks which compatible
-coding agent should run it, preselecting its remembered choice. The form's value
+coding agent should run it, using the last successful agent when compatible. The form's value
 then reads `Blender · Codex`. Choosing a direct agent removes the package choice
 and sends no `dsh`; it does not remove project instructions or skills.
 
@@ -97,17 +109,23 @@ Machine changes re-evaluate compatibility and never silently substitute at
 launch. The installed package's compatibility takes precedence over a newer
 catalog listing.
 
-The existing local state store retains separate engine and harness use recents.
-Explicit desktop agent/harness choices become defaults immediately without
-pretending a launch happened or changing use-recency order. The compatible
-agent chosen for a harness is remembered too. Explicit folder choices are saved
-after Git discovery canonicalizes linked worktrees to their repository. Legacy
-preference keys and the app data directory stay in place.
-On the desktop experiment, approvals separately remember the last explicit
-selection for each agent. Worktree remembers the last explicit toggle for each
-project on each machine, even when the form is later dismissed. Unsupported
-saved modes are ignored; drafts and pending receipts retain their reviewed
-values. Automatic retry recovery never changes these remembered preferences.
+The existing local state store remembers one global **last successful launch**:
+agent and specialized harness, model route, approvals, and account/profile.
+A profile path is only reusable on its original machine. Worktree is a global
+choice from the last successful Git launch; plain folders leave that choice alone.
+Choosing options, cancelling, or a failed start never changes these defaults.
+A confirmed start saves them even when creation has already replaced the form.
+Legacy preference keys and the app data directory stay in place; migration uses
+actual launch history instead of previously persisted dropdown edits.
+
+The working project is the last focused real work pane in this window, including
+its machine. Monitor, Grid, Store, and Settings do not replace it. Without a working
+pane, use the last successfully launched user project. Without either, suggest a
+new local folder so Enter can launch immediately. Normalize linked worktrees back
+to their repository. Utility launches never update this project history or the
+successful setup. Task text, attachments, branch names, and worktree folder names
+are never global preferences. There is no extra Draft, Save as default, or
+reasoning-effort control.
 
 ## Model selection
 
@@ -127,17 +145,17 @@ updates the choices; Manage Models opens the existing Models panel for lifecycle
 management and preserves the launch draft. Choosing Terminal clears model routing;
 its Model row is omitted.
 
-An explicit model survives draft dismissal/restoration and uncertain creation
-receipts. A new OpenCode session starts with Muse Spark 1.3; other engines use their default subscription;
-model routing is not persisted as a global preference. Start refreshes availability
+An explicit model survives an uncertain creation receipt. A successful launch
+remembers its model route globally with its agent. A first OpenCode session starts
+with Muse Spark 1.3; other engines use their default subscription. Start refreshes availability
 and sends only `gridModel` and `gridName`; the selected machine resolves the endpoint
 and credentials. Older daemons without `supportsModelLaunch` explain that an update
 is needed while continuing to allow ordinary subscription launches.
 
 ## Git projects
 
-Git projects enable Branch and Worktree. Worktree defaults to **Yes** when the
-project has no saved worktree preference;
+Git projects enable Branch and Worktree. Worktree defaults to **Yes** until a
+successful Git launch remembers another global choice.
 The checkbox supports pointer and keyboard activation through the form's active
 keymap. Its label and branch icon remain together as the form narrows.
 An empty repository explains that a commit is required for a worktree and asks
@@ -219,35 +237,26 @@ worktree it finds in `~/harnesses/worktrees` only when no live or stopped
 harness uses it, nothing is uncommitted, and it has been idle for a week; the
 branch stays unless Harness made it and its commits are all elsewhere.
 
-Drafts preserve these choices. A lost start reply reuses
+An open form preserves these choices. A lost start reply reuses
 its receipt, and retrying a confirmed launch failure reuses its prepared
 worktree: the retry selects that worktree's branch with Worktree off.
 
-## Draft ownership
+## Fresh forms and launch recovery
 
-- Workspace drafts belong to their original machine, focused source harness,
-  and project context. A different focused harness does not inherit their edits.
-- Fresh Cmd-N and Cmd-Shift-P creation use the same remembered explicit choices.
-  The current tab controls placement; a saved draft cannot redirect it to an old destination.
-- Draft identity uses the original source context, not the remembered project
-  subsequently changed by editing that draft. Reopening cannot lose the task
-  because the person's latest choice became a new default.
-- Store drafts belong to the explicitly requested product and machine. Opening
-  Blender cannot restore Workshop's agent, task, or generated project name.
-- Closing Cmd-N keeps its draft for that context. Explicit Store entries can
-  resume their compatible draft, including the selected agent. Store Open still
-  wins if the harness or machine was changed inside that saved draft.
-- Cmd-N from search resumes the same-context draft, including its task and
-  selected options. Search text seeds the task only when no compatible draft
-  resumes; browsing search must not replace an interrupted composer.
-- Explicitly choosing a new-task search result or a Store example starts the
-  requested task from that entry's defaults. Repeating the same request while
-  its draft is already open keeps its edits.
-- A request awaiting confirmation is an exception: restore its exact values and
+- Every newly opened Cmd-N starts with an empty prompt and the successful setup.
+  Closing discards ordinary edits. Repeating Cmd-N while the same form is still
+  open simply focuses it.
+- Browsing search does not become a new task. An explicit create action or Store
+  example supplies its requested prompt. Explicit product, machine, split and
+  destination choices take precedence over inferred defaults.
+- The current tab controls placement. Store entries start fresh on their requested
+  machine, with a suggested project named for that product.
+- A request awaiting confirmation is the exception: restore its exact values and
   receipt. A new task must not silently turn an uncertain start into a duplicate.
-  An in-flight or uncertain draft cannot be replaced while it is open.
-- Closing the dock does not discard unresolved receipts. Advanced options and
-  return-to-dock preserve the same draft ownership and placement.
+  In-flight and uncertain requests cannot be replaced while open.
+- Pending receipts belong to their original source context. Closing keeps them
+  recoverable. Opening a nested picker or returning from advanced options keeps
+  the currently open form and its destination.
 
 ## Project names
 
@@ -257,7 +266,7 @@ does not. The suggestion is frozen while reviewed. Project → New Folder
 opens the name prompt on the selected machine, with Change machine available;
 accepting a name returns to the Repo control.
 
-Each machine retains its own project choice. A folder on one machine is never
+Project paths retain their owning machine. A folder on one machine is never
 silently reused on another. Generated folders use exclusive reservation and
 advance to seconds/a suffix only on a confirmed collision. Explicit names are
 never silently renamed, and existing files are never overwritten.

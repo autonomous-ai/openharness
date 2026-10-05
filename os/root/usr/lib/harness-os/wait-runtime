@@ -1,0 +1,13 @@
+#!/bin/sh
+# Type=exec establishes a process, not an agent runtime ready to accept hn.
+# Keep startup ordering honest without a second persistent supervisor.
+set -eu
+for attempt in $(seq 1 120); do
+    if curl --fail --silent --max-time 1 http://127.0.0.1:18473/api/status |
+        jq -e '.discoveryReady == true and .safeMode != true' >/dev/null 2>&1; then
+        exit 0
+    fi
+    sleep 0.25
+done
+printf '%s\n' 'Harness runtime did not become ready; see journalctl --user -u harness-daemon.' >&2
+exit 1

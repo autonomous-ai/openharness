@@ -11,8 +11,10 @@ import '../shared/widgets/command_row.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 
-/// One setup review with a direct install action. Launch probes stay read-only;
-/// installation starts only after the user chooses the visible install action.
+/// First-run setup. Launch probes stay read-only; a plan that installs
+/// entirely in-app then runs unasked and this screen shows its progress. Only a
+/// plan that needs a password in Terminal (Linux apt) waits on the review's
+/// install action.
 class EnvironmentSetupScreen extends StatefulWidget {
   final AppNotifier notifier;
 

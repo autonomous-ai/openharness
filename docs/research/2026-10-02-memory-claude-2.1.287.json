@@ -1,0 +1,607 @@
+{
+  "date": "2026-10-02",
+  "purpose": "Version-pinned native Claude memory transport; synthetic input only.",
+  "before": {
+    "version": "2.1.287 (Claude Code)",
+    "outcome": "claude_version_uncertified",
+    "providerRequests": 0
+  },
+  "probeHashes": {
+    "cli/scripts/memory-native-claude-lifecycle-probe.mjs": "f944741de47189939125ed29188df0c7c3730c705f3e310eb39a87c2fa3cb26f",
+    "cli/scripts/memory-native-claude-inference-probe.mjs": "e2d4d9d4216c4e0dd64977d061138f1ecb129706bb31956b85f6333ea35eb51a"
+  },
+  "lifecycle": {
+    "version": "2.1.287 (Claude Code)",
+    "requests": [
+      {
+        "phase": "first",
+        "path": "/v1/messages",
+        "model": "claude-opus-4-6",
+        "markers": [
+          "first"
+        ],
+        "contextRoles": [
+          "user"
+        ],
+        "tools": []
+      },
+      {
+        "phase": "resume",
+        "path": "/v1/messages",
+        "model": "claude-opus-4-6",
+        "markers": [
+          "first",
+          "resume"
+        ],
+        "contextRoles": [
+          "user",
+          "user"
+        ],
+        "tools": []
+      },
+      {
+        "phase": "compact",
+        "path": "/v1/messages",
+        "model": "claude-opus-4-6",
+        "markers": [
+          "first",
+          "resume"
+        ],
+        "contextRoles": [
+          "user",
+          "user"
+        ],
+        "tools": []
+      },
+      {
+        "phase": "after_compact",
+        "path": "/v1/messages",
+        "model": "claude-opus-4-6",
+        "markers": [
+          "after_compact"
+        ],
+        "contextRoles": [
+          "user"
+        ],
+        "tools": []
+      },
+      {
+        "phase": "model_change",
+        "path": "/v1/messages",
+        "model": "claude-sonnet-4-6",
+        "markers": [
+          "after_compact",
+          "model_change"
+        ],
+        "contextRoles": [
+          "user",
+          "user"
+        ],
+        "tools": []
+      }
+    ],
+    "hooks": [
+      {
+        "phase": "first",
+        "route": "/api/hook/session-start",
+        "event": "SessionStart",
+        "source": "startup",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "first",
+        "route": "/api/hook/session-start",
+        "event": "UserPromptSubmit",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "first",
+        "route": "/api/hook/memory-emitted",
+        "session": "session_1",
+        "receipt": true
+      },
+      {
+        "phase": "resume",
+        "route": "/api/hook/session-start",
+        "event": "SessionStart",
+        "source": "resume",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "resume",
+        "route": "/api/hook/session-start",
+        "event": "UserPromptSubmit",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "resume",
+        "route": "/api/hook/memory-emitted",
+        "session": "session_1",
+        "receipt": true
+      },
+      {
+        "phase": "compact",
+        "route": "/api/hook/session-start",
+        "event": "SessionStart",
+        "source": "resume",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "compact",
+        "route": "/api/hook/session-start",
+        "event": "PreCompact",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "compact",
+        "route": "/api/hook/session-start",
+        "event": "SessionStart",
+        "source": "compact",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "compact",
+        "route": "/api/hook/session-start",
+        "event": "PostCompact",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "after_compact",
+        "route": "/api/hook/session-start",
+        "event": "SessionStart",
+        "source": "resume",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "after_compact",
+        "route": "/api/hook/session-start",
+        "event": "UserPromptSubmit",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "after_compact",
+        "route": "/api/hook/memory-emitted",
+        "session": "session_1",
+        "receipt": true
+      },
+      {
+        "phase": "model_change",
+        "route": "/api/hook/session-start",
+        "event": "SessionStart",
+        "source": "resume",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "model_change",
+        "route": "/api/hook/session-start",
+        "event": "UserPromptSubmit",
+        "session": "session_1",
+        "receipt": false
+      },
+      {
+        "phase": "model_change",
+        "route": "/api/hook/memory-emitted",
+        "session": "session_1",
+        "receipt": true
+      }
+    ],
+    "runs": [
+      {
+        "phase": "first",
+        "code": 0,
+        "signal": null,
+        "timedOut": false,
+        "events": [
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "session": "session_1"
+          },
+          {
+            "type": "assistant",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "informational",
+            "session": "session_1"
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "session": "session_1",
+            "isError": false,
+            "result": "Synthetic response."
+          }
+        ],
+        "stderr": ""
+      },
+      {
+        "phase": "resume",
+        "code": 0,
+        "signal": null,
+        "timedOut": false,
+        "events": [
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "session": "session_1"
+          },
+          {
+            "type": "assistant",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "informational",
+            "session": "session_1"
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "session": "session_1",
+            "isError": false,
+            "result": "Synthetic response."
+          }
+        ],
+        "stderr": ""
+      },
+      {
+        "phase": "compact",
+        "code": 0,
+        "signal": null,
+        "timedOut": false,
+        "events": [
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "status",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "status",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "informational",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "compact_boundary",
+            "session": "session_1",
+            "compactMetadata": {
+              "trigger": "manual",
+              "pre_tokens": 1020,
+              "post_tokens": 353,
+              "cumulative_dropped_tokens": 667,
+              "duration_ms": 86,
+              "preserved_segment": {
+                "head_uuid": "bfd1d64b-7908-40c5-9231-085e0f18cf08",
+                "anchor_uuid": "03a28975-96dd-4c36-bc15-ef2870d6d307",
+                "tail_uuid": "bfd1d64b-7908-40c5-9231-085e0f18cf08"
+              },
+              "preserved_messages": {
+                "anchor_uuid": "03a28975-96dd-4c36-bc15-ef2870d6d307",
+                "uuids": [
+                  "bfd1d64b-7908-40c5-9231-085e0f18cf08"
+                ],
+                "all_uuids": [
+                  "bfd1d64b-7908-40c5-9231-085e0f18cf08",
+                  "f51f1436-e3cf-40d6-8736-0e527a6b4f8b"
+                ]
+              }
+            }
+          },
+          {
+            "type": "user",
+            "session": "session_1"
+          },
+          {
+            "type": "user",
+            "session": "session_1"
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "session": "session_1",
+            "isError": false,
+            "result": ""
+          }
+        ],
+        "stderr": ""
+      },
+      {
+        "phase": "after_compact",
+        "code": 0,
+        "signal": null,
+        "timedOut": false,
+        "events": [
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "session": "session_1"
+          },
+          {
+            "type": "assistant",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "informational",
+            "session": "session_1"
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "session": "session_1",
+            "isError": false,
+            "result": "Synthetic response."
+          }
+        ],
+        "stderr": ""
+      },
+      {
+        "phase": "model_change",
+        "code": 0,
+        "signal": null,
+        "timedOut": false,
+        "events": [
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_started",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "hook_response",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "session": "session_1"
+          },
+          {
+            "type": "assistant",
+            "session": "session_1"
+          },
+          {
+            "type": "system",
+            "subtype": "informational",
+            "session": "session_1"
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "session": "session_1",
+            "isError": false,
+            "result": "Synthetic response."
+          }
+        ],
+        "stderr": ""
+      }
+    ],
+    "limitations": [
+      "Synthetic localhost provider; no inference or semantic quality measured.",
+      "Adapter uses synthetic responses; this does not verify real host authorization."
+    ]
+  },
+  "extraction": {
+    "date": "2026-10-02T14:23:02.709Z",
+    "engine": "claude",
+    "version": "2.1.287 (Claude Code)",
+    "model": "claude-opus-4-6",
+    "passed": true,
+    "sourceHashes": {
+      "src/memory/claudeInference.ts": "a8e758b92b7cbd547a77bff02495a831e60e2a37365ca3355b7cfd041a966ef0",
+      "src/memory/inferenceProcess.ts": "995df74135cd42539274e1eac99f1a5b080ff2f5c9e2dafe035a68adc224afe0",
+      "src/memory/account.ts": "c7e95d7c1464ca65ce80961efd42589c2ca827ceefc965ffc4ac5fe52b36498b"
+    },
+    "runs": [
+      {
+        "mode": "text",
+        "requests": [
+          {
+            "model": "claude-opus-4-6",
+            "tools": [],
+            "promptReceived": true,
+            "workspaceContentReceived": false
+          }
+        ],
+        "observations": [
+          {
+            "model": "claude-opus-4-6"
+          },
+          {
+            "usage": {
+              "inputTokens": 10,
+              "outputTokens": 20,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            },
+            "reportedCostUsd": 0.00055
+          }
+        ],
+        "expectedAnswer": true,
+        "error": null,
+        "forbiddenFileExists": false,
+        "argv": [
+          "--print",
+          "--verbose",
+          "--output-format",
+          "stream-json",
+          "--no-session-persistence",
+          "--safe-mode",
+          "--disable-slash-commands",
+          "--tools",
+          "",
+          "--strict-mcp-config",
+          "--mcp-config",
+          "{\"mcpServers\":{}}",
+          "--model",
+          "claude-opus-4-6",
+          "--effort",
+          "high"
+        ],
+        "passed": true
+      },
+      {
+        "mode": "tool_attempt",
+        "requests": [
+          {
+            "model": "claude-opus-4-6",
+            "tools": [],
+            "promptReceived": true,
+            "workspaceContentReceived": false
+          }
+        ],
+        "observations": [
+          {
+            "model": "claude-opus-4-6"
+          }
+        ],
+        "error": "inference_tool_or_error",
+        "expectedAnswer": false,
+        "forbiddenFileExists": false,
+        "argv": [
+          "--print",
+          "--verbose",
+          "--output-format",
+          "stream-json",
+          "--no-session-persistence",
+          "--safe-mode",
+          "--disable-slash-commands",
+          "--tools",
+          "",
+          "--strict-mcp-config",
+          "--mcp-config",
+          "{\"mcpServers\":{}}",
+          "--model",
+          "claude-opus-4-6",
+          "--effort",
+          "high"
+        ],
+        "passed": true
+      }
+    ],
+    "limitations": [
+      "Local mock replies and fake credentials; no real inference or semantic quality measurement.",
+      "The launcher redirects native home and provider environment; this does not certify a production login or account switch.",
+      "Prompt-hook lifecycle delivery is covered by the separate native lifecycle probe."
+    ]
+  },
+  "limitations": [
+    "Fake credentials and localhost providers; no real model inference or personal-session content.",
+    "Native-reported token and cost values come from mock responses and are not actual billing.",
+    "Next-user-prompt print-mode delivery only; automatic mid-turn compaction, interactive TUI behavior, and production account changes remain unverified.",
+    "These observations do not establish extraction faithfulness, held-out quality, or coding-task benefit."
+  ]
+}

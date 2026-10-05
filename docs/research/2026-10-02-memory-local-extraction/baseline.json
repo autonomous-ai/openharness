@@ -1,0 +1,667 @@
+{
+  "schemaVersion": 1,
+  "suite": "synthetic-extraction-diagnostics-v1",
+  "suiteSha256": "135545eb05370bac04fbaf555c36255afd21fbcbd4190b0e21895e17d31273c3",
+  "promptVersion": "coding-memory-v4",
+  "contextVersion": "coding-context-v1",
+  "sourceHashes": {
+    "learner.ts": "1aac0ae075edba47e411b1a45c1411632d6c866fd0fb4ba32de7af18fa81668f",
+    "evaluation.ts": "91e35b391ec7231cb35c248e9e325f6c27de651632e4c74f4ce09f1afe756b17",
+    "store.ts": "491eb959f757b4f97be450bec415dc33e86e2c910adc8ede9bb40e4cb2b72dcf",
+    "admission.ts": "de6fe82c328763d0daad687373c345fa79dc7a48ae3ef8632de7729b419bb465",
+    "types.ts": "380a95c563c7c5254f4a2ad8ccf3858d21e88f76ab90a348f1be5e18aa273ec6",
+    "queue.ts": "95b1470a91332b62162b9860a27c1f817f8d860eb2d549f906450f14ba76a50a",
+    "context.ts": "d1e5e0797c065c7ce86cf6cfb1158a1702d10be2040a04a700a21d18b2c6fd70",
+    "evaluationReview.ts": "da4c153d69c6cdf26bd8135993e576bc3f60c4042fc2c11829880b2be295bea3"
+  },
+  "runnerSha256": "d2b7acc932a17c634c296b5a17d261269f003431d01c92d97e60adb644acdca5",
+  "startedAt": "2026-10-02T15:51:46.301Z",
+  "status": "completed",
+  "selected": {
+    "engine": "local-reference-llama",
+    "model": "Qwen3.8-27B-Q4_0",
+    "weightSha256": "ede16c7b36e578ca87a8c70e011e4b4633a32c831c0ce76d0f474582384e671d",
+    "selectionSource": "Explicit offline diagnostic reference; not the selected companion model"
+  },
+  "limits": {
+    "maxCalls": 6,
+    "timeoutPerCallMs": 90000,
+    "maxOutputTokens": 4096,
+    "contextTokens": 16384,
+    "temperature": 0,
+    "seed": 42,
+    "thinking": false,
+    "retries": 0,
+    "corpus": "synthetic_only",
+    "network": "OS sandbox denies non-loopback networking; cloud disabled",
+    "tools": "none"
+  },
+  "limitations": [
+    "Development diagnostic; not a held-out quality benchmark.",
+    "Different reference model from the selected companion; no claim of Muse quality, native agent delivery or live learning.",
+    "No private conversations, credentials, production memory or app settings used.",
+    "Expectations and recall probes are never supplied to extraction.",
+    "Mechanical checks measure record/recall presence; semantic review is separate.",
+    "Full local GGUF SHA-256 recorded; no model download or conversion."
+  ],
+  "cases": [
+    {
+      "id": "conditional-debugging",
+      "durationMs": 34951,
+      "outcome": {
+        "state": "failed",
+        "reason": "evidence_path"
+      },
+      "checks": [
+        {
+          "name": "completed_extraction",
+          "passed": false
+        },
+        {
+          "name": "record_count",
+          "passed": null
+        },
+        {
+          "name": "scope",
+          "passed": null
+        },
+        {
+          "name": "no_invented_rationale",
+          "passed": null
+        },
+        {
+          "name": "recall:debugging",
+          "passed": null
+        },
+        {
+          "name": "recall:incident",
+          "passed": null
+        },
+        {
+          "name": "recall:unclassified-task",
+          "passed": null
+        }
+      ],
+      "probes": [
+        {
+          "id": "debugging",
+          "query": "debugging failing test implementation",
+          "projectIds": [
+            "alpha"
+          ],
+          "conditions": {
+            "taskType": "debugging",
+            "productionIncident": false
+          },
+          "expected": "recall",
+          "status": "not_run",
+          "returnedIds": [],
+          "passed": null,
+          "context": null
+        },
+        {
+          "id": "incident",
+          "query": "debugging failing test implementation",
+          "projectIds": [
+            "alpha"
+          ],
+          "conditions": {
+            "taskType": "debugging",
+            "productionIncident": true
+          },
+          "expected": "abstain",
+          "status": "not_run",
+          "returnedIds": [],
+          "passed": null,
+          "context": null
+        },
+        {
+          "id": "unclassified-task",
+          "query": "debugging failing test implementation",
+          "projectIds": [
+            "alpha"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "not_run",
+          "returnedIds": [],
+          "passed": null,
+          "context": null
+        }
+      ],
+      "records": [],
+      "episodes": {
+        "expected": 1,
+        "reviewed": 0,
+        "jobs": {
+          "failed": 1
+        }
+      },
+      "semanticReview": {
+        "status": "not_reviewable",
+        "criteria": [
+          "Preserves the test-before-implementation preference only for debugging.",
+          "Preserves the production-incident exception without inventing an incident workflow.",
+          "Does not invent a reason for the preference."
+        ]
+      },
+      "promptSha256": "73195c9ebab865b2310db8405521841903f302248997b7d54aebb1c9e3428cce",
+      "answer": {
+        "text": "{\"proposals\": [{\"kind\": \"working_preference\", \"facet\": \"debugging_workflow\", \"assertionType\": \"stated_preference\", \"scope\": {\"profileId\": \"synthetic-owner\"}, \"claim\": \"When debugging, the user prefers to write a small failing test before changing the implementation.\", \"rationale\": null, \"futureAction\": \"Suggest creating a minimal failing test case before proposing or implementing code changes during debugging tasks.\", \"applicability\": {\"taskType\": \"debugging\", \"productionIncident\": false}, \"exceptions\": [{\"when\": {\"productionIncident\": true}, \"reason\": \"The user explicitly stated this preference does not apply during production incidents.\"}], \"retrievalCues\": [\"debugging\", \"failing test\", \"test-driven\", \"production incident\"], \"evidenceClass\": \"user_stated\", \"evidence\": [{\"sourceEventId\": \"conditional-debugging-0\", \"quote\": \"Across my coding projects, when debugging I prefer a small failing test before changing implementation. This preference does not apply during production incidents.\", \"paths\": [\"/text\"]}], \"conflictKey\": \"debugging-failing-test-preference\", \"validity\": {\"validFrom\": null, \"validUntil\": null, \"recheckWhen\": []}}]}",
+        "metrics": {
+          "model": "memory-reference",
+          "finishReason": "stop",
+          "usage": {
+            "completion_tokens": 269,
+            "prompt_tokens": 3286,
+            "total_tokens": 3555,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 3286,
+            "prompt_ms": 18636.415,
+            "prompt_per_token_ms": 5.67145922093731,
+            "prompt_per_second": 176.32146526035183,
+            "predicted_n": 269,
+            "predicted_ms": 16252.929,
+            "predicted_per_token_ms": 60.41981040892193,
+            "predicted_per_second": 16.550862924461185
+          }
+        }
+      }
+    },
+    {
+      "id": "project-database-decision",
+      "durationMs": 20002,
+      "outcome": {
+        "state": "failed",
+        "reason": "invalid_inference_output"
+      },
+      "checks": [
+        {
+          "name": "completed_extraction",
+          "passed": false
+        },
+        {
+          "name": "record_count",
+          "passed": null
+        },
+        {
+          "name": "scope",
+          "passed": null
+        },
+        {
+          "name": "recall:same-repository",
+          "passed": null
+        },
+        {
+          "name": "recall:different-repository",
+          "passed": null
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-repository",
+          "query": "SQLite desktop database deployment",
+          "projectIds": [
+            "desktop-repo"
+          ],
+          "conditions": {},
+          "expected": "recall",
+          "status": "not_run",
+          "returnedIds": [],
+          "passed": null,
+          "context": null
+        },
+        {
+          "id": "different-repository",
+          "query": "SQLite desktop database deployment",
+          "projectIds": [
+            "server-repo"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "not_run",
+          "returnedIds": [],
+          "passed": null,
+          "context": null
+        }
+      ],
+      "records": [],
+      "episodes": {
+        "expected": 1,
+        "reviewed": 0,
+        "jobs": {
+          "failed": 1
+        }
+      },
+      "semanticReview": {
+        "status": "not_reviewable",
+        "criteria": [
+          "Represents an accepted project decision, not a universal preference or required database for all desktop apps.",
+          "Rationale is limited to the stated single-file deployment and absence of a database server.",
+          "Does not add performance, scale, transaction or security claims."
+        ]
+      },
+      "promptSha256": "322449a854fdae6dea3e6c73e7c261c58d92696ce536ee0e7c8ce1b3067d5e07",
+      "answer": {
+        "text": "{\"proposals\":[]",
+        "metrics": {
+          "model": "memory-reference",
+          "finishReason": "stop",
+          "usage": {
+            "completion_tokens": 7,
+            "prompt_tokens": 3239,
+            "total_tokens": 3246,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 3239,
+            "prompt_ms": 19590.134,
+            "prompt_per_token_ms": 6.048204384069156,
+            "prompt_per_second": 165.33832795630698,
+            "predicted_n": 7,
+            "predicted_ms": 369.544,
+            "predicted_per_token_ms": 52.791999999999994,
+            "predicted_per_second": 18.94226397939082
+          }
+        }
+      }
+    },
+    {
+      "id": "routine-tool-choice",
+      "durationMs": 21173,
+      "outcome": {
+        "state": "no_useful_memory",
+        "learned": 0
+      },
+      "checks": [
+        {
+          "name": "completed_extraction",
+          "passed": true
+        },
+        {
+          "name": "record_count",
+          "passed": true
+        },
+        {
+          "name": "scope",
+          "passed": true
+        },
+        {
+          "name": "recall:no-assumed-taste",
+          "passed": true
+        }
+      ],
+      "probes": [
+        {
+          "id": "no-assumed-taste",
+          "query": "MongoDB database green button design",
+          "projectIds": [
+            "scratch-repo"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        }
+      ],
+      "records": [],
+      "episodes": {
+        "expected": 1,
+        "reviewed": 1,
+        "jobs": {
+          "no_useful_memory": 1
+        }
+      },
+      "semanticReview": {
+        "status": "pending",
+        "criteria": [
+          "Does not infer the user's database or visual-design taste, expertise, or endorsement from assistant activity and an acknowledgement."
+        ]
+      },
+      "promptSha256": "721de87652af11201633c30d886b79230bb0edca33fc32a39c921101feb25c07",
+      "answer": {
+        "text": "{\"proposals\":[]}",
+        "metrics": {
+          "model": "memory-reference",
+          "finishReason": "stop",
+          "usage": {
+            "completion_tokens": 7,
+            "prompt_tokens": 3295,
+            "total_tokens": 3302,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 3295,
+            "prompt_ms": 20647.877,
+            "prompt_per_token_ms": 6.266427010622155,
+            "prompt_per_second": 159.58057092261834,
+            "predicted_n": 7,
+            "predicted_ms": 421.562,
+            "predicted_per_token_ms": 60.22314285714286,
+            "predicted_per_second": 16.60491220745703
+          }
+        }
+      }
+    },
+    {
+      "id": "quoted-third-party",
+      "durationMs": 20323,
+      "outcome": {
+        "state": "no_useful_memory",
+        "learned": 0
+      },
+      "checks": [
+        {
+          "name": "completed_extraction",
+          "passed": true
+        },
+        {
+          "name": "record_count",
+          "passed": true
+        },
+        {
+          "name": "scope",
+          "passed": true
+        },
+        {
+          "name": "recall:no-borrowed-opinion",
+          "passed": true
+        }
+      ],
+      "probes": [
+        {
+          "id": "no-borrowed-opinion",
+          "query": "microservices tests preference",
+          "projectIds": [
+            "alpha"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        }
+      ],
+      "records": [],
+      "episodes": {
+        "expected": 1,
+        "reviewed": 1,
+        "jobs": {
+          "no_useful_memory": 1
+        }
+      },
+      "semanticReview": {
+        "status": "pending",
+        "criteria": [
+          "Does not assign the quoted author's preference to the user.",
+          "Does not invent the user's opposite preference from non-adoption."
+        ]
+      },
+      "promptSha256": "3a0f8ae94a30870a42c10682dcab78f02cdbb26175440d65a8a04fcf6282ba52",
+      "answer": {
+        "text": "{\"proposals\":[]}",
+        "metrics": {
+          "model": "memory-reference",
+          "finishReason": "stop",
+          "usage": {
+            "completion_tokens": 7,
+            "prompt_tokens": 3297,
+            "total_tokens": 3304,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 3297,
+            "prompt_ms": 19923.442,
+            "prompt_per_token_ms": 6.042900212314224,
+            "prompt_per_second": 165.48345411400302,
+            "predicted_n": 7,
+            "predicted_ms": 361.712,
+            "predicted_per_token_ms": 51.67314285714286,
+            "predicted_per_second": 19.352412969434248
+          }
+        }
+      }
+    },
+    {
+      "id": "unstated-rationale",
+      "durationMs": 31566,
+      "outcome": {
+        "state": "failed",
+        "reason": "evidence_path"
+      },
+      "checks": [
+        {
+          "name": "completed_extraction",
+          "passed": false
+        },
+        {
+          "name": "record_count",
+          "passed": null
+        },
+        {
+          "name": "scope",
+          "passed": null
+        },
+        {
+          "name": "no_invented_rationale",
+          "passed": null
+        },
+        {
+          "name": "recall:database-choice",
+          "passed": null
+        },
+        {
+          "name": "recall:irrelevant-ui-task",
+          "passed": null
+        }
+      ],
+      "probes": [
+        {
+          "id": "database-choice",
+          "query": "PostgreSQL database preference",
+          "projectIds": [
+            "alpha"
+          ],
+          "conditions": {},
+          "expected": "recall",
+          "status": "not_run",
+          "returnedIds": [],
+          "passed": null,
+          "context": null
+        },
+        {
+          "id": "irrelevant-ui-task",
+          "query": "button color hover animation",
+          "projectIds": [
+            "alpha"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "not_run",
+          "returnedIds": [],
+          "passed": null,
+          "context": null
+        }
+      ],
+      "records": [],
+      "episodes": {
+        "expected": 1,
+        "reviewed": 0,
+        "jobs": {
+          "failed": 1
+        }
+      },
+      "semanticReview": {
+        "status": "not_reviewable",
+        "criteria": [
+          "Preserves a default preference, not an absolute requirement or expertise claim.",
+          "Does not invent reasons such as ACID, performance, familiarity, reliability or cost.",
+          "No invented conditions limit this explicit default."
+        ]
+      },
+      "promptSha256": "e04dcb7b5fd73003d36e379f7289d92f0113d64727b51c584566befd1a4fe8ff",
+      "answer": {
+        "text": "{\"proposals\": [{\"kind\": \"working_preference\", \"facet\": \"database.default\", \"assertionType\": \"stated_preference\", \"scope\": {\"profileId\": \"synthetic-owner\"}, \"claim\": \"The user's default database preference for coding projects is PostgreSQL.\", \"rationale\": null, \"futureAction\": \"When selecting a database for new coding projects, default to PostgreSQL unless the user specifies otherwise.\", \"applicability\": {\"taskType\": \"implementation\"}, \"exceptions\": [], \"retrievalCues\": [\"PostgreSQL\", \"database\", \"default\", \"preference\"], \"evidenceClass\": \"user_stated\", \"evidence\": [{\"sourceEventId\": \"unstated-rationale-0\", \"quote\": \"My default database preference for coding projects is PostgreSQL. Please remember that preference.\", \"paths\": [\"/text\"]}], \"conflictKey\": \"database.default\", \"validity\": {\"validFrom\": null, \"validUntil\": null, \"recheckWhen\": []}}]}",
+        "metrics": {
+          "model": "memory-reference",
+          "finishReason": "stop",
+          "usage": {
+            "completion_tokens": 211,
+            "prompt_tokens": 3285,
+            "total_tokens": 3496,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 3285,
+            "prompt_ms": 18932.952,
+            "prompt_per_token_ms": 5.7634557077625574,
+            "prompt_per_second": 173.5070157046825,
+            "predicted_n": 211,
+            "predicted_ms": 12594.52,
+            "predicted_per_token_ms": 59.6896682464455,
+            "predicted_per_second": 16.75331810978108
+          }
+        }
+      }
+    },
+    {
+      "id": "unbound-project-fact",
+      "durationMs": 19813,
+      "outcome": {
+        "state": "no_useful_memory",
+        "learned": 0
+      },
+      "checks": [
+        {
+          "name": "completed_extraction",
+          "passed": true
+        },
+        {
+          "name": "record_count",
+          "passed": true
+        },
+        {
+          "name": "scope",
+          "passed": true
+        },
+        {
+          "name": "recall:no-project-leak",
+          "passed": true
+        }
+      ],
+      "probes": [
+        {
+          "id": "no-project-leak",
+          "query": "Redis billing queue",
+          "projectIds": [
+            "other-repo"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        }
+      ],
+      "records": [],
+      "episodes": {
+        "expected": 1,
+        "reviewed": 1,
+        "jobs": {
+          "no_useful_memory": 1
+        }
+      },
+      "semanticReview": {
+        "status": "pending",
+        "criteria": [
+          "Abstains because a repository decision has no verified project binding.",
+          "Does not broaden billing's Redis decision to a personal preference or another project."
+        ]
+      },
+      "promptSha256": "8d8704c17fd50f1305b2728c6b5c3336c0345a7434ef0095bf4a20b3c704bd90",
+      "answer": {
+        "text": "{\"proposals\": []}",
+        "metrics": {
+          "model": "memory-reference",
+          "finishReason": "stop",
+          "usage": {
+            "completion_tokens": 8,
+            "prompt_tokens": 3303,
+            "total_tokens": 3311,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 3303,
+            "prompt_ms": 19356.746,
+            "prompt_per_token_ms": 5.860353012412958,
+            "prompt_per_second": 170.63818474448135,
+            "predicted_n": 8,
+            "predicted_ms": 428.452,
+            "predicted_per_token_ms": 53.5565,
+            "predicted_per_second": 18.671869894410577
+          }
+        }
+      }
+    }
+  ],
+  "inferenceCalls": 6,
+  "networkGuard": {
+    "nonLoopbackConnectError": 1
+  },
+  "runtime": {
+    "health": {
+      "status": "ok"
+    },
+    "version": "9870 (2d973636e)"
+  },
+  "workerExit": {
+    "code": 0,
+    "signal": null
+  },
+  "completedCases": 3,
+  "finishedAt": "2026-10-02T15:54:17.179Z",
+  "originalReportSha256": "c823aa077ec5360ff4b5007fa3450eb0897981c99f6fa22899fce12bf1d50611",
+  "redaction": "Only local runtime stderr was omitted; synthetic sources, answers, stored records and recall packets are unchanged."
+}

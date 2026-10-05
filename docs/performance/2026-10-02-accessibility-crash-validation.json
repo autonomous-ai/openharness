@@ -1,0 +1,391 @@
+{
+  "sourceCommit": "bb86565ef55a870a9ac817ef60e3397a4bf4d8a8",
+  "sourceTree": "037e381f6c9ec2a7851229fce5ce8587e5c0a56a",
+  "baselineCommit": "f537725295864d8150d439289dc24cf4f870e226",
+  "platform": {
+    "macOS": "26.6.2",
+    "architecture": "arm64"
+  },
+  "toolchain": {
+    "frameworkVersion": "3.47.2",
+    "channel": "[user-branch]",
+    "repositoryUrl": "https://github.com/flutter/flutter.git",
+    "frameworkRevision": "d3b14c876900e553bc736ca19295fc09e3853e8e",
+    "frameworkCommitDate": "2026-08-26 16:07:51 -0700",
+    "engineRevision": "a804b261645ef8c13eb3d5c44a5c2fb0340c5539",
+    "engineCommitDate": "2026-08-26 18:46:13.000Z",
+    "engineContentHash": "1cf1c4773fb941c4c74a7f8bb144a8837596c0f4",
+    "engineBuildDate": "2026-08-26 15:23:07.677",
+    "dartSdkVersion": "3.13.2",
+    "devToolsVersion": "2.60.0",
+    "flutterVersion": "3.47.2"
+  },
+  "pubspecLockSha256": "0987d3b363535b314a292bab02ff8ec5bc51691398f8ede9406b9885925c00b7",
+  "rootCause": {
+    "exception": "EXC_BAD_ACCESS / SIGSEGV, address 0x48",
+    "stack": [
+      "ui::AXNode::id() const",
+      "flutter::AccessibilityBridge::CreateRemoveReparentedNodesUpdate()",
+      "flutter::AccessibilityBridge::CommitUpdates()",
+      "-[FlutterViewController updateSemantics:]"
+    ],
+    "description": "Disconnected dirty OverlayPortal nodes corrupt the native accessibility tree. A later reparent dereferences a null parent. Filtering also requires restoring clean nodes when they reconnect."
+  },
+  "focused": {
+    "testsPassed": 11,
+    "variants": [
+      "macOS",
+      "Windows"
+    ],
+    "changedDartAnalysis": "passed",
+    "switchWithoutResizeRegression": "Failed on the first filtering-only implementation; passes with node snapshot replay."
+  },
+  "nativeMacos": {
+    "command": "python3 tool/accessibility_regression/run.py --flutter /path/to/flutter",
+    "fixed": {
+      "status": "passed",
+      "exitCode": 0,
+      "runtimeSeconds": 11.355,
+      "cycles": 160,
+      "semanticsRestarts": 32,
+      "nativeAppKitButtonActions": 160,
+      "nativeBridgeErrors": 0
+    },
+    "stockEngine": {
+      "argument": "--unguarded",
+      "status": "baseline_crash_reproduced",
+      "exitCode": -11,
+      "runtimeSeconds": 1.301,
+      "crashStackMatchesReportedCrash": true
+    },
+    "productionSourcesSha256": {
+      "core/connected_semantics.dart": "1ce2e9c8a91954e06056ccf17e2354b3a8eca353b3429d2623641fe12a364fa9",
+      "logging/app_log.dart": "00b91e3b4e8b429453773b4e558020b40ce78960999d391015900fb4ece9957e",
+      "logging/log_file.dart": "f962f08e6ad3373109924fc87c861b23d62be0d3833e0f6e5d7ae2703b95f438",
+      "logging/log_append.dart": "a10c8d50f136b62c4f95f0a2453a433436c2c8c443c67aed8f383dcdfd4f9ffa",
+      "logging/log_append_native.dart": "cd205c906bca1ef59d3596a04e2fce0f51cbf83e6d3514658f3dcec73ce0e252",
+      "logging/log_append_io.dart": "e6d6971b9e9ef3a6652dae1e0da1b6e5e469dcdad4b1cce85e99d989bca59ff8",
+      "core/harness_file_store.dart": "53593c8d07ff664e960949bb6e989ca4172b898ae15c646d79f5c8d662c9094c",
+      "core/harness_file_store_web.dart": "e45ee84f97a7115127a6427c53e12c69d249e362c3a8328dceb81e4e96c1ee49",
+      "core/local_key_value_store.dart": "0037ead698dc89cd35f8435759bb7acb53e776cc84296516b81a6866019accc2",
+      "core/browser_lock.dart": "844e3fff9e11c0b99448989c927f724b681e56a55375ff57e548c26254aabe6a",
+      "core/harness_file_store_native.dart": "a1bab68fa395164ca63ed1de0fa05ad4a48dfc9784e0645120020c43fd43f3e9",
+      "core/viewer_mode.dart": "f64230618a793e9a48b472fe6641963c6a000dae7949f80dadaeabe44e546d73",
+      "core/runtime_platform.dart": "d3c5482dc8c5ad8b7388fd09a346e9d60eebdcd30d89ca6c43c10b81f7592e53",
+      "core/host_platform.dart": "66618cf60dab1fee2ff4bd0cf6e292be616d54fa8bbbbcd537da32d85080f296",
+      "logging/error_burst_filter.dart": "d41c50a11e8ddb7639114e7f6304c803a0a18fe5803b45c620bde0e20fa94a7a"
+    }
+  },
+  "broadDesktop": {
+    "passingTestCases": 5646,
+    "skippedTestCases": 16,
+    "reproducedBaselineAssertionFailures": 44,
+    "assertionFailures": [
+      {
+        "file": "test/agent_pause_state_test.dart",
+        "test": "a confirmed pause remains in inventory when its refresh fails",
+        "result": "failure",
+        "skipped": false
+      },
+      {
+        "file": "test/boot_flow_widget_test.dart",
+        "test": "offline unlinked remote with a pending agent opens machine recovery",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/machines_manager_test.dart",
+        "test": "Search unifies categories and preserves management commands (native=false)",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/machines_manager_test.dart",
+        "test": "Search unifies categories and preserves management commands (native=true)",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/share_toolbar_test.dart",
+        "test": "Share defaults hidden and its saved Settings toggle updates the toolbar (native=false)",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/share_toolbar_test.dart",
+        "test": "Share defaults hidden and its saved Settings toggle updates the toolbar (native=true)",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/box_flows_test.dart",
+        "test": "dismissed edits resume and explicit agent/project choices become defaults",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/box_flows_test.dart",
+        "test": "each source pane retains its own draft and launch defaults",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/daemon_workspace_test.dart",
+        "test": "the pair brain an unavailable companion engine explains setup and retries in the same DSH",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/desktop_dialog_interaction_test.dart",
+        "test": "composer closes on Escape and restores its draft on reopen",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/desktop_dialog_interaction_test.dart",
+        "test": "composer closes on outside click and restores its draft on reopen",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/desktop_dialog_interaction_test.dart",
+        "test": "Cmd-P and Cmd-N replace each other without losing the composer",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/desktop_dialog_interaction_test.dart",
+        "test": "long mixed mouse and keyboard setup keeps the draft and dismisses one level",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/desktop_search_polish_test.dart",
+        "test": "native scopes put machines first and keep typed words and focus",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/desktop_welcome_composer_test.dart",
+        "test": "Cmd-P round trip restores the tab draft and chosen options",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/desktop_welcome_composer_test.dart",
+        "test": "each new tab keeps its own draft after switching",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/desktop_welcome_composer_test.dart",
+        "test": "page launches once into its own tab and blocks another start while pending",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/desktop_welcome_composer_test.dart",
+        "test": "Escape from search restores the embedded draft",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/harness_placement_test.dart",
+        "test": "setup with Work profile handles escape without starting",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/harness_placement_test.dart",
+        "test": "setup with Default profile handles outside without starting",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/harness_placement_test.dart",
+        "test": "new-tab creation keeps the task and pending receipt through picker shortcuts",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/harness_store_entry_test.dart",
+        "test": "Store Open uses the dock with its harness and task",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/harness_store_entry_test.dart",
+        "test": "Store Try uses the dock with its harness and task",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/harness_store_entry_test.dart",
+        "test": "returning from Store restores the creation draft and selected project",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/new_harness_install_e2e_test.dart",
+        "test": "pick with keys, install with narration, then create",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/new_harness_install_e2e_test.dart",
+        "test": "a failed install explains itself; New Harness retries and creates",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/new_harness_install_e2e_test.dart",
+        "test": "a dropped socket says the install may still be finishing",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/new_harness_install_e2e_test.dart",
+        "test": "the pane fits a 960px window at 2.0x text",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/new_harness_install_e2e_test.dart",
+        "test": "the pane fits a 520px window at 1.0x text",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/new_harness_install_pane_test.dart",
+        "test": "the harness list with no history, Claude Code leads and every harness is listed",
+        "result": "failure",
+        "skipped": false
+      },
+      {
+        "file": "test/new_harness_install_pane_test.dart",
+        "test": "what the form opens on Code and Claude Code when nothing was used before",
+        "result": "failure",
+        "skipped": false
+      },
+      {
+        "file": "test/new_harness_install_e2e_test.dart",
+        "test": "the pane fits a 520px window at 2.0x text",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/new_harness_install_pane_test.dart",
+        "test": "installing on the way to start outside dismissal cannot abandon a running installation",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/new_harness_install_pane_test.dart",
+        "test": "installing on the way to start the right pane narrates the machine, step by step",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/new_harness_install_pane_test.dart",
+        "test": "installing on the way to start a failed install stays on screen, with how to retry",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/pane_model_status_test.dart",
+        "test": "an agent whose frame says neither keeps the header it had",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/swarm_split_test.dart",
+        "test": "hovering the right edge splits with its project and keeps the terminal",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/swarm_split_test.dart",
+        "test": "hovering the down edge splits with its project and keeps the terminal",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/swarm_split_test.dart",
+        "test": "split creation dismissal restores terminal input immediately",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/terminal_panel_presentation_test.dart",
+        "test": "retained header uses current callbacks, names, projects and status",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/terminal_panel_presentation_test.dart",
+        "test": "narrow headers preserve identity and close control at large text",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/terminal_tail_lifecycle_test.dart",
+        "test": "all delayed local panes start at bottom",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/terminal_tail_lifecycle_test.dart",
+        "test": "all delayed remote panes start at bottom",
+        "result": "error",
+        "skipped": false
+      },
+      {
+        "file": "test/workspace_start_guide_test.dart",
+        "test": "a failed first start stays actionable and retries once",
+        "result": "error",
+        "skipped": false
+      }
+    ],
+    "stalledTestCases": [
+      "Settings switches the creature on and off without leaving Settings",
+      "button and shortcut share only the focused agent and return terminal focus",
+      "illustrated Tim lives in the footer and hover preserves focus",
+      "empty and view-only panes keep an inactive Share button"
+    ],
+    "incompleteFiles": [
+      "test/daemon_off_test.dart",
+      "test/share_toolbar_test.dart"
+    ],
+    "browserOnlyFiles": "Nine test/web files were not executed on the VM platform. Web behavior is unchanged by the platform-gated guard.",
+    "status": "Not a passing full suite. All observed assertion failures reproduce on unchanged main; four stalled cases reproduce in bounded baseline checks.",
+    "unvisitedFilesAndLoaderRetries": {
+      "testsPassed": 112,
+      "status": "passed"
+    },
+    "candidateOnlyAssertionFailures": []
+  },
+  "evidenceReuse": {
+    "initialBroadRunParent": "30d2381b4",
+    "finalParent": "f537725295864d8150d439289dc24cf4f870e226",
+    "desktopChangesBetweenParents": [
+      "desktop/scripts/upload-desktop-linux.sh",
+      "desktop/scripts/upload-desktop.sh"
+    ],
+    "sameFlutterSdkAndDependencyLock": true,
+    "affectedTestsAndNativeCheckRerunAfterReconnectionFix": true
+  },
+  "unverified": [
+    "Native Windows execution",
+    "Intel macOS native execution"
+  ],
+  "timing": {
+    "requestReceived": "2026-10-02T13:57:03Z",
+    "initialValidationStarted": "2026-10-02T14:29:55.184618+00:00",
+    "finalImplementationReady": "2026-10-02T14:50:33Z",
+    "finalValidationStarted": "2026-10-02T14:50:33.539361Z",
+    "validationCompleted": "2026-10-02T15:06:38.695172+00:00",
+    "merge": "pending",
+    "publication": "pending"
+  },
+  "pullRequest": "https://github.com/autonomous-ai/openharness/pull/620"
+}

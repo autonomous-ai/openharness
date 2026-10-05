@@ -1,0 +1,63 @@
+name: Harness OS hardware preparation
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_run_id:
+        description: 'Exact Harness OS image artifact to assess'
+        type: string
+        default: '37142219550'
+        required: true
+  push:
+    branches: ['os-polish/hardware-*']
+    paths: ['os/tests/broadcom_*.py', '.github/workflows/os-hardware.yml']
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: harness-hardware-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  broadcom:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id || '37142219550' }}
+          github-token: ${{ github.token }}
+      - name: Check the experiment and install VM tools
+        run: |
+          python3 -m py_compile os/tests/broadcom_guest.py os/tests/broadcom_vm.py
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os-hardware.yml
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+      - name: Build, reinstall offline, and load on the constrained image
+        run: python3 os/tests/broadcom_vm.py --iso os/dist/*.iso
+      - name: Archive package filenames unchanged
+        if: always()
+        run: |
+          # Arch epochs put ':' in package names; upload-artifact rejects those
+          # names directly. Keep original names and signatures inside one tar.
+          if [ -d os/test-results/broadcom/bundle ]; then
+            tar -cf os/test-results/broadcom/driver-bundle.tar -C os/test-results/broadcom/bundle .
+          fi
+      - name: Retain exact package, module, license and experiment evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-broadcom-preparation
+          path: |
+            os/test-results/broadcom/
+            !os/test-results/broadcom/bundle/**
+            !os/test-results/broadcom/**/*.qcow2
+            !os/test-results/broadcom/**/OVMF_VARS.fd
+          retention-days: 14
+          compression-level: 0

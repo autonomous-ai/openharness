@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  activityPhrase, COMPARE_HINT, deviceRegistration, deviceStatusValue, formatDeviceDetail, formatDeviceList, fullDateTime, isNewDevice,
+  activityPhrase, COMPARE_HINT, deviceRegistration, deviceStatusValue, formatDeviceDetail, formatDeviceHistory, formatDeviceList, shortFingerprint, fullDateTime, isNewDevice,
   confirmsRemoval, logOrder, orderDevices, relativeAgo, removeConfirmation, type DeviceRow,
 } from './deviceDisplay.js'
 
@@ -216,4 +216,63 @@ describe('removeConfirmation', () => {
 describe('confirmsRemoval', () => {
   it.each(['y', 'Y', 'yes', 'YES', '  y  ', 'yes\n'])('%j removes', (a) => expect(confirmsRemoval(a)).toBe(true))
   it.each(['', 'n', 'no', 'yep', 'sure', 'y y', '\n'])('%j does not', (a) => expect(confirmsRemoval(a)).toBe(false))
+})
+
+describe('pending, taken and history display', () => {
+  it('isNewDevice follows pending when the daemon sends it, else the 7-day rule', () => {
+    expect(isNewDevice(row('x', 0, { pending: true, firstSeen: NOW - 30 * D }), NOW)).toBe(true)
+    expect(isNewDevice(row('x', 0, { pending: false, firstSeen: NOW - D }), NOW)).toBe(false)
+    expect(isNewDevice(row('x', 0, { pending: true, self: true }), NOW)).toBe(false)
+  })
+  it('words the taken status and shortens a key code', () => {
+    const f = { state: { active: { h: {} }, removed: [] }, conflict: { pub: 'h' } } as never
+    expect(deviceRegistration('p', f, false)).toBe('taken')
+    expect(deviceStatusValue('AAAA', 'taken', 'E2FB·0DF5·5FD8·E6C7')).toBe('AAAA  (not registered — another key holds this computer: E2FB·0DF5…)')
+    expect(shortFingerprint('E2FB·0DF5·5FD8·E6C7')).toBe('E2FB…')
+  })
+  it('lists conflict, suspended and pending lines and the history footer', () => {
+    const lines = formatDeviceList({
+      ...listing(), pending: ['new'], suspended: ['old'],
+      conflict: { label: 'old-install', fingerprint: FP_OLD, addedAt: NOW - D, afterJoin: true },
+    }, NOW).join('\n')
+    expect(lines).toContain("Another key took this computer's place on your account after it joined: old-install · AAAA·BBBB·CCCC·DDDD. If you did not set up")
+    expect(lines).not.toContain('added yesterday')
+    expect(lines).toContain('New since you last looked — mark them seen: harness devices dismiss')
+    expect(lines).toContain('History: harness devices history')
+    const neutral = formatDeviceList({ ...listing(), conflict: { label: 'x', fingerprint: FP_OLD, addedAt: NOW, afterJoin: false } }, NOW).join('\n')
+    expect(neutral).toContain('This computer is held by another key on your account: x')
+    const susp = formatDeviceList({ members: listing().members.map((m) => (m.pub === 'old' ? { ...m, suspended: true } : m)) }, NOW).join('\n')
+    expect(susp).toContain('Not trusted here until you review the list: old-mac')
+    expect(susp).toMatch(/old-mac.*  suspended/)
+  })
+  it('lists a new key that joined and left before anyone looked, with how to dismiss it', () => {
+    const gone = { label: 'Chrome', fingerprint: FP_NEW, removedBy: 'x', removedByLabel: '', selfRemoved: true }
+    const lines = formatDeviceList({ ...listing(), pending: ['new'], departed: [
+      gone,
+      { ...gone, label: '', fingerprint: FP_OLD, removedBy: 'old', removedByLabel: 'old-mac', selfRemoved: false },
+      { ...gone, label: 'iPad', removedBy: 'new', removedByLabel: 'Evil', selfRemoved: false },
+    ] }, NOW)
+    expect(lines).toContain(`  ⚠ Chrome joined and left before you looked — mark it seen: harness devices dismiss ${FP_NEW}`)
+    expect(lines).toContain(`  ⚠ (no name) joined and left before you looked (removed by old-mac) — mark it seen: harness devices dismiss ${FP_OLD}`)
+    expect(lines).toContain(`  ⚠ iPad joined and left before you looked (removed by a new device you have not looked at: Evil) — mark it seen: harness devices dismiss ${FP_NEW}`)
+    expect(formatDeviceList(listing(), NOW).join('\n')).not.toContain('joined and left')
+  })
+  it('says nothing about who removed a departed key that nothing removed (a review of the list)', () => {
+    const reviewed = { label: 'Chrome', fingerprint: FP_NEW, removedBy: '', removedByLabel: '', selfRemoved: false }
+    const lines = formatDeviceList({ ...listing(), departed: [reviewed] }, NOW)
+    expect(lines).toContain(`  ⚠ Chrome joined and left before you looked — mark it seen: harness devices dismiss ${FP_NEW}`)
+    expect(lines.join('\n')).not.toContain('removed by')
+  })
+  it('formats the history', () => {
+    const r = { seq: 3, op: 'removed' as const, pub: 'p', kind: 'machine' as const, machineId: 'abcdef0123456789', label: 'box', fingerprint: FP_OLD, by: { pub: 'q', label: 'mac', fingerprint: FP_SELF },
+      at: new Date(2026, 9, 1, 14, 5).getTime(), thisDevice: false, afterJoin: true, pending: true, active: false, whileFrozen: true }
+    const lines = formatDeviceHistory({ rows: [r], complete: false })
+    expect(lines).toContain(`  3  1 Oct 2026, 14:05  removed  box  computer abcdef01  ${FP_OLD}  by mac  left before you looked  (applied while the list was frozen)`)
+    expect(formatDeviceHistory({ rows: [{ ...r, active: true }], complete: true }).join('\n')).toMatch(/by mac  new  \(applied/)
+    expect(lines).toContain('  Older history needs a connection.')
+    // A signer with no known name is "another device", never an empty or raw-key label.
+    const nameless = formatDeviceHistory({ rows: [{ ...r, by: { pub: 'q', label: '', fingerprint: FP_SELF } }], complete: true }).join('\n')
+    expect(nameless).toContain('by another device (E2FB·0DF5…)')
+    expect(formatDeviceHistory({ rows: [], complete: true })).toContain('  No history yet.')
+  })
 })

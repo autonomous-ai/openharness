@@ -3,8 +3,9 @@
  * `devices list|show` and the `status` row. Pure — the clock is passed in — so the same rules the
  * desktop and mobile apps follow (their `relative_time.dart`) are pinned by one spec here.
  */
-import type { DevLogFile } from './deviceLogStore.js'
+import type { DevLogConflict, DevLogDeparted, DevLogFile } from './deviceLogStore.js'
 import type { DeviceLogListing } from './deviceLogSyncer.js'
+import type { DevLogHistoryRow } from './deviceHistory.js'
 
 /** The fields of a listing row this module reads. `seq` (log position) and `firstSeen` (when this
  *  machine first applied the add) are the two a device cannot choose for itself; both optional so a
@@ -13,6 +14,10 @@ export type DeviceRow = Pick<DeviceLogListing['members'][number], 'pub' | 'label
   kind: string
   seq?: number
   firstSeen?: number
+  /** Not yet marked as seen on this machine / not trusted after a fork — only a daemon that has the
+   *  joined-point marks sends them; absent, `new` falls back to the 7-day `firstSeen` rule. */
+  pending?: boolean
+  suspended?: boolean
 }
 
 const MIN = 60_000
@@ -60,7 +65,8 @@ export function activityPhrase(lastSeen: number | undefined, addedAt: number, no
 
 /** `new` rests on when THIS machine applied the add, never the entry's `at`: the adding device picks
  *  that itself, and a backdated one would hide exactly the device the flag is for. */
-export function isNewDevice(row: Pick<DeviceRow, 'self' | 'firstSeen'>, now: number): boolean {
+export function isNewDevice(row: Pick<DeviceRow, 'self' | 'firstSeen' | 'pending'>, now: number): boolean {
+  if (row.pending !== undefined) return !row.self && row.pending
   return !row.self && row.firstSeen !== undefined && now - row.firstSeen < NEW_DEVICE_MS
 }
 
@@ -101,7 +107,7 @@ export function removeConfirmation(
 /** The answer to `remove`'s `[y/N]`: only an explicit yes removes. */
 export const confirmsRemoval = (answer: string): boolean => /^y(es)?$/i.test(answer.trim())
 
-export type DeviceRegistration = 'active' | 'removed' | 'unregistered'
+export type DeviceRegistration = 'active' | 'removed' | 'unregistered' | 'taken'
 
 /** Whether the account's device log holds this machine's key. No key on disk but a retired one means
  *  this machine was signed out of the account; neither means there is nothing to say. */
@@ -109,24 +115,41 @@ export function deviceRegistration(pub: string | null, file: DevLogFile, spent: 
   if (!pub) return spent ? 'removed' : null
   if (file.state?.active[pub]) return 'active'
   if (file.state?.removed.includes(pub)) return 'removed'
+  if (file.conflict && file.state?.active[file.conflict.pub]) return 'taken'
   return 'unregistered'
 }
 
-/** The text after `device     ` in `harness status`, or null for no row. */
-export function deviceStatusValue(fp: string | null, reg: DeviceRegistration | null): string | null {
+/** The text after `device     ` in `harness status`, or null for no row. `holderFp` is the key code of
+ *  the key holding this computer's place (`taken`), shortened to its first two groups. */
+export function deviceStatusValue(fp: string | null, reg: DeviceRegistration | null, holderFp?: string): string | null {
   if (!reg) return null
+  if (reg === 'taken') {
+    const note = `not registered — another key holds this computer${holderFp ? `: ${shortFingerprint(holderFp, 2)}` : ''}`
+    return fp ? `${fp}  (${note})` : `(${note})`
+  }
   const note = reg === 'active' ? 'in your account' : reg === 'removed' ? 'removed — run harness login' : 'not registered yet'
   return fp ? `${fp}  (${note})` : `(${note})`
+}
+
+/** The first `groups` groups of a key code and an ellipsis: enough to tell two keys apart in a sentence. */
+export function shortFingerprint(fp: string, groups = 1): string {
+  return `${fp.split('·').slice(0, groups).join('·')}…`
 }
 
 const nameOf = (row: Pick<DeviceRow, 'label'>): string => row.label || '(no name)'
 const kindOf = (row: Pick<DeviceRow, 'kind' | 'machineId'>): string => (row.kind === 'machine' ? `computer ${row.machineId.slice(0, 8)}` : 'app')
 
 /** The lines of `harness devices list`: shown in `orderDevices` order, each row keeping its `logOrder`
- *  number. `selfFallback` is this machine's own
- *  key code for when the log has no row for it yet. */
+ *  number. Above the rows, when the listing has them: the key holding this computer's place
+ *  (`conflict`, worded by `afterJoin`), keys not trusted here after a fork (`suspended`), new keys
+ *  that joined and left before anyone looked (`departed`), and how to mark `pending` ones seen.
+ *  `selfFallback` is this machine's own key code for when the log has no row for it yet. */
 export function formatDeviceList(
-  listing: { members: DeviceRow[]; lastSeen?: Record<string, number> },
+  listing: {
+    members: DeviceRow[]; lastSeen?: Record<string, number>; pending?: string[]; suspended?: string[]
+    conflict?: Pick<DevLogConflict, 'label' | 'fingerprint' | 'addedAt' | 'afterJoin'> | null
+    departed?: Array<Pick<DevLogDeparted, 'label' | 'fingerprint' | 'removedBy' | 'removedByLabel' | 'selfRemoved'>>
+  },
   now: number,
   selfFallback?: { label: string; fp: string },
 ): string[] {
@@ -136,13 +159,55 @@ export function formatDeviceList(
   const self = rows.find((r) => r.self)
   if (self) lines.push(`  This machine: ${nameOf(self)}  ${self.fingerprint}`, '')
   else if (selfFallback) lines.push(`  This machine: ${selfFallback.label}  ${selfFallback.fp}  (not registered yet)`, '')
+  const c = listing.conflict
+  if (c) {
+    // No "added <when>": the holder's `addedAt` is whatever its signer wrote.
+    const who = `${nameOf(c)} · ${c.fingerprint}`
+    lines.push(c.afterJoin
+      ? `  ⚠ Another key took this computer's place on your account after it joined: ${who}. If you did not set up Harness here again, remove that key from another device now.`
+      : `  ⚠ This computer is held by another key on your account: ${who}. If that was an earlier install of this computer, remove it from another device (Your devices) — this computer joins on its own once it is gone.`, '')
+  }
+  const suspended = listing.members.filter((m) => m.suspended || listing.suspended?.includes(m.pub))
+  if (suspended.length) {
+    lines.push(`  ⚠ Not trusted here until you review the list: ${suspended.map(nameOf).join(', ')} — added after this computer's and another device's lists split apart. Review it: harness devices rebaseline   Yours? harness devices dismiss <key code>`, '')
+  }
+  // A new key that was removed again before anyone looked: gone, but nobody saw it come.
+  // Removed by a key that is itself new here (unlooked at): said so.
+  const unlooked = new Set([...(listing.pending ?? []), ...listing.members.filter((m) => m.pending).map((m) => m.pub)])
+  for (const d of listing.departed ?? []) {
+    const by = d.selfRemoved || !d.removedBy ? '' : ` (removed by ${unlooked.has(d.removedBy) ? 'a new device you have not looked at: ' : ''}${d.removedByLabel || 'another device'})`
+    lines.push(`  ⚠ ${nameOf(d)} joined and left before you looked${by} — mark it seen: harness devices dismiss ${d.fingerprint}`)
+  }
+  if (listing.departed?.length) lines.push('')
+  if (listing.members.some((m) => !m.self && (m.pending || listing.pending?.includes(m.pub)))) {
+    lines.push('  New since you last looked — mark them seen: harness devices dismiss', '')
+  }
   lines.push('  Devices on this account — each one trusts every other:', '')
   rows.forEach((m) => {
-    const flag = m.self ? '  (this machine)' : isNewDevice(m, now) ? '  new' : ''
+    const flag = m.self ? '  (this machine)' : m.suspended ? '  suspended' : isNewDevice(m, now) ? '  new' : ''
     lines.push(`   ${String(numbers.get(m.pub)).padStart(2)}. ${nameOf(m)}  ${kindOf(m)}  ${m.fingerprint}  ${activityPhrase(listing.lastSeen?.[m.pub], m.addedAt, now)}${flag}`)
   })
   // `remove` takes the key code here, not a number: a code names one device however the list moves.
-  lines.push('', '  Details: harness devices show <#|fingerprint>   Not yours? harness devices remove <fingerprint>', '')
+  lines.push('', '  Details: harness devices show <#|fingerprint>   Not yours? harness devices remove <fingerprint>')
+  lines.push('   History: harness devices history', '')
+  return lines
+}
+
+const OP_WORDS: Record<DevLogHistoryRow['op'], string> = { added: 'added', renamed: 'renamed', removed: 'removed', signedOut: 'signed out' }
+
+/** The lines of `harness devices history`: newest first, with what to say when the log could not be
+ *  read in full. A still-unseen key is flagged `new`, or `left before you looked` once it is gone. */
+export function formatDeviceHistory(h: { rows: DevLogHistoryRow[]; complete: boolean }): string[] {
+  const lines = ['', '  Device history, newest first (as this machine verified it):', '']
+  for (const r of h.rows) {
+    const name = r.op === 'renamed' && r.previousLabel !== undefined ? `${r.previousLabel || '(no name)'} → ${nameOf(r)}` : nameOf(r)
+    const by = r.by ? `  by ${r.by.label || `another device (${shortFingerprint(r.by.fingerprint, 2)})`}` : ''
+    lines.push(`  ${r.seq}  ${fullDateTime(r.at)}  ${OP_WORDS[r.op]}  ${name}  ${kindOf(r)}  ${r.fingerprint}${by}`
+      + `${r.pending ? (r.active ? '  new' : '  left before you looked') : ''}${r.thisDevice ? '  (this machine)' : ''}${r.whileFrozen ? '  (applied while the list was frozen)' : ''}`)
+  }
+  if (!h.complete) lines.push('', '  Older history needs a connection.')
+  else if (!h.rows.length) lines.push('  No history yet.')
+  lines.push('')
   return lines
 }
 

@@ -95,21 +95,39 @@ export async function previewDelete(row, { list = listAgents, rpc = request } = 
     const current = await fresh(row, list)
     if (!current.canDelete) return receipt(row, 'delete-review', current.unavailable || 'This harness cannot be deleted yet.')
     const result = await rpc(row.machineId, 'agent_purge', {
-      agentId: row.agentId, sessionId: row.sessionId, createdAt: row.createdAt, mode: 'inspect',
+      agentId: row.agentId, sessionId: row.sessionId, createdAt: row.createdAt, mode: 'inspect', includeWorktree: true,
     })
     if (!result.reviewId) return receipt(row, 'delete-review', 'The daemon did not confirm which session data would be deleted.')
+    if (!result.choices) return receipt(row, 'delete-review', 'Update Harness on the owning machine to choose session and worktree data separately.')
     return { ...receipt(row, 'delete-review', 'Review permanent deletion.'), ...result, ok: true, refused: false }
   } catch (error) { return receipt(row, 'delete-review', error.code === 'UNSUPPORTED' ? 'Update Harness on the owning machine to enable deletion.' : error.message) }
 }
-export async function deleteHarness(row, { reviewId, rpc = request } = {}) {
+export async function deleteHarness(row, { reviewId, choices, path, discardChanges = false, rpc = request } = {}) {
   try {
     if (typeof reviewId !== 'string' || !reviewId) return receipt(row, 'delete', 'Review this harness before deleting it.')
+    if (!choices || typeof choices.sessionData !== 'boolean' || typeof choices.worktreeData !== 'boolean'
+      || (!choices.sessionData && !choices.worktreeData)) return receipt(row, 'delete', 'Select the data to delete first.')
     const result = await rpc(row.machineId, 'agent_purge', {
-      agentId: row.agentId, sessionId: row.sessionId, createdAt: row.createdAt, mode: 'delete', reviewId,
+      agentId: row.agentId, sessionId: row.sessionId, createdAt: row.createdAt, mode: 'delete', reviewId, choices,
+      ...(choices.worktreeData ? { path, discardChanges } : {}),
     })
     if (result.deleted !== true) return receipt(row, 'delete', 'Deletion was not confirmed. Refresh before trying again.')
-    return { ...receipt(row, 'delete', 'Session data deleted. Project files kept.'), ...result, ok: true, refused: false }
+    return { ...receipt(row, 'delete', 'Selected data deleted.'), ...result, ok: true, refused: false }
   } catch (error) { return receipt(row, 'delete', error.message + ' Refresh to check; deletion is never retried automatically.') }
+}
+
+export async function inspectWorkspace(row, { rpc = request } = {}) {
+  try {
+    if (!row.machineId || !row.agentId || row.online === false) throw new Error('Reconnect this machine to check its workspace.')
+    const result = await rpc(row.machineId, 'agent_worktree_delete', {
+      agentId: row.agentId, sessionId: row.sessionId, createdAt: row.createdAt, mode: 'describe',
+    })
+    if (!result.workspace) throw new Error('The machine did not report workspace details.')
+    return { ...receipt(row, 'workspace-inspect', ''), ok: true, refused: false, workspace: result.workspace }
+  } catch (error) {
+    return receipt(row, 'workspace-inspect', ['UNSUPPORTED', 'INVALID_DELETE_REQUEST'].includes(error.code)
+      ? 'Update Harness on this machine to show worktree details.' : error.message)
+  }
 }
 
 export async function worktreeAction(row, { reviewId, path, discardChanges = false, rpc = request } = {}) {

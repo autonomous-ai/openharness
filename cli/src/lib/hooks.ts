@@ -5,7 +5,7 @@
  * Changes to settings.json take effect on the NEXT claude session start.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync } from 'fs'
 import { basename, join, dirname } from 'path'
 import { homedir } from 'os'
 import { fileURLToPath } from 'url'
@@ -13,9 +13,8 @@ import { cursorConfigDir, cursorDataDir } from '../engines/cursor/home.js'
 import { env } from '../config/env.js'
 import { VERSION } from '../version.js'
 import { hermesConfigHomes } from '../engines/hermes/home.js'
+import { opencodeMajorVersion } from '../engines/opencode/version.js'
 import { managedNodePath } from './nodeRuntime.js'
-import { opencodeMemoryPluginSource } from './opencodeMemoryPlugin.js'
-import { opencodeRecallPluginSource } from './opencodeRecallPlugin.js'
 
 const SETTINGS_PATH = join(homedir(), '.claude', 'settings.json')
 const GROK_HOOKS_PATH = join(env.GROK_HOME, 'hooks', 'harness.json')
@@ -450,12 +449,7 @@ export const MachineRegister = async ({ directory, worktree, project, client }) 
       })
     } catch {}
   }
-${engine === 'opencode' ? opencodeMemoryPluginSource(port) : ''}
-${engine === 'opencode' ? opencodeRecallPluginSource(port) : ''}
   return {
-    ${engine === 'opencode' ? `"chat.message": async (input, output) => { await memoryMessage(input, output); await recallMessage(input, output) },
-    "chat.params": memoryParams, "experimental.chat.messages.transform": recallTransform,
-    "experimental.session.compacting": recallCompacting, "experimental.compaction.autocontinue": recallAutoContinue,` : ''}
     event: async ({ event }) => {
       if (!event) return
       if (event.type === "session.created" || event.type === "session.updated") {
@@ -1137,11 +1131,26 @@ export function installAmpPlugin(port: number): void {
 }
 
 /**
- * Idempotently drop the OpenCode discovery plugin into ~/.config/opencode/plugin/ (1.x, as it always
- * was), and its 2.0 TUI form into ~/.config/opencode/plugins/launcher-register/ (1.x never looks there).
+ * OpenCode 2 still discovers the legacy plugin directory, but rejects its 1.x API. Keep the legacy
+ * file only for a confirmed 1.x binary. Remove only our generated file during migration, preserving
+ * unrelated plugins and user configuration. With no binary yet, prepare the TUI plugin without
+ * planting a legacy file that would fail when the pane installs current OpenCode.
  */
 export function installOpencodePlugin(port: number): void {
-  installForkPlugin('opencode', OPENCODE_PLUGIN_PATH, 'OpenCode', port)
+  if (opencodeMajorVersion() === 1) {
+    installForkPlugin('opencode', OPENCODE_PLUGIN_PATH, 'OpenCode', port)
+  } else {
+    try {
+      const source = readFileSync(OPENCODE_PLUGIN_PATH, 'utf8')
+      if (source.startsWith('// session-register — auto-installed by the machine adapter. Binds this OpenCode session to the\n')
+        && source.includes('export const MachineRegister =')) {
+        unlinkSync(OPENCODE_PLUGIN_PATH)
+        console.log('[hooks] removed incompatible OpenCode 1 discovery plugin')
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') console.error('[hooks] failed to remove OpenCode 1 plugin:', err)
+    }
+  }
   installPluginSource('opencode', OPENCODE_TUI_PLUGIN_PATH, 'OpenCode 2 TUI', opencodeTuiPluginSource(port))
 }
 

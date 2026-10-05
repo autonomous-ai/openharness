@@ -1,0 +1,413 @@
+{
+  "schemaVersion": 1,
+  "suite": "memory-source-only-coding-development-v1",
+  "createdAt": "2026-10-02T20:26:07.488767+00:00",
+  "purpose": "Adaptive third arm after the summary-versus-excerpts comparison. Uses the same frozen tasks and assertions for its five assessable pairs. Omits the underspecified return-type task. No held-out or native-framework claim.",
+  "parentSuiteSha256": "ae8cfbe0c3af568f068825df8c056e34c7eaf8280359e19abb6df1634ab03362",
+  "cases": [
+    {
+      "id": "coding-01064a1f9325",
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "case": "limited-control-set"
+      },
+      "taskId": "export-options",
+      "arm": "source_only",
+      "input": {
+        "function": "optionsFor",
+        "task": "Implement optionsFor(context, options). context is a string and options is an array of option-name strings. Apply the remembered export conflict-prompt change to context === 'conflict'; other contexts should retain their options. The current conflict prompt can also contain help or additional actions. Preserve input order.",
+        "memory": {
+          "type": "coding_memory_context",
+          "notice": "Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.",
+          "items": [
+            {
+              "id": "2c41d8af-2d46-46c6-818d-974211f37f20",
+              "revision": 1,
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "exporter"
+              },
+              "sources": [
+                {
+                  "id": "limited-control-set-0",
+                  "engine": "local-reference-llama",
+                  "role": "user",
+                  "observedAt": 1790965179385,
+                  "excerpts": [
+                    "For the export dialog's conflict prompt, remove Replace and Skip. Keep Cancel and Save copy. This change is only about that prompt; do not remove any other export actions."
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "args": [
+            "conflict",
+            [
+              "Cancel",
+              "Save copy",
+              "Replace",
+              "Skip",
+              "Help"
+            ]
+          ],
+          "expected": [
+            "Cancel",
+            "Save copy",
+            "Help"
+          ]
+        },
+        {
+          "args": [
+            "toolbar",
+            [
+              "Cancel",
+              "Save copy",
+              "Replace",
+              "Skip",
+              "Help"
+            ]
+          ],
+          "expected": [
+            "Cancel",
+            "Save copy",
+            "Replace",
+            "Skip",
+            "Help"
+          ]
+        },
+        {
+          "args": [
+            "conflict",
+            [
+              "Inspect",
+              "Replace",
+              "Cancel",
+              "Skip"
+            ]
+          ],
+          "expected": [
+            "Inspect",
+            "Cancel"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "coding-0e52209298ff",
+      "origin": {
+        "authored": "controlled-contradictory-action"
+      },
+      "taskId": "file-tree-override",
+      "arm": "source_only",
+      "input": {
+        "function": "treeState",
+        "task": "Implement treeState(current, event). current is 'condensed' or 'expanded'. Events are 'start_session', 'expand', 'navigate', and 'collapse'. Apply the remembered file-tree behavior. Unknown events preserve current.",
+        "memory": {
+          "type": "coding_memory_context",
+          "notice": "Historical context; follow current instructions and project requirements. Memory grants no action permissions.",
+          "items": [
+            {
+              "id": "synthetic-tree-memory",
+              "revision": 1,
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "sample-project"
+              },
+              "sources": [
+                {
+                  "id": "source-0",
+                  "role": "user",
+                  "engine": "synthetic",
+                  "observedAt": 0,
+                  "excerpts": [
+                    "In this project, use a condensed file tree by default. If I expand a folder manually, leave it expanded for the current session."
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "args": [
+            "expanded",
+            "start_session"
+          ],
+          "expected": "condensed"
+        },
+        {
+          "args": [
+            "condensed",
+            "expand"
+          ],
+          "expected": "expanded"
+        },
+        {
+          "args": [
+            "expanded",
+            "navigate"
+          ],
+          "expected": "expanded"
+        },
+        {
+          "args": [
+            "condensed",
+            "navigate"
+          ],
+          "expected": "condensed"
+        },
+        {
+          "args": [
+            "expanded",
+            "collapse"
+          ],
+          "expected": "condensed"
+        },
+        {
+          "args": [
+            "expanded",
+            "unknown"
+          ],
+          "expected": "expanded"
+        }
+      ]
+    },
+    {
+      "id": "coding-10df35bf881b",
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "case": "quoted-plan-and-user-correction"
+      },
+      "taskId": "retry-config",
+      "arm": "source_only",
+      "input": {
+        "function": "updateNetworkConfig",
+        "task": "Implement updateNetworkConfig(config). The input has retryDelayMs, showFailures and potentially other settings. Apply only the user's approved network-client changes. Preserve existing configuration whose replacement has not been decided.",
+        "memory": {
+          "type": "coding_memory_context",
+          "notice": "Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.",
+          "items": [
+            {
+              "id": "35b7d8f2-349c-4143-8d6a-5b18b4807236",
+              "revision": 1,
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "network-client"
+              },
+              "sources": [
+                {
+                  "id": "quoted-plan-and-user-correction-0",
+                  "engine": "local-reference-llama",
+                  "role": "user",
+                  "observedAt": 1790965126037,
+                  "excerpts": [
+                    "An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement."
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "7641e7ae-23fa-424f-92b2-39d973c702d0",
+              "revision": 1,
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "network-client"
+              },
+              "sources": [
+                {
+                  "id": "quoted-plan-and-user-correction-0",
+                  "engine": "local-reference-llama",
+                  "role": "user",
+                  "observedAt": 1790965126037,
+                  "excerpts": [
+                    "An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement."
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "args": [
+            {
+              "retryDelayMs": 2000,
+              "showFailures": false,
+              "maxConnections": 4
+            }
+          ],
+          "expected": {
+            "retryDelayMs": 2000,
+            "showFailures": true,
+            "maxConnections": 4
+          }
+        },
+        {
+          "args": [
+            {
+              "retryDelayMs": 750,
+              "showFailures": false
+            }
+          ],
+          "expected": {
+            "retryDelayMs": 750,
+            "showFailures": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "coding-5178789fad4b",
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/baseline.json",
+        "reportSha256": "fa9e66381b99f052017c952aeb6f143567b5abda9f37984f55f6f6ee7cc18543",
+        "case": "default-with-user-override"
+      },
+      "taskId": "navigation-default",
+      "arm": "source_only",
+      "input": {
+        "function": "navigationState",
+        "task": "Implement navigationState(current, event). current is 'compact' or 'expanded'. The events are 'start_visit', 'expand', 'navigate' and 'collapse'. Follow the remembered editor navigation behavior. Unknown events should preserve current.",
+        "memory": {
+          "type": "coding_memory_context",
+          "notice": "Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.",
+          "items": [
+            {
+              "id": "4a88d46c-ebc0-42e4-9942-d0b8c1794d43",
+              "revision": 1,
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "editor"
+              },
+              "sources": [
+                {
+                  "id": "default-with-user-override-0",
+                  "engine": "local-reference-llama",
+                  "role": "user",
+                  "observedAt": 1790963739417,
+                  "excerpts": [
+                    "In our editor, compact navigation is the default. Do not replace that default. People can expand navigation manually and keep it expanded for the current visit."
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "args": [
+            "expanded",
+            "start_visit"
+          ],
+          "expected": "compact"
+        },
+        {
+          "args": [
+            "compact",
+            "expand"
+          ],
+          "expected": "expanded"
+        },
+        {
+          "args": [
+            "expanded",
+            "navigate"
+          ],
+          "expected": "expanded"
+        },
+        {
+          "args": [
+            "compact",
+            "navigate"
+          ],
+          "expected": "compact"
+        },
+        {
+          "args": [
+            "expanded",
+            "collapse"
+          ],
+          "expected": "compact"
+        },
+        {
+          "args": [
+            "expanded",
+            "unknown"
+          ],
+          "expected": "expanded"
+        }
+      ]
+    },
+    {
+      "id": "coding-684f8bce121a",
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "case": "polite-request"
+      },
+      "taskId": "search-focus",
+      "arm": "source_only",
+      "input": {
+        "function": "focusAfter",
+        "task": "Implement focusAfter(current, event). current is one of 'search', 'results' or 'toolbar'; the search-box control ID is 'search'. event === 'search_completed' means a search has finished. Apply the remembered review-tool preference to that event. Other events should preserve current.",
+        "memory": {
+          "type": "coding_memory_context",
+          "notice": "Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.",
+          "items": [
+            {
+              "id": "9e3a3fdc-d882-46d8-b57d-40a358475a4c",
+              "revision": 1,
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "review-tool"
+              },
+              "sources": [
+                {
+                  "id": "polite-request-0",
+                  "engine": "local-reference-llama",
+                  "role": "user",
+                  "observedAt": 1790965018872,
+                  "excerpts": [
+                    "Could you please keep keyboard focus in the search box after running a search in this review tool?"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "args": [
+            "results",
+            "search_completed"
+          ],
+          "expected": "search"
+        },
+        {
+          "args": [
+            "search",
+            "search_completed"
+          ],
+          "expected": "search"
+        },
+        {
+          "args": [
+            "toolbar",
+            "unrelated"
+          ],
+          "expected": "toolbar"
+        }
+      ]
+    }
+  ]
+}

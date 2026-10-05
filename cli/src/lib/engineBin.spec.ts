@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   agentAliasOwner,
   agentCommandOwnershipSnapshot,
@@ -15,13 +15,46 @@ import {
 
 const originalPath = process.env.PATH
 const tempDirs: string[] = []
+const overlayInodes = vi.hoisted(() => new Map<string, bigint>())
+
+vi.mock('node:fs', async (importOriginal) => {
+  const fs = await importOriginal<typeof import('node:fs')>()
+  return { ...fs, statSync: (path: Parameters<typeof fs.statSync>[0], options?: { bigint?: boolean }) => {
+    const value = fs.statSync(path, options)
+    const inode = overlayInodes.get(String(path))
+    if (value && inode !== undefined) Object.assign(value, { ino: options?.bigint ? inode : Number(BigInt.asUintN(64, inode)) })
+    return value
+  } }
+})
 
 afterEach(() => {
   process.env.PATH = originalPath
+  overlayInodes.clear()
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
 describe('canonical engine CLI commands', () => {
+  it('keeps distinct live-USB executables distinct above the JS integer limit', () => {
+    const root = mkdtempSync(join(tmpdir(), 'engine-bin-live-inodes-'))
+    tempDirs.push(root)
+    const opencode = join(root, 'opencode'), shell = join(root, 'bash')
+    writeFileSync(opencode, 'agent', { mode: 0o755 })
+    writeFileSync(shell, 'shell', { mode: 0o755 })
+    // Recorded from the same preview 4 USB in BIOS and UEFI. Node's BigInt
+    // stat uses signed values; its Number stat rounds both to the same value.
+    overlayInodes.set(opencode, -9223372036854773743n)
+    overlayInodes.set(shell, -9223372036854774580n)
+    process.env.PATH = root
+    const snapshot = agentCommandOwnershipSnapshot()
+    const agent = executableFileIdentity(opencode)!
+    const bash = executableFileIdentity(shell)!
+    expect(agent.fileKey).not.toBe(bash.fileKey)
+    expect(agent.fileKey).toMatch(/:9223372036854777873$/)
+    expect(bash.fileKey).toMatch(/:9223372036854777036$/)
+    expect(snapshot.engineFileKeys?.get('opencode')?.has(agent.fileKey)).toBe(true)
+    expect(snapshot.engineFileKeys?.get('opencode')?.has(bash.fileKey)).toBe(false)
+  })
+
   it('keeps the user-facing 14-engine command contract exact and ordered', () => {
     expect(PROCESS_ENGINES.map((engine) => [engine, ENGINE_CLI_COMMANDS[engine]])).toEqual([
       ['claude', 'claude'],

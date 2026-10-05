@@ -106,7 +106,8 @@ class DevicesHarnessController extends ChangeNotifier {
         if (!_current(owner)) return;
         if (failure != null) {
           // This package ships with the CLI and is deliberately absent from
-          // dsh_list/the Store. A missing bundle requires a Harness update,
+          // dsh_list. The Store exposes it through the account's experiment.
+          // A missing bundle requires a Harness update,
           // not a Store install or a raw INVALID_DSH message in the dashboard.
           error = switch (_creation!.refusal) {
             'INVALID_DSH' || 'UNSUPPORTED' || 'UNSUPPORTED_ON_REMOTE' => 'Update Harness on this computer to use Devices chat, then try again.',

@@ -5,12 +5,15 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { useBundledCli } from './__fixtures__/bundledCli.js'
 
 const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
-const CLI_SOURCE = join(CLI_ROOT, 'src', 'cli.ts')
-const TSX = join(CLI_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs')
+const cli = useBundledCli()
 const DAY = 86_400_000
 const dirs: string[] = []
+let rebaseConflict = false
+/** The daemon answers OTHER_ACCOUNT: on the preview, or only on the confirm. */
+let rebaseOther: 'no' | 'preview' | 'confirm' = 'no'
 const servers: Server[] = []
 
 afterEach(async () => {
@@ -31,8 +34,10 @@ const MEMBERS = [
 ]
 
 /** A daemon that answers the two device routes `harness devices` calls; records each removal. */
-function fakeDaemon(lastSeen: Record<string, number> = { 'pub-old': now - 3 * DAY }, members: typeof MEMBERS = MEMBERS): Promise<{ port: number; removed: string[] }> {
+function fakeDaemon(lastSeen: Record<string, number> = { 'pub-old': now - 3 * DAY }, members: typeof MEMBERS = MEMBERS, extra: Record<string, unknown> = {}, newRoutes = false): Promise<{ port: number; removed: string[]; dismissed: unknown[]; rebased: Array<{ confirm?: boolean; head?: unknown }> }> {
+  const rebased: Array<{ confirm?: boolean; head?: unknown }> = []
   const removed: string[] = []
+  const dismissed: unknown[] = []
   return new Promise((resolve) => {
     const server = createServer((req, res) => {
       let raw = ''
@@ -40,12 +45,26 @@ function fakeDaemon(lastSeen: Record<string, number> = { 'pub-old': now - 3 * DA
       req.on('end', () => {
         res.setHeader('content-type', 'application/json')
         if (req.method === 'GET' && req.url === '/api/devices') {
-          res.end(JSON.stringify({ head: null, frozen: null, self: 'pub-self', members, frozenPeers: [], lastSeen }))
+          res.end(JSON.stringify({ head: null, frozen: null, self: 'pub-self', members, frozenPeers: [], lastSeen, ...extra }))
         } else if (req.method === 'POST' && req.url === '/api/devices/remove') {
           removed.push((JSON.parse(raw) as { pub: string }).pub)
           res.end(JSON.stringify({ ok: true }))
+        } else if (newRoutes && req.method === 'GET' && req.url === '/api/devices/history') {
+          res.end(JSON.stringify({ complete: false, frozen: null, rows: [{
+            seq: 3, op: 'added', pub: 'pub-new', kind: 'viewer', machineId: '', label: 'phone', fingerprint: '1111·2222·3333·4444',
+            at: new Date(2026, 9, 1, 14, 5).getTime(), thisDevice: false, afterJoin: true, pending: true, active: true, whileFrozen: false,
+          }] }))
+        } else if (newRoutes && req.method === 'POST' && req.url === '/api/devices/dismiss') {
+          dismissed.push(JSON.parse(raw))
+          res.end(JSON.stringify({ ok: true }))
+        } else if (newRoutes && req.method === 'POST' && req.url === '/api/devices/rebaseline') {
+          const body = JSON.parse(raw) as { confirm?: boolean; head?: unknown }
+          rebased.push(body)
+          if (rebaseOther === 'preview' || (body.confirm && rebaseOther === 'confirm')) { res.statusCode = 409; res.end(JSON.stringify({ error: 'OTHER_ACCOUNT' })); return }
+          if (body.confirm && rebaseConflict) { res.statusCode = 409; res.end(JSON.stringify({ error: 'LOG_CHANGED' })); return }
+          res.end(JSON.stringify({ head: { seq: 7, hash: 'h7' }, added: [{ label: 'phone', kind: 'viewer' }], removed: [], applied: !!body.confirm }))
         } else {
-          res.writeHead(404)
+          res.statusCode = 404
           res.end('{}')
         }
       })
@@ -53,7 +72,7 @@ function fakeDaemon(lastSeen: Record<string, number> = { 'pub-old': now - 3 * DA
     servers.push(server)
     server.listen(0, '127.0.0.1', () => {
       const address = server.address()
-      resolve({ port: typeof address === 'object' && address ? address.port : 0, removed })
+      resolve({ port: typeof address === 'object' && address ? address.port : 0, removed, dismissed, rebased })
     })
   })
 }
@@ -76,7 +95,7 @@ function cliEnv(port: number): NodeJS.ProcessEnv {
 
 function run(port: number, args: string[]): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [TSX, CLI_SOURCE, 'devices', ...args], { cwd: CLI_ROOT, env: cliEnv(port) })
+    const child = spawn(process.execPath, [cli(), 'devices', ...args], { cwd: CLI_ROOT, env: cliEnv(port) })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (c: Buffer) => { stdout += c.toString() })
@@ -94,7 +113,7 @@ const HAS_SCRIPT = (process.platform === 'darwin' || process.platform === 'linux
  *  question, as a person would. `pipeOut` sends its stdout to a pipe, so only stdin is a terminal.
  *  Returns everything the terminal showed. */
 function runAtTerminal(port: number, args: string[], answer: string, pipeOut = false): Promise<{ status: number | null; screen: string }> {
-  const cmd = [process.execPath, TSX, CLI_SOURCE, 'devices', ...args].map(quote).join(' ') + (pipeOut ? ' | cat; exit "${PIPESTATUS[0]:-$?}"' : '')
+  const cmd = [process.execPath, cli(), 'devices', ...args].map(quote).join(' ') + (pipeOut ? ' | cat; exit "${PIPESTATUS[0]:-$?}"' : '')
   const shell = pipeOut ? `bash -c ${quote(cmd)}` : cmd
   // The keyboard is a FIFO piped in by cat: BSD script refuses a socket or a FIFO as stdin, not a pipe.
   const dir = mkdtempSync(join(tmpdir(), 'harness-cli-tty-'))
@@ -335,4 +354,95 @@ describe('harness devices', () => {
     expect(status).not.toBe(0)
     expect(daemon.removed).toEqual([])
   }, 30_000)
+
+  it('history prints the rows and says when older history needs a connection', async () => {
+    const { port } = await fakeDaemon(undefined, undefined, {}, true)
+    const { status, stdout } = await run(port, ['history'])
+    expect(status).toBe(0)
+    expect(stdout).toContain('Device history, newest first (as this machine verified it):')
+    expect(stdout).toContain('  3  1 Oct 2026, 14:05  added  phone  app  1111·2222·3333·4444  new')
+    expect(stdout).toContain('Older history needs a connection.')
+    const asJson = await run(port, ['history', '--json'])
+    expect(JSON.parse(asJson.stdout.trim()).rows).toHaveLength(1)
+  }, 20_000)
+
+  it('history and dismiss against a daemon that predates them print the restart hint and exit 1', async () => {
+    const { port } = await fakeDaemon()
+    for (const args of [['history'], ['dismiss']]) {
+      const r = await run(port, args)
+      expect(r.status).toBe(1)
+      expect(r.stderr).toContain('This needs a newer Harness running here. Restart it: harness stop && harness start')
+    }
+  }, 30_000)
+
+  it('rebaseline --yes previews, then confirms with the previewed head', async () => {
+    rebaseConflict = false
+    const d = await fakeDaemon(undefined, MEMBERS, {}, true)
+    const { status, stdout } = await run(d.port, ['rebaseline', '--yes'])
+    expect(status).toBe(0)
+    expect(d.rebased).toEqual([{ confirm: false }, { confirm: true, head: { seq: 7, hash: 'h7' } }])
+    expect(stdout).toContain('+ added')
+    expect(stdout).toContain('✓ Done.')
+    expect(stdout).not.toContain('would')
+  })
+
+  it('rebaseline --yes refuses when the list changed after the preview', async () => {
+    rebaseConflict = true
+    try {
+      const d = await fakeDaemon(undefined, MEMBERS, {}, true)
+      const { status, stderr, stdout } = await run(d.port, ['rebaseline', '--yes'])
+      expect(status).toBe(1)
+      expect(stderr).toContain('The device list changed while you were reviewing it. Run it again.')
+      expect(stdout).not.toContain('Done')
+    } finally { rebaseConflict = false }
+  })
+
+  for (const at of ['preview', 'confirm'] as const) {
+    it(`rebaseline tells to sign in again when the list is another account's (${at})`, async () => {
+      rebaseOther = at
+      try {
+        const d = await fakeDaemon(undefined, MEMBERS, {}, true)
+        const { status, stderr, stdout } = await run(d.port, ['rebaseline', '--yes'])
+        expect(status).toBe(1)
+        expect(stderr).toContain('  ✗ The device list now belongs to a different account than the one you signed in with. Sign in again (harness login) to switch accounts.')
+        expect(stderr).not.toContain('changed while you were reviewing')
+        expect(stdout).not.toContain('Done')
+        expect(stdout).not.toContain('would')
+        expect(d.rebased).toHaveLength(at === 'preview' ? 1 : 2)
+      } finally { rebaseOther = 'no' }
+    })
+  }
+
+  it('dismiss marks everything, or one device, as seen', async () => {
+    const d = await fakeDaemon(undefined, undefined, {}, true)
+    const all = await run(d.port, ['dismiss'])
+    expect(all.stdout).toContain('Marked every device as seen.')
+    const one = await run(d.port, ['dismiss', '3'])
+    expect(one.stdout).toContain('Marked phone as seen.')
+    expect(d.dismissed).toEqual([{}, { pub: 'pub-new' }])
+  }, 30_000)
+
+  it('lists a key that joined and left before you looked, and dismisses it by its key code', async () => {
+    const d = await fakeDaemon(undefined, undefined, {
+      departed: [{ pub: 'pub-gone', label: 'Chrome', kind: 'viewer', machineId: '', fingerprint: '7777·6666·5555·4444', addedAt: now - DAY, removedAt: now, removedBy: 'pub-gone', removedByLabel: '', selfRemoved: true }],
+    }, true)
+    const list = await run(d.port, ['list'])
+    expect(list.stdout).toContain('⚠ Chrome joined and left before you looked — mark it seen: harness devices dismiss 7777·6666·5555·4444')
+    const one = await run(d.port, ['dismiss', '7777·6666'])
+    expect(one.stdout).toContain('Marked Chrome as seen.')
+    expect(d.dismissed).toEqual([{ pub: 'pub-gone' }])
+  }, 30_000)
+
+  it('list flags only what the daemon says is pending, and shows the conflict and suspended lines', async () => {
+    const members = MEMBERS.map((m) => ({ ...m, pending: m.pub === 'pub-old', suspended: m.pub === 'pub-new' }))
+    const { port } = await fakeDaemon(undefined, members as never, {
+      pending: ['pub-old'], suspended: ['pub-new'], conflict: { pub: 'h', label: 'older', fingerprint: '9999·8888', addedAt: now - DAY, afterJoin: false },
+    })
+    const { stdout } = await run(port, ['list'])
+    expect(stdout).toMatch(/old-box.*  new$/m)
+    expect(stdout).toMatch(/phone.*  suspended$/m)
+    expect(stdout).toContain('This computer is held by another key on your account: older')
+    expect(stdout).toContain('Not trusted here until you review the list: phone')
+    expect(stdout).toContain('harness devices dismiss')
+  }, 20_000)
 })

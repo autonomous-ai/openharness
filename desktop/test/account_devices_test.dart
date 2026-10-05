@@ -109,4 +109,44 @@ void main() {
     expect(NewDeviceNotice(pub: pub, label: 'iPad', kind: 'viewer', frameFingerprint: '').fingerprint, computed);
     expect(const NewDeviceNotice(pub: '%%not base64%%', label: '', kind: 'viewer').fingerprint, '');
   });
+
+  test('a daemon listing with pending reads the joined point, baseline, conflict and per-device flags', () {
+    final devices = AccountDevices.fromDaemon({
+      'members': [
+        {...row('old'), 'seq': 2},
+        {...row('me', self: true), 'seq': 3},
+        {...row('late'), 'seq': 7, 'pending': true},
+        {...row('sus'), 'seq': 8, 'suspended': true},
+      ],
+      'pending': ['late', 5],
+      'joinedSeq': 3,
+      'baselineSeen': false,
+      'conflict': {
+        'pub': 'holder', 'label': 'Old install', 'fingerprint': 'AAAA·BBBB', 'addedAt': 1000, 'afterJoin': true,
+      },
+    })!;
+    expect(devices.pending, ['late']);
+    expect(devices.joinedSeq, 3);
+    expect(devices.baselineSeen, isFalse);
+    expect(devices.historyAvailable, isTrue);
+    expect(devices.baseline.map((d) => d.pub), ['old'], reason: 'not this device, not one added after it joined');
+    expect(devices.devices[2].pending, isTrue);
+    expect(devices.devices[3].suspended, isTrue);
+    expect(devices.conflict?.pub, 'holder');
+    expect(devices.conflict?.afterJoin, isTrue);
+    expect(devices.conflict?.addedAt, DateTime.fromMillisecondsSinceEpoch(1000));
+    // The flags survive a last-seen pass.
+    expect(devices.withLastSeen({}).devices[2].pending, isTrue);
+    expect(devices.withLastSeen({}).conflict, isNotNull);
+  });
+
+  test('a listing from an older daemon has no pending array: no history, nothing pending, baseline already seen', () {
+    final devices = AccountDevices.fromDaemon({'members': [row('old'), row('me', self: true)]})!;
+    expect(devices.historyAvailable, isFalse);
+    expect(devices.pending, isEmpty);
+    expect(devices.joinedSeq, isNull);
+    expect(devices.baselineSeen, isTrue);
+    expect(devices.baseline, isEmpty);
+    expect(devices.conflict, isNull);
+  });
 }

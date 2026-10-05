@@ -7,6 +7,10 @@ import 'usage_accounts.dart';
 import 'usage_controller.dart';
 import 'usage_window.dart';
 
+/// Preserve distinct account identities even when their short labels collide.
+String subscriptionSearchId(Map<String, Object?> row) =>
+    'model:subscription:${row['engine']}:${row['title']}:${row['accountKey'] ?? row['account']}';
+
 /// Subscription readings for the Models panel, the pane pickers and New Harness.
 ///
 /// Read ahead, not on click: [start] reads once and then every [interval] in the background, so
@@ -188,6 +192,9 @@ class ModelsMenuController extends ChangeNotifier {
     return {
       'title': provider,
       'account': _accountLabel(reading),
+      'accountKey': reading.account,
+      'local': account.isLocal,
+      'machines': account.machines,
       'status': status,
       'remainingPercent': remainingPercent,
       'details': details,

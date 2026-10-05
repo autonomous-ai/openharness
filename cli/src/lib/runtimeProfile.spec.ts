@@ -429,3 +429,79 @@ describe('RuntimeProfileManager', () => {
     expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ effort: 'ultra' })
   })
 })
+
+describe('RuntimeProfileManager.transcriptFields', () => {
+  const codexLine = (type: string, payload: Record<string, unknown>) => JSON.stringify({ type, payload })
+
+  it('names the fields a Codex record sets, through the same reader as ingest', () => {
+    const manager = new RuntimeProfileManager()
+    const codex = session('codex')
+    expect(manager.transcriptFields(codex, codexLine('turn_context', { model: 'gpt-6', reasoning_effort: 'high', collaboration_mode: { mode: 'plan' } })))
+      .toEqual(['model', 'effort', 'mode'])
+    expect(manager.transcriptFields(codex, codexLine('turn_context', { model: 'gpt-6', collaboration_mode: { mode: 'default' } }))).toEqual(['model', 'mode'])
+    expect(manager.transcriptFields(codex, codexLine('event_msg', { type: 'thread_settings_applied', thread_settings: { model: 'gpt-6', reasoning_effort: 'low' } })))
+      .toEqual(['model', 'effort'])
+    expect(manager.transcriptFields(codex, codexLine('session_meta', { cli_version: '0.159.0' }))).toEqual([])
+    expect(manager.transcriptFields(codex, codexLine('event_msg', { type: 'user_message', message: 'hi' }))).toEqual([])
+  })
+
+  it('names the fields a Claude record sets', () => {
+    const manager = new RuntimeProfileManager()
+    const claude = session('claude')
+    const assistant = (model: string) => JSON.stringify({ type: 'assistant', version: '2.1.212', message: { role: 'assistant', model, content: [] } })
+    expect(manager.transcriptFields(claude, assistant('claude-opus-5-5'))).toEqual(['model'])
+    expect(manager.transcriptFields(claude, assistant('<synthetic>'))).toEqual([])
+    const local = (text: string) => JSON.stringify({ type: 'user', message: { role: 'user', content: `<local-command-stdout>${text}</local-command-stdout>` } })
+    expect(manager.transcriptFields(claude, local('Set effort level to high'))).toEqual(['effort'])
+    expect(manager.transcriptFields(claude, JSON.stringify({ type: 'user', message: { role: 'user', content: 'plain' } }))).toEqual([])
+  })
+
+  it('leaves the session, its controls and its state untouched', () => {
+    const manager = new RuntimeProfileManager()
+    const claude = session('claude')
+    manager.hydrate(claude, [JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-5-5' } })])
+    const before = manager.getState(claude.sessionId)
+    expect(manager.transcriptFields(claude, JSON.stringify({ type: 'assistant', version: '9.9.9', message: { model: 'claude-fable-5-1' } }))).toEqual(['model'])
+    expect(manager.getState(claude.sessionId)).toEqual(before)
+    expect(claude.cliVersion).toBe('2.1.212')
+  })
+
+  it('answers nothing for other engines or a record that is not an object', () => {
+    const manager = new RuntimeProfileManager()
+    expect(manager.transcriptFields(session('grok'), JSON.stringify({ params: { update: { _meta: { modelId: 'grok-5' } } } }))).toEqual([])
+    expect(manager.transcriptFields(session('codex'), 'not json')).toEqual([])
+    expect(manager.transcriptFields(session('codex'), '[1]')).toEqual([])
+  })
+})
+
+describe('RuntimeProfileManager.beginHydrate', () => {
+  const turnContext = JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-6', reasoning_effort: 'high', collaboration_mode: { mode: 'plan' } } })
+
+  it('changes nothing the session shows until commit, then shows the staged state', () => {
+    const manager = new RuntimeProfileManager()
+    const codex = session('codex')
+    manager.hydrate(codex, [JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-5', reasoning_effort: 'low' } })])
+    const before = manager.getState(codex.sessionId)
+    const staged = manager.beginHydrate(codex)
+    staged.ingest(turnContext)
+    staged.ingest('not json')
+    staged.ingest('[1]')
+    expect(manager.getState(codex.sessionId)).toEqual(before)
+    staged.commit()
+    expect(manager.getState(codex.sessionId)).toMatchObject({ model: 'gpt-6', effort: 'high', mode: 'plan', cliVersion: '0.144.5' })
+  })
+
+  it('reads Claude records too, and keeps an unbound session out of the shared state', () => {
+    const manager = new RuntimeProfileManager()
+    const claude = session('claude')
+    const staged = manager.beginHydrate(claude)
+    staged.ingest(JSON.stringify({ type: 'assistant', version: '2.1.270', message: { model: 'claude-opus-5-5' } }))
+    staged.commit()
+    expect(manager.getState(claude.sessionId)).toMatchObject({ model: 'claude-opus-5-5', cliVersion: '2.1.270' })
+    const unbound = { ...session('codex'), sessionId: '' }
+    const nothing = manager.beginHydrate(unbound)
+    nothing.ingest(turnContext)
+    nothing.commit()
+    expect(manager.getState('')).toMatchObject({ model: null })
+  })
+})

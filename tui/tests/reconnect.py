@@ -35,7 +35,7 @@ ENV.update(HOME=str(BASE), HN_TMPDIR=str(BASE), HN_SOCKET_NAME=PREFIX, PORT=str(
            TERM='xterm-256color', SHELL='/bin/sh', HARNESS_TUI_DESK='off',
            HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off', MOCK_RECONNECT='1')
 CONF = BASE / 'tmux.conf'
-CONF.write_text('set -g automatic-rename off\nset -g pane-border-status off\n')
+CONF.write_text('set -g @hn-new-window shell\nset -g automatic-rename off\nset -g pane-border-status off\n')
 
 
 def hn(*args, ok=True):

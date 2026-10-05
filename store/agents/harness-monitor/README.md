@@ -17,20 +17,25 @@ opens Inspect. Freeze updates disables actions until live readings return.
 
 Each row has **Stop Harness** and **Delete Harness** buttons:
 
-- Stop Harness ends running work and closes its panes, keeping history, configuration and files.
-- Delete Harness first previews the selected conversation's native history and Harness checkpoints
-  on the owning daemon. Confirmation stops it, then permanently removes those files or supported
-  database rows, search history, saved metadata and the retained harness. Project/worktree files
-  stay. Some native stores have unsupported schemas or dependent conversations; deletion is refused
-  rather than affecting other history. Shared database space becomes reusable but its file may not
-  shrink immediately. Engine-wide caches and older conversations from `/clear` are not removed.
-- **Inspect → Delete Worktree…** is separate. Its review shows the exact checkout path, branch, full
-  worktree size and uncommitted changes. Type the full path to confirm; dirty worktrees also require
-  explicit consent to discard all uncommitted and untracked files. Ignored dependencies/build output
-  are removed too. The owning daemon stops the selected harness, revalidates the checkout and uses
-  `git worktree remove`. It keeps the main checkout, branch, commits and conversation history.
-  Recreate the checkout to resume later. Main folders, locked worktrees, nested worktrees, checkouts
-  used by other live or saved harnesses, and detached commits without a saved branch are protected.
+- **Stop** ends running work and closes its panes, keeping history, configuration and files.
+- **Delete** opens one confirmation directly from the row or Inspect. It shows two independent
+  checkboxes, each with its size and full path: **Session data** and **Worktree data**. Available
+  options start checked. Nothing is removed until the person confirms; neither option selected
+  disables Delete. Main project folders and worktrees used by another harness cannot be selected.
+- **Session data** removes only this conversation's verified native history and Harness checkpoints,
+  search history, saved metadata and retained harness. Unchecked worktree files stay. Some native
+  stores have unsupported schemas or dependent conversations; their session option is unavailable.
+  Shared database space becomes reusable but its file may not shrink immediately. Engine-wide
+  caches and older conversations from `/clear` are not removed.
+- **Worktree data** removes the exact reviewed checkout folder, including ignored dependencies and
+  build output. Dirty worktrees require explicit consent to discard uncommitted and untracked files.
+  The owning daemon stops the harness, revalidates the checkout and uses `git worktree remove`.
+  The main checkout, branch and commits stay. Unchecked session data remains as a stopped harness;
+  recreate the checkout to resume later. Locked or nested worktrees and detached commits without
+  a saved branch are protected. Selecting both removes the worktree first, then the session data;
+  if only part succeeds, the result says what was already removed and is never retried automatically.
+- **Inspect** prominently shows the full working folder, worktree path and main project path, with
+  copy buttons and an explanation of cleanup eligibility. Opening Inspect only reads these facts.
 
 Deletion is one harness at a time, never automatic. Reviews expire after two minutes and are bound
 to the machine, harness and conversation. Changed identities, paths or worktree status require a new
@@ -44,7 +49,7 @@ review. Cancel is the default. A lost response is uncertain and is never automat
 | RAM | Process-tree resident memory, in rounded MB/GB. Shared pages can overlap. Nested harness roots are excluded from their parent. Shared Codex servers appear separately and count once. |
 | GPU % | GPU use of the harness process tree. macOS reads IOAccelerator clients owned by each PID: Apple Silicon AppUsage and Intel/AMD accumulatedGPUTime counters. GPU nanoseconds divided by the sample interval give percent. Linux reads NVIDIA process utilization. Summed use can exceed 100% across contexts/devices. Initial samples, context changes, resets and unavailable drivers show —. Cloud inference is not local GPU use. |
 | GPU memory | NVIDIA compute allocations on supported Linux drivers. macOS and unsupported counters show —. |
-| Workspace | Allocated disk space of the entire working folder (project, linked worktree or subfolder), from bounded `du` reads cached for one minute. Shared and nested canonical folders count once per machine in totals. Inspect reviews the full worktree root before deletion. |
+| Workspace | Allocated disk space of the entire working folder (project, linked worktree or subfolder), from bounded `du` reads cached for one minute. Shared and nested canonical folders count once per machine in totals. Delete reviews the full worktree root before deletion. |
 | Session data | Allocated conversation-file and checkpoint bytes, or estimated conversation content within a shared native database plus checkpoints. Excludes project/worktree files. Cached for one minute; unsupported or unreadable stores show —. |
 | Disk read/s / write/s | Physical process-tree I/O deltas from Linux /proc/<pid>/io. Restricted counters, resets and macOS show —. |
 | Transcript | Individual conversation-file size when reported. Shared databases show —. |

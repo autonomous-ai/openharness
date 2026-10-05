@@ -26,30 +26,59 @@ env:
   GCS_BUCKET: s3-autonomous-upgrade-3
 
 jobs:
-  test:
+  # Reject an unchanged Cargo version before paying for native tests and four
+  # platform builds. 0.1.10 was overwritten with different bytes on 2026-10-02.
+  version:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        run: |
+          python3 - <<'PY'
+          import os, tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path('tui/Cargo.toml').read_text())['package']['version']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\n')
+          PY
+      - if: ${{ inputs.publish }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - if: ${{ inputs.publish }}
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Require a new version before building
+        if: ${{ inputs.publish }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gcloud storage cp "gs://${GCS_BUCKET}/harness/tui/metadata.json" live.json
+          python3 scripts/check-release-version.py "$VERSION" live.json
+
+  test:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tui
+          shared-key: tui-unit
+          cache-bin: false
       - name: Unit tests
         working-directory: tui
         run: cargo test --locked
-      # The real binary, driven in tmux against tests/mock-daemon.mjs: no account, no real harnesses.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: End-to-end against the mock daemon
-        run: |
-          set -euo pipefail
-          sudo apt-get update && sudo apt-get install -y tmux
-          (cd cli && npm ci --no-audit --no-fund)
-          (cd tui && cargo build --locked --release)
-          tui/tests/e2e.sh
-      - name: Native terminal lifecycle and concurrent window creation
-        run: python3 -u tui/tests/native-terminal.py
 
+  # Compile platforms alongside unit tests. Publication still requires both;
+  # native checks below exercise the exact Linux artifact that will be uploaded.
   build:
-    needs: test
+    needs: version
     strategy:
       fail-fast: true
       matrix:
@@ -59,11 +88,17 @@ jobs:
           - { platform: linux-x64, os: ubuntu-latest, target: x86_64-unknown-linux-musl }
           - { platform: linux-arm64, os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tui
+          shared-key: tui-${{ matrix.target }}
+          cache-bin: false
       - name: musl toolchain
         if: contains(matrix.target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
@@ -84,6 +119,27 @@ jobs:
             echo "sha256  $(shasum -a 256 "$bin" | awk '{print $1}')"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-node@v7
+        if: matrix.platform == 'linux-x64'
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - name: Install native test dependencies
+        if: matrix.platform == 'linux-x64'
+        run: |
+          sudo apt-get install -y tmux
+          npm ci --prefix cli --no-audit --no-fund
+      - name: End-to-end against the mock daemon
+        if: matrix.platform == 'linux-x64'
+        env:
+          HARNESS_TUI_BIN: ${{ runner.temp }}/dist/harness-tui-linux-x64
+        run: bash tui/tests/e2e.sh
+      - name: Native terminal lifecycle and concurrent window creation
+        if: matrix.platform == 'linux-x64'
+        env:
+          HN_NATIVE_TEST_BINARY: ${{ runner.temp }}/dist/harness-tui-linux-x64
+        run: python3 -u tui/tests/native-terminal.py
       - uses: actions/upload-artifact@v4
         with:
           name: harness-tui-${{ matrix.platform }}
@@ -93,8 +149,12 @@ jobs:
 
   publish:
     if: ${{ inputs.publish }}
-    needs: build
+    needs: [version, test, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: tui-manifest-publish
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
@@ -109,20 +169,32 @@ jobs:
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
       - name: Publish binaries and manifest
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
-          version="$(grep -m1 '^version' tui/Cargo.toml | cut -d'"' -f2)"
+          version="$VERSION"
+          manifest="gs://${GCS_BUCKET}/harness/tui/metadata.json"
+          # Capture the generation before the read. If an external publisher wins
+          # during this job, the final conditional write fails instead of losing it.
+          generation="$(gcloud storage objects describe "$manifest" --format='value(generation)')"
+          [[ "$generation" =~ ^[0-9]+$ ]]
+          gcloud storage cp "$manifest" live.json
+          python3 scripts/check-release-version.py "$version" live.json
           base="harness/tui/${version}"
           builds="{}"
           for bin in dist/harness-tui-*; do
             platform="${bin##*/harness-tui-}"
             sha="$(sha256sum "$bin" | awk '{print $1}')"
             # `gcloud storage`, never gsutil — gsutil cannot use the federated credential.
-            gcloud storage cp "$bin" "gs://${GCS_BUCKET}/${base}/harness-tui-${platform}" --cache-control="public, max-age=31536000, immutable"
+            # Published version paths are immutable, including partial older runs.
+            # A collision requires a new version; never overwrite cached bytes.
+            gcloud storage cp "$bin" "gs://${GCS_BUCKET}/${base}/harness-tui-${platform}" \
+              --if-generation-match=0 --cache-control="public, max-age=31536000, immutable"
             url="https://storage.googleapis.com/${GCS_BUCKET}/${base}/harness-tui-${platform}"
             builds="$(jq -c --arg p "$platform" --arg u "$url" --arg s "$sha" '. + {($p): {url: $u, sha256: $s}}' <<< "$builds")"
           done
           jq -n --arg v "$version" --argjson b "$builds" '{version: $v, builds: $b}' > metadata.json
           cat metadata.json
-          gcloud storage cp metadata.json "gs://${GCS_BUCKET}/harness/tui/metadata.json" --cache-control="no-cache, max-age=0"
+          gcloud storage cp metadata.json "$manifest" --if-generation-match="$generation" --cache-control="no-cache, max-age=0"
           echo "Published harness-tui **${version}** → \`https://storage.googleapis.com/${GCS_BUCKET}/harness/tui/metadata.json\`" >> "$GITHUB_STEP_SUMMARY"

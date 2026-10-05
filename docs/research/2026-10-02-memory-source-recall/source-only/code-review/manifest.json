@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "6b827ffb0d399ad90254336857f9b8df200cd9488e9ef761bfaf8f6e147d9dd7",
+  "suiteSha256": "6749c1751b864f83f9f769a5fcb838a7807acdd4aaca81de9d178728a5bc1511",
+  "extraction": "Only a single surrounding Markdown JSON fence is removed for offline execution. No code or JSON body is repaired; strict-format failures remain recorded.",
+  "cases": [
+    {
+      "id": "coding-01064a1f9325",
+      "taskId": "export-options",
+      "arm": "source_only",
+      "strictFormat": false,
+      "codeSha256": "220306a1022ca6624657018478007bcf856d9d577ee9b1d4fe9f417697459d77"
+    },
+    {
+      "id": "coding-0e52209298ff",
+      "taskId": "file-tree-override",
+      "arm": "source_only",
+      "strictFormat": true,
+      "codeSha256": "a77d5ece7ace877667ce3feb2e0c2f6f658829b389886426782ee54d1a991c41"
+    },
+    {
+      "id": "coding-10df35bf881b",
+      "taskId": "retry-config",
+      "arm": "source_only",
+      "strictFormat": false,
+      "codeSha256": "1dc6bbe097b2983154a143af300c325dd6a257cee47dbb02ca146760483ace28"
+    },
+    {
+      "id": "coding-5178789fad4b",
+      "taskId": "navigation-default",
+      "arm": "source_only",
+      "strictFormat": true,
+      "codeSha256": "9c36257b7418699d864b22c409c95ca212b91afd3deacd2afbb7e3b0121a54aa"
+    },
+    {
+      "id": "coding-684f8bce121a",
+      "taskId": "search-focus",
+      "arm": "source_only",
+      "strictFormat": false,
+      "codeSha256": "fcd4e54ee2af28251f784f928305b2964c2998b8319c5bc807a97c856e153bfd"
+    }
+  ]
+}

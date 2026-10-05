@@ -65,10 +65,11 @@ to compensate for excess container padding.
 - Keep a selected state legible without color: checkmarks, labels and shape
   changes carry meaning. Zoom becomes Restore; loading can animate only while
   work is actually pending, respecting Reduce Motion.
-- Reserve red for errors and destructive actions. Workspace hardware and
-  subscription figures use neutral ink at every percentage, including exhausted
-  allowance. The figure and tooltip explain usage; the footer is not an alarm.
-  The same contrast-adjusted ink goes to Flutter and the native footer.
+- Subscription allowance values use `usageLow` at 6–20% remaining and
+  `usageCritical` at 5% or less; healthy and unknown figures stay neutral.
+  Provider artwork retains its identity colors. Values and tooltip status text
+  carry the meaning alongside color. Flutter and AppKit share contrast-adjusted
+  ink with at least 4.5:1 text contrast on the selected workspace surface.
 
 ## Deliberate exceptions
 

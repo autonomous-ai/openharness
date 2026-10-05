@@ -105,6 +105,11 @@ pub struct Picker {
     pub selected_id: Option<String>,
     /// The cursor was put on an item when the list opened (not moved by you since).
     pub preselected: bool,
+    /// The row a list put the cursor on itself, which it may move again as rows arrive — until the
+    /// cursor is somewhere else, which only a key puts it (the Models view: the row in use).
+    pub placed: Option<String>,
+    /// Its rows' right column may take half the list's width, not a third (the Models view's).
+    pub right_half: bool,
     /// When the list opened (a question on it since then has only just appeared).
     pub opened: std::time::Instant,
     pub status: String,
@@ -260,6 +265,8 @@ impl Picker {
             cursor: 0,
             selected_id: None,
             preselected: false,
+            placed: None,
+            right_half: false,
             opened: std::time::Instant::now(),
             status: String::new(),
             hints: Vec::new(),

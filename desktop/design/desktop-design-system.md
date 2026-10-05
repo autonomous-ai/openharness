@@ -4,6 +4,9 @@ The canonical system for everything around terminal panes. This supersedes
 older BIOS, bracket-button and mixed desktop recipes. The user-approved
 direction is the authority: refine one system, then use it everywhere.
 
+Product names, meanings, and action labels follow the
+[Naming System](../../docs/naming-system.md), shared across the OS, apps, and device.
+
 ## Character
 
 A calm, precise Mac workspace. Content supplies the personality: an agent's
@@ -64,9 +67,9 @@ from the control that owns it.
 | What should happen? | Prompt, then the terminal's work | The task remains the focal point |
 | Where is the project? | Project selector; machine inside its search row | A folder belongs to a machine; its path is not globally interchangeable |
 | Which agent or specialized harness? | Agent selector, with its real mark | A specialized harness can run with an agent framework: “Run Blender with” |
-| Which model and effort? | Model control and its options | Available models belong to the selected agent and connection |
+| Which model? | Model control and its options | Available models belong to the selected agent and connection |
 | What may it do? | Visible approvals control | Preserve the explicit setting; never hide a permission change behind styling |
-| How is the work isolated? | Worktree and branch together | Fresh main default, remembered worktree choice, reviewed draft kept intact |
+| How is the work isolated? | Worktree and branch together | Fresh main default, worktree remembered after a successful Git launch |
 | Which work am I returning to? | Session name in tabs/search, with machine/project context when useful | Session identity stays stable when its model or activity changes |
 
 The footer describes the focused work. Creation controls describe the next
@@ -296,19 +299,23 @@ reuses `StatusLine`, honoring the selected wording, machine/project/branch
 visibility and status font, but omitting ANSI colors and segment backplates.
 It is never a second renderer with a hard-coded dot separator.
 A new user with no history sees the composer
-without an empty recents section; initial project guidance is neutral. Empty
-tabs hide the workspace footer, which returns when there is work to describe.
+without an empty recents section; initial project guidance is neutral. Keep the
+workspace footer visible on empty tabs so inventory controls are discoverable
+from first launch, including zero counts. Leave the right-side context blank on
+Welcome and New Tab; machine/project/branch context appears when a harness is
+open. Model inventory shows `—` until its first reading.
 Before a creation machine is available, show “Harness anything”, a short next
 step and a natural-width “Choose a machine” action. Keep that action available
 while finding machines. While saved defaults load, show “Preparing your harness…”
 in the same quiet hierarchy, then hand focus to the existing composer. Startup
 must not leave a blank page or imply that a harness has already started.
 
-Fresh forms focus the prompt and use the last explicit agent, project,
-approvals and worktree choices. Fresh branches default to main; reopening a
-draft preserves its selected branch. Enter submits except during composition.
-Escape and outside click dismiss the innermost picker first, then the dialog;
-they preserve its draft. Pending operations retain their existing close guards.
+Fresh forms focus an empty prompt. The last focused real project supplies its
+machine and folder; the global last successful launch supplies agent, model,
+approvals, account and worktree choice. Fresh branches default to main. Enter
+submits even with an empty prompt, except during composition. Escape and outside
+click dismiss the innermost picker first, then the dialog. Closing discards ordinary
+edits; pending operations retain their close guards and exact recovery values.
 Opening any form or preview must never start work.
 The GitHub entry starts with only “Enter GitHub URL”; a valid address reveals
 its clone action and an invalid submission reveals inline validation. Do not
@@ -382,13 +389,23 @@ names truncate and retain their full-name tooltip. Keep effort in the terminal,
 and keep the icon targets clear at narrow widths. Tab-strip close behavior is
 separate and remains hover-revealed.
 
-**Focused workspace footer** — only the open harness count at the left, such as `Harnesses 118`;
-focused machine, project, branch and PR at the right. Count connected owned harnesses, including
-idle and starting sessions. Clicking the count reuses Harness Monitor or creates it when absent.
-The footer performs no resource polling. CPU, RAM, GPU, workspace/session storage and their detailed
-accounting belong in the Monitor. Subscription usage stays available in Models/Subscriptions.
+**Focused workspace footer** — `Harnesses N`, `Machines N`, `Models N`, then subscription
+icons with remaining percentages at the left; focused machine, project, branch and PR at the right.
+Harnesses counts connected owned sessions, including idle and starting sessions, and opens Harness
+Monitor. Machines counts linked owned computers, including this computer, and opens the `@` picker.
+Models counts distinct installed local model variants across those computers, running or stopped,
+and opens local models. Exclude downloadable catalog, API, subscription and shared-grid rows.
+The picker and footer share cached model inventory; background reads never force a disk scan,
+set up Grid, download models or create harnesses. CPU/RAM/GPU/storage remain in Monitor.
 
-Labels use neutral readable ink. Preserve focused context actions and the selected status face,
+Each distinct subscription account has its own authentic provider icon and remaining percentage.
+Account identity, machines, limiting window, freshness and resets stay in its tooltip; clicking
+selects that subscription in Models. Percentages use neutral ink above 20%, `usageLow` amber at
+6–20%, and `usageCritical` red at 5% or less. Keep positive fractions as `<1%`, zero as `0%`,
+unknown as `—`. Color only the value; retain provider artwork. Omit signed-out accounts. Compact
+widths preserve whole account controls and expose overflow through `+N`.
+
+Count labels use neutral readable ink. Preserve focused context actions and the selected status face,
 fields, colors and shell/Powerline treatment. Companion and sharing controls follow the count;
 the companion's fixed gutter replaces the preceding control's trailing padding. See the
 [status bar contract](workspace-status-bar.md). Do not repeat branches in pane headers or model/effort

@@ -26,6 +26,7 @@ class _CloseConnection extends WsConn {
   final closes = <Map<String, dynamic>>[];
   final activities = <String, String>{};
   final failures = <String, Map<String, dynamic>>{};
+  final targetedFailures = <(String, String), Map<String, dynamic>>{};
   final requests = <String>[];
   Completer<Map<String, dynamic>>? inspecting;
   @override
@@ -37,8 +38,10 @@ class _CloseConnection extends WsConn {
     requests.add(type);
     if (type != 'agent_close') return {};
     closes.add(Map.of(payload));
-    final mode = payload['mode'];
-    if (failures[mode] case final failure?) {
+    final mode = payload['mode'] as String;
+    final agentId = payload['agentId'] as String;
+    if (targetedFailures[(agentId, mode)] ?? failures[mode]
+        case final failure?) {
       // Real WsConn throws refusals; returning a map would skip the production
       // error path and hide the bug that called every refusal a lost reply.
       throw WsRequestFailure(
@@ -123,8 +126,8 @@ void main() {
       await mount(tester, app);
       unawaited(app.requestClosePane(pane.id));
       await tester.pumpAndSettle();
-      expect(find.text('Still working. Close anyway?'), findsOneWidget);
-      expect(find.widgetWithText(FilledButton, 'Close'), findsOneWidget);
+      expect(find.text('1 session is still working.'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Stop'), findsOneWidget);
       expect(find.byType(FilledButton), findsOneWidget);
       expect(find.text('Close session'), findsNothing);
       expect(find.text('Stop after finishing'), findsNothing);
@@ -192,16 +195,16 @@ void main() {
     expect(app.allPanes, isEmpty);
     expect(app.stateOf('m')!.agents.single.isStopped, isTrue);
     expect(app.closedHistory, hasLength(1));
-    expect(find.widgetWithText(FilledButton, 'Close'), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Stop'), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
 
   for (final entry in {
-    'working': 'Still working. Close anyway?',
-    'needs_input': 'Waiting for input. Close anyway?',
-    'draft': 'Unsent text. Close anyway?',
-    'unknown': 'May still be working. Close anyway?',
+    'working': '1 session is still working.',
+    'needs_input': '1 session is waiting for input.',
+    'draft': '1 session has unsent text.',
+    'unknown': '1 session may still be working.',
   }.entries) {
     testWidgets('${entry.key} Close sends only the reviewed action', (
       tester,
@@ -213,7 +216,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text(entry.value), findsOneWidget);
       expect(modes(), ['inspect']);
-      await tester.tap(find.widgetWithText(FilledButton, 'Close'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Stop'));
       await tester.pumpAndSettle();
       expect(modes(), ['inspect', 'now']);
       expect(app.allPanes, isEmpty);
@@ -263,7 +266,7 @@ void main() {
               : app.requestClosePane(pane.id),
         );
         await tester.pumpAndSettle();
-        expect(find.text('Still working. Close anyway?'), findsOneWidget);
+        expect(find.text('1 session is still working.'), findsOneWidget);
         expect(app.panes, [pane]);
         expect(modes(), ['inspect', 'idle']);
         await tester.tap(find.byKey(const Key('session-close-now')));
@@ -289,7 +292,7 @@ void main() {
     await mount(tester, app);
     unawaited(app.requestClosePane(pane.id));
     await tester.pumpAndSettle();
-    expect(find.text('Unsent text. Close anyway?'), findsOneWidget);
+    expect(find.text('1 session has unsent text.'), findsOneWidget);
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(modes(), ['inspect', 'idle']);
@@ -343,21 +346,197 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  for (final stop in [false, true]) {
+    testWidgets(
+      'one mixed-tab review ${stop ? 'stops' : 'keeps'} all sessions',
+      (tester) async {
+        app.stateOf('m')!.agents.add(agent('a2'));
+        connection.activities.addAll({'a0': 'working', 'a1': 'working'});
+        for (final id in ['a0', 'a1', 'a2']) {
+          app.adoptSessionForTest(terminal(id, []));
+        }
+        final tab = app.activeSwarm;
+        app.renameSwarm(tab.id, 'Release');
+        await mount(tester, app);
+        unawaited(app.requestCloseSwarm(tab.id));
+        // Repeated Close shares the same pending review.
+        unawaited(app.requestCloseSwarm(tab.id));
+        await tester.pumpAndSettle();
+        expect(find.byType(Dialog), findsOneWidget);
+        expect(find.text('2 sessions are still working.'), findsOneWidget);
+        expect(
+          find.text(
+            'Stopping all 3 sessions will close the tab “Release”. History will be saved.',
+          ),
+          findsOneWidget,
+        );
+        for (final id in ['a0', 'a1']) {
+          expect(
+            find.descendant(
+              of: find.byType(Dialog),
+              matching: find.text('Work $id'),
+            ),
+            findsOneWidget,
+          );
+        }
+        expect(modes(), ['inspect', 'inspect', 'inspect']);
+        expect(find.widgetWithText(FilledButton, 'Stop'), findsOneWidget);
+        await tester.tap(find.text(stop ? 'Stop' : 'Cancel'));
+        await tester.pumpAndSettle();
+        expect(find.byType(Dialog), findsNothing);
+        if (stop) {
+          expect(modes(), [
+            'inspect',
+            'inspect',
+            'inspect',
+            'now',
+            'now',
+            'now',
+          ]);
+          expect(app.allPanes, isEmpty);
+          expect(app.swarms, isNot(contains(tab)));
+          expect(
+            app.stateOf('m')!.agents.every((agent) => agent.isStopped),
+            isTrue,
+          );
+          expect(app.closedHistory, hasLength(1));
+        } else {
+          expect(app.panes, hasLength(3));
+          expect(modes(), ['inspect', 'inspect', 'inspect']);
+          expect(
+            app.stateOf('m')!.agents.any((agent) => agent.isStopped),
+            isFalse,
+          );
+        }
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
+  testWidgets('an idle tab closes every session without a prompt', (
+    tester,
+  ) async {
+    app.adoptSessionForTest(terminal('a0', []));
+    app.adoptSessionForTest(terminal('a1', []));
+    final tab = app.activeSwarm;
+    await mount(tester, app);
+    await app.requestCloseSwarm(tab.id);
+    await tester.pumpAndSettle();
+    expect(find.byType(Dialog), findsNothing);
+    expect(modes(), ['inspect', 'inspect', 'idle', 'idle']);
+    expect(app.swarms, isNot(contains(tab)));
+    expect(app.allPanes, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('an inspection failure stops no member of the tab', (
+    tester,
+  ) async {
+    connection.activities['a0'] = 'working';
+    connection.targetedFailures[('a1', 'inspect')] = {
+      'error': 'CLOSE_UNCONFIRMED',
+      'detail': 'Could not reach the machine.',
+    };
+    app.adoptSessionForTest(terminal('a0', []));
+    app.adoptSessionForTest(terminal('a1', []));
+    await mount(tester, app);
+    unawaited(app.requestCloseSwarm(app.activeSwarmId));
+    await tester.pumpAndSettle();
+    expect(find.text('Could not reach the machine.'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Stop'), findsNothing);
+    expect(modes(), ['inspect', 'inspect']);
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(app.panes, hasLength(2));
+    expect(app.stateOf('m')!.agents.any((agent) => agent.isStopped), isFalse);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('a partial failure keeps the tab and names confirmed stops', (
+    tester,
+  ) async {
+    connection.activities.addAll({'a0': 'working', 'a1': 'working'});
+    connection.targetedFailures[('a1', 'now')] = {
+      'error': 'HISTORY_NOT_SAVED',
+      'detail': 'Not enough free disk space.',
+    };
+    app.adoptSessionForTest(terminal('a0', []));
+    app.adoptSessionForTest(terminal('a1', []));
+    final tab = app.activeSwarm;
+    await mount(tester, app);
+    unawaited(app.requestCloseSwarm(tab.id));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Stop'));
+    await tester.pumpAndSettle();
+    expect(find.text('Not enough free disk space.'), findsOneWidget);
+    expect(find.text('Stopped'), findsOneWidget);
+    expect(find.text('Stop not confirmed'), findsOneWidget);
+    expect(find.text('The tab stays open.'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Stop'), findsNothing);
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(app.swarms, contains(tab));
+    expect(tab.panes, hasLength(2));
+    expect(
+      app.stateOf('m')!.agents.firstWhere((a) => a.id == 'a0').isStopped,
+      isTrue,
+    );
+    expect(
+      app.stateOf('m')!.agents.firstWhere((a) => a.id == 'a1').isStopped,
+      isFalse,
+    );
+    expect(app.closedHistory, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets(
-    'Cancel on a later tab member does not stop an earlier approved member',
+    'new work during an idle close reviews all remaining sessions once',
     (tester) async {
-      connection.activities.addAll({'a0': 'working', 'a1': 'working'});
-      app.adoptSessionForTest(terminal('a0', []));
-      app.adoptSessionForTest(terminal('a1', []));
+      app.stateOf('m')!.agents.add(agent('a2'));
+      connection.targetedFailures[('a1', 'idle')] = {
+        'error': 'SESSION_NOT_IDLE',
+        'activity': 'working',
+      };
+      for (final id in ['a0', 'a1', 'a2']) {
+        app.adoptSessionForTest(terminal(id, []));
+      }
+      final tab = app.activeSwarm;
+      app.renameSwarm(tab.id, 'Release');
       await mount(tester, app);
-      unawaited(app.requestCloseSwarm(app.activeSwarmId));
+      unawaited(app.requestCloseSwarm(tab.id));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('session-close-now')));
+      expect(find.text('1 session is still working.'), findsOneWidget);
+      expect(
+        find.text(
+          'Stopping all 2 sessions will close the tab “Release”. History will be saved.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('1 session has already closed.'), findsOneWidget);
+      expect(modes(), [
+        'inspect',
+        'inspect',
+        'inspect',
+        'idle',
+        'idle',
+        'inspect',
+      ]);
+      await tester.tap(find.text('Stop'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Cancel'));
-      await tester.pumpAndSettle();
-      expect(app.panes, hasLength(2));
-      expect(modes(), ['inspect', 'inspect']);
+      expect(modes(), [
+        'inspect',
+        'inspect',
+        'inspect',
+        'idle',
+        'idle',
+        'inspect',
+        'now',
+        'now',
+      ]);
+      expect(find.byType(Dialog), findsNothing);
+      expect(app.allPanes, isEmpty);
+      expect(app.swarms, isNot(contains(tab)));
       await tester.pumpWidget(const SizedBox());
     },
   );

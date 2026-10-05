@@ -270,7 +270,9 @@ function streamGit(args: string[], onLine: ((line: string) => void) | undefined)
       }
     })
     child.on('error', (error) => { clearTimeout(timer); resolve({ ok: false, detail: error.message }) })
-    child.on('exit', (code, signal) => {
+    // Exit may precede the last stderr data. Classify the failure only once
+    // the pipe closes, so a retryable Git error cannot become an empty one.
+    child.on('close', (code, signal) => {
       clearTimeout(timer)
       if (rest.trim()) { onLine?.(rest.trim()); tail.push(rest.trim()) }
       if (code === 0) { resolve({ ok: true }); return }

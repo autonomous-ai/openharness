@@ -130,6 +130,7 @@ class SettingsRow extends StatelessWidget {
     this.onTap,
     this.destructive = false,
     this.nested = false,
+    this.detailLines = 2,
   });
 
   final String title;
@@ -146,6 +147,10 @@ class SettingsRow extends StatelessWidget {
 
   final VoidCallback? onTap;
   final bool destructive;
+
+  /// How many lines [detail] may take before it is cut short with an ellipsis; null lets it wrap in full
+  /// (a warning is read to the end).
+  final int? detailLines;
 
   /// Draws this row as a CHILD of the one above it — the Codex profiles under Codex, the folders
   /// under Recent.
@@ -198,8 +203,13 @@ class SettingsRow extends StatelessWidget {
                   const SizedBox(height: 3),
                   Text(
                     detail!,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
+                    maxLines: detailLines,
+                    // ⚠️ Not `ellipsis` when the detail may take every line: an ellipsis with no
+                    // `maxLines` still cuts the text to ONE line (measured on iOS and in a widget
+                    // test), which is exactly the clipping `detailLines: null` is meant to prevent.
+                    overflow: detailLines == null
+                        ? TextOverflow.clip
+                        : TextOverflow.ellipsis,
                     style: TextStyle(
                       color: AppPalette.textSecondary,
                       fontSize: 12.5,

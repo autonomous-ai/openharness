@@ -8,9 +8,11 @@ import 'package:harness/auth/cli_login.dart';
 import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/state/account_devices.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/terminal/terminal_session.dart';
+import 'package:harness/viewer/device_log_sync.dart' show DeviceLogDeparted;
 
 import 'swarm_state_test.dart' show MemoryStore;
 
@@ -197,6 +199,45 @@ void main() {
       },
     );
   }
+
+  test(
+    'a runtime sign-out forgets what was said about the old account’s devices',
+    () async {
+      final app = _Desktop(MemoryStore(), _Login());
+      addTearDown(app.dispose);
+      await app.arrange();
+      app.newDevices.add(
+        const NewDeviceNotice(pub: 'p', label: 'iPad', kind: 'viewer'),
+      );
+      app.departedDevices.add(
+        const DeviceLogDeparted(
+          pub: 'g',
+          label: 'Phone',
+          kind: 'viewer',
+          machineId: '',
+          fingerprint: 'AAAA',
+          addedAt: 1,
+          removedAt: 2,
+          removedBy: 'x',
+          removedByLabel: 'Mac',
+          selfRemoved: false,
+        ),
+      );
+      app.deviceConflict = DeviceConflict(
+        pub: 'h',
+        label: 'H',
+        fingerprint: 'AAAA',
+        addedAt: DateTime.fromMillisecondsSinceEpoch(1),
+        afterJoin: true,
+      );
+      app.expireSessionForTest('Session expired.');
+      await _settle();
+      expect(app.newDevices, isEmpty);
+      expect(app.departedDevices, isEmpty);
+      expect(app.deviceConflict, isNull);
+      expect(app.deviceRemovals, isEmpty);
+    },
+  );
 
   test(
     'expiry hides remote panes even when the guest daemon is unavailable',

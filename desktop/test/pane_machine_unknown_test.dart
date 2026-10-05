@@ -42,6 +42,10 @@ class _Api extends ApiClient {
   @override
   Future<Map<String, dynamic>?> me() async => null;
 
+  // A retry also re-reads the daemon's pending devices: a daemon that predates them.
+  @override
+  Future<Map<String, dynamic>?> daemonDevices() async => null;
+
   @override
   Future<List<Machine>> machines() {
     final result = Completer<List<Machine>>();

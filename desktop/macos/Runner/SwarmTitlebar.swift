@@ -1271,8 +1271,11 @@ private final class SwarmContextButton: SwarmIconButton {
   var groupGapCells: CGFloat?
   private var detail: String?
   private var iconAsset: String?
+  private var iconEngine: String?
   private var iconColor = NSColor.white
-  private var iconWidth: CGFloat { iconAsset == nil ? 0 : textFont.pointSize + cellWidth }
+  private var iconSize: CGFloat { iconEngine == nil ? textFont.pointSize : textFont.pointSize * 14 / 13 }
+  private var iconWidth: CGFloat { iconAsset == nil && iconEngine == nil ? 0 : iconSize + cellWidth }
+  private var overflowButton: SwarmContextButton?
   private var segments: [SwarmStatusSegment] = []
   private var segmented = false
   private var roundedSeparators = false
@@ -1308,8 +1311,11 @@ private final class SwarmContextButton: SwarmIconButton {
 
   func update(_ context: [String: Any]?, enabled: Bool) {
     text = context?["text"] as? String ?? ""
+    iconEngine = (context?["iconEngine"] as? String).flatMap { ["claude", "codex"].contains($0) ? $0 : nil }
     let asset = context?["iconAsset"] as? String
-    iconAsset = asset.flatMap { SwarmHistoryIcons.pullRequestAssets.contains($0) ? $0 : nil }
+    iconAsset = asset.flatMap {
+      SwarmHistoryIcons.pullRequestAssets.contains($0) || (iconEngine != nil && SwarmHistoryIcons.opens($0)) ? $0 : nil
+    }
     iconColor = statusColor(context?["iconColor"], fallback: foreground)
     segmented = context?["segmented"] as? Bool == true
     roundedSeparators = context?["roundedSeparators"] as? Bool == true
@@ -1336,12 +1342,29 @@ private final class SwarmContextButton: SwarmIconButton {
       button.font = font
       button.textAlignment = .left
       button.foreground = foreground
+      button.contentPadding = context?["paddedFields"] as? Bool == true ? contentPadding : 0
       button.update(values, enabled: enabled)
       button.setAccessibilityLabel(values["detail"] as? String ?? values["text"] as? String)
     }
     setAccessibilityChildren(fields.isEmpty ? nil : fieldButtons.filter { $0.field != nil })
     field = context?["field"] as? String
     paneId = context?["paneId"] as? Int
+    if context?["overflowFields"] as? Bool == true {
+      if overflowButton == nil {
+        let button = SwarmContextButton()
+        button.isBordered = false
+        button.target = self
+        button.action = #selector(openOverflow)
+        overflowButton = button
+        addSubview(button)
+      }
+      overflowButton?.font = font
+      overflowButton?.foreground = foreground
+      overflowButton?.contentPadding = contentPadding
+    } else {
+      overflowButton?.removeFromSuperview()
+      overflowButton = nil
+    }
     actionURL = context?["url"] as? String
     detail = context?["detail"] as? String
     updateTooltip()
@@ -1369,11 +1392,44 @@ private final class SwarmContextButton: SwarmIconButton {
     onField?(field, paneId)
   }
 
+  @objc private func openOverflow() {
+    guard isEnabled else { return }
+    onField?("", 0)
+  }
+
   override func layout() {
     super.layout()
     updateTooltip()
     guard !fieldButtons.isEmpty else { return }
     let natural = fieldButtons.map { $0.preferredWidth }
+    if let overflowButton {
+      var count = fieldButtons.count
+      var occupied = natural.reduce(0, +)
+      func overflowWidth(_ hidden: Int) -> CGFloat {
+        hidden == 0 ? 0 : ceil(workspaceBarTextWidth("+\(hidden)", font: textFont) + contentPadding * 2)
+      }
+      while count > 0 && occupied + overflowWidth(fieldButtons.count - count) > bounds.width {
+        count -= 1
+        occupied -= natural[count]
+      }
+      var x: CGFloat = 0
+      for (index, button) in fieldButtons.enumerated() {
+        button.isHidden = index >= count
+        button.setAccessibilityHidden(button.isHidden)
+        button.frame = NSRect(x: x, y: 0, width: button.isHidden ? 0 : natural[index], height: bounds.height)
+        if !button.isHidden { x += natural[index] }
+      }
+      let hidden = fieldButtons.count - count
+      overflowButton.isHidden = hidden == 0
+      let label = "\(hidden) more subscriptions"
+      overflowButton.update(["text": "+\(hidden)", "label": label,
+        "detail": fieldButtons.dropFirst(count).compactMap { $0.detail }.joined(separator: "\n\n"),
+        "interactive": true, "segments": [["text": "+\(hidden)"]]], enabled: isEnabled)
+      overflowButton.setAccessibilityLabel(label)
+      overflowButton.frame = NSRect(x: x, y: 0, width: min(overflowWidth(hidden), max(0, bounds.width - x)), height: bounds.height)
+      setAccessibilityChildren(fieldButtons.filter { !$0.isHidden } + (hidden == 0 ? [] : [overflowButton]))
+      return
+    }
     var widths = natural
     var excess = max(0, widths.reduce(0, +) - bounds.width)
     for (index, button) in fieldButtons.enumerated() where button.field == "branch" {
@@ -1427,10 +1483,14 @@ private final class SwarmContextButton: SwarmIconButton {
     return NSAttributedString(attachment: attachment)
   }
   private func drawPullRequestIcon(x: CGFloat, color: NSColor) {
-    guard let iconAsset else { return }
-    let size = textFont.pointSize
+    guard iconAsset != nil || iconEngine != nil else { return }
+    let size = iconSize
     let rect = NSRect(x: x, y: (bounds.height - size) / 2, width: size, height: size)
-    let image = Self.statusIcons.image(engine: nil, asset: iconAsset, pointSize: size)
+    let image = Self.statusIcons.image(engine: iconEngine, asset: iconAsset, pointSize: size)
+    if iconEngine != nil && iconEngine != "claude" {
+      image.draw(in: rect)
+      return
+    }
     // Preserve the SVG at the current backing scale; tint only this layer.
     NSGraphicsContext.current?.cgContext.beginTransparencyLayer(auxiliaryInfo: nil)
     image.draw(in: rect)
@@ -1782,6 +1842,8 @@ private final class SwarmTabStrip: NSView {
   fileprivate let contextButton = SwarmContextButton()
   fileprivate let subscriptionUsageButton = SwarmContextButton()
   fileprivate let harnessMonitorButton = SwarmContextButton()
+  fileprivate let machinesButton = SwarmContextButton()
+  fileprivate let modelsButton = SwarmContextButton()
   fileprivate let machineResourcesLabel = SwarmContextButton()
   private var machineResourcesState: [String: Any]?
   private var subscriptionUsageState: [String: Any]?
@@ -1852,7 +1914,11 @@ private final class SwarmTabStrip: NSView {
     subscriptionUsageButton.textAlignment = .center
     subscriptionUsageButton.target = self
     subscriptionUsageButton.action = #selector(openSubscriptions)
-    subscriptionUsageButton.setAccessibilityLabel("Subscription allowance used")
+    subscriptionUsageButton.setAccessibilityLabel("Remaining subscription allowance")
+    subscriptionUsageButton.onField = { [weak self] id, _ in
+      guard let self, self.actionsEnabled else { return }
+      self.emit?("subscriptions", id.isEmpty ? nil : ["id": id])
+    }
     subscriptionUsageButton.isHidden = true
     statusBar.addSubview(subscriptionUsageButton)
     harnessMonitorButton.isBordered = false
@@ -1862,6 +1928,18 @@ private final class SwarmTabStrip: NSView {
     harnessMonitorButton.setAccessibilityLabel("Harness Monitor")
     harnessMonitorButton.isHidden = true
     statusBar.addSubview(harnessMonitorButton)
+    for (button, label, action) in [
+      (machinesButton, "Machines", #selector(openFooterMachines)),
+      (modelsButton, "Local models", #selector(openFooterModels))
+    ] {
+      button.isBordered = false
+      button.textAlignment = .center
+      button.target = self
+      button.action = action
+      button.setAccessibilityLabel(label)
+      button.isHidden = true
+      statusBar.addSubview(button)
+    }
     machineResourcesLabel.isBordered = false
     machineResourcesLabel.textAlignment = .left
     machineResourcesLabel.target = self
@@ -1949,7 +2027,7 @@ private final class SwarmTabStrip: NSView {
     statusBar.setAccessibilityLabel("Focused pane status")
     statusBar.setAccessibilityParent(self)
     setAccessibilityChildren([scroll, newButton, searchButton, storeButton, statusBar])
-    statusBar.setAccessibilityChildren([harnessMonitorButton, machineResourcesLabel, subscriptionUsageButton, daemonButton, shareButton, voiceLabel, contextButton, pullRequestButton])
+    statusBar.setAccessibilityChildren([harnessMonitorButton, machinesButton, modelsButton, machineResourcesLabel, subscriptionUsageButton, daemonButton, shareButton, voiceLabel, contextButton, pullRequestButton])
     registerForDraggedTypes([swarmPasteboardType])
     scroll.contentView.postsBoundsChangedNotifications = true
     for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification,
@@ -2112,6 +2190,14 @@ private final class SwarmTabStrip: NSView {
     harnessMonitorButton.valueGapCells = resourceValueGapCells
     harnessMonitorButton.update(state["harnessMonitor"] as? [String: Any], enabled: actionsEnabled)
     harnessMonitorButton.isHidden = state["harnessMonitor"] == nil
+    for (button, key) in [(machinesButton, "footerMachines"), (modelsButton, "footerModels")] {
+      button.font = barFont
+      button.foreground = terminalForeground
+      button.contentPadding = harnessMonitorButton.contentPadding
+      button.valueGapCells = resourceValueGapCells
+      button.update(state[key] as? [String: Any], enabled: actionsEnabled)
+      button.isHidden = state[key] == nil
+    }
     machineResourcesState = state["machineResources"] as? [String: Any]
     machineResourcesLabel.font = barFont
     machineResourcesLabel.foreground = terminalForeground
@@ -2365,13 +2451,17 @@ private final class SwarmTabStrip: NSView {
     let y = (statusBar.bounds.height - height) / 2
     let available = max(0, statusBar.bounds.width - cell * 2)
     let daemonWidth = daemonButton.isHidden ? 0 : min(daemonButton.preferredWidth, available * 0.5)
-    let showsUsage = hasSubscriptionUsage && (harnessMonitorButton.isHidden || statusBar.bounds.width >= 1050)
+    let countsVisible = !machinesButton.isHidden || !modelsButton.isHidden
+    let showsUsage = hasSubscriptionUsage && (countsVisible || harnessMonitorButton.isHidden || statusBar.bounds.width >= 1050)
     // The fixed companion slot already has an optical gutter around its art.
     subscriptionUsageButton.trailingContentPadding = daemonWidth > 0 ? 0 : nil
     machineResourcesLabel.trailingContentPadding = daemonWidth > 0 && !showsUsage ? 0 : nil
     let shareWidth = shareButton.isHidden ? 0 : min(shareButton.preferredWidth, available * 0.3)
     let usageBudget = max(0, available - daemonWidth - shareWidth - cell * 4 - resourceGap * 2)
-    let monitorWidth = harnessMonitorButton.isHidden ? 0 : min(harnessMonitorButton.preferredWidth, usageBudget * 0.4)
+    let inventory = [harnessMonitorButton, machinesButton, modelsButton]
+    let countTotal = inventory.filter { !$0.isHidden }.reduce(CGFloat(0)) { $0 + $1.preferredWidth }
+    let countScale = min(1, usageBudget * (countsVisible ? 0.8 : 0.4) / max(1, countTotal))
+    let monitorWidth = harnessMonitorButton.isHidden ? 0 : harnessMonitorButton.preferredWidth * countScale
     let hardwareBudget = usageBudget * 0.52
     if var resource = machineResourcesState {
       for key in ["segments", "noStorageSegments", "compactSegments", "minimalSegments"] {
@@ -2383,10 +2473,16 @@ private final class SwarmTabStrip: NSView {
     }
     let hardwareWidth = machineResourcesLabel.isHidden ? 0 : min(machineResourcesLabel.preferredWidth, hardwareBudget)
     harnessMonitorButton.frame = NSRect(x: cell, y: y, width: monitorWidth, height: height)
+    let machinesWidth = machinesButton.isHidden ? 0 : machinesButton.preferredWidth * countScale
+    let modelsWidth = modelsButton.isHidden ? 0 : modelsButton.preferredWidth * countScale
+    machinesButton.frame = NSRect(x: harnessMonitorButton.frame.maxX, y: y, width: machinesWidth, height: height)
+    modelsButton.frame = NSRect(x: machinesButton.frame.maxX, y: y, width: modelsWidth, height: height)
     let usageWidth = showsUsage
-      ? min(subscriptionUsageButton.preferredWidth, usageBudget * (monitorWidth == 0 ? 0.45 : 0.22)) : 0
+      ? min(subscriptionUsageButton.preferredWidth, countsVisible
+          ? max(0, usageBudget - countTotal * countScale)
+          : usageBudget * (monitorWidth == 0 ? 0.45 : 0.22)) : 0
     subscriptionUsageButton.isHidden = usageWidth == 0
-    machineResourcesLabel.frame = NSRect(x: cell + monitorWidth + (monitorWidth > 0 && hardwareWidth > 0 ? resourceGap : 0),
+    machineResourcesLabel.frame = NSRect(x: modelsButton.frame.maxX + (monitorWidth > 0 && hardwareWidth > 0 ? resourceGap : 0),
       y: y, width: hardwareWidth, height: height)
     subscriptionUsageButton.frame = NSRect(x: machineResourcesLabel.frame.maxX + (usageWidth > 0 && (monitorWidth > 0 || hardwareWidth > 0) ? resourceGap : 0),
       y: y, width: usageWidth, height: height)
@@ -2413,6 +2509,8 @@ private final class SwarmTabStrip: NSView {
     pullRequestButton.layoutSubtreeIfNeeded()
     subscriptionUsageButton.layoutSubtreeIfNeeded()
     harnessMonitorButton.layoutSubtreeIfNeeded()
+    machinesButton.layoutSubtreeIfNeeded()
+    modelsButton.layoutSubtreeIfNeeded()
     machineResourcesLabel.layoutSubtreeIfNeeded()
   }
   override func draw(_ dirtyRect: NSRect) {
@@ -2448,6 +2546,14 @@ private final class SwarmTabStrip: NSView {
   @objc private func openHarnessMonitor() {
     guard actionsEnabled, harnessMonitorButton.isEnabled else { return }
     emit?("resourceMonitor", nil)
+  }
+  @objc private func openFooterMachines() {
+    guard actionsEnabled, machinesButton.isEnabled else { return }
+    emit?("machineControls", nil)
+  }
+  @objc private func openFooterModels() {
+    guard actionsEnabled, modelsButton.isEnabled else { return }
+    emit?("runLocalModel", nil)
   }
   @objc private func openDaemon() {
     setDaemonHover(false)

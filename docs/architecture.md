@@ -113,6 +113,15 @@ Runtime truth belongs to the daemon owning the work. A question answered through
 must resolve for the others. Closing an interface leaves execution running on an available host;
 it does not make a sleeping or disconnected host capable of continuing work elsewhere.
 
+Companions and Memory have separate implementations in the optional
+[companions package](../companions/README.md). Core does not construct either
+subsystem or bundle their workers. Old optional requests receive an unsupported
+response without changing their transport security boundaries. The package
+currently builds as libraries; its application startup and client integration
+remain disconnected. The [extraction plan](plans/2026-10-03-memory-companion-isolation.md)
+records those remaining requirements. This extraction does not establish a
+working companion-memory experience.
+
 The current [orchestrator](../cli/src/orchestrator/service.ts) already persists local project
 runs, task dependencies, and artifact handoffs. Cross-machine orchestration, project migration,
 and universal engine-session portability are separate capabilities; access to a remote terminal

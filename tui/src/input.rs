@@ -53,10 +53,11 @@ pub fn handle(app: &mut App, event: CEvent) {
 
 /// Overlays that type text keep every key (tmux's prompt ignores the prefix too).
 fn typing(app: &App) -> bool {
-    matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Picker { .. }) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }) | Some(Modal::Menu { .. }) | Some(Modal::NewHarness(_)))
+    (app.home_visible() && !os_home(app)) || matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Picker { .. }) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }) | Some(Modal::Menu { .. }) | Some(Modal::NewHarness(_)))
 }
 
 fn on_key(app: &mut App, key: KeyEvent) {
+    if crate::os_welcome::key(app, key) { return }
     let chord = keys::of(&key);
     app.key_name = Some(keys::name(&chord));
     // A message goes on the next key, as tmux's does.
@@ -143,7 +144,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
     // at the status line keeps it — and a plain-key prefix (`` ` ``, Enter) is the prefix over the
     // panes alone: in a list it is typed into the search, or chooses.
     let line_edit = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }) | Some(Modal::Menu { .. }) | Some(Modal::NewHarness(_)));
-    let listed = chord.plain() && app.modal.is_some();
+    let listed = chord.plain() && (app.modal.is_some() || app.home_visible() && !os_home(app) && crate::new_harness::welcome_editing(app));
     if !line_edit && !listed && (chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2) {
         app.status_redraws += 1;
         app.prefix = true;
@@ -153,7 +154,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
     // key-table (a session's default table, root unless set — `off` for a nested tmux): its key
     // runs; one it has not goes to the pane, root's bindings not this client's then.
     let base = app.options.get("key-table", "", None).unwrap_or_else(|| "root".into());
-    if base != "root" && app.modal.is_none() {
+    if base != "root" && app.modal.is_none() && !app.home_visible() {
         if let Some(b) = app.keymap.named.get(&base).and_then(|l| l.iter().rev().find(|b| b.chord == chord)).cloned() {
             app.status_redraws += 1;
             commands::execute_bound(app, &b.command);
@@ -256,7 +257,7 @@ pub fn send_to_pane(app: &mut App, focus: u64, bytes: Vec<u8>) {
 }
 
 fn on_paste(app: &mut App, text: String) {
-    if let Some(Modal::NewHarness(form)) = &mut app.modal { crate::new_harness::paste(form, &text); return }
+    if paste_form(app, &text) { return }
     if let Some(Modal::Picker { picker, .. }) = &mut app.modal { for c in text.chars().filter(|c| !c.is_control()) { picker.type_char(c) } return }
     if let Some(Modal::Prompt(prompt)) = &mut app.modal { prompt.value.push_str(&text.replace(['\r', '\n'], " ")); return }
     app.tab_mut().home = false;
@@ -267,7 +268,19 @@ fn on_paste(app: &mut App, text: String) {
     else { send_to_focused(app, text.into_bytes()) }
 }
 
+/// A foreground creation editor owns paste, including the tmux paste-buffer binding.
+pub(crate) fn paste_form(app: &mut App, text: &str) -> bool {
+    if let Some(Modal::NewHarness(form)) = &mut app.modal {
+        crate::new_harness::paste(form, text);
+        true
+    } else if app.home_visible() {
+        if !os_home(app) { crate::new_harness::welcome_paste(app, text); }
+        true
+    } else { false }
+}
+
 fn on_mouse(app: &mut App, mouse: MouseEvent) {
+    if crate::os_welcome::mouse(app, mouse) { return }
     // tmux asks the terminal for bare motion only when a pane here wants it (or a menu opened by
     // the mouse): the rest of the motion hn is sent never happened, as far as tmux is concerned.
     if matches!(mouse.kind, MouseEventKind::Moved) && !app.wants_motion() { return }
@@ -276,6 +289,7 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
     // ── status bar ──
     // (The bar down a side and the tabs over the panes: theirs, unless a menu is open.)
     if !matches!(app.modal, Some(Modal::Menu(_))) && crate::bar::mouse(app, &mouse) { return }
+    if app.home_visible() { if !os_home(app) { crate::new_harness::welcome_mouse(app, mouse); } return }
     crate::mouse::on_event(app, mouse);
 }
 
@@ -468,7 +482,7 @@ pub enum HomeRow { Harness(String, String), External(crate::app::External) }
 
 impl HomeRow {
     /// Its key in the home page's order: (machine, agent), or (machine, "x:" session).
-    fn key(&self) -> (String, String) {
+    pub(crate) fn key(&self) -> (String, String) {
         match self { HomeRow::Harness(m, a) => (m.clone(), a.clone()), HomeRow::External(x) => (x.machine.clone(), format!("x:{}", x.session_id)) }
     }
 }
@@ -478,16 +492,17 @@ impl HomeRow {
 /// the last 30 days that Harness did not start, on every connected machine.
 pub fn home_rows(app: &App) -> Vec<HomeRow> {
     let mut all: Vec<(u64, HomeRow)> = app.fleet.agents.values()
-        .filter(|a| app.fleet.state_of(a) != crate::fleet::State::Offline)
+        .filter(|a| a.engine != "terminal" && app.fleet.state_of(a) != crate::fleet::State::Offline)
         .map(|a| (a.recency(), HomeRow::Harness(a.key().0, a.key().1)))
         .collect();
-    all.extend(app.home_external.iter().map(|x| (x.last_at, HomeRow::External(x.clone()))));
+    all.extend(app.home_external.iter()
+        .filter(|x| app.fleet.machine(&x.machine).is_some_and(|m| m.usable()))
+        .map(|x| (x.last_at, HomeRow::External(x.clone()))));
     // (Ties by name, so two alike keep their places between readings.)
     let name = |r: &HomeRow| match r { HomeRow::Harness(m, a) => app.fleet.agent(m, a).map(|x| x.name.clone()).unwrap_or_default(), HomeRow::External(x) => x.title.clone() };
     all.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| name(&a.1).cmp(&name(&b.1))));
     let ranked: Vec<HomeRow> = all.into_iter().map(|(_, r)| r).collect();
-    // Numbers are for fingers: a row keeps its number while you look at the list, however the
-    // harnesses' activity reorders them (the order is fresh each time the window is entered).
+    // Keep rows stable while activity changes; refresh the order when entering a window.
     let mut order = app.home_order.borrow_mut();
     let mut out: Vec<HomeRow> = order.iter().filter_map(|k| ranked.iter().find(|r| &r.key() == k).cloned()).collect();
     for r in &ranked { if out.len() >= 9 { break } if !out.iter().any(|o| o.key() == r.key()) { out.push(r.clone()) } }
@@ -496,15 +511,7 @@ pub fn home_rows(app: &App) -> Vec<HomeRow> {
     out
 }
 
-/// A conversation Harness did not start, opened as a harness that resumes it — in its own folder,
-/// named for its title — in the window here when it is empty (else a new one). Its machine says
-/// why when it will not (open elsewhere, already a harness, its folder gone).
-pub fn resume_external(app: &mut App, x: &crate::app::External) {
-    let placement = if app.tab().home { Placement::Replace } else if app.tab().root.is_none() { Placement::Auto(None) } else { Placement::Tab };
-    resume_external_as(app, x, placement)
-}
-
-/// resume_external, placed as asked (a new window, beside, below, here).
+/// Resume an external conversation, placed as asked (a new window, beside, below, here).
 pub fn resume_external_as(app: &mut App, x: &crate::app::External, placement: Placement) {
     let Some(link) = app.link(&x.machine) else { app.say("That machine is not connected", theme::DANGER); return };
     let mut payload = json!({ "engine": x.engine, "cwd": x.cwd, "bypassPermission": true, "resumeSessionId": x.session_id, "creationId": uuid::Uuid::new_v4().to_string() });
@@ -524,44 +531,36 @@ pub fn resume_external_as(app: &mut App, x: &crate::app::External, placement: Pl
     });
 }
 
-/// A window with no harness in it has no pane to take keys from, so plain letters work here.
-fn home_key(app: &mut App, key: KeyEvent) {
-    let rows = home_rows(app);
-    let open = |app: &mut App, index: usize| {
-        match rows.get(index).cloned() {
-            Some(HomeRow::Harness(m, a)) => app.open_agent(&m, &a, Placement::Auto(None)),
-            Some(HomeRow::External(x)) => resume_external(app, &x),
-            None => {}
-        }
-    };
-    let plain = !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let rows_n = rows.len();
+/// The OS opts in through its session launcher. Ordinary hn on macOS or any
+/// other Linux keeps its normal home, even with a stray live-session flag.
+pub fn os_home(app: &App) -> bool {
+    app.os_session && (app.os_live || home_rows(app).is_empty())
+}
+
+fn os_home_command(app: &App, key: KeyEvent) -> Option<Option<&'static str>> {
+    if !os_home(app) || key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) { return None }
     match key.code {
-        // A row by its number, or chosen with the arrows (C-p / C-n) and then Enter.
-        KeyCode::Char(c @ '1'..='9') if plain && (c as usize - '1' as usize) < rows_n => open(app, c as usize - '1' as usize),
-        KeyCode::Up => { app.home_cursor = if app.home_moved { app.home_cursor.saturating_sub(1) } else { 0 }; app.home_moved = true }
-        KeyCode::Char('p') if ctrl => { app.home_cursor = if app.home_moved { app.home_cursor.saturating_sub(1) } else { 0 }; app.home_moved = true }
-        KeyCode::Down => { app.home_cursor = if app.home_moved { (app.home_cursor + 1).min(rows_n.saturating_sub(1)) } else { 0 }; app.home_moved = true }
-        KeyCode::Char('n') if ctrl => { app.home_cursor = if app.home_moved { (app.home_cursor + 1).min(rows_n.saturating_sub(1)) } else { 0 }; app.home_moved = true }
-        KeyCode::Enter if app.home_moved && rows_n > 0 => open(app, app.home_cursor),
-        KeyCode::Esc => app.home_moved = false,
-        // Anything else is typed into a shell made here, as after tmux's C-b c: in the machine and
-        // folder of the pane you came from, what you type (`claude⏎`, `git status⏎`) its.
-        _ => {
-            if app.tab().home && (app.focused().is_some() || app.shell_inputs.contains_key(&app.tab().id)) {
-                app.tab_mut().home = false;
-                app.home_from = None;
-                on_key(app, key);
-                return;
-            }
-            let Some(bytes) = crate::pane::encode_key(&key, alacritty_terminal::term::TermMode::empty()) else { return };
-            let from = app.home_from.take();
-            new_shell_from(app, from, Placement::Auto(None), None, None);
-            if let Some(buffer) = app.shell_inputs.get(&app.tab().id) { buffer.lock().unwrap().push(bytes) }
-        }
+        KeyCode::Enter if app.os_live => Some(Some("sudo /usr/bin/harness install")),
+        KeyCode::Char('i' | 'I') if app.os_live => Some(Some("sudo /usr/bin/harness install")),
+        KeyCode::Enter => Some(Some("/usr/bin/hn-os try")),
+        KeyCode::Char('t' | 'T') if app.os_live => Some(Some("/usr/bin/hn-os welcome")),
+        KeyCode::Char('w' | 'W') => Some(Some("/usr/bin/hn-os wifi")),
+        KeyCode::Char('t' | 'T') => Some(None),
+        _ => None,
     }
 }
+
+/// The shared welcome composer owns ordinary keys; the OS retains its setup actions.
+fn home_key(app: &mut App, key: KeyEvent) {
+    if os_home(app) {
+        if let Some(command) = os_home_command(app, key) {
+            new_shell_from(app, None, Placement::Auto(None), None, command.map(str::to_string));
+        }
+        return;
+    }
+    crate::new_harness::welcome_key(app, key);
+}
+
 
 // ── commands ──────────────────────────────────────────────────────────────
 
@@ -611,7 +610,7 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
     // Its spinner turns while what it lists is still coming in, as fzf's does while it reads.
     let busy = match kind {
         PickerKind::Store => is_loading(&format!("dsh {}", app.fleet.local_id)),
-        PickerKind::Models => crate::models::loading(app) || focused_agent(app).is_some_and(|(m, a)| is_loading(&format!("models {m} {a}"))),
+        PickerKind::Models => crate::models::loading(app),
         _ => false,
     };
     picker.busy = busy.then(|| "loading".to_string());
@@ -661,22 +660,23 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.hints = vec![("enter", "its harnesses"), ("C-t", "a session of them"), ("M-n", "new harness there")];
             picker.empty = "No projects yet.".into();
         }
-        // ── models: the Models view's sections (models.rs), then the engine's own models ──
+        // ── models: the Models view's sections, as the desktop picker lists them (models.rs) ──
         PickerKind::Models => {
-            let mut rows = crate::models::rows(app, crate::models::searched(picker));
+            let rows = crate::models::rows(app, crate::models::searched(picker));
             let in_use = crate::models::in_use_row(&rows);
-            rows.extend(modal::model_rows(app));
+            let top = rows.first().map(|r| r.id.clone());
+            let before = picker.selected_id.clone();
             // (Rebuilt in its sections each time — a model moves to where its state puts it, a
             // reply come late lands in its section — the cursor staying on its row.)
             picker.rows.clear();
             picker.set_rows(rows);
-            // Start on the model it runs — the grid model it is on, else its engine's model — so
-            // ↑/↓ are "a little more / less" from where it is.
-            if picker.query.trim() == ":" && picker.selected_id.is_none() {
-                if let Some(current) = in_use.or_else(|| focused_agent(app).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| x.model.clone()))) {
-                    if let Some(at) = picker.visible.iter().position(|(i, _)| picker.rows[*i].id == current) { picker.cursor = at; picker.selected_id = Some(current) }
-                }
+            // Start on what the harness is on — the model, the API's or its own login — else the
+            // top row, as the desktop's picker does; and follow it there as replies arrive, until a
+            // key moves the cursor elsewhere.
+            if picker.query.trim() == ":" && (before.is_none() || before == picker.placed) {
+                if let Some(want) = in_use.or(top) { picker.select(&want); picker.placed = picker.selected_id.clone() }
             }
+            picker.right_half = true;
             picker.hints = vec![("enter", "use · get"), ("C-s", "stop a local model")];
             picker.empty = if crate::models::target(app).is_none() { crate::models::no_target_why(app) } else { "Loading its models…".into() };
             picker.status = app.focused().and_then(|f| app.panes.get(&f)).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone()).unwrap_or_default();
@@ -836,16 +836,6 @@ fn prepare(app: &mut App, kind: &PickerKind) {
 fn load_models(app: &mut App) {
     // ── models: this computer's models, the grids and the saved APIs (models.rs) ──
     crate::models::open(app);
-    // (The focused pane's engine's own models — what `model_rows` lists for that pane.)
-    let Some((machine, agent)) = focused_agent(app) else { return };
-    let Some(link) = app.link(&machine) else { return };
-    let mark = loading(format!("models {machine} {agent}"), true);
-    let key = (machine, agent.clone());
-    app.spawn(async move { link.rpc("models_list", json!({ "agentId": agent }), Duration::from_secs(20)).await }, move |app, reply| {
-        loading(mark, false);
-        if let Ok(reply) = reply { app.models.insert(key, reply.get("models").and_then(|v| v.as_array()).cloned().unwrap_or_default()); }
-        refill(app);
-    });
 }
 
 /// The query changed: when its first character moved the box to another mode, rebuild it as that mode.
@@ -879,8 +869,8 @@ pub fn run(app: &mut App, command: &str) {
         "store" => launch(app, "*", Filter::All),
         "new" => crate::new_harness::open(app, None, None),
         "terminal" => {
-            let machine = focused_agent(app).map(|(m, _)| m).unwrap_or(app.fleet.local_id.clone());
-            create(app, machine, What { engine: "terminal".into(), dsh: None, label: "Terminal".into() }, None, None);
+            let focused = focused_agent(app);
+            new_shell_from(app, focused, Placement::Auto(None), None, None);
         }
         "send" => prompt(app, PromptKind::Send, "Send to harness", "What should be done?", "Harness picks the harness that fits best; you confirm.", "", false),
         "broadcast" => {
@@ -974,6 +964,7 @@ pub fn run(app: &mut App, command: &str) {
         "messages" => picker(app, PickerKind::Messages, "messages", ""),
         "keys" => picker(app, PickerKind::Keys, "keys", ""),
         "choose-buffer" => picker(app, PickerKind::Buffers, "buffers", ""),
+        "quit" if app.os_session => app.error("hn is the OS session; open a Terminal with C-b N"),
         "quit" => app.quit = true,
         c if c.starts_with("tab-") => { if let Some(n) = c[4..].parse::<usize>().ok().and_then(|n| n.checked_sub(1)) { app.select_tab(n) } }
         // ── machines & devices ──
@@ -1086,7 +1077,8 @@ fn harness_preview(picker: &mut Picker) {
 
 /// Rebuild the open overlay's rows (the fleet or a catalog moved under it).
 pub fn refill(app: &mut App) {
-    if matches!(app.modal, Some(Modal::NewHarness(_))) { return crate::new_harness::refresh(app) }
+    crate::new_harness::refresh(app);
+    if matches!(app.modal, Some(Modal::NewHarness(_))) { return }
     // A delayed search/catalog reply may arrive after the picker has closed. It must not
     // consume a command prompt, confirmation or copy mode that replaced that picker.
     if !matches!(app.modal, Some(Modal::Picker { .. })) { return }
@@ -1295,6 +1287,7 @@ fn shell_placed(app: &mut App, machine: String, placement: Placement, reply: Res
         p.queued.extend(typed);
         p.start_command = reply.pointer("/agent/startCommand").and_then(serde_json::Value::as_str).map(str::to_string);
     }
+    crate::os_welcome::shell_created(app, pane);
     // A new session's first pane may belong to a session not currently in front.
     let (back, before) = (app.session_id, app.swap_back);
     if session != back { app.swap_back = Some(back); app.swap_session(session); }
@@ -1323,9 +1316,13 @@ fn create_in(app: &mut App, machine: String, what: What, cwd: Option<String>, me
 
 pub(crate) fn create_opts(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>, worktree: bool, opts: NewOpts) {
     let machine = app.fleet.launch_machine_id(&machine).to_string();
-    let Some(link) = app.link(&machine) else { return app.error("That machine is not connected") };
+    let Some(link) = app.link(&machine) else {
+        if let Some(id) = &opts.form_id { crate::new_harness::completed(app, id, Some("That machine is not connected. Your draft is kept here.".into())); }
+        return app.error("That machine is not connected")
+    };
     let terminal = what.engine == "terminal";
     let mut payload = json!({ "engine": what.engine, "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": !terminal });
+    if terminal { configure_local_shell(app, &machine, &mut payload); }
     if let Some(dsh) = &what.dsh { payload["dsh"] = json!(dsh) }
     match &cwd {
         Some(cwd) if worktree => { payload["projectSource"] = json!("worktree"); payload["gitSource"] = json!(cwd) }
@@ -1338,19 +1335,17 @@ pub(crate) fn create_opts(app: &mut App, machine: String, what: What, cwd: Optio
     if let Some(name) = opts.name.as_ref().filter(|n| !n.is_empty()) { payload["name"] = json!(name) }
     if let Some(extra) = opts.extra.as_ref().and_then(|v| v.as_object()) { for (key, value) in extra { payload[key] = value.clone(); } }
     if let Some(form_id) = &opts.form_id {
-        let Some(Modal::NewHarness(form)) = &mut app.modal else { return };
-        if &form.id != form_id || form.attempt.is_some() { return }
-        form.attempt = Some(crate::new_harness::Creation {
-            id: payload["creationId"].as_str().unwrap().into(), machine: machine.clone(), session: app.session_id,
-        });
-        form.starting = true; form.error.clear();
+        if !crate::new_harness::record_attempt(app, form_id, crate::new_harness::Creation {
+            id: payload["creationId"].as_str().unwrap().into(), machine: machine.clone(),
+            session: opts.target.as_ref().map(|t| t.session).unwrap_or(app.session_id), target: opts.target.clone(),
+        }) { return }
     }
     // (From a shell: nothing said on the way — a message there is the command's error.)
     if app.capture.is_none() { app.say(format!("Starting {} on {}…", what.label, app.fleet.machine_name(&machine)), theme::SOFT) }
     if opts.form_id.is_none() { app.modal = None; }
     // -P: the shell that asked waits for it, and is told where it is (as new-window -P).
     if opts.print.is_some() { app.print_new = opts.print.clone() }
-    let session = app.session_id;
+    let session = opts.target.as_ref().map(|t| t.session).unwrap_or(app.session_id);
     let timeout = Duration::from_secs(if opts.form_id.is_some() { 20 } else { 180 });
     app.spawn(async move { link.rpc("agent_create", payload, timeout).await }, move |app, reply| {
         creation_finished(app, machine, session, opts, reply, false);
@@ -1358,7 +1353,7 @@ pub(crate) fn create_opts(app: &mut App, machine: String, what: What, cwd: Optio
 }
 
 pub(crate) fn check_creation(app: &mut App, form_id: String, attempt: crate::new_harness::Creation) {
-    let opts = NewOpts { form_id: Some(form_id), ..Default::default() };
+    let opts = NewOpts { form_id: Some(form_id), target: attempt.target.clone(), ..Default::default() };
     let Some(link) = app.link(&attempt.machine) else {
         return creation_finished(app, attempt.machine, attempt.session, opts, Err(crate::daemon::RpcError::new("DISCONNECTED", "")), true);
     };
@@ -1378,13 +1373,19 @@ fn creation_finished(app: &mut App, machine: String, session: u32, opts: NewOpts
             if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
                 if let Some(form_id) = &opts.form_id { crate::new_harness::created(app, form_id, &reply["agent"]); }
                 app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
+                if reply["agent"]["engine"] == "terminal" { app.shells.insert((machine.clone(), id.to_string())); }
                 // Keep new harnesses in the current window, filling it or splitting beside
                 // the focused pane; -d keeps the previous pane focused.
                 let back = (app.session_id, app.tab().id.clone());
                 let swapped = session != app.session_id && app.swap_back.is_none() && app.sessions.iter().any(|s| s.id == session) && { app.swap_back = Some(back.0); app.swap_session(session) };
                 let before = (app.tab().id.clone(), app.focused(), app.tab().zoomed);
-                app.open_agent(&machine, id, Placement::Auto(None));
-                if opts.detached {
+                let lastw = app.lastw.clone();
+                let target = opts.target.as_ref().and_then(|t| app.tabs.iter().position(|w| w.id == t.tab));
+                if opts.target.is_none() || target.is_some() {
+                    if let Some(i) = target { app.select_tab(i) }
+                    app.open_agent(&machine, id, Placement::Auto(None));
+                }
+                if opts.detached || opts.target.as_ref().is_some_and(|t| t.tab != before.0) {
                     if let Some(i) = app.tabs.iter().position(|t| t.id == before.0) {
                         app.select_tab(i);
                         if let Some(pane) = before.1.filter(|p| app.tabs[i].panes().contains(p)) {
@@ -1393,13 +1394,16 @@ fn creation_finished(app: &mut App, machine: String, session: u32, opts: NewOpts
                             app.fit_panes();
                         }
                     }
+                    if opts.target.is_some() { app.lastw = lastw; }
                 }
                 if let Some(fmt) = opts.print.as_ref().and(app.print_new.take()) {
                     let line = app.find_pane(&machine, id).map(|(w, p)| crate::format::spans_for_pane(app, &fmt, w, p, ratatui::style::Style::default()).into_iter().map(|s| s.content.into_owned()).collect::<String>()).unwrap_or_default();
                     if let Some(tx) = app.held_reply.take() { let _ = tx.send((vec![line], Vec::new(), 0)); }
                 }
                 if swapped { app.swap_back = None; app.swap_session(back.0); app.fit_panes(); app.save_sessions() }
-                app.toast = None;
+                if opts.target.is_some() && target.is_none() {
+                    app.say("Harness started. Open it from Sessions.", theme::SOFT);
+                } else { app.toast = None; }
             } else {
                 if let Some(tx) = app.held_reply.take().filter(|_| opts.print.is_some()) { app.print_new = None; let _ = tx.send((Vec::new(), vec!["the machine created no harness".into()], 1)); return }
                 if let Some(form_id) = &opts.form_id { crate::new_harness::completed(app, form_id, Some("The machine created no harness — try again".into())); }
@@ -2764,23 +2768,8 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             fill(app, &kind, &mut picker);
             return keep(app, kind, picker);
         }
-        PickerKind::Models => {
-            // (The engine's own models: only Enter switches.)
-            if choice != Choice::Enter { return keep(app, kind, picker) }
-            let Some(model) = id else { return keep(app, kind, picker) };
-            let Some(crate::models::Target { machine, agent, .. }) = crate::models::target(app) else { return };
-            let Some(link) = app.link(&machine) else { return };
-            let label = picker.current().map(|r| r.label.clone()).unwrap_or_default();
-            app.say(format!("Switching to {label}…"), theme::SOFT);
-            app.spawn(async move { link.rpc("agent_update", json!({ "agentId": agent, "selectedModel": model }), Duration::from_secs(60)).await }, move |app, reply| match reply {
-                Ok(reply) => {
-                    if let Some(row) = reply.get("agent") { let key = (machine.clone(), row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string()); let a = crate::fleet::agent_from(&machine, row, app.fleet.agents.get(&key)); app.fleet.agents.insert(key, a); }
-                    crate::models::close(app);
-                    app.say(format!("✓ Now on {label}"), theme::ONLINE);
-                }
-                Err(e) => app.say(format!("Could not switch: {e}"), theme::DANGER),
-            });
-        }
+        // (Every row of the Models view is its own — models.rs — so nothing else is chosen here.)
+        PickerKind::Models => return keep(app, kind, picker),
         PickerKind::Layout => {
             if let Some(id) = id { app.apply_shared_preset(&id) }
         }
@@ -3004,6 +2993,7 @@ pub fn is_command(id: &str) -> bool {
 /// choose-buffer's pick: that buffer pasted into this pane, as paste-buffer -b does.
 pub fn paste_buffer(app: &mut App, name: &str) {
     let Some(text) = app.paste.get(name).map(|b| b.data.clone()) else { return app.say(format!("no buffer {name}"), theme::WARN) };
+    if paste_form(app, &text) { return }
     let Some(focus) = app.focused() else { return };
     paste_into(app, focus, &text, "\r", false);
 }
@@ -3033,7 +3023,8 @@ pub fn paste_into(app: &mut App, pane: u64, text: &str, sep: &str, bracket: bool
 /// over the pane (what fzf in the pane would get: C-b is backward-char, C-a beginning-of-line), to
 /// copy mode through its table (C-b is page-up in copy-mode-vi), else to the pane's program.
 pub fn send_prefix_key(app: &mut App, key: KeyEvent) {
-    if matches!(app.modal, Some(Modal::Picker { .. }) | Some(Modal::Copy { .. })) { return modal_key(app, key) }
+    if matches!(app.modal, Some(Modal::Picker { .. }) | Some(Modal::Copy { .. }) | Some(Modal::NewHarness(_))) { return modal_key(app, key) }
+    if app.home_visible() { return home_key(app, key) }
     // The tree over the pane: it has the key (C-b is page-up there).
     if let Some(pane) = app.focused().filter(|f| app.panes.get(f).map(|p| p.tree_top()).unwrap_or(false)) {
         return crate::tree::key(app, pane, keys::of(&key), None, true);
@@ -3126,7 +3117,11 @@ pub struct NewOpts {
     pub detached: bool, pub name: Option<String>, pub print: Option<String>,
     /// Additional project/permission choices from the interactive draft.
     pub extra: Option<serde_json::Value>, pub form_id: Option<String>,
+    pub target: Option<LaunchTarget>,
 }
+
+#[derive(Clone, Debug)]
+pub(crate) struct LaunchTarget { pub session: u32, pub tab: String }
 
 /// `new-harness [-dP] [-e engine] [-c folder] [-n name] [-F format] [engine] [@machine] [folder]
 /// [task …]`: the engine a known one (else -e's, else Claude Code), the folder a path, and the
@@ -3271,6 +3266,38 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn os_actions_are_unavailable_in_ordinary_hn_and_install_is_live_only() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (80, 24));
+        app.handed_over = true;
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        app.os_session = false;
+        for live in [false, true] {
+            app.os_live = live;
+            assert!(!os_home(&app));
+            for code in [KeyCode::Enter, KeyCode::Char('i'), KeyCode::Char('I'), KeyCode::Char('t'), KeyCode::Char('T'), KeyCode::Char('w'), KeyCode::Char('W')] {
+                assert_eq!(os_home_command(&app, key(code)), None);
+            }
+        }
+        app.os_session = true;
+        app.os_live = false;
+        assert!(!typing(&app), "the OS setup page retains root key bindings");
+        assert_eq!(os_home_command(&app, key(KeyCode::Enter)), Some(Some("/usr/bin/hn-os try")));
+        assert_eq!(os_home_command(&app, key(KeyCode::Char('T'))), Some(None));
+        for code in [KeyCode::Char('i'), KeyCode::Char('I')] {
+            assert_eq!(os_home_command(&app, key(code)), None);
+        }
+        app.os_live = true;
+        for code in [KeyCode::Enter, KeyCode::Char('i'), KeyCode::Char('I')] {
+            assert_eq!(os_home_command(&app, key(code)), Some(Some("sudo /usr/bin/harness install")));
+        }
+        assert_eq!(os_home_command(&app, key(KeyCode::Char('T'))), Some(Some("/usr/bin/hn-os welcome")));
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SUPER] {
+            assert_eq!(os_home_command(&app, KeyEvent::new(KeyCode::Enter, modifiers)), None);
+        }
+    }
+
     #[tokio::test]
     async fn created_harness_stays_in_the_current_window() {
         for existing in 0..=2 {
@@ -3317,6 +3344,49 @@ mod tests {
         assert!(app.find_pane("fixture", "home-shell").is_none());
         let (_, created) = app.find_pane("fixture", "created").unwrap();
         assert_eq!(app.focused(), Some(created));
+    }
+
+    #[tokio::test]
+    async fn a_delayed_launch_fills_its_original_window_without_stealing_the_current_one() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (150, 42));
+        let first = app.tab().id.clone();
+        app.tab_mut().home = true;
+        app.open_agent("fixture", "unused-shell", Placement::Fill(first.clone()));
+        let session = app.session_id;
+        app.new_tab();
+        app.open_agent("fixture", "other-work", Placement::Auto(None));
+        let current = app.tab().id.clone();
+        let focus = app.focused();
+        let lastw = app.lastw.clone();
+        creation_finished(&mut app, "fixture".into(), session,
+            NewOpts { target: Some(LaunchTarget { session, tab: first.clone() }), ..Default::default() },
+            Ok(json!({"agent":{"id":"created", "name":"New harness", "engine":"codex"}})), false);
+        assert_eq!(app.tab().id, current);
+        assert_eq!(app.focused(), focus);
+        assert_eq!(app.lastw, lastw, "a background completion must preserve last-window navigation");
+        assert_eq!(app.tabs.len(), 2);
+        assert!(app.find_pane("fixture", "unused-shell").is_none());
+        let (window, _) = app.find_pane("fixture", "created").unwrap();
+        assert_eq!(app.tabs[window].id, first);
+        assert_eq!(app.tabs[window].panes().len(), 1);
+        assert!(!app.tabs[window].home);
+    }
+
+    #[tokio::test]
+    async fn a_closed_launch_window_does_not_replace_unrelated_work() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (150, 42));
+        app.open_agent("fixture", "other-work", Placement::Auto(None));
+        let before = (app.tab().id.clone(), app.focused());
+        let session = app.session_id;
+        creation_finished(&mut app, "fixture".into(), session,
+            NewOpts { target: Some(LaunchTarget { session, tab: "closed-window".into() }), ..Default::default() },
+            Ok(json!({"agent":{"id":"created", "name":"New harness", "engine":"codex"}})), false);
+        assert_eq!((app.tab().id.clone(), app.focused()), before);
+        assert_eq!(app.tabs.len(), 1);
+        assert!(app.find_pane("fixture", "created").is_none());
+        assert!(app.fleet.agent("fixture", "created").is_some(), "completed work remains available in Sessions");
     }
 
     #[tokio::test]

@@ -84,6 +84,10 @@ export interface SessionSearchResult {
   /** Sessions in the index, and sessions still waiting for their first pass. */
   indexed: number
   pending: number
+  /** False until discovery and its queued first passes have finished. */
+  ready: boolean
+  /** A scan failed; any cached hits are still usable and a later search retries it. */
+  discoveryError?: boolean
   tookMs: number
 }
 
@@ -103,7 +107,11 @@ export interface SessionSearchIndexOptions {
    * Which sessions are open in a running process right now (external.ts `OpenSessions`), so a
    * conversation Harness did not start says whether a terminal still has it. `known` never waits.
    */
-  openSessions?: { known(): ReadonlyMap<string, 'terminal' | 'app' | 'harness' | 'maybe'>; fresh(): Promise<ReadonlyMap<string, 'terminal' | 'app' | 'harness' | 'maybe'>> }
+  openSessions?: {
+    known(): ReadonlyMap<string, 'terminal' | 'app' | 'harness' | 'maybe'>
+    fresh(): Promise<ReadonlyMap<string, 'terminal' | 'app' | 'harness' | 'maybe'>>
+    working?(sessionId: string): Promise<boolean | null>
+  }
   /** Looks again for conversations Harness did not start, before each sweep lists its sources. */
   discover?: () => Promise<unknown>
   /** Between full sweeps. */
@@ -135,6 +143,11 @@ export class SessionSearchIndex {
   private stopped = false
   private sweepTimer: NodeJS.Timeout | null = null
   private sliceStart = 0
+  private initialized = false
+  private discovering = false
+  private discoveryFailed = false
+  private discoveryStartedAt: number | undefined
+  private discoveryFinishedAt: number | undefined
   /** Callers waiting for a session's next pass (`tail`). */
   private readonly waiters = new Map<string, Array<() => void>>()
 
@@ -191,14 +204,29 @@ export class SessionSearchIndex {
 
   /** Queue every known session, newest first; drop sessions whose agent no longer exists. */
   sweep(): void {
-    if (this.stopped) return
+    if (this.stopped || this.discovering) return
+    this.discovering = true
+    this.discoveryFailed = false
+    this.discoveryStartedAt = Date.now()
+    const finish = (failed = false) => {
+      if (this.stopped) { this.discovering = false; return }
+      this.discoveryFailed = failed
+      try { this.sweepSources() }
+      catch (error) {
+        this.discoveryFailed = true
+        this.opts.log?.(`[search] source discovery failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      this.initialized = true
+      this.discovering = false
+      this.discoveryFinishedAt = Date.now()
+    }
     if (this.opts.discover) {
       // Which of them are open, looked at now: a search reads it without waiting.
       void this.opts.openSessions?.fresh().catch(() => undefined)
-      void this.opts.discover().catch(() => undefined).then(() => this.sweepSources())
+      void Promise.resolve().then(() => this.opts.discover!()).then(() => finish(), () => finish(true))
       return
     }
-    this.sweepSources()
+    finish()
   }
 
   private sweepSources(): void {
@@ -218,6 +246,11 @@ export class SessionSearchIndex {
 
   search(query: string, options: { limit?: number; from?: number; to?: number } = {}): SessionSearchResult {
     const started = performance.now()
+    // Opening welcome/search is an explicit demand for current history, including sessions
+    // started since boot. Keep a short cache across typing/retries, not the ten-minute idle sweep.
+    const stale = this.discoveryFinishedAt === undefined || Date.now() - this.discoveryFinishedAt >= 5_000
+    if ((!this.initialized || this.discoveryFailed || stale) && !this.discovering && !this.running &&
+        (this.discoveryStartedAt === undefined || Date.now() - this.discoveryStartedAt >= 1_000)) this.sweep()
     const hits = this.opts.store.search(query, options)
     // Whether a terminal still has it, as last looked: a search never waits for a process table.
     if (hits.some((hit) => hit.external) && this.opts.openSessions) {
@@ -230,7 +263,10 @@ export class SessionSearchIndex {
       }
     }
     const indexed = this.opts.store.counts().sessions
-    return { hits, indexed, pending: this.queue.size, tookMs: Math.round((performance.now() - started) * 10) / 10 }
+    return { hits, indexed, pending: this.queue.size,
+      ready: this.initialized && !this.discovering && !this.discoveryFailed && !this.running && this.queue.size === 0,
+      ...(this.discoveryFailed ? { discoveryError: true } : {}),
+      tookMs: Math.round((performance.now() - started) * 10) / 10 }
   }
 
   /**
@@ -261,7 +297,12 @@ export class SessionSearchIndex {
       // A preview of a conversation Harness did not start says whether a terminal has it, as of now.
       const open = await this.opts.openSessions?.fresh().catch(() => null)
       const where = open?.get(sessionId)
-      tail.external = { title: session.title ?? '', cwd: session.cwd ?? '', origin: session.origin ?? '', open: open?.has(sessionId) ?? false, ...(where ? { openIn: where } : {}) }
+      const working = open?.has(sessionId) ? await this.opts.openSessions?.working?.(sessionId).catch(() => null) : null
+      tail.external = {
+        title: session.title ?? '', cwd: session.cwd ?? '', origin: session.origin ?? '',
+        open: open?.has(sessionId) ?? false, ...(where ? { openIn: where } : {}),
+        ...(typeof working === 'boolean' ? { working } : {}),
+      }
     }
     return tail
   }

@@ -4,7 +4,7 @@
 // `slice(0, 60)` of markdown is a heading and a severed word. What is asserted here is that the cut
 // lands on words a person can read.
 import { describe, expect, it } from 'vitest'
-import { BODY_MAX_CHARS, RECAP_MAX_CHARS, deriveTurnSummary } from './summarize.js'
+import { BODY_MAX_CHARS, RECAP_MAX_CHARS, deriveTurnSummary } from './deviceRecap.js'
 
 const parts = (text: string) => {
   const out = deriveTurnSummary(text)

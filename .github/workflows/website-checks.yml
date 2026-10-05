@@ -54,3 +54,21 @@ jobs:
 
       - name: Production build (standalone, with the pinned Flutter bundle)
         run: npm run build
+
+      - name: Verify production routes and static OS page
+        run: |
+          set -euo pipefail
+          PORT=3000 HOSTNAME=127.0.0.1 node .next/standalone/server.js > /tmp/website-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=false
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/os > /dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != true ]; then cat /tmp/website-server.log; exit 1; fi
+          node scripts/check-os-site.mjs
+          node scripts/check-harness-web.mjs

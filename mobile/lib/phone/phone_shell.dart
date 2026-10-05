@@ -5,14 +5,10 @@ import 'new_device_banner.dart';
 import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/state/app_state.dart';
-import 'package:harness_mobile/viewer/device_log_sync.dart';
 
 import '../p2p/phone_terminal_p2p.dart';
 import 'agent_home.dart';
-import 'device_detail_page.dart';
-import 'device_rows.dart';
 import 'devices_page.dart';
-import 'phone_navigation.dart' show phoneRoute;
 import 'phone_shell_scope.dart';
 
 /// The signed-in phone app: one page stack, rooted in [AgentHome] — the terminal the phone opens
@@ -143,8 +139,8 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   }
 
   /// A tapped "new device" notice: that device's page. One this phone has just been told of opens as
-  /// new; one it no longer lists as new but the account still holds opens plain; one that is gone
-  /// opens the list, which says so by not showing it.
+  /// new (so does one the log still holds as pending); one already seen but still on the account opens
+  /// plain; one that is gone opens the list, which says so by not showing it.
   void _openNoticedDevice() {
     final opened = widget.notifier.agentNotices.system.openedDevice;
     final pub = opened.value;
@@ -153,36 +149,20 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     unawaited(_showDevice(pub));
   }
 
-  Future<void> _showDevice(String pub) async {
+  Future<void> _showDevice(String key) async {
     final navigator = _navigator.currentState;
     if (navigator == null) return;
-    for (final m in widget.notifier.newDevices) {
-      if (m.pub != pub) continue;
-      await navigator.push(
-        phoneRoute(
-          (_) => DeviceDetailPage(
-            notifier: widget.notifier,
-            row: rowFromMember(m),
-            isNew: true,
-          ),
-        ),
-      );
-      return;
+    // A removal by a new device is keyed `removedBy:<signer>:<removed pub>`: it opens the signer.
+    var pub = key;
+    if (key.startsWith('removedBy:')) {
+      final rest = key.substring('removedBy:'.length);
+      final cut = rest.indexOf(':');
+      pub = cut < 0 ? rest : rest.substring(0, cut);
     }
-    final DeviceLogListing listing = await widget.notifier.deviceListing();
-    if (!mounted) return;
-    for (final row in listing.members) {
-      if (row.member.pub != pub) continue;
-      await navigator.push(
-        phoneRoute(
-          (_) => DeviceDetailPage(notifier: widget.notifier, row: row),
-        ),
-      );
-      return;
-    }
-    await navigator.push(
-      phoneRoute((_) => DevicesPage(notifier: widget.notifier)),
-    );
+    // From the log's own listing, never a row made up from the notice: it carries the real
+    // `suspended` and `pending` flags (a tap that launched the app comes before the banner list is
+    // rebuilt from the log, and is still news while the log holds it pending).
+    await openDeviceFromLog(navigator, widget.notifier, pub);
   }
 
   /// Back in the foreground: a p2p retry waiting out its delay fires now, and so does every machine
@@ -271,20 +251,26 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
                   navigator: _navigator,
                 ),
                 Expanded(
-                  child: HeroControllerScope(
-                    controller: _heroController,
-                    child: Navigator(
-                      key: _navigator,
-                      // ⚠️ The controller goes in the SCOPE ONLY, never also in `observers`.
-                      // `NavigatorState._updateEffectiveObservers` appends the scope's controller to
-                      // `widget.observers` itself, so listing it here registers it twice and trips
-                      // "A HeroController can not be shared by multiple Navigators" — which reads
-                      // like a sharing bug and is really a double-subscription by one navigator.
-                      onGenerateRoute: (_) => MaterialPageRoute<void>(
-                        builder: (_) => AgentHome(
-                          notifier: widget.notifier,
-                          openMachineId: _linkedMachineId,
-                          openAgent: _openAgentRequest,
+                  // While a band shows it has taken the status-bar inset, so the pages under it must
+                  // not take it again (a blank gap the height of the notch otherwise).
+                  child: MediaQuery.removePadding(
+                    context: context,
+                    removeTop: NewDeviceBanner.showing(widget.notifier),
+                    child: HeroControllerScope(
+                      controller: _heroController,
+                      child: Navigator(
+                        key: _navigator,
+                        // ⚠️ The controller goes in the SCOPE ONLY, never also in `observers`.
+                        // `NavigatorState._updateEffectiveObservers` appends the scope's controller to
+                        // `widget.observers` itself, so listing it here registers it twice and trips
+                        // "A HeroController can not be shared by multiple Navigators" — which reads
+                        // like a sharing bug and is really a double-subscription by one navigator.
+                        onGenerateRoute: (_) => MaterialPageRoute<void>(
+                          builder: (_) => AgentHome(
+                            notifier: widget.notifier,
+                            openMachineId: _linkedMachineId,
+                            openAgent: _openAgentRequest,
+                          ),
                         ),
                       ),
                     ),

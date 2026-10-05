@@ -3,8 +3,11 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/agent_preference.dart';
+import 'package:harness/core/codex_profiles.dart';
 import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/core/git_worktree.dart';
+import 'package:harness/core/launch_setup.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/core/permission_modes.dart';
 import 'package:harness/core/project_history.dart';
 import 'package:harness/state/app_state.dart';
@@ -210,27 +213,30 @@ void main() {
     },
   );
 
-  test('desktop remembers selected agent and repo before launching', () async {
-    final storage = _Store();
-    final fixture = _Fixture(storage: storage);
-    final box = fixture.open(desktop: true);
-    await _settle();
-    _engine(box, 'claude');
-    box.setFolder('/chosen/project');
-    await _settle();
-    expect(fixture.app.agentPreference.value, 'claude');
-    expect(fixture.app.projectHistory.selected('m'), '/chosen/project');
-    expect(fixture.connections.values.expand((c) => c.creates), isEmpty);
-    final next = fixture.open(engine: null, desktop: true);
-    await _settle();
-    expect(next.engine, 'claude');
-  });
+  test(
+    'desktop ignores cancelled choices when opening the next form',
+    () async {
+      final storage = _Store();
+      final fixture = _Fixture(storage: storage);
+      final box = fixture.open(desktop: true);
+      await _settle();
+      _engine(box, 'claude');
+      box.setFolder('/chosen/project');
+      await _settle();
+      expect(fixture.app.agentPreference.successfulLaunch, isNull);
+      expect(fixture.app.projectHistory.lastLaunched, isNull);
+      expect(fixture.connections.values.expand((c) => c.creates), isEmpty);
+      final next = fixture.open(engine: null, desktop: true);
+      await _settle();
+      expect(next.engine, 'opencode');
+    },
+  );
 
   test(
     'desktop defaults to main with saved worktree off and sends that branch',
     () async {
       final fixture = _Fixture();
-      await fixture.app.projectHistory.selectWorktree('m', '/repo', false);
+      await fixture.app.agentPreference.remember('codex', worktree: false);
       final box = fixture.open(desktop: true);
       await _settle();
       expect(box.worktree, isFalse);
@@ -255,7 +261,7 @@ void main() {
 
   test('desktop does not substitute a remote or different branch for missing local main', () async {
     final fixture = _Fixture();
-    await fixture.app.projectHistory.selectWorktree('m', '/repo', false);
+    await fixture.app.agentPreference.remember('codex', worktree: false);
     final connection = fixture.connections.putIfAbsent(
       'm',
       () => _Connection('m'),
@@ -279,6 +285,233 @@ void main() {
     box.toggleWorktree();
     expect(box.branchRef, 'refs/remotes/origin/main');
   });
+
+  test(
+    'successful desktop choices apply globally after launch and reload',
+    () async {
+      final storage = _Store();
+      final fixture = _Fixture(storage: storage);
+      final box = fixture.open(desktop: true);
+      await _settle();
+      _engine(box, 'claude');
+      _mode(box, 'plan');
+      box.toggleWorktree();
+      expect(fixture.app.agentPreference.successfulLaunch, isNull);
+      expect(fixture.app.agentPreference.successfulWorktree, isNull);
+      expect(await box.create(), NewHarnessOutcome.created);
+      final preferences = AgentPreference(storage);
+      await preferences.load();
+      expect(preferences.successfulLaunch?.engine, 'claude');
+      expect(preferences.successfulLaunch?.permissionMode, 'plan');
+      expect(preferences.successfulWorktree, isFalse);
+      final other = fixture.open(
+        engine: null,
+        folder: '/another',
+        desktop: true,
+      );
+      await _settle();
+      expect(other.engine, 'claude');
+      expect(other.mode, 'plan');
+      expect(other.worktree, isFalse);
+      expect(other.branchRef, 'refs/heads/main');
+      expect(other.task, isEmpty);
+      final history = ProjectHistory(storage);
+      await history.load();
+      expect(history.lastLaunched, (machineId: 'm', folder: '/repo'));
+    },
+  );
+
+  test(
+    'a non-Git launch preserves the last successful worktree preference',
+    () async {
+      final fixture = _Fixture();
+      await fixture.app.agentPreference.remember('codex', worktree: false);
+      final box = fixture.open(
+        engine: 'claude',
+        folder: '/plain',
+        desktop: true,
+      );
+      await _settle();
+      expect(await box.create(), NewHarnessOutcome.created);
+      expect(fixture.app.agentPreference.successfulLaunch?.engine, 'claude');
+      final next = fixture.open(engine: null, desktop: true);
+      await _settle();
+      expect(next.worktree, isFalse);
+    },
+  );
+
+  test(
+    'failed desktop launches leave the last successful setup intact',
+    () async {
+      final fixture = _Fixture();
+      await fixture.app.agentPreference.remember('codex', worktree: true);
+      final box = fixture.open(desktop: true);
+      await _settle();
+      _engine(box, 'claude');
+      _mode(box, 'plan');
+      box.toggleWorktree();
+      fixture.connections['m']!.failure = {
+        'failure': {'code': 'WORKTREE_FAILED', 'detail': 'Fixture failure'},
+      };
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(fixture.app.agentPreference.successfulLaunch?.engine, 'codex');
+      expect(fixture.app.agentPreference.successfulWorktree, isTrue);
+      expect(fixture.app.projectHistory.lastLaunched, isNull);
+    },
+  );
+
+  test(
+    'retrying a prepared worktree remembers the original isolation choice',
+    () async {
+      final fixture = _Fixture();
+      await fixture.app.agentPreference.remember('codex', worktree: false);
+      final connection = fixture.connections.putIfAbsent(
+        'm',
+        () => _Connection('m'),
+      );
+      connection.gitAnswers['/worktrees/repo/task'] = {
+        ..._git,
+        'branch': 'task',
+        'mainFolder': '/repo',
+        'mainBranch': 'feature',
+      };
+      connection.failure = {
+        'preparedFolder': '/worktrees/repo/task',
+        'failure': {'code': 'TMUX_UNAVAILABLE'},
+      };
+      final box = fixture.open(desktop: true);
+      await _settle();
+      box.toggleWorktree();
+      expect(await box.create(), NewHarnessOutcome.failed);
+      await _settle();
+      expect(box.worktree, isFalse);
+      expect(fixture.app.agentPreference.successfulWorktree, isFalse);
+      final retry = fixture.open(draft: box.draft, desktop: true);
+      await _settle();
+      connection.failure = null;
+      expect(await retry.create(), NewHarnessOutcome.created);
+      await _settle();
+      expect(fixture.app.agentPreference.successfulWorktree, isTrue);
+      expect(connection.creates.last['projectSource'], 'branch');
+    },
+  );
+
+  test(
+    'model routes and machine-scoped account references survive reload',
+    () async {
+      final storage = _Store();
+      final preferences = AgentPreference(storage);
+      const model = GridModel(
+        id: 'Qwen-35B',
+        node: 'Studio',
+        grid: 'team-grid',
+      );
+      await preferences.remember(
+        'codex',
+        setup: const LaunchSetup(
+          engine: 'codex',
+          model: model,
+          permissionMode: 'readOnly',
+        ),
+      );
+      var restored = AgentPreference(storage);
+      await restored.load();
+      expect(restored.successfulLaunch?.model?.id, model.id);
+      expect(restored.successfulLaunch?.model?.node, model.node);
+      expect(restored.successfulLaunch?.model?.grid, model.grid);
+      await preferences.remember(
+        'codex',
+        setup: const LaunchSetup(
+          engine: 'codex',
+          profile: LocalCodexProfile('/accounts/work', 'Work'),
+          profileMachineId: 'm',
+        ),
+      );
+      restored = AgentPreference(storage);
+      await restored.load();
+      expect(restored.successfulLaunch?.model, isNull);
+      final fixture = _Fixture(storage: storage, machines: true);
+      final local = fixture.open(engine: null, desktop: true);
+      final remote = fixture.open(
+        engine: null,
+        machine: 'studio',
+        desktop: true,
+      );
+      await _settle();
+      expect(local.draft.profile?.path, '/accounts/work');
+      expect(remote.draft.profile, isNull);
+    },
+  );
+
+  test(
+    'internal utilities cannot replace launch defaults or user projects',
+    () async {
+      final storage = _Store();
+      final preferences = AgentPreference(storage);
+      await preferences.remember('codex', worktree: false);
+      await preferences.remember(
+        'opencode',
+        harnessId: 'autonomous/harness-monitor',
+        worktree: true,
+      );
+      expect(preferences.successfulLaunch?.engine, 'codex');
+      expect(preferences.successfulWorktree, isFalse);
+      expect(preferences.recentChoices, ['codex']);
+      final history = ProjectHistory(storage);
+      await history.select('m', '/repo', launched: true);
+      await history.select(
+        'm',
+        '/harnesses/harness-monitor-2026-09-21-18-41',
+        launched: true,
+      );
+      await history.select('studio', '/just-browsing');
+      expect(history.lastLaunched, (machineId: 'm', folder: '/repo'));
+      expect(history.recent('m'), ['/repo']);
+      // A normal repository with this name remains selectable.
+      await history.select('m', '/projects/harness-monitor', launched: true);
+      expect(history.lastLaunched?.folder, '/projects/harness-monitor');
+    },
+  );
+
+  test(
+    'legacy successful history migrates without using cancelled defaults',
+    () async {
+      final storage = _Store()
+        ..values['new_agent_engine'] = 'claude'
+        ..values['new_agent_recent'] = 'codex';
+      final preferences = AgentPreference(storage);
+      await preferences.load();
+      expect(preferences.successfulLaunch?.engine, 'codex');
+      expect(LaunchSetup.fromJson({'engine': 'terminal'}), isNull);
+      expect(
+        LaunchSetup.fromJson({
+          'engine': 'opencode',
+          'harness': 'autonomous/harness-monitor',
+        }),
+        isNull,
+      );
+      expect(
+        LaunchSetup.fromJson({'engine': 'codex', 'permissionMode': 'plan'})
+            ?.permissionMode,
+        kDefaultPermissionMode,
+      );
+    },
+  );
+
+  test(
+    'migration ignores dropdown-only defaults with no successful launch',
+    () async {
+      final storage = _Store();
+      await AgentPreference(storage).selectLaunch('claude');
+      final restored = AgentPreference(storage);
+      await restored.load();
+      expect(restored.successfulLaunch, isNull);
+      final fixture = _Fixture(storage: storage);
+      final box = fixture.open(engine: null, desktop: true);
+      await _settle();
+      expect(box.engine, 'opencode');
+    },
+  );
 
   test(
     'launch recency interleaves harnesses and agents across reloads',

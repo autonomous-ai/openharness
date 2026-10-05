@@ -24,4 +24,5 @@ and [new-harness-entry-rules.md](design/new-harness-entry-rules.md).
 
 The full visual migration is tracked in
 [desktop-ui-migration.md](design/desktop-ui-migration.md). Preserve core UX,
-controller reuse, keyboard/IME behavior, drafts, pending receipts, and scope.
+controller reuse, keyboard/IME behavior, pending receipts, and scope. Ordinary
+Cmd-N forms start fresh after dismissal; see the entry rules above.

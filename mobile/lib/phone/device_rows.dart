@@ -1,7 +1,4 @@
 import 'package:harness_mobile/core/relative_time.dart';
-import 'package:harness_mobile/e2ee/bytes.dart';
-import 'package:harness_mobile/e2ee/keys.dart' as keys;
-import 'package:harness_mobile/viewer/device_log.dart';
 import 'package:harness_mobile/viewer/device_log_sync.dart';
 
 /// This phone's own row, which the Devices page shows on its own card rather than in the list.
@@ -69,14 +66,4 @@ String deviceDetailLine(
       ? ' · ${row.fingerprint.split('·').first}…'
       : '';
   return '$what · $when$tail';
-}
-
-/// A row for a device only known from its log entry (a new-device notice), with its key code worked
-/// out from the key. Never this phone: a notice is about a device this phone had not trusted.
-DeviceLogRow rowFromMember(DevLogMember m) {
-  var fp = '';
-  try {
-    fp = keys.fingerprint(b64d(m.pub));
-  } catch (_) {}
-  return DeviceLogRow(m, fingerprint: fp, self: false);
 }

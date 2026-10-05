@@ -1,12 +1,75 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/state/harness_placement.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
+import 'package:harness/widgets/swarm_switcher.dart';
 
 import 'swarm_state_test.dart' show createApp;
 
 void main() {
+  testWidgets('Cmd-P ages update without changing order or selection', (
+    tester,
+  ) async {
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    final now = tester.binding.clock.now();
+    app.machineStates['m']!.agents = [
+      Agent(
+        id: 'new',
+        name: 'New work',
+        engine: 'claude',
+        terminalAvailable: true,
+        lastActivityAt: now.subtract(const Duration(seconds: 20)),
+      ),
+      Agent(
+        id: 'viewed',
+        name: 'Old work viewed now',
+        engine: 'codex',
+        terminalAvailable: true,
+        lastActivityAt: now.subtract(const Duration(minutes: 5)),
+        lastOpenedAt: now,
+      ),
+    ];
+    final search = SwarmSearchController(
+      app,
+      const [],
+      adding: true,
+      activityFirst: true,
+    );
+    addTearDown(search.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DesktopChrome(
+          child: Scaffold(
+            body: SwarmSearchResults(
+              search: search,
+              onChoose: (_) {},
+              onRefocus: () {},
+              now: tester.binding.clock.now,
+              showPreview: false,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final order = search.rows.map((row) => row.id).toList();
+    final selected = search.selected?.id;
+    final position = tester.getTopLeft(find.byKey(ValueKey(order.first)));
+    expect(find.text('now'), findsOneWidget);
+    expect(find.text('5m'), findsOneWidget);
+    await tester.pump(const Duration(minutes: 1));
+    expect(find.text('now'), findsNothing);
+    expect(find.text('1m'), findsOneWidget);
+    expect(find.text('6m'), findsOneWidget);
+    expect(search.rows.map((row) => row.id), order);
+    expect(search.selected?.id, selected);
+    expect(tester.getTopLeft(find.byKey(ValueKey(order.first))), position);
+    await tester.pumpWidget(const SizedBox());
+  });
   testWidgets(
     'Open Harness sorts by activity as it opened, and keeps that order while open',
     (tester) async {

@@ -1,0 +1,3 @@
+# Updates use the fixed official channel and root-owned recovery receipts.
+# Exact no-argument commands only: no local bundle, feed URL or arbitrary shell.
+%wheel ALL=(root) NOPASSWD: /usr/bin/harness upgrade, /usr/bin/harness rollback

@@ -1,0 +1,220 @@
+{
+  "schemaVersion": 1,
+  "suiteSha256": "d9b1cd4c9a50327935dde45115afc23e7550a8a1a33c61c1ee0d9a0d3889e430",
+  "reportSha256": "bbad843edd652864b3056692f02eb22f024b6d05792185bb23b359db7458fa20",
+  "evidence": "known_synthetic_textual_support_diagnostic",
+  "independentHumanReview": false,
+  "primaryArm": "scoped_source",
+  "arms": {
+    "scoped_source": {
+      "complete": true,
+      "counts": {
+        "supported_accepted": 9,
+        "supported_withheld": 1,
+        "unsupported_accepted": 2,
+        "unsupported_withheld": 4,
+        "missing_or_incomplete": 0
+      },
+      "mismatches": [
+        {
+          "id": "audit-01f634831f20",
+          "expectedAccepted": false,
+          "accepted": true,
+          "fields": [
+            {
+              "path": "/claim",
+              "label": "entailment",
+              "probabilities": {
+                "entailment": 0.9943957147292484,
+                "neutral": 0.002569570581407891,
+                "contradiction": 0.0030347146893438108
+              }
+            },
+            {
+              "path": "/futureAction",
+              "label": "entailment",
+              "probabilities": {
+                "entailment": 0.9916809626935471,
+                "neutral": 0.005885797569097487,
+                "contradiction": 0.00243323973735552
+              }
+            }
+          ]
+        },
+        {
+          "id": "audit-776a00824696",
+          "expectedAccepted": false,
+          "accepted": true,
+          "fields": [
+            {
+              "path": "/claim",
+              "label": "entailment",
+              "probabilities": {
+                "entailment": 0.9964101868568147,
+                "neutral": 0.0022174080594089454,
+                "contradiction": 0.0013724050837762263
+              }
+            },
+            {
+              "path": "/futureAction",
+              "label": "entailment",
+              "probabilities": {
+                "entailment": 0.9950874762463207,
+                "neutral": 0.004210115301297382,
+                "contradiction": 0.0007024084523821254
+              }
+            }
+          ]
+        },
+        {
+          "id": "audit-8625fb25e3b1",
+          "expectedAccepted": true,
+          "accepted": false,
+          "fields": [
+            {
+              "path": "/claim",
+              "label": "entailment",
+              "probabilities": {
+                "entailment": 0.9851335619381454,
+                "neutral": 0.012693032225825253,
+                "contradiction": 0.0021734058360293727
+              }
+            },
+            {
+              "path": "/futureAction",
+              "label": "neutral",
+              "probabilities": {
+                "entailment": 0.0623700768176642,
+                "neutral": 0.9314433863008773,
+                "contradiction": 0.006186536881458414
+              }
+            }
+          ]
+        }
+      ],
+      "meetsDiagnosticRule": false
+    },
+    "raw_source": {
+      "complete": true,
+      "counts": {
+        "supported_accepted": 8,
+        "supported_withheld": 2,
+        "unsupported_accepted": 2,
+        "unsupported_withheld": 4,
+        "missing_or_incomplete": 0
+      },
+      "mismatches": [
+        {
+          "id": "audit-01f634831f20",
+          "expectedAccepted": false,
+          "accepted": true,
+          "fields": [
+            {
+              "path": "/claim",
+              "label": "entailment",
+              "probabilities": {
+                "entailment": 0.9417256004187542,
+                "neutral": 0.05246203020285324,
+                "contradiction": 0.005812369378392454
+              }
+            },
+            {
+              "path": "/futureAction",
+              "label": "entailment",
+              "probabilities": {
+                "entailment": 0.9871880403403062,
+                "neutral": 0.010066838363767486,
+                "contradiction": 0.002745121295926388
+              }
+            }
+          ]
+        },
+        {
+          "id": "audit-567845832990",
+          "expectedAccepted": true,
+          "accepted": false,
+          "fields": [
+            {
+              "path": "/claim",
+              "label": "neutral",
+              "probabilities": {
+                "entailment": 0.05011978059357923,
+                "neutral": 0.9483185347320404,
+                "contradiction": 0.0015616846743803873
+              }
+            },
+            {
+              "path": "/futureAction",
+              "label": "entailment",
+              "probabilities": {
+                "entailment": 0.9282589847685486,
+                "neutral": 0.0695420604345173,
+                "contradiction": 0.0021989547969341393
+              }
+            }
+          ]
+        },
+        {
+          "id": "audit-776a00824696",
+          "expectedAccepted": false,
+          "accepted": true,
+          "fields": [
+            {
+              "path": "/claim",
+              "label": "entailment",
+              "probabilities": {
+                "entailment": 0.9964534403871781,
+                "neutral": 0.002435375973596361,
+                "contradiction": 0.0011111836392256262
+              }
+            },
+            {
+              "path": "/futureAction",
+              "label": "entailment",
+              "probabilities": {
+                "entailment": 0.9946416195291737,
+                "neutral": 0.004685108185705256,
+                "contradiction": 0.0006732722851209978
+              }
+            }
+          ]
+        },
+        {
+          "id": "audit-8625fb25e3b1",
+          "expectedAccepted": true,
+          "accepted": false,
+          "fields": [
+            {
+              "path": "/claim",
+              "label": "entailment",
+              "probabilities": {
+                "entailment": 0.9348767029492103,
+                "neutral": 0.06221711820253616,
+                "contradiction": 0.0029061788482534915
+              }
+            },
+            {
+              "path": "/futureAction",
+              "label": "neutral",
+              "probabilities": {
+                "entailment": 0.039171126955862605,
+                "neutral": 0.9551708391122512,
+                "contradiction": 0.005658033931886321
+              }
+            }
+          ]
+        }
+      ],
+      "meetsDiagnosticRule": false
+    }
+  },
+  "attemptedPairs": 69,
+  "completedPairs": 69,
+  "completedProposalDurationMs": {
+    "count": 32,
+    "median": 90.94037549220957,
+    "max": 119.64170896681026
+  },
+  "decision": "reject_candidate",
+  "productionChange": false
+}

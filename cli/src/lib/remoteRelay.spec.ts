@@ -627,6 +627,20 @@ describe('RemoteRelayPool shares one upstream between every local client selecte
     clearTimeout(entry.lingerTimer!)
   })
 
+  it.each(['device_key_added', 'device_key_removed', 'device_conflict', 'device_keys_changed'])(
+    'a %s frame from the remote machine never reaches the local app: those notices are this daemon\'s own', async (type) => {
+      const { pool, entry } = poolWithEntry()
+      const app = sink()
+      await pool.acquire('m1', 'env', { type: 'machine_select', payload: {} }, app, vi.fn())
+      app.sendFrame.mockClear()
+      // Delivered as far as the sender knows (the client is not dropped for it), but not forwarded.
+      expect(entry.sink!.sendFrame({ type, payload: { pub: 'evil' } })).toBe(true)
+      expect(app.sendFrame).not.toHaveBeenCalled()
+      expect(entry.attached.size).toBe(1)
+      entry.sink!.sendFrame({ type: 'agent_created', payload: {} })
+      expect(app.sendFrame).toHaveBeenCalledWith({ type: 'agent_created', payload: {} })
+    })
+
   it('a client whose socket refuses a frame is dropped; the rest keep receiving', async () => {
     const { pool, entry } = poolWithEntry()
     const live = sink()

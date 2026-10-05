@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/state/pane_preset.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/terminal/terminal_binary.dart';
@@ -19,6 +20,11 @@ import 'workspace_activity_test.dart' show captureWorkspace;
 
 void main() {
   final capture = Platform.environment['HARNESS_PANE_FOCUS_CAPTURE_DIR'];
+  setUp(() {
+    final previous = appearancePrefsStore.value;
+    addTearDown(() => appearancePrefsStore.value = previous);
+    appearancePrefsStore.value = previous.copyWith(shadeInactivePanes: true);
+  });
   setUpAll(() async {
     await loadRealFonts();
     if (capture != null && Platform.isMacOS) {

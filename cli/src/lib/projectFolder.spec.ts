@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseProjectFolder, prepareProjectFolder, ProjectFolderError } from './projectFolder.js'
+import { parseProjectFolder, prepareProjectFolder, ProjectFolderError, projectsRoot } from './projectFolder.js'
 
 describe('project folder preparation', () => {
   let root: string
@@ -101,4 +101,14 @@ describe('project folder preparation', () => {
     expect(await readFile(join(root, 'repo', 'draft'), 'utf8')).toBe('keep me')
     expect(await readdir(root)).toEqual(['repo'])
   })
+})
+
+// The OS chooses a familiar project root without changing other hn installations.
+it('uses lowercase projects only in the explicit Harness OS environment', () => {
+  try {
+    vi.stubEnv('HARNESS_OS', '1')
+    expect(projectsRoot('/home/me')).toBe('/home/me/projects')
+    vi.stubEnv('HARNESS_OS', '')
+    expect(projectsRoot('/Users/me')).toBe('/Users/me/harnesses')
+  } finally { vi.unstubAllEnvs() }
 })

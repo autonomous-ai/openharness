@@ -1,5 +1,6 @@
-import { existsSync, linkSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { registry, type RegisteredSession } from './registry.js'
@@ -38,6 +39,95 @@ beforeEach(() => {
 afterEach(() => { for (const row of registry.list()) registry.removeAgent(row.agentId); rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks() })
 const review = () => service.request({ ...target, mode: 'inspect' })
 const remove = (reviewId: unknown) => service.request({ ...target, mode: 'delete', reviewId: String(reviewId) })
+
+it('workspace inspection is read-only and binds the selected session identity', async () => {
+  expect(await service.worktreeRequest({ ...target, mode: 'describe' })).toMatchObject({ workspace: { kind: 'folder', path: realpathSync(session.cwd!), canDelete: false } })
+  expect(await service.worktreeRequest({ ...target, sessionId: 'different', mode: 'describe' })).toHaveProperty('error')
+  expect(stop).not.toHaveBeenCalled(); expect(deleted).not.toHaveBeenCalled()
+  expect(existsSync(session.transcriptPath!)).toBe(true)
+})
+
+describe('selected session and worktree cleanup', () => {
+  const choices = (sessionData: boolean, worktreeData: boolean) => ({ sessionData, worktreeData })
+  const treeReview = () => ({ path: join(root, 'temporary'), main: session.cwd!, branch: 'feature', head: 'commit',
+    bytes: 1e9, dirty: false, changes: [], signature: 'tree-review', dev: 1, ino: 2 })
+  it('deletes both real selected stores while keeping the main checkout and committed branch', async () => {
+    const main = session.cwd!, tree = join(root, 'real-worktree')
+    const git = (...args: string[]) => execFileSync('git', ['-C', main, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+      '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { encoding: 'utf8' })
+    git('init', '--quiet', '-b', 'main'); git('add', '.'); git('commit', '--quiet', '-m', 'main project')
+    git('worktree', 'add', '--quiet', '-b', 'feature', tree)
+    session.cwd = tree
+    const plan = await service.request({ ...target, mode: 'inspect', includeWorktree: true })
+    expect(plan).toMatchObject({ choices: { sessionData: { available: true }, worktreeData: { available: true, path: realpathSync(tree) } } })
+    expect(await service.request({ ...target, mode: 'delete', reviewId: String(plan.reviewId), choices: choices(true, true), path: realpathSync(tree) })).toMatchObject({ deleted: true, worktreeDeleted: true, sessionDeleted: true })
+    expect(existsSync(tree)).toBe(false); expect(existsSync(session.transcriptPath!)).toBe(false)
+    expect(existsSync(join(main, 'project.txt'))).toBe(true)
+    expect(git('show', 'feature:project.txt')).toBe('project files stay')
+  })
+  it.each([[true, false], [false, true], [true, true]])('only deletes the selected data: session %s, worktree %s', async (sessionData, worktreeData) => {
+    const tree = treeReview()
+    vi.spyOn(worktrees, 'inspectWorktree').mockResolvedValue(tree)
+    const eraseTree = vi.spyOn(worktrees, 'removeReviewedWorktree').mockImplementation(async () => {
+      expect(service.busy(session.agentId)).toBe(true)
+      expect(service.blocksFolder(tree.path)).toBe(true)
+      expect(stopped.beginResume(session.agentId)).toBeNull()
+    })
+    const plan = await service.request({ ...target, mode: 'inspect', includeWorktree: true })
+    expect(plan).toMatchObject({ choices: { sessionData: { available: true, paths: [realpathSync(session.transcriptPath!)] }, worktreeData: { available: true, path: tree.path } } })
+    expect(stop).not.toHaveBeenCalled(); expect(eraseTree).not.toHaveBeenCalled()
+    const result = await service.request({ ...target, mode: 'delete', reviewId: String(plan.reviewId), choices: choices(sessionData, worktreeData), path: tree.path })
+    expect(result).toMatchObject({ deleted: true, sessionDeleted: sessionData, worktreeDeleted: worktreeData, historyKept: !sessionData })
+    expect(stop).toHaveBeenCalledOnce()
+    expect(eraseTree).toHaveBeenCalledTimes(worktreeData ? 1 : 0)
+    expect(existsSync(session.transcriptPath!)).toBe(!sessionData)
+    expect(existsSync(join(session.cwd!, 'project.txt'))).toBe(true)
+    expect(stopped.get(session.agentId) !== null).toBe(!sessionData)
+  })
+  it('refuses unreviewed, protected, empty or dirty selections before stopping', async () => {
+    for (const scenario of ['legacy', 'protected', 'empty', 'dirty', 'path']) {
+      vi.restoreAllMocks()
+      const tree = { ...treeReview(), dirty: scenario === 'dirty', changes: ['?? draft'] }
+      vi.spyOn(worktrees, 'inspectWorktree').mockImplementation(async () => {
+        if (scenario === 'protected') throw new Error('Main project folder is protected.')
+        return tree
+      })
+      const eraseTree = vi.spyOn(worktrees, 'removeReviewedWorktree')
+      const plan = await service.request({ ...target, mode: 'inspect', includeWorktree: scenario !== 'legacy' })
+      const result = await service.request({ ...target, mode: 'delete', reviewId: String(plan.reviewId), choices: choices(false, scenario !== 'empty'), path: scenario === 'path' ? '/wrong' : tree.path })
+      expect(result).toHaveProperty('error')
+      expect(stop).not.toHaveBeenCalled(); expect(eraseTree).not.toHaveBeenCalled()
+      expect(existsSync(session.transcriptPath!)).toBe(true)
+    }
+  })
+  it('can clean a worktree while unavailable conversation data is kept', async () => {
+    const tree = treeReview()
+    vi.spyOn(worktrees, 'inspectWorktree').mockResolvedValue(tree)
+    vi.spyOn(worktrees, 'removeReviewedWorktree').mockResolvedValue()
+    const originalPath = session.transcriptPath!
+    session.transcriptPath = join(root, 'unverified-history')
+    const plan = await service.request({ ...target, mode: 'inspect', includeWorktree: true })
+    expect(plan).toMatchObject({ choices: { sessionData: { available: false }, worktreeData: { available: true } } })
+    expect(await service.request({ ...target, mode: 'delete', reviewId: String(plan.reviewId), choices: choices(false, true), path: tree.path })).toMatchObject({ deleted: true, historyKept: true })
+    expect(existsSync(originalPath)).toBe(true)
+  })
+  it('reports completed worktree deletion when subsequent history deletion fails, without retrying', async () => {
+    const tree = treeReview()
+    vi.spyOn(worktrees, 'inspectWorktree').mockResolvedValue(tree)
+    const eraseTree = vi.spyOn(worktrees, 'removeReviewedWorktree').mockImplementation(async () => {
+      renameSync(session.transcriptPath!, session.transcriptPath! + '.old')
+      writeFileSync(session.transcriptPath!, 'replacement must stay')
+    })
+    const plan = await service.request({ ...target, mode: 'inspect', includeWorktree: true })
+    const request = { ...target, mode: 'delete' as const, reviewId: String(plan.reviewId), choices: choices(true, true), path: tree.path }
+    const result = await service.request(request)
+    expect(result).toMatchObject({ error: 'DELETE_REFUSED', worktreeDeleted: true })
+    expect(result.detail).toContain('worktree was deleted')
+    expect(existsSync(session.transcriptPath!)).toBe(true)
+    expect(await service.request(request)).toHaveProperty('error')
+    expect(eraseTree).toHaveBeenCalledOnce()
+  })
+})
 
 it('previews without stopping, then deletes only reviewed history and checkpoints', async () => {
   await checkpoints.save(session, { screen: 'saved terminal' })

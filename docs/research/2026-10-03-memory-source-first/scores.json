@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "suiteSha256": "d9b1cd4c9a50327935dde45115afc23e7550a8a1a33c61c1ee0d9a0d3889e430",
+  "reportSha256": "2b0e922af4e6e22f99081b0b4f9661af8a1424fc4fa080c6169569d6300f8762",
+  "planSha256": "a258503c0110960505468b2d4929dcd3e601c4a7d64ebcb7b1c14da5b8dfc156",
+  "evidence": "known_synthetic_development_diagnostic",
+  "labelAuthor": {
+    "kind": "implementing_agent",
+    "independent": false
+  },
+  "complete": false,
+  "expectedCases": 16,
+  "validReviews": 4,
+  "confusion": {
+    "unsupported->supported": 1,
+    "unsupported->unsupported": 1,
+    "supported->supported": 2,
+    "unsupported->invalid": 1,
+    "supported->missing_review": 8,
+    "unsupported->missing_review": 3
+  },
+  "mismatches": [
+    {
+      "id": "audit-01f634831f20",
+      "expected": "unsupported",
+      "actual": "supported",
+      "note": "The source withholds approval and says measurement is pending; it does not verify an unset implementation or permanently rule out a two-second value. The claim/action leave these distinctions insufficiently explicit. Review conservatively rejects the record rather than treating unresolved approval as a prohibition or observed state."
+    },
+    {
+      "id": "audit-4d25c6f7134d",
+      "expected": "unsupported",
+      "actual": "invalid",
+      "note": "A request does not establish implemented or working behavior."
+    },
+    {
+      "id": "audit-50d82bed0606",
+      "expected": "supported",
+      "actual": "missing_review",
+      "note": "Preserves the compact-navigation default together with the explicit manual expansion/current-visit allowance, without converting application state into a coding-task filter."
+    },
+    {
+      "id": "audit-567845832990",
+      "expected": "supported",
+      "actual": "missing_review",
+      "note": "Retains the explicit log-preservation request and leaves placement undecided rather than choosing the footer or Run location."
+    },
+    {
+      "id": "audit-776a00824696",
+      "expected": "unsupported",
+      "actual": "missing_review",
+      "note": "The component boundary is preserved, but the record adds only Cancel and Save copy. Naming two retained options and two removals does not establish an exhaustive inventory in a bounded excerpt. The original only qualifies the scope of the change, not the allowed options."
+    },
+    {
+      "id": "audit-8625fb25e3b1",
+      "expected": "supported",
+      "actual": "missing_review",
+      "note": "Preserves the adopted completed-log retention policy and exact 14-day duration. Treat the present-tense claim as the labelled policy, not a verified implementation observation."
+    },
+    {
+      "id": "audit-989f8e0009a9",
+      "expected": "supported",
+      "actual": "missing_review",
+      "note": "Faithful project-scoped requested behavior; no unstated reason or implementation claim."
+    },
+    {
+      "id": "audit-9a0077092e24",
+      "expected": "supported",
+      "actual": "missing_review",
+      "note": "Faithful project-scoped requested behavior; no unstated reason or implementation claim."
+    },
+    {
+      "id": "audit-9cec6f971b07",
+      "expected": "unsupported",
+      "actual": "missing_review",
+      "note": "The request gives no accessibility diagnosis, tool use or reason."
+    },
+    {
+      "id": "audit-9efa67f8c22f",
+      "expected": "supported",
+      "actual": "missing_review",
+      "note": "Faithful project-scoped requested behavior; no unstated reason or implementation claim."
+    },
+    {
+      "id": "audit-a65781ef836b",
+      "expected": "supported",
+      "actual": "missing_review",
+      "note": "The stated compact-navigation default is supported and scoped correctly. It does not itself forbid an override, but the separately required manual-expansion/current-visit behavior is absent from the retained record and recall."
+    },
+    {
+      "id": "audit-bb84d91e6745",
+      "expected": "unsupported",
+      "actual": "missing_review",
+      "note": "A project-specific preference is promoted to a personal default and made unconditional."
+    },
+    {
+      "id": "audit-dfb13cf95cfc",
+      "expected": "supported",
+      "actual": "missing_review",
+      "note": "Retains the concrete behavior requested in a polite question. It stays scoped to the review tool and supplies no invented reason or implementation verification."
+    }
+  ],
+  "inferenceCalls": 16,
+  "answeredCalls": 15,
+  "callsWithoutSavedAnswer": 1,
+  "usageForAnsweredCalls": {
+    "prompt_tokens": 9690,
+    "completion_tokens": 7383,
+    "total_tokens": 17073
+  },
+  "sourceDurationMs": {
+    "count": 10,
+    "median": 23623.0,
+    "max": 27080
+  },
+  "reviewDurationMs": {
+    "count": 5,
+    "median": 75921,
+    "max": 79965
+  },
+  "unamortizedSourcePlusReviewMs": {
+    "count": 4,
+    "median": 102261.5,
+    "max": 106955
+  },
+  "decision": "reject_candidate",
+  "productionChange": false
+}

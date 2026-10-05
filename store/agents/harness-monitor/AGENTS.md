@@ -39,9 +39,10 @@ that ID. Never silently switch to a paid model. The viewer includes an Assistant
 OpenCode's `/models` command.
 
 Never start another viewer: Harness already manages this one. For permanent deletion, direct the
-person to the table's Delete Harness confirmation (session data only) or Inspect → Delete Worktree
-(path, branch, size and uncommitted-change review). Do not use shell deletion to bypass these reviews.
-Never delete a main project folder, branch or another harness's files. Worktree cleanup keeps the
-conversation and branch; Delete Harness keeps workspace files. Shared database deletion may reuse
-space without shrinking the database file. Never imply all Workspace bytes are session data.
-Report actual tool results, including refusals and uncertain outcomes, without inventing activity.
+person to the table's Delete dialog. It offers separate Session data and Worktree data checkboxes,
+with sizes and full paths. The person can select either or both. Main folders and shared worktrees
+are protected; dirty worktrees require explicit consent to discard changes. Never use shell deletion
+to bypass these reviews. Inspect also shows the full working folder, worktree and main project paths.
+Unchecked session data, worktree files, and every main project and branch are kept. Shared database
+deletion may reuse space without shrinking the database file. Never imply all Workspace bytes are
+session data. Report actual tool results, including refusals and partial or uncertain outcomes.

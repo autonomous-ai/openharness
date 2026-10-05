@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/settings/sections/account_device_detail.dart';
 import 'package:harness/shared/widgets/fingerprint_text.dart';
 import 'package:harness/state/account_devices.dart';
+import 'package:harness/theme/app_theme.dart' show AppColors;
 
 import 'support/devices_app.dart';
 
@@ -52,6 +53,27 @@ void main() {
     await tester.pump();
     return mine;
   }
+
+  testWidgets(
+    'a device the log still has as new offers It’s mine even when the caller did not say so',
+    (tester) async {
+      // A notification's click lands before the banner has been rebuilt from the log.
+      final mine = await open(
+        tester,
+        pub: 'p1',
+        device: fakeDevice('p1', pending: true),
+      );
+      await tester.tap(find.byKey(const Key('device-detail-mine')));
+      await tester.pump();
+      expect(app.dismissCalls, [('p1', false)]);
+      expect(mine, ['p1']);
+    },
+  );
+
+  testWidgets('a device that is not new offers no It’s mine', (tester) async {
+    await open(tester, pub: 'p1', device: fakeDevice('p1'));
+    expect(find.byKey(const Key('device-detail-mine')), findsNothing);
+  });
 
   testWidgets(
     'an app: kind, added, last active, the code and how to check it on the app',
@@ -126,8 +148,61 @@ void main() {
     await tester.pump();
     expect(app.newDevices, isEmpty);
     expect(mine, ['p1']);
+    // Nothing here said the key is suspended, so "mine" lifts nothing.
+    expect(app.dismissCalls, [('p1', false)]);
     expect(find.text(fp), findsNothing);
   });
+
+  testWidgets(
+    'It’s mine on a suspended device, whose Suspended text is shown, lifts the suspension',
+    (tester) async {
+      app.newDevices.add(
+        const NewDeviceNotice(
+          pub: 'sus',
+          label: 'Odd Mac',
+          kind: 'viewer',
+          suspended: true,
+        ),
+      );
+      await open(
+        tester,
+        pub: 'sus',
+        device: fakeDevice('sus', suspended: true),
+        isNew: true,
+      );
+      expect(find.byKey(const Key('device-detail-suspended')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('device-detail-mine')));
+      await tester.pump();
+      expect(app.dismissCalls, [('sus', true)]);
+    },
+  );
+
+  testWidgets(
+    'It’s mine before the device has loaded (so no Suspended text) keeps the suspension',
+    (tester) async {
+      // Opened from the banner's Review: the list that says the key is suspended has not answered, and
+      // whoever delays it must not get the suspension lifted for a page that never showed it.
+      app.loadGate = Completer<void>();
+      app.newDevices.add(
+        const NewDeviceNotice(
+          pub: 'sus',
+          label: 'Odd Mac',
+          kind: 'viewer',
+          suspended: true,
+        ),
+      );
+      app.devices = AccountDevices(
+        devices: [fakeDevice('sus', suspended: true)],
+      );
+      await open(tester, pub: 'sus', isNew: true);
+      expect(find.byKey(const Key('device-detail-suspended')), findsNothing);
+      await tester.tap(find.byKey(const Key('device-detail-mine')));
+      await tester.pump();
+      expect(app.dismissCalls, [('sus', false)]);
+      app.loadGate!.complete();
+      await tester.pump();
+    },
+  );
 
   testWidgets('Remove asks first; a no leaves the device alone', (
     tester,
@@ -169,11 +244,19 @@ void main() {
     await tester.pump();
     expect(app.removed, ['p1']);
     expect(
-      find.text("Couldn't remove iPad (UNAVAILABLE). Try again."),
+      find.text('Couldn’t remove iPad (UNAVAILABLE). Try again.'),
       findsOneWidget,
     );
     expect(find.text(fp), findsOneWidget);
     expect(find.text('Remove'), findsOneWidget);
+    // A failure, not a state to review again: red.
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('device-detail-error')))
+          .style
+          ?.color,
+      AppColors.danger,
+    );
   });
 
   testWidgets(

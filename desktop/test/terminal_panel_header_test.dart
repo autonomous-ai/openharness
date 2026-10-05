@@ -24,20 +24,104 @@ class _PrNotifier extends AppNotifier {
         authSession: AuthSession(),
         configStore: null,
       );
+  int prReads = 0;
   @override
   Future<Map<String, dynamic>> readAgentPullRequest(
     String machineId,
     String agentId,
-  ) async => {
-    'status': 'found',
-    'number': 260,
-    'state': 'Draft',
-    'url': 'https://github.com/autonomous-ai/openharness/pull/260',
-  };
+  ) async {
+    prReads++;
+    return {
+      'status': 'found',
+      'number': 260,
+      'state': 'Draft',
+      'url': 'https://github.com/autonomous-ai/openharness/pull/260',
+    };
+  }
+}
+
+/// Shared by the VM and native fixture: exercise the retained terminal header's
+/// actual visibility and foreground wiring with synthetic requests only.
+Future<void> verifyPanePrVisibility(WidgetTester tester) async {
+  final notifier = _PrNotifier();
+  final session = TerminalSession(
+    machineId: 'local',
+    agentId: 'agent-1',
+    agentName: 'Fixture',
+    engineId: 'codex',
+    send: (_, _) async => true,
+    sendBinary: (_) async => true,
+  )..status = TerminalSessionStatus.controlling;
+  notifier.machineStates['local'] = MachineState(
+    const Machine(
+      machineId: 'local',
+      name: 'Fixture',
+      authMode: MachineAuthMode.remote,
+    ),
+  );
+  void branch(String name) {
+    notifier.machineStates['local']!.agents = [
+      Agent(
+        id: 'agent-1',
+        name: 'Fixture',
+        engine: 'codex',
+        project: AgentProject(name: 'fixture', cwd: '/fixture', branch: name),
+      ),
+    ];
+  }
+
+  Widget frame(bool visible) => MaterialApp(
+    home: Scaffold(
+      body: SizedBox(
+        width: 900,
+        height: 320,
+        child: TerminalPanel(
+          notifier: notifier,
+          session: session,
+          focused: true,
+          visible: visible,
+        ),
+      ),
+    ),
+  );
+  try {
+    branch('first');
+    notifier.appLifecycleChanged(AppLifecycleState.hidden);
+    await tester.pumpWidget(frame(false));
+    await tester.pump();
+    expect(notifier.prReads, 0);
+    notifier.appLifecycleChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(notifier.prReads, 0);
+    await tester.pumpWidget(frame(true));
+    await tester.pump();
+    expect(notifier.prReads, 1);
+    expect(find.text('#260 Draft'), findsOneWidget);
+    notifier.appLifecycleChanged(AppLifecycleState.hidden);
+    branch('second');
+    await tester.pumpWidget(frame(true));
+    await tester.pump();
+    expect(notifier.prReads, 1);
+    expect(find.text('#260 Draft'), findsNothing);
+    notifier.appLifecycleChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(notifier.prReads, 2);
+    await tester.pump();
+    expect(find.text('#260 Draft'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  } finally {
+    await tester.pumpWidget(const SizedBox());
+    session.dispose();
+    notifier.dispose();
+  }
 }
 
 void main() {
   setUpAll(loadRealFonts);
+  testWidgets(
+    'retained terminal header respects pane and app visibility',
+    verifyPanePrVisibility,
+  );
   TerminalSession sessionNamed(String name) {
     final session = TerminalSession(
       machineId: 'local',

@@ -114,6 +114,7 @@ void main() {
         addTearDown(() => newHarnessOpensInBox = false);
         final app = createApp();
         seedMixedAgents(app);
+        await app.agentPreference.remember('claude');
         final map = MemoryKeymap();
         addTearDown(app.dispose);
         addTearDown(map.dispose);
@@ -129,7 +130,7 @@ void main() {
           'm',
           prompt: prompt,
         );
-        await tester.pump();
+        await tester.pumpAndSettle();
         final box = tester
             .widget<NewHarnessForm>(find.byType(NewHarnessForm))
             .controller;
@@ -151,7 +152,7 @@ void main() {
   }
 
   testWidgets(
-    'returning from Store restores the creation draft and selected project',
+    'returning from Store starts fresh without changing project history',
     (tester) async {
       newHarnessOpensInBox = true;
       addTearDown(() => newHarnessOpensInBox = false);
@@ -191,11 +192,11 @@ void main() {
       final resumed = tester
           .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
-      expect(resumed.task, draft.task);
+      expect(resumed.task, isEmpty);
       expect(resumed.engine, draft.engine);
       expect(resumed.machineId, draft.machineId);
-      expect(resumed.project.folder, draft.project.folder);
-      expect(app.projectHistory.selected('m'), '/work/project');
+      expect(resumed.projectFolderRequest!.isGenerated, isTrue);
+      expect(app.projectHistory.selected('m'), '/work/saved');
       await key(tester, LogicalKeyboardKey.escape);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());

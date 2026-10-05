@@ -106,6 +106,14 @@ function binaryBytes(raw: RawData): Uint8Array {
   return new Uint8Array()
 }
 
+/**
+ * Frames only THIS machine's own daemon says to its own windows (the device key log's notices). A
+ * remote machine is not that daemon: if its frame reached the local app as-is, the app would show a
+ * "new device" / "removed by" band as though this machine had verified it. Dropped on the way in,
+ * sealed or not.
+ */
+export const DAEMON_LOCAL_ONLY_TYPES: ReadonlySet<string> = new Set(['device_key_added', 'device_key_removed', 'device_conflict', 'device_keys_changed'])
+
 /** One local client attached to a pooled upstream: where its frames go, and what to tell it on close. */
 interface AttachedClient {
   sink: LocalClientSink
@@ -122,6 +130,8 @@ function bindAttached(entry: Entry): void {
   if (clients.size === 0) { entry.sink = null; entry.onClosed = null; return }
   entry.sink = {
     sendFrame: (frame) => {
+      // Not delivered, and not a refusal either: nobody is dropped for a frame that never goes out.
+      if (typeof frame.type === 'string' && DAEMON_LOCAL_ONLY_TYPES.has(frame.type)) return true
       let delivered = false
       for (const client of [...clients]) {
         if (client.sink.sendFrame(frame)) delivered = true

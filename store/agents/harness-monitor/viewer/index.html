@@ -39,19 +39,24 @@
   <dialog id="inspector" aria-labelledby="inspect-title">
     <div class="dialog-heading"><h2 id="inspect-title">Harness details</h2><button id="inspect-close" aria-label="Close details">Close</button></div>
     <p id="inspect-context" class="muted"></p><div id="inspect-content"></div>
-    <div class="dialog-actions"><button id="inspect-worktree" class="danger">Delete Worktree…</button><button id="inspect-stop">Stop Harness</button><button id="inspect-delete" class="danger">Delete Harness</button></div>
+    <div class="dialog-actions"><button id="inspect-stop">Stop</button><button id="inspect-delete" class="danger">Delete</button></div>
   </dialog>
   <dialog id="stop-dialog" aria-labelledby="stop-title">
     <h2 id="stop-title">Stop harness?</h2><p id="stop-context"></p><p id="stop-description"></p><p id="stop-storage" class="muted"></p>
-    <div id="worktree-review" hidden>
-      <dl id="worktree-details" class="worktree-details"></dl>
+    <div id="delete-choices" hidden>
+      <section class="delete-choice">
+        <label><input id="delete-session" type="checkbox" disabled> <strong>Session data</strong> <span id="delete-session-size"></span></label>
+        <div id="delete-session-paths" class="delete-paths"></div><p id="delete-session-note" class="muted"></p>
+      </section>
+      <section class="delete-choice">
+        <label><input id="delete-worktree" type="checkbox" disabled> <strong>Worktree data</strong> <span id="delete-worktree-size"></span></label>
+        <div id="delete-worktree-path" class="delete-paths"></div><p id="delete-worktree-note" class="muted"></p>
+      </section>
       <pre id="worktree-changes" hidden></pre>
       <label id="worktree-discard-label" hidden><input id="worktree-discard" type="checkbox"> Permanently discard all uncommitted changes and untracked files.</label>
-      <label for="worktree-path">Type the full worktree path to confirm</label>
-      <input id="worktree-path" type="text" autocomplete="off" spellcheck="false">
     </div>
     <p id="stop-result" role="status" aria-live="polite"></p>
-    <div class="dialog-actions"><button id="stop-cancel" autofocus>Cancel</button><button id="stop-confirm" class="danger filled">Stop Harness</button></div>
+    <div class="dialog-actions"><button id="stop-cancel" autofocus>Cancel</button><button id="stop-confirm" class="danger filled">Stop</button></div>
   </dialog>
   <script type="module" src="app.js"></script>
 </body>

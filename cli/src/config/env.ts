@@ -294,7 +294,7 @@ const envSchema = z.object({
   // Path to the `kilo` CLI for Kilo recap one-shots (else `kilo` is resolved from PATH). `@kilocode/cli`
   // also installs it as `kilocode`; both are the same file.
   KILO_PATH: z.string().optional(),
-  // Path to the xAI Grok CLI for interactive sessions and recap one-shots.
+  // Path to the xAI Grok CLI for interactive sessions and voice-router one-shots.
   GROK_PATH: z.string().optional(),
   // Path to the GitHub Copilot CLI. Two builds answer to `copilot` on a typical machine — a compiled
   // binary and the npm loader script — so an override is worth having.
@@ -302,46 +302,6 @@ const envSchema = z.object({
   // Path to the Antigravity CLI. Two binaries answer to `agy` on a typical PATH — the CLI itself and
   // the Antigravity IDE launcher — so an override is worth having.
   AGY_PATH: z.string().optional(),
-  // Model for the device turn-recap one-shot.
-  SUMMARY_MODEL: z.string().default('sonnet'),
-  // Balanced Codex counterpart used only for recap workers; never inherits the interactive CLI model.
-  CODEX_SUMMARY_MODEL: z.string().default('gpt-5.5'),
-  // Cursor's Auto model keeps recap availability aligned with the user's Cursor account.
-  CURSOR_SUMMARY_MODEL: z.string().default('auto'),
-  // OpenCode recap model (`provider/model`). Empty → use the user's opencode config default model.
-  OPENCODE_SUMMARY_MODEL: z.string().default(''),
-  // Kilo recap model (`provider/model` as `kilo models` prints it). Empty → the user's kilo default.
-  KILO_SUMMARY_MODEL: z.string().default(''),
-  // Grok recap model. Empty → use the user's Grok CLI default model.
-  GROK_SUMMARY_MODEL: z.string().default(''),
-  // Copilot recap model. Empty -> `auto`, which lets Copilot pick and keeps the user's credit policy.
-  COPILOT_SUMMARY_MODEL: z.string().default(''),
-  // Antigravity recap model (a slug from `agy models`). Flash at low effort: a recap is a short
-  // summarisation of text already in hand, so the cheapest tier in the catalog is the right one.
-  AGY_SUMMARY_MODEL: z.string().default('gemini-3.7-flash-low'),
-  // Pi recap model (`provider/model` or a model pattern). Empty → use the user's pi config default.
-  PI_SUMMARY_MODEL: z.string().default(''),
-  // Hermes recap model. Empty → use the user's ~/.hermes/config.yaml default (keeps their provider).
-  HERMES_SUMMARY_MODEL: z.string().default(''),
-  // Command Code recap model. Empty → use the user's own account default.
-  COMMANDCODE_SUMMARY_MODEL: z.string().default(''),
-  // Devin recap model. Empty → use the user's own account default (their plan decides what is available).
-  DEVIN_SUMMARY_MODEL: z.string().default(''),
-  MUSE_SUMMARY_MODEL: z.string().default(''),
-  // Amp recap agent mode. Amp exposes no model list — `-m` picks a MODE (low|medium|high|ultra) and the
-  // mode picks the model. `medium` on the project owner's call: `low` was the cheaper default but is no
-  // more reliable on this path (both modes hit Amp's ~30s network timeout at similar rates, measured),
-  // so the better answer wins over the cheaper one.
-  AMP_SUMMARY_MODE: z.string().default('medium'),
-  // Shared recap reasoning level for Claude and Codex. Cursor effort is part of its model identifier.
-  SUMMARY_EFFORT: z.enum(['low', 'medium', 'high']).default('low'),
-  // Who writes the device recap's headline. `local` (default since 2026-09-15): no model in the loop —
-  // the answer's first sentence is excerpted, instantly; the dial shows what the terminal shows, as it
-  // shows it. `model`: a disposable one-shot of the session's own engine, fed the previous recap, the
-  // user's ask and the answer — reads better across turns, but measured at ~9s of the user's turn to
-  // rephrase "Blue selected." as "Blue selected as the colour choice" (owner: the dial is cabled to the
-  // window already showing the answer in full; the recap is a glance, not prose).
-  SUMMARY_MODE: z.enum(['model', 'local']).default('local'),
   RECAP_WITHOUT_DEVICE: z.string().default('true').transform((v) => v !== 'false'),
   // Model for the voice router one-shot classifier (Overview voice → pick the agent). Small/fast by default.
   VOICE_ROUTE_MODEL: z.string().default('haiku'),
@@ -358,12 +318,10 @@ const envSchema = z.object({
   TERMINAL_P2P_FORCE_RELAY: z.string().default('false').transform((v) => v === 'true'),
 
   // ── OpenRouter gateway agents (`ori claude`, `ori codex`, …) ───────────────────────────────────
-  // An agent whose CLI is pointed at OpenRouter has no vendor credential to spend, so its recap and
-  // voice route are served by ONE direct chat/completions call instead of a vendor one-shot: a recap
-  // is a 200-token condensation, and spawning a whole coding agent to do it would bill an account the
-  // user may not even have. Both default to a cheap, fast model; '' disables that call (the
-  // VOICE_ROUTE_MODEL convention) and falls back to the engine path.
-  ORI_SUMMARY_MODEL: z.string().default('deepseek/deepseek-v4-flash'),
+  // An agent whose CLI is pointed at OpenRouter has no vendor credential to spend, so its voice route
+  // is served by ONE direct chat/completions call instead of a vendor one-shot: spawning a whole coding
+  // agent for it would bill an account the user may not even have. A cheap, fast model by default; ''
+  // disables that call (the VOICE_ROUTE_MODEL convention) and falls back to the engine path.
   ORI_VOICE_ROUTE_MODEL: z.string().default('deepseek/deepseek-v4-flash'),
   // Where `ori login` stores the key ({ createdAt, key, userId }). Only read when neither the daemon
   // env nor the agent's own process supplies one.
@@ -411,10 +369,6 @@ const envSchema = z.object({
   // Where the `harness` launcher lives. Same name (and default) `scripts/install-cli.sh` uses, so a
   // sandboxed install and this process agree on which launcher they are talking about.
   HARNESS_BIN_DIR: z.string().default(adapterBinDir),
-  // The lessons your daemons learned (pair/learn, daemons/LEARNING.md): a git-backed folder outside any
-  // repo, created on the first lesson, never before.
-  HARNESS_LESSONS_DIR: z.string().default(join(adapterRootDir, 'lessons')),
-
   // ── the dial on the USB cable ──────────────────────────────────────────────────────────────────
   // Set 'true' to leave the serial port alone entirely. The port is exclusive, so this is what a
   // developer flips before running esptool or a serial monitor against the dial.

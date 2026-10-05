@@ -12,6 +12,7 @@ import 'package:path/path.dart' as p;
 
 import '../core/runtime_platform.dart';
 import '../core/codex_profiles.dart';
+import '../core/launch_setup.dart';
 import '../core/dsh_catalog.dart';
 import '../core/harness_catalog.dart';
 import '../core/first_task.dart';
@@ -282,6 +283,7 @@ class NewHarnessDraft {
     required this.task,
     required this.permissionMode,
     this.worktree,
+    this.worktreePreference,
     this.branchRef,
     this.branchName,
     this.placeholder,
@@ -299,6 +301,8 @@ class NewHarnessDraft {
   final GridModel? model;
   final bool advancedOpen;
   final bool? worktree;
+  // The reviewed choice when recovery reuses an already prepared worktree.
+  final bool? worktreePreference;
 
   /// The branch chosen in the launcher, and the name typed for a worktree's
   /// branch; null leaves either to [defaultBranchRef] and [placeholder].
@@ -420,6 +424,9 @@ class NewHarnessController extends ChangeNotifier {
        ),
        _machineId = draft?.machineId ?? machineId,
        _autoProject = autoProject || draft?.project.generated != null,
+       _initialAgentExplicit =
+           draft != null || engine != null || harnessId != null,
+       _restoringDraft = draft != null,
        _now = now ?? DateTime.now,
        _home = home ?? RuntimePlatform.environment['HOME'] {
     final explicitSelection =
@@ -454,6 +461,7 @@ class NewHarnessController extends ChangeNotifier {
         : const NewHarnessProject.fresh();
     if (task != null) this.task = task;
     _worktree = draft?.worktree;
+    _recoveredWorktreePreference = draft?.worktreePreference;
     _branchRef = draft?.branchRef;
     _branchName = draft?.branchName;
     _placeholder = draft?.placeholder;
@@ -503,6 +511,7 @@ class NewHarnessController extends ChangeNotifier {
           _engine = _initialEngine(null);
         }
         _restorePermissionMode();
+        if (_desktopChoices) _applySuccessfulLaunch();
         _refresh();
       }),
     );
@@ -550,6 +559,8 @@ class NewHarnessController extends ChangeNotifier {
       : placement;
 
   final bool _autoProject;
+  final bool _initialAgentExplicit;
+  final bool _restoringDraft;
   final DateTime Function() _now;
   final String? _home;
 
@@ -610,11 +621,20 @@ class NewHarnessController extends ChangeNotifier {
     final allowed = compatibleEngines;
     final remembered =
         requested ??
-        app.agentPreference.engineFor(_harnessId) ??
-        (_harnessId == null || _harnessId == app.agentPreference.harness
-            ? app.agentPreference.value
-            : null);
-    if (remembered != null) return remembered;
+        (_desktopChoices
+            ? app.agentPreference.successfulLaunch?.engine
+            : app.agentPreference.engineFor(_harnessId) ??
+                  (_harnessId == null ||
+                          _harnessId == app.agentPreference.harness
+                      ? app.agentPreference.value
+                      : null));
+    if (remembered != null &&
+        (requested != null ||
+            !_desktopChoices ||
+            allowed.contains(remembered) ||
+            _harnessId == app.agentPreference.successfulLaunch?.harnessId)) {
+      return remembered;
+    }
     final preferred = allowed.contains(defaultHarnessEngine)
         ? defaultHarnessEngine
         : selectedHarness?.engine;
@@ -648,8 +668,15 @@ class NewHarnessController extends ChangeNotifier {
   bool get worktree =>
       isGitProject &&
       (_worktree ??
-          app.projectHistory.worktreeFor(_machineId, _project.folder ?? '') ??
-          worktreeByDefault(_gitProject));
+          (_desktopChoices
+              ? app.agentPreference.successfulWorktree ?? true
+              : app.projectHistory.worktreeFor(
+                      _machineId,
+                      _project.folder ?? '',
+                    ) ??
+                    worktreeByDefault(_gitProject)));
+
+  bool? _recoveredWorktreePreference;
 
   /// Fresh desktop work starts on main, with or without a worktree. A retry
   /// must instead keep the branch of the folder its first attempt prepared.
@@ -723,6 +750,24 @@ class NewHarnessController extends ChangeNotifier {
         : '$name · new from ${_refName(currentBranchRef(_gitProject)) ?? 'HEAD'}';
   }
 
+  /// A new worktree names its base instead of implying it opens that branch.
+  String get compactBranchLabel =>
+      worktree &&
+          worktreePlan?.kind == WorktreeStart.newBranch &&
+          _branchName == null
+      ? 'From $branchLabel'
+      : branchRowLabel.split(' · ').first;
+
+  String get branchTooltip {
+    final plan = worktreePlan;
+    if (worktree && plan?.kind == WorktreeStart.newBranch) {
+      return 'New branch from ${_refName(plan!.base) ?? 'HEAD'} in a separate folder';
+    }
+    if (opensWorktree) return 'Open $branchLabel in its existing worktree';
+    if (worktree) return 'Open $branchLabel in a separate folder';
+    return 'Use $branchRowLabel in the project folder';
+  }
+
   /// Start goes into a worktree that already exists.
   bool get opensWorktree => worktree
       ? worktreePlan?.kind == WorktreeStart.openWorktree
@@ -731,7 +776,8 @@ class NewHarnessController extends ChangeNotifier {
   void toggleWorktree() {
     if (locked || !canUseWorktree) return;
     _worktree = !worktree;
-    if (_project.folder case final folder?) {
+    _recoveredWorktreePreference = null;
+    if (_project.folder case final folder? when !_desktopChoices) {
       unawaited(
         app.projectHistory.selectWorktree(_machineId, folder, _worktree!),
       );
@@ -800,6 +846,7 @@ class NewHarnessController extends ChangeNotifier {
     if (_gitKey == key) return;
     if (_gitKey != null) {
       _worktree = null;
+      _recoveredWorktreePreference = null;
       _branchRef = null;
       _branchName = null;
       _placeholder = null;
@@ -882,6 +929,7 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   GridModel? _model;
+  bool _modelTouched = false;
   GridModel? get model => _model;
   GridModels? _modelCatalog;
   ModelsMenuController? _modelUsage;
@@ -1032,7 +1080,7 @@ class NewHarnessController extends ChangeNotifier {
   bool _profileChosen = false;
   String? get profileLabel =>
       _base == 'codex' && (_profileChosen || _profile != null)
-      ? _profile?.label ?? 'Default'
+      ? _profile?.label ?? (_desktopChoices ? 'Default account' : 'Default')
       : null;
 
   NewHarnessDraft get draft => NewHarnessDraft(
@@ -1045,6 +1093,7 @@ class NewHarnessController extends ChangeNotifier {
     task: task,
     permissionMode: _mode,
     worktree: isGitProject ? worktree : _worktree,
+    worktreePreference: _recoveredWorktreePreference,
     branchRef: _branchRef,
     branchName: _branchName,
     placeholder: isGitProject ? placeholder : _placeholder,
@@ -1107,7 +1156,11 @@ class NewHarnessController extends ChangeNotifier {
   final _chosenModes = <String, String>{};
   String _permissionFor(String engine) =>
       _chosenModes[engine] ??
-      app.agentPreference.permissionModeFor(_baseOf(engine)) ??
+      (_desktopChoices
+          ? app.agentPreference.successfulLaunch?.engine == engine
+                ? app.agentPreference.successfulLaunch?.permissionMode
+                : null
+          : app.agentPreference.permissionModeFor(_baseOf(engine))) ??
       kDefaultPermissionMode;
   void _restorePermissionMode() => _mode = _permissionFor(_engine);
 
@@ -1686,7 +1739,32 @@ class NewHarnessController extends ChangeNotifier {
   void useDesktopChoices(bool desktop) {
     if (_desktopChoices == desktop) return;
     _desktopChoices = desktop;
+    if (desktop) _applySuccessfulLaunch();
     _refresh(resetCursor: true);
+  }
+
+  void _applySuccessfulLaunch() {
+    if (_restoringDraft || locked) return;
+    final saved = app.agentPreference.successfulLaunch;
+    if (!_initialAgentExplicit && !_selectionTouched) {
+      _harnessId = saved?.harnessId;
+      _engine = _initialEngine(null);
+      if (_project.generated != null) _project = _generatedProject();
+    }
+    _restorePermissionMode();
+    if (saved == null || saved.engine != _engine || isTerminal) return;
+    if (!_modelTouched) {
+      _model = saved.model;
+      if (_model != null) unawaited(refreshModels());
+    }
+    if (!_profileChosen &&
+        saved.profileMachineId == _machineId &&
+        _engine == 'codex' &&
+        _model == null) {
+      _profile = saved.profile;
+      _profileChosen = true;
+      if (_profile != null) unawaited(refreshProfiles());
+    }
   }
 
   List<NewHarnessOption> _projectMenu() => [
@@ -1807,25 +1885,6 @@ class NewHarnessController extends ChangeNotifier {
     query = field == NewHarnessField.task ? task : '';
     error = null;
     _refresh(resetCursor: true);
-    _rememberProjectSelection();
-  }
-
-  void _rememberProjectSelection() {
-    if (!_desktopChoices || _project.folder == null) return;
-    final machine = _machineId;
-    final revision = _gitRevision;
-    // Git discovery normalizes a chosen worktree back to its repository.
-    // Do not persist the temporary checkout or an obsolete async selection.
-    unawaited(() async {
-      await _gitFuture;
-      if (_disposed || machine != _machineId || revision != _gitRevision) {
-        return;
-      }
-      final folder = _project.folder;
-      if (folder != null && gitError != 'PROJECT_UNAVAILABLE') {
-        await app.projectHistory.select(machine, folder);
-      }
-    }());
   }
 
   /// ⌘↵: make it now — WITH the row under the highlight. Creating with the
@@ -1888,6 +1947,7 @@ class NewHarnessController extends ChangeNotifier {
         _selectEngine(option.id);
       case NewHarnessField.model:
         _model = option.model;
+        _modelTouched = true;
       case NewHarnessField.machine:
         _selectMachine(option.id);
       case NewHarnessField.branch:
@@ -1907,13 +1967,14 @@ class NewHarnessController extends ChangeNotifier {
         _project = option.project ?? _project;
         if (_desktopChoices) {
           _syncGitProject();
-          _rememberProjectSelection();
         }
       case NewHarnessField.mode:
         _selectEngine(_settingsEngine);
         _mode = option.id;
         _chosenModes[_engine] = _mode;
-        unawaited(app.agentPreference.selectPermissionMode(_base, _mode));
+        if (!_desktopChoices) {
+          unawaited(app.agentPreference.selectPermissionMode(_base, _mode));
+        }
       case NewHarnessField.profile:
         _selectEngine(_settingsEngine);
         _profile = option.profile;
@@ -1921,12 +1982,6 @@ class NewHarnessController extends ChangeNotifier {
       case NewHarnessField.task:
       case NewHarnessField.launch:
         break;
-    }
-    if (_desktopChoices &&
-        (field == NewHarnessField.harness || field == NewHarnessField.agent)) {
-      unawaited(
-        app.agentPreference.selectLaunch(_engine, harnessId: _harnessId),
-      );
     }
   }
 
@@ -1940,6 +1995,7 @@ class NewHarnessController extends ChangeNotifier {
       _resetProfiles();
     }
     _engine = engine;
+    if (changed && _desktopChoices && !_modelTouched) _model = null;
     if (changed) _restorePermissionMode();
     if (isTerminal) _model = null;
     if (changed &&
@@ -1961,7 +2017,11 @@ class NewHarnessController extends ChangeNotifier {
     _selectionTouched = true;
     _harnessId = id;
     _installing = null;
-    _selectEngine(_initialEngine(app.agentPreference.engineFor(id) ?? _engine));
+    _selectEngine(
+      _desktopChoices
+          ? _initialEngine(null)
+          : _initialEngine(app.agentPreference.engineFor(id) ?? _engine),
+    );
     if (_project.generated != null) {
       _project = _generatedProject();
       unawaited(_refreshGeneratedProject());
@@ -2895,9 +2955,11 @@ class NewHarnessController extends ChangeNotifier {
       // on this machine. Older projects need not be picked again to appear.
       if (machine != null)
         for (final agent in machine.agents.reversed)
-          ?machine.projectOf(agent)?.cwd,
+          if (!isInternalLaunchHarness(agent.dsh))
+            ?machine.projectOf(agent)?.cwd,
     ]) {
       if (!p.isAbsolute(folder) ||
+          isInternalLaunchFolder(folder) ||
           folder.length > 4096 ||
           RegExp(r'[\x00-\x1f\x7f]').hasMatch(folder) ||
           folder != _project.folder &&
@@ -3420,6 +3482,16 @@ class NewHarnessController extends ChangeNotifier {
         'Update Harness CLI on $machineLabel to attach files, or remove them.',
       );
     }
+    final launchSetup = LaunchSetup(
+      engine: base,
+      harnessId: harness,
+      permissionMode: permissionMode ?? kDefaultPermissionMode,
+      model: _model,
+      profile: base == 'codex' && _model == null ? _profile : null,
+      profileMachineId: _machineId,
+    );
+    final launchedWorktree =
+        _recoveredWorktreePreference ?? (isGitProject ? worktree : null);
     final failure = await app.createAgent(
       _machineId,
       engine: base,
@@ -3449,11 +3521,24 @@ class NewHarnessController extends ChangeNotifier {
     if (failure == null && files.isNotEmpty) {
       _deliverFiles(attempt.agentId, files, firstMessage);
     }
+    // Creation can replace an embedded form before this future returns. Save
+    // the confirmed choices even if that form has already been disposed.
+    if (failure == null && attempt.agentId != null) {
+      unawaited(
+        app.agentPreference.remember(
+          choice,
+          harnessId: harness,
+          setup: launchSetup,
+          worktree: launchedWorktree,
+        ),
+      );
+    }
     if (_disposed) return NewHarnessOutcome.failed;
     if (failure != null) {
       // A folder already made for this attempt is the project now: a retry
       // goes into it rather than making a second one beside it.
       if (!checking && attempt.preparedFolder != null) {
+        _recoveredWorktreePreference = launchedWorktree;
         _project = NewHarnessProject.folder(attempt.preparedFolder!);
         _gitKey = (_machineId, _project.folder, isTerminal);
         _worktree = false;
@@ -3463,7 +3548,6 @@ class NewHarnessController extends ChangeNotifier {
       }
       return _fail(failure);
     }
-    unawaited(app.agentPreference.remember(choice, harnessId: _harnessId));
     busy = false;
     status = null;
     return NewHarnessOutcome.created;

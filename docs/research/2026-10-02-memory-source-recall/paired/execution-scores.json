@@ -1,0 +1,387 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "3df25a604e36f8722234d380ce0351e113aa461931986c6ed77096239987f5c2",
+  "suiteSha256": "ae8cfbe0c3af568f068825df8c056e34c7eaf8280359e19abb6df1634ab03362",
+  "executionAt": "2026-10-02T20:24:41.452827+00:00",
+  "execution": "Reviewed pure functions, isolated node process for each; OS sandbox denies networking and file writes and excludes user/private file contents except the exact test folder and node binary. Filesystem metadata is readable for module resolution.",
+  "startupAttempts": [
+    {
+      "status": "failed_before_cases",
+      "reason": "Sandbox denied parent-directory metadata required by Node module resolution."
+    },
+    {
+      "status": "completed",
+      "change": "Allowed filesystem metadata; private file-content restrictions and all write/network restrictions retained."
+    }
+  ],
+  "codeExtraction": "Only a single surrounding Markdown JSON fence is removed for offline code execution. No JSON or code body is repaired. Strict-format failures remain recorded.",
+  "cases": [
+    {
+      "id": "coding-01823b564b7e",
+      "taskId": "retry-config",
+      "arm": "summary",
+      "strictFormat": true,
+      "codeSha256": "1dc6bbe097b2983154a143af300c325dd6a257cee47dbb02ca146760483ace28",
+      "assessable": true,
+      "limitation": null,
+      "checks": [
+        {
+          "index": 0,
+          "passed": true
+        },
+        {
+          "index": 1,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "coding-0aab4f1b2f23",
+      "taskId": "search-focus",
+      "arm": "summary",
+      "strictFormat": false,
+      "codeSha256": "fcd4e54ee2af28251f784f928305b2964c2998b8319c5bc807a97c856e153bfd",
+      "assessable": true,
+      "limitation": null,
+      "checks": [
+        {
+          "index": 0,
+          "passed": true
+        },
+        {
+          "index": 1,
+          "passed": true
+        },
+        {
+          "index": 2,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "coding-2386fe805c36",
+      "taskId": "export-options",
+      "arm": "excerpts",
+      "strictFormat": false,
+      "codeSha256": "2d5ba040a64d95883cb847f6307fd488e3e1b6f2e3de8f42731894b5488259a5",
+      "assessable": true,
+      "limitation": null,
+      "checks": [
+        {
+          "index": 0,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  [\n    'Cancel',\n    'Save copy',\n-   'Help'\n  ]\n"
+        },
+        {
+          "index": 1,
+          "passed": true
+        },
+        {
+          "index": 2,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  [\n-   'Inspect',\n    'Cancel'\n  ]\n"
+        }
+      ],
+      "passed": false
+    },
+    {
+      "id": "coding-3c3e3566608d",
+      "taskId": "navigation-default",
+      "arm": "excerpts",
+      "strictFormat": true,
+      "codeSha256": "06735c93383bee64a1d114ca514ec4c1edd4b2925b30678f90b7cb3d41bc3441",
+      "assessable": true,
+      "limitation": null,
+      "checks": [
+        {
+          "index": 0,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ 'expanded'\n- 'compact'\n"
+        },
+        {
+          "index": 1,
+          "passed": true
+        },
+        {
+          "index": 2,
+          "passed": true
+        },
+        {
+          "index": 3,
+          "passed": true
+        },
+        {
+          "index": 4,
+          "passed": true
+        },
+        {
+          "index": 5,
+          "passed": true
+        }
+      ],
+      "passed": false
+    },
+    {
+      "id": "coding-4f8ac504c866",
+      "taskId": "search-focus",
+      "arm": "excerpts",
+      "strictFormat": false,
+      "codeSha256": "fcd4e54ee2af28251f784f928305b2964c2998b8319c5bc807a97c856e153bfd",
+      "assessable": true,
+      "limitation": null,
+      "checks": [
+        {
+          "index": 0,
+          "passed": true
+        },
+        {
+          "index": 1,
+          "passed": true
+        },
+        {
+          "index": 2,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "coding-76aba95c6c16",
+      "taskId": "export-options",
+      "arm": "summary",
+      "strictFormat": false,
+      "codeSha256": "220306a1022ca6624657018478007bcf856d9d577ee9b1d4fe9f417697459d77",
+      "assessable": true,
+      "limitation": null,
+      "checks": [
+        {
+          "index": 0,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  [\n    'Cancel',\n    'Save copy',\n-   'Help'\n  ]\n"
+        },
+        {
+          "index": 1,
+          "passed": true
+        },
+        {
+          "index": 2,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  [\n-   'Inspect',\n    'Cancel'\n  ]\n"
+        }
+      ],
+      "passed": false
+    },
+    {
+      "id": "coding-80eef5fd73cd",
+      "taskId": "log-retention",
+      "arm": "excerpts",
+      "strictFormat": false,
+      "codeSha256": "2ecf6ae9cfdde2d76fc53a829f60307573e58962c48b6fe262c015b1dcd58efa",
+      "assessable": false,
+      "limitation": "The task did not specify a boolean return type; frozen assertions assume one, so this pair cannot establish task failure or success.",
+      "checks": [
+        {
+          "index": 0,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ {\n+   completed: true,\n+   completedAtMs: 0\n+ }\n- true\n"
+        },
+        {
+          "index": 1,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n\nnull !== false\n"
+        },
+        {
+          "index": 2,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n\nnull !== false\n"
+        },
+        {
+          "index": 3,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ {\n+   completed: false,\n+   completedAtMs: 0\n+ }\n- true\n"
+        }
+      ],
+      "passed": false
+    },
+    {
+      "id": "coding-860dc5243256",
+      "taskId": "retry-config",
+      "arm": "excerpts",
+      "strictFormat": false,
+      "codeSha256": "349d1641a31c08613a26b2290f237839d0cb3b75e6f53acd62f987ecfc8951ac",
+      "assessable": true,
+      "limitation": null,
+      "checks": [
+        {
+          "index": 0,
+          "passed": true
+        },
+        {
+          "index": 1,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "coding-9b94deb0ddb6",
+      "taskId": "file-tree-override",
+      "arm": "excerpts",
+      "strictFormat": true,
+      "codeSha256": "a77d5ece7ace877667ce3feb2e0c2f6f658829b389886426782ee54d1a991c41",
+      "assessable": true,
+      "limitation": null,
+      "checks": [
+        {
+          "index": 0,
+          "passed": true
+        },
+        {
+          "index": 1,
+          "passed": true
+        },
+        {
+          "index": 2,
+          "passed": true
+        },
+        {
+          "index": 3,
+          "passed": true
+        },
+        {
+          "index": 4,
+          "passed": true
+        },
+        {
+          "index": 5,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "coding-bb9161f47b4a",
+      "taskId": "file-tree-override",
+      "arm": "summary",
+      "strictFormat": true,
+      "codeSha256": "ecb28ebafa19adf3ad380396ab0d91bb9e2645ab74b92856b80e93322fdc1de9",
+      "assessable": true,
+      "limitation": null,
+      "checks": [
+        {
+          "index": 0,
+          "passed": true
+        },
+        {
+          "index": 1,
+          "passed": true
+        },
+        {
+          "index": 2,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ 'condensed'\n- 'expanded'\n"
+        },
+        {
+          "index": 3,
+          "passed": true
+        },
+        {
+          "index": 4,
+          "passed": true
+        },
+        {
+          "index": 5,
+          "passed": true
+        }
+      ],
+      "passed": false
+    },
+    {
+      "id": "coding-bedd962b7b5b",
+      "taskId": "navigation-default",
+      "arm": "summary",
+      "strictFormat": false,
+      "codeSha256": "06735c93383bee64a1d114ca514ec4c1edd4b2925b30678f90b7cb3d41bc3441",
+      "assessable": true,
+      "limitation": null,
+      "checks": [
+        {
+          "index": 0,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ 'expanded'\n- 'compact'\n"
+        },
+        {
+          "index": 1,
+          "passed": true
+        },
+        {
+          "index": 2,
+          "passed": true
+        },
+        {
+          "index": 3,
+          "passed": true
+        },
+        {
+          "index": 4,
+          "passed": true
+        },
+        {
+          "index": 5,
+          "passed": true
+        }
+      ],
+      "passed": false
+    },
+    {
+      "id": "coding-cd8f4f5057d9",
+      "taskId": "log-retention",
+      "arm": "summary",
+      "strictFormat": false,
+      "codeSha256": "c0fbf97df815d9d879f6e934366823b806b041236ed5c8f7fb1a60b01122741a",
+      "assessable": false,
+      "limitation": "The task did not specify a boolean return type; frozen assertions assume one, so this pair cannot establish task failure or success.",
+      "checks": [
+        {
+          "index": 0,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ {\n+   completed: true,\n+   completedAtMs: 0\n+ }\n- true\n"
+        },
+        {
+          "index": 1,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n\nnull !== false\n"
+        },
+        {
+          "index": 2,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n\nnull !== false\n"
+        },
+        {
+          "index": 3,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ {\n+   completed: false,\n+   completedAtMs: 0\n+ }\n- true\n"
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "summary": {
+    "summary": {
+      "assessableTasks": 5,
+      "passedTasks": 2
+    },
+    "excerpts": {
+      "assessableTasks": 5,
+      "passedTasks": 3
+    }
+  },
+  "limitations": [
+    "Five assessable synthetic microtask pairs, no held-out user task or native framework.",
+    "Only 4/12 responses followed strict JSON formatting. Others were valid JSON inside a single Markdown fence; that wrapper was removed explicitly for this offline code-only check.",
+    "The log-retention pair is unscorable because the request did not specify the return type assumed by its frozen assertions.",
+    "No production recall change has been made."
+  ]
+}

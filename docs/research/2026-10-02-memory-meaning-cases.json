@@ -1,0 +1,424 @@
+{
+  "schemaVersion": 1,
+  "suite": "synthetic-memory-meaning-diagnostics-v1",
+  "purpose": "Fresh development diagnostics motivated by prior semantic failures, frozen before their first model run. These are not held-out user histories. Expectations and probes never enter inference; do not alter this suite after observing results.",
+  "cases": [
+    {
+      "id": "default-with-user-override",
+      "projectId": "editor",
+      "boundary": "bounded",
+      "sources": [
+        {
+          "role": "user",
+          "text": "In our editor, compact navigation is the default. Do not replace that default. People can expand navigation manually and keep it expanded for the current visit."
+        }
+      ],
+      "expected": {
+        "records": {
+          "min": 1,
+          "max": 2
+        },
+        "scope": "project",
+        "rationale": "null",
+        "review": [
+          "Retain compact navigation as the default and preserve the explicitly permitted manual expansion for the current visit.",
+          "Do not prohibit expansion, force compact mode after a user override, or invent persistence beyond the current visit.",
+          "This specifies product behavior; do not invent a coding-task applicability filter that prevents work on navigation from recalling it."
+        ]
+      },
+      "probes": [
+        {
+          "id": "same-project",
+          "query": "compact navigation expanded default",
+          "projectIds": [
+            "editor"
+          ],
+          "conditions": {},
+          "expected": "recall"
+        },
+        {
+          "id": "different-project",
+          "query": "compact navigation expanded default",
+          "projectIds": [
+            "unrelated-project"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        },
+        {
+          "id": "unrelated-topic",
+          "query": "PostgreSQL partition pruning",
+          "projectIds": [
+            "editor"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        }
+      ]
+    },
+    {
+      "id": "firm-request-with-unresolved-placement",
+      "projectId": "build-monitor",
+      "boundary": "bounded",
+      "sources": [
+        {
+          "role": "user",
+          "text": "Preserve the last successful build log when another build starts. Maybe the history chooser belongs in the footer, or beside Run? Let us settle its placement later."
+        }
+      ],
+      "expected": {
+        "records": {
+          "min": 1,
+          "max": 2
+        },
+        "scope": "project",
+        "rationale": "null",
+        "review": [
+          "Retain the explicit request to preserve the last successful build log when another build starts.",
+          "Do not choose the footer or Run-button placement, claim it is decided, or discard the firm request because the same message contains an unresolved detail."
+        ]
+      },
+      "probes": [
+        {
+          "id": "same-project",
+          "query": "build log preserve history chooser",
+          "projectIds": [
+            "build-monitor"
+          ],
+          "conditions": {},
+          "expected": "recall"
+        },
+        {
+          "id": "different-project",
+          "query": "build log preserve history chooser",
+          "projectIds": [
+            "unrelated-project"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        },
+        {
+          "id": "unrelated-topic",
+          "query": "PostgreSQL partition pruning",
+          "projectIds": [
+            "build-monitor"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        }
+      ]
+    },
+    {
+      "id": "polite-request",
+      "projectId": "review-tool",
+      "boundary": "bounded",
+      "sources": [
+        {
+          "role": "user",
+          "text": "Could you please keep keyboard focus in the search box after running a search in this review tool?"
+        }
+      ],
+      "expected": {
+        "records": {
+          "min": 1,
+          "max": 2
+        },
+        "scope": "project",
+        "rationale": "null",
+        "review": [
+          "Recognize this polite question as a concrete requested behavior and remember it within the review-tool project.",
+          "Do not claim it is already implemented or invent a reason, shortcut, global preference or exception."
+        ]
+      },
+      "probes": [
+        {
+          "id": "same-project",
+          "query": "keyboard focus search box",
+          "projectIds": [
+            "review-tool"
+          ],
+          "conditions": {},
+          "expected": "recall"
+        },
+        {
+          "id": "different-project",
+          "query": "keyboard focus search box",
+          "projectIds": [
+            "unrelated-project"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        },
+        {
+          "id": "unrelated-topic",
+          "query": "PostgreSQL partition pruning",
+          "projectIds": [
+            "review-tool"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        }
+      ]
+    },
+    {
+      "id": "exploratory-question",
+      "projectId": "review-tool",
+      "boundary": "bounded",
+      "sources": [
+        {
+          "role": "user",
+          "text": "Would keeping keyboard focus in the search box after a search be useful, or would it make navigation awkward? I have not decided."
+        }
+      ],
+      "expected": {
+        "records": {
+          "min": 0,
+          "max": 0
+        },
+        "scope": "none",
+        "rationale": "null",
+        "review": [
+          "Do not turn this unresolved design question into a preference for either keeping or moving focus.",
+          "This bounded excerpt contains no adopted choice or self-contained requested product behavior."
+        ]
+      },
+      "probes": [
+        {
+          "id": "same-project",
+          "query": "keyboard focus search box",
+          "projectIds": [
+            "review-tool"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        },
+        {
+          "id": "different-project",
+          "query": "keyboard focus search box",
+          "projectIds": [
+            "unrelated-project"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        },
+        {
+          "id": "unrelated-topic",
+          "query": "PostgreSQL partition pruning",
+          "projectIds": [
+            "review-tool"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        }
+      ]
+    },
+    {
+      "id": "tentative-number",
+      "projectId": "build-monitor",
+      "boundary": "bounded",
+      "sources": [
+        {
+          "role": "user",
+          "text": "I am only brainstorming possible log retention. Maybe 14 days, maybe 30? We have not chosen a policy."
+        }
+      ],
+      "expected": {
+        "records": {
+          "min": 0,
+          "max": 0
+        },
+        "scope": "none",
+        "rationale": "null",
+        "review": [
+          "Do not adopt either numeric retention option, average them, or manufacture an implementation requirement.",
+          "An unresolved brainstorming question in bounded context is not an accepted project decision."
+        ]
+      },
+      "probes": [
+        {
+          "id": "same-project",
+          "query": "log retention days policy",
+          "projectIds": [
+            "build-monitor"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        },
+        {
+          "id": "different-project",
+          "query": "log retention days policy",
+          "projectIds": [
+            "unrelated-project"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        },
+        {
+          "id": "unrelated-topic",
+          "query": "PostgreSQL partition pruning",
+          "projectIds": [
+            "build-monitor"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        }
+      ]
+    },
+    {
+      "id": "accepted-number",
+      "projectId": "build-monitor",
+      "boundary": "bounded",
+      "sources": [
+        {
+          "role": "user",
+          "text": "For this build monitor, retain completed logs for 14 days. This is the policy we agreed to; keep it."
+        }
+      ],
+      "expected": {
+        "records": {
+          "min": 1,
+          "max": 2
+        },
+        "scope": "project",
+        "rationale": "null",
+        "review": [
+          "Retain the explicitly agreed 14-day retention for completed logs in this project.",
+          "Do not reject an explicit number merely because a different example used tentative numbers, broaden it to all logs, or invent rationale."
+        ]
+      },
+      "probes": [
+        {
+          "id": "same-project",
+          "query": "completed log retention days",
+          "projectIds": [
+            "build-monitor"
+          ],
+          "conditions": {},
+          "expected": "recall"
+        },
+        {
+          "id": "different-project",
+          "query": "completed log retention days",
+          "projectIds": [
+            "unrelated-project"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        },
+        {
+          "id": "unrelated-topic",
+          "query": "PostgreSQL partition pruning",
+          "projectIds": [
+            "build-monitor"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        }
+      ]
+    },
+    {
+      "id": "quoted-plan-and-user-correction",
+      "projectId": "network-client",
+      "boundary": "bounded",
+      "sources": [
+        {
+          "role": "user",
+          "text": "An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement."
+        }
+      ],
+      "expected": {
+        "records": {
+          "min": 1,
+          "max": 2
+        },
+        "scope": "project",
+        "rationale": "null",
+        "review": [
+          "Retain the explicit user request to show failures in this network client.",
+          "Do not adopt the assistant's two-second retry delay or hiding policy, invent the opposite retry policy, or imply measurement has happened."
+        ]
+      },
+      "probes": [
+        {
+          "id": "same-project",
+          "query": "network failure display retry delay",
+          "projectIds": [
+            "network-client"
+          ],
+          "conditions": {},
+          "expected": "recall"
+        },
+        {
+          "id": "different-project",
+          "query": "network failure display retry delay",
+          "projectIds": [
+            "unrelated-project"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        },
+        {
+          "id": "unrelated-topic",
+          "query": "PostgreSQL partition pruning",
+          "projectIds": [
+            "network-client"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        }
+      ]
+    },
+    {
+      "id": "limited-control-set",
+      "projectId": "exporter",
+      "boundary": "bounded",
+      "sources": [
+        {
+          "role": "user",
+          "text": "For the export dialog's conflict prompt, remove Replace and Skip. Keep Cancel and Save copy. This change is only about that prompt; do not remove any other export actions."
+        }
+      ],
+      "expected": {
+        "records": {
+          "min": 1,
+          "max": 2
+        },
+        "scope": "project",
+        "rationale": "null",
+        "review": [
+          "Keep removal/retention instructions within the export conflict prompt and preserve the request not to remove other export actions.",
+          "Do not claim that the whole exporter or every dialog may only offer Cancel and Save copy, or assert the changes are already implemented."
+        ]
+      },
+      "probes": [
+        {
+          "id": "same-project",
+          "query": "export conflict prompt cancel save copy",
+          "projectIds": [
+            "exporter"
+          ],
+          "conditions": {},
+          "expected": "recall"
+        },
+        {
+          "id": "different-project",
+          "query": "export conflict prompt cancel save copy",
+          "projectIds": [
+            "unrelated-project"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        },
+        {
+          "id": "unrelated-topic",
+          "query": "PostgreSQL partition pruning",
+          "projectIds": [
+            "exporter"
+          ],
+          "conditions": {},
+          "expected": "abstain"
+        }
+      ]
+    }
+  ]
+}

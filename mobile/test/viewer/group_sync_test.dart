@@ -175,6 +175,78 @@ void main() {
     });
 
     test(
+      'a suspended key is neither pinned nor seeded into the roster',
+      () async {
+        final keys = ViewerKeyStore(storage: MemoryKeyValueStore());
+        final machine = await E2eeIdentity.generate();
+        final cPub = await _pub();
+        final dPub = await _pub();
+        final dId = 'd' * 32;
+        await keys.pin(ms.machineId, machine.pub);
+        await keys.pin(
+          dId,
+          b64d(dPub),
+          label: 'd',
+        ); // a pin the roster does not name yet
+        Map<String, dynamic>? seen;
+        final socket = _machineSocket(
+          machine,
+          (_) => {
+            'members': [_machine(cPub, _c, 50).toJson()],
+            'removed': [],
+          },
+          onRequest: (r) => seen = r,
+        );
+        final outcome = await syncTrustGroup(
+          machineId: ms.machineId,
+          keys: keys,
+          accessToken: 't',
+          wsBaseUrl: 'wss://relay.test',
+          autonomousEnv: 'prod',
+          label: 'p',
+          socket: socket.factory,
+          suspended: () async => {cPub, dPub},
+        );
+        expect(outcome.pinned, isEmpty);
+        expect(await keys.peer(_c), isNull);
+        expect([
+          for (final m in seen!['members'] as List) (m as Map)['pub'],
+        ], isNot(contains(dPub)));
+      },
+    );
+
+    test('a key suspended by the devlog this very exchange carries is not pinned either', () async {
+      final keys = ViewerKeyStore(storage: MemoryKeyValueStore());
+      final machine = await E2eeIdentity.generate();
+      final cPub = await _pub();
+      await keys.pin(ms.machineId, machine.pub);
+      final socket = _machineSocket(
+        machine,
+        (_) => {
+          'members': [_machine(cPub, _c, 50).toJson()],
+          'removed': [],
+          'devlog': {
+            'head': {'seq': 1, 'hash': 'x'},
+          },
+        },
+      );
+      final suspendedNow = <String>{};
+      final outcome = await syncTrustGroup(
+        machineId: ms.machineId,
+        keys: keys,
+        accessToken: 't',
+        wsBaseUrl: 'wss://relay.test',
+        autonomousEnv: 'prod',
+        label: 'p',
+        socket: socket.factory,
+        onDevlog: (_, _) async => suspendedNow.add(cPub),
+        suspended: () async => {...suspendedNow},
+      );
+      expect(outcome.pinned, isEmpty);
+      expect(await keys.peer(_c), isNull);
+    });
+
+    test(
       'a pin the roster already names is not restamped by re-pinning',
       () async {
         final keys = ViewerKeyStore(storage: MemoryKeyValueStore());

@@ -1,0 +1,54 @@
+#!/bin/sh
+set -eu
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=labwc
+export ADAPTER_UPDATE_DISABLE=true
+export HARNESS_TUI_BIN=/usr/lib/harness/hn
+export PATH="$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/bin"
+export BROWSER=hn-browser
+export npm_config_prefix="$HOME/.local"
+export HARNESS_OS=1
+export HARNESS_TUI_NOTIFY=off
+export HARNESS_TUI_TMUX_CONF=/usr/share/harness-os/tmux.conf
+# A 2D virtio display has no GPU acceleration. Using Mesa's software GL there
+# wastes CPU and memory. Keep wlroots' normal renderer on physical/3D GPUs and
+# honor an explicit WLR_RENDERER setting.
+if [ -z "${WLR_RENDERER:-}" ] && /usr/lib/harness-os/virtio-2d; then
+    export WLR_RENDERER=pixman
+fi
+mkdir -p "$HOME/.local/bin" "$HOME/.local/state/harness-os"
+/usr/bin/python3 /usr/lib/harness-os/projects.py prepare >/dev/null
+# Use the systemd user's existing bus so activation and the compositor share one
+# environment. A second dbus-run-session bus would split those services.
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+# The graphical keyboard belongs to Wayland. In particular, an autologin TTY
+# must not interpret Ctrl+C as SIGINT for the compositor's foreground group.
+# Restore the console before using hn's text fallback or leaving the session.
+tty_state=$(stty -g 2>/dev/null || true)
+restore_tty() {
+    if [ -n "$tty_state" ]; then stty "$tty_state" 2>/dev/null || true; fi
+}
+trap restore_tty EXIT
+if [ -n "$tty_state" ]; then stty -echo -icanon -isig; fi
+compositor_config=/usr/share/harness-os/labwc
+if [ -f /etc/harness-live ]; then
+    compositor_config=/usr/share/harness-os/labwc-install
+fi
+if labwc -C "$compositor_config" > "$HOME/.local/state/harness-os/display.log" 2>&1; then
+    exit 0
+fi
+restore_tty
+trap - EXIT
+# A missing/broken GPU driver must not strand the programmer at a blank screen.
+# Stay in hn on the Linux console; an agent can install drivers and arrange a reboot.
+systemctl --user stop harness-os.target || true
+if [ -f /etc/harness-live ]; then
+    exec sudo /usr/bin/python3 /usr/lib/harness-os/install.py --boot
+fi
+systemctl --user start harness-daemon.service || true
+printf '%s\n' 'Graphics unavailable; continuing in hn on the console.'
+cd "$HOME/projects"
+while :; do
+    /usr/bin/hn || true
+    sleep 2
+done

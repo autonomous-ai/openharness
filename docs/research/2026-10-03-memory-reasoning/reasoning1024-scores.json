@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "a95f6ce4eab789be5447360ed48fdb901e1ed1b34f1634ea76ce644866167a22",
+  "suiteSha256": "657aae9de4f301b660cc2c57dce0f80ae801f49e71921a2365b862ba15d0023e",
+  "evidence": "development_diagnostic_only",
+  "reviewer": {
+    "id": "implementing-agent",
+    "kind": "agent",
+    "independent": false
+  },
+  "contextFormats": [
+    "source_excerpts"
+  ],
+  "coverage": {
+    "completedCases": 1,
+    "expectedCases": 8
+  },
+  "memories": {
+    "passed": 1,
+    "reviewed": 1,
+    "total": 1,
+    "rate": null
+  },
+  "recall": {
+    "passed": 1,
+    "reviewed": 1,
+    "total": 1,
+    "rate": null
+  },
+  "abstention": {
+    "passed": 2,
+    "reviewed": 2,
+    "total": 2,
+    "rate": null
+  },
+  "cases": [
+    {
+      "id": "default-with-user-override",
+      "status": "reviewable",
+      "probes": [
+        {
+          "id": "same-project",
+          "passed": true
+        },
+        {
+          "id": "different-project",
+          "passed": true
+        },
+        {
+          "id": "unrelated-topic",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "id": "firm-request-with-unresolved-placement",
+      "status": "not_reviewable",
+      "probes": []
+    },
+    {
+      "id": "polite-request",
+      "status": "not_reviewable",
+      "probes": []
+    },
+    {
+      "id": "exploratory-question",
+      "status": "not_reviewable",
+      "probes": []
+    },
+    {
+      "id": "tentative-number",
+      "status": "not_reviewable",
+      "probes": []
+    },
+    {
+      "id": "accepted-number",
+      "status": "not_reviewable",
+      "probes": []
+    },
+    {
+      "id": "quoted-plan-and-user-correction",
+      "status": "not_reviewable",
+      "probes": []
+    },
+    {
+      "id": "limited-control-set",
+      "status": "not_reviewable",
+      "probes": []
+    }
+  ],
+  "taskBenefit": "not_measured",
+  "nativeDelivery": "not_measured",
+  "limitations": [
+    "Ratings are attributed judgements, not authenticated independent review.",
+    "Exact source and metadata checks do not establish faithful meaning or complete surrounding context.",
+    "These diagnostics do not satisfy the held-out-history or paired coding-task release gates.",
+    "Older reports without captured recall context can be reviewed for memory content but receive no recall-quality rate.",
+    "Empty, unfinished or partially reviewed denominators never receive a passing rate."
+  ],
+  "producer": {
+    "protocol": "coding-memory-quality-review-v2",
+    "node": "v22.23.2",
+    "runnerSha256": "05de851ddec92668ab0757e62f579527a2b53f602f954bf6f3a3f4c3b0a2d7e2",
+    "scorerSha256": "3fbdd654e93c58343d41ebe117f2ee6092ac8a35ec01b75675f9679978a20b3d",
+    "contextValidatorSha256": "eb41f6c26608f1628e7f9e721d1f6ca9b39594e6f2bd494ecd21a067515ed626"
+  }
+}

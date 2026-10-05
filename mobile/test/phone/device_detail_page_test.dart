@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/relative_time.dart';
 import 'package:harness_mobile/phone/device_detail_page.dart';
 import 'package:harness_mobile/phone/fingerprint_text.dart';
+import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/viewer/device_log_sync.dart';
 
 import 'devices_fixture.dart';
@@ -178,9 +179,33 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(notifier.newDevices, isEmpty);
+    // Nothing on this page said the key was suspended: "mine" vouches for nothing it did not show.
+    expect(notifier.dismissed, [(pub: r.member.pub, liftSuspension: false)]);
     expect(mine, 1);
     expect(find.byType(DeviceDetailPage), findsNothing);
     expect(notifier.removed, isEmpty);
+  });
+
+  testWidgets('It’s mine lifts a fork suspension only when the page shows it', (
+    tester,
+  ) async {
+    final notifier = DevicesApp();
+    addTearDown(notifier.dispose);
+    final r = DeviceLogRow(
+      app().member,
+      fingerprint: app().fingerprint,
+      self: false,
+      pending: true,
+      suspended: true,
+    );
+    notifier.newDevices.add(r.member);
+    await pump(tester, notifier, r, isNew: true);
+    expect(find.textContaining('Not trusted here'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('device-detail-mine')));
+    await tester.pumpAndSettle();
+
+    expect(notifier.dismissed, [(pub: r.member.pub, liftSuspension: true)]);
   });
 
   testWidgets('Remove asks first; backing out removes nothing', (tester) async {
@@ -249,8 +274,14 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(DeviceDetailPage), findsOneWidget);
-    expect(find.text("Couldn't remove iPad. Try again."), findsOneWidget);
+    expect(find.text('Couldn’t remove iPad. Try again.'), findsOneWidget);
     expect(find.text('Remove this device'), findsOneWidget);
+    // A failure is red (only advice — another account, a list that moved — is amber).
+    final message = find.text('Couldn’t remove iPad. Try again.');
+    expect(
+      tester.widget<Text>(message).style!.color,
+      Tty.of(tester.element(message)).red,
+    );
   });
 
   testWidgets('this phone itself has no Remove and no It’s mine', (

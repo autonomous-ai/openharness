@@ -138,7 +138,7 @@ void main() {
       expect(app.pendingAgentPause('m', 'a0'), same(pause));
       expect(
         (await app.resumeAgent('m', 'a0')).error,
-        contains('still pausing'),
+        contains('still stopping'),
       );
       expect(connection.requests, isEmpty);
       connection.inventory!.completeError(StateError('inventory unavailable'));

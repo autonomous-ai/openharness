@@ -10,7 +10,7 @@ import type { RegisteredSession } from './registry.js'
 const exec = promisify(execFile)
 const within = (parent: string, path: string) => parent === path || path.startsWith(parent + sep)
 async function git(cwd: string, args: string[]): Promise<string> {
-  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete env[key]
   return (await exec('git', ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', cwd, ...args],
     { env, timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 })).stdout.replace(/\r?\n$/, '')
@@ -20,6 +20,45 @@ export type WorktreeReview = {
   dirty: boolean; changes: string[]; signature: string; dev: number; ino: number
 }
 
+export type WorkspaceInspection = {
+  kind: 'main' | 'worktree' | 'folder' | 'unavailable'
+  path: string | null; worktreePath?: string; mainPath?: string
+  canDelete: boolean; reason: string
+}
+
+/** Read-only location and cleanup eligibility. No review token or deletion is created by Inspect. */
+export async function inspectWorkspace(s: RegisteredSession, sessions: readonly RegisteredSession[]): Promise<WorkspaceInspection> {
+  let path: string | null = s.cwd ?? null
+  try {
+    if (!path) throw new Error('No working folder')
+    path = await realpath(path)
+    let root: string
+    try { root = await realpath(await git(path, ['rev-parse', '--show-toplevel'])) }
+    catch (error) {
+      if (/not a git repository/i.test(String((error as { stderr?: string }).stderr))) {
+        return { kind: 'folder', path, canDelete: false, reason: 'This folder is not a Git worktree. Its files are kept.' }
+      }
+      throw error
+    }
+    const gitDir = await realpath(resolve(root, await git(root, ['rev-parse', '--git-dir'])))
+    const common = await realpath(resolve(root, await git(root, ['rev-parse', '--git-common-dir'])))
+    if (gitDir === common) {
+      return { kind: 'main', path, mainPath: root, canDelete: false, reason: 'This is the main project checkout. It cannot be deleted here.' }
+    }
+    const location = { kind: 'worktree' as const, path, worktreePath: root,
+      ...(basename(common) === '.git' ? { mainPath: dirname(common) } : {}) }
+    try {
+      const review = await inspectWorktree(s, sessions)
+      return { ...location, worktreePath: review.path, mainPath: review.main, canDelete: true,
+        reason: 'Selecting Worktree data in Delete removes this entire worktree folder after confirmation. The main project and branch are kept. Leave Session data unchecked to keep the conversation.' }
+    } catch (error) {
+      return { ...location, canDelete: false, reason: error instanceof Error ? error.message : 'Worktree cleanup is unavailable.' }
+    }
+  } catch {
+    return { kind: 'unavailable', path, canDelete: false, reason: 'The working folder could not be verified. Reopen Inspect to try again.' }
+  }
+}
+
 export async function inspectWorktree(s: RegisteredSession, sessions: readonly RegisteredSession[]): Promise<WorktreeReview> {
   if (!s.cwd) throw new Error('This harness has no working folder.')
   const root = await realpath(await git(s.cwd, ['rev-parse', '--show-toplevel']))
@@ -27,7 +66,7 @@ export async function inspectWorktree(s: RegisteredSession, sessions: readonly R
   const gitDir = await realpath(resolve(root, await git(root, ['rev-parse', '--git-dir'])))
   const common = await realpath(resolve(root, await git(root, ['rev-parse', '--git-common-dir'])))
   if (!folder.isDirectory() || !marker.isFile() || gitDir === common || basename(common) !== '.git') {
-    throw new Error('This is the main project folder, not a temporary Git worktree. It cannot be deleted here.')
+    throw new Error('No separate worktree. This is the main project folder; it cannot be deleted here.')
   }
   const main = dirname(common)
   if (within(root, main)) throw new Error('The main project is inside this folder. It cannot be deleted here.')

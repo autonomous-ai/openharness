@@ -64,6 +64,8 @@ class ViewerKeyStore {
   static const _peersKey = 'viewer_e2ee_machine_peers';
   static const _groupKey = 'viewer_e2ee_group';
   static const _devLogKey = 'viewer_e2ee_devlog';
+  static const _devLogArchiveKey = 'viewer_e2ee_devlog_archive';
+  static const _signInKey = 'viewer_e2ee_sign_in';
 
   /// Minted on first use and kept: every linked machine has pinned it.
   Future<E2eeIdentity> identity() => _identity ??= _loadOrMintIdentity();
@@ -155,13 +157,36 @@ class ViewerKeyStore {
   Future<void> writeDeviceLog(Map<String, Object?> log) =>
       _storage.write(_devLogKey, jsonEncode(log));
 
+  /// The device key logs of accounts this device was signed in to before, by account id, as stored
+  /// JSON; empty when there are none or they cannot be read.
+  Future<Map<String, Object?>> deviceLogArchive() async {
+    final raw = await _storage.read(_devLogArchiveKey);
+    if (raw == null) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      return decoded is Map ? decoded.cast<String, Object?>() : {};
+    } on FormatException {
+      return {};
+    }
+  }
+
+  Future<void> writeDeviceLogArchive(Map<String, Object?> archive) =>
+      _storage.write(_devLogArchiveKey, jsonEncode(archive));
+
+  /// Which sign-in by hand this device is under (`device_log_sync.dart` keeps its marks per sign-in);
+  /// null when none was recorded.
+  Future<String?> signInEpoch() => _storage.read(_signInKey);
+
+  Future<void> writeSignInEpoch(String epoch) =>
+      _storage.write(_signInKey, epoch);
+
   /// This device was removed from the account's device key log: its identity is spent. The next one
-  /// minted is a new device, which every other device announces as one.
+  /// minted is a new device, which every other device announces as one. The log as this device
+  /// verified it stays, with every mark on it: signing in again to the same account goes on from there.
   Future<void> forgetIdentity() =>
       _storage.synchronized('viewer_identity', () async {
         _identity = null;
         await _storage.delete(_seedKey);
-        await _storage.delete(_devLogKey);
       });
 
   Future<void> _write(List<MachinePeer> peers) => _storage.write(

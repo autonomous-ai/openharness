@@ -1,0 +1,19 @@
+name: Set up Google Cloud CLI
+description: Reuse a working runner installation, then configure the job's federated credentials
+runs:
+  using: composite
+  steps:
+    - name: Check the runner's Google Cloud CLI
+      id: installed
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: python3 "$ACTION_PATH/check-installed.py"
+    # skip_install only bypasses the download. The upstream action still configures
+    # credentials from the preceding google-github-actions/auth step.
+    - uses: google-github-actions/setup-gcloud@v2
+      with:
+        skip_install: ${{ steps.installed.outputs.reusable }}
+        # A hosted runner discards its local tool cache after this job. Use the
+        # extracted SDK directly when a missing/broken installation needs setup.
+        skip_tool_cache: ${{ runner.environment == 'github-hosted' }}

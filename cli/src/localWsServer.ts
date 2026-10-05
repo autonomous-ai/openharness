@@ -16,7 +16,10 @@ import {
   type TerminalBinaryClear,
 } from './lib/terminalBinary.js'
 import { RelayConnectError, type RelaySession, type RemoteRelayPool } from './lib/remoteRelay.js'
-import { DAEMON_IN_TYPES, DAEMON_PLATE, DAEMON_PLATE_GET } from './pair/protocol.js'
+// Reserved retired feature frames: transport refusals only, no optional implementation.
+const DAEMON_IN_TYPES = new Set(['daemon_act', 'daemon_presence', 'daemon_talk', 'daemon_open', 'daemon_shown', 'daemon_confirm'])
+const DAEMON_PLATE_GET = 'daemon_plate_get'
+const DAEMON_PLATE = 'daemon_plate'
 
 export const LOCAL_WS_PATH = '/api/local-ws'
 export const LOCAL_WS_PROTOCOL_VERSION = 1
@@ -118,39 +121,11 @@ export interface LocalWsServerOptions {
    * separate frame rather than a flag on the answer.
    */
   onVoiceRouteReply?: (voiceId: string, reply: WindowVoiceReply) => void
-  /**
-   * The pair brain's frames from a window (pair/brain.ts, daemons/BRAIN.md "Security"): `daemon_act` (a key
-   * pressed on a daemon's line), `daemon_shown` (the window drew a line), `daemon_confirm` (the person said
-   * yes to a setting), `daemon_talk` (words to the pair harness) and `daemon_presence` (here, or away).
-   * Consumed like `app_focus` and never travel on. They are taken ONLY over the daemon's own Unix socket —
-   * never TCP (LOCAL_SOCKET_REQUIRED) — and all but presence only from a UI connection: a window bound to
-   * this machine, not a tool (`harness pair`, the MCP server) and not a relayed machine (UI_ONLY). Absent
-   * (no brain), a request answers UNSUPPORTED and the rest is dropped.
-   */
-  onDaemonAct?: (connId: string, payload: Record<string, unknown>, reply: (frame: Frame) => boolean) => void
-  /** `meta.ui`: a window bound to this machine (else a relayed machine's socket: its desk facts only). */
-  onDaemonPresence?: (connId: string, payload: Record<string, unknown>, meta: { ui: boolean }) => void
-  /** `daemon_talk { requestId, text }`: the person's words to their daemon (the pair harness) → `daemon_talk_result`. */
-  onDaemonTalk?: (connId: string, payload: Record<string, unknown>, reply: (frame: Frame) => boolean) => void
-  onDaemonOpen?: (connId: string, payload: Record<string, unknown>, reply: (frame: Frame) => boolean) => void
-  /** `daemon_shown { id }`: this window has displayed that line, detail and all. */
-  onDaemonShown?: (connId: string, payload: Record<string, unknown>) => void
-  /** `daemon_confirm { requestId, kind, nonce, accept }` → `daemon_confirm_result`. */
-  onDaemonConfirm?: (connId: string, payload: Record<string, unknown>, reply: (frame: Frame) => boolean) => void
-  /**
-   * `daemon_plate_get { requestId, uid, id, seed, size, version, mood }` → `daemon_plate` (pair/plateService.ts):
-   * an individual's art. Over the Unix socket only (LOCAL_SOCKET_REQUIRED on TCP), from any client there —
-   * it moves nothing. Answered here, never forwarded to a relayed machine: any computer draws any individual.
-   * Absent: `daemon_plate { requestId, error: 'UNSUPPORTED' }`.
-   */
-  onDaemonPlate?: (connId: string, payload: Record<string, unknown>, reply: (frame: Frame) => boolean) => void
   onSelectionReply?: (connId: string, machineId: string, payload: Record<string, unknown>) => void
   onVisitReply?: (connId: string, machineId: string, payload: Record<string, unknown>) => void
   onFormReply?: (connId: string, machineId: string, payload: Record<string, unknown>) => void
 }
 
-/** The pair brain's frames from a window (pair/protocol.ts DAEMON_IN_TYPES). */
-const DAEMON_IN = DAEMON_IN_TYPES
 /** The reply each request among them gets. */
 const DAEMON_RESULT: Record<string, string> = { daemon_act: 'daemon_act_result', daemon_talk: 'daemon_talk_result', daemon_open: 'daemon_open_result', daemon_confirm: 'daemon_confirm_result' }
 
@@ -195,11 +170,6 @@ export interface RouteAnswer {
 
 export interface LocalWsServer {
   close: () => Promise<void>
-  /**
-   * The caller's end of a loopback TCP connection: its port, so the daemon can find the process asking
-   * (pair/learn/approval.ts). Null over the daemon's Unix socket, or once the connection is gone.
-   */
-  peerPort: (connId: string) => number | null
   /** Exact local socket, including sockets viewing a remote machine; never relayed. */
   sendToWindow: (connId: string, frame: Frame) => boolean
 }
@@ -342,14 +312,11 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
   const servers = [server, ...(options.localSocketServer ? [options.localSocketServer] : [])]
   for (const each of servers) each.on('upgrade', onUpgrade)
 
-  const peers = new Map<string, number | null>()
   wss.on('connection', (ws, req: http.IncomingMessage) => {
     const connId = `local:${randomUUID()}`
     // Over the daemon's own Unix socket (0600, in a 0700 folder): this user's process, not any user's.
     const trusted = isTrustedLocal(req)
-    // The caller's loopback TCP port, so the daemon can find the process asking (pair/learn/approval.ts).
-    peers.set(connId, trusted ? null : req.socket.remotePort ?? null)
-    /** Introduced itself as a tool (`machine_select { tool: true }`): `harness pair`, the MCP server. */
+    /** Introduced itself as a tool (`machine_select { tool: true }`), rather than a window. */
     let tool = false
     let selected = false
     // Which machine THIS connection is bound to. The app opens one local socket per machine, so it is
@@ -382,91 +349,95 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       try { ws.close(code, reason) } catch { ws.terminate() }
     }
 
-    ws.on('message', (raw, isBinary) => {
-      chain = chain.then(async () => {
-        if (!selected) {
-          if (isBinary) { close(4400, 'machine_select required'); return }
-          const frame = jsonFrame(raw)
-          const payload = frame?.payload as Record<string, unknown> | undefined
-          const requestedMachineId = payload?.machineId
-          if (typeof requestedMachineId === 'string') boundMachineId = requestedMachineId
-          if (frame?.type !== 'machine_select'
-            || typeof requestedMachineId !== 'string'
-            || payload?.localProtocolVersion !== LOCAL_WS_PROTOCOL_VERSION) {
-            close(4403, 'machine mismatch')
-            return
-          }
-          if (typeof payload.shareId === 'string') {
-            if (!options.shareRelay) { close(4403, 'Sharing is unavailable'); return }
-            try {
-              relay = await options.shareRelay.acquire(requestedMachineId, payload.shareId, terminalSink, close)
-              if (ws.readyState !== WebSocket.OPEN) { relay.detach(); return }
-              selected = true
-            } catch (error) {
-              close(error instanceof SharingEndedError ? 4403 : 1013,
-                error instanceof Error ? error.message.slice(0, 120) : 'Sharing unavailable')
-            }
-            return
-          }
-          if (requestedMachineId === options.machineId) {
-            tool = payload.tool === true
-            if (!options.backend.registerLocalClient(connId, terminalSink, tool ? { tool: true } : {})) {
-              close(1011, 'local registration failed')
-              return
-            }
-            selected = true
-            windowSinks.set(connId, sink)
-            sink.sendFrame({
-              type: 'connected',
-              payload: {
-                machineId: options.machineId,
-                transport: 'local',
-                localProtocolVersion: LOCAL_WS_PROTOCOL_VERSION,
-                terminalProtocolVersion: TERMINAL_BINARY_VERSION,
-                e2ee: false,
-              },
-            })
-            // Right after, not inside `connected`: the window's handshake parser is shared with the
-            // relay path, and a field it does not expect is a field it has to learn to ignore.
-            if (options.dialStatus) sink.sendFrame({ type: 'dial_status', payload: options.dialStatus() })
-            if (options.openQuestions) {
-              const open = options.openQuestions()
-              for (const asked of open) sink.sendFrame(asked)
-              // Then which questions are open at all, so a window that was here before (its link
-              // dropped) lets go of one answered meanwhile. Sent even when there are none.
-              const requestIds = open.map((f) => (f.payload as { requestId?: unknown } | undefined)?.requestId).filter((id): id is string => typeof id === 'string')
-              sink.sendFrame({ type: 'commander_questions_open', payload: { requestIds } })
-            }
-            return
-          }
-          // Not this daemon's own machine — relay to backend for the other machines this same
-          // signed-in user owns, if the daemon was wired up to do that (see lib/remoteRelay.ts).
-          if (!options.relayPool || !options.autonomousEnv) {
-            close(4403, 'machine mismatch')
-            return
-          }
-          // The local client observed a live RPC time out against an otherwise-"connected" machine —
-          // its pooled entry is suspect (most commonly the relayed machine's own Harness process
-          // restarted, dropping its E2EE session without the transport itself ever closing). Drop it
-          // so this select dials fresh instead of handing back the same dead session again.
-          if (payload?.forceReconnect === true) {
-            if (payload?.relayIsolation === true) options.relayPool.invalidateIsolated(requestedMachineId)
-            else options.relayPool.invalidate(requestedMachineId)
-          }
-          try {
-            relay = payload?.relayIsolation === true
-              ? await options.relayPool.acquireIsolated(requestedMachineId, options.autonomousEnv, frame, terminalSink, close)
-              : await options.relayPool.acquire(requestedMachineId, options.autonomousEnv, frame, terminalSink, close)
-            if (ws.readyState !== WebSocket.OPEN) { relay.detach(); return }
-            selected = true
-            windowSinks.set(connId, sink)
-          } catch (err) {
-            const noPeerLink = err instanceof RelayConnectError && err.message === 'NO_PEER_LINK'
-            const code = noPeerLink ? 4404 : err instanceof RelayConnectError && err.closeCode ? err.closeCode : 1011
-            close(code, err instanceof Error ? err.message.slice(0, 120) : 'relay failed')
-          }
+    // The handshake is asynchronous; established local control frames are not.
+    // Keep its suspension state out of the per-message hot path.
+    const selectMachine = async (raw: RawData, isBinary: boolean): Promise<void> => {
+      if (isBinary) { close(4400, 'machine_select required'); return }
+      const frame = jsonFrame(raw)
+      const payload = frame?.payload as Record<string, unknown> | undefined
+      const requestedMachineId = payload?.machineId
+      if (typeof requestedMachineId === 'string') boundMachineId = requestedMachineId
+      if (frame?.type !== 'machine_select'
+        || typeof requestedMachineId !== 'string'
+        || payload?.localProtocolVersion !== LOCAL_WS_PROTOCOL_VERSION) {
+        close(4403, 'machine mismatch')
+        return
+      }
+      if (typeof payload.shareId === 'string') {
+        if (!options.shareRelay) { close(4403, 'Sharing is unavailable'); return }
+        try {
+          relay = await options.shareRelay.acquire(requestedMachineId, payload.shareId, terminalSink, close)
+          if (ws.readyState !== WebSocket.OPEN) { relay.detach(); return }
+          selected = true
+        } catch (error) {
+          close(error instanceof SharingEndedError ? 4403 : 1013,
+            error instanceof Error ? error.message.slice(0, 120) : 'Sharing unavailable')
+        }
+        return
+      }
+      if (requestedMachineId === options.machineId) {
+        tool = payload.tool === true
+        if (!options.backend.registerLocalClient(connId, terminalSink, tool ? { tool: true } : {})) {
+          close(1011, 'local registration failed')
           return
         }
+        selected = true
+        windowSinks.set(connId, sink)
+        sink.sendFrame({
+          type: 'connected',
+          payload: {
+            machineId: options.machineId,
+            transport: 'local',
+            localProtocolVersion: LOCAL_WS_PROTOCOL_VERSION,
+            terminalProtocolVersion: TERMINAL_BINARY_VERSION,
+            e2ee: false,
+          },
+        })
+        // Right after, not inside `connected`: the window's handshake parser is shared with the
+        // relay path, and a field it does not expect is a field it has to learn to ignore.
+        if (options.dialStatus) sink.sendFrame({ type: 'dial_status', payload: options.dialStatus() })
+        if (options.openQuestions) {
+          const open = options.openQuestions()
+          for (const asked of open) sink.sendFrame(asked)
+          // Then which questions are open at all, so a window that was here before (its link
+          // dropped) lets go of one answered meanwhile. Sent even when there are none.
+          const requestIds = open.map((f) => (f.payload as { requestId?: unknown } | undefined)?.requestId).filter((id): id is string => typeof id === 'string')
+          sink.sendFrame({ type: 'commander_questions_open', payload: { requestIds } })
+        }
+        return
+      }
+      // Not this daemon's own machine — relay to backend for the other machines this same
+      // signed-in user owns, if the daemon was wired up to do that (see lib/remoteRelay.ts).
+      if (!options.relayPool || !options.autonomousEnv) {
+        close(4403, 'machine mismatch')
+        return
+      }
+      // The local client observed a live RPC time out against an otherwise-"connected" machine —
+      // its pooled entry is suspect (most commonly the relayed machine's own Harness process
+      // restarted, dropping its E2EE session without the transport itself ever closing). Drop it
+      // so this select dials fresh instead of handing back the same dead session again.
+      if (payload?.forceReconnect === true) {
+        if (payload?.relayIsolation === true) options.relayPool.invalidateIsolated(requestedMachineId)
+        else options.relayPool.invalidate(requestedMachineId)
+      }
+      try {
+        relay = payload?.relayIsolation === true
+          ? await options.relayPool.acquireIsolated(requestedMachineId, options.autonomousEnv, frame, terminalSink, close)
+          : await options.relayPool.acquire(requestedMachineId, options.autonomousEnv, frame, terminalSink, close)
+        if (ws.readyState !== WebSocket.OPEN) { relay.detach(); return }
+        selected = true
+        windowSinks.set(connId, sink)
+      } catch (err) {
+        const noPeerLink = err instanceof RelayConnectError && err.message === 'NO_PEER_LINK'
+        const code = noPeerLink ? 4404 : err instanceof RelayConnectError && err.closeCode ? err.closeCode : 1011
+        close(code, err instanceof Error ? err.message.slice(0, 120) : 'relay failed')
+      }
+      return
+    }
+
+    ws.on('message', (raw, isBinary) => {
+      chain = chain.then(() => {
+        if (!selected) return selectMachine(raw, isBinary)
 
         // Parsed ONCE. Every sniff below used to re-run JSON.parse on the same bytes — up to seven
         // times for a frame that matched none of them, which is what a terminal_ack (every 16ms of
@@ -588,21 +559,24 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         // act on.
         if (!isBinary && (options.onRouteTask || options.onRouteSend || options.onVoiceRouteReply)) {
           if (parsed?.type === 'route_task' && options.onRouteTask) {
-            const payload = parsed.payload as Record<string, unknown> | undefined
-            const requestId = typeof payload?.requestId === 'string' ? payload.requestId : ''
-            const text = typeof payload?.text === 'string' ? payload.text.trim() : ''
-            // An answer ALWAYS goes back, even for a question we cannot serve: the window is holding a
-            // spinner open on this id, and silence is the one reply it cannot recover from.
-            let answer: RouteAnswer = { agentId: '', machineId: '', name: '', confidence: 0, reason: 'empty task', candidates: [], weighed: 0, machines: 0, via: '' }
-            if (text) {
-              try {
-                answer = await options.onRouteTask(text)
-              } catch (err) {
-                answer = { agentId: '', machineId: '', name: '', confidence: 0, reason: (err as Error).message.slice(0, 120), candidates: [], weighed: 0, machines: 0, via: '' }
+            const onRouteTask = options.onRouteTask
+            return (async () => {
+              const payload = parsed.payload as Record<string, unknown> | undefined
+              const requestId = typeof payload?.requestId === 'string' ? payload.requestId : ''
+              const text = typeof payload?.text === 'string' ? payload.text.trim() : ''
+              // An answer ALWAYS goes back, even for a question we cannot serve: the window is holding a
+              // spinner open on this id, and silence is the one reply it cannot recover from.
+              let answer: RouteAnswer = { agentId: '', machineId: '', name: '', confidence: 0, reason: 'empty task', candidates: [], weighed: 0, machines: 0, via: '' }
+              if (text) {
+                try {
+                  answer = await onRouteTask.call(options, text)
+                } catch (err) {
+                  answer = { agentId: '', machineId: '', name: '', confidence: 0, reason: (err as Error).message.slice(0, 120), candidates: [], weighed: 0, machines: 0, via: '' }
+                }
               }
-            }
-            sink.sendFrame({ type: 'route_result', payload: { requestId, ...answer } })
-            return
+              sink.sendFrame({ type: 'route_result', payload: { requestId, ...answer } })
+              return
+            })()
           }
           if (parsed?.type === 'voice_route_reply' && options.onVoiceRouteReply) {
             const payload = parsed.payload as Record<string, unknown> | undefined
@@ -657,11 +631,10 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             sink.sendFrame({ type: DAEMON_PLATE, payload: { requestId: payload.requestId, error, ...(detail ? { detail } : {}) } })
           }
           if (!trusted) { refuse('LOCAL_SOCKET_REQUIRED', 'The daemon takes these only over its own socket, never TCP.'); return }
-          if (!options.onDaemonPlate) { refuse('UNSUPPORTED'); return }
-          options.onDaemonPlate(connId, payload, (frame) => sink.sendFrame(frame))
+          refuse('UNSUPPORTED')
           return
         }
-        if (!isBinary && parsed && typeof parsed.type === 'string' && DAEMON_IN.has(parsed.type)) {
+        if (!isBinary && parsed && typeof parsed.type === 'string' && DAEMON_IN_TYPES.has(parsed.type)) {
           const type: string = parsed.type
           const payload = (parsed.payload && typeof parsed.payload === 'object' && !Array.isArray(parsed.payload)
             ? parsed.payload : {}) as Record<string, unknown>
@@ -678,12 +651,8 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           if (!trusted) { answer({ ok: false, error: 'LOCAL_SOCKET_REQUIRED', detail: 'The daemon takes these only over its own socket, never TCP.' }); return }
           if (tool) { answer({ ok: false, error: 'UI_ONLY', detail: 'A tool is not a window: keys, talk and confirmations come from a window.' }); return }
           const ui = !relay && boundMachineId === options.machineId
-          if (type === 'daemon_presence') { options.onDaemonPresence?.(connId, payload, { ui }); return }
-          if (!ui) { answer({ ok: false, error: 'UI_ONLY', detail: 'Keys, talk and confirmations come from a window on this machine\'s own socket.' }); return }
-          const reply = (frame: Frame): boolean => sink.sendFrame(frame)
-          if (type === 'daemon_shown') { options.onDaemonShown?.(connId, payload); return }
-          const handler = type === 'daemon_act' ? options.onDaemonAct : type === 'daemon_talk' ? options.onDaemonTalk : type === 'daemon_open' ? options.onDaemonOpen : options.onDaemonConfirm
-          if (handler) { handler(connId, payload, reply); return }
+          if (type === 'daemon_presence' || type === 'daemon_shown') return
+          if (!ui) { answer({ ok: false, error: 'UI_ONLY' }); return }
           answer({ ok: false, error: 'UNSUPPORTED' })
           return
         }
@@ -731,19 +700,16 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           if (isBinary) {
             const clear = decodeTerminalLocal(binaryBytes(raw))
             if (!clear) { close(4400, 'invalid terminal frame'); return }
-            await relay.sendBinary(clear)
-            return
+            return relay.sendBinary(clear)
           }
           if (!parsed) { close(4400, 'invalid json frame'); return }
-          await relay.send(withLocalClient(parsed, options.localClient))
-          return
+          return relay.send(withLocalClient(parsed, options.localClient))
         }
 
         if (isBinary) {
           const frame = decodeTerminalLocal(binaryBytes(raw))
           if (!frame) { close(4400, 'invalid terminal frame'); return }
-          await options.backend.handleLocalBinary(connId, frame)
-          return
+          return options.backend.handleLocalBinary(connId, frame)
         }
         if (!parsed) { close(4400, 'invalid json frame'); return }
         options.backend.handleLocalFrame(connId, parsed)
@@ -761,7 +727,6 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     })
 
     const cleanup = (): void => {
-      peers.delete(connId)
       heartbeat.stop()
       const wasWindow = windowSinks.delete(connId)
       explicitFocusClients.delete(connId)
@@ -781,7 +746,6 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
   })
 
   return {
-    peerPort: (connId) => peers.get(connId) ?? null,
     sendToWindow: (connId, frame) => windowSinks.get(connId)?.sendFrame(frame) ?? false,
     close: async () => {
       for (const each of servers) each.off('upgrade', onUpgrade)

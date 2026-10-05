@@ -1,0 +1,14 @@
+[Unit]
+Description=Harness USB installer
+ConditionPathExists=/etc/harness-live
+PartOf=harness-os.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/foot --config=/usr/share/harness-os/foot.ini /usr/bin/sudo /usr/bin/python3 /usr/lib/harness-os/install.py --boot
+Restart=on-failure
+RestartSec=1
+
+[Install]
+WantedBy=harness-os.target

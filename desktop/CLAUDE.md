@@ -23,6 +23,11 @@ it from memory. The harness CLI (`autonomous-harness`) still carries its own gri
 
 ## Toolchain and commands
 
+Choose and time-bound validation using the repository's
+[validation and release guide](../docs/validation-and-release.md). The full-suite
+command below is available for broad changes and suite maintenance; it is not an
+extra mandatory run after affected checks and equivalent CI have already passed.
+
 `pubspec.yaml` pins `sdk: ^3.13.0`, i.e. **Flutter ≥ 3.47 / Dart ≥ 3.13**. An older Flutter fails at
 `flutter pub get` ("version solving failed") and every command below fails with it — check
 `flutter --version` first.
@@ -37,7 +42,7 @@ back to CocoaPods and rewrites tracked files (`project.pbxproj`, `contents.xcwor
 ```bash
 flutter pub get
 flutter analyze                                   # lints: package:flutter_lints, no custom rules
-flutter test                                      # whole unit/widget suite (test/)
+make -C .. desktop-test                           # bounded VM suite, workers + receipt
 flutter test test/terminal_session_test.dart      # one file
 flutter test test/ws_conn_test.dart --plain-name "reconnects"   # one test by name substring
 flutter run -d macos                              # or: flutter run -d linux
@@ -240,11 +245,14 @@ both themes and enlarged text at the minimum window size without running an inst
 
 Read-only dependency probes own their subprocesses and have a ten-second deadline covering startup,
 exit, and output-pipe closure. A timeout reports a failed check, not a missing tool; Retry after the
-initial check stays read-only. Only an explicit install action permits automatic installation to
-continue after a Terminal handoff, and a failed recheck stops that continuation. Readiness requires
-the final ready phase and every required step, so old successful step values cannot flash a ready
-screen during a new verification. The preflight status is a live region and uses a static waiting
-icon when Reduce Motion is enabled.
+initial check probes read-only first. When every item in the probed plan installs in-app (no
+`requiresTerminal` — always the case on macOS), the app installs it straight after the probe, at
+launch and after an automatic-mode Retry, without showing the review or its Install button; a plan
+that needs Terminal (Linux apt) waits on that button, and manual mode never installs. Only an
+install the app or the person started may continue after a Terminal handoff, and a failed recheck
+stops that continuation. Readiness requires the final ready phase and every required step, so old
+successful step values cannot flash a ready screen during a new verification. The preflight status
+is a live region and uses a static waiting icon when Reduce Motion is enabled.
 
 ### Boot and state
 
@@ -277,8 +285,12 @@ An owned idle session saves its native conversation and terminal snapshot
 before releasing its process, regardless of other viewers. A ready, unused Claude/Codex chat with
 an empty composer also closes directly, saving its terminal snapshot without requiring a native
 conversation. Missing activity evidence for an existing chat remains unknown. Working,
-waiting-for-input, draft, or unknown sessions show one short sentence with Cancel and Close;
-there is no title or deferred-close button. Cancel is the default. Previously queued daemon close
+waiting-for-input, draft, or unknown sessions share one confirmation for the whole tab, with
+their names, activity, and the number of sessions that will stop. Its only choices are Cancel
+and Stop; Cancel is the default. Stop saves and stops every reviewed session before the tab
+closes. Idle-only closes retain the daemon's activity guard; newly active work gets one review
+of the remaining sessions. Failures keep the view and identify confirmed stops separately
+from uncertain ones. Previously queued daemon close
 plans remain compatible. Layout cleanup, moving panes, switching tabs, and sign-out retain their view-only behavior. A failed save
 or unconfirmed close keeps the pane. Older daemons retain their existing behavior until updated.
 
@@ -376,7 +388,7 @@ add a kind there, not at the call site.
   Chrome widgets call `grid.AppTheme.watch(context)` at the top of `build` so `const` subtrees still
   repaint on a theme flip.
 - The [workspace status bar](design/workspace-status-bar.md) places system-font tabs and global actions at the top,
-  with harness count, local hardware and subscription allowance used at the bottom left and focused machine/repo/branch/PR at the bottom right.
+  with harness, machine and installed local model counts plus subscription allowance remaining at the bottom left and focused machine/repo/branch/PR at the bottom right.
   Tabs center their name/status group without permanent number prefixes; Command replaces
   the status with the resolved shortcut beside the name. Tab and pane close marks are small
   and quiet, with larger click targets. Terminal panes end with matching
@@ -422,7 +434,10 @@ add a kind there, not at the call site.
   have spent. Each account shows its `tightest` window, the limit that stops the work first.
   The shared controller reads ahead at startup and every five minutes; opening a menu requests
   a fresh reading, capped at once per minute. The footer uses these same deduplicated accounts
-  and freshness rules, displaying whole allowance-used percentages (100 − remaining) in neutral ink.
+  and freshness rules, displaying one provider icon and remaining percentage per account.
+  Values are neutral above 20%, muted amber at 6–20%, and red at 5% or less; tooltips identify
+  the account, machines, limiting window and resets. Models counts distinct installed local
+  model variants across linked owned machines, sharing the picker's cached inventories.
   **Remote machines' accounts arrive through `usage_read`** (`AppNotifier.readRemoteUsage`,
   `usage/remote_usage.dart`, `usage/usage_accounts.dart`; CLI side `cli/src/lib/accountUsage.ts`).
   A remote machine may be signed in to a DIFFERENT subscription, and the only honest way to read

@@ -1,0 +1,287 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "fa9e66381b99f052017c952aeb6f143567b5abda9f37984f55f6f6ee7cc18543",
+  "suiteSha256": "657aae9de4f301b660cc2c57dce0f80ae801f49e71921a2365b862ba15d0023e",
+  "reviewer": {
+    "id": "codex-source-review",
+    "kind": "agent",
+    "independent": false
+  },
+  "cases": [
+    {
+      "id": "default-with-user-override",
+      "records": [
+        {
+          "id": "4a88d46c-ebc0-42e4-9942-d0b8c1794d43",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "The stated compact-navigation default is supported and scoped correctly. It does not itself forbid an override, but the separately required manual-expansion/current-visit behavior is absent from the retained record and recall."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "4a88d46c-ebc0-42e4-9942-d0b8c1794d43"
+          ],
+          "requiredIds": [
+            "4a88d46c-ebc0-42e4-9942-d0b8c1794d43"
+          ],
+          "missingRequiredMemory": true,
+          "faithfulContext": true,
+          "note": "The compact default is recalled faithfully, but explicit manual expansion and its current-visit limit are missing."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correctly returns no context for this unresolved choice, unrelated topic or different project."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correctly returns no context for this unresolved choice, unrelated topic or different project."
+        }
+      ]
+    },
+    {
+      "id": "firm-request-with-unresolved-placement",
+      "records": [
+        {
+          "id": "9f172cb9-5510-4be1-b24a-9910c70a2004",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Retains the firm build-log preservation request without settling the footer/Run placement question or inventing a runtime condition for retrieval."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "9f172cb9-5510-4be1-b24a-9910c70a2004"
+          ],
+          "requiredIds": [
+            "9f172cb9-5510-4be1-b24a-9910c70a2004"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The packet preserves the requested behavior, scope and unknowns."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correctly returns no context for this unresolved choice, unrelated topic or different project."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correctly returns no context for this unresolved choice, unrelated topic or different project."
+        }
+      ]
+    },
+    {
+      "id": "polite-request",
+      "records": [
+        {
+          "id": "cce68c51-aaf9-4495-8ed0-2222fe55d7cd",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Correctly treats the polite question as a request for search-focus behavior, with no claim that implementation is complete or invented reason."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "cce68c51-aaf9-4495-8ed0-2222fe55d7cd"
+          ],
+          "requiredIds": [
+            "cce68c51-aaf9-4495-8ed0-2222fe55d7cd"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The packet preserves the requested behavior, scope and unknowns."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correctly returns no context for this unresolved choice, unrelated topic or different project."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correctly returns no context for this unresolved choice, unrelated topic or different project."
+        }
+      ]
+    },
+    {
+      "id": "exploratory-question",
+      "records": [],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correctly returns no context for this unresolved choice, unrelated topic or different project."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correctly returns no context for this unresolved choice, unrelated topic or different project."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correctly returns no context for this unresolved choice, unrelated topic or different project."
+        }
+      ]
+    },
+    {
+      "id": "tentative-number",
+      "records": [],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correctly returns no context for this unresolved choice, unrelated topic or different project."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correctly returns no context for this unresolved choice, unrelated topic or different project."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correctly returns no context for this unresolved choice, unrelated topic or different project."
+        }
+      ]
+    },
+    {
+      "id": "accepted-number",
+      "records": [
+        {
+          "id": "bff983ab-c5f3-4c92-9526-a1ce831b389c",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Retains the agreed 14-day policy for completed logs within build-monitor; requested maintenance is distinct from verification that the implementation enforces it."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "bff983ab-c5f3-4c92-9526-a1ce831b389c"
+          ],
+          "requiredIds": [
+            "bff983ab-c5f3-4c92-9526-a1ce831b389c"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The packet preserves the requested behavior, scope and unknowns."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correctly returns no context for this unresolved choice, unrelated topic or different project."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correctly returns no context for this unresolved choice, unrelated topic or different project."
+        }
+      ]
+    },
+    {
+      "id": "quoted-plan-and-user-correction",
+      "records": [
+        {
+          "id": "b3306b62-bddd-484e-acba-eafadfa3ff92",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Retains only the explicit user instruction to show failures. It does not adopt the assistant's retry duration/hiding proposal or claim a measurement."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "b3306b62-bddd-484e-acba-eafadfa3ff92"
+          ],
+          "requiredIds": [
+            "b3306b62-bddd-484e-acba-eafadfa3ff92"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The packet preserves the requested behavior, scope and unknowns."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correctly returns no context for this unresolved choice, unrelated topic or different project."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correctly returns no context for this unresolved choice, unrelated topic or different project."
+        }
+      ]
+    }
+  ]
+}

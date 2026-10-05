@@ -58,6 +58,12 @@ function onceMessage(ws: WebSocket): Promise<Frame> {
   })
 }
 
+function gate(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => { resolve = done })
+  return { promise, resolve }
+}
+
 describe('local CLI WebSocket', () => {
   let server: http.Server | null = null
   let local: LocalWsServer | null = null
@@ -277,6 +283,148 @@ describe('local CLI WebSocket', () => {
     expect(backend.sink?.sendFrame({ type: 'agents_list_result', payload: { requestId: 'r1', agents: [] } })).toBe(true)
     await expect(reply).resolves.toMatchObject({ type: 'agents_list_result' })
     ws.close()
+  })
+
+  it.each(['local binary', 'remote JSON', 'remote binary', 'route task'] as const)(
+    'keeps later messages behind an unfinished %s operation', async (kind) => {
+      const backend = new FakeBackend(), pending = gate(), entered = gate()
+      const trace: string[] = []
+      const first = async () => {
+        trace.push('first started')
+        entered.resolve()
+        await pending.promise
+        trace.push('first finished')
+      }
+      backend.handleLocalFrame = () => { trace.push('second') }
+      backend.handleLocalBinary = first
+      const remote = kind.startsWith('remote')
+      const relay = {
+        send: async (frame: Frame) => {
+          if ((frame.payload as { requestId?: string })?.requestId === 'first') await first()
+          else trace.push('second')
+        },
+        sendBinary: first,
+        detach: () => {},
+      }
+      const ws = new WebSocket(await start(backend, {
+        autonomousEnv: 'test',
+        relayPool: {
+          acquire: async (_id: string, _env: string, _select: Frame, sink: LocalClientSink) => {
+            sink.sendFrame({ type: 'connected', payload: {} })
+            return relay
+          },
+        } as unknown as LocalWsServerOptions['relayPool'],
+        async onRouteTask(this: LocalWsServerOptions) {
+          expect(this.machineId).toBe(machineId)
+          await first()
+          return { agentId: '', machineId: '', name: '', confidence: 0, reason: '', candidates: [], weighed: 0, machines: 0, via: '' }
+        },
+      }))
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: remote ? 'remote' : machineId, localProtocolVersion: 1 } }))
+      await connected
+      if (kind.endsWith('binary')) {
+        ws.send(encodeTerminalLocal({ kind: TerminalBinaryKind.input, streamId, seq: 1, bytes: new Uint8Array([97]), compressed: false })!)
+      } else {
+        ws.send(JSON.stringify({ type: kind === 'route task' ? 'route_task' : 'agents_list', payload: { requestId: 'first', text: 'route me' } }))
+      }
+      ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'second' } }))
+      await entered.promise
+      // Let the real socket deliver the queued frame while the first operation is held open.
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(trace).toEqual(['first started'])
+      pending.resolve()
+      await vi.waitFor(() => expect(trace).toEqual(['first started', 'first finished', 'second']))
+      ws.close()
+    },
+  )
+
+  it.each(['local JSON', 'local binary', 'remote JSON', 'remote binary'] as const)(
+    'closes the socket when %s dispatch fails', async (kind) => {
+      const backend = new FakeBackend()
+      backend.handleLocalFrame = () => { throw new Error('dispatch failed') }
+      backend.handleLocalBinary = async () => { throw new Error('dispatch failed') }
+      const relay = { send: async () => { throw new Error('dispatch failed') }, sendBinary: async () => { throw new Error('dispatch failed') }, detach: () => {} }
+      const ws = new WebSocket(await start(backend, {
+        autonomousEnv: 'test',
+        relayPool: {
+          acquire: async (_id: string, _env: string, _select: Frame, sink: LocalClientSink) => {
+            sink.sendFrame({ type: 'connected', payload: {} })
+            return relay
+          },
+        } as unknown as LocalWsServerOptions['relayPool'],
+      }))
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: kind.startsWith('remote') ? 'remote' : machineId, localProtocolVersion: 1 } }))
+      await connected
+      const closed = new Promise<[number, string]>((resolve) => ws.once('close', (code, reason) => resolve([code, reason.toString()])))
+      if (kind.endsWith('binary')) {
+        ws.send(encodeTerminalLocal({ kind: TerminalBinaryKind.input, streamId, seq: 1, bytes: new Uint8Array([97]), compressed: false })!)
+      } else {
+        ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'first' } }))
+      }
+      await expect(closed).resolves.toEqual([1011, 'local dispatch failed'])
+    },
+  )
+
+  it.each(['owned', 'isolated', 'shared'] as const)(
+    'queues frames during a pending %s relay handshake', async (kind) => {
+      const backend = new FakeBackend(), pending = gate(), entered = gate()
+      const frames: Frame[] = []
+      const acquire = vi.fn(async () => {
+        entered.resolve()
+        await pending.promise
+        return { send: async (frame: Frame) => { frames.push(frame) }, sendBinary: async () => {}, detach: () => {} }
+      })
+      const ws = new WebSocket(await start(backend, {
+        autonomousEnv: 'test',
+        relayPool: { acquire, acquireIsolated: acquire } as unknown as LocalWsServerOptions['relayPool'],
+        shareRelay: { acquire } as unknown as LocalWsServerOptions['shareRelay'],
+      }))
+      await onceOpen(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: {
+        machineId: 'remote', localProtocolVersion: 1,
+        ...(kind === 'shared' ? { shareId: 'share' } : {}), relayIsolation: kind === 'isolated',
+      } }))
+      ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'queued' } }))
+      await entered.promise
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(acquire).toHaveBeenCalledTimes(1)
+      expect(frames).toEqual([])
+      pending.resolve()
+      await vi.waitFor(() => expect(frames).toEqual([{ type: 'agents_list', payload: { requestId: 'queued' } }]))
+      expect(backend.frames).toEqual([])
+      ws.close()
+    },
+  )
+
+  it.each(['owned', 'shared'] as const)('detaches a late %s relay after its window disconnects', async (kind) => {
+    const backend = new FakeBackend(), pending = gate(), entered = gate(), disconnected = gate(), detach = vi.fn()
+    const acquire = async () => {
+      entered.resolve()
+      await pending.promise
+      return { send: async () => {}, sendBinary: async () => {}, detach }
+    }
+    const ws = new WebSocket(await start(backend, {
+      autonomousEnv: 'test',
+      relayPool: { acquire } as unknown as LocalWsServerOptions['relayPool'],
+      shareRelay: { acquire } as unknown as LocalWsServerOptions['shareRelay'],
+    }))
+    server!.once('connection', (socket) => socket.once('close', disconnected.resolve))
+    await onceOpen(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: {
+      machineId: 'remote', localProtocolVersion: 1, ...(kind === 'shared' ? { shareId: 'share' } : {}),
+    } }))
+    await entered.promise
+    const closed = new Promise<void>((resolve) => ws.once('close', () => resolve()))
+    ws.close()
+    await closed
+    await disconnected.promise
+    pending.resolve()
+    await vi.waitFor(() => expect(detach).toHaveBeenCalledTimes(1))
+    expect(backend.unregisters).toEqual([])
   })
 
   // A window from before it introduced itself on `terminal_open` still gets named on the far
@@ -685,116 +833,6 @@ describe('local CLI WebSocket', () => {
     }
     return { unix: `ws+unix://${socketPath}:/api/local-ws`, tcp, open, cleanup }
   }
-
-  it('takes the pair brain\'s frames only over its own socket, and keys, talk and confirmations only from a window', async () => {
-    const backend = new FakeBackend()
-    const relayed: Frame[] = []
-    const relayPool = {
-      acquire: async (_machineId: string, _env: string, _select: Frame, sink: LocalClientSink) => {
-        sink.sendFrame({ type: 'connected', payload: { machineId: 'other-machine', e2ee: false } })
-        return { send: async (frame: Frame) => { relayed.push(frame) }, sendBinary: async () => {}, detach: () => {} }
-      },
-      acquireIsolated: async () => { throw new Error('unused') },
-      invalidate: () => {},
-    }
-    const got: Array<[string, Record<string, unknown>]> = []
-    const presence: Array<{ payload: Record<string, unknown>; ui: boolean }> = []
-    const w = await unixWorld(backend, {
-      autonomousEnv: 'test',
-      relayPool: relayPool as unknown as NonNullable<Parameters<typeof attachLocalWsServer>[1]['relayPool']>,
-      onDaemonAct: (_connId, payload, reply) => { got.push(['act', payload]); reply({ type: 'daemon_act_result', payload: { requestId: payload.requestId, ok: true } }) },
-      onDaemonTalk: (_connId, payload, reply) => { got.push(['talk', payload]); reply({ type: 'daemon_talk_result', payload: { requestId: payload.requestId, ok: true } }) },
-      onDaemonOpen: (_connId, payload, reply) => { got.push(['open', payload]); reply({ type: 'daemon_open_result', payload: { requestId: payload.requestId, ok: true } }) },
-      onDaemonConfirm: (_connId, payload, reply) => { got.push(['confirm', payload]); reply({ type: 'daemon_confirm_result', payload: { requestId: payload.requestId, ok: true } }) },
-      onDaemonShown: (_connId, payload) => { got.push(['shown', payload]) },
-      onDaemonPresence: (_connId, payload, meta) => { presence.push({ payload, ui: meta.ui }) },
-    })
-    try {
-      // A window on this machine, over the socket: every one of them reaches the brain.
-      const ws = await w.open(w.unix, { machineId })
-      ws.send(JSON.stringify({ type: 'daemon_presence', payload: { active: true, awayMs: 0 } }))
-      ws.send(JSON.stringify({ type: 'daemon_shown', payload: { id: 'need:x' } }))
-      let result = onceMessage(ws)
-      ws.send(JSON.stringify({ type: 'daemon_act', payload: { requestId: 'r1', id: 'need:x', choice: 'n' } }))
-      expect(await result).toEqual({ type: 'daemon_act_result', payload: { requestId: 'r1', ok: true } })
-      result = onceMessage(ws)
-      ws.send(JSON.stringify({ type: 'daemon_talk', payload: { requestId: 't1', text: 'what needs me?' } }))
-      expect(await result).toEqual({ type: 'daemon_talk_result', payload: { requestId: 't1', ok: true } })
-      result = onceMessage(ws)
-      ws.send(JSON.stringify({ type: 'daemon_confirm', payload: { requestId: 'c1', kind: 'autonomy', nonce: 'n1', accept: true } }))
-      expect(await result).toEqual({ type: 'daemon_confirm_result', payload: { requestId: 'c1', ok: true } })
-      result = onceMessage(ws)
-      ws.send(JSON.stringify({ type: 'daemon_open', payload: { requestId: 'o1', companionUid: 'tim-one' } }))
-      expect(await result).toEqual({ type: 'daemon_open_result', payload: { requestId: 'o1', ok: true } })
-      expect(got.map(([kind]) => kind)).toEqual(['shown', 'act', 'talk', 'confirm', 'open'])
-      expect(presence).toEqual([{ payload: { active: true, awayMs: 0 }, ui: true }])
-      ws.close()
-
-      // Over TCP — any user's process can reach it — none of them, and nothing is passed on.
-      const tcp = await w.open(w.tcp, { machineId })
-      tcp.send(JSON.stringify({ type: 'daemon_presence', payload: { active: false } }))
-      tcp.send(JSON.stringify({ type: 'daemon_shown', payload: { id: 'need:x' } }))
-      result = onceMessage(tcp)
-      tcp.send(JSON.stringify({ type: 'daemon_act', payload: { requestId: 'r2', id: 'need:x', choice: 'y' } }))
-      expect(await result).toMatchObject({ type: 'daemon_act_result', payload: { requestId: 'r2', id: 'need:x', ok: false, error: 'LOCAL_SOCKET_REQUIRED' } })
-      result = onceMessage(tcp)
-      tcp.send(JSON.stringify({ type: 'daemon_confirm', payload: { requestId: 'c2', kind: 'rules', nonce: 'n2' } }))
-      expect(await result).toMatchObject({ type: 'daemon_confirm_result', payload: { requestId: 'c2', kind: 'rules', nonce: 'n2', ok: false, error: 'LOCAL_SOCKET_REQUIRED' } })
-      result = onceMessage(tcp)
-      tcp.send(JSON.stringify({ type: 'daemon_open', payload: { requestId: 'blocked-open', companionUid: 'tim-one' } }))
-      expect(await result).toMatchObject({ type: 'daemon_open_result', payload: { ok: false, error: 'LOCAL_SOCKET_REQUIRED' } })
-      tcp.close()
-
-      // A tool (`harness pair`, the MCP server) is not a window, even over the socket.
-      const tool = await w.open(w.unix, { machineId, tool: true })
-      result = onceMessage(tool)
-      tool.send(JSON.stringify({ type: 'daemon_talk', payload: { requestId: 't3', text: 'hi' } }))
-      expect(await result).toMatchObject({ type: 'daemon_talk_result', payload: { requestId: 't3', ok: false, error: 'UI_ONLY' } })
-      result = onceMessage(tool)
-      tool.send(JSON.stringify({ type: 'daemon_open', payload: { requestId: 'blocked-open', companionUid: 'tim-one' } }))
-      expect(await result).toMatchObject({ type: 'daemon_open_result', payload: { ok: false, error: 'UI_ONLY' } })
-      tool.close()
-
-      // A relayed machine's socket: its presence is a fact about this desk; a key on it is not a window's.
-      const relay = await w.open(w.unix, { machineId: 'other-machine' })
-      relay.send(JSON.stringify({ type: 'daemon_presence', payload: { active: true } }))
-      result = onceMessage(relay)
-      relay.send(JSON.stringify({ type: 'daemon_act', payload: { requestId: 'r4', id: 'need:x', choice: 'y' } }))
-      expect(await result).toMatchObject({ type: 'daemon_act_result', payload: { requestId: 'r4', ok: false, error: 'UI_ONLY' } })
-      result = onceMessage(relay)
-      relay.send(JSON.stringify({ type: 'daemon_open', payload: { requestId: 'blocked-open', companionUid: 'tim-one' } }))
-      expect(await result).toMatchObject({ type: 'daemon_open_result', payload: { ok: false, error: 'UI_ONLY' } })
-      relay.close()
-
-      expect(got.map(([kind]) => kind)).toEqual(['shown', 'act', 'talk', 'confirm', 'open'])
-      expect(presence.map((p) => p.ui)).toEqual([true, false])
-      // Neither this daemon's dispatcher (whose send() uploads) nor the relayed machine ever saw one.
-      expect(backend.frames).toEqual([])
-      expect(relayed).toEqual([])
-    } finally {
-      await w.cleanup()
-    }
-  })
-
-  it('serves individual art on the private socket and refuses it on TCP', async () => {
-    const backend = new FakeBackend()
-    const called = vi.fn((_connId, payload, reply) => reply({ type: 'daemon_plate', payload: { requestId: payload.requestId, frames: [{ rows: 'o', mats: '.' }] } }))
-    const w = await unixWorld(backend, { onDaemonPlate: called })
-    try {
-      const socket = await w.open(w.unix, { machineId })
-      let result = onceMessage(socket)
-      socket.send(JSON.stringify({ type: 'daemon_plate_get', payload: { requestId: 'art' } }))
-      expect(await result).toMatchObject({ type: 'daemon_plate', payload: { requestId: 'art', frames: [{ rows: 'o', mats: '.' }] } })
-      const tcp = await w.open(w.tcp, { machineId })
-      result = onceMessage(tcp)
-      tcp.send(JSON.stringify({ type: 'daemon_plate_get', payload: { requestId: 'tcp' } }))
-      expect(await result).toMatchObject({ type: 'daemon_plate', payload: { requestId: 'tcp', error: 'LOCAL_SOCKET_REQUIRED' } })
-      expect(called).toHaveBeenCalledOnce()
-      expect(backend.frames).toEqual([])
-      socket.close()
-      tcp.close()
-    } finally { await w.cleanup() }
-  })
 
   it('answers daemon_act UNSUPPORTED when there is no pair brain, rather than passing it on', async () => {
     const backend = new FakeBackend()

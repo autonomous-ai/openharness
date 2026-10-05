@@ -1924,7 +1924,8 @@ impl Copy {
         let hsize = self.hsize();
         let put = |buf: &mut Buffer, x: u32, y: u32, text: &str, st: (Color, Color, Modifier)| {
             if let Some(cell) = buf.cell_mut((area.x + x as u16, area.y + y as u16)) {
-                cell.set_symbol(if text.is_empty() { " " } else { text });
+                // (A tab the grid kept for copying is drawn as the blank it stands for.)
+                cell.set_symbol(if text.is_empty() || text.chars().any(char::is_control) { " " } else { text });
                 cell.fg = if st.0 == Color::Reset { window.0.unwrap_or(Color::Reset) } else { st.0 };
                 cell.bg = if st.1 == Color::Reset { window.1.unwrap_or(Color::Reset) } else { st.1 };
                 cell.modifier = st.2;

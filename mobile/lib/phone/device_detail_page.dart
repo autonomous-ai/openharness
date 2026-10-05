@@ -70,12 +70,17 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
     }
     setState(() {
       _removing = false;
-      _error = "Couldn't remove $name. Try again.";
+      _error = 'Couldn’t remove $name. Try again.';
     });
   }
 
   void _mine() {
-    widget.notifier.dismissNewDevice(_row.member.pub);
+    // The suspension is lifted only when this page says there is one: "It's mine" is the person
+    // vouching for what is on screen.
+    widget.notifier.dismissNewDevice(
+      _row.member.pub,
+      liftSuspension: _row.suspended,
+    );
     widget.onMine?.call();
     Navigator.of(context).pop();
   }
@@ -147,9 +152,17 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
                 style: tty.style(color: tty.dim),
               ),
             ],
+            if (_row.suspended) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Not trusted here: added after this device’s list and another’s split. '
+                'Review the list to trust it again.',
+                style: tty.style(color: tty.red),
+              ),
+            ],
             if (_error case final error?) ...[
               const SizedBox(height: 12),
-              TtyText(error, color: tty.red),
+              Text(error, style: tty.style(color: tty.red)),
             ],
             if (widget.isNew || !_row.self) ...[
               const SizedBox(height: 16),

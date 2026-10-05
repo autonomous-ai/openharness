@@ -313,7 +313,7 @@ void main({bool nativeSmoke = false}) {
     expect(_task, findsOneWidget);
     expect(
       tester.widget<TextField>(_task).decoration?.hintText,
-      'Harness anything',
+      'What would you like to work on?',
     );
     expect(find.byKey(const ValueKey('new-harness-settings')), findsNothing);
     expect(find.byKey(const ValueKey('new-harness-task-toggle')), findsNothing);
@@ -376,6 +376,7 @@ void main({bool nativeSmoke = false}) {
       _close,
       _start,
       _agent,
+      find.byKey(const ValueKey('new-harness-field-machine')),
       find.byKey(const ValueKey('new-harness-field-project')),
       _task,
     ]) {
@@ -612,6 +613,8 @@ void main({bool nativeSmoke = false}) {
       expect(tester.getSize(_surface).width, 680);
       await tester.tapAt(const Offset(5, 5));
       await tester.pumpAndSettle();
+      expect(fixture.closed, 0);
+      await key(tester, LogicalKeyboardKey.escape);
       expect(fixture.closed, 1);
     });
   }

@@ -29,8 +29,8 @@ The first command links the shared viewer from this checkout. Store installation
 that dependency automatically; this also lets you try a new viewer before it is published.
 
 **A harness packages an agent’s instructions, tools, and optional viewer.** Install it,
-start it in your workspace, and group it with other harnesses in a swarm; see the
-[terminology guide](docs/terminology.md). This example has three working files:
+start it in your workspace, and group it with other harnesses in a tab; see the
+[Naming System](docs/naming-system.md). This example has three working files:
 
 - [`harness.json`](store/examples/hello-world/harness.json) declares the agent and its viewer.
 - [`AGENTS.md`](store/examples/hello-world/AGENTS.md) teaches the agent to change the greeting.
@@ -169,7 +169,8 @@ Security reports go through [SECURITY.md](SECURITY.md).
    you need help. No separate issue is required for a small fix or documentation change.
 2. **Run the checks relevant to your change.** A harness contribution starts with its package
    check and a real example. Platform changes use the package checks below and in the
-   [development guide](docs/development.md). Say exactly what ran and what did not.
+   [development guide](docs/development.md). Follow the [validation and release guide](docs/validation-and-release.md)
+   to select checks, bound their runtime, and reuse results. Say exactly what ran and what did not.
 3. **Make it reproducible.** Use the PR template to describe the result, how to try it, and the
    validation. Remove credentials and private project content from logs and recordings.
 4. **Review together.** A maintainer checks the change and may ask you to refine it. CI is
@@ -190,11 +191,19 @@ Security reports go through [SECURITY.md](SECURITY.md).
 
 ## The CLI (`cli/`) — engines and multiplexers
 
-```bash
-cd cli && npm install && npm run typecheck && npm test
-```
+Use the pinned Node version in `.github/workflows/ci.yml` and `npm ci` when the lockfile
+or installed dependencies change. Run `npm run typecheck` and the affected test files
+while developing. Shared state, authentication, protocols, dependencies, and changes
+with an unclear impact also need the full CLI suite. A passing CI run on the tested
+source satisfies that full-suite check; do not run it again locally before release.
+Manual CI offers `cli`, `tui`, `backend`, `desktop`, and `full` scopes; `full` remains the default.
+CLI scope includes the supported OS/Node shell and serial matrix. Cross-component
+changes need all affected scopes or `full`.
+Desktop scope runs the complete VM suite in four shards on both macOS and Linux,
+with a verified coverage summary. Changed Dart analysis, browser tests and native
+integration checks remain separate requirements when relevant.
 
-That is the bar for every pull request that touches `cli/`. Two further suites exist and are
+Two further suites exist and are
 **opt-in**, because they need software the machine may not have — they skip themselves rather than
 fail, which is also why forgetting them is easy:
 

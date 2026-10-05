@@ -14,7 +14,7 @@ const rows = Array.from({ length: Number(process.env.PREVIEW_ROWS || 24) }, (_, 
   id: 'session-' + i, sessionId: 'conversation-' + i, name: names[i % names.length] + (i > 7 ? ' ' + (i + 1) : ''),
   engine: engines[i % engines.length], status: i % 7 === 6 ? 'stopped' : 'active',
   terminal: { available: true }, resumeMode: 'conversation', launch: { state: 'ready' },
-  project: { name: i % 2 ? 'openharness' : 'autonomous-harness', cwd: '/home/demo/code/openharness', branch: i % 3 ? 'fix/session-recovery' : 'main' },
+  project: { name: i % 2 ? 'openharness' : 'autonomous-harness', cwd: i === 0 ? '/home/demo/code/openharness' : '/home/demo/worktrees/feature-' + i, branch: i % 3 ? 'fix/session-recovery' : 'main' },
   selectedModel: ['gpt-6', 'claude-sonnet-4-6', 'muse-spark-1.3-contributor-free', 'auto'][i % 4],
   createdAt: new Date(Date.now() - 86400000 * 3).toISOString(), updatedAt: new Date(Date.now() - i * 85000).toISOString(),
   tokenUsage: { totalTokens: i % 3 ? 578000 : 3500000, inputTokens: i % 3 ? 420000 : 3200000, outputTokens: i % 3 ? 158000 : 300000, cachedTokens: i % 3 ? 190000 : 2100000, updatedAt: new Date().toISOString() },
@@ -25,8 +25,22 @@ const viewer = createViewer({ workspace, port: Number(process.env.PREVIEW_PORT |
   verbs: { stop: async row => {
     Object.assign(row, { state: 'stopped', live: false, activity: 'stopped', canStop: false, cpu: 0, rssBytes: 0 })
     return { ok: true, action: 'stop', id: row.id, name: row.name }
-  }, previewDelete: async row => ({ ok: true, id: row.id, reviewId: 'synthetic-delete', sessionBytes: row.sessionBytes, sharedStore: row.engine === 'opencode' }),
-  deleteHarness: async row => { rows.splice(rows.indexOf(row), 1); return { ok: true, id: row.id, deleted: true } },
+  }, previewDelete: async row => ({ ok: true, id: row.id, reviewId: 'synthetic-delete', choices: {
+    sessionData: { available: true, bytes: row.sessionBytes, paths: ['/home/demo/.codex/sessions/' + row.sessionId + '.jsonl'], sharedStore: row.engine === 'opencode' },
+    worktreeData: { available: row.agentId !== 'session-0', bytes: row.agentId === 'session-0' ? null : 3200000000,
+      path: row.cwd, mainPath: '/home/demo/code/openharness',
+      branch: 'feature/storage', dirty: row.agentId === 'session-1', changes: [' M src/app.ts', '?? draft.txt'],
+      reason: row.agentId === 'session-0' ? 'No separate worktree. Main project folder — protected.' : '' },
+  } }),
+  deleteHarness: async (row, { choices }) => {
+    if (choices.sessionData) rows.splice(rows.indexOf(row), 1)
+    else Object.assign(row, { state: 'stopped', live: false, activity: 'stopped', canStop: false, workspaceBytes: null })
+    return { ok: true, id: row.id, deleted: true, sessionDeleted: choices.sessionData, worktreeDeleted: choices.worktreeData }
+  },
+  inspectWorkspace: async row => ({ ok: true, id: row.id, workspace: { kind: row.agentId === 'session-0' ? 'main' : 'worktree',
+    path: row.cwd, ...(row.agentId === 'session-0' ? {} : { worktreePath: row.cwd }),
+    mainPath: '/home/demo/code/openharness', canDelete: row.agentId !== 'session-0',
+    reason: row.agentId === 'session-0' ? 'No separate worktree. Main project folder — protected.' : 'Choose Worktree data in Delete to review cleanup.' } }),
   worktreeAction: async (row, options) => options?.reviewId
     ? { ok: true, id: row.id, deleted: true }
     : { ok: true, id: row.id, reviewId: 'synthetic-worktree', worktree: { path: '/home/demo/worktrees/feature', main: '/home/demo/code/openharness', branch: 'feature/storage', bytes: 3200000000, dirty: true, changes: [' M src/app.ts', '?? draft.txt'] } },

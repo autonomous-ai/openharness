@@ -1,15 +1,51 @@
 import 'dart:async';
 
+import 'package:xterm/xterm.dart';
+
 import '../logging/app_log.dart';
 import '../terminal/terminal_session.dart';
 import 'app_state.dart';
 import 'harness_attachments.dart';
 
 /// How long a new harness has to open its terminal and start its engine.
+/// An observed Codex update waits for completion or pane closure instead: the
+/// person may leave its confirmation open for longer than this deadline.
 const kAttachedTaskOpenTimeout = Duration(minutes: 2);
 
 /// A beat after the engine reports ready, for its input to be drawn.
 const kAttachedTaskSettle = Duration(milliseconds: 800);
+
+/// Codex can be alive in its updater before it opens a conversation. An empty
+/// chat may not have a session ID yet either. Read only the visible terminal,
+/// looking for its composer and footer together, not a menu's selected row or
+/// an old prompt in scrollback.
+enum _CodexStartup { waiting, updating, ready }
+
+_CodexStartup _codexStartup(Terminal terminal) {
+  final buffer = terminal.buffer;
+  final lines = [
+    for (var row = buffer.scrollBack; row < buffer.height; row++)
+      buffer.lines[row].getText(),
+  ];
+  final prompt = lines.lastIndexWhere(
+    (line) => RegExp(r'^\s*›').hasMatch(line),
+  );
+  if (prompt >= 0 &&
+      lines
+          .skip(prompt + 1)
+          .any(
+            (line) =>
+                RegExp(r'\? for shortcuts|\d+% context left').hasMatch(line),
+          )) {
+    return _CodexStartup.ready;
+  }
+  if (RegExp(
+    r'Update available!|Updating Codex via|Update ran successfully! Please restart Codex\.',
+  ).hasMatch(lines.join('\n'))) {
+    return _CodexStartup.updating;
+  }
+  return _CodexStartup.waiting;
+}
 
 /// Can [machineId] take files into a harness's prompt? Both halves are the
 /// daemon's: a file written there and its path pasted, then a space pasted.
@@ -62,6 +98,10 @@ Future<TerminalSession?> _readySession(
   String agentId,
 ) async {
   var claimed = false;
+  TerminalSession? watchedSession;
+  Terminal? watchedTerminal;
+  Timer? timeout;
+  late void Function() check;
   TerminalSession? ready() {
     final agent = app
         .stateOf(machineId)
@@ -76,7 +116,24 @@ Future<TerminalSession?> _readySession(
         .nonNulls
         .firstOrNull;
     if (session == null) return null;
-    if (session.acceptsInput) return session;
+    // Output and replacement keyframes need not change the agent inventory.
+    // Watch both so the queued task wakes up when the new composer is drawn.
+    if (!identical(watchedSession, session)) {
+      watchedSession?.removeListener(check);
+      watchedSession = session..addListener(check);
+    }
+    if (!identical(watchedTerminal, session.terminal)) {
+      watchedTerminal?.removeListener(check);
+      watchedTerminal = session.terminal..addListener(check);
+    }
+    if (session.acceptsInput) {
+      if (agent?.engine == 'codex') {
+        final startup = _codexStartup(session.terminal);
+        if (startup == _CodexStartup.updating) timeout?.cancel();
+        if (startup != _CodexStartup.ready) return null;
+      }
+      return session;
+    }
     // A pane that arrives over the desk opens as a watcher, and another window
     // on the account (the Mac's own app) may hold the terminal. Pressing New
     // Harness with files is this person asking to type here: take it, once,
@@ -87,29 +144,51 @@ Future<TerminalSession?> _readySession(
             session.status == TerminalSessionStatus.takenOver)) {
       claimed = true;
       appLog.info('attach', 'taking control of $agentId to hand it its files');
-      unawaited(session.reopen(force: true));
+      // A local takeover can notify synchronously. Check again after reopen
+      // returns so that notification cannot be cancelled by this call's null.
+      unawaited(session.reopen(force: true).then((_) => check()));
     }
     return null;
   }
 
   final found = Completer<TerminalSession?>();
-  void check() {
+  TerminalSession? candidate;
+  Timer? settle;
+  check = () {
     if (found.isCompleted) return;
-    if (ready() case final session?) found.complete(session);
-  }
+    if (watchedSession != null &&
+        !app.panesFor(machineId).any((pane) => pane.agentId == agentId)) {
+      found.complete(null);
+      return;
+    }
+    final session = ready();
+    if (identical(candidate, session)) return;
+    settle?.cancel();
+    candidate = session;
+    if (session == null) return;
+    settle = Timer(kAttachedTaskSettle, () {
+      if (found.isCompleted) return;
+      if (identical(ready(), session)) {
+        found.complete(session);
+      } else {
+        candidate = null;
+        check();
+      }
+    });
+  };
 
-  final timeout = Timer(kAttachedTaskOpenTimeout, () {
+  timeout = Timer(kAttachedTaskOpenTimeout, () {
     if (!found.isCompleted) found.complete(null);
   });
   app.addListener(check);
   check();
   try {
-    final session = await found.future;
-    if (session == null) return null;
-    await Future<void>.delayed(kAttachedTaskSettle);
-    return session.acceptsInput ? session : null;
+    return await found.future;
   } finally {
     timeout.cancel();
+    settle?.cancel();
+    watchedSession?.removeListener(check);
+    watchedTerminal?.removeListener(check);
     app.removeListener(check);
   }
 }

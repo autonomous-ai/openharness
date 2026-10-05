@@ -39,6 +39,7 @@ mod modal;
 mod new_harness;
 mod mouse;
 mod options;
+mod os_welcome;
 mod paste;
 mod pane;
 mod pane_frame;
@@ -49,6 +50,7 @@ mod term_out;
 mod term_input;
 mod tmuxconf;
 mod ui;
+mod verify;
 mod viewer;
 // ── status bar ──
 mod bar;
@@ -382,6 +384,11 @@ async fn run(config: config::Config) -> io::Result<()> {
 
     let backend = term_out::TmuxBackend::new(BufWriter::with_capacity(256 * 1024, term_out::Counted(io::stdout())));
     let mut term = Terminal::new(backend)?;
+    // HARNESS_TUI_VERIFY: each frame's bytes replayed and compared with the frame (verify.rs).
+    let mut verifier = verify::Verifier::from_env();
+    if verifier.is_some() { verify::listen_for_dump() }
+    // Whether some pane was selecting last frame (a selection starting is when a ghost is seen).
+    let mut was_selecting = false;
     term.clear()?;
     let size = terminal::size()?;
 
@@ -509,7 +516,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         if let Some(event) = first { apply(&mut app, event, &mut refill, &mut startup_input); need_draw = true }
         // Everything else already waiting goes into the same frame.
         while let Ok(event) = rx.try_recv() { apply(&mut app, event, &mut refill, &mut startup_input); need_draw = true }
-        if !input_ready && (app.focused().is_some() || app.shell_asked && app.starting_shell.is_none()) {
+        if !input_ready && (app.focused().is_some() || app.tab().home || app.shell_asked && app.starting_shell.is_none()) {
             input_ready = true;
             while let Some(event) = startup_input.pop_front() { input::handle(&mut app, event); refill = true; }
         }
@@ -545,22 +552,34 @@ async fn run(config: config::Config) -> io::Result<()> {
             // A fresh Terminal repaints everything (ratatui's clear() asks the terminal where its
             // cursor is, and the input reader would eat the answer).
             term = Terminal::new(term_out::TmuxBackend::new(BufWriter::with_capacity(256 * 1024, term_out::Counted(io::stdout()))))?;
+            if let Some(v) = verifier.as_mut() { v.reset() }
             need_draw = true;
         }
         // Every motion asked for only while something wants it.
         let all = app.mouse && app.wants_motion();
         if all != mouse_all { execute!(term.backend_mut(), term_out::Mouse(if all { 2 } else { 1 }))?; mouse_all = all }
         app.flush_acks();
-        if refill && matches!(app.modal, Some(modal::Modal::Picker { .. } | modal::Modal::NewHarness(_))) { input::refill(&mut app) }
-        // A scroll that has rested: every cell of the screen written again, once. The terminal
-        // may have kept a ghost of old text through the cell-by-cell updates; this overwrites it.
-        if app::scroll_settle_in(app.scrolled_at, Instant::now()) == Some(Duration::ZERO) { app.scrolled_at = None; app.redraw_all = true }
+        // Welcome forms also need connection and catalog updates, including drafts in
+        // background windows. Refill leaves unrelated overlays alone.
+        if refill { input::refill(&mut app) }
+        // A scroll that has rested: every row of the screen written again, once — row by row over
+        // what is there, not after erasing it, so it never flashes.
+        let settle = app::scroll_settle_in(app.scrolled_at, Instant::now()) == Some(Duration::ZERO);
+        if settle { app.scrolled_at = None }
         if std::mem::take(&mut app.redraw_all) { term.clear()?; need_draw = true; }
+        else if settle { term.backend_mut().soft_clear_next(); term.clear()?; need_draw = true; }
         if need_draw && last_draw.elapsed() >= frame_budget {
             // (The backend makes each frame's changes one synchronized update, and writes nothing
             // for a frame that changed nothing.)
             let frame_started = Instant::now();
-            term.draw(|frame| ui::draw(frame, &mut app))?;
+            if let Some(v) = verifier.as_mut() {
+                let selecting = app.panes.values().any(|p| p.copy_top());
+                if selecting && !was_selecting { v.dump_now("a selection started") }
+                if verify::dump_asked() { v.dump_now("SIGUSR2") }
+                was_selecting = selecting;
+            }
+            let done = term.draw(|frame| ui::draw(frame, &mut app))?;
+            if let Some(v) = verifier.as_mut() { v.check(done.buffer) }
             // The focused program's cursor shape (vim's block and bar), passed through as tmux does.
             let shape = app.focused().filter(|_| app.modal.is_none()).and_then(|f| app.panes.get(&f)).map(|p| p.cursor_style()).unwrap_or(cursor::SetCursorStyle::DefaultUserShape);
             let code = format!("{shape:?}");

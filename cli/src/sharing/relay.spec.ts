@@ -71,6 +71,16 @@ describe('recipient relay', () => {
     await session.send({ type: 'terminal_alive' })
     expect(ws.send).toHaveBeenCalledTimes(count)
   })
+  it('never forwards the daemon-local device notices a share owner sends', async () => {
+    const { ws, owner } = await ready()
+    sink.sendFrame.mockClear()
+    for (const type of ['device_key_added', 'device_key_removed', 'device_conflict', 'device_keys_changed']) {
+      frame(ws, 'observer_frame', owner.cipher.seal({ type, payload: { pub: 'x' } }))
+    }
+    expect(sink.sendFrame).not.toHaveBeenCalled()
+    frame(ws, 'observer_frame', owner.cipher.seal({ type: 'observer_viewer', payload: { state: 'live' } }))
+    expect(sink.sendFrame).toHaveBeenCalledTimes(1)
+  })
   it('refuses unpublished or wrong-machine grants before opening a socket', async () => {
     discover.mockResolvedValue([])
     await expect(relay.acquire('machine', 'share', sink as never, closed)).rejects.toBeInstanceOf(SharingEndedError)

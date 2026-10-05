@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
@@ -225,6 +225,15 @@ describe('buildEngineLaunchArgv', () => {
         expect(out).toContain('harness remote')
         expect(out.trim().endsWith('prompt')).toBe(true)
       }
+    })
+
+    it('opens OS terminals directly at the shell prompt', () => {
+      vi.stubEnv('HARNESS_OS', '1')
+      try {
+        const argv = buildEngineLaunchArgv('terminal', { terminalHint: { machineName: 'programmer-os' } }, '/bin/sh')
+        const out = execFileSync('/bin/sh', ['-c', argv[2], 'harness-terminal', '', '/bin/sh', '-c', 'echo prompt']).toString()
+        expect(out).toBe('prompt\n')
+      } finally { vi.unstubAllEnvs() }
     })
 
     it('the banner names the machine, falls back to "this machine", and fits an 80-column pane unwrapped', () => {

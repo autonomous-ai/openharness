@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Rejected synthetic development diagnostic; no production change.",
+  "initialAttempt": {
+    "receipt": ".harness/validation/20261003T034515.388240Z-48961/receipt.json",
+    "outcome": "failed_before_inference",
+    "inferenceCalls": 0,
+    "reason": "Version probe wrote to stderr, while initial runner read only stdout.",
+    "reportSha256": "510b87f35bf74b5a98f5c746c1c5146b1a4b95aca6d83b5d6e938589492815c6"
+  },
+  "inferenceAttempt": {
+    "receipt": ".harness/validation/20261003T034634.806095Z-57809/receipt.json",
+    "commandOutcome": "failed",
+    "receiptStatus": "source_changed",
+    "reason": "Source-independent scorer and README added during run; frozen inference inputs unchanged. The sixth proposal request timed out.",
+    "originalReportSha256": "c52fd1f5b3ffa8783296fe521ed199de7af1f5fbcdad28a8c97641562cdc67bc",
+    "publishedReportSha256": "2b0e922af4e6e22f99081b0b4f9661af8a1424fc4fa080c6169569d6300f8762",
+    "publicationChanges": [
+      "Removed process stderr containing local runtime paths.",
+      "Reserialized JSON with unchanged remaining values."
+    ],
+    "frozenInputHashes": {
+      "docs/research/2026-10-03-memory-source-first/run.mjs": "fb6c51a508c1fe18f9e93c55d8aa2bc7479b5853777a3eb806cebd65d7ff030e",
+      "docs/research/2026-10-03-memory-source-first/plan.json": "a258503c0110960505468b2d4929dcd3e601c4a7d64ebcb7b1c14da5b8dfc156",
+      "docs/research/2026-10-03-memory-source-first/review-prompt.txt": "cf732edd5f4cd6fe70ea57aa5a1f5a2e446b5cbb6cfb77365eafa0858a05179b",
+      "docs/research/2026-10-03-memory-source-first/source-prompt.txt": "a52453c341a5fb7f9ea7e13cc4cb23415fe3c9c04bc4f888084bd6179d4f9aa5"
+    },
+    "corpusSha256": "d9b1cd4c9a50327935dde45115afc23e7550a8a1a33c61c1ee0d9a0d3889e430"
+  },
+  "productionChange": false,
+  "releaseOrInstallation": false
+}

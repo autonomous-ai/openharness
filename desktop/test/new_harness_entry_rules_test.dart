@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/dsh_catalog.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_placement.dart';
@@ -14,6 +15,7 @@ import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/store/store_screen.dart';
+import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/widgets/desktop_search_panel.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/swarm_search_input.dart';
@@ -91,6 +93,7 @@ class _Connection extends WsConn {
       'engine': starts.last['engine'],
       'dsh': starts.last['dsh'],
       'project': {
+        'name': 'Created project',
         'cwd':
             starts.last['cwd'] ??
             '/home/$machineId/harnesses/${starts.last['projectName']}',
@@ -116,7 +119,13 @@ void main() {
     newHarnessOpensInBox = false;
   });
 
-  Future<void> mount(WidgetTester tester, {bool store = true}) async {
+  Future<void> mount(
+    WidgetTester tester, {
+    bool store = true,
+    bool workingPane = true,
+    bool history = true,
+    bool remotePane = false,
+  }) async {
     connections = {
       for (final id in ['m', 'studio', 'build']) id: _Connection(id),
     };
@@ -128,9 +137,26 @@ void main() {
       machine.dsh.replace(_products.map((json) => DshEntry.fromJson(json)!));
     }
     map = MemoryKeymap();
-    await app.agentPreference.remember('codex');
-    await app.projectHistory.select('m', '/work/openharness');
-    app.adoptSessionForTest(terminal('a0', []));
+    if (history) {
+      await app.agentPreference.remember('codex');
+      await app.projectHistory.select('m', '/work/openharness', launched: true);
+    }
+    if (workingPane) {
+      app.adoptSessionForTest(
+        remotePane
+            ? (TerminalSession(
+                  machineId: 'studio',
+                  agentId: 'helmet',
+                  agentName: 'Helmet',
+                  engineId: 'claude',
+                  send: (_, _) async => true,
+                  sendBinary: (_) async => true,
+                )
+                ..status = TerminalSessionStatus.controlling
+                ..streamId = 'remote-stream')
+            : terminal('a0', []),
+      );
+    }
     if (store) app.openStore();
     await configured.mount(tester, app, map);
   }
@@ -232,6 +258,87 @@ void main() {
     );
   }
 
+  testWidgets(
+    'Monitor and Store preserve the last focused real project and machine',
+    (tester) async {
+      await mount(tester, store: false, remotePane: true);
+      // Observe the real work pane before focusing a utility terminal.
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+      expect(box(tester).machineId, 'studio');
+      expect(box(tester).project.folder, '/work/helmet');
+      expect(box(tester).engine, 'codex');
+      await dismiss(tester);
+      app.machineStates['m']!.agents = [
+        ...app.machineStates['m']!.agents,
+        const Agent(
+          id: 'monitor',
+          name: 'Harness Monitor',
+          engine: 'opencode',
+          dsh: 'autonomous/harness-monitor',
+          terminalAvailable: true,
+          project: AgentProject(
+            name: 'Monitor',
+            cwd: '/harnesses/harness-monitor-2026-09-21-18-41',
+          ),
+        ),
+      ];
+      app.newSwarm(name: 'Monitor');
+      app.adoptSessionForTest(terminal('monitor', []));
+      await tester.pump();
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+      expect(box(tester).machineId, 'studio');
+      expect(box(tester).project.folder, '/work/helmet');
+      expect(box(tester).engine, 'codex');
+      await dismiss(tester);
+      app.openStore();
+      await tester.pump();
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+      expect(box(tester).machineId, 'studio');
+      expect(box(tester).project.folder, '/work/helmet');
+      expect(box(tester).engine, 'codex');
+      expect(box(tester).task, isEmpty);
+      await dismiss(tester);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'without a focused work pane Cmd-N uses the last successful project',
+    (tester) async {
+      await mount(tester, workingPane: false);
+      await app.projectHistory.select('studio', '/work/helmet', launched: true);
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+      expect(box(tester).machineId, 'studio');
+      expect(box(tester).project.folder, '/work/helmet');
+      await dismiss(tester);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'first launch needs only Enter and saves choices when the embedded form closes',
+    (tester) async {
+      await mount(tester, store: false, workingPane: false, history: false);
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+      expect(box(tester).project.generated, isNotNull);
+      expect(box(tester).engine, 'opencode');
+      expect(box(tester).task, isEmpty);
+      app.machineStates['m']!.localOnly = false;
+      await acceptSetupOrSearch(tester);
+      final connection = connections['m']!;
+      expect(connection.starts, hasLength(1));
+      expect(connection.starts.single['projectName'], isNotEmpty);
+      expect(connection.starts.single['prompt'], isNull);
+      connection.created();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.byType(NewHarnessForm), findsNothing);
+      expect(app.agentPreference.successfulLaunch?.engine, 'opencode');
+      expect(app.projectHistory.lastLaunched?.folder, contains('/harnesses/'));
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   for (final closeFirst in [false, true]) {
     for (final task in [null, 'Model a reading nook']) {
       testWidgets(
@@ -255,8 +362,8 @@ void main() {
           await dismiss(tester);
           await product(tester, 'autonomous/workshop');
           expect(box(tester).harnessId, 'autonomous/workshop');
-          expect(box(tester).projectLabel, '~/harnesses/workshop-design');
-          expect(box(tester).task, 'Workshop task');
+          expect(box(tester).project.generated, isNotNull);
+          expect(box(tester).task, isEmpty);
           expect(connections.values.expand((c) => c.starts), isEmpty);
           await dismiss(tester);
           await tester.pumpWidget(const SizedBox());
@@ -289,36 +396,35 @@ void main() {
     },
   );
 
-  testWidgets(
-    'Store machine choices have separate drafts and override edited defaults',
-    (tester) async {
-      await mount(tester);
-      await product(tester, 'autonomous/blender');
-      await nameProject(tester, 'local-scene');
-      await product(tester, 'autonomous/blender', machine: 'studio');
-      expect(box(tester).machineId, 'studio');
-      expect(box(tester).project.generated, isNotNull);
-      await nameProject(tester, 'remote-scene');
-      await product(tester, 'autonomous/blender');
-      expect(box(tester).machineId, 'm');
-      expect(box(tester).project.name, 'local-scene');
-      box(tester).focusField(NewHarnessField.machine);
-      box(tester).accept(const NewHarnessOption(id: 'studio', title: 'Studio'));
-      await dismiss(tester);
-      await product(tester, 'autonomous/blender');
-      expect(
-        box(tester).machineId,
-        'm',
-        reason: 'The Store explicitly requested this machine',
-      );
-      expect(box(tester).projectLabel, startsWith('~/harnesses/blender-'));
-      await dismiss(tester);
-      await product(tester, 'autonomous/blender', machine: 'studio');
-      expect(box(tester).project.name, 'remote-scene');
-      await dismiss(tester);
-      await tester.pumpWidget(const SizedBox());
-    },
-  );
+  testWidgets('Store requests start fresh on their explicitly chosen machine', (
+    tester,
+  ) async {
+    await mount(tester);
+    await product(tester, 'autonomous/blender');
+    await nameProject(tester, 'local-scene');
+    await product(tester, 'autonomous/blender', machine: 'studio');
+    expect(box(tester).machineId, 'studio');
+    expect(box(tester).project.generated, isNotNull);
+    await nameProject(tester, 'remote-scene');
+    await product(tester, 'autonomous/blender');
+    expect(box(tester).machineId, 'm');
+    expect(box(tester).project.generated, isNotNull);
+    box(tester).focusField(NewHarnessField.machine);
+    box(tester).accept(const NewHarnessOption(id: 'studio', title: 'Studio'));
+    await dismiss(tester);
+    await product(tester, 'autonomous/blender');
+    expect(
+      box(tester).machineId,
+      'm',
+      reason: 'The Store explicitly requested this machine',
+    );
+    expect(box(tester).projectLabel, startsWith('~/harnesses/blender-'));
+    await dismiss(tester);
+    await product(tester, 'autonomous/blender', machine: 'studio');
+    expect(box(tester).project.generated, isNotNull);
+    await dismiss(tester);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets(
     'product entry from a pane does not inherit workspace projects or search tasks',
@@ -400,7 +506,7 @@ void main() {
   });
 
   testWidgets(
-    'an explicit coding engine reopens its draft and overrides a different harness',
+    'an explicit coding engine opens fresh and overrides a different harness',
     (tester) async {
       await mount(tester);
       await product(tester, 'codex');
@@ -409,7 +515,7 @@ void main() {
       box(tester).setFolder('/work/explicit-code');
       await dismiss(tester);
       await product(tester, 'codex');
-      expect(box(tester).project.folder, '/work/explicit-code');
+      expect(box(tester).project.generated, isNotNull);
       box(tester).focusField(NewHarnessField.harness);
       box(tester).applyOption(
         box(tester).options
@@ -530,13 +636,10 @@ void main() {
     expect(updated.search!.rows, isEmpty);
     expect(connections.values.expand((c) => c.starts), isEmpty);
     await key(tester, LogicalKeyboardKey.keyN, cmd: true);
-    expect(box(tester).task, 'Check the keyboard workflow');
+    expect(box(tester).task, isEmpty);
     expect(box(tester).placement, HarnessPlacement.currentTab);
     await acceptSetupOrSearch(tester);
-    expect(
-      connections['m']!.starts.single['prompt'],
-      'Check the keyboard workflow',
-    );
+    expect(connections['m']!.starts.single['prompt'], isNull);
     connections['m']!.created();
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
@@ -619,8 +722,28 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets('Cmd-N focuses the task after restoring the successful agent', (
+    tester,
+  ) async {
+    await mount(tester, store: false);
+    await app.agentPreference.selectLaunch('terminal');
+    await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+    await tester.pumpAndSettle();
+    expect(box(tester).engine, 'codex');
+    final task = tester.widget<TextField>(
+      find.byKey(const ValueKey('new-harness-task')),
+    );
+    expect(task.focusNode!.hasPrimaryFocus, isTrue);
+    tester.testTextInput.enterText('Type immediately after Cmd-N');
+    await tester.pump();
+    expect(box(tester).task, 'Type immediately after Cmd-N');
+    expect(connections.values.expand((c) => c.starts), isEmpty);
+    await dismiss(tester);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets(
-    'Cmd-N keeps drafts with their source pane and uses defaults in another',
+    'Cmd-N follows the focused project and discards cancelled task edits',
     (tester) async {
       await mount(tester, store: false);
       final first = app.focusedPane!;
@@ -638,15 +761,15 @@ void main() {
       expect(box(tester).harnessId, isNull);
       expect(box(tester).engine, 'codex');
       expect(box(tester).machineId, 'm');
-      expect(box(tester).project.folder, '/work/openharness');
+      expect(box(tester).project.folder, '/work/release-notes');
       expect(box(tester).task, isEmpty);
       await dismiss(tester);
       app.focusPane(first.id);
       await tester.pump();
       await key(tester, shortcut, cmd: true);
       expect(box(tester).engine, 'codex');
-      expect(box(tester).project.name, 'keyboard-review');
-      expect(box(tester).task, 'Review this project');
+      expect(box(tester).project.folder, '/work/openharness');
+      expect(box(tester).task, isEmpty);
       expect(connections.values.expand((c) => c.starts), isEmpty);
       await dismiss(tester);
       await tester.pumpWidget(const SizedBox());
@@ -655,7 +778,7 @@ void main() {
   );
 
   testWidgets(
-    'reopened Cmd-N restores reviewed edits and starts in the current tab',
+    'reopened Cmd-N starts fresh in the current tab even after searching',
     (tester) async {
       await mount(tester, store: false);
       final origin = app.activeSwarm;
@@ -682,8 +805,8 @@ void main() {
       );
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       draft = box(tester);
-      expect(draft.task, 'Check keyboard focus');
-      expect(draft.project.name, 'keyboard-review');
+      expect(draft.task, isEmpty);
+      expect(draft.project.folder, '/work/openharness');
       expect(draft.placement, HarnessPlacement.currentTab);
       // Keep the launch on the fake daemon; no local project is created.
       app.machineStates['m']!.localOnly = false;
@@ -691,8 +814,8 @@ void main() {
       final connection = connections['m']!;
       expect(connection.starts, hasLength(1));
       expect(connection.starts.single['engine'], 'codex');
-      expect(connection.starts.single['projectName'], 'keyboard-review');
-      expect(connection.starts.single['prompt'], 'Check keyboard focus');
+      expect(connection.starts.single['cwd'], '/work/openharness');
+      expect(connection.starts.single['prompt'], isNull);
       expect(connection.starts.single['dsh'], isNull);
       connection.created();
       await tester.pump();

@@ -174,6 +174,88 @@ void main() {
     },
   );
 
+  test(
+    'a suspended key is neither pinned nor seeded into the roster',
+    () async {
+      final keys = ViewerKeyStore(storage: _Memory());
+      final machine = await E2eeIdentity.generate();
+      final cPub = b64e((await E2eeIdentity.generate()).pub);
+      final dId = 'd' * 32;
+      final dPub = b64e((await E2eeIdentity.generate()).pub);
+      await keys.pin(_machineId, machine.pub);
+      await keys.pin(dId, b64d(dPub)); // a pin the roster does not name yet
+      Map<String, dynamic>? seen;
+      final socket = await _machine(machine, (request) {
+        seen = request;
+        return {
+          'members': [
+            {
+              'pub': cPub,
+              'kind': 'machine',
+              'machineId': _c,
+              'label': 'c',
+              'at': 50,
+            },
+          ],
+          'removed': [],
+        };
+      });
+      final outcome = await syncTrustGroup(
+        machineId: _machineId,
+        keys: keys,
+        accessToken: 't',
+        wsBaseUrl: 'wss://relay.test',
+        autonomousEnv: 'prod',
+        label: 'Studio PC',
+        socket: socket.factory,
+        suspended: () async => {cPub, dPub},
+      );
+      expect(outcome.pinned, isEmpty);
+      expect(await keys.peer(_c), isNull);
+      expect([
+        for (final m in seen!['members'] as List) (m as Map)['pub'],
+      ], isNot(contains(dPub)));
+    },
+  );
+
+  test('a key suspended by the devlog this very exchange carries is not pinned either', () async {
+    final keys = ViewerKeyStore(storage: _Memory());
+    final machine = await E2eeIdentity.generate();
+    final cPub = b64e((await E2eeIdentity.generate()).pub);
+    await keys.pin(_machineId, machine.pub);
+    final socket = await _machine(machine, (request) {
+      return {
+        'members': [
+          {
+            'pub': cPub,
+            'kind': 'machine',
+            'machineId': _c,
+            'label': 'c',
+            'at': 50,
+          },
+        ],
+        'removed': [],
+        'devlog': {
+          'head': {'seq': 1, 'hash': 'x'},
+        },
+      };
+    });
+    final suspendedNow = <String>{};
+    final outcome = await syncTrustGroup(
+      machineId: _machineId,
+      keys: keys,
+      accessToken: 't',
+      wsBaseUrl: 'wss://relay.test',
+      autonomousEnv: 'prod',
+      label: 'Studio PC',
+      socket: socket.factory,
+      onDevlog: (_, _) async => suspendedNow.add(cPub),
+      suspended: () async => {...suspendedNow},
+    );
+    expect(outcome.pinned, isEmpty);
+    expect(await keys.peer(_c), isNull);
+  });
+
   test('the merge matches the CLI: tombstones beat older entries, newer links beat tombstones', () async {
     final self = b64e((await E2eeIdentity.generate()).pub);
     final pub = b64e((await E2eeIdentity.generate()).pub);

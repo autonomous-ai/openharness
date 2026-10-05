@@ -74,6 +74,62 @@ void main() {
     app.dispose();
   });
 
+  test(
+    'footer counts installed variants once across owned linked machines',
+    () async {
+      expect(catalog.installedCount, isNull);
+      app.localInventory = {
+        'models': [
+          {
+            'id': 'same-model',
+            'name': 'Same model',
+            'quant': 'Q4',
+            'state': 'downloaded',
+          },
+          {'id': 'catalog-only', 'name': 'Download me'},
+        ],
+      };
+      app.machineStates['other']!.connectionStatus = ConnectionStatus.connected;
+      app.machineInventories['other'] = {
+        'models': [
+          {
+            'id': 'same-model',
+            'name': 'Same model',
+            'quant': 'Q4',
+            'state': 'running',
+          },
+          {
+            'id': 'same-model',
+            'name': 'Same model',
+            'quant': 'Q8',
+            'state': 'downloaded',
+          },
+        ],
+      };
+      catalog.watchInstalled();
+      await catalog.refresh();
+      expect(catalog.installedCount, 2);
+      expect(catalog.installedDetail, contains('2 machines'));
+      expect(app.gridSetups, isEmpty);
+      expect(app.installs, 0);
+      expect(app.connection.creations, isEmpty);
+
+      // An offline host retains its last installed inventory; an unlinked host
+      // leaves this account's scope altogether.
+      app.machineStates['other']!.connectionStatus =
+          ConnectionStatus.disconnected;
+      app.notifyListeners();
+      expect(catalog.installedCount, 2);
+      expect(catalog.installedDetail, contains('Inventory unavailable'));
+      app.machineStates['other']!.needsLink = true;
+      app.notifyListeners();
+      expect(catalog.installedCount, 1);
+      app.localInventory = {'models': <Object>[]};
+      await catalog.refresh();
+      expect(catalog.installedCount, 0);
+    },
+  );
+
   test('sections separate your models from downloads, and fold the catalog past five', () async {
     final usage = _WithSubscriptions();
     final grouped = ModelSearchCatalog(

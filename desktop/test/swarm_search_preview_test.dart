@@ -9,10 +9,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_activity.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/terminal/terminal_text.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
+import 'package:harness/widgets/harness_activity_mark.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
 import 'keymap_runtime_test.dart' as configured;
@@ -214,7 +216,15 @@ void main() {
     await tester.pump();
     expect(
       find.textContaining('Not connected', findRichText: true),
-      findsNWidgets(2),
+      findsOneWidget,
+    );
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is ActivityMark &&
+            widget.activity == HarnessActivity.offline,
+      ),
+      findsOneWidget,
     );
     expect(find.text('Needs your input'), findsNothing);
     expect(

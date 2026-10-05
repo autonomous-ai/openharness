@@ -268,6 +268,8 @@ export class CodexNormalizer implements EngineNormalizer {
   private pendingChildResults = new Map<string, ChildResult>()
   private completedChildren = new Set<string>()
   private thinkingCounter = 0
+  /** See `TurnState.thinkingPrefix`. */
+  thinkingPrefix = 'thinking-codex-'
   private compactJustEmitted = false
   /** Objective of the active `/goal`, so its re-injection each turn isn't read as a new submission. */
   private goalObjective: string | null = null
@@ -383,7 +385,7 @@ export class CodexNormalizer implements EngineNormalizer {
       if (!summary) return []
       return [{
         type: 'thinking_delta',
-        payload: { content: clip(summary, MAX_THINKING), thinkingId: `thinking-codex-${this.thinkingCounter++}` },
+        payload: { content: clip(summary, MAX_THINKING), thinkingId: `${this.thinkingPrefix}${this.thinkingCounter++}` },
       }]
     }
 
@@ -573,6 +575,56 @@ export function codexMessagesToEvents(
   return events
 }
 
+/** Select only records that can affect lastCodexTurnText. Empty user messages do not reset a
+ * turn. Discard tool receipts while scanning so a long latest turn does not retain them all. */
+export function selectCodexRecapLine(line: string): 'keep' | 'skip' | 'stop' {
+  const raw = parse(line)
+  const item = raw && payload(raw)
+  if (!raw || !item) return 'skip'
+  if (raw.type === 'response_item' && string(item.type) === 'message') return goalObjective(item) ? 'stop' : 'skip'
+  if (raw.type !== 'event_msg') return 'skip'
+  const itemType = string(item.type)
+  if (USER_TURN_TYPES.has(itemType) && messageText(item)) return 'stop'
+  return AGENT_TEXT_TYPES.has(itemType) ? 'keep' : 'skip'
+}
+
+/**
+ * The record `CodexNormalizer.ingest` opens a turn on — a user message with text, or a `/goal` context
+ * injection — decided from the record alone, as `ingest` decides it whatever came before. Attaching
+ * folds from the last one of these (lib/attachTranscript.ts); see `startsClaudeTurn`.
+ */
+export function startsCodexTurn(line: string): boolean {
+  const raw = parse(line)
+  if (!raw || raw.type === 'compacted') return false
+  const item = payload(raw)
+  if (!item) return false
+  const type = string(item.type)
+  if (raw.type === 'event_msg') return USER_TURN_TYPES.has(type) && !!messageText(item)
+  return raw.type === 'response_item' && type === 'message' && goalObjective(item) !== null
+}
+
+/**
+ * Where a Codex task's work begins (`task_started`, written before the turn's first message) and
+ * where one ends (`task_complete`, `turn_aborted`). Everything the normalizer keeps across messages —
+ * tool names, sub-agents in flight — belongs to one task and is cleared when it ends, so a fold that
+ * starts at the task's beginning keeps all of it, a message sent mid-task included.
+ */
+export function codexTaskBoundary(line: string): 'begins' | 'ends' | null {
+  const raw = parse(line)
+  const item = raw && raw.type === 'event_msg' ? payload(raw) : null
+  const type = item ? string(item.type) : ''
+  return type === 'task_started' ? 'begins' : type === 'task_complete' || type === 'turn_aborted' ? 'ends' : null
+}
+
+/** The objective a `/goal` turn opener carries, or null. Whether that turn reads as the submission or a
+ *  continuation depends on the goal record before it, which is the one older record a fold from the
+ *  last turn has to be shown. */
+export function codexGoalOf(line: string): string | null {
+  const raw = parse(line)
+  const item = raw && raw.type === 'response_item' ? payload(raw) : null
+  return item && string(item.type) === 'message' ? goalObjective(item) : null
+}
+
 export function lastCodexTurnText(rawLines: string[]): LastTurnText | null {
   let userMessage = ''
   let assistantText = ''
@@ -615,6 +667,19 @@ export function lastCodexTurnText(rawLines: string[]): LastTurnText | null {
   return text ? { userMessage, assistantText: text } : null
 }
 
+/**
+ * Whether a Codex history page may start at this line: a user's message, or the injected context a goal
+ * turn starts on — so a turn is never split. Shared by `windowCodexLines` and the bounded pager
+ * (lib/transcriptPages.ts), so the two cannot drift apart.
+ */
+export function codexPageStart(line: string): boolean {
+  const raw = parse(line)
+  const item = raw ? payload(raw) : null
+  if (raw?.type === 'event_msg' && item && USER_TURN_TYPES.has(string(item.type))) return true
+  // A goal turn starts on the injected goal context, not on a `user_message`.
+  return raw?.type === 'response_item' && !!item && string(item.type) === 'message' && !!goalObjective(item)
+}
+
 export function windowCodexLines(
   rawLines: string[],
   opts: { limit: number; before?: string },
@@ -630,14 +695,7 @@ export function windowCodexLines(
   }
 
   let start = Math.max(0, endIndex - opts.limit)
-  while (start > 0) {
-    const raw = parse(rawLines[start])
-    const item = raw ? payload(raw) : null
-    if (raw?.type === 'event_msg' && item && USER_TURN_TYPES.has(string(item.type))) break
-    // A goal turn starts on the injected goal context, not on a `user_message`.
-    if (raw?.type === 'response_item' && item && string(item.type) === 'message' && goalObjective(item)) break
-    start--
-  }
+  while (start > 0 && !codexPageStart(rawLines[start])) start--
   return {
     window: rawLines.slice(start, endIndex),
     hasMore: start > 0,

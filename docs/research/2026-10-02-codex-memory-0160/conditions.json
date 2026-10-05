@@ -1,0 +1,21 @@
+{
+  "version": "codex-cli 0.160.0",
+  "sourceHashes": {
+    "cli/hook/notify.mjs": "63d55131bba0c4460059c0dd4de95730c5750bb5884a51e6049bb92e4c5f3abe",
+    "cli/scripts/memory-native-codex-lifecycle-probe.mjs": "81b6862febca66eee8681d50496932082bb996c259826542d0d195c44463e32e",
+    "cli/src/memory/inference.ts": "90ac3238d8a723102a365b809be2936429b31db0ad2fd7d2eaf7bc8ae5de12d5",
+    "docs/research/2026-10-02-memory-source-recall/native/context.json": "b8ea53e51cc1e5243ae36d02fe1911d565443c20ff1b10322f453900c21d605c"
+  },
+  "conditions": [
+    "macOS arm64, Node 22.23.2",
+    "Disposable HOME/CODEX_HOME, fake key, localhost mock provider and adapter",
+    "OS policy denies external networking and writes to production config; Code Mode host disabled",
+    "Four exact synthetic hooks reviewed and trusted individually in native UI"
+  ],
+  "limitations": [
+    "Native prompt transport only, not production ownership, real authentication, extraction quality or task benefit.",
+    "Five additional requests omitted context; their purposes are not established by this metadata-only probe.",
+    "The first lifecycle run timed out during its first launch; retained as failed. The corrected probe allows individual trust review and recognizes native compaction hooks independently of provider route.",
+    "Codex 0.160.0 restricted extraction failed both with and without explicit Code Mode disable flags; its extraction gate remains closed."
+  ]
+}

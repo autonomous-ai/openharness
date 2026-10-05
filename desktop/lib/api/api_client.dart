@@ -374,16 +374,50 @@ class ApiClient {
     }
   }
 
+  /// `GET /api/devices/history` — every add and remove, as the daemon verified it. Null when the
+  /// daemon predates the route (404); throws when it cannot answer.
+  Future<Map<String, dynamic>?> daemonDeviceHistory() async {
+    final res = await _dio.get(
+      '/api/devices/history',
+      options: Options(headers: {'x-adapter-local': '1'}),
+    );
+    if (res.statusCode == 404) return null;
+    final data = res.data;
+    if (res.statusCode == 200 && data is Map<String, dynamic>) return data;
+    throw StateError('HTTP_${res.statusCode}');
+  }
+
+  /// `POST /api/devices/dismiss` — new devices marked as seen: [pub] one, neither argument every
+  /// one, [pubs] exactly those (what the person was shown), [baseline] the "Already on your account"
+  /// list. False when the daemon predates the route (an old one answers a `pubs` body with an error).
+  Future<bool> daemonDismissDevices({String? pub, List<String>? pubs, bool baseline = false}) async {
+    try {
+      final res = await _dio.post(
+        '/api/devices/dismiss',
+        data: {'pub': ?pub, 'pubs': ?pubs, if (baseline) 'baseline': true},
+        options: Options(headers: {'x-adapter-local': '1'}),
+      );
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// `POST /api/devices/rebaseline` — what trusting the backend's list again changes; [confirm]
-  /// does it. Null when the daemon could not read a valid list.
-  Future<Map<String, dynamic>?> daemonRebaselineDevices({required bool confirm}) async {
+  /// does it, for the list whose [head] (`{seq, hash}`) the preview showed. Null when the daemon could
+  /// not read a valid list; `{'error': 'LOG_CHANGED'}` when the list is not the one that was previewed;
+  /// `{'error': 'OTHER_ACCOUNT'}` when it is another account's than the one this computer is signed in to.
+  Future<Map<String, dynamic>?> daemonRebaselineDevices({required bool confirm, Map<String, Object?>? head}) async {
     try {
       final res = await _dio.post(
         '/api/devices/rebaseline',
-        data: {'confirm': confirm},
+        data: {'confirm': confirm, 'head': ?head},
         options: Options(headers: {'x-adapter-local': '1'}),
       );
       final data = res.data;
+      if (res.statusCode == 409) {
+        return {'error': data is Map && data['error'] == 'OTHER_ACCOUNT' ? 'OTHER_ACCOUNT' : 'LOG_CHANGED'};
+      }
       return res.statusCode == 200 && data is Map<String, dynamic> ? data : null;
     } catch (_) {
       return null;

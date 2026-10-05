@@ -1,9 +1,10 @@
 import 'dart:convert';
 
 import 'local_key_value_store.dart';
+import 'launch_setup.dart';
 import 'permission_modes.dart';
 
-/// Remembers agent choices and each agent's last explicit approval mode.
+/// Confirmed launch setup and use history, alongside legacy picker preferences.
 class AgentPreference {
   AgentPreference(this.storage);
   final LocalKeyValueStore? storage;
@@ -17,6 +18,9 @@ class AgentPreference {
 
   String? value;
   String? harness;
+  LaunchSetup? successfulLaunch;
+  // A non-Git launch leaves the last Git preference alone.
+  bool? successfulWorktree;
   bool advancedOpen = false;
   List<String> recentHarnesses = const [];
   final _enginesByHarness = <String, String>{};
@@ -44,10 +48,12 @@ class AgentPreference {
       }.take(recentCapacity).toList(growable: false);
 
   Future<void>? _loading;
+  bool _loaded = false;
   Future<void> _writes = Future.value();
   int _revision = 0;
 
-  Future<void> load() => _loading ??= _read();
+  Future<void> load() =>
+      _loading ??= _read().whenComplete(() => _loaded = true);
   Future<void> _read() async {
     final revision = _revision;
     try {
@@ -133,8 +139,36 @@ class AgentPreference {
           }
         }
       }
+      successfulLaunch = LaunchSetup.fromJson(data['successfulLaunch']);
+      if (data['successfulWorktree'] case final bool worktree) {
+        successfulWorktree = worktree;
+      }
     } catch (_) {
       /* A malformed preference never blocks launch. */
+    } finally {
+      // Older versions persisted dropdown edits as defaults. Only actual
+      // launch history is suitable for migrating a successful setup.
+      if (successfulLaunch == null && revision == _revision && revision == 0) {
+        final choice = _recentChoices
+            ?.where(
+              (id) =>
+                  id != 'terminal' &&
+                  !isInternalLaunchHarness(id) &&
+                  (id.contains('/')
+                      ? recentHarnesses.contains(id)
+                      : recent.contains(id)),
+            )
+            .firstOrNull;
+        final engine = choice != null && !choice.contains('/')
+            ? choice
+            : recent.where((id) => id != 'terminal').firstOrNull;
+        if (engine != null) {
+          successfulLaunch = LaunchSetup(
+            engine: engine,
+            harnessId: choice?.contains('/') == true ? choice : null,
+          );
+        }
+      }
     }
   }
 
@@ -149,8 +183,8 @@ class AgentPreference {
     return _save();
   }
 
-  /// Explicit composer selections become the next form's defaults without
-  /// recording an agent launch or changing the recent-use order.
+  /// Legacy picker defaults. Cmd-N uses [successfulLaunch] instead; selecting
+  /// an option is not a successful launch.
   Future<void> selectLaunch(String engine, {String? harnessId}) async {
     await load();
     _revision++;
@@ -162,12 +196,23 @@ class AgentPreference {
 
   /// [agent] was just used to create a harness: it moves to the front of
   /// [recent].
-  Future<void> remember(String agent, {String? harnessId}) async {
-    await load();
-    _revision++;
+  Future<void> remember(
+    String agent, {
+    String? harnessId,
+    LaunchSetup? setup,
+    bool? worktree,
+  }) async {
+    if (!_loaded) await load();
     if (agent.contains('/')) {
       harnessId = agent;
       agent = value ?? '';
+    }
+    if (isInternalLaunchHarness(harnessId)) return;
+    _revision++;
+    if (agent.isNotEmpty && agent != 'terminal') {
+      successfulLaunch =
+          setup ?? LaunchSetup(engine: agent, harnessId: harnessId);
+      if (worktree != null) successfulWorktree = worktree;
     }
     final choice = harnessId ?? agent;
     _recentChoices = <String>{
@@ -217,6 +262,9 @@ class AgentPreference {
       'enginesByHarness': _enginesByHarness,
       'advancedOpen': advancedOpen,
       'permissionsByEngine': _permissionsByEngine,
+      if (successfulLaunch != null)
+        'successfulLaunch': successfulLaunch!.toJson(),
+      if (successfulWorktree != null) 'successfulWorktree': successfulWorktree,
     });
     return _writes = _writes.then((_) async {
       try {

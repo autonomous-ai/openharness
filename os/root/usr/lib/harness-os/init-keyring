@@ -1,0 +1,13 @@
+#!/bin/sh
+# Generate a fresh local key on each installation. Never ship a shared private key.
+set -eu
+install -d /var/lib/pacman/sync
+for repo in core extra; do
+    if [ ! -s "/var/lib/pacman/sync/$repo.db" ]; then
+        cp "/usr/share/harness-os/repository-databases/$repo.db" "/var/lib/pacman/sync/$repo.db"
+    fi
+done
+pacman-key --init
+pacman-key --populate archlinux
+mkdir -p /var/lib/harness-os
+touch /var/lib/harness-os/keyring-ready

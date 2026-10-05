@@ -14,17 +14,24 @@ class WorkspacePullRequest extends ChangeNotifier {
   WorkspacePullRequest(
     this.app, {
     Future<Map<String, dynamic>> Function(String, String)? read,
-  }) : _read = read ?? app.readAgentPullRequest {
+    DateTime Function()? now,
+  }) : _read = read ?? app.readAgentPullRequest,
+       _now = now ?? DateTime.now {
     app.addListener(_focusChanged);
+    app.foreground.addListener(_scheduleRefresh);
     _focusChanged();
   }
   final AppNotifier app;
   final Future<Map<String, dynamic>> Function(String, String) _read;
+  final DateTime Function() _now;
+  static const _interval = Duration(seconds: 60);
   final _cache = <_Identity, (DateTime, PullRequestStatus?)>{};
   _Identity? _identity;
   PullRequestStatus? value;
   Timer? _timer;
   int _revision = 0;
+  int? _pendingRevision;
+  bool _disposed = false;
 
   void _focusChanged() {
     final focused = WorkspacePaneContext.focused(app);
@@ -44,51 +51,63 @@ class WorkspacePullRequest extends ChangeNotifier {
           );
     if (identity == _identity) return;
     _identity = identity;
-    final revision = ++_revision;
-    _timer?.cancel();
+    ++_revision;
     final cached = _cache[identity];
     value = cached?.$2;
     notifyListeners();
+    _scheduleRefresh();
+  }
+
+  void _scheduleRefresh() {
+    _timer?.cancel();
+    _timer = null;
+    if (_disposed || !app.foreground.value) return;
+    final identity = _identity, revision = _revision;
     if (identity == null) return;
-    final age = cached == null
-        ? const Duration(seconds: 60)
-        : DateTime.now().difference(cached.$1);
-    if (age < const Duration(seconds: 60)) {
-      _timer = Timer(
-        const Duration(seconds: 60) - age,
-        () => _refresh(identity, revision),
-      );
+    // Visibility changes do not cancel a request already sent to the daemon.
+    // Let that lookup fill this identity's cache without starting another one.
+    if (_pendingRevision == revision) return;
+    final cached = _cache[identity];
+    final age = cached == null ? _interval : _now().difference(cached.$1);
+    if (age >= Duration.zero && age < _interval) {
+      _timer = Timer(_interval - age, () => _refresh(identity, revision));
     } else {
       unawaited(_refresh(identity, revision));
     }
   }
 
   Future<void> _refresh(_Identity identity, int revision) async {
+    if (_disposed ||
+        revision != _revision ||
+        !app.foreground.value ||
+        _pendingRevision == revision) {
+      return;
+    }
+    _pendingRevision = revision;
     Map<String, dynamic>? result;
     try {
       result = await _read(identity.$1, identity.$2);
     } catch (_) {
       /* Hidden until available. */
     }
-    if (revision != _revision) return;
+    if (_pendingRevision == revision) _pendingRevision = null;
+    if (_disposed || revision != _revision) return;
     value = PullRequestStatus.fromResult(result);
     if (_cache.length >= 32 && !_cache.containsKey(identity)) {
       _cache.remove(_cache.keys.first);
     }
-    _cache[identity] = (DateTime.now(), value);
+    _cache[identity] = (_now(), value);
     notifyListeners();
-    if (revision != _revision) return;
-    _timer = Timer(
-      const Duration(seconds: 60),
-      () => _refresh(identity, revision),
-    );
+    _scheduleRefresh();
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _revision++;
     _timer?.cancel();
     app.removeListener(_focusChanged);
+    app.foreground.removeListener(_scheduleRefresh);
     super.dispose();
   }
 }

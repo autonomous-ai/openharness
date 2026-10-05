@@ -1,0 +1,81 @@
+name: Harness OS offline NVIDIA installation
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_run_id:
+        description: 'Verified reference image for focused candidate testing'
+        type: string
+        default: '37222390225'
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: harness-nvidia-install-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  nvidia:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id || '37222390225' }}
+          github-token: ${{ github.token }}
+      - name: Check source and reference inventory
+        run: |
+          make -C os check
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os-nvidia.yml
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          dist = Path('os/dist')
+          manifest = json.loads((dist / 'manifest.json').read_text())
+          lock = json.loads(Path('os/lock.json').read_text())
+          iso = next(dist.glob('*.iso'))
+          with iso.open('rb') as handle:
+              assert hashlib.file_digest(handle, 'sha256').hexdigest() == manifest['iso']['sha256']
+          assert iso.stat().st_size == manifest['iso']['bytes']
+          assert manifest['arch_snapshot'] == lock['arch_snapshot']
+          snapshot = lock['arch_snapshot']
+          text = '[options]\nArchitecture = x86_64\nSigLevel = Required DatabaseOptional\n'
+          for repo in ['core', 'extra']:
+              text += f'[{repo}]\nServer = https://archive.archlinux.org/repos/{snapshot}/$repo/os/$arch\n'
+          Path('os/dist/nvidia-pacman.conf').write_text(text)
+          PY
+      - name: Build signed offline cache in an isolated Arch root
+        run: |
+          docker run --rm --privileged -v "$PWD:/src" -w /src archlinux:base-devel bash -euc '
+            pacman -Syu --noconfirm archlinux-keyring arch-install-scripts python
+            python3 os/tools/build-nvidia.py --config os/dist/nvidia-pacman.conf \
+              --base-packages os/dist/packages.txt --work os/work/nvidia-build --output os/work/nvidia-bundle
+            tar -cf os/dist/nvidia-bundle.tar -C os/work/nvidia-bundle .
+            cp os/work/nvidia-bundle/manifest.json os/dist/nvidia-bundle-manifest.json
+          '
+      - name: Install native VM tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+      - name: Prove offline package authentication, selection, installation and encrypted reboot
+        run: python3 os/tests/nvidia_install_vm.py --iso os/dist/*.iso --candidate-bundle os/dist/nvidia-bundle.tar
+      - name: Retain native evidence without virtual disks or duplicate packages
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-nvidia-install
+          path: |
+            os/test-results/nvidia-install/
+            !os/test-results/nvidia-install/*.qcow2
+            !os/test-results/nvidia-install/OVMF_VARS.fd
+            !os/test-results/nvidia-install/served/bundle.tar
+            os/dist/nvidia-bundle-manifest.json
+          retention-days: 14
+          compression-level: 0

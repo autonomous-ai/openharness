@@ -1656,7 +1656,7 @@ private extension SwarmTabStrip {
       newButton.frame.maxX < searchButton.frame.minX, "Tabs precede the search and Store controls")
     try checkTitlebar(tabs[0].frame.width < 136 && tabs[0].displayLabel == "code",
       "Overflow tabs keep readable names without persistent number prefixes")
-    try checkTitlebar(subviews.filter { !$0.isHidden }.count == 4 && devicesButton.isHidden && statusBar.subviews.count == 8 && machineResourcesLabel.isHidden && pullRequestButton.isHidden && subscriptionUsageButton.isHidden && harnessMonitorButton.isHidden && daemonButton.isHidden && voiceLabel.isHidden && shareButton.isHidden,
+    try checkTitlebar(subviews.filter { !$0.isHidden }.count == 4 && devicesButton.isHidden && statusBar.subviews.count == 10 && machineResourcesLabel.isHidden && machinesButton.isHidden && modelsButton.isHidden && pullRequestButton.isHidden && subscriptionUsageButton.isHidden && harnessMonitorButton.isHidden && daemonButton.isHidden && voiceLabel.isHidden && shareButton.isHidden,
       "Navigation lives in the titlebar and focused context lives in the footer")
     let controls = [newButton]
     for control in controls {
@@ -2577,6 +2577,7 @@ do {
   try strip.checkSharedTypography()
   try strip.checkShareAction()
   try strip.checkHarnessMonitor()
+  try strip.checkInventoryFooter()
   try strip.checkTopActions()
   try checkIconTooltipTracking()
   try strip.checkActivityMarks()
@@ -2621,6 +2622,90 @@ do {
 }
 
 private extension SwarmTabStrip {
+  func checkInventoryFooter() throws {
+    if let root = ProcessInfo.processInfo.environment["HARNESS_TITLEBAR_ASSETS"] {
+      SwarmContextButton.statusIcons = SwarmHistoryIcons(assetURL: { asset in
+        URL(fileURLWithPath: root).appendingPathComponent(String(asset.dropFirst("assets/".count)))
+      })
+    }
+    func count(_ text: String) -> [String: Any] {
+      ["text": text, "detail": text, "segments": [["text": text]], "interactive": true]
+    }
+    for dark in [true, false] {
+      let ink = Int64(dark ? 0xfff5f5f5 : 0xff1f1f1d)
+      let low = Int64(dark ? 0xffc4a46c : 0xff87632a)
+      let critical = Int64(dark ? 0xffff7068 : 0xffb3261e)
+      let fields: [[String: Any]] = [
+        ("claude", "a", "68%", ink), ("claude", "b", "18%", low),
+        ("codex", "c", "4%", critical), ("codex", "d", "82%", ink)
+      ].map { engine, account, figure, color in
+        ["text": figure, "iconEngine": engine,
+         "iconAsset": engine == "codex" ? "assets/engine-icons/codex.png" : "",
+         "field": account, "paneId": 0, "interactive": true,
+         "iconColor": Int64(dark ? 0xffcc7c5e : 0xffc2633f),
+         "detail": "Account: \(account)\n\(figure) remaining\nResets in 2h",
+         "segments": [["text": figure, "foreground": color]]]
+      }
+      var state: [String: Any] = ["enabled": true,
+        "palette": ["dark": dark ? 1 : 0, "workspace": Int64(dark ? 0xff282828 : 0xffe6e6e3),
+          "tabBar": Int64(dark ? 0xff1c1c1c : 0xffeeeeec), "foreground": ink],
+        "barStyle": ["size": 13, "foreground": ink],
+        "tabs": [["id": "work", "name": "Work"]], "activeId": "work",
+        "harnessMonitor": count("Harnesses 8"), "footerMachines": count("Machines 3"),
+        "footerModels": count("Models 4"), "focusedContext": count("Mac Studio > harness > main"),
+        "subscriptionUsage": ["text": "Subscriptions", "interactive": true,
+          "paddedFields": true, "overflowFields": true, "fields": fields]]
+      var calls: [(String, Any?)] = []
+      emit = { calls.append(($0, $1)) }
+      for width in [CGFloat(1280), CGFloat(640), CGFloat(360)] {
+        setFrameSize(NSSize(width: width, height: 40))
+        update(state)
+        try checkTitlebar(!machinesButton.isHidden && !modelsButton.isHidden && !subscriptionUsageButton.isHidden,
+          "Inventory and subscription controls remain available at \(width)")
+        let controls = [harnessMonitorButton, machinesButton, modelsButton, subscriptionUsageButton, contextButton]
+        for (left, right) in zip(controls, controls.dropFirst()) {
+          try checkTitlebar(left.frame.maxX <= right.frame.minX,
+            "Footer groups do not overlap at \(width)")
+        }
+        let visible = subscriptionUsageButton.fieldButtons.filter { !$0.isHidden }
+        for account in visible {
+          try checkTitlebar(account.frame.width == account.preferredWidth &&
+            account.frame.maxX <= subscriptionUsageButton.bounds.width,
+            "A visible account always has its full icon and percentage")
+          try checkTitlebar(account.toolTip?.contains("Account:") == true,
+            "Each subscription owns its account tooltip")
+        }
+        if width == 1280 {
+          try checkTitlebar(visible.count == 4, "Multiple accounts each get their own provider icon")
+          machinesButton.performClick(nil)
+          modelsButton.performClick(nil)
+          visible[1].performClick(nil)
+          try checkTitlebar(calls.map { $0.0 } == ["machineControls", "runLocalModel", "subscriptions"],
+            "Footer actions use the existing resource destinations")
+          try checkTitlebar((calls.last?.1 as? [String: String])?["id"] == "b",
+            "Subscription clicks preserve the selected account")
+        } else if width == 360 {
+          try checkTitlebar(visible.count < 4 && subscriptionUsageButton.subviews.contains { view in
+            !view.isHidden && !subscriptionUsageButton.fieldButtons.contains(where: { $0 === view })
+          }, "A narrow footer offers the remaining accounts through overflow")
+        }
+        if let capture = ProcessInfo.processInfo.environment["HARNESS_FOOTER_CAPTURE_DIR"] {
+          let root = URL(fileURLWithPath: capture)
+          try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+          try statusBar.renderedTree(background: palette.workspace).representation(using: .png, properties: [:])!
+            .write(to: root.appendingPathComponent("native-footer-\(dark ? "dark" : "light")-\(Int(width)).png"))
+        }
+      }
+      state["enabled"] = false
+      update(state)
+      let before = calls.count
+      machinesButton.performClick(nil)
+      modelsButton.performClick(nil)
+      for account in subscriptionUsageButton.fieldButtons { account.performClick(nil) }
+      try checkTitlebar(calls.count == before, "Covered footers cannot navigate or select accounts")
+    }
+  }
+
   func checkHarnessMonitor() throws {
     var state: [String: Any] = ["enabled": true,
       "harnessMonitor": ["text": "Harnesses 10", "segments": [["text": "Harnesses 10"]], "label": "Harness Monitor", "detail": "View running harnesses", "interactive": true],

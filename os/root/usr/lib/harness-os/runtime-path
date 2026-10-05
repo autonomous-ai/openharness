@@ -1,0 +1,12 @@
+#!/bin/sh
+# Sourced by the two OS launchers. Fast updates are per-user and never replace
+# pacman's packaged fallback. Privileged commands always use packaged code.
+harness_runtime=/usr/lib/harness
+if [ "$(id -u)" != 0 ] && [ ! -f /etc/harness-live ]; then
+    harness_candidate="$HOME/.local/state/harness-os/updates/current"
+    if [ -x "$harness_candidate/harness-tui" ] && [ -f "$harness_candidate/cli.mjs" ] && [ -f "$harness_candidate/notify.mjs" ] &&
+        cmp -s "$harness_candidate/base.json" /usr/share/harness-os/runtime.json; then
+        harness_runtime=$harness_candidate
+    fi
+fi
+export HARNESS_TUI_BIN="$harness_runtime/hn"

@@ -134,101 +134,15 @@ describe('cable session', () => {
     voiceLang: 'en', followCompanion: true, companion: null as string | null,
   }
 
-  it('follows all ten paired species, deduplicates acknowledgements and restores the saved skin', async () => {
-    let paired: string | null = 'tim'
-    const { session, port } = await connect(makeHost({ companion: () => paired }))
+  it('preserves dial settings and sends no automatic companion presentation', async () => {
+    const { session, port } = await connect()
     try {
-      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: 'companions', settings: companionSettings })
-      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'companion.set', id: 'tim' }))
-      for (const id of ['tim', 'gnu', 'lynx', 'mutt', 'yak', 'gopher', 'bug', 'tux', 'auk', 'beastie']) {
-        paired = id
-        await session['syncCompanion']()
-        expect(port.sent.filter(m => m.t === 'companion.set').at(-1)).toEqual({ t: 'companion.set', id })
-        port.say({ t: 'settings.state', ok: true, settings: { ...companionSettings, companion: id } })
-        await settle()
-        const count = port.sent.length
-        await session['syncCompanion']()
-        expect(port.sent).toHaveLength(count)
-      }
-      paired = null // unpair, sign out or disable Focus-bar creature
-      await session['syncCompanion']()
-      expect(port.sent.at(-1)).toEqual({ t: 'companion.set', id: null })
-      expect(port.types()).not.toContain('settings.set') // brightness and saved Focus skin survive
-    } finally { await session.stop() }
-  })
-
-  it('syncs individual changes and sends fresh celebrations once without replay on hello', async () => {
-    let identity = {id:'tim',uid:'tim_1',seed:42,name:'Pip',version:'0.1' as '0.1'|'1.0',colour:2,mark:1}
-    let event: import('./companionIdentity.js').CompanionMilestone | null = null
-    const {session,port}=await connect(makeHost({companion:()=>identity.id, companionIdentity:()=>identity, companionMilestone:()=>event}))
-    const settings={...companionSettings,companionProtocol:2,companionDetails:null as unknown}
-    try {
-      port.say({t:'hello',product:'harness',mac:'aa:bb',settings})
-      await vi.waitFor(()=>expect(port.sent).toContainEqual({t:'companion.set',id:'tim',identity}))
-      port.say({t:'settings.state',settings:{...settings,companion:'tim',companionDetails:identity}})
-      identity={...identity,name:'Dot',version:'1.0',colour:3,mark:2}
-      await session['syncCompanion']()
-      expect(port.sent.filter(m=>m.t==='companion.set').at(-1)).toEqual({t:'companion.set',id:'tim',identity})
-      port.say({t:'settings.state',settings:{...settings,companion:'tim',companionDetails:identity}})
-      event={token:'tim_1:grow:1.0',kind:'grow',at:Date.now(),companion:identity}
-      await session['syncCompanion'](); await session['syncCompanion']()
-      expect(port.sent.filter(m=>m.t==='companion.celebrate')).toHaveLength(1)
-      port.say({t:'hello',product:'harness',mac:'aa:bb',settings})
-      await session['syncCompanion']()
-      expect(port.sent.filter(m=>m.t==='companion.celebrate')).toHaveLength(1)
-      event={...event,token:'old-event',at:Date.now()-9_000}
-      await session['syncCompanion']()
-      expect(port.sent.filter(m=>m.t==='companion.celebrate')).toHaveLength(1)
-      port.say({t:'settings.state',settings:{...settings,quiet:true}})
-      event={...event,token:'quiet-event',at:Date.now()}
-      await session['syncCompanion']()
-      port.say({t:'settings.state',settings:{...settings,quiet:false}})
-      await session['syncCompanion']()
-      expect(port.sent.filter(m=>m.t==='companion.celebrate')).toHaveLength(1)
-    } finally { await session.stop() }
-  })
-
-  it('honours follow-off, refuses unknown species and never sends companion commands to old firmware', async () => {
-    let paired = 'gnu'
-    const { session, port } = await connect(makeHost({ companion: () => paired }))
-    try {
-      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', settings: { ...companionSettings, followCompanion: false } })
-      await settle(); await session['syncCompanion']()
-      expect(port.types()).not.toContain('companion.set')
-      paired = 'unknown'
-      port.say({ t: 'settings.state', settings: companionSettings })
-      await settle(); await session['syncCompanion']()
-      expect(port.types()).not.toContain('companion.set')
-      paired = 'gnu'
-      await session['syncCompanion']()
-      expect(port.sent.at(-1)).toEqual({ t: 'companion.set', id: 'gnu' })
-      port.sent.length = 0
-      port.say({ t: 'hello', product: 'harness', mac: 'other', fw: 'old' })
-      await settle(); await session['syncCompanion']()
-      expect(port.types()).not.toContain('companion.set')
-    } finally { await session.stop() }
-  })
-
-  it('bounds unacknowledged retries, sends a newer choice immediately and restores after reboot', async () => {
-    let paired = 'tim'
-    const { session, port } = await connect(makeHost({ companion: () => paired }))
-    try {
-      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', settings: companionSettings })
-      await vi.waitFor(() => expect(port.types()).toContain('companion.set'))
-      port.sent.length = 0
-      await session['syncCompanion']()
-      expect(port.sent).toHaveLength(0)
-      paired = 'gnu'
-      await session['syncCompanion']()
-      expect(port.sent).toEqual([{ t: 'companion.set', id: 'gnu' }])
-      session['companionAttempt']!.at -= 5_001
-      await session['syncCompanion']()
-      expect(port.sent.filter(m => m.t === 'companion.set')).toHaveLength(2)
-      port.say({ t: 'settings.state', settings: { ...companionSettings, companion: 'gnu' } })
-      await settle(); await session['syncCompanion']()
-      port.sent.length = 0
-      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', settings: companionSettings })
-      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'companion.set', id: 'gnu' }))
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', proto: 3, settings: companionSettings })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      await session.focusAgent('a1')
+      await settle()
+      expect(port.types().filter(type => type.startsWith('companion.'))).toEqual([])
+      expect(port.types()).not.toContain('settings.set')
     } finally { await session.stop() }
   })
 

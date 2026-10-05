@@ -13,6 +13,7 @@ import '../core/codex_profiles.dart';
 import '../core/dsh_catalog.dart';
 import '../core/harness_catalog.dart';
 import '../core/first_task.dart';
+import '../core/launch_setup.dart';
 import '../core/permission_modes.dart';
 import '../core/project_folder.dart';
 import '../core/repository_clone.dart';
@@ -745,6 +746,30 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
       prompt: _firstPrompt,
       attempt: _creation,
     );
+    if (error == null && _creation?.agentId != null) {
+      unawaited(
+        widget.notifier.agentPreference.remember(
+          choice,
+          harnessId: harness,
+          setup: LaunchSetup(
+            engine: engine,
+            harnessId: harness,
+            permissionMode: permissionMode ?? kDefaultPermissionMode,
+            model: terminal ? null : widget.initialDraft?.model,
+            profile: engine == 'codex' && widget.initialDraft?.model == null
+                ? profile
+                : null,
+            profileMachineId: _machineId,
+          ),
+          worktree:
+              _sameGitProject && widget.initialDraft?.worktreePreference != null
+              ? widget.initialDraft!.worktreePreference
+              : project?.gitSource != null
+              ? project!.createsWorktree
+              : null,
+        ),
+      );
+    }
     if (!mounted) return;
     if (error != null) {
       setState(() {
@@ -764,10 +789,6 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
       });
       return;
     }
-    // What New Harness lists first next time, before anything is typed.
-    unawaited(
-      widget.notifier.agentPreference.remember(choice, harnessId: _harnessId),
-    );
     Navigator.of(context).pop(NewAgentDialogResult.created);
   }
 

@@ -54,6 +54,8 @@ export interface GroupSyncerDeps {
   /** Close every open relay session to a machine the group removed — a lingering one would otherwise
    *  keep working after its pin is gone, since a pooled session is reused without looking again. */
   dropSessions?: (machineId: string) => void
+  /** Keys a fork put out of trust here until reviewed (deviceLogSyncer.ts): never pinned, trusted or dialed. */
+  suspended?: () => ReadonlySet<string>
   /** Machines worth dialing now; null = unknown, try every member. */
   reachable?: () => Set<string> | null
   now?: () => number
@@ -116,6 +118,17 @@ export class GroupSyncer {
     if (!known) this.forget(pub)
     this.scheduleFanOut(0)
     return known || result.dropped.length > 0
+  }
+
+  /** A fork put these keys out of trust here: unpin, untrust and stop dialing them — locally only (no
+   *  tombstone, so nothing is removed for anyone else) until `resume`. */
+  suspend(pubs: readonly string[]): void {
+    for (const pub of pubs) this.forget(pub)
+  }
+
+  /** The suspension was lifted (a review): pin and trust the roster again. */
+  resume(): void {
+    this.applyAll()
   }
 
   /** This machine's user unpaired `pub` (`harness unpair`): stop trusting and dialing it HERE, and keep
@@ -198,8 +211,9 @@ export class GroupSyncer {
     const reachable = this.deps.reachable?.() ?? null
     const self = this.deps.self().machineId
     const targets = new Set<string>()
-    for (const m of this.deps.store.read().members) if (m.kind === 'machine' && m.machineId) targets.add(m.machineId)
-    for (const p of this.deps.peers.list()) targets.add(p.machineId)
+    const suspended = this.deps.suspended?.() ?? new Set<string>()
+    for (const m of this.deps.store.read().members) if (m.kind === 'machine' && m.machineId && !suspended.has(m.pub)) targets.add(m.machineId)
+    for (const p of this.deps.peers.list()) if (!suspended.has(p.pub)) targets.add(p.machineId)
     if (self) targets.delete(self)
     // All at once: one machine that never answers (offline, or too old to know the frame) must not
     // hold up the rest for its whole timeout.
@@ -286,8 +300,9 @@ export class GroupSyncer {
   private apply(result: MergeResult): void {
     const selfMachine = this.deps.self().machineId
     const blocked = this.deps.store.blocked()
+    const suspended = this.deps.suspended?.() ?? new Set<string>()
     for (const m of result.upserted) {
-      if (blocked.has(m.pub)) continue
+      if (blocked.has(m.pub) || suspended.has(m.pub)) continue
       try {
         if (m.kind === 'machine' && m.machineId && m.machineId !== selfMachine) {
           const pin = this.deps.peers.get(m.machineId)

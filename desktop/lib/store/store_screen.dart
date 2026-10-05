@@ -26,6 +26,7 @@ import '../widgets/dsh_install_panel.dart' show describeInstallFailure;
 import '../widgets/engine_identity.dart';
 import '../widgets/new_agent_dialog.dart';
 import '../widgets/open_harness_intent.dart';
+import 'experimental_harnesses.dart';
 import 'store_category.dart';
 import 'store_collections.dart';
 import 'store_controller.dart';
@@ -273,8 +274,9 @@ class _StoreTabState extends State<StoreTab> {
         installed: _installedOnMachine(local, identity.id),
       );
     }
-    for (final entry in currentHarnessCatalog(
-      local?.dsh.entries ?? const <DshEntry>[],
+    for (final entry in storeVisibleHarnesses(
+      currentHarnessCatalog(local?.dsh.entries ?? const <DshEntry>[]),
+      widget.notifier.experimentalFeatures,
     )) {
       rows.putIfAbsent(entry.id, () => entry);
     }
@@ -439,7 +441,11 @@ class _StoreTabState extends State<StoreTab> {
         child: ColoredBox(
           color: grid.AppPalette.windowBg,
           child: ListenableBuilder(
-            listenable: Listenable.merge([widget.notifier, _store]),
+            listenable: Listenable.merge([
+              widget.notifier,
+              widget.notifier.experimentalFeatures,
+              _store,
+            ]),
             builder: (context, _) {
               final catalog = _catalog;
               final selected = _selected == null
@@ -903,7 +909,8 @@ bool _canGetOnMachine(MachineState machine, DshEntry entry) {
       machine.dsh.runs[id]?.inProgress != true;
 }
 
-/// Open the workspace's New Harness dock with this product and machine chosen.
+/// Open a bundled app workspace, or the New Harness dock with this product and
+/// machine chosen.
 /// A successful start opens a new tab; reviewing or cancelling allocates none.
 ///
 /// Public because it is the ONE way a harness is opened from anywhere — the
@@ -916,6 +923,22 @@ Future<void> openStoreAgent(
   String machineId, {
   String? prompt,
 }) async {
+  final workspace = ExperimentalStoreHarness.forId(harnessId);
+  if (workspace != null) {
+    // Recheck at activation as the account/flag can change after rendering.
+    if (!workspace.enabled(notifier.experimentalFeatures)) return;
+    switch (workspace) {
+      case ExperimentalStoreHarness.devices:
+        notifier.openDevices();
+      case ExperimentalStoreHarness.companions:
+        notifier.openCompanions();
+        notifier.syncCompanionViewer(
+          enabled: true,
+          machineId: notifier.localMachineState?.machine.machineId,
+        );
+    }
+    return;
+  }
   harnessId = _operationId(notifier.machineStates[machineId], harnessId);
   final intent = OpenHarnessIntent(harnessId, machineId, task: prompt);
   if (Actions.maybeFind<OpenHarnessIntent>(context) != null) {
@@ -1115,7 +1138,8 @@ class _ProductPageState extends State<_ProductPage> {
   /// Open from the Store with this product and machine. An example's [prompt]
   /// becomes the editable task in the same dock before the person presses Start.
   Future<void> _open(String machineId, {String? prompt}) async {
-    if (widget.notifier.localMachineState?.machine.machineId != machineId) {
+    if (ExperimentalStoreHarness.forId(widget.entry.id) == null &&
+        widget.notifier.localMachineState?.machine.machineId != machineId) {
       return;
     }
     await openStoreAgent(
@@ -1153,6 +1177,7 @@ class _ProductPageState extends State<_ProductPage> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final entry = widget.entry;
+    final workspace = ExperimentalStoreHarness.forId(entry.id);
     final identity = engineIdentity(entry.id, displayName: entry.name);
     final author = entry.author ?? identity.creator;
     final category = entry.category ?? identity.category;
@@ -1161,7 +1186,9 @@ class _ProductPageState extends State<_ProductPage> {
     final local = widget.notifier.localMachineState;
     final localInstalled = _installedOnMachine(local, entry.id);
     final operationId = _operationId(local, entry.id);
-    final hasUpdate = _machineHarness(local, entry.id)?.hasUpdate == true;
+    final hasUpdate =
+        workspace == null &&
+        _machineHarness(local, entry.id)?.hasUpdate == true;
     final base = entry.engine.isNotEmpty
         ? entry.engine
         : (knownHarnessBase[entry.id] ?? '');
@@ -1173,12 +1200,17 @@ class _ProductPageState extends State<_ProductPage> {
     // New Harness installs a harness the machine lacks before it creates, so
     // an example can be tried from here whether or not Get was pressed.
     final canTry =
+        workspace == null &&
         !entry.isViewerPackage &&
         local != null &&
         !busy &&
         !installing &&
         (localInstalled || _canGetOnMachine(local, entry));
-    final showLaunch = !entry.isViewerPackage && !hasUpdate && localInstalled;
+    final showLaunch =
+        workspace == null &&
+        !entry.isViewerPackage &&
+        !hasUpdate &&
+        localInstalled;
     // A package that has not published its own examples yet still leads with
     // prompts — the editorial ones — so every page reads the same way.
     final examples = entry.examples.isNotEmpty
@@ -1194,8 +1226,9 @@ class _ProductPageState extends State<_ProductPage> {
     // A viewer package is never opened on its own: once it is here there is
     // nothing more to press, and Remove sits in the line beneath.
     final showAction =
-        local != null &&
-        (hasUpdate || !(entry.isViewerPackage && localInstalled));
+        workspace != null ||
+        (local != null &&
+            (hasUpdate || !(entry.isViewerPackage && localInstalled)));
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1259,7 +1292,9 @@ class _ProductPageState extends State<_ProductPage> {
                       [
                         ?author,
                         ?category,
-                        if (entry.isViewerPackage)
+                        if (workspace != null)
+                          'Included with Harness'
+                        else if (entry.isViewerPackage)
                           'Viewer package'
                         else if (entry.isEngine)
                           'Coding agent'
@@ -1319,11 +1354,13 @@ class _ProductPageState extends State<_ProductPage> {
                       Center(
                         child: FilledButton(
                           key: const ValueKey('store-primary-action'),
-                          onPressed:
-                              busy ||
-                                  installing ||
-                                  (!localInstalled &&
-                                      !_canGetOnMachine(local, entry))
+                          onPressed: workspace != null
+                              ? () => _open(local?.machine.machineId ?? '')
+                              : local == null ||
+                                    busy ||
+                                    installing ||
+                                    (!localInstalled &&
+                                        !_canGetOnMachine(local, entry))
                               ? null
                               : () => hasUpdate
                                     ? _update(local.machine.machineId)
@@ -1339,7 +1376,9 @@ class _ProductPageState extends State<_ProductPage> {
                             shape: const StadiumBorder(),
                           ),
                           child: Text(
-                            installing || busy
+                            workspace != null
+                                ? 'Open'
+                                : installing || busy
                                 ? 'Working…'
                                 : hasUpdate
                                 ? 'Update'
@@ -1374,27 +1413,28 @@ class _ProductPageState extends State<_ProductPage> {
                       ),
                     ],
                     const SizedBox(height: 14),
-                    Center(
-                      child: local == null
-                          ? Text(
-                              'Connecting to this computer…',
-                              style: grid.AppType.body(
-                                color: grid.AppPalette.textFaint,
+                    if (workspace == null)
+                      Center(
+                        child: local == null
+                            ? Text(
+                                'Connecting to this computer…',
+                                style: grid.AppType.body(
+                                  color: grid.AppPalette.textFaint,
+                                ),
+                              )
+                            : _InstallLine(
+                                key: ValueKey(
+                                  'store-machine:${local.machine.machineId}',
+                                ),
+                                state: local,
+                                entry: entry,
+                                busy: busy,
+                                onRemove: () => _remove(
+                                  local.machine.machineId,
+                                  local.machine.displayName,
+                                ),
                               ),
-                            )
-                          : _InstallLine(
-                              key: ValueKey(
-                                'store-machine:${local.machine.machineId}',
-                              ),
-                              state: local,
-                              entry: entry,
-                              busy: busy,
-                              onRemove: () => _remove(
-                                local.machine.machineId,
-                                local.machine.displayName,
-                              ),
-                            ),
-                    ),
+                      ),
                     const SizedBox(height: 24),
                   ],
                 ),

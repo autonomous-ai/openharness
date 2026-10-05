@@ -2,7 +2,7 @@ import { WebSocket } from 'ws'
 import { b64e, newEphemeral } from '../lib/e2ee/core.js'
 import type { AuthSessionManager } from '../lib/authSession.js'
 import type { Frame, LocalClientSink } from '../backendSocket.js'
-import type { RelaySession } from '../lib/remoteRelay.js'
+import { DAEMON_LOCAL_ONLY_TYPES, type RelaySession } from '../lib/remoteRelay.js'
 import { recipientHandshake, type ObserverCipher } from './crypto.js'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness } from '../lib/wsLiveness.js'
 
@@ -67,7 +67,7 @@ export class HarnessShareRelay {
               if (clear.type === 'observer_binary') {
                 const bytes = (clear.payload as { bytes?: unknown })?.bytes
                 if (typeof bytes === 'string') sink.sendBinary(Buffer.from(bytes, 'base64'))
-              } else sink.sendFrame(clear)
+              } else if (!(typeof clear.type === 'string' && DAEMON_LOCAL_ONLY_TYPES.has(clear.type))) sink.sendFrame(clear)
             }
           } catch {
             clearTimeout(timeout)

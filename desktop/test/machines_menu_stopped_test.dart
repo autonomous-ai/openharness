@@ -166,6 +166,11 @@ void main() {
     expect(app.panes.map((pane) => pane.agentId), isNot(contains('old')));
     expect(find.text('The saved conversation is gone.'), findsOneWidget);
     expect(find.text('Start New Conversation'), findsOneWidget);
+    await tester.tap(find.byTooltip('Dismiss notice'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SnackBar), findsNothing);
+    expect(app.resumed, ['old']);
+    expect(app.panes.map((pane) => pane.agentId), isNot(contains('old')));
     await finish(tester);
   });
 }

@@ -8,6 +8,7 @@ import '../../shared/widgets/app_dialog.dart';
 import '../../shared/widgets/fingerprint_text.dart';
 import '../../state/account_devices.dart';
 import '../../state/app_state.dart';
+import '../../theme/app_theme.dart';
 
 /// What removing a device does, said in the confirm and nowhere else so the two entry points (the list
 /// row and the detail) cannot word it differently.
@@ -161,12 +162,17 @@ class _AccountDeviceDetailState extends State<_AccountDeviceDetail> {
     }
     setState(() {
       _removing = false;
-      _error = "Couldn't remove $name ($error). Try again.";
+      _error = 'Couldn’t remove $name ($error). Try again.';
     });
   }
 
   void _mine() {
-    widget.app.dismissNewDevice(widget.pub);
+    // Only a suspension this dialog SHOWS is lifted. Before the device has loaded (opened from the
+    // banner or a notification) it dismisses the way the banner's own button does, which keeps it.
+    widget.app.dismissNewDevice(
+      widget.pub,
+      liftSuspension: _device?.suspended == true,
+    );
     widget.onMine?.call();
     Navigator.pop(context);
   }
@@ -245,12 +251,25 @@ class _AccountDeviceDetailState extends State<_AccountDeviceDetail> {
                   ),
                 ),
               ],
+              if (device?.suspended ?? false) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'Not trusted here: added after this device’s list and another’s split. '
+                  'Review the list to trust it again.',
+                  key: const Key('device-detail-suspended'),
+                  style: grid.AppType.body(
+                    color: grid.AppPalette.warn,
+                    height: 1.4,
+                  ),
+                ),
+              ],
               if (_error case final error?) ...[
                 const SizedBox(height: 12),
                 Text(
                   error,
                   key: const Key('device-detail-error'),
-                  style: grid.AppType.body(color: grid.AppPalette.warn),
+                  // A failure to remove is red; only a state to review again is amber.
+                  style: grid.AppType.body(color: AppColors.danger),
                 ),
               ],
             ],
@@ -259,7 +278,9 @@ class _AccountDeviceDetailState extends State<_AccountDeviceDetail> {
       ),
       actions: [
         closeButton,
-        if (widget.isNew)
+        // New by the caller's word, or by the list's own once it has loaded (a notification's click can
+        // land before the banner has been rebuilt from the log).
+        if (widget.isNew || device?.pending == true)
           TextButton(
             key: const Key('device-detail-mine'),
             onPressed: _removing ? null : _mine,

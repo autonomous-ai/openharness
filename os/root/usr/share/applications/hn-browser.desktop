@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Browser
+Type=Application
+Exec=hn-browser %U
+Terminal=false
+MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;
+NoDisplay=true

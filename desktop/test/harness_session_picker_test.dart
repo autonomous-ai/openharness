@@ -398,10 +398,10 @@ void main() {
       expect(harnessActivityAge(null, now), '—');
       expect(
         harnessActivityAge(now.add(const Duration(minutes: 4)), now),
-        '0m',
+        'now',
       );
       for (final sample in [
-        (59, '0m'),
+        (59, 'now'),
         (300, '5m'),
         (3599, '59m'),
         (3600, '1h'),

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'fs'
-import { execFileSync } from 'child_process'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'fs'
+import { execFileSync, spawn } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { claudeContinuation } from './sessionRepair.js'
@@ -174,6 +174,180 @@ describe('session repair', () => {
 })
 
 /**
+ * A fork is bound by the repair sweep (`bornOnly`) while its parent is usually still running. The parent's
+ * Claude subagents write transcripts of their own right next to it, and being the youngest file in the
+ * project they used to be picked as the fork's session — wiring the fork to a subagent of its parent.
+ */
+describe('session repair — Claude subagent transcripts', () => {
+  const lines = (...records: object[]) => `${records.map(r => JSON.stringify(r)).join('\n')}\n`
+  function write(root: string, rel: string, body: string, mtimeMs: number): string {
+    const file = join(root, rel)
+    mkdirSync(join(file, '..'), { recursive: true })
+    writeFileSync(file, body)
+    utimesSync(file, new Date(mtimeMs), new Date(mtimeMs))
+    return file
+  }
+  function projects(): string { return join(tempRoot(), 'projects') }
+  async function sweep(root: string) {
+    const { findLiveSession } = await load(root)
+    return findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true, pid: 4242 })
+  }
+  function parentWithSubagent(root: string): void {
+    write(root, 'proj/p-sess.jsonl', lines({ type: 'user', isSidechain: false, cwd: CWD }), STARTED_AT - 3_600_000)
+    write(root, 'proj/p-sess/subagents/agent-a1.jsonl',
+      lines({ type: 'user', isSidechain: true, cwd: CWD, sessionId: 'p-sess' }), STARTED_AT + 60_000)
+  }
+
+  it('S1 never binds a subagent transcript, even when it is the only candidate', async () => {
+    const root = projects()
+    parentWithSubagent(root)
+    await expect(sweep(root)).resolves.toBeNull()
+  })
+
+  it('S2 binds the fork own transcript instead of the parent subagent', async () => {
+    const root = projects()
+    parentWithSubagent(root)
+    const file = write(root, 'proj/fork-sess.jsonl',
+      lines({ type: 'permission-mode' }, { type: 'user', isSidechain: false, cwd: CWD }), STARTED_AT + 30_000)
+    await expect(sweep(root)).resolves.toEqual({ sessionId: 'fork-sess', transcriptPath: file })
+  })
+
+  it('S3 skips a sidechain transcript even outside a subagents directory', async () => {
+    const root = projects()
+    write(root, 'proj/agent-b2.jsonl', lines({ type: 'user', isSidechain: true, cwd: CWD }), STARTED_AT + 10_000)
+    await expect(sweep(root)).resolves.toBeNull()
+  })
+
+  it('S4 reads the first isSidechain flag past bookkeeping records and ignores later ones', async () => {
+    const root = projects()
+    const file = write(root, 'proj/main-sess.jsonl', lines(
+      { type: 'summary' }, { type: 'x-mode' },
+      { type: 'user', isSidechain: false, cwd: CWD },
+      { type: 'assistant', isSidechain: true },
+    ), STARTED_AT + 10_000)
+    await expect(sweep(root)).resolves.toEqual({ sessionId: 'main-sess', transcriptPath: file })
+  })
+
+  it('does not refuse every transcript because the projects root sits under a folder named subagents', async () => {
+    const root = join(tempRoot(), 'subagents', 'projects')
+    const file = write(root, 'proj/main-sess.jsonl', lines({ type: 'user', isSidechain: false, cwd: CWD }), STARTED_AT + 10_000)
+    await expect(sweep(root)).resolves.toEqual({ sessionId: 'main-sess', transcriptPath: file })
+  })
+
+  it('still refuses a subagents directory below such a root', async () => {
+    const root = join(tempRoot(), 'subagents', 'projects')
+    write(root, 'proj/p/subagents/agent-a1.jsonl', lines({ type: 'user', cwd: CWD }), STARTED_AT + 10_000)
+    await expect(sweep(root)).resolves.toBeNull()
+  })
+
+  it('reads only the head of a large transcript', async () => {
+    const root = projects()
+    const filler = JSON.stringify({ type: 'assistant', text: 'x'.repeat(300 * 1024) })
+    // The opening record fits the head; a huge record after it must not be needed.
+    const file = write(root, 'proj/big-sess.jsonl',
+      `${JSON.stringify({ type: 'user', isSidechain: false, cwd: CWD })}\n${filler}\n`, STARTED_AT + 10_000)
+    await expect(sweep(root)).resolves.toEqual({ sessionId: 'big-sess', transcriptPath: file })
+  })
+
+  it('treats a transcript with no isSidechain flag as a main session', async () => {
+    const root = projects()
+    const file = write(root, 'proj/plain-sess.jsonl', lines({ type: 'user', cwd: CWD }), STARTED_AT + 10_000)
+    await expect(sweep(root)).resolves.toEqual({ sessionId: 'plain-sess', transcriptPath: file })
+  })
+})
+
+describe('session repair — Claude subagent transcripts, verifier cases', () => {
+  const lines = (...records: object[]) => `${records.map(r => JSON.stringify(r)).join('\n')}\n`
+  function write(root: string, rel: string, body: string, mtimeMs: number): string {
+    const file = join(root, rel)
+    mkdirSync(join(file, '..'), { recursive: true })
+    writeFileSync(file, body)
+    utimesSync(file, new Date(mtimeMs), new Date(mtimeMs))
+    return file
+  }
+  afterEach(() => { delete process.env.PI_HOME })
+
+  it('does not let a subagent file make a resumed main session ambiguous (wrote tier)', async () => {
+    // A `claude --resume` pane: its own file is old but freshly written, and a Task subagent it ran wrote
+    // next to it. Before the fix both sat in the `wrote` tier and the pane was never repaired.
+    const root = join(tempRoot(), 'projects')
+    const born = Date.now()
+    const startedAt = born + 30_000
+    const main = write(root, 'proj/main-sess.jsonl', lines({ type: 'user', isSidechain: false, cwd: CWD }), startedAt + 10_000)
+    write(root, 'proj/main-sess/subagents/agent-a1.jsonl',
+      lines({ type: 'user', isSidechain: true, cwd: CWD, sessionId: 'main-sess' }), startedAt + 20_000)
+    const { findLiveSession } = await load(root)
+    await expect(findLiveSession('claude', CWD, startedAt)).resolves.toEqual({ sessionId: 'main-sess', transcriptPath: main })
+  })
+
+  it('binds the fork next to an old-layout sidechain file that used to tie with it', async () => {
+    const root = join(tempRoot(), 'projects')
+    write(root, 'proj/agent-b2.jsonl', lines({ type: 'user', isSidechain: true, cwd: CWD, sessionId: 'p-sess' }), STARTED_AT + 50_000)
+    const fork = write(root, 'proj/fork-sess.jsonl', lines({ type: 'user', isSidechain: false, cwd: CWD }), STARTED_AT + 30_000)
+    const { findLiveSession } = await load(root)
+    await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true, pid: 4242 }))
+      .resolves.toEqual({ sessionId: 'fork-sess', transcriptPath: fork })
+  })
+
+  it('reads only the opening for the flag: a sidechain record past the scanned lines does not hide a main session', async () => {
+    const root = join(tempRoot(), 'projects')
+    const opening = Array.from({ length: 25 }, (_, i) => ({ type: 'x-mode', i }))
+    const file = write(root, 'proj/long-sess.jsonl',
+      lines({ type: 'summary' }, { type: 'user', cwd: CWD }, ...opening, { type: 'user', isSidechain: true, cwd: CWD }),
+      STARTED_AT + 10_000)
+    const { findLiveSession } = await load(root)
+    await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true }))
+      .resolves.toEqual({ sessionId: 'long-sess', transcriptPath: file })
+  })
+
+  it('takes the cwd from a later record when the flagged opening carries none', async () => {
+    const root = join(tempRoot(), 'projects')
+    const file = write(root, 'proj/split-sess.jsonl',
+      lines({ type: 'user', isSidechain: false }, { type: 'assistant', cwd: CWD }), STARTED_AT + 10_000)
+    const { findLiveSession } = await load(root)
+    await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true }))
+      .resolves.toEqual({ sessionId: 'split-sess', transcriptPath: file })
+  })
+
+  it('refuses a file whose first flagged record is a sidechain even when a later one says main', async () => {
+    const root = join(tempRoot(), 'projects')
+    write(root, 'proj/agent-c3.jsonl',
+      lines({ type: 'user', isSidechain: true }, { type: 'user', isSidechain: false, cwd: CWD }), STARTED_AT + 10_000)
+    const { findLiveSession } = await load(root)
+    await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true })).resolves.toBeNull()
+  })
+
+  it('still finds a main session behind a large opening record', async () => {
+    const root = join(tempRoot(), 'projects')
+    const file = write(root, 'proj/big-sess.jsonl',
+      lines({ type: 'summary', summary: 'x'.repeat(150_000) }, { type: 'user', isSidechain: false, cwd: CWD }),
+      STARTED_AT + 10_000)
+    const { findLiveSession } = await load(root)
+    await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true }))
+      .resolves.toEqual({ sessionId: 'big-sess', transcriptPath: file })
+  })
+
+  it('treats a non-boolean isSidechain as no flag', async () => {
+    const root = join(tempRoot(), 'projects')
+    const file = write(root, 'proj/odd-sess.jsonl',
+      lines({ type: 'user', isSidechain: 'true', cwd: CWD }, { type: 'user', isSidechain: false }), STARTED_AT + 10_000)
+    const { findLiveSession } = await load(root)
+    await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true }))
+      .resolves.toEqual({ sessionId: 'odd-sess', transcriptPath: file })
+  })
+
+  it('leaves pi alone: its scan does not apply the Claude subagent rule', async () => {
+    const piHome = tempRoot()
+    process.env.PI_HOME = piHome
+    const file = write(join(piHome, 'agent', 'sessions'), '--proj--/subagents/2026-08-03_pi-sess.jsonl',
+      lines({ type: 'session', isSidechain: true, cwd: CWD }), STARTED_AT + 10_000)
+    const { findLiveSession } = await load(join(tempRoot(), 'projects'))
+    await expect(findLiveSession('pi', CWD, STARTED_AT, { bornOnly: true }))
+      .resolves.toEqual({ sessionId: 'pi-sess', transcriptPath: file })
+  })
+})
+
+/**
  * Muse opens sessions of its OWN under the user's workspace — memory reminders are the ones seen live.
  * They share the workspace_root, sit at the same depth, and are BORN LATER, so they beat the real session
  * on every signal repair used to look at. Measured on a live machine: the daemon tailed an 11-line
@@ -324,6 +498,48 @@ describe('session repair — Codex profiles', () => {
   })
 })
 
+describe('session repair — a Codex process names its own rollout', () => {
+  it('names a fork among its siblings by the rollout its process holds open, where a scan must refuse', async () => {
+    const profile = tempRoot()
+    const fork = 'a1b2c3d4-1111-4a4a-8a8a-000000000003'
+    const sibling = 'a1b2c3d4-1111-4a4a-8a8a-000000000004'
+    const forkFile = writeCodexRollout(profile, fork, CWD, STARTED_AT + 1_000)
+    const siblingFile = writeCodexRollout(profile, sibling, CWD, STARTED_AT + 2_000)
+    const elsewhere = writeCodexRollout(tempRoot(), 'a1b2c3d4-1111-4a4a-8a8a-000000000005', CWD, STARTED_AT)
+    vi.resetModules()
+    const { codexProcessSession, findLiveSession } = await import('./sessionRepair.js')
+    const sessions = join(profile, 'sessions')
+    // Two born in the folder since the process started: guessing would wire a tile to a sibling.
+    await expect(findLiveSession('codex', CWD, STARTED_AT, { codexHome: profile, bornOnly: true })).resolves.toBeNull()
+    // The process holds one of them open, beside files that are not rollouts or not this profile's.
+    const held = async () => [forkFile, '/dev/null', join(profile, 'notes.jsonl'), elsewhere]
+    await expect(codexProcessSession(42, sessions, CWD, held)).resolves.toEqual({ sessionId: fork, transcriptPath: realpathSync(forkFile) })
+    // Two held, or one for another folder: nothing, rather than a guess.
+    await expect(codexProcessSession(42, sessions, CWD, async () => [forkFile, siblingFile])).resolves.toBeNull()
+    await expect(codexProcessSession(42, sessions, '/Users/demo/elsewhere', held)).resolves.toBeNull()
+    await expect(codexProcessSession(42, sessions, CWD, async () => [])).resolves.toBeNull()
+  })
+
+  it('reads a live process\'s open files, and binds the repair to the rollout it holds', async () => {
+    const profile = tempRoot()
+    const fork = 'a1b2c3d4-1111-4a4a-8a8a-000000000006'
+    const forkFile = writeCodexRollout(profile, fork, CWD, STARTED_AT + 1_000)
+    writeCodexRollout(profile, 'a1b2c3d4-1111-4a4a-8a8a-000000000007', CWD, STARTED_AT + 2_000)
+    // A stand-in for Codex: a process that keeps its rollout open.
+    const holder = spawn(process.execPath, ['-e', 'require("fs").openSync(process.argv[1], "r"); setInterval(() => {}, 60_000)', forkFile], { stdio: 'ignore' })
+    try {
+      vi.resetModules()
+      const { findLiveSession, openFiles } = await import('./sessionRepair.js')
+      await vi.waitFor(async () => expect(await openFiles(holder.pid!)).toContain(realpathSync(forkFile)), { timeout: 10_000, interval: 100 })
+      await expect(findLiveSession('codex', CWD, STARTED_AT, { codexHome: profile, bornOnly: true, pid: holder.pid! }))
+        .resolves.toEqual({ sessionId: fork, transcriptPath: realpathSync(forkFile) })
+      expect(await openFiles(-1)).toEqual([])
+    } finally {
+      holder.kill()
+    }
+  })
+})
+
 describe('claudeContinuation', () => {
   it('follows a continued-in marker to the new session file', async () => {
     const dir = tempRoot()
@@ -411,7 +627,7 @@ describe('claudeContinuation', () => {
     await expect(claudeContinuation(oldPath)).resolves.toEqual({ sessionId: newId, transcriptPath: background })
   })
 
-  it('follows a continuation whose first turn is past the bounded read', async () => {
+  it.each(['x', '漢', '📘'])('follows a continuation past the byte cap with %s bookkeeping', async (character) => {
     // A rollover can open on a `file-history-snapshot` big enough to push the first turn out of the
     // head this check reads. What it rules out is two short lines, so size alone answers for a file
     // larger than the bound — the bound must never be the thing that refuses a real conversation.
@@ -421,11 +637,15 @@ describe('claudeContinuation', () => {
     writeFileSync(oldPath, `${JSON.stringify({ type: 'continued-in', continuedInSessionId: newId })}\n`)
     const nextPath = join(dir, `${newId}.jsonl`)
     writeFileSync(nextPath, [
-      JSON.stringify({ type: 'file-history-snapshot', sessionId: newId, blob: 'x'.repeat(300 * 1024) }),
+      JSON.stringify({ type: 'file-history-snapshot', sessionId: newId, blob: character.repeat(300 * 1024) }),
       JSON.stringify({ type: 'user', sessionId: newId, message: { role: 'user', content: 'carry on' } }),
     ].join('\n') + '\n')
 
     await expect(claudeContinuation(oldPath)).resolves.toEqual({ sessionId: newId, transcriptPath: nextPath })
+
+    // Small Unicode-only bookkeeping is still an empty background session, not a conversation.
+    writeFileSync(nextPath, JSON.stringify({ type: 'ai-title', title: character.repeat(12) }) + '\n')
+    await expect(claudeContinuation(oldPath)).resolves.toBeNull()
   })
 
   it('returns null for a missing file', async () => {

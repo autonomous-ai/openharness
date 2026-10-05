@@ -22,6 +22,7 @@ import 'package:harness/state/workspace_status.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/usage/models_menu_controller.dart';
 import 'package:harness/widgets/workspace_subscription_usage.dart';
+import 'package:harness/widgets/desktop_search_panel.dart';
 import 'package:harness/terminal/terminal_text.dart';
 import 'package:xterm/xterm.dart' show TerminalStyle;
 import 'package:harness/widgets/grid_model_picker.dart';
@@ -58,6 +59,7 @@ Map<String, Object?> subscription(
   String? status,
 }) => {
   'engine': engine,
+  'title': engine == 'claude' ? 'Anthropic' : 'OpenAI',
   'account': account,
   'remainingPercent': remaining,
   'status': status ?? '$remaining% remaining',
@@ -424,20 +426,22 @@ void main() {
           subscription('claude', 'aaaaaa', 0),
           subscription('codex', 'bbbbbb', 50),
         ]).text,
-        'Claude 100%   Codex 50%',
+        'Claude Code 0%   Codex 50%',
       );
       final all = WorkspaceSubscriptionUsage.fromRows([
         subscription('claude', 'aaaaaa', 0),
         subscription('claude', 'cccccc', .3, status: '<1% remaining'),
         subscription('codex', 'bbbbbb', null, status: 'Usage unavailable'),
       ]);
-      expect(all.text, 'Claude aaaaaa 100%   Claude cccccc 100%   Codex -');
-      expect(all.detail, contains('Codex (bbbbbb): Usage unavailable'));
+      expect(all.text, 'Claude Code 0%   Claude Code <1%   Codex —');
+      expect(all.accounts, hasLength(3));
+      expect(all.accounts[1].detail, contains('Account: cccccc'));
+      expect(all.accounts.last.detail, contains('Usage unavailable'));
       expect(all.segments.map((part) => part.tone), [
         WorkspaceUsageTone.normal,
+        WorkspaceUsageTone.exhausted,
         WorkspaceUsageTone.normal,
-        WorkspaceUsageTone.normal,
-        WorkspaceUsageTone.normal,
+        WorkspaceUsageTone.exhausted,
         WorkspaceUsageTone.normal,
         WorkspaceUsageTone.normal,
       ]);
@@ -451,41 +455,71 @@ void main() {
     },
   );
 
-  test('all subscription percentages use neutral readable ink', () {
-    final oldBrightness = grid.AppTheme.brightness.value;
-    addTearDown(() => grid.AppTheme.brightness.value = oldBrightness);
-    final usage = WorkspaceSubscriptionUsage.fromRows([
-      subscription('claude', '', 0),
-      subscription('codex', '', 20),
-      subscription('other', '', 21),
-    ]);
-    for (final brightness in Brightness.values) {
-      grid.AppTheme.brightness.value = brightness;
-      for (final palette in HarnessPalette.values) {
-        final parts = usage.paintSegments(
-          foreground: palette.foreground,
-          surface: palette.workspace,
-        );
-        for (final part in parts) {
-          expect(part.foreground, palette.foreground);
-        }
-        for (final part in parts) {
-          final ink = part.foreground.computeLuminance();
-          final ground = palette.workspace.computeLuminance();
-          expect(
-            ink > ground
-                ? (ink + .05) / (ground + .05)
-                : (ground + .05) / (ink + .05),
-            greaterThanOrEqualTo(4.5),
+  test(
+    'rounded allowance thresholds and account identities stay consistent',
+    () {
+      final usage = WorkspaceSubscriptionUsage.fromRows([
+        {
+          ...subscription('claude', 'aaaaaa', 20.9),
+          'accountKey': 'aaaaaa0000000001',
+        },
+        {
+          ...subscription('claude', 'aaaaaa', 5.9),
+          'accountKey': 'aaaaaa0000000002',
+        },
+        subscription('codex', 'b', double.nan),
+      ]);
+      expect(usage.accounts.map((a) => a.figure), ['20%', '5%', '—']);
+      expect(usage.accounts.map((a) => a.tone), [
+        WorkspaceUsageTone.low,
+        WorkspaceUsageTone.exhausted,
+        WorkspaceUsageTone.normal,
+      ]);
+      expect(usage.accounts.map((a) => a.searchId).toSet(), hasLength(3));
+      expect(usage.detail, isNot(contains('aaaaaa0000000001')));
+    },
+  );
+
+  test(
+    'only low and critical percentages change ink, with readable contrast',
+    () {
+      final oldBrightness = grid.AppTheme.brightness.value;
+      addTearDown(() => grid.AppTheme.brightness.value = oldBrightness);
+      final usage = WorkspaceSubscriptionUsage.fromRows([
+        subscription('claude', '', 0),
+        subscription('codex', '', 20),
+        subscription('other', '', 21),
+      ]);
+      for (final brightness in Brightness.values) {
+        grid.AppTheme.brightness.value = brightness;
+        for (final palette in HarnessPalette.values) {
+          final parts = usage.paintSegments(
+            foreground: palette.foreground,
+            surface: palette.workspace,
           );
+          expect(parts[0].foreground, palette.foreground);
+          expect(parts[1].foreground, isNot(palette.foreground));
+          expect(parts[2].foreground, palette.foreground);
+          expect(parts[3].foreground, isNot(palette.foreground));
+          expect(parts[5].foreground, palette.foreground);
+          for (final part in parts) {
+            final ink = part.foreground.computeLuminance();
+            final ground = palette.workspace.computeLuminance();
+            expect(
+              ink > ground
+                  ? (ink + .05) / (ground + .05)
+                  : (ground + .05) / (ink + .05),
+              greaterThanOrEqualTo(4.5),
+            );
+          }
         }
       }
-    }
-  });
+    },
+  );
 
   for (final native in [false, true]) {
     testWidgets(
-      'footer shows only harness count beside focused work (native=$native)',
+      'footer shows inventory and remaining accounts beside focused work (native=$native)',
       (tester) async {
         final updates = <Map>[];
         const channel = MethodChannel('harness/swarm_tabs');
@@ -496,7 +530,11 @@ void main() {
         });
         addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
         final subscriptions = _FooterSubscriptions()
-          ..values = [subscription('codex', 'bbbbbb', 13)];
+          ..values = [
+            subscription('claude', 'aaaaaa', 68),
+            subscription('claude', 'cccccc', 18),
+            subscription('codex', 'bbbbbb', 4),
+          ];
         final app = createApp();
         app.machineStates['m']!.localOnly = true;
         final pane = app.adoptSessionForTest(terminal('a0', []));
@@ -518,13 +556,26 @@ void main() {
           );
           await tester.pumpAndSettle();
           if (native) {
-            expect(updates.last['subscriptionUsage'], isNull);
+            expect(updates.last['subscriptionUsage']['fields'], hasLength(3));
+            expect(
+              updates.last['subscriptionUsage']['fields'][0]['text'],
+              '68%',
+            );
+            expect(
+              updates.last['subscriptionUsage']['fields'][1]['detail'],
+              contains('cccccc'),
+            );
+            expect(
+              updates.last['footerMachines']['text'],
+              startsWith('Machines '),
+            );
+            expect(updates.last['footerModels']['text'], startsWith('Models '));
             expect(updates.last['machineResources'], isNull);
             expect(updates.last['harnessMonitor']['text'], 'Harnesses 0');
           } else {
             expect(
               find.byKey(const ValueKey('workspace-subscription-usage')),
-              findsNothing,
+              findsOneWidget,
             );
             expect(
               find.byKey(const ValueKey('workspace-machine-resources')),
@@ -538,18 +589,61 @@ void main() {
             );
             expect(monitor, findsOneWidget);
             expect(
+              find.byKey(const ValueKey('workspace-machines')),
+              findsOneWidget,
+            );
+            expect(
+              find.byKey(const ValueKey('workspace-models')),
+              findsOneWidget,
+            );
+            expect(
               tester.getRect(monitor).right,
               lessThan(tester.getRect(context).left),
             );
             if (width == 1280) {
-              await captureControls(tester, 'harness-count-footer');
+              await captureControls(tester, 'inventory-allowance-footer');
             }
           }
           expect(tester.takeException(), isNull);
         }
+        if (!native) {
+          tester.view.physicalSize = const Size(1280, 800);
+          await tester.pumpAndSettle();
+          DesktopSearchPanel picker() => tester.widget<DesktopSearchPanel>(
+            find.byType(DesktopSearchPanel),
+          );
+          await tester.tap(find.byKey(const ValueKey('workspace-machines')));
+          await tester.pumpAndSettle();
+          expect(picker().search.scopePrefix, '@');
+          picker().onClose();
+          await tester.pumpAndSettle();
+          await tester.tap(find.byKey(const ValueKey('workspace-models')));
+          await tester.pumpAndSettle();
+          expect(picker().search.query, ':local');
+          picker().onClose();
+          await tester.pumpAndSettle();
+          await tester.tap(
+            find.byKey(
+              const ValueKey('workspace-subscription:claude:cccccc:0'),
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(
+            picker().search.selected?.id,
+            'model:subscription:claude:Anthropic:cccccc',
+          );
+          expect(picker().search.previewVisible, isTrue);
+          picker().onClose();
+          await tester.pumpAndSettle();
+        }
         subscriptions.update([subscription('codex', 'bbbbbb', 27)]);
         await tester.pump();
-        expect(find.text('Codex 73%'), findsNothing);
+        if (native) {
+          expect(
+            updates.last['subscriptionUsage']['fields'].single['text'],
+            '27%',
+          );
+        }
         expect(app.focusedPane, same(pane));
         expect(app.panes, [pane]);
         await tester.pumpWidget(const SizedBox());

@@ -15,10 +15,21 @@ name: CI
 on:
   # The only way this runs on its own: Actions -> CI -> Run workflow, on any branch.
   workflow_dispatch:
+    inputs:
+      scope:
+        description: 'Affected components (full for shared protocols or uncertain impact)'
+        type: choice
+        options: [full, cli, tui, backend, desktop, process]
+        default: full
   # Callable as a reusable workflow. release.yml used to gate on this and take the Node pin from
   # its output; it no longer does (see the note above `publish` there) and pins the same version
   # itself, so the output below is kept only for any future caller.
   workflow_call:
+    inputs:
+      scope:
+        description: 'full, cli, tui, backend, desktop (VM tests), or process (repository tooling only)'
+        type: string
+        default: full
     outputs:
       node-version:
         description: The Node the suite ran on. release.yml bundles the release with it.
@@ -27,17 +38,147 @@ on:
 permissions:
   contents: read
 
+# The managed runtime shipped by the CLI; keep release.yml's pin in sync.
+env:
+  CLI_NODE_VERSION: 22.23.2
+
 concurrency:
-  group: cli-ci-${{ github.workflow }}-${{ github.ref }}
+  group: cli-ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.scope || 'full' }}
   # Every run here was started by a person or by a release, and is the record of whether that commit
   # was green — never killed to make room for a newer one.
   cancel-in-progress: false
 
 jobs:
+  process-checks:
+    if: ${{ contains(fromJSON('["full","cli","tui","backend","desktop","process"]'), inputs.scope || 'full') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /.github/
+            /scripts/
+            /desktop/scripts/
+            /.gitattributes
+            /.gitignore
+            /.gitmodules
+            /Makefile
+          sparse-checkout-cone-mode: false
+      - name: Verify declared source checkout
+        run: python3 scripts/ci-source-inputs.py process
+      - name: Validation deadlines, cleanup, receipts and release version guards
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
+      - name: Record source inputs for CI evidence reuse
+        run: python3 scripts/ci-source-inputs.py process --record "$RUNNER_TEMP/ci-source-inputs.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-source-inputs
+          path: ${{ runner.temp }}/ci-source-inputs.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+  # workflow_dispatch restricts the choice; reusable callers can pass any string.
+  # Fail invalid calls rather than reporting success after skipping every check.
+  invalid-scope:
+    if: ${{ !contains(fromJSON('["full","cli","tui","backend","desktop","process"]'), inputs.scope || 'full') }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo '::error::scope must be full, cli, tui, backend, desktop, or process'; exit 1
+
+  desktop-tests:
+    if: ${{ contains(fromJSON('["full","desktop"]'), inputs.scope || 'full') }}
+    name: desktop-tests (${{ matrix.os }}, ${{ matrix.shard }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-15]
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /.github/
+            /scripts/
+            /desktop/
+            /cli/
+            /tests/
+            /daemons/
+            /store/
+            /docs/images/
+            /mobile/pubspec.lock
+            /.gitattributes
+            /.gitignore
+            /.gitmodules
+            /Makefile
+          sparse-checkout-cone-mode: false
+      - name: Verify declared source checkout
+        run: python3 scripts/ci-source-inputs.py desktop
+      - id: toolchain
+        run: |
+          version="$(sed -n "s/^  FLUTTER_VERSION: '\([^']*\)'.*/\1/p" .github/workflows/release-desktop.yml)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/desktop-flutter
+        with:
+          version: ${{ steps.toolchain.outputs.version }}
+      - name: Run bounded Desktop VM shard
+        env:
+          DESKTOP_SHARD: ${{ matrix.shard }}
+        run: python3 scripts/test-desktop.py --shard "$DESKTOP_SHARD/4" --workers 4 --timeout 600
+      - name: Preserve complete test logs and receipts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-shard-${{ matrix.os }}-${{ matrix.shard }}
+          path: .harness/validation/
+          include-hidden-files: true
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+  desktop-test-summary:
+    needs: desktop-tests
+    if: ${{ !cancelled() && contains(fromJSON('["full","desktop"]'), inputs.scope || 'full') }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /desktop/test/
+            /scripts/
+            /.gitignore
+          sparse-checkout-cone-mode: false
+      - name: Verify declared source checkout
+        run: python3 scripts/ci-source-inputs.py desktop --subset
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-shard-*
+          path: ${{ runner.temp }}/desktop-shards
+      - name: Verify every VM file and its complete raw reporter on both platforms
+        env:
+          DESKTOP_TEST_RESULT: ${{ needs.desktop-tests.result }}
+        run: >-
+          python3 scripts/verify-desktop-test-shards.py "$RUNNER_TEMP/desktop-shards"
+          --root "$GITHUB_WORKSPACE" --shards 4 --tests-result "$DESKTOP_TEST_RESULT"
+          --output "$RUNNER_TEMP/desktop-test-summary.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-test-summary
+          path: ${{ runner.temp }}/desktop-test-summary.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
   # tty.ReadStream uses libuv's native TTY handle. Exercise descriptor ownership,
   # binary backpressure and unplug behavior on both supported OSes and runtimes.
   # These are disposable PTYs; no USB device or existing daemon is touched.
   serial-native:
+    if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
     strategy:
       fail-fast: false
       matrix:
@@ -63,8 +204,71 @@ jobs:
       - name: Agent startup through the system zsh login shell
         run: npx vitest run src/lib/engineShellStartup.spec.ts
 
-  # Typecheck, the full suite, and the package updater's complete-coverage gate.
-  typecheck-test:
+  # Build both slices and execute each host architecture. All process/tmux
+  # fixtures are private; no installed agent or running session is controlled.
+  process-images-native:
+    if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: command -v tmux || brew install tmux
+      - name: Read-only kernel probe, universal signing and byte-safe protocol
+        run: python3 native/test_process_images.py
+      - name: Build the embedded universal artifact
+        run: python3 scripts/build-process-images.py --output "$RUNNER_TEMP/process-images.json"
+      - name: Bundled native discovery, exec replacement and private tmux cleanup
+        env:
+          HARNESS_PROCESS_IMAGES_ARTIFACT: ${{ runner.temp }}/process-images.json
+          RUN_DARWIN_PROCESS_IMAGES: '1'
+        run: |
+          node scripts/test-process-images-bundled.mjs
+          npx vitest run src/lib/nativeProcessImages.spec.ts src/lib/processImages.spec.ts src/lib/processImages.real.spec.ts --maxWorkers=1
+
+  # The optional product has its own dependencies, bundle and suites. CLI-only CI
+  # deliberately checks core without installing or building this package.
+  companion-subsystems:
+    if: ${{ (inputs.scope || 'full') == 'full' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: companions
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            cli/package-lock.json
+            companions/package-lock.json
+      # Shared source helpers retain their own dependency resolution during typecheck.
+      - run: npm ci --prefix ../cli --ignore-scripts
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run test:bundle
+      # CPU-budget fuzz runs alone, separate from subprocess-heavy fixture tests.
+      - run: npx vitest run src/shared/guard.fuzz.spec.ts --maxWorkers=1
+      - run: npm test -- --exclude src/shared/guard.fuzz.spec.ts --maxWorkers=3
+
+  # Typecheck and contract checks run alongside the default suite's four shards.
+  cli-contracts:
+    if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
@@ -89,7 +293,7 @@ jobs:
       # is not a pin: a floating 22.x turns an unrelated upstream release into a red build on an
       # untouched commit.)
       - id: pin
-        run: echo "node-version=22.23.2" >> "$GITHUB_OUTPUT"
+        run: echo "node-version=$CLI_NODE_VERSION" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v7
         with:
@@ -125,15 +329,8 @@ jobs:
 
       - run: npx tsc --noEmit
 
-      # 1,871 tests over 144 files, ~30s. The four `*.real.spec.ts` / `localE2e.spec.ts` suites that
-      # need a live tmux or Cursor are gated behind RUN_* env vars and stay skipped here —
-      # `npm run test:tmux-real` and friends are how those are run, on a machine that has them.
-      # The guard fuzz suite measures a wall-clock CPU budget. Sibling workers running
-      # subprocess fixtures can deschedule it past that bound on a shared runner.
-      # Run it separately with the same assertions and deadline; every test still runs.
-      - run: npx vitest run --exclude src/pair/learn/guard.fuzz.spec.ts
-      - name: Guard fuzz and bounded hostile-input time
-        run: npx vitest run src/pair/learn/guard.fuzz.spec.ts
+      - name: Native helper build-input and portable bundle contracts
+        run: node --test scripts/test-process-image-bundle.mjs
 
       - name: Concurrent registry discovery, hooks and durable close intents
         run: node scripts/registry-observation-e2e.mjs "$RUNNER_TEMP/registry-observation-e2e"
@@ -149,9 +346,91 @@ jobs:
       - name: Require complete harness updater coverage
         run: npm run test:dsh-updates
 
+      # The daemon's supervisor and its core modules are held to 100% in every file
+      # (docs/design/2026-10-03-harnessd.md#testing).
+      - name: Require complete harnessd and core coverage
+        run: npm run test:harnessd && npm run test:core
+
+  cli-tests:
+    if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      # Vitest partitions files using the same config in every shard. Keep the
+      # existing worker cap/isolation: subprocess fixtures still need spare CPUs.
+      # Opt-in real-engine suites retain their existing explicit skips.
+      - name: Discover the complete default-suite inventory
+        run: npx vitest list --config vitest.ci.config.ts --filesOnly --json="$RUNNER_TEMP/inventory-${{ matrix.shard }}.json"
+      - name: Run default-suite shard
+        run: npx vitest run --config vitest.ci.config.ts --shard=${{ matrix.shard }}/4 --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/result-${{ matrix.shard }}.json"
+      - name: Preserve inventory and test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-shard-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/inventory-${{ matrix.shard }}.json
+            ${{ runner.temp }}/result-${{ matrix.shard }}.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+  # Preserve the original aggregate check/output for callers. A missing, failed
+  # or skipped shard/contract job cannot turn into a green aggregate check.
+  typecheck-test:
+    needs: [cli-contracts, cli-tests]
+    if: ${{ !cancelled() && contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      node-version: ${{ needs.cli-contracts.outputs.node-version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # This job reads only the shard reports and this stdlib-only verifier.
+          # Avoid fetching/materializing the app, fixtures and performance assets again.
+          sparse-checkout: scripts/verify-cli-test-shards.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cli-shard-*
+          path: ${{ runner.temp }}/cli-shards
+          merge-multiple: true
+      - name: Require every discovered file exactly once and all checks passing
+        env:
+          CLI_TEST_RESULT: ${{ needs.cli-tests.result }}
+          CLI_CONTRACT_RESULT: ${{ needs.cli-contracts.result }}
+        run: >-
+          python3 scripts/verify-cli-test-shards.py "$RUNNER_TEMP/cli-shards"
+          --root "$GITHUB_WORKSPACE/cli" --shards 4
+          --tests-result "$CLI_TEST_RESULT" --contracts-result "$CLI_CONTRACT_RESULT"
+          --output "$RUNNER_TEMP/cli-test-summary.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-test-summary
+          path: ${{ runner.temp }}/cli-test-summary.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
   # Native shell lifecycle checks on the Linux platforms used over SSH. This workflow
   # remains on demand; it builds and tests without publishing or installing a release.
   tui-test:
+    if: ${{ contains(fromJSON('["full","tui"]'), inputs.scope || 'full') }}
     strategy:
       fail-fast: false
       matrix:
@@ -168,6 +447,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tui
+          shared-key: tui-${{ matrix.target }}
+          cache-bin: false
       - uses: actions/setup-node@v7
         with:
           node-version: 22.23.2
@@ -196,63 +480,30 @@ jobs:
           RUN_REAL_TMUX_CODEX_STARTUP: '1'
         run: npx vitest run src/lib/codexStartupRetry.real.spec.ts --maxWorkers=1
       - name: Release unit tests
-        run: cargo test --locked --release
+        # Use the shipped target for both commands so Cargo can reuse the
+        # dependencies, instead of compiling once for glibc and again for musl.
+        run: cargo test --locked --release --target ${{ matrix.target }}
       - name: Build static Linux binary
         run: cargo build --locked --release --target ${{ matrix.target }}
-      - name: End-to-end against a private mock daemon
-        env:
-          HARNESS_TUI_BIN: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
-          E2E_PORT: 19297
-          HN_SOCKET_NAME: hn-ci-e2e
-        run: bash tests/e2e.sh
-      - name: Pane surfaces, mouse coordinates and layout compatibility
-        env:
-          HN_PANE_UI_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
-          HN_PANE_UI_PORT: 19783
-        run: python3 -u tests/pane-ui.py
-      - name: Animation, timed messages and idle input
-        env:
-          HARNESS_TUI_BIN: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
-          HN_REPAINT_TEST_PORT: 19794
-        run: python3 -u tests/repaint.py
-      - name: New Harness popup, draft and launch recovery
-        env:
-          HN_NEW_UI_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
-        run: python3 -u tests/new-harness.py
-
-      - name: Layout keys and shared desk synchronization
-        env:
-          HN_LAYOUT_TEST_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
-          HN_LAYOUT_TEST_PORT: 19801
-        run: python3 -u tests/layout-sync.py
-      - name: Terminal lease expiry and stalled-open recovery
-        env:
-          HN_RECONNECT_TEST_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
-          HN_RECONNECT_TEST_PORT: 19781
-        run: python3 -u tests/reconnect.py
-      - name: Browser viewer commands and SSH handoff
-        env:
-          HN_VIEWER_TEST_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
-          HN_VIEWER_TEST_PORT: 19671
-        run: python3 -u tests/viewer.py
-      - name: Persistent local shell lifecycle
-        env:
-          HN_LOCAL_TEST_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
-          HN_LOCAL_TEST_PORT: 19441
-          HN_LOCAL_TEST_PREFIX: hn-local-test-ci
-        run: python3 -u tests/local-shells.py
-
-      - name: Native terminal exits, startup input and small PTYs
-        env:
-          HN_NATIVE_TEST_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
-          HN_NATIVE_TEST_PORT: 19433
-          HN_NATIVE_TEST_PREFIX: hnt19fixnativeci
-        run: python3 -u tests/native-terminal.py
-
-      - name: Terminal attributes and attribute-only repaints
-        run: python3 -u tests/terminal-attributes.py target/${{ matrix.target }}/release/harness-tui
+      - name: Complete native fixtures with bounded parallelism
+        working-directory: .
+        run: python3 scripts/validate-tui-native.py tui/target/${{ matrix.target }}/release/harness-tui
+      - name: Show native fixture failures
+        if: failure()
+        working-directory: .
+        run: |
+          find .harness/validation -name '*.log' -type f -exec sh -c 'echo "::group::$1"; cat "$1"; echo "::endgroup::"' sh {} \;
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tui-validation-${{ matrix.target }}
+          path: .harness/validation/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
 
   backend-desk:
+    if: ${{ contains(fromJSON('["full","backend"]'), inputs.scope || 'full') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:

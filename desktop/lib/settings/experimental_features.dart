@@ -9,7 +9,7 @@ enum ExperimentalFeature {
   focusBarCreature(
     'focus_bar_creature',
     'Focus-bar creature',
-    'Start with an egg in the focus bar. Your collection and progress are saved to your account.',
+    'Start with an egg in the focus bar and find Companions in Harness Store. Your collection and progress are saved to your account.',
   ),
   shareButton(
     'share_button',
@@ -19,7 +19,7 @@ enum ExperimentalFeature {
   devicesTab(
     'devices_tab',
     'Devices tab',
-    'Manage your Harness devices. Show Devices next to Harness Store. Off by default.',
+    'Manage your Harness devices. Show Devices next to Harness Store and in its catalog. Off by default.',
   );
 
   const ExperimentalFeature(this.id, this.label, this.description);

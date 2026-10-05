@@ -11,7 +11,7 @@ import { builtinSqlite, sqliteReadAll } from './sqliteRead.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import type { SessionCheckpointStore } from './sessionCheckpoint.js'
 import type { StopAgentOptions } from './stopAgentService.js'
-import { inspectWorktree, removeReviewedWorktree, type WorktreeReview } from './worktreeDeletion.js'
+import { inspectWorkspace, inspectWorktree, removeReviewedWorktree, type WorktreeReview } from './worktreeDeletion.js'
 
 const exec = promisify(execFile)
 const identity = (s: RegisteredSession) => JSON.stringify([s.agentId, s.engine, s.sessionId,
@@ -150,7 +150,11 @@ export async function sessionDataBytes(s: RegisteredSession, checkpoints: Sessio
   } catch { return null }
 }
 
-export interface PurgeRequest { agentId: string; sessionId: string | null; createdAt: number; mode: 'inspect' | 'delete'; reviewId?: string }
+export interface PurgeRequest {
+  agentId: string; sessionId: string | null; createdAt: number; mode: 'inspect' | 'delete'; reviewId?: string
+  includeWorktree?: boolean; choices?: { sessionData: boolean; worktreeData: boolean }; path?: string; discardChanges?: boolean
+}
+export type WorktreeRequest = Omit<PurgeRequest, 'mode'> & { mode: 'describe' | 'inspect' | 'delete'; path?: string; discardChanges?: boolean }
 export interface PurgeDeps {
   live(id: string): RegisteredSession | undefined
   sessions(): RegisteredSession[]
@@ -165,7 +169,8 @@ export interface PurgeDeps {
 }
 
 export class PurgeAgentService {
-  private readonly reviews = new Map<string, { session: RegisteredSession; signature: string; expires: number; history: History }>()
+  private readonly reviews = new Map<string, { session: RegisteredSession; signature: string; expires: number;
+    history: History | null; worktree?: WorktreeReview; includesWorktree: boolean }>()
   private readonly jobs = new Set<string>()
   private readonly worktreeJobs = new Map<string, string>()
   private readonly worktreeReviews = new Map<string, { session: RegisteredSession; signature: string; expires: number; worktree: WorktreeReview }>()
@@ -178,13 +183,18 @@ export class PurgeAgentService {
     return [...this.worktreeJobs.values()].some(root => path === root || path.startsWith(root + sep) || root.startsWith(path + sep))
   }
 
-  async worktreeRequest(request: PurgeRequest & { path?: string; discardChanges?: boolean }): Promise<Record<string, unknown>> {
+  async worktreeRequest(request: WorktreeRequest): Promise<Record<string, unknown>> {
     let stopped = false
     try {
       if (this.busy(request.agentId)) throw new Error('Wait for the current harness operation to finish.')
       const now = this.deps.now?.() ?? Date.now()
       for (const [id, review] of this.worktreeReviews) if (review.expires <= now) this.worktreeReviews.delete(id)
       const current = this.current(request, false)
+      if (request.mode === 'describe') {
+        const signature = identity(current), workspace = await inspectWorkspace(current, this.deps.sessions())
+        if (identity(this.current(request, false)) !== signature) throw new Error('The harness changed. Reopen Inspect to check its workspace again.')
+        return { workspace }
+      }
       if (request.mode === 'inspect') {
         const signature = identity(current), worktree = await inspectWorktree(current, this.deps.sessions())
         if (identity(this.current(request, false)) !== signature) throw new Error('The harness changed. Review its worktree again.')
@@ -220,7 +230,7 @@ export class PurgeAgentService {
     }
   }
 
-  private current(request: PurgeRequest, deletingHistory = true): RegisteredSession {
+  private current(request: Pick<PurgeRequest, 'agentId' | 'sessionId' | 'createdAt'>, deletingHistory = true): RegisteredSession {
     const s = this.deps.live(request.agentId) ?? this.deps.stopped.get(request.agentId)
     if (!s || (s.sessionId || null) !== request.sessionId || s.registeredAt !== request.createdAt) return fail('This harness changed. Refresh and review deletion again.')
     if (s.dsh === 'autonomous/harness-monitor' || s.launch?.state === 'starting') return fail('This harness cannot be deleted from this monitor.')
@@ -232,27 +242,56 @@ export class PurgeAgentService {
   }
 
   async request(request: PurgeRequest): Promise<Record<string, unknown>> {
-    let stopped = false
+    let stopped = false, worktreeDeleted = false, sessionDeleted = false
+    const sessionData = request.choices ? request.choices.sessionData === true : true
+    const worktreeData = request.choices?.worktreeData === true
     try {
       if (this.busy(request.agentId)) return { error: 'DELETE_IN_PROGRESS', detail: 'This harness is already being deleted.' }
       const now = this.deps.now?.() ?? Date.now()
       for (const [id, review] of this.reviews) if (review.expires <= now) this.reviews.delete(id)
-      const current = this.current(request)
+      const current = this.current(request, request.mode === 'inspect' ? !request.includeWorktree : sessionData)
       if (request.mode === 'inspect') {
         const signature = identity(current)
-        const history = await (this.deps.inspect ?? inspectNativeHistory)(current)
-        if (identity(this.current(request)) !== signature) return fail('The harness changed while checking its data. Try again.')
-        const checkpointBytes = this.deps.checkpoints.deletionFiles(current).reduce((n, path) => n + file(path).bytes, 0)
+        let history: History | null = null, checkpointFiles: File[] = [], historyReason = ''
+        try {
+          this.current(request)
+          history = await (this.deps.inspect ?? inspectNativeHistory)(current)
+          checkpointFiles = this.deps.checkpoints.deletionFiles(current).map(file)
+        } catch (error) {
+          if (!request.includeWorktree) throw error
+          history = null
+          historyReason = error instanceof Error ? error.message : 'Session data could not be verified.'
+        }
+        let worktree: WorktreeReview | undefined, worktreeReason = ''
+        if (request.includeWorktree) {
+          try { worktree = await inspectWorktree(current, this.deps.sessions()) }
+          catch (error) { worktreeReason = error instanceof Error ? error.message : 'The worktree could not be verified.' }
+        }
+        if (identity(this.current(request, !request.includeWorktree)) !== signature) return fail('The harness changed while checking its data. Try again.')
+        const sessionBytes = history?.bytes == null ? null : history.bytes + checkpointFiles.reduce((n, f) => n + f.bytes, 0)
+        const paths = history ? [history.file?.path ?? history.missingFile ?? history.database, ...checkpointFiles.map(f => f.path)].filter(Boolean) : []
         const reviewId = randomUUID()
         if (this.reviews.size >= 64) this.reviews.delete(this.reviews.keys().next().value!)
-        this.reviews.set(reviewId, { session: { ...current }, signature, history, expires: now + 120_000 })
-        return { reviewId, sessionBytes: history.bytes == null ? null : history.bytes + checkpointBytes,
-          sharedStore: !!history.database, workspaceKept: true, workspacePath: current.cwd }
+        this.reviews.set(reviewId, { session: { ...current }, signature, history, worktree, includesWorktree: request.includeWorktree === true, expires: now + 120_000 })
+        return { reviewId, sessionBytes, sessionPaths: paths,
+          sharedStore: !!history?.database, workspaceKept: true, workspacePath: current.cwd,
+          ...(request.includeWorktree ? { choices: {
+            sessionData: { available: history !== null, bytes: sessionBytes, paths, sharedStore: !!history?.database, reason: historyReason },
+            worktreeData: { available: !!worktree, path: worktree?.path ?? current.cwd, bytes: worktree?.bytes ?? null,
+              mainPath: worktree?.main, branch: worktree?.branch, dirty: worktree?.dirty ?? false, changes: worktree?.changes ?? [], reason: worktreeReason },
+          } } : {}) }
       }
       const review = this.reviews.get(request.reviewId ?? '')
       this.reviews.delete(request.reviewId ?? '')
       if (!review || review.signature !== identity(current)) return fail('The deletion review expired or changed. Review this harness again.')
+      if (!sessionData && !worktreeData) return fail('Select session data, worktree data, or both.')
+      if (sessionData && !review.history) return fail('Session data was not verified. Review this harness again.')
+      if (worktreeData && (!review.includesWorktree || !review.worktree || request.path !== review.worktree.path)) {
+        return fail('Only the reviewed worktree folder can be deleted. Review it again.')
+      }
+      if (worktreeData && review.worktree?.dirty && !request.discardChanges) return fail('Confirm discarding the listed uncommitted files before deleting this worktree.')
       this.jobs.add(request.agentId)
+      if (worktreeData) this.worktreeJobs.set(request.agentId, review.worktree!.path)
       try {
         if (this.deps.live(request.agentId)) {
           await this.deps.stop(request.agentId, { current: () => {
@@ -262,29 +301,40 @@ export class PurgeAgentService {
         }
         if (this.deps.live(request.agentId)) return fail('The harness did not stop. No session data was deleted.')
         stopped = true
-        const saved = this.current(request)
-        if (conversation(saved) !== conversation(review.session) || saved.transcriptPath !== review.session.transcriptPath) {
+        const saved = this.current(request, sessionData)
+        if (sessionData && (conversation(saved) !== conversation(review.session) || saved.transcriptPath !== review.session.transcriptPath)) {
           return fail('The saved conversation changed while stopping. Review it before deleting.')
         }
         // Stop has saved its final archive. Reserve it while asynchronous native DB deletion runs.
         const reservation = this.deps.stopped.beginResume(request.agentId)
         if (!reservation) return fail('Another operation is using this saved harness. Nothing was deleted.')
         try {
-          const files = this.deps.checkpoints.deletionFiles(saved).map(file)
-          let freedBytes = await (this.deps.erase ?? eraseNativeHistory)(review.history)
-          for (const target of files) {
-            const current = file(target.path)
-            if (current.dev !== target.dev || current.ino !== target.ino) return fail('Saved session data changed. Some data may already have been deleted; refresh to check.')
-            unlinkSync(target.path); freedBytes += current.bytes
+          const files = sessionData ? this.deps.checkpoints.deletionFiles(saved).map(file) : []
+          if (worktreeData) {
+            await removeReviewedWorktree(review.worktree!, saved, this.deps.sessions(), request.discardChanges === true)
+            worktreeDeleted = true
           }
-          this.deps.deleted(saved)
-          this.deps.stopped.remove(request.agentId)
-          return { deleted: true, freedBytes, sharedStore: !!review.history.database, workspaceKept: true }
+          let freedBytes = 0
+          if (sessionData) {
+            freedBytes = await (this.deps.erase ?? eraseNativeHistory)(review.history!)
+            for (const target of files) {
+              const current = file(target.path)
+              if (current.dev !== target.dev || current.ino !== target.ino) return fail('Saved session data changed. Some data may already have been deleted; refresh to check.')
+              unlinkSync(target.path); freedBytes += current.bytes
+            }
+            this.deps.deleted(saved)
+            this.deps.stopped.remove(request.agentId)
+            sessionDeleted = true
+          }
+          return { deleted: true, sessionDeleted, worktreeDeleted, freedBytes,
+            sharedStore: sessionData && !!review.history?.database, workspaceKept: !worktreeDeleted, historyKept: !sessionData, branchKept: true }
         } finally { this.deps.stopped.finishResume(request.agentId, reservation) }
-      } finally { this.jobs.delete(request.agentId) }
+      } finally { this.jobs.delete(request.agentId); this.worktreeJobs.delete(request.agentId) }
     } catch (error) {
-      return { error: 'DELETE_REFUSED', stopped,
+      return { error: 'DELETE_REFUSED', stopped, worktreeDeleted, sessionDeleted,
         detail: (error instanceof Error ? error.message : 'Could not delete this harness.')
+          + (worktreeDeleted ? ' The worktree was deleted.' : '')
+          + (sessionDeleted ? ' Session data was deleted.' : worktreeDeleted && sessionData ? ' Session data deletion did not finish.' : '')
           + (stopped ? ' The harness is stopped; refresh before trying again.' : '') }
     }
   }

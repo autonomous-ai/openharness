@@ -10,8 +10,11 @@ const dom = {
   inspectContent: el('inspect-content'), inspectClose: el('inspect-close'), inspectStop: el('inspect-stop'), inspectDelete: el('inspect-delete'),
   stopDialog: el('stop-dialog'), stopTitle: el('stop-title'), stopContext: el('stop-context'), stopResult: el('stop-result'),
   stopCancel: el('stop-cancel'), stopConfirm: el('stop-confirm'), stopDescription: el('stop-description'), stopStorage: el('stop-storage'),
-  inspectWorktree: el('inspect-worktree'), worktreeReview: el('worktree-review'), worktreeDetails: el('worktree-details'),
-  worktreeChanges: el('worktree-changes'), worktreeDiscardLabel: el('worktree-discard-label'), worktreeDiscard: el('worktree-discard'), worktreePath: el('worktree-path'),
+  deleteChoices: el('delete-choices'), deleteSession: el('delete-session'), deleteSessionSize: el('delete-session-size'),
+  deleteSessionPaths: el('delete-session-paths'), deleteSessionNote: el('delete-session-note'),
+  deleteWorktree: el('delete-worktree'), deleteWorktreeSize: el('delete-worktree-size'),
+  deleteWorktreePath: el('delete-worktree-path'), deleteWorktreeNote: el('delete-worktree-note'),
+  worktreeChanges: el('worktree-changes'), worktreeDiscardLabel: el('worktree-discard-label'), worktreeDiscard: el('worktree-discard'),
 }
 const token = document.querySelector('meta[name="hps-token"]').content
 const STORAGE_KEY = 'harness-monitor.process-table.v5'
@@ -23,7 +26,7 @@ const state = {
   preset: Object.hasOwn(PRESETS, saved.preset) ? saved.preset : 'overview',
   visible: new Set(Array.isArray(saved.visible) ? saved.visible : PRESETS.overview), widths: {},
   selected: null, inspecting: null, busy: new Set(), nodes: new Map(), shown: [],
-  frozen: false, pending: null, connected: false, receivedAt: 0, review: null,
+  frozen: false, pending: null, connected: false, receivedAt: 0, review: null, workspaceInspection: null,
 }
 for (const col of COLUMNS) state.widths[col.key] = Math.max(64, Math.min(600, Number(saved.widths?.[col.key]) || col.width))
 const text = (node, value) => { if (node.textContent !== String(value)) node.textContent = value }
@@ -43,7 +46,7 @@ async function post(path, payload) {
   if (!response.ok || result.error) throw new Error(result.error || 'Request failed. Refresh and try again.')
   return result
 }
-const actionWidth = () => innerWidth <= 620 ? 156 : 274
+const actionWidth = () => innerWidth <= 620 ? 100 : 154
 window.addEventListener('resize', resizeColumns)
 const activeColumns = () => {
   const ordered = PRESETS[state.preset]
@@ -131,8 +134,8 @@ function createRow(row) {
     tr.append(td)
   }
   const actions = element('td', null, 'row-actions')
-  for (const [verb, label] of [['stop', 'Stop Harness'], ['delete', 'Delete Harness']]) {
-    const button = element('button', label, verb === 'delete' ? 'delete-harness danger' : 'stop-harness')
+  for (const [verb, label] of [['stop', 'Stop'], ['delete', 'Delete']]) {
+    const button = element('button', label, verb === 'stop' ? 'stop-harness' : 'danger')
     button.type = 'button'; button.dataset.action = verb
     button.onclick = event => { event.stopPropagation(); state.selected = row.id; select(); reviewAction(row.id, verb) }
     actions.append(button)
@@ -147,10 +150,10 @@ function updateRow(tr, row) {
       for (const button of td.children) {
         const deleting = button.dataset.action === 'delete'
         button.disabled = !(deleting ? canDelete(row) : canStop(row))
-        button.setAttribute('aria-label', (deleting ? 'Delete Harness: ' : 'Stop Harness: ') + row.name)
+        button.setAttribute('aria-label', (deleting ? 'Delete: ' : 'Stop: ') + row.name)
         button.title = state.busy.has(row.id) ? 'Please wait…' : state.frozen ? 'Turn on live updates before acting.'
           : !state.connected || !currentSnapshot() ? 'Reconnect before acting.'
-          : row.unavailable || (deleting ? 'Review permanent deletion of session data. Project files are kept.' : 'Stop running work. History and files are kept.')
+          : row.unavailable || (deleting ? 'Choose session data, worktree data, or both. Review sizes and full paths before deletion.' : 'Stop running work. History and files are kept.')
         button.setAttribute('aria-busy', String(state.busy.has(row.id)))
       }
     } else if (key === 'name') {
@@ -189,7 +192,7 @@ function summary() {
   const resources = [...rows, ...shared]
   dom.summary.replaceChildren()
   for (const [label, total, format, hint] of [
-    ['Workspace', storageTotal(rows), bytes, 'Disk space used by working folders. Shared and nested folders count once per machine. Inspect a harness to review worktree cleanup.'],
+    ['Workspace', storageTotal(rows), bytes, 'Disk space used by working folders. Shared and nested folders count once per machine. Delete lets you review worktree cleanup separately from session data.'],
     ['Session data', sumReading(rows, 'sessionBytes'), bytes, 'Conversation history and checkpoints. Shared database content is approximate; project and worktree files are excluded.'],
     ['RAM', sumReading(resources, 'rssBytes'), memory, 'Resident memory including child processes and shared servers once. Shared memory pages can overlap.'],
     ['CPU', sumReading(resources, 'cpu'), n => Math.round(n) + '%', '100% is one core. Shared servers count once.'],
@@ -244,20 +247,65 @@ function render() {
 }
 function inspect(id) {
   const row = state.rows.find(r => r.id === id); if (!row) return
-  state.inspecting = id; renderInspector(); dom.inspector.showModal()
+  state.inspecting = id
+  const inspection = { identity: workspaceIdentity(row), loading: true }
+  state.workspaceInspection = inspection
+  renderInspector(); dom.inspector.showModal()
+  void loadWorkspace(row, inspection)
+}
+const workspaceIdentity = row => JSON.stringify([row?.id, row?.sessionId, row?.createdAt, row?.cwd])
+async function loadWorkspace(row, inspection) {
+  try {
+    const reply = await post('/api/act', { verb: 'workspace-inspect', ids: [row.id], manual: true, expected: [row] })
+    const result = reply.results?.find(r => r.id === row.id)
+    if (!result?.ok || !result.workspace) throw new Error(result?.detail || 'Workspace details are unavailable.')
+    inspection.workspace = result.workspace
+  } catch (error) { inspection.error = error.message }
+  finally {
+    inspection.loading = false
+    if (state.workspaceInspection === inspection && dom.inspector.open) renderInspector()
+  }
+}
+function workspaceSection(row, inspection) {
+  const workspace = inspection?.workspace
+  const section = element('section', null, 'inspect-section workspace-location')
+  section.append(element('h3', 'Workspace'))
+  const dl = element('dl')
+  const add = (label, value, path = false) => {
+    const dd = element('dd'), content = element(path ? 'code' : 'span', value || 'Unavailable')
+    dd.append(content)
+    if (path && value) {
+      const copy = element('button', 'Copy'); copy.type = 'button'; copy.setAttribute('aria-label', 'Copy ' + label.toLowerCase())
+      copy.onclick = async () => {
+        try { await navigator.clipboard.writeText(value); text(copy, 'Copied') }
+        catch { text(copy, 'Select path to copy') }
+      }
+      dd.append(copy)
+    }
+    dl.append(element('dt', label), dd)
+  }
+  add('Type', inspection?.loading ? 'Checking…' : ({ main: 'Main checkout', worktree: 'Git worktree', folder: 'Folder', unavailable: 'Unverified' }[workspace?.kind] || 'Unverified'))
+  add('Working folder', workspace?.path || row.cwd || row.workspacePath, true)
+  if (workspace?.worktreePath) add('Worktree path', workspace.worktreePath, true)
+  if (workspace?.mainPath) add('Main project', workspace.mainPath, true)
+  if (workspace?.kind === 'main') add('Worktree', 'None — this harness uses the main project directly.')
+  section.append(dl, element('p', inspection?.loading ? 'Checking the folder on ' + row.machine + '…'
+    : workspace?.reason || inspection?.error || 'The workspace changed. Reopen Inspect to check it again.', 'muted workspace-note'))
+  return section
 }
 function renderInspector() {
   const row = state.rows.find(r => r.id === state.inspecting)
+  const inspection = state.workspaceInspection?.identity === workspaceIdentity(row) ? state.workspaceInspection : null
   dom.inspectStop.disabled = !canStop(row)
   dom.inspectDelete.disabled = !canDelete(row)
-  dom.inspectWorktree.disabled = !canDelete(row)
   if (!row) { text(dom.inspectContext, 'This harness is no longer open.'); return }
   text(dom.inspectTitle, row.name)
   text(dom.inspectContext, [engineNames[row.engine] || row.engine, row.machine, ACTIVITY[row.activity]?.[1]].filter(Boolean).join(' · '))
   dom.inspectContent.replaceChildren()
+  dom.inspectContent.append(workspaceSection(row, inspection))
   for (const group of ['Resources', 'AI usage', 'Session']) {
     const section = element('section', null, 'inspect-section'); section.append(element('h3', group)); const dl = element('dl')
-    for (const col of COLUMNS.filter(c => c.group === group && !['name', 'activity', 'engine', 'machine'].includes(c.key))) {
+    for (const col of COLUMNS.filter(c => c.group === group && !['name', 'activity', 'engine', 'machine', 'home'].includes(c.key))) {
       const label = element('dt', col.label), value = element('dd', formatValue(col.key, row[col.key])); label.title = col.help || col.label
       dl.append(label, value)
     }
@@ -279,84 +327,96 @@ function renderInspector() {
     if (row.processCount > row.processes.length) processes.append(element('p', `Showing ${row.processes.length} of ${row.processCount} processes.`, 'muted'))
   }
   dom.inspectContent.append(processes)
-  const notes = element('p', 'Session data is conversation history and checkpoints. Workspace is the project or worktree folder. Delete Harness keeps workspace files. Delete Worktree separately reviews the checkout path, branch and uncommitted changes; the main project folder is protected. Missing readings are unavailable, not zero.', 'muted metric-note')
+  const notes = element('p', 'Session data is conversation history and checkpoints. Workspace is the project or worktree folder. Delete lets you choose session data, worktree data, or both, with a size and path review. The main project folder is protected. Missing readings are unavailable, not zero.', 'muted metric-note')
   dom.inspectContent.append(notes)
 }
 async function reviewAction(id, verb = 'stop') {
-  const row = state.rows.find(r => r.id === id), deleting = verb === 'delete', worktree = verb === 'worktree-delete'
-  if (!(deleting || worktree ? canDelete(row) : canStop(row))) return
+  const row = state.rows.find(r => r.id === id), deleting = verb === 'delete'
+  if (!(deleting ? canDelete(row) : canStop(row))) return
   const review = { id: row.id, sessionId: row.sessionId, createdAt: row.createdAt, lastActivity: row.lastActivity, name: row.name, verb }
   state.review = review
-  text(dom.stopTitle, worktree ? 'Delete worktree for “' + row.name + '”?' : (deleting ? 'Delete' : 'Stop') + ' “' + row.name + '”?')
+  text(dom.stopTitle, (deleting ? 'Delete' : 'Stop') + ' “' + row.name + '”?')
   text(dom.stopContext, `${row.machine} · ${ACTIVITY[row.activity]?.[1] || 'Unknown'}`)
-  text(dom.stopDescription, worktree ? 'Permanently remove this Git worktree and everything inside it, including ignored files such as dependencies and build output. This harness will stop. Its branch, commits and conversation history are kept.'
-    : deleting ? 'Are you sure you want to permanently delete this harness and its saved conversation? Running work will stop. This cannot be undone.'
+  text(dom.stopDescription, deleting ? 'Choose the data to permanently delete. Running work will stop. This cannot be undone.'
     : 'Its running work will end and its panes will close. Conversation history and project files are kept.')
-  text(dom.stopStorage, deleting ? `Project and worktree files are kept. Workspace: ${row.workspacePath || row.home || 'unavailable'} (${bytes(row.workspaceBytes)}).` : '')
-  text(dom.stopConfirm, worktree ? 'Delete Worktree' : deleting ? 'Delete Harness' : 'Stop Harness')
-  text(dom.stopResult, worktree ? 'Checking the worktree and other harnesses…' : deleting ? 'Checking saved session data…' : '')
-  dom.worktreeReview.hidden = true; dom.worktreePath.value = ''; dom.worktreeDiscard.checked = false
-  dom.stopConfirm.disabled = deleting || worktree; dom.stopCancel.disabled = false
+  text(dom.stopStorage, '')
+  text(dom.stopConfirm, deleting ? 'Delete' : 'Stop')
+  text(dom.stopResult, deleting ? 'Checking data sizes, paths and worktree protection…' : '')
+  dom.deleteChoices.hidden = true; dom.worktreeDiscard.checked = false; dom.worktreeDiscard.disabled = false
+  for (const check of [dom.deleteSession, dom.deleteWorktree]) { check.checked = false; check.disabled = true }
+  dom.worktreeChanges.hidden = true; dom.worktreeDiscardLabel.hidden = true
+  dom.stopConfirm.disabled = deleting; dom.stopCancel.disabled = false
   dom.stopDialog.showModal()
-  if (!deleting && !worktree) return
+  if (!deleting) return
   try {
-    const reply = await post('/api/act', { verb: worktree ? 'worktree-review' : 'delete-review', ids: [review.id], manual: true, expected: [review] })
+    const reply = await post('/api/act', { verb: 'delete-review', ids: [review.id], manual: true, expected: [review] })
     if (state.review !== review || !dom.stopDialog.open) return
     const result = reply.results?.find(r => r.id === review.id)
-    if (!result?.ok || !result.reviewId) throw new Error(result?.detail || 'Could not check session data. Refresh and try again.')
-    review.reviewId = result.reviewId
-    if (worktree) {
-      if (!result.worktree?.path) throw new Error('The worktree path could not be verified.')
-      review.worktree = result.worktree
-      dom.worktreeDetails.replaceChildren()
-      for (const [label, value] of [['Delete folder', review.worktree.path], ['Disk space', bytes(review.worktree.bytes)], ['Branch kept', review.worktree.branch || 'Detached; commits are saved on a branch'], ['Main project kept', review.worktree.main]]) {
-        dom.worktreeDetails.append(element('dt', label), element('dd', value))
-      }
-      text(dom.worktreeChanges, review.worktree.changes.join('\n'))
-      dom.worktreeChanges.hidden = !review.worktree.dirty
-      dom.worktreeDiscardLabel.hidden = !review.worktree.dirty
-      dom.worktreeReview.hidden = false
-      text(dom.stopResult, review.worktree.dirty ? 'Uncommitted changes are present (up to 12 entries shown). They cannot be recovered from Git after deletion.' : 'The worktree has no uncommitted changes. Recreate its checkout to resume work later.')
-      return
-    }
-    text(dom.stopResult, result.sharedStore ? `Approximately ${bytes(result.sessionBytes)} of session data will be removed. Shared database space can be reused; its file may not shrink immediately.`
-      : `Session files to delete: approximately ${bytes(result.sessionBytes)}. The final size may change as running work stops.`)
-    dom.stopConfirm.disabled = false
+    if (!result?.ok || !result.reviewId || !result.choices) throw new Error(result?.detail || 'Could not check the data. Update Harness on the owning machine and try again.')
+    review.reviewId = result.reviewId; review.choices = result.choices
+    const session = review.choices.sessionData, worktree = review.choices.worktreeData
+    dom.deleteSession.disabled = !session.available; dom.deleteSession.checked = session.available
+    dom.deleteWorktree.disabled = !worktree.available; dom.deleteWorktree.checked = worktree.available
+    text(dom.deleteSessionSize, bytes(session.bytes)); text(dom.deleteWorktreeSize, bytes(worktree.bytes))
+    dom.deleteSessionPaths.replaceChildren(...(session.paths || []).map(path => element('code', path)))
+    if (!session.paths?.length) dom.deleteSessionPaths.append(element('span', session.available ? 'No saved session files.' : 'Path unavailable.'))
+    dom.deleteWorktreePath.replaceChildren(element('code', worktree.path || 'Path unavailable.'))
+    text(dom.deleteSessionNote, session.reason || (session.sharedStore
+      ? 'Only this conversation and its checkpoints are deleted. Shared database space can be reused; the file may not shrink immediately.'
+      : 'Conversation history and saved checkpoints. Project files are kept.'))
+    text(dom.deleteWorktreeNote, worktree.reason || `Removes this entire folder, including dependencies and build output. Main project kept: ${worktree.mainPath}. Branch kept: ${worktree.branch || 'commits saved on a branch'}.`)
+    text(dom.worktreeChanges, (worktree.changes || []).join('\n'))
+    dom.deleteChoices.hidden = false
+    text(dom.stopResult, 'Sizes are approximate and may change as running work stops.')
+    validateDeleteConfirmation()
   } catch (error) { if (state.review === review && dom.stopDialog.open) text(dom.stopResult, error.message) }
 }
 dom.inspect.onclick = () => inspect(state.selected)
 dom.inspectStop.onclick = () => reviewAction(state.inspecting)
 dom.inspectDelete.onclick = () => reviewAction(state.inspecting, 'delete')
-dom.inspectWorktree.onclick = () => reviewAction(state.inspecting, 'worktree-delete')
-function validateWorktreeConfirmation() {
-  const review = state.review
-  if (review?.verb === 'worktree-delete') dom.stopConfirm.disabled = !review.worktree || !review.reviewId
-    || state.busy.has(review.id) || dom.worktreePath.value !== review.worktree.path || (review.worktree.dirty && !dom.worktreeDiscard.checked)
+function selectedChoices() {
+  return { sessionData: !dom.deleteSession.disabled && dom.deleteSession.checked,
+    worktreeData: !dom.deleteWorktree.disabled && dom.deleteWorktree.checked }
 }
-dom.worktreePath.oninput = validateWorktreeConfirmation
-dom.worktreeDiscard.onchange = validateWorktreeConfirmation
+function validateDeleteConfirmation() {
+  const review = state.review
+  if (review?.verb !== 'delete') return
+  const choices = selectedChoices(), dirty = choices.worktreeData && review.choices?.worktreeData?.dirty
+  dom.worktreeChanges.hidden = !dirty; dom.worktreeDiscardLabel.hidden = !dirty
+  dom.stopConfirm.disabled = !review.reviewId || review.consumed || state.busy.has(review.id)
+    || (!choices.sessionData && !choices.worktreeData) || (dirty && !dom.worktreeDiscard.checked)
+}
+dom.deleteSession.onchange = dom.deleteWorktree.onchange = dom.worktreeDiscard.onchange = validateDeleteConfirmation
 dom.inspectClose.onclick = () => dom.inspector.close()
 dom.stopCancel.onclick = () => { state.review = null; dom.stopDialog.close() }
 dom.stopDialog.addEventListener('cancel', event => { if (state.busy.has(state.review?.id)) event.preventDefault(); else state.review = null })
 dom.stopConfirm.onclick = async () => {
   const review = state.review
-  if (!review || state.busy.has(review.id)) return
-  const deleting = review.verb === 'delete', worktree = review.verb === 'worktree-delete', row = state.rows.find(r => r.id === review.id)
-  if (worktree && (!review.worktree || dom.worktreePath.value !== review.worktree.path || (review.worktree.dirty && !dom.worktreeDiscard.checked))) return
-  if (!(deleting || worktree ? canDelete(row) : canStop(row)) || row.sessionId !== review.sessionId || row.createdAt !== review.createdAt || ((deleting || worktree) && !review.reviewId)) {
+  if (!review || review.consumed || state.busy.has(review.id)) return
+  const deleting = review.verb === 'delete', row = state.rows.find(r => r.id === review.id), choices = selectedChoices()
+  if (deleting) { validateDeleteConfirmation(); if (dom.stopConfirm.disabled) return }
+  if (!(deleting ? canDelete(row) : canStop(row)) || row.sessionId !== review.sessionId || row.createdAt !== review.createdAt || (deleting && !review.reviewId)) {
     text(dom.stopResult, 'This session or connection changed. Cancel, refresh and review it again.')
     dom.stopConfirm.disabled = true; return
   }
+  review.consumed = true
   state.busy.add(review.id); dom.stopConfirm.disabled = true; dom.stopCancel.disabled = true
-  text(dom.stopResult, worktree ? 'Stopping and deleting the worktree…' : deleting ? 'Deleting session data…' : 'Stopping…'); render()
+  for (const check of [dom.deleteSession, dom.deleteWorktree, dom.worktreeDiscard]) check.disabled = true
+  text(dom.stopResult, deleting ? 'Stopping and deleting the selected data…' : 'Stopping…'); render()
   try {
     const reply = await post('/api/act', { verb: review.verb, ids: [review.id], manual: true, expected: [review], reviewId: review.reviewId,
-      ...(worktree ? { path: dom.worktreePath.value, discardChanges: dom.worktreeDiscard.checked } : {}) })
+      ...(deleting ? { choices, ...(choices.worktreeData ? { path: review.choices.worktreeData.path, discardChanges: dom.worktreeDiscard.checked } : {}) } : {}) })
     const result = reply.results?.find(r => r.id === review.id)
     if (!result?.ok) { text(dom.stopResult, result?.detail || 'The action was not confirmed. Refresh to check.'); return }
-    if (deleting) state.rows = state.rows.filter(r => r.id !== review.id || r.sessionId !== review.sessionId)
-    else { const stopped = state.rows.find(r => r.id === review.id); if (stopped) Object.assign(stopped, { state: 'stopped', activity: 'stopped', live: false, canStop: false, ...(worktree ? { workspaceBytes: null } : {}) }) }
-    message(worktree ? 'Worktree deleted. Branch and conversation history kept.' : deleting ? 'Deleted ' + review.name + '. Project files kept.' : 'Stopped ' + review.name + '. History and files kept.')
+    if (deleting && result.sessionDeleted) state.rows = state.rows.filter(r => r.id !== review.id || r.sessionId !== review.sessionId)
+    else {
+      const stopped = state.rows.find(r => r.id === review.id)
+      if (stopped) Object.assign(stopped, { state: 'stopped', activity: 'stopped', live: false, canStop: false, ...(result.worktreeDeleted ? { workspaceBytes: null } : {}) })
+    }
+    message(!deleting ? 'Stopped ' + review.name + '. History and files kept.'
+      : result.sessionDeleted && result.worktreeDeleted ? 'Session and worktree data deleted. Main project and branch kept.'
+      : result.worktreeDeleted ? 'Worktree data deleted. Conversation, main project and branch kept.'
+      : 'Session data deleted. Project and worktree files kept.')
     state.review = null; dom.stopDialog.close()
     if (dom.inspector.open && state.inspecting === review.id) dom.inspector.close()
     dom.grid.focus({ preventScroll: true })

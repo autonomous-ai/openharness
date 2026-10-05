@@ -5,6 +5,7 @@ Run after a release build. Optional HN_NATIVE_TEST_BINARY, HN_NATIVE_TEST_PORT
 (19430..19439), HN_NATIVE_TEST_PREFIX (hnt19fixnative...). No daemon is started.
 """
 import fcntl
+from collections import deque
 import os
 from pathlib import Path
 import pty
@@ -43,6 +44,7 @@ CONF.write_text('set -g default-shell /bin/sh\nset -g @hn-look tmux\n'
                 'set -g automatic-rename off\nset -g status off\n'
                 'set -g pane-border-status off\n')
 clients = []
+observations = deque(maxlen=4)
 
 
 def argv(kind, *args):
@@ -60,6 +62,7 @@ def cli(kind, *args, check=True):
 
 def same(*args):
     h, t = (cli(kind, *args, check=False) for kind in ('hn', 'tmux'))
+    observations.append((args, (h.returncode, h.stdout, h.stderr), (t.returncode, t.stdout, t.stderr)))
     assert (h.returncode, h.stdout, h.stderr) == (t.returncode, t.stdout, t.stderr), (args, h, t)
     return h.stdout.strip()
 
@@ -71,14 +74,15 @@ def both(*args):
 
 def wait(fn, label, seconds=8):
     end = time.monotonic() + seconds
+    last_error = None
     while time.monotonic() < end:
         try:
             if answer := fn():
                 return answer
-        except (AssertionError, subprocess.TimeoutExpired):
-            pass
+        except (AssertionError, subprocess.TimeoutExpired) as error:
+            last_error = repr(error)
         time.sleep(.04)
-    raise AssertionError(label)
+    raise AssertionError(f'{label}; last error: {last_error}; recent hn/tmux comparisons: {list(observations)!r}')
 
 
 def owned():
@@ -437,7 +441,14 @@ try:
     both('split-window', '-d', '-t', 'work:4', 'sleep 30')
     first_id = same('list-panes', '-t', 'work:4', '-F', '#{pane_id}').splitlines()[0]
     both('select-window', '-t', 'work:0')
-    both('respawn-window', '-k', '-t', 'work:4', 'printf "WHOLE_WINDOW\\n"; exit 9')
+    # Check whole-window replacement after the new shell is ready. Immediate
+    # exit here races the reference tmux's old-child signal reaping; rapid exits
+    # have their own paired coverage below.
+    both('respawn-window', '-k', '-t', 'work:4', 'printf "WHOLE_WINDOW\\n"; read -r status; exit 9')
+    wait(lambda: same('list-panes', '-t', 'work:4', '-F', '#{pane_id}:#{pane_dead}') == first_id + ':0'
+         and all('WHOLE_WINDOW' in cli(kind, 'capture-pane', '-p', '-t', 'work:4').stdout
+                 for kind in ('hn', 'tmux')), 'whole-window replacement ready')
+    both('send-keys', '-t', 'work:4', '9', 'Enter')
     wait(lambda: same('list-panes', '-t', 'work:4', '-F', '#{pane_id}:#{pane_dead}:#{pane_dead_status}') == first_id + ':1:9', 'whole-window respawn keeps only the first pane')
     assert same('display', '-p', '-t', 'work', '#{window_index}') == '4'
     assert 'WHOLE_WINDOW' in same('display', '-p', '-t', 'work:4', '#{pane_start_command}')

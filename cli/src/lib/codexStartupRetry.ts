@@ -6,10 +6,12 @@
  * safe; retrying an arbitrary exit could replay work. Inspect tmux AFTER exit so
  * stdin, stdout and stderr stay real terminals (no tee, pipe or second PTY).
  *
- * The baseline rejects an old error left in the pane. Only a new, final error line
- * within 30 seconds qualifies; normal exits, cancellation, auth/config errors,
- * session failures and unavailable terminal evidence all fail closed. The baseline
- * contains a hash, never terminal contents or the user's prompt.
+ * The baseline rejects old output left in the pane. A bootstrap timeout must be
+ * the new, final line within 30 seconds. A successful startup update instead ends
+ * with Codex's explicit restart request (observed in codex-cli 0.160.0). That path
+ * has no time limit: the person may leave the update prompt open before accepting.
+ * Normal exits, cancellation, auth/config errors, session failures and unavailable
+ * terminal evidence fail closed. The baseline stores no terminal text or prompt.
  */
 export const CODEX_STARTUP_RETRY_PROBE = String.raw`
 const { execFileSync } = require('node:child_process');
@@ -28,7 +30,11 @@ try {
     const before = JSON.parse(baseline);
     const elapsed = Date.now() - before.at;
     const error = 'Error: account/read failed during TUI bootstrap: account/read failed: workspace routing discovery timed out (code -32603)';
-    process.exit(elapsed >= 0 && elapsed <= 30000 && before.hash !== hash && last === error ? 0 : 1);
+    const fresh = Number.isFinite(elapsed) && elapsed >= 0 && /^[a-f0-9]{64}$/.test(before.hash) && before.hash !== hash;
+    const matches = mode === 'after-update'
+      ? /^(?:🎉\s*)?Update ran successfully! Please restart Codex\.$/.test(last)
+      : mode === 'after' && elapsed <= 30000 && last === error;
+    process.exit(fresh && matches ? 0 : 1);
   }
 } catch { process.exit(1); }
 `.trim()

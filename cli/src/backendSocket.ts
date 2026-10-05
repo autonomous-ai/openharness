@@ -1,4 +1,5 @@
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
+import { ServiceUnavailableError } from './core/serviceHost.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { readSessionGitPullRequest } from './lib/sessionGitPullRequest.js'
 import { MonitorCompletions, type MonitorActivity } from './lib/harnessMonitor.js'
@@ -24,7 +25,7 @@ import type { AutonomousDeviceService, AutonomousDeviceFrame } from './lib/auton
 
 import { WebSocket } from 'ws'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } from './lib/wsLiveness.js'
-import { stat, readFile, readdir } from 'fs/promises'
+import { stat, readdir } from 'fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'path'
 import { hostname, homedir } from 'os'
@@ -91,13 +92,15 @@ import { terminalHandoffRequest } from './lib/terminalHandoff.js'
 import { routeVoiceTask } from './lib/voiceRouter.js'
 import { tailFile } from './lib/sessions.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
-import { messagesToEvents, windowRawLines, subagentStatsFromRawLines, type SessionEvent } from './lib/normalize.js'
+import { messagesToEvents, windowRawLines, SubagentStats, type SessionEvent } from './lib/normalize.js'
+import { TranscriptPager } from './lib/transcriptPages.js'
+import { streamRecords } from './lib/transcriptTail.js'
 import { MediaPreviewError, readMediaPreviewChunk } from './lib/mediaPreview.js'
 import { ViewerForwarder } from './lib/viewerForwarder.js'
 import { InteractiveViewers } from './lib/interactiveViewer.js'
 import { OwnerCommands, OWNER_COMMAND_TYPES } from './lib/ownerCommands.js'
 import { VIEWER_DOWN_TYPES } from './lib/viewerWire.js'
-import { codexMessagesToEvents, windowCodexLines } from './engines/codex/normalizer.js'
+import { codexMessagesToEvents } from './engines/codex/normalizer.js'
 import { codexSubagentResolverFor } from './engines/codex/subagent.js'
 import { parseHostTheme, type HostTheme } from './lib/hostTheme.js'
 import { cursorMessagesToEvents, windowCursorLines } from './engines/cursor/normalizer.js'
@@ -132,7 +135,6 @@ import {
 } from './lib/terminalBinary.js'
 import { b64d, fingerprint, isWrapped } from './lib/e2ee/core.js'
 import { encryptRpcResult, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType } from './lib/e2ee/applicationFrames.js'
-import type { PairEvent, PairService } from './pair/protocol.js'
 import { tmuxPaneInfo } from './lib/tmux.js'
 import { DEVICE_RECENT_SAFE_FRAME_BYTES, fitRecentReplyPayloadForDevice } from './lib/deviceRecentTrim.js'
 import { shouldReplayCommander } from './lib/commanderReplay.js'
@@ -151,6 +153,8 @@ import {
 
 // OpenCode has no per-session transcript file — its history is read from this SQLite store.
 const OPENCODE_DB = join(env.OPENCODE_DATA_DIR, 'opencode.db')
+/** History pages and line counts for the threads clients read (lib/transcriptPages.ts). */
+const transcriptPages = new TranscriptPager()
 // Kilo keeps history the same way opencode does, in its own store.
 const KILO_DB = join(env.KILO_DATA_DIR, 'kilo.db')
 const DEVIN_DB = join(env.DEVIN_HOME, 'sessions.db')
@@ -180,6 +184,9 @@ export const AGENT_OPENED_THROTTLE_MS = 3_000
 const BASE_DELAY_MS = 1_000
 const MAX_DELAY_MS = 30_000
 const QUEUE_MAX = 2_000
+/** Requests one local connection may queue before the daemon is ready (see `openRequests`). The app
+ *  sends a handful on connect; hundreds is a client looping, not a person. */
+const MAX_REQUESTS_BEFORE_READY = 256
 const DEVICE_AGENT_LIST_LIMIT = 100
 const DEVICE_AGENT_NAME_MAX_CODEPOINTS = 15
 const DEVICE_AGENT_NAME_MAX_BYTES = 39 // device project_t.name[40], including trailing NUL on-device.
@@ -399,8 +406,11 @@ async function enrichSubagentStats(events: SessionEvent[], transcriptPath: strin
     const sub = e.payload.subagent
     if (!sub?.agentId || typeof sub.totalToolUseCount === 'number') continue
     try {
-      const txt = await readFile(join(subagentsDir, `agent-${sub.agentId}.jsonl`), 'utf8')
-      const stats = subagentStatsFromRawLines(txt.split('\n'))
+      // A line at a time: a long sub-agent's transcript is never held whole to count its calls.
+      const file = join(subagentsDir, `agent-${sub.agentId}.jsonl`)
+      const totals = new SubagentStats()
+      await streamRecords(file, 0, (await stat(file)).size, (line) => { totals.push(line) }, () => true)
+      const stats = totals.result()
       sub.totalToolUseCount = stats.totalToolUseCount
       if (sub.totalDurationMs === undefined) sub.totalDurationMs = stats.totalDurationMs
       if (sub.totalTokens === undefined) sub.totalTokens = stats.totalTokens
@@ -482,6 +492,17 @@ export class BackendSocket {
   // real and must be counted once, so it is owed to the next link — not turned into a `ping`.
   private appOpenOwed = false
   private readonly downChains = new Map<string, Promise<void>>()
+  /**
+   * Requests wait here until the daemon is ready (`openRequests`), each in its connection's own order.
+   * The port answers long before start-up has wired every handler and confirmed the agents it
+   * restored; a request answered in between met a handler that was not there yet — refused with
+   * UNSUPPORTED_ON_REMOTE, or for `message` silently dropped — or a registry not yet reconciled.
+   */
+  private requestsOpen = true
+  private openRequestGate: () => void = () => {}
+  private requestGate: Promise<void> = Promise.resolve()
+  /** Requests waiting at the gate, per connection: a client that floods a starting daemon is closed. */
+  private readonly waitingAtGate = new Map<string, number>()
   private readonly localClients = new Map<string, LocalClientSink>()
   /**
    * Loopback clients that are TOOLS, not windows (`machine_select { tool: true }`): `harness pair`, the
@@ -763,6 +784,12 @@ export class BackendSocket {
   recentProvider: RecentProvider | null = null
   /** The person's own last questions for an agent, newest first. See the `agent_recent` case. */
   recentAsksProvider: ((agentId: string, n: number) => string[]) | null = null
+  /** Writes the structured handoff file for an agent whose engine is about to change (the
+   *  `agent_handoff_prepare` case; cli.ts wires lib/agentHandoff.ts). It resolves with where the file is,
+   *  never with text for the next engine (the desktop words that prompt itself). A `HandoffError`'s `code`
+   *  is the error reply; any other failure replies `INTERNAL`. */
+  handoffProvider: ((req: { agentId: string; changeId: string; targetEngine: string }) =>
+    Promise<{ file: string | null; gitRepo: boolean; cwd: string; degraded: string[] }>) | null = null
   monitorActivityProvider: ((sessionId: string) => MonitorActivity) | null = null
   private readonly monitorCompletions = new MonitorCompletions()
   /** Answers `session_search` from this machine's transcript index (lib/sessionSearch/). Null when
@@ -786,36 +813,17 @@ export class BackendSocket {
   /** Receives `theme_set` — the desktop's pane colours, to become this machine's tmux
    *  `window-style` (lib/hostTheme.ts). Wired by cli.ts; null answers with UNSUPPORTED. */
   hostThemeSink: ((theme: HostTheme) => void) | null = null
-  /**
-   * The pair brain's sensor (pair/sensor.ts): answers the sealed `pair_*` RPCs another machine's brain
-   * sends, and the loopback-only `pair` request. Null answers UNSUPPORTED, like an older daemon.
-   */
-  pairService: PairService | null = null
-  /** The owning machine's reads and writes for the pair (pair/owner.ts). Null: those answer UNSUPPORTED. */
-  pairOwner: { handle: (type: string, payload: Record<string, unknown>, from: { connId: string; label?: string | null }) => Promise<Record<string, unknown>> } | null = null
-  /** The control interface (pair/control.ts) behind the loopback `pair` request: the verbs it answers. */
-  pairControl: { verbs: ReadonlySet<string>; local: (payload: Record<string, unknown>, connId: string) => Promise<Record<string, unknown>> } | null = null
-  /** The account's zoo changed (a `zoo_changed` from the backend) — cli.ts re-reads which daemon is paired. */
-  onZooChanged: ((revision: number) => void) | null = null
   /** The account's device key log grew (lib/e2ee/deviceLogSyncer.ts): re-read it from this machine's head. */
   onDeviceKeysChanged: (() => void) | null = null
   /** This machine's key was taken out of the account's device key log (`machine_revoked` says so). */
   onDeviceRemoved: ((pub: string) => void) | null = null
+  /** Whether [pub] is this machine's own device key. Set, a `machine_revoked` naming another key (an earlier
+   *  install under the same machine id) does not sign this one out. Null: every removal signs out. */
+  isOwnDeviceKey: ((pub: string) => boolean) | null = null
   /** The link to the backend just came up (each reconnect too). */
   onLinkUp: (() => void) | null = null
   /** Appends to the device key log waiting for the backend's answer, by requestId. */
   private readonly devlogAppends = new Map<string, (payload: Record<string, unknown> | null) => void>()
-  /**
-   * Whether daemons run at all (lib/daemonsSwitch.ts). Off, the loopback `pair` request (`harness pair`, the
-   * MCP server) is answered DAEMONS_OFF before any verb runs, except the verified owner's local coding
-   * memory opt-in setting. That setting does not read memory or start a companion. Null: always on.
-   */
-  daemonsOn: (() => boolean) | null = null
-  /**
-   * An individual's art (pair/plateService.ts), for the phone's sealed `pair_plate_get` → `pair_plate`. Null
-   * answers UNSUPPORTED, like an older daemon. The service answers DAEMONS_OFF itself while daemons are off.
-   */
-  plateService: { get: (payload: Record<string, unknown>) => Promise<Record<string, unknown>> } | null = null
   runtimeProfileProvider: ((session: RegisteredSession) => string | null) | null = null
   onRuntimeProfileUpdate: ((sessionId: string, selectedModel: string) => Promise<void>) | null = null
   /** Web↔adapter E2EE: group-encrypts user events, runs the CPace pairing, holds per-conn sessions. */
@@ -1436,7 +1444,6 @@ export class BackendSocket {
     if (!this.toolClients.delete(connId)) this.onLocalClient?.(connId, false)
     this.rowStateWindows.delete(connId)
     this.viewerForwarder.closeConnection(connId)
-    this.pairService?.unwatch(connId)
     this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId)
     // The window left before any link could hear it attach: nothing happened, as far as the backend
     // is concerned, and a later link must not be told otherwise.
@@ -1564,11 +1571,40 @@ export class BackendSocket {
     console.warn(`[terminal-p2p] conn=${sid(connId)} fallback=relay reason=${reason}`)
   }
 
+  /** Hold requests at the gate until `openRequests`. The daemon calls this the moment it builds this
+   *  socket, before anything can reach it; a socket built without it answers at once. */
+  holdRequests(): void {
+    if (!this.requestsOpen) return
+    this.requestsOpen = false
+    this.requestGate = new Promise<void>((resolve) => { this.openRequestGate = resolve })
+  }
+
+  /** Let requests through: every handler is wired and the agents the daemon restored are confirmed.
+   *  Idempotent. Called once at the end of start-up — and by safe mode, so a daemon that could not
+   *  start still answers rather than leaving its clients waiting. */
+  openRequests(): void {
+    if (this.requestsOpen) return
+    this.requestsOpen = true
+    this.waitingAtGate.clear()
+    this.openRequestGate()
+  }
+
   private enqueueDown(frame: Frame, connId: string, transport: DownTransport = 'relay'): void {
     const key = connId || '__backend__'
+    if (!this.requestsOpen) {
+      const waiting = (this.waitingAtGate.get(key) ?? 0) + 1
+      this.waitingAtGate.set(key, waiting)
+      if (waiting > MAX_REQUESTS_BEFORE_READY && transport === 'local') {
+        console.warn(`[backend] local client ${key} sent ${waiting} requests before the daemon was ready — closing it`)
+        this.waitingAtGate.delete(key)
+        void this.unregisterLocalClient(connId)
+        return
+      }
+    }
     const previous = this.downChains.get(key) ?? Promise.resolve()
     const next = previous
       .catch(() => { /* prior failure is already logged */ })
+      .then(() => this.requestGate)
       .then(() => this.dispatchDown(frame, connId, transport))
       .catch((err) => {
         console.error('[backend] down-frame dispatch failed:', err instanceof Error ? err.message : err)
@@ -1649,7 +1685,7 @@ export class BackendSocket {
     const resultType = rpcResultType(type)
     if (connId && deviceDump.enabled && this.e2ee.sessionRole(connId) === 'device') deviceDump.record('out', 'legacy', connId, { type: resultType, payload: { requestId, ...payload } })
     // Before the E2EE wrap: an RPC reply is only readable here.
-    if (env.LOG_FRAMES && !TEAM_REQUEST_TYPES.has(type) && !OWNER_COMMAND_TYPES.has(type) && !type.startsWith('viewer_') && type !== 'phone_pair' && type !== 'api_connections' && type !== 'orchestrator' && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
+    if (env.LOG_FRAMES && !TEAM_REQUEST_TYPES.has(type) && !OWNER_COMMAND_TYPES.has(type) && !type.startsWith('viewer_') && type !== 'phone_pair' && type !== 'api_connections' && type !== 'orchestrator' && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'agent_handoff_prepare' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
     if (this.localClients.has(connId)) {
       this.sendTo(connId, { type: resultType, payload: { requestId, ...payload } })
       return
@@ -1688,75 +1724,6 @@ export class BackendSocket {
       return
     }
     this.send({ type: resultType, payload: { requestId, ...payload } })
-  }
-
-  /**
-   * The pair brain's requests (daemons/BRAIN.md):
-   *   - `pair_watch` / `pair_journal` from another machine's brain, answered by the sensor;
-   *   - `pair_list`, `pair_read` and the writes (`pair_answer`, `pair_send`, `pair_stop`, `pair_start`,
-   *     `pair_pause`, `pair_resume`), answered by the owning machine's PairOwner (pair/owner.ts), which
-   *     re-checks the floor and journals every action;
-   *   - the loopback-only `pair`: the control interface's verbs (pair/control.ts) when it is wired, the
-   *     sensor's own read verbs otherwise.
-   * An older daemon answers every one of them UNSUPPORTED, which a brain already handles.
-   */
-  private handlePair(connId: string, type: string, payload: Record<string, unknown>, local: boolean,
-    reply: (t: string, rid: unknown, p: Record<string, unknown>) => void): void {
-    const requestId = payload.requestId
-    const service = this.pairService
-    const detached = (work: Promise<Record<string, unknown>>): void => {
-      void work.then((result) => reply(type, requestId, result)).catch(() => reply(type, requestId, { error: 'PAIR_FAILED' }))
-    }
-    if (type === 'pair') {
-      if (!local) { reply(type, requestId, { error: 'LOCAL_ONLY', detail: 'Ask the pair brain on this computer.' }); return }
-      const verb = typeof payload.verb === 'string' ? payload.verb : ''
-      const control = this.pairControl
-      // The owner must be able to clear the saved opt-in without turning companions on. Only these
-      // two settings actions reach MemoryControl, which checks their full schema and verifies the OS
-      // caller. Ordinary library, recall and agent tools remain inert while the master switch is off.
-      const memorySetting = control?.verbs.has('memory') && verb === 'memory' &&
-        (payload.action === 'experiment' || payload.action === 'configure_experiment')
-      if (this.daemonsOn && !this.daemonsOn() && !memorySetting) { reply(type, requestId, { error: 'DAEMONS_OFF', detail: 'Daemons are off for this account or on this computer.' }); return }
-      if (control && control.verbs.has(verb)) { detached(control.local(payload, connId)); return }
-      if (!service) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
-      detached(service.local(payload))
-      return
-    }
-    // The machine-to-machine requests come from ANOTHER machine, sealed. This computer's own processes use
-    // `pair` (a tool) or the window's daemon_* frames; a loopback `pair_*` would be a local process
-    // claiming to be a remote brain — and the owner treats a remote request as one (daemons/BRAIN.md).
-    if (local) { reply(type, requestId, { error: 'REMOTE_ONLY', detail: 'pair_* requests come from another machine.' }); return }
-    if (!service) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
-    if (!service.enabled()) { reply(type, requestId, { error: 'PAIR_OFF' }); return }
-    if (type === 'pair_watch') {
-      if (payload.off === true) { service.unwatch(connId); reply(type, requestId, { ok: true }); return }
-      const snapshot = service.watch(connId, (event) => this.sendPairEvent(connId, event))
-      reply(type, requestId, { snapshot })
-      return
-    }
-    if (type === 'pair_journal') { reply(type, requestId, { ...service.journal(payload) }); return }
-    const owner = this.pairOwner
-    if (!owner) {
-      reply(type, requestId, type === 'pair_read' ? service.read(payload) : { error: 'UNSUPPORTED' })
-      return
-    }
-    // Detached: an answer keys a dialog and a pause saves a conversation, both seconds of work that must
-    // not hold the watch's pushes behind them on this connection.
-    detached(owner.handle(type, payload, { connId, label: this.e2ee.sessionLabel(connId) }))
-  }
-
-  /** One `pair_event` to one watcher: plaintext over loopback, sealed pairwise (`wrapTarget`) otherwise.
-   *  Through the same ordered queue as the watch's reply, and only while the link is up — a push for a
-   *  connection the backend has forgotten is dropped there anyway. False = stop pushing to it. */
-  private sendPairEvent(connId: string, event: PairEvent): boolean {
-    const payload = event as unknown as Record<string, unknown>
-    const local = this.localClients.get(connId)
-    if (local) return local.sendFrame({ type: 'pair_event', payload })
-    if (!this.isConnected()) return false
-    const frame = this.e2ee.wrapTarget(connId, 'pair_event', payload)
-    if (!frame) return false
-    this.sendTo(connId, frame)
-    return true
   }
 
   private async dispatchDown(frame: Frame, connId: string, transport: DownTransport = 'relay'): Promise<void> {
@@ -1845,7 +1812,7 @@ export class BackendSocket {
     // than as an opaque __e2e envelope.
     // Terminal frames contain raw keystrokes, paste text and screen bytes after
     // unwrap. Never pass them to the frame logger, even in diagnostic mode.
-    if (env.LOG_FRAMES && !TEAM_REQUEST_TYPES.has(type) && !OWNER_COMMAND_TYPES.has(type) && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'orchestrator' && type !== 'api_connections' && type !== 'phone_pair' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) {
+    if (env.LOG_FRAMES && !TEAM_REQUEST_TYPES.has(type) && !OWNER_COMMAND_TYPES.has(type) && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'agent_handoff_prepare' && type !== 'orchestrator' && type !== 'api_connections' && type !== 'phone_pair' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => this.emitReply(connId, t, rid, p)
@@ -1891,7 +1858,6 @@ export class BackendSocket {
       this.autonomousDeviceRelay?.drop(connId)
       this.e2ee.dropSession(connId)
       this.viewerForwarder.closeConnection(connId)
-      this.pairService?.unwatch(connId)
       this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId)
       await this.terminalP2p.closeConnection(connId, 'client_disconnected', false)
       this.p2pPendingOpens.delete(connId)
@@ -1909,9 +1875,16 @@ export class BackendSocket {
     // The machine was deleted/revoked from the web → stop for good (don't reconnect) and let the CLI
     // clear the saved token. `closed` blocks the reconnect that would otherwise fire on socket drop.
     if (type === 'machine_revoked') {
+      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as { reason?: unknown; pub?: unknown }
+      // Another key under this machine id was removed — an earlier install of this computer that this one
+      // waits behind (`device_conflict`). The frame goes to the machine id, so it reaches this install too:
+      // that removal is what lets this key register, not a sign-out. Re-read the log instead.
+      if (p.reason === 'device_removed' && typeof p.pub === 'string' && this.isOwnDeviceKey && !this.isOwnDeviceKey(p.pub)) {
+        this.onDeviceKeysChanged?.()
+        return
+      }
       this.closed = true
       // Removed from the account's device key log (not just signed out): the key itself is spent.
-      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as { reason?: unknown; pub?: unknown }
       if (p.reason === 'device_removed' && typeof p.pub === 'string') {
         try { this.onDeviceRemoved?.(p.pub) } catch { /* signing out still happens */ }
       }
@@ -1935,7 +1908,6 @@ export class BackendSocket {
     if (type === 'zoo_changed') {
       const revision = (typeof frame.payload === 'object' && frame.payload !== null ? (frame.payload as { revision?: unknown }).revision : undefined)
       this.sendLocal({ type: 'zoo_changed', payload: { revision: typeof revision === 'number' ? revision : 0 } })
-      this.onZooChanged?.(typeof revision === 'number' ? revision : 0)
       return
     }
 
@@ -2052,21 +2024,12 @@ export class BackendSocket {
       return
     }
 
-    // The pair brain (daemons/BRAIN.md). `pair_*` come from another machine's brain and reach here only
-    // sealed — the default-deny above already refused them in the clear. `pair` is this computer's own.
-    if (PAIR_REQUESTS.has(type) || type === 'pair') {
-      this.handlePair(connId, type, payload, local, reply)
-      return
-    }
-    // An individual's art for the phone, sealed (the default-deny above refused it in the clear). A window
-    // on this computer asks `daemon_plate_get` over the Unix socket instead; the same request over loopback
-    // would let a TCP client past that, so it is refused like a loopback `pair_*`.
-    if (type === PLATE_REQUEST) {
-      if (local) { reply(type, requestId, { error: 'REMOTE_ONLY', detail: 'On this computer, ask daemon_plate_get over the daemon\'s socket.' }); return }
-      const plates = this.plateService
-      if (!plates) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
-      // Detached: a plate not drawn yet takes seconds, and this connection's other requests must not wait.
-      void plates.get(payload).then((result) => reply(type, requestId, result)).catch(() => reply(type, requestId, { error: 'RENDER_FAILED' }))
+    // Retired optional-feature requests remain reserved. Never reinterpret one as an
+    // ordinary command or weaken its existing encryption / local transport boundary.
+    if (PAIR_REQUESTS.has(type) || type === 'pair' || type === PLATE_REQUEST) {
+      const error = type === 'pair' && !local ? 'LOCAL_ONLY'
+        : type !== 'pair' && local ? 'REMOTE_ONLY' : 'UNSUPPORTED'
+      reply(type, requestId, { error })
       return
     }
 
@@ -2245,13 +2208,14 @@ export class BackendSocket {
           // plainly beats inventing one: the web then shows the tab with an empty thread until the bind
           // lands, instead of pinning `currentSessionId` to an id no event will ever carry.
           if (!s || !s.sessionId) { reply(type, requestId, { sessions: [] }); return }
-          const lines = s.transcriptPath ? await tailFile(s.transcriptPath, Infinity) : []
+          // Counted from an index kept as the file grows (lib/transcriptPages.ts), not by reading it whole.
+          const messageCount = s.transcriptPath ? await transcriptPages.lineCount(s.transcriptPath) : 0
           reply(type, requestId, {
             sessions: [{
               id: s.sessionId,
               title: projectDisplayName(s),
               timestamp: new Date(s.registeredAt).toISOString(),
-              messageCount: lines.length,
+              messageCount,
               lastActivity: new Date(await lastActivityAt(s)).toISOString(),
               participants: [],
             }],
@@ -2372,14 +2336,42 @@ export class BackendSocket {
           const rawLimit = payload.limit
           const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
           const before = typeof payload.before === 'string' ? payload.before : undefined
+          if (s.engine === 'claude' || s.engine === 'codex') {
+            // Only the page asked for is read (lib/transcriptPages.ts): the whole history of a long session
+            // is more memory than the daemon has. Without a limit, the newest lines that fit a page, and
+            // the cursor to the rest when they do not all fit — a cursor the full-transcript reply never had.
+            const opts = limit ? { limit, before } : {}
+            const page = s.engine === 'codex'
+              ? await transcriptPages.codex(s.transcriptPath, opts)
+              : await transcriptPages.claude(s.transcriptPath, opts)
+            const st = await stat(s.transcriptPath).catch(() => null)
+            const timestamp = new Date(st?.mtimeMs ?? Date.now()).toISOString()
+            if (page.staleCursor) {
+              reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true })
+              return
+            }
+            const events = s.engine === 'codex'
+              ? codexMessagesToEvents(page.lines, codexSubagentResolverFor(s.codexHome))
+              : messagesToEvents(page.lines)
+            await enrichSubagentStats(events, s.transcriptPath)
+            // Older pages must not inject a spurious end-of-transcript marker mid-scroll.
+            if (limit && before && events[events.length - 1]?.type === 'done') events.pop()
+            reply(type, requestId, {
+              id: sessionId,
+              title: projectDisplayName(s),
+              events,
+              timestamp,
+              engine: s.engine,
+              ...(limit || page.hasMore ? { hasMore: page.hasMore, oldestCursor: page.oldestCursor } : {}),
+            })
+            return
+          }
           const lines = await tailFile(s.transcriptPath, Infinity)
           const st = await stat(s.transcriptPath).catch(() => null)
           const timestamp = new Date(st?.mtimeMs ?? Date.now()).toISOString()
 
           if (!limit) {
-            const fullEvents = s.engine === 'codex'
-              ? codexMessagesToEvents(lines, codexSubagentResolverFor(s.codexHome))
-              : s.engine === 'cursor'
+            const fullEvents = s.engine === 'cursor'
                 ? cursorMessagesToEvents(lines, sessionId, await loadCursorReplayTaskLinks(cursorConfigDir(), sessionId, cursorDataDir()))
                 : s.engine === 'muse'
                   ? museMessagesToEvents(lines)
@@ -2437,9 +2429,7 @@ export class BackendSocket {
             })
             return
           }
-          const w = s.engine === 'codex'
-            ? windowCodexLines(lines, { limit, before })
-            : s.engine === 'cursor'
+          const w = s.engine === 'cursor'
               ? windowCursorLines(lines, { limit, before })
               : s.engine === 'pi'
                 ? windowPiLines(lines, { limit, before })
@@ -2450,9 +2440,7 @@ export class BackendSocket {
             reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true })
             return
           }
-          const events = s.engine === 'codex'
-            ? codexMessagesToEvents(w.window, codexSubagentResolverFor(s.codexHome))
-            : s.engine === 'cursor'
+          const events = s.engine === 'cursor'
               ? cursorMessagesToEvents(
                   w.window,
                   sessionId,
@@ -2657,6 +2645,40 @@ export class BackendSocket {
           // reaches the router with nothing but its name.
           const asks = this.recentAsksProvider ? this.recentAsksProvider(projectId, n) : []
           reply(type, requestId, { agentId: projectId, events, asks })
+          return
+        }
+
+        case 'agent_handoff_prepare': {
+          // "Change agent": before the engine is swapped, write what the old one did into the project
+          // (`.harness/handoff/`) so the new one can read it. It writes into the user's folder and runs
+          // git there, so only the owner may ask: the loopback window, or a sealed `web` session. A
+          // `device` (the dial) and a shared viewer never do.
+          if (!local && this.e2ee.sessionRole(connId) !== 'web') { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
+          const agentId = payload.agentId
+          if (typeof agentId !== 'string' || agentId.length === 0 || agentId.length > 200) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
+          const changeId = payload.changeId
+          if (typeof changeId !== 'string' || !/^[0-9a-f]{32}$/.test(changeId)) { reply(type, requestId, { error: 'BAD_CHANGE_ID' }); return }
+          const targetEngine = payload.targetEngine
+          if (typeof targetEngine !== 'string' || !(ENGINES as readonly string[]).includes(targetEngine)) { reply(type, requestId, { error: 'BAD_ENGINE' }); return }
+          const provider = this.handoffProvider
+          if (!provider) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+          // DETACHED from this connection's ordered RPC chain, like `engines_probe`: it reads a whole
+          // session and runs git, and a window's next request must not queue behind it. The reply names
+          // fixed fields only; whatever else the provider returned stays here.
+          // Called inside the executor so a provider that throws before returning its promise lands in
+          // the same catch (and the same message-free log) as one that rejects.
+          void new Promise<Awaited<ReturnType<typeof provider>>>((resolve) => resolve(provider({ agentId, changeId, targetEngine })))
+            .then((r) => reply(type, requestId, { agentId, file: r.file, gitRepo: r.gitRepo, cwd: r.cwd, degraded: r.degraded }))
+            .catch((e: unknown) => {
+              // Only a HandoffError's code goes on the wire, and only code-shaped: the reply never carries
+              // a message or anything else the provider put in it.
+              const code = typeof e === 'object' && e !== null ? (e as { code?: unknown }).code : undefined
+              const known = (e as { name?: unknown } | null)?.name === 'HandoffError' && typeof code === 'string' && /^[A-Z][A-Z_]{0,39}$/.test(code)
+              // Name and errno code only: a message can quote the project path or, from a parser, a
+              // slice of the transcript it choked on.
+              if (!known) console.error(`[handoff] prepare failed: ${e instanceof Error ? e.name : typeof e}${typeof code === 'string' && /^[A-Z0-9_]{1,40}$/.test(code) ? ` ${code}` : ''}`)
+              reply(type, requestId, { error: known ? code : 'INTERNAL' })
+            })
           return
         }
 
@@ -3106,19 +3128,27 @@ export class BackendSocket {
         case 'agent_purge': {
           if (!local && this.e2ee.sessionRole(connId) !== 'web') { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
           if (!this.purgeAgentService) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
-          const { agentId, sessionId, createdAt, mode, reviewId, path, discardChanges } = payload
+          const { agentId, sessionId, createdAt, mode, reviewId, path, discardChanges, choices, includeWorktree } = payload
+          const selected = choices && typeof choices === 'object' ? choices as Record<string, unknown> : null
           if (typeof agentId !== 'string' || !(sessionId === null || typeof sessionId === 'string')
             || typeof createdAt !== 'number' || !Number.isFinite(createdAt)
-            || (mode !== 'inspect' && mode !== 'delete') || (mode === 'delete' && typeof reviewId !== 'string')) {
+            || (mode !== 'inspect' && mode !== 'delete' && !(type === 'agent_worktree_delete' && mode === 'describe'))
+            || (mode === 'delete' && typeof reviewId !== 'string')
+            || (choices !== undefined && (!selected
+              || typeof selected.sessionData !== 'boolean' || typeof selected.worktreeData !== 'boolean'))) {
             reply(type, requestId, { error: 'INVALID_DELETE_REQUEST' }); return
           }
-          const operation = type === 'agent_worktree_delete' ? this.purgeAgentService.worktreeRequest.bind(this.purgeAgentService) : this.purgeAgentService.request.bind(this.purgeAgentService)
           const deletion = { agentId, sessionId, createdAt, mode: mode as 'inspect' | 'delete',
             ...(typeof reviewId === 'string' ? { reviewId } : {}),
-            ...(typeof path === 'string' ? { path } : {}), discardChanges: discardChanges === true }
-          void operation(deletion)
+            ...(typeof path === 'string' ? { path } : {}), discardChanges: discardChanges === true,
+            includeWorktree: includeWorktree === true,
+            ...(selected ? { choices: { sessionData: selected.sessionData as boolean, worktreeData: selected.worktreeData as boolean } } : {}) }
+          const operation = type === 'agent_worktree_delete'
+            ? this.purgeAgentService.worktreeRequest({ ...deletion, mode: mode as 'describe' | 'inspect' | 'delete' })
+            : this.purgeAgentService.request(deletion)
+          void operation
             .then(result => {
-              if (result.deleted === true) void this.harnessStorageReader([], true)
+              if (result.deleted === true || result.worktreeDeleted === true) void this.harnessStorageReader([], true)
               reply(type, requestId, result)
             }, () => reply(type, requestId, { error: 'DELETE_FAILED' }))
           return
@@ -3460,6 +3490,13 @@ export class BackendSocket {
           return
       }
     } catch (err) {
+      // A service on the core boundary that failed or is off (core/serviceHost.ts): the host has logged
+      // it, and the client may ask again — the service can be back after the daemon restarts.
+      if (err instanceof ServiceUnavailableError) {
+        console.warn(`[backend] ${type}: ${err.message}`)
+        if (requestId !== undefined) reply(type, requestId, { error: 'SERVICE_UNAVAILABLE', service: err.service, retryable: true })
+        return
+      }
       console.error(`[backend] dispatch ${type} failed:`, err)
       if (requestId !== undefined) reply(type, requestId, { error: 'INTERNAL' })
     }

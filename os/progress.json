@@ -1,0 +1,1584 @@
+{
+  "request_started_utc": "2026-10-02T17:09:32Z",
+  "implementation_started_utc": "2026-10-02T17:10:08Z",
+  "implementation_complete_utc": "2026-10-03T01:54:40.607222+00:00",
+  "validation_complete_utc": "2026-10-03T01:49:00Z",
+  "merge_utc": null,
+  "publication_utc": "2026-10-03T02:03:47Z",
+  "completion_utc": null,
+  "status": "Preview 4 and optional development update are public and verified. User reports physical ThinkPad install/boot/use success. Updating the agents-as-apps landing page and validating the authorized main merge. Physical Wi-Fi/suspend/Mac/NVIDIA and browser visual review remain unverified.",
+  "evidence": [
+    {
+      "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
+      "command": "make -C os check",
+      "result": "passed",
+      "test_count": 14,
+      "at_utc": "2026-10-02T22:01:21Z",
+      "source_sha256": {
+        "os/installer.py": "7703760b9192f727e9e1daafe80e984774a68b47226cf4f6e96115719b51aa7a",
+        "os/system.py": "d4151c2c0d02d8a99a733ad8abb0f334a2e40562421215638dadcef81d853379",
+        "os/tests/test_installer.py": "a91f0916da58620b4256a36ccb4341c0ab2de3d2ba11d10a90e635838dd61a9b",
+        "os/tests/test_system.py": "f028ed6d3ab27f1802fe504ed99cb209a07c57dd9e6837cc5a3a5bca6265a336",
+        "os/tests/test_vm_protocol.py": "14a8657be48778ca38778321e0ebbc7b42970822c9cb69277c7667ca59089ea8"
+      },
+      "limitations": "No claim of real image boot, installation, recovery, or hardware support."
+    },
+    {
+      "scope": "Full hn unit suite and ten native terminal fixtures",
+      "result": "passed",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37044532366",
+      "image_job_id": 110962557234,
+      "source_commit": "4677aa7e7596a93a88dd08d31481fa8c758c8d4a",
+      "tui_tree": "edde219331358a43c6749c4b9447e3aaa27455ca",
+      "cli_tree": "9860ed1e27314ff796374a0e84c7c8b2e6120394",
+      "environment": "Ubuntu 24.04 x86_64; Rust stable musl target; Node 22.23.2",
+      "limitations": "Covers unchanged hn/CLI source; does not validate the assembled OS session."
+    },
+    {
+      "scope": "Real hybrid ISO assembly, checksums and build manifest",
+      "result": "passed",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37044532366",
+      "source_commit": "4677aa7e7596a93a88dd08d31481fa8c758c8d4a",
+      "artifact_id": 11244280283,
+      "artifact_archive_bytes": 1820435868,
+      "limitations": "First development image only. Later local fixes are not in this artifact. Not recommended for installation."
+    },
+    {
+      "scope": "BIOS and UEFI machine tests",
+      "result": "failed before guest boot",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37044532366",
+      "reason": "QEMU rejected the disk serial option on -drive. Corrected locally to a virtio-blk-pci device property; rerun pending."
+    },
+    {
+      "scope": "Actual ISO payload, boot entries, configuration, root ownership, runtime and offline kernel hashes",
+      "result": "passed",
+      "source_commit": "151572d6e76d5802aa53d7ef31b2008791cf44a2",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37071830823",
+      "iso_sha256": "1b4026ee97ddd8b3b3bf38181c6a280ef6b1c14fa25b2ed562006008b8d64051",
+      "limitations": "Machine tests failed on the obsolete foot [colors] section. This artifact is not install-ready."
+    },
+    {
+      "scope": "Installer, recovery, publication guards and real-shell VM protocol",
+      "result": "passed",
+      "test_count": 15,
+      "command": "make -C os check",
+      "source_commit": "1a71edc0dd2ece66781ff94073acdd17f30e1bf9",
+      "limitations": "Portable guard/syntax checks only. Actual VM installation/recovery remains pending."
+    },
+    {
+      "scope": "BIOS/plain and UEFI/encrypted live boot, installation, reboot and offline recovery",
+      "result": "passed",
+      "source_commit": "7d778fe8586fc74cb7133896086537fb16f410de",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37075579216",
+      "limitations": "This image precedes the discovered last-terminal identity fix; physical hardware and real model turns unverified."
+    },
+    {
+      "scope": "On-demand gcc/make, C compilation, Git diff and local web preview",
+      "result": "failed after compiler success",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37076181584",
+      "reason": "Closing the last terminal restarts the underlying tmux server and reuses a pane ID before discovery forgets the old row. Fixed OS tmux server policy in f0b3c0488."
+    },
+    {
+      "scope": "Native terminal regression fixture",
+      "result": "first attempt failed in reference tmux; bounded retry passed all unit, native and machine checks",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37077942258",
+      "reason": "hn reported expected exit status 9; the unchanged reference tmux fixture reported an empty dead status. Other nine native fixtures and 334 unit tests passed. No required check bypassed."
+    },
+    {
+      "scope": "BIOS/plain and UEFI/encrypted installation, recovery, terminal reopen, compiler/browser preview and four vendor agent binaries",
+      "result": "passed",
+      "source_commit": "f0b3c0488c6709ce7afc49224659d5890d9c2584",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37077942258",
+      "limitations": "Visual review found the screen can appear before daemon discovery is ready. Readiness and timing checks strengthened for the next image. No model calls in this suite."
+    },
+    {
+      "scope": "Runtime readiness, live scratch capacity and delayed encrypted unlock",
+      "result": "passed",
+      "image_source_commit": "a19a4de6127b94ecd6ea14a5076e470ec3978af4",
+      "test_source_commit": "2cc57da13dee90c84e8b6a4c668d1d820c46f1da",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37082675625",
+      "limitations": "Whole run failed two additional workload gates: interrupted game agent and malformed DELETE request in acceptance code."
+    },
+    {
+      "scope": "Four real free OpenCode project builds inside installed OS",
+      "result": "partial",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37082675625",
+      "projects": [
+        "Python logscope CLI",
+        "Terminal Days conference website",
+        "Signal Run keyboard game",
+        "Fastify/SQLite Patchboard fullstack app"
+      ],
+      "unit_tests_passed": 94,
+      "independent_checks_passed": [
+        "CLI file/stdin/malformed/filter/empty",
+        "Website keyboard search/day filter/help/mobile layout",
+        "Game movement/pause/restart/snapshot restore",
+        "Backend create/update/validation and persistence after restart"
+      ],
+      "remaining": [
+        "Game agent exceeded 12-minute limit after writing code and passing 23 tests",
+        "DELETE acceptance sent content-type JSON with no body; corrected test is running against retained projects"
+      ],
+      "reported_model_cost": 0
+    },
+    {
+      "scope": "CLI typecheck, affected engine launch/install unit tests, full hn unit suite and native terminal fixtures",
+      "result": "passed",
+      "source_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37083780202",
+      "cli_unit_tests_passed": 89,
+      "cli_unit_tests_skipped": 1,
+      "tui_unit_tests_passed": 335,
+      "tui_unit_tests_ignored": 1,
+      "native_fixtures_passed": 10
+    },
+    {
+      "scope": "Smaller ISO; complete BIOS/plain and UEFI/encrypted installation/recovery; real four-agent executable and compiler checks",
+      "result": "passed",
+      "source_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37083780202",
+      "iso_bytes": 1525678080,
+      "iso_sha256": "51e3315843440bcdd445ead6b55d281dd1ae40685f3399c084ac5cf33cf5bce6",
+      "bios_install_seconds": 36.512,
+      "bios_ready_seconds_including_test_login": 19.3,
+      "uefi_ready_seconds_including_test_login_and_deliberate_100s_unlock_wait": 110.953,
+      "settled_idle_mib": [
+        397.59,
+        397.32,
+        397.32,
+        399.3,
+        396.62,
+        400.62
+      ],
+      "settled_cpu_percent_2s_samples": [
+        0.75,
+        0,
+        0,
+        0.25,
+        0.75,
+        0
+      ],
+      "limitations": "2-vCPU/2-GiB x86 VMs; measurements include the measurement process. Physical ThinkPad, Wi-Fi, suspend and RTX compute remain unverified."
+    },
+    {
+      "scope": "Four retained free OpenCode projects; focused game layout fix, all unit tests and independent browser/API checks",
+      "result": "passed",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37086423516",
+      "image_source_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
+      "test_source_commit": "a2b2f1a38d8f283b45d0b414a2b303647273d47f",
+      "unit_tests_passed": 103,
+      "project_origins": [
+        37082675625,
+        37084999965
+      ],
+      "limitations": "Three completed model turns reused; all project and independent checks reran. Prior game deadlines remain failed evidence."
+    },
+    {
+      "scope": "Three managed free OpenCode DSHs, shared viewers, CSV tool, keyboard game/pause/restart/export and viewport fit",
+      "result": "passed",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37086603345",
+      "image_source_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
+      "test_source_commit": "4c9d1a47c20ce06a6f4fbc311d6cca12efd1d3b4"
+    },
+    {
+      "scope": "1 GiB RAM BIOS/plain and UEFI/encrypted full install/recovery; browser, compiler and agent executable checks",
+      "result": "passed",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37086919917",
+      "image_source_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
+      "limitations": "No concurrent live model workload at 1 GiB; physical devices remain unverified."
+    },
+    {
+      "scope": "Public preview publication and all nine public downloads",
+      "result": "passed",
+      "release_url": "https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.1",
+      "source_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
+      "verified_assets": [
+        "boot-layout.txt",
+        "inspection.json",
+        "machine-evidence.zip",
+        "manifest.json",
+        "packages.txt",
+        "programmer-examples.zip",
+        "programmer-os-0.1.0-preview.1-x86_64.iso",
+        "programmer-os-0.1.0-preview.1-x86_64.iso.sha256",
+        "validation.json"
+      ],
+      "iso_sha256": "51e3315843440bcdd445ead6b55d281dd1ae40685f3399c084ac5cf33cf5bce6",
+      "finished_at_utc": "2026-10-03T02:06:57.675352+00:00",
+      "method": "Same guarded publisher run locally with authorized gh authentication; Actions run 37087917557 could not create release (403 Resource not accessible by integration). Receipt reused; no duplicate download cycle."
+    },
+    {
+      "scope": "Mac refreshed runtime and retained examples",
+      "result": "partial",
+      "runtime_source_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
+      "verified": [
+        "published hn and CLI SHA-256 values inside the VM disk",
+        "all four original example directories retained",
+        "verified public project and DSH archive installed under Projects/preview-examples",
+        "qcow2 integrity check passed",
+        "normal graphical boot configuration restored"
+      ],
+      "failed": [
+        "background Mac reboot readiness",
+        "single-CPU emulation trial"
+      ],
+      "at_utc": "2026-10-03T03:21:35.153023+00:00",
+      "limitations": "Apple Silicon x86 TCG emulation; no new native x86 runtime failure. Earlier Chromium project rendering is separate evidence."
+    }
+  ],
+  "waiting": [
+    {
+      "started_utc": "2026-10-02T18:15:44Z",
+      "ended_utc": "2026-10-02T22:01:42Z",
+      "reason": "GitHub CLI/Git TLS resets and timeouts; intermittent connector RPC failures; connector lacks repository-content write permission and cannot download artifacts above 512 MiB. Native QEMU install failed fetching ghcr.io. Existing Colima VM now runs, but its Ubuntu package-index transfers time out. Some automatic approval reviews timed out; retries sometimes succeeded.",
+      "local_implementation_continued": true,
+      "overlaps_other_stages": true,
+      "resolution": "User restored network access. Git push and local VM package downloads succeeded."
+    },
+    {
+      "started_utc": "2026-10-03T01:54:40.607222+00:00",
+      "ended_utc": "2026-10-03T01:55:13.285215+00:00",
+      "reason": "Automatic approval review rejected public ISO/examples/evidence publication without explicit approval. Exact local bundle prepared and approval requested.",
+      "local_implementation_continued": true,
+      "overlaps_other_stages": true,
+      "resolution": "User approved publishing the exact prepared preview to autonomous-ai/openharness."
+    },
+    {
+      "started_utc": null,
+      "ended_utc": null,
+      "reason": "User approved the local landing-page and VM visual checks, but the browser reports a saved blocking preference and native computer use still refuses the VM app. Awaiting tool permission changes.",
+      "local_implementation_continued": true,
+      "overlaps_other_stages": true
+    }
+  ],
+  "remaining": [
+    "Landing-page visual and keyboard validation: user approved, but saved browser permission still blocks localhost access",
+    "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
+    "Physical ThinkPad boot, installation, Wi-Fi, suspend and hardware verification; user will test manually"
+  ],
+  "last_updated_utc": "2026-10-03T11:39:35.289044+00:00",
+  "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
+  "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
+  "build_attempts": [
+    {
+      "run_id": 37041386511,
+      "result": "failed",
+      "reason": "HTTP 403 fetching published runtime; replaced with source builds"
+    },
+    {
+      "run_id": 37042351034,
+      "result": "failed",
+      "reason": "Incorrect zram package name; corrected to zram-generator"
+    },
+    {
+      "run_id": 37043363506,
+      "result": "failed",
+      "reason": "Package conflict on Bash skeleton files; replaced with profile.d integration"
+    },
+    {
+      "run_id": 37044532366,
+      "result": "image passed; machine harness failed before guest boot"
+    },
+    {
+      "run_id": 37070229186,
+      "result": "failed",
+      "reason": "All 14 Linux guard/protocol tests passed. Workflow lint rejected two unprefixed file globs; corrected with ./ prefixes."
+    },
+    {
+      "run_id": 37070493791,
+      "result": "ISO assembled; inspection failed",
+      "reason": "Python inspector shadowed the standard inspect module; renamed it and normalized packaged system ownership to root."
+    },
+    {
+      "run_id": 37071830823,
+      "result": "Image inspection passed; machine tests failed",
+      "reason": "Real UEFI boot reached Linux. Shipped foot rejected obsolete [colors] section; corrected to [colors-dark] and added validation by the packaged binary during construction."
+    },
+    {
+      "run_id": 37072955865,
+      "result": "in progress",
+      "source_commit": "1a71edc0dd2ece66781ff94073acdd17f30e1bf9"
+    }
+  ],
+  "recent_implementation": [
+    "Verify and restore the package-owned kernel removed from /boot by Archiso before offline installation",
+    "Initialize a fresh package-verification keyring per machine and pin live-session repositories",
+    "Start the agent runtime with the graphical environment; browser requests use the current user-service environment",
+    "Exercise a real offline package transaction and clear its stale database lock during recovery",
+    "Inspect the actual ISO payload and shorten the USB boot-menu delay to one second",
+    "Guard preview publication with matching full machine evidence and verify all public assets after publishing",
+    "Add an interactive QEMU launcher for the full installation and reboot experience on macOS"
+  ],
+  "additional_user_requested_work": [
+    "Use OpenCode free models for real development inside the installed VM",
+    "Build and exercise a terminal tool, website and keyboard-controlled game",
+    "Build a full-stack application with dependencies, persistent data and automated tests",
+    "Create several DSH packages using existing repository components; exercise native hn and HTML viewers",
+    "Measure and reduce boot time, steady idle CPU/RAM and image footprint without losing functionality"
+  ],
+  "computer_use": {
+    "status": "User explicitly approved local landing-page and native VM visual checks. Both tools still rejected access; no workaround used.",
+    "browser": "Saved user permission blocks http://127.0.0.1:18092. Asked user to change the saved setting.",
+    "native_vm": "Local app launched successfully after renewed approval. cua.getApp(local.programmer-os.vm) refused computer use. Stopped that VM through its own QMP control socket; preserved disk and projects.",
+    "latest_retry": {
+      "at_utc": "2026-10-03T05:44:11.773434+00:00",
+      "user_confirmed": "Any App and Chrome enabled; exact http://127.0.0.1:18092 Browsing rule says Always allow.",
+      "browser": "Exact open Chrome Dee tab still refused: saved permission setting blocks this action.",
+      "native_vm": "cua.getApp(local.programmer-os.vm) still returned Computer Use was not approved.",
+      "next_step": "User may restart Chrome/ChatGPT to refresh connection or permission state. No bypass attempted."
+    }
+  },
+  "additional_work_window": {
+    "started_utc": "2026-10-02T23:33:00Z",
+    "requested_hours": 4,
+    "expected_user_return_utc": "2026-10-03T03:33:00Z",
+    "ended_utc": "2026-10-03T03:33:35.279197+00:00"
+  },
+  "publication_prepared_utc": "2026-10-03T01:54:40.607222+00:00",
+  "publication_approved_utc": "2026-10-03T01:55:13.285215+00:00",
+  "publication_trigger_utc": "2026-10-03T01:55:13.285215+00:00",
+  "publication_verified_utc": "2026-10-03T02:06:57.675352+00:00",
+  "landing_page": {
+    "path": "os/site",
+    "implementation": "Plain HTML/CSS, local WOFF fonts, actual OS and generated-game screenshots",
+    "initial_asset_bytes_before_compression": 156626,
+    "validation": "Static assets, fragment references, fonts, image dimensions and verified release asset names passed",
+    "browser_validation": "Unverified: renewed user approval received, but saved browser permission continues to block the exact local URL.",
+    "implementation_commit": "86955f946"
+  },
+  "mac_vm": {
+    "status": "partial; readiness failures retained",
+    "runtime_hashes_match_published_image": true,
+    "saved_projects": [
+      "os-components",
+      "os-examples",
+      "os-workloads",
+      "preview-examples"
+    ],
+    "normal_graphical_boot_configuration": "restored after stopping the failed test VM",
+    "disk": "os/work/interactive-vm/disk.qcow2",
+    "backup": "os/work/interactive-vm/disk-before-control-recovery.qcow2",
+    "mac_application_boot": "Failed readiness deadline with two emulated CPUs; one-CPU trial also failed. No performance improvement is claimed.",
+    "discarded_experiments": [
+      "one TCG CPU",
+      "application scheduling wrapper",
+      "temporary wake assertion in launcher"
+    ],
+    "computer_use": "Renewed explicit user approval received. VM launched once, but native computer-use tool still denied Programmer OS VM. VM stopped safely; no alternate observation path attempted."
+  },
+  "review_url": "https://github.com/autonomous-ai/openharness/pull/669",
+  "handoff_prepared_utc": "2026-10-03T03:33:35.279197+00:00",
+  "continued_work": {
+    "request_started_utc": null,
+    "request": "User asked to keep working while postponing local visual permission changes.",
+    "implementation_started_utc": null,
+    "implementation_ready_utc": "2026-10-03T04:13:24.219808+00:00",
+    "candidate_version": "0.1.0-preview.2",
+    "published_version": "0.1.0-preview.2",
+    "changes": [
+      "Persist incomplete full-update state before repository or package changes.",
+      "Block ordinary package transactions until a full-update retry succeeds.",
+      "Retain the original recovery checkpoint across failed and interrupted retries.",
+      "Identify the OS package with the candidate image version using pacman prerelease ordering.",
+      "Use the user-selected editable installer defaults me@harness and validate installation under that account."
+    ],
+    "validation_plan": [
+      "Portable installer/recovery/publication/protocol tests and source syntax checks.",
+      "Build a fresh candidate ISO and inspect its exact payload, package version and manifest.",
+      "Native BIOS/plain and UEFI/encrypted installation, update failure and successful retry, original checkpoint retention, package hook, offline recovery and reboot.",
+      "Existing hn/CLI lifecycle, compiler and applicable agent executable checks in the native workflow.",
+      "Verify the installed me account, /home/me, hostname harness, and authentication in both firmware modes."
+    ],
+    "local_validation": {
+      "system_unit_tests": "10 passed during implementation",
+      "portable_checks": "22 passed during implementation",
+      "final_script_syntax_and_diff_check": "passed",
+      "validated_runtime_sha256": {
+        "os/system.py": "5e04e3f213cf0276df6cd7724af734d6f52f59f8aa1a7dce057347805c81c05b",
+        "os/tests/test_system.py": "3e5f226ef656c0a830ec8ee6904b359b516dea009acfe9cc147feefec13908df"
+      },
+      "affected_installer_tests": "7 passed; final syntax and diff checks passed",
+      "working_copy_after_cli_options": {
+        "result": "26 portable tests and Python/JSON/XML/shell syntax passed",
+        "scope": "Includes uncommitted interactive CLI changes, not present in the previously built ISO; does not validate the proposed disk picker/checkbox interface.",
+        "sha256": {
+          "os/installer.py": "2b0f58bedf6fc1107c384535d3c80ea54ecdac449d35d9b02f13867f643d159f",
+          "os/tests/test_installer.py": "a7265db6cdd3b6ad93acb7ad456f9b3753af6ac71814a1453135c0f4298863a7",
+          "os/tests/vm.py": "3ebfb7dc815b77e1969c0ae62667e2c1b34411f829356504cb6054876da5c14a"
+        }
+      }
+    },
+    "native_validation_started_utc": "2026-10-03T04:13:46Z",
+    "native_validation_completed_utc": "2026-10-03T04:53:50Z",
+    "merge_utc": null,
+    "publication_utc": "2026-10-03T07:04:33Z",
+    "limitations": "Preview 2 keyboard installer image and both native machine paths passed on a155a16850438e04315a1959b1bfd1c387d8bf99; all eight public downloads passed full size/SHA-256 verification. Historical real-model project/DSH and 1 GiB results remain tied to preview 1. Physical hardware and local computer-use review remain unverified.",
+    "implementation_revised_utc": "2026-10-03T04:28:01.749594+00:00",
+    "installer_defaults": {
+      "username": "me",
+      "hostname": "harness",
+      "editable": "Account and hostname overrides remain on the command line; encryption is editable in the main form.",
+      "encryption_default": true,
+      "selection_recorded_utc": "2026-10-03T04:28:01.749594+00:00"
+    },
+    "native_attempts": [
+      {
+        "run_id": 37095837835,
+        "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37095837835",
+        "source_commit": "8d3b09afda1e5be67d7581b07eff3db826649b79",
+        "iso_sha256": "67816cd667a4be9c2f0560f8f9e4981a28b5ffcc0a4d1a9c1161764aaf0ff221",
+        "image": "passed",
+        "bios": "failed in the new update fixture after successful installation and boot",
+        "uefi": "failed in the new update fixture after successful encrypted installation and boot",
+        "diagnosis": "Pacman stops at the first unreachable repository; appending the local fixture after core prevented it from syncing. Put the local repository first so the check exercises a real partially synchronized database state.",
+        "evidence": "os/test-results/ci-37095837835-bios/bios-plain/update-retry.log"
+      },
+      {
+        "run_id": 37096639763,
+        "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37096639763",
+        "source_commit": "7a64753b25819b833d5b20f39862f9fab8d97e2a",
+        "iso_sha256": "6c8ee5a89ae8dda35c133276d50fa22635c1e726c96ced94ee82505e7ec2985c",
+        "started_utc": "2026-10-03T04:28:09Z",
+        "completed_utc": "2026-10-03T04:41:00Z",
+        "image": "passed",
+        "bios": "failed after successful installation and boot, before the update fixture",
+        "uefi": "failed after successful encrypted installation and boot, before the update fixture",
+        "diagnosis": "The account/hostname assertion invoked hostname, which is not installed in the minimal image. Use coreutils uname -n to inspect the active kernel hostname without adding a package. Guest shell metadata already showed me@harness; update retry and later checks were not reached.",
+        "evidence": [
+          "os/test-results/ci-37096639763-bios/bios-plain/receipt.json",
+          "os/test-results/ci-37096639763-uefi/uefi-encrypted/receipt.json"
+        ]
+      },
+      {
+        "run_id": 37097681222,
+        "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37097681222",
+        "source_commit": "147b7458f1974c1bebadf275cfdfa6a02a2fe510",
+        "image_source_commit": "7a64753b25819b833d5b20f39862f9fab8d97e2a",
+        "image_run_id": 37096639763,
+        "iso_sha256": "6c8ee5a89ae8dda35c133276d50fa22635c1e726c96ced94ee82505e7ec2985c",
+        "started_utc": "2026-10-03T04:47:00Z",
+        "status": "passed",
+        "scope": "Reuse the unchanged inspected ISO; rerun BIOS/plain and UEFI/encrypted machine checks with corrected hostname assertion. Uncommitted interactive installer changes are excluded.",
+        "completed_utc": "2026-10-03T04:53:50Z",
+        "bios": "passed",
+        "uefi": "passed"
+      }
+    ],
+    "test_fixture_revised_utc": "2026-10-03T04:46:52.305584+00:00",
+    "installer_ux_proposal": "Approved and implemented: disk picker, encryption checked directly below the disk, password twice, Continue, separate Back/Erase and install confirmation. Back is initially selected. No device-path typing or first-boot account wizard.",
+    "installer_experience": {
+      "request_started_utc": "2026-10-03T05:20:11Z",
+      "request_time_basis": "First implementation action after explicit approval; design discussion and prior draft started earlier.",
+      "implementation_ready_utc": "2026-10-03T05:44:11.773434+00:00",
+      "required_validation_started_utc": "2026-10-03T05:44:11.852041+00:00",
+      "required_validation_completed_utc": "2026-10-03T06:12:04Z",
+      "merge_utc": null,
+      "publication_utc": "2026-10-03T07:04:33Z",
+      "publication_requested": "User will wait for the new public download, then write it to USB and install on a ThinkPad.",
+      "validation_plan": [
+        "Portable installer/recovery/publication/serial tests and syntax with a bounded source receipt",
+        "Fresh source ISO build and exact payload/manifest inspection",
+        "Real guest terminal disk picker, encryption toggle, password entry, Back/Esc and explicit confirmation feeding the actual installer",
+        "BIOS/plain and UEFI/encrypted offline installation, reboot to me@harness, update failure/retry, recovery, browser/clipboard/terminal lifecycle and applicable compiler/agent executable checks",
+        "Prepare and publish the verified preview; verify each public asset size and SHA-256"
+      ],
+      "local_results": [
+        "19 installer tests passed during implementation",
+        "Real macOS PTY with fixture-only disk inventory: disk picker, encryption toggle, masked passwords, Back/Esc and explicit confirmation returned the expected config; no real disk was exposed"
+      ],
+      "limitations": "Native guest-terminal installer and machine checks passed. CI screenshots were visually inspected. Local computer-use review of the landing page and Mac VM remains blocked; physical ThinkPad, Wi-Fi, suspend and NVIDIA remain unverified. Historical real-model project and DSH results remain tied to preview 1.",
+      "local_validation_receipt": {
+        "path": ".harness/validation/20261003T054411.851664Z-23170/receipt.json",
+        "status": "passed",
+        "tests": 34,
+        "base_commit": "147b7458f1974c1bebadf275cfdfa6a02a2fe510",
+        "working_changes_sha256": "0875172f2f8736a8289199158f01d918cd134039e9b8d900e4d0f4b74373e086",
+        "finished_at_utc": "2026-10-03T05:44:12.850298+00:00",
+        "coverage": "All runtime and test edits in this commit; only progress metadata changed after the receipt."
+      },
+      "source_commit": "a155a16850438e04315a1959b1bfd1c387d8bf99",
+      "native_run_id": 37101103529,
+      "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37101103529",
+      "native_validation_started_utc": "2026-10-03T05:50:12Z",
+      "native_attempts": [
+        {
+          "attempt": 1,
+          "started_utc": "2026-10-03T05:50:12Z",
+          "failed_step_utc": "2026-10-03T05:56:33.447257Z",
+          "result": "failed before image production; machine checks not run",
+          "passed": "34 portable tests, workflow lint, runtime build, CLI typecheck/affected tests, hn unit tests and native terminal fixtures",
+          "reason": "archive.archlinux.org package/signature downloads timed out at less than 1 byte/sec for 10 seconds; pacstrap stopped before package installation",
+          "evidence": "os/test-results/ci-37101103529-build/attempt-1.log",
+          "response": "One bounded failed-job rerun on unchanged source and package snapshot, started 2026-10-03T05:58:31Z."
+        },
+        {
+          "attempt": 2,
+          "started_utc": "2026-10-03T05:58:26Z",
+          "completed_utc": "2026-10-03T06:12:04Z",
+          "status": "passed",
+          "image_source_commit": "a155a16850438e04315a1959b1bfd1c387d8bf99",
+          "test_source_commit": "a155a16850438e04315a1959b1bfd1c387d8bf99",
+          "iso_sha256": "7eae886e3f9a77cc5831fae591d4de1f095ff16e43a412f0c714a09042b933d2",
+          "scope": "Image inspection; 34 portable tests; CLI typecheck and 89 affected tests (1 unavailable row skipped); 335 hn tests (1 benchmark ignored); ten native terminal fixtures; BIOS/plain and UEFI/encrypted keyboard installer, offline installation, reboot, update failure/retry, checkpoint recovery; BIOS compiler and four agent executables."
+        }
+      ],
+      "native_validation_completed_utc": "2026-10-03T06:12:04Z",
+      "machine_measurements": [
+        {
+          "firmware": "bios",
+          "encrypted": false,
+          "status": "passed",
+          "receipt": "os/work/release-preview2/machines/bios/bios-plain/receipt.json",
+          "checks_passed": 18,
+          "install_seconds": 30.418,
+          "installed_hn_ready_seconds_including_test_login": 17.819,
+          "deliberate_unlock_delay_seconds": 0,
+          "idle_mib": [
+            404.37,
+            403.89,
+            401.02
+          ],
+          "idle_cpu_percent": [
+            1.0,
+            1.0,
+            0.75
+          ]
+        },
+        {
+          "firmware": "uefi",
+          "encrypted": true,
+          "status": "passed",
+          "receipt": "os/work/release-preview2/machines/uefi/uefi-encrypted/receipt.json",
+          "checks_passed": 17,
+          "install_seconds": 49.341,
+          "installed_hn_ready_seconds_including_test_login": 111.696,
+          "deliberate_unlock_delay_seconds": 100,
+          "idle_mib": [
+            400.12,
+            395.05,
+            396.91
+          ],
+          "idle_cpu_percent": [
+            1.25,
+            0.25,
+            0.0
+          ]
+        }
+      ],
+      "publication_trigger_utc": "2026-10-03T06:25:51.506554+00:00",
+      "usb_flash": {
+        "status": "Not flashed by assistant; raw disk write denied before any image bytes, then Etcher startup crash during user attempt",
+        "target": "Kingston DataTraveler 3.0, 124 GB external USB",
+        "source_iso_sha256": "7eae886e3f9a77cc5831fae591d4de1f095ff16e43a412f0c714a09042b933d2",
+        "authorization": "User asked the assistant to flash the plugged-in clean USB. macOS administrator authorization completed, but raw disk open failed with Operation not permitted.",
+        "result": "Source hash and device identity verified; disk unmounted; dd failed before writing; original volume remounted. User offered Etcher or disk-access troubleshooting.",
+        "local_iso": "~/Downloads/programmer-os-0.1.0-preview.2-x86_64.iso",
+        "public_receipt": false,
+        "etcher": {
+          "installed_version": "2.1.7",
+          "path": "/Applications/balenaEtcher.app",
+          "computer_use": "cua.getApp rejected access: Computer Use was not approved to use balenaEtcher. No alternate UI route used.",
+          "user_observed_error": "Error opening source: (0 , h.requestMetadata) is not a function",
+          "iso_recheck": "Downloads ISO matches released source: 1525678080 bytes, SHA-256 7eae886e3f9a77cc5831fae591d4de1f095ff16e43a412f0c714a09042b933d2",
+          "diagnosis": "macOS crash report confirms etcher-util ARM64 aborted at startup in V8 Heap::SetUp/FatalProcessOutOfMemory. Installed helper has an empty entitlement dictionary. Upstream 2.1.7 hardening commit 26ad031b removed the helper JIT entitlements. This suggests a packaging regression; no OS image or USB write was reached by that helper.",
+          "workaround": "Official 2.1.6 ARM64 DMG downloaded to ~/Downloads/balenaEtcher-2.1.6-arm64.dmg and verified against GitHub asset SHA-256 ecf71fb5e74803ea8d7d16c54378a6a8d964e9808594b867c088222a8cfe3d2b. User instructed to quit 2.1.7 and replace it through Finder. GUI success remains unverified."
+        }
+      },
+      "publication_attempts": [
+        {
+          "result": "Draft created; seven small assets uploaded; ISO upload failed with TLS handshake timeout",
+          "evidence": "os/work/release-preview2/publication.log"
+        },
+        {
+          "result": "Bounded ISO-only upload retry completed; all eight GitHub asset sizes and SHA-256 digests match local verified assets",
+          "evidence": "os/work/release-preview2/upload-retry.log"
+        },
+        {
+          "result": "Existing draft published; all eight anonymous public downloads verified by full size and SHA-256",
+          "evidence": "os/work/release-preview2/public-verification.log"
+        }
+      ],
+      "publication_verified_utc": "2026-10-03T07:07:19.173864+00:00",
+      "publication_receipt": "os/work/release-preview2/publication.json",
+      "publication_completion_reported_utc": "2026-10-03T07:09:06.191273+00:00",
+      "installation_guide": "os/INSTALL.md",
+      "documentation_validation": "Relative Markdown links and code fences; static page assets, anchors, fonts and image dimensions; JSON; git diff --check passed. Local page visual review remains blocked.",
+      "elapsed_seconds": {
+        "first_implementation_action_to_verified_publication": 6428.174,
+        "implementation": 1440.773,
+        "required_validation": 1672.148,
+        "artifact_transfer_and_release_preparation": 827.507,
+        "publication_including_failed_transfer_retry_and_public_downloads": 2487.667,
+        "merge": null
+      },
+      "waiting": [
+        {
+          "started_utc": "2026-10-03T05:56:33.447257Z",
+          "ended_utc": "2026-10-03T05:58:26Z",
+          "reason": "One bounded retry after Arch package/signature download timeout; source unchanged."
+        },
+        {
+          "started_utc": "2026-10-03T06:12:04Z",
+          "ended_utc": "2026-10-03T07:07:19.173864+00:00",
+          "reason": "Artifact transfer, publication upload/TLS timeout and retry, then public download verification. Documentation and USB/Etcher troubleshooting continued during transfer waits. This overlaps publication and is not subtracted from total elapsed."
+        }
+      ]
+    }
+  },
+  "published_version": "0.1.0-preview.3",
+  "latest_publication": {
+    "version": "0.1.0-preview.4",
+    "source_commit": "21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8",
+    "release_url": "https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.4",
+    "published_at": "2026-10-03T12:03:40Z",
+    "verified_at": "2026-10-03T12:04:09.527570+00:00",
+    "verified_assets": [
+      "boot-layout.txt",
+      "harness-0.1.0-preview.4-x86_64.iso",
+      "harness-0.1.0-preview.4-x86_64.iso.sha256",
+      "harness-examples.zip",
+      "inspection.json",
+      "INSTALL.md",
+      "machine-evidence.zip",
+      "manifest.json",
+      "packages.txt",
+      "validation.json"
+    ],
+    "receipt": "os/work/release-preview4-37119543543/publication-ci/publication.json",
+    "verification_run": "https://github.com/autonomous-ai/openharness/actions/runs/37121570059"
+  },
+  "physical_thinkpad": {
+    "live_boot": {
+      "status": "passed by user report",
+      "reported_utc": "2026-10-03T07:19:35.550371+00:00",
+      "evidence": "User: ok i boot sucessfully and now in hn",
+      "model": "not yet provided",
+      "scope": "USB reaches hn on a physical ThinkPad; installation, encrypted disk boot, network and suspend not yet verified"
+    },
+    "installation": "Passed by user report using the explicit RAM-image --source workaround; user confirms shutdown, USB removal and successful boot into hn from the internal disk. Encryption choice and hardware model remain unknown.",
+    "workaround_result": {
+      "recorded_utc": "2026-10-03T07:47:40.256187+00:00",
+      "evidence": "User: yeah it works i'm in hn now but there are a few issues",
+      "status": "workaround passed by user report; remaining issue details pending"
+    },
+    "installed_boot": {
+      "status": "passed by user report",
+      "recorded_utc": "2026-10-03T07:49:33.368095+00:00",
+      "evidence": "User answered Yes, booted with USB removed to the internal-disk boot question.",
+      "limitations": "Further issues reported; user will describe them later. No physical performance, Wi-Fi, suspend or NVIDIA measurements established."
+    }
+  },
+  "resumed_goal_audit": {
+    "started_utc": "2026-10-03T07:19:35.550371+00:00",
+    "previous_turn_classification": "progress: preview 2 published and every public asset verified; complete manual guide delivered; Etcher startup failure diagnosed and official workaround downloaded",
+    "status": "Console fallback and RAM-copy installer fix validated and published. Physical installation/internal-disk boot passed by user report; remaining hardware issue details pending.",
+    "next_work": "Investigate the physical ThinkPad issues when described; retain unverified Wi-Fi, suspend, NVIDIA and local page/VM visual rows.",
+    "validation_plan": [
+      "Python and shell syntax for the test-only change",
+      "Native BIOS/plain and UEFI/encrypted machine workflow reusing image run 37101103529; no new ISO/runtime build or duplicate application unit suite"
+    ],
+    "runtime_source_unchanged": "a155a16850438e04315a1959b1bfd1c387d8bf99",
+    "new_runtime_verification_started_utc": "2026-10-03T07:20:27Z",
+    "new_runtime_verification_completed_utc": "2026-10-03T07:26:14.932472+00:00",
+    "console_fallback_run": {
+      "url": "https://github.com/autonomous-ai/openharness/actions/runs/37106021765",
+      "status": "passed",
+      "test_source_commit": "89836662a54e27d01aaf01d1f27b9d68fd7e68d5",
+      "image_source_commit": "a155a16850438e04315a1959b1bfd1c387d8bf99",
+      "scope": "Both firmware paths: forced compositor failure, real tty1 keyboard input through hn, original work survives, graphics restored; all existing installation/recovery and applicable agent checks also passed.",
+      "visual_review": "Inspected BIOS tty1 screenshot with typed ready input, and UEFI restored fullscreen hn screenshot; both show working terminal surfaces."
+    }
+  },
+  "ram_copy_installer_fix": {
+    "recorded_utc": "2026-10-03T07:32:02.276978+00:00",
+    "request_started_utc": null,
+    "request_time_basis": "User reported the physical USB error in the active turn; exact message timestamp unavailable.",
+    "implementation_ready_utc": "2026-10-03T07:34:37.125072+00:00",
+    "source_version": "0.1.0-preview.3",
+    "published_version": "0.1.0-preview.3",
+    "cause": "Archiso 73 automatically copies a USB root image into RAM when it has enough free memory, then removes bootmnt. The installer only knew the bootmnt path. Previous native tests used virtual optical discs, where automatic RAM copying is disabled.",
+    "changes": [
+      "Detect both copytoram and bootmnt before collecting passwords; explicit missing source fails without fallback.",
+      "Reject the HN_OS ISO medium even after RAM boot unmounts it.",
+      "Test a 16 GiB writable virtual USB backed by a private qcow2 overlay, at 4 GiB guest memory, so actual automatic RAM boot and boot-device exclusion are exercised."
+    ],
+    "validation_plan": [
+      "24 affected installer tests, portable syntax and diff checks",
+      "Pinned actionlint in the fresh image workflow",
+      "Fresh source image build, payload inspection and original BIOS/plain plus UEFI/encrypted machine gates",
+      "Reuse that exact image for both firmware modes booted from a writable virtual USB at 4096 MiB; require RAM payload, excluded live medium, actual offline installation/reboot/recovery",
+      "Publish immutable preview 3 only after all required gates pass and public assets verify"
+    ],
+    "local_installer_tests": "24 passed",
+    "native_validation_started_utc": "2026-10-03T07:34:41Z",
+    "native_validation_completed_utc": "2026-10-03T07:49:43Z",
+    "merge_utc": null,
+    "publication_utc": "2026-10-03T07:53:11Z",
+    "local_validation": {
+      "result": "39 portable tests and Python/JSON/XML/shell syntax passed; git diff --check passed",
+      "recorded_utc": "2026-10-03T07:34:37.125072+00:00",
+      "source_sha256": {
+        "os/installer.py": "ac844e24cf50256b43bf7ec5aa9cdd6a54bc2bcba8ab174c120a830c76800578",
+        "os/tests/test_installer.py": "a50a5a7bee2c9c0f2b9ec3d2775c89a9d89ed0826c2acd9deb9cdc4d56f96f07",
+        "os/tests/vm.py": "bf6828befe0a8f5945471207178507958ee989e771c3d50755ee7ac845179920",
+        ".github/workflows/os.yml": "3a47cdb4695facdef02e74b0b825d49de8dd893498387c2e30d394e8f18f783b",
+        "os/lock.json": "55dbc169ebc74eadd4a99c83839b3c9f92c84238a46aa7fd8f689c8365c89399"
+      },
+      "coverage": "Installer/unit source unchanged since the passed run; final QEMU removable-device flag is verified against local device help and requires the native USB run. Workflow actionlint runs in the build job."
+    },
+    "source_commit": "bbf6442d9c62fc8a4e9ad9acf5668159f35c99f0",
+    "native_run_id": 37106807986,
+    "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37106807986",
+    "usb_run_id": 37107310576,
+    "usb_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37107310576",
+    "usb_validation_started_utc": "2026-10-03T07:43:51Z",
+    "next_step": "Published installer fix complete. Await reported ThinkPad issue details and continue physical hardware acceptance; local page visual/keyboard verification remains unavailable.",
+    "publication_trigger_utc": "2026-10-03T07:51:39Z",
+    "publication_verified_utc": "2026-10-03T07:53:47.799570+00:00",
+    "publication_run_id": 37107746318,
+    "publication_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37107746318",
+    "publication_receipt": "os/work/release-preview3/publication-ci/publication.json",
+    "native_validation_result": "All required exact-source checks passed: 39 portable tests, pinned actionlint, CLI typecheck/affected tests, 335 hn unit tests (one benchmark ignored), ten native terminal fixtures, ISO inspection, optical BIOS/plain and UEFI/encrypted machine tests, and writable USB RAM-copy BIOS/plain and UEFI/encrypted tests.",
+    "machine_checks": {
+      "optical_2gib": {
+        "bios_plain": 20,
+        "uefi_encrypted": 19
+      },
+      "usb_4gib": {
+        "bios_plain": 22,
+        "uefi_encrypted": 21
+      }
+    },
+    "measurements": [
+      {
+        "mode": "cdrom",
+        "firmware": "bios",
+        "memory_mib": 2048,
+        "install_seconds": 33.764,
+        "boot_seconds": 17.509,
+        "unlock_wait_seconds": 0,
+        "idle_mib": [
+          398.02,
+          397.88,
+          397.77
+        ],
+        "idle_cpu_percent": [
+          0.75,
+          0.25,
+          0.0
+        ],
+        "root_gib": [
+          1.9095,
+          1.9103,
+          1.9103
+        ]
+      },
+      {
+        "mode": "cdrom",
+        "firmware": "uefi",
+        "memory_mib": 2048,
+        "install_seconds": 47.013,
+        "boot_seconds": 111.998,
+        "unlock_wait_seconds": 100,
+        "idle_mib": [
+          403.73,
+          403.73,
+          407.73
+        ],
+        "idle_cpu_percent": [
+          1.5,
+          0.25,
+          0.25
+        ],
+        "root_gib": [
+          1.9395,
+          1.9395,
+          1.9395
+        ]
+      },
+      {
+        "mode": "usb",
+        "firmware": "bios",
+        "memory_mib": 4096,
+        "install_seconds": 34.698,
+        "boot_seconds": 18.067,
+        "unlock_wait_seconds": 0,
+        "idle_mib": [
+          471.6,
+          471.71,
+          469.92
+        ],
+        "idle_cpu_percent": [
+          0.5,
+          0.5,
+          0.0
+        ],
+        "root_gib": [
+          1.9664,
+          1.9672,
+          1.9672
+        ]
+      },
+      {
+        "mode": "usb",
+        "firmware": "uefi",
+        "memory_mib": 4096,
+        "install_seconds": 42.136,
+        "boot_seconds": 111.029,
+        "unlock_wait_seconds": 100,
+        "idle_mib": [
+          510.91,
+          510.62,
+          513.75
+        ],
+        "idle_cpu_percent": [
+          0.75,
+          0.25,
+          0.25
+        ],
+        "root_gib": [
+          1.9338,
+          1.9338,
+          1.9338
+        ]
+      }
+    ],
+    "visual_review": "Reviewed actual BIOS installed hn home and local development browser screenshots. UEFI installed/recovered captures show early startup states; live-session operation, installed readiness and recovery are covered by the passing machine checks. No completed UEFI home screenshot is claimed.",
+    "elapsed_seconds": {
+      "request_to_completion": null,
+      "first_recorded_fix_to_public_verification": 1305.523,
+      "implementation_recorded_interval": 154.848,
+      "native_validation": 902.0,
+      "artifact_review_and_publication_preparation": 116.0,
+      "publication_and_full_public_download_verification": 128.8,
+      "merge": null
+    },
+    "waiting": [
+      {
+        "started_utc": "2026-10-03T07:34:41Z",
+        "ended_utc": "2026-10-03T07:49:43Z",
+        "reason": "Fresh image and two parallel native VM environments; user workaround support and documentation continued."
+      },
+      {
+        "started_utc": "2026-10-03T07:43:51Z",
+        "reason": "Optional local ISO mirror was slow and was cancelled after roughly ten minutes. Publication proceeded in CI, which verified every public asset; no duplicate full local download is required. Exact cancellation timestamp was not recorded.",
+        "recorded_utc": "2026-10-03T08:00:05.732467+00:00",
+        "ended_utc": null
+      }
+    ],
+    "documentation_validation": {
+      "recorded_utc": "2026-10-03T08:03:04.680531+00:00",
+      "result": "Passed local HTML/CSS assets and fonts, fragment targets, PNG dimensions, public asset names, Markdown file links/fences, JSON and git diff --check. Current BIOS screenshot inspected. Full local page visual/keyboard validation remains unverified."
+    }
+  },
+  "keyboard_readiness_audit": {
+    "started_utc": "2026-10-03T08:05:05Z",
+    "previous_goal_turn": "progress: preview 3 USB fix published and all public assets verified; user confirmed successful physical installation and internal-disk boot with USB removed.",
+    "requirement": "Boot into a usable hn surface; test keyboard input through the graphical session rather than only service/process readiness.",
+    "finding": "hn displays Finding your harnesses for the first three seconds on an empty initial session. Earlier installed/recovered screenshots can catch this or the initial tmux notice. No persistent UI failure is established by those captures.",
+    "image_source_commit": "bbf6442d9c62fc8a4e9ad9acf5668159f35c99f0",
+    "image_run_id": 37106807986,
+    "implementation_ready_utc": "2026-10-03T08:10:55.937569+00:00",
+    "test_script_sha256": "af7981eac1f5e3a39bdac751df44fb83547e2dd66261e8c6057f1e3850e9a049",
+    "validation_plan": [
+      "Portable tests and syntax/whitespace for test-runner change",
+      "Reuse the exact published preview 3 ISO in one BIOS/plain and UEFI/encrypted writable-USB machine workflow; no runtime rebuild or redundant Rust/CLI suite",
+      "Type a unique echo command through the physical VM keyboard after installed and recovered boot; verify standalone response in the hn pane, capture its framebuffer, close the shell through Ctrl+D and capture returned home",
+      "Record process readiness and keyboard-confirmed readiness separately, including automated typing overhead; inspect final screenshots"
+    ],
+    "local_validation": "39 portable tests and Python/JSON/XML/shell syntax passed; git diff --check passed",
+    "native_status": "passed",
+    "remaining_physical_work": "ThinkPad issue details promised by user; Wi-Fi, suspend and GPU evidence still unavailable.",
+    "test_source_commit": "909ca1ac43654875c256a024406d6f87ddc823eb",
+    "native_run_id": 37108853927,
+    "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37108853927",
+    "native_validation_started_utc": "2026-10-03T08:11:19Z",
+    "native_validation_completed_utc": "2026-10-03T08:18:10Z",
+    "visual_review_utc": "2026-10-03T08:28:25.074631+00:00",
+    "visual_review": "Installed and recovered terminal screenshots show the physical-keyboard probe and response in both firmware modes; installed home screenshots show hn after closing the pane.",
+    "measurements": {
+      "uefi-encrypted": {
+        "installed_keyboard_readiness": {
+          "confirmed_seconds_since_boot": 118.341,
+          "probe_seconds_including_automated_typing": 6.057
+        },
+        "recovered_keyboard_readiness": {
+          "confirmed_seconds_since_boot": 18.086,
+          "probe_seconds_including_automated_typing": 6.053
+        }
+      },
+      "bios-plain": {
+        "installed_keyboard_readiness": {
+          "confirmed_seconds_since_boot": 25.056,
+          "probe_seconds_including_automated_typing": 6.045
+        },
+        "recovered_keyboard_readiness": {
+          "confirmed_seconds_since_boot": 24.67,
+          "probe_seconds_including_automated_typing": 6.042
+        }
+      }
+    },
+    "limitations": "Encrypted installed boot includes the intentional 100-second password delay. Readiness times include about six seconds of automated typing. These are VM observations, not ThinkPad boot measurements."
+  },
+  "usb_first_use_revision": {
+    "request_received_utc": null,
+    "first_recorded_utc": "2026-10-03T08:28:25.074631+00:00",
+    "status": "Published and verified: all ten assets include matching guide, image, examples, inspection and machine evidence.",
+    "implementation_complete_utc": "2026-10-03T11:24:15.435201+00:00",
+    "validation_complete_utc": "2026-10-03T11:43:29Z",
+    "publication_utc": "2026-10-03T12:03:40Z",
+    "requirements": [
+      "Product name Harness; live and installed hostname harness",
+      "Try launches bundled OpenCode; when disconnected offer network setup first; install remains usable offline",
+      "Keep terminal available, other agents installed on demand, and normal work restoration after install",
+      "USB account me and hostname harness; remove Programmer OS from visible product branding",
+      "New terminal opens a shell immediately; retain an existing agent draft without sending its task to the shell",
+      "sudo harness install is the command equivalent of the direct Install action",
+      "Installer has four aligned fields: Disk, Encryption, Password, Repeat password; no account text, password minimum length, decorative separators or navigation-hint clutter",
+      "Single-line disk choices include the device path on the same line; Install starts directly with no second confirmation; keep one inline disk-erasure disclosure",
+      "Encrypted boot should show Harness branding and a friendly masked password prompt before entering hn",
+      "Keyboard-first interface with optional mouse support; hide pointer while typing",
+      "USB welcome prioritizes Enter = Install Harness; T = Try without installing. Network setup is only required by Try, never by offline installation.",
+      "Bundle OpenCode with its upstream default setup. Do not pin any specific model or override its model selection. Verify its actual clean first launch.",
+      "Ordinary hn on macOS or other Linux must retain its regular interface. Installation UI and actions are exclusive to the live OS session; installed Harness never offers Install."
+    ],
+    "validation_plan": [
+      "Portable installer safety and first-use helper tests, shell/Python/JSON/XML syntax and workflow lint",
+      "Affected TUI tests and full native TUI suite in the exact image build; existing CLI typecheck/engine install and launch checks",
+      "Inspect actual SquashFS for bundled signed OpenCode package, live marker/account and exact runtime",
+      "Boot USB with BIOS/plain and UEFI/encrypted; physically activate Wi-Fi, Try, Install and direct terminal; verify single-form offline install, friendly encrypted unlock, and removal of live-only actions after install",
+      "Clean-profile real free-model turn with bundled OpenCode and old-CPU startup check; distinguish virtual network checks from physical Wi-Fi",
+      "Inspect screenshots; verify published assets using the existing publication receipt without duplicate full downloads",
+      "Explicit normal hn / installed OS / live USB render and action regressions, including stray live flag and modified keys"
+    ],
+    "waiting": [
+      {
+        "started_utc": "2026-10-03T11:36:33Z",
+        "ended_utc": null,
+        "reason": "Local 1.6 GB image artifact download still active; small machine evidence already downloaded. CI publication uses its own artifact transfer and is not blocked by this local download."
+      }
+    ],
+    "local_validation": {
+      "completed_utc": "2026-10-03T10:29:26.198461+00:00",
+      "toolchain": "Node 22.23.2, tmux 3.7c on macOS arm64",
+      "affected_cli": "273 passed, 1 Linux-only test skipped; 10 test files.",
+      "real_tmux": "20 passed, 9 unavailable/non-agent rows skipped; Claude Code 2.1.287, Codex 0.160.0, OpenCode 1.18.34, pi 0.85.1, Hermes 0.18.0 and Grok 1.0.44 discovered; Grok agent alias, restart and shell lifecycle passed. No model turns.",
+      "portable_os": "51 tests plus Python/JSON/XML/shell syntax and git diff --check passed. Three disposable DSH manifests generated with no --agent or model override.",
+      "initial_receipt": ".harness/validation/20261003T102725.582029Z-2586/receipt.json",
+      "initial_failure": "Typecheck rejected a possibly undefined Stats mock value; guarded it. Product runtime sources unchanged after passed affected and real tmux checks.",
+      "followup_receipt": ".harness/validation/20261003T102818.737073Z-15548/receipt.json",
+      "followup": "Typecheck and exact-inode regression passed (3 tests, 1 Linux-only skip).",
+      "limitations": "OpenCode 2 plugin startup and OverlayFS behavior still require fresh Linux image verification; full CLI CI pending."
+    },
+    "implemented_in_source": [
+      "Install-first live welcome and direct system shortcuts",
+      "Harness branding and me@harness live identity",
+      "Direct terminal action in the chooser, preserving the agent draft",
+      "Single-form installer and harness install alias",
+      "Signed snapshot OpenCode package input, with no custom OpenCode configuration",
+      "NetworkManager keyboard UI and connection check before trying OpenCode",
+      "foot hide-when-typing enabled",
+      "Five-line ASCII Harness Plymouth theme for encrypted boot; standard systemd/Plymouth password handling, awaiting boot verification",
+      "Fresh installed home offers Start OpenCode, New terminal and Wi-Fi; live-only Install action removed after installation"
+    ],
+    "remaining": [
+      "Physical ThinkPad test of preview 4 Wi-Fi, suspend, brightness and actual boot time",
+      "NVIDIA/local AI validation on real GPU hardware",
+      "Reliable Mac emulation and landing-page interactive review; current site permission still blocks the latter"
+    ],
+    "native_run_id": 37116595898,
+    "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37116595898",
+    "source_commit": "67958156da30d2983daee22ddab48c43970fa244",
+    "native_validation_started_utc": "2026-10-03T10:29:41Z",
+    "validation_attempts": [
+      {
+        "run_id": 37111342650,
+        "source_commit": "11a8010acc9491356eaa3a45d295638277660627",
+        "started_utc": "2026-10-03T08:56:02Z",
+        "failed_utc": "2026-10-03T09:00:42Z",
+        "result": "failed: native New Harness fixture looked for literal Agent|Harness because field_position escaped its regular expression",
+        "passed": "45 portable tests, workflow lint, exact runtime build, CLI typecheck, 89 affected CLI tests (1 skipped), 336 Rust tests (1 ignored), 9 of 10 native fixtures",
+        "remedy": "Use the same field pattern convention in field_position and field_at; rerun affected native behavior as part of image validation"
+      },
+      {
+        "run_id": 37112220215,
+        "source_commit": "0b3073e6ad6dc5a25858b48a088bbf9c19b4770e",
+        "started_utc": "2026-10-03T09:11:39Z",
+        "failed_utc": "2026-10-03T09:20:31Z",
+        "result": "ISO generated but artifact inspection failed: symbolic-link target text was included in the ownership-map path for nmtui-connect",
+        "passed": "45 portable tests, workflow lint, exact runtime build, CLI typecheck, 89 affected CLI tests (1 skipped), 337 Rust tests (1 ignored), all 10 native fixtures",
+        "remedy": "Parse the link path separately from its target. Confirmed nmtui-connect -> nmtui in the exact snapshot NetworkManager package, whose SHA-256 matches the snapshot database. Still require root ownership and both target and alias. Includes pending hook branding and publication-guard updates in the next source."
+      },
+      {
+        "run_id": 37112874271,
+        "source_commit": "7fc8c9c2294254b608fadb7a1060f5a749f090ae",
+        "started_utc": "2026-10-03T09:23:17Z",
+        "failed_utc": "2026-10-03T09:37:17Z",
+        "result": "Both machine journeys stopped at first-use identity assertion: hostname command is absent from the minimal image. Serial prompt already shows harness, but remaining identity assertions and first-use journeys did not run.",
+        "passed": "Image job including portable checks, native CLI/TUI checks, all native fixtures, ISO build and SquashFS inspection.",
+        "remedy": "Read kernel hostname with existing coreutils uname -n; no package added. Rebuild latest source to include separately added installer completion screen, then rerun BIOS/plain and UEFI/encrypted journeys."
+      },
+      {
+        "run_id": 37113924838,
+        "source_commit": "ca24088bae5e648becabdfa3f4c150059e038c53",
+        "started_utc": "2026-10-03T09:41:57Z",
+        "failed_utc": "2026-10-03T09:57:17Z",
+        "result": "Both machine journeys stopped after Ctrl+B T / Ctrl+D: the shortcut used the generic agent launch path and left a closed-terminal card. Try never received its key, so OpenCode did not launch.",
+        "passed": "Image build and inspection; native CLI/TUI checks including all ten fixtures. Both VMs passed live identity, offline bundled OpenCode version (including Nehalem), disconnected Try/network UI, offline Install/cancel and physical input in a new terminal.",
+        "remedy": "Use the owned shell path for the New terminal shortcut, matching the chooser. Add native stream-exit regression and an actual VM pane-disappearance assertion. Also retain interactive installer errors until acknowledgement."
+      },
+      {
+        "run_id": 37115159220,
+        "source_commit": "5445fe1ff1ba178c276735a05a79046a09db1a1f",
+        "result": "Both VMs failed: model check inherited /root, which me cannot enter. Earlier first-use steps passed; screenshots also exposed an incompatible OpenCode 1 plugin.",
+        "passed": "Live identity, bundled OpenCode on Nehalem, disconnected Try/network setup, offline Install/cancel, retained installer error, direct terminal input and Ctrl+D pane removal, actual OpenCode 2 TUI with upstream default model.",
+        "remedy": "Run model acceptance from ~/Projects. Select discovery plugins by OpenCode major version and remove only Harness-owned incompatible legacy files."
+      },
+      {
+        "run_id": 37115791048,
+        "source_commit": "06e268bc38b564aa79b6800f1507d5737a3e53da",
+        "image_run_id": 37115159220,
+        "result": "Both VMs failed at the same model-check cwd error; workload acceptance did not run. Diagnostics confirmed rounded OverlayFS inode IDs map Bash/Python to OpenCode.",
+        "remedy": "Use bigint stat and unsigned 64-bit inode keys. Assert no agent appears before one has been started."
+      },
+      {
+        "run_id": 37115793973,
+        "source_commit": "06e268bc38b564aa79b6800f1507d5737a3e53da",
+        "image_run_id": 37115159220,
+        "result": "Both VMs failed at the same model-check cwd error; DSH acceptance did not run."
+      },
+      {
+        "run_id": 37116595898,
+        "source_commit": "67958156da30d2983daee22ddab48c43970fa244",
+        "result": "Both VMs failed only at first-use cleanup: the test incorrectly required OpenCode 2 shared service to exit along with the TUI.",
+        "passed": "Live executable identities no longer conflate Bash/Python with agents; actual OpenCode TUI starts without the plugin error; both default clean-profile model calls returned 42. Both screenshots show return to the USB welcome after closing the TUI.",
+        "remedy": "Verify disappearance of the exact interactive pane, not every process named opencode. Test-only correction; reuse the verified image/runtime."
+      },
+      {
+        "scope": "four programmer projects plus complete BIOS/UEFI USB journey",
+        "run_id": 37117491184,
+        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37117491184",
+        "started_utc": "2026-10-03T10:46:10Z",
+        "memory_mib": 4096,
+        "image_run_id": 37116595898,
+        "image_source_commit": "67958156da30d2983daee22ddab48c43970fa244",
+        "test_source_commit": "5001600ca051e07152be9000b2470512ebddb5c4",
+        "status": "failed",
+        "result": "UEFI complete journey passed. All four agents completed and project unit tests passed; independent game browser check wrongly assumes a .legend class absent from the task contract. Website and fullstack browser/API checks passed."
+      },
+      {
+        "scope": "three DSH exercises plus complete BIOS/UEFI USB journey",
+        "run_id": 37117493096,
+        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37117493096",
+        "started_utc": "2026-10-03T10:46:12Z",
+        "memory_mib": 4096,
+        "image_run_id": 37116595898,
+        "image_source_commit": "67958156da30d2983daee22ddab48c43970fa244",
+        "test_source_commit": "5001600ca051e07152be9000b2470512ebddb5c4",
+        "status": "passed",
+        "result": "Both complete USB installation/recovery journeys passed, plus three real default-model DSH exercises and shared viewer checks."
+      },
+      {
+        "scope": "constrained complete BIOS/UEFI USB journey and bundled default-model chat",
+        "run_id": 37117494883,
+        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37117494883",
+        "started_utc": "2026-10-03T10:46:14Z",
+        "memory_mib": 1024,
+        "image_run_id": 37116595898,
+        "image_source_commit": "67958156da30d2983daee22ddab48c43970fa244",
+        "test_source_commit": "5001600ca051e07152be9000b2470512ebddb5c4",
+        "status": "failed",
+        "result": "Both 1 GiB installations exhausted memory during unsquashfs extraction; kernel killed the extractor (about 384\u2013441 MiB resident plus swap). First live model conversations passed."
+      }
+    ],
+    "isolation_revision_ready_utc": "2026-10-03T09:11:28.017223+00:00",
+    "positioning": "Harness is built around agents as the primary interface: conversation directs work; terminal output, diffs and browser make results inspectable. Programmers first; broader uses later. Product name remains Harness.",
+    "post_build_source_changes": [
+      "Test-only: operate the visible default OpenCode TUI through virtual keyboard input and require its reply; publication guard now requires that evidence. Runtime and image source remain 67958156d.",
+      "Test-only cleanup uses the exact interactive pane id; preserves the real OpenCode 2 shared service lifecycle. Portable 51 tests/syntax passed."
+    ],
+    "post_build_local_checks": "31 installer tests passed; changed Python files compile and git diff --check passed. Native terminal regression and updated machine journey require the new source build.",
+    "native_validation_complete_utc": null,
+    "isolation_validation": "Normal hn (including a stray live flag), installed OS and live USB UI/action regression tests passed in run 37112220215. The native terminal lifecycle validation step, including all ten fixtures, passed on source 0b3073e6ad6dc5a25858b48a088bbf9c19b4770e.",
+    "pending_source_changes": [
+      "Cap unsquashfs extraction caches at 64 MiB instead of the packaged default 512 MiB. Both 1 GiB failures show kernel OOM killing this process. Real low-memory installation must rerun on the resulting image.",
+      "Locate generated game controls by their visible keyboard instructions, not an undocumented .legend CSS class. All previous model-built project tests remain recorded; independent browser acceptance must rerun.",
+      "Keep tty0 as the primary console when an unattended test enables serial logging; normal install kernel arguments are unchanged."
+    ],
+    "branding_review": {
+      "status": "approved and documented",
+      "sources": [
+        "https://github.com/autonomous-ai/autonomous-computer",
+        "https://github.com/autonomous-ai/autonomous-grid",
+        "docs/terminology.md",
+        "README.md#harness-device",
+        "devices/harness-device/firmware/README.md"
+      ],
+      "photos": "User supplied five square-device / monitor / compute-box concepts. Device has Harness/TUI voice and navigation, browser keyboard and pointer controls. These are design concepts, not evidence of implemented square-device integration.",
+      "confirmed": [
+        "Product name Harness; programmer OS is audience shorthand only",
+        "Bring your own computer remains supported; first-party computer/device combination is optional",
+        "Ordinary hn on macOS and other Linux does not expose OS installation actions"
+      ],
+      "open": [
+        "Final device variant names and exact integration scope",
+        "Local-model out-of-box claim requires tested drivers, inference engine and model provisioning; these are not currently bundled in the minimal ISO",
+        "Assessment file supplied under /Users/d is unavailable on this Mac; requested accessible path or GitHub link"
+      ],
+      "document": "docs/naming-system.md",
+      "approved_date": "2026-10-03",
+      "documentation": {
+        "request_received_utc": null,
+        "implementation_ready_utc": "2026-10-03T09:55:05.452913+00:00",
+        "validation_completed_utc": "2026-10-03T09:55:05.452913+00:00",
+        "validation": "Reviewed approved vocabulary, checked local Markdown links and fences in all eight touched documents, and passed git diff --check. Documentation only; no runtime suite required.",
+        "merge_utc": null,
+        "publication_utc": null
+      }
+    },
+    "next_step": "Build and inspect a fresh exact-source image with bounded extraction caches and corrected diagnostic console order; run native 4 GiB and constrained 1 GiB installation/recovery and project/DSH acceptance. Reuse passed full CLI evidence because CLI/TUI sources and dependencies are unchanged.",
+    "last_recorded_utc": "2026-10-03T11:39:35.289044+00:00",
+    "first_use_visual_review": "Inspected BIOS 01d-bundled-opencode.png and failure.png from run 37116595898: upstream-default Fledge Alpha Free is shown without a plugin warning; after Ctrl+C twice, the clean Harness Install/Try welcome is visible. Both firmware JSONL replies are 42. The retained process in each is /usr/bin/opencode serve --service.",
+    "revision_ready_utc": "2026-10-03T10:29:26.198461+00:00",
+    "development_acceptance_revision": {
+      "status": "prepared; syntax and fixture generation passed; real guest runs pending",
+      "reason": "The bundled OpenCode first-use route must also support the requested programmer and DSH workflows with upstream model defaults.",
+      "changes": [
+        "Removed hardcoded model arguments/configuration from the disposable workload and DSH fixtures; kept their task permissions and independent acceptance checks.",
+        "Prepared a preview 4 manual installation guide at os/work/preview4-INSTALL.md; current public guide remains preview 3 until publication.",
+        "Added read-only live file-identity and registry diagnostics to investigate terminal rows appearing as OpenCode before an agent is launched. No discovery change is made without evidence.",
+        "Removed the unused custom primary agent and unsupported OpenCode 2 interactive --agent flag from DSH fixtures; test permissions remain scoped to the disposable guest."
+      ],
+      "required_checks": [
+        "Bash/Python syntax and disposable DSH fixture generation",
+        "After the base image journeys pass, run four project workloads and three DSH tasks on that exact ISO using the default model; keep those scopes in separate bounded VM runs."
+      ],
+      "validation_started_utc": "2026-10-03T10:13:49.119774+00:00"
+    },
+    "native_validation": "Run 37115159220 passed CLI typecheck, 89 affected CLI tests (1 skipped), 337 Rust tests (1 ignored), all 10 native fixtures, image assembly and SquashFS inspection. Both VM journeys failed at the default chat test before installation.",
+    "last_image": {
+      "run_id": 37119543543,
+      "source_commit": "21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8",
+      "iso": {
+        "name": "harness-0.1.0-preview.4-x86_64.iso",
+        "bytes": 1612300288,
+        "sha256": "d111c2127e503818e4fccba62b8460e6160063bbf3b48e004e51516416229a92"
+      },
+      "status": "Image build and actual SquashFS inspection passed; 337 native tests passed with one ignored, ten terminal fixtures passed, affected CLI 89 passed with one skipped. Full CLI evidence reused from unchanged source. Machine validation pending.",
+      "publishable": false,
+      "manifest_from_log": "os/work/preview4-build-37119543543/manifest-from-build-log.json"
+    },
+    "current_validation_plan": [
+      "Pinned Node 22.23.2 typecheck and affected discovery, launch, hooks, plugin and version tests.",
+      "Private tmux 3.7c real discovery/restart/login-shell fixtures on this Mac; unavailable engines recorded as skipped.",
+      "Portable OS tests/syntax, workflow lint in image CI, full CLI CI including supported OS/Node matrix.",
+      "Fresh exact-source ISO and native TUI checks; both full USB machine journeys, then separate workload/DSH default-model acceptance against the same image.",
+      "Measure the constrained 1-GiB base and bundled default-agent journey after the 4-GiB RAM-copy journeys; preview 1 low-memory evidence does not cover the newly bundled OpenCode 2."
+    ],
+    "full_cli_ci": {
+      "run_id": 37116593867,
+      "url": "https://github.com/autonomous-ai/openharness/actions/runs/37116593867",
+      "source_commit": "67958156da30d2983daee22ddab48c43970fa244",
+      "started_utc": "2026-10-03T10:29:38Z",
+      "status": "passed",
+      "passed_so_far": [
+        "Repository process checks",
+        "Linux and macOS native serial/login-shell matrix on Node 20.19.0 and 22.23.2"
+      ],
+      "result": "8761 full-suite tests passed, 62 skipped; 40 separately scheduled fuzz tests passed. Supported Linux/macOS Node matrix, release bundle migration and updater coverage checks passed; updater coverage reports 100%. No second full local suite required.",
+      "typecheck_test_job_completed_utc": "2026-10-03T10:35:28Z"
+    },
+    "browser_visual_review": {
+      "attempted_utc": "2026-10-03T10:38:15.965197+00:00",
+      "status": "blocked by saved site permission",
+      "tool": "cua.getTab",
+      "url": "http://127.0.0.1:18092/",
+      "reason": "Browser Use rejected the exact previously authorized URL because of a saved user permission setting. No alternate browser, raw CDP, or rendering workaround attempted.",
+      "impact": "Landing-page visual and interactive checks remain unverified; static source review and separate authorized CI guest VM work continue."
+    },
+    "low_memory_run": {
+      "run_id": 37117247900,
+      "image_run_id": 37116595898,
+      "test_source_commit": "e79f94fcb7e6a78e8250eea46da51c80017af8bf",
+      "memory_mib": 1024,
+      "started_utc": "2026-10-03T10:41:33Z",
+      "status": "failed at the known shared-service cleanup assertion; both actual keyboard conversations and independent JSONL replies passed before that assertion",
+      "visual_review": "Inspected BIOS and UEFI 01e-first-agent-reply.png: typed question and 42 reply are visible, upstream default free model, no plugin warning. This proves first-use chat at 1 GiB, not full installation or parallel project workloads."
+    },
+    "active_machine_runs": [
+      {
+        "scope": "1 GiB complete USB installation/recovery and actual first model chat",
+        "run_id": 37119543543,
+        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37119543543",
+        "started_utc": "2026-10-03T11:24:19Z",
+        "memory_mib": 1024,
+        "image_run_id": 37119543543,
+        "image_source_commit": "21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8",
+        "test_source_commit": "21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8",
+        "status": "passed",
+        "completed_utc": "2026-10-03T11:41:22Z"
+      },
+      {
+        "scope": "4 GiB RAM-copy install/recovery, retained four project sources and independent acceptance",
+        "run_id": 37120135497,
+        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37120135497",
+        "started_utc": "2026-10-03T11:35:21Z",
+        "memory_mib": 4096,
+        "image_run_id": 37119543543,
+        "image_source_commit": "21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8",
+        "test_source_commit": "ba221cbf993833f7cb6ffbacdd4fce4c0223787d",
+        "status": "passed",
+        "completed_utc": "2026-10-03T11:43:07Z"
+      },
+      {
+        "scope": "4 GiB RAM-copy install/recovery, three real DSH exercises and shared viewers",
+        "run_id": 37120138348,
+        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37120138348",
+        "started_utc": "2026-10-03T11:35:24Z",
+        "memory_mib": 4096,
+        "image_run_id": 37119543543,
+        "image_source_commit": "21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8",
+        "test_source_commit": "ba221cbf993833f7cb6ffbacdd4fce4c0223787d",
+        "status": "passed",
+        "completed_utc": "2026-10-03T11:43:29Z"
+      }
+    ],
+    "boot_performance_investigation": {
+      "image_run_id": 37116595898,
+      "evidence_run_id": 37117493096,
+      "uefi_initrd_seconds_including_100s_wait": 210.533,
+      "recovered_keyboard_ready_seconds": 116.847,
+      "status": "resolved in test instrumentation; exact new image passed",
+      "next_step": "No additional boot diagnostic run required. Measure the physical ThinkPad separately.",
+      "diagnostic_run_id": 37118718782,
+      "diagnostic_test_source": "6fe521be4d98a1ae1a0da0005f517632a54177ae",
+      "diagnostic_started_utc": "2026-10-03T11:08:47Z",
+      "diagnostic_status": "failed in diagnostic test pager; initial installed boot journal and timestamps retained",
+      "unlock_prompt_seconds": 97.764,
+      "password_submitted_seconds": 210.139,
+      "serial_login_seconds": 218.782,
+      "harness_ready_seconds": 220.004,
+      "finding": "Delay precedes the graphical prompt. The initrd journal shows serial-primary virtual console setup stalled around 30-second intervals. The test adds console=tty0 console=ttyS0; ordinary installation does not add a serial console. Change diagnostic argument order to keep tty0 primary and test the resulting image before attributing a physical-device regression.",
+      "diagnostic_fix": "Disable systemd-analyze paging, retain journals and boot-stage events, and enforce a sub-30-second unlock-prompt gate on native x86 VMs.",
+      "serial_console_reference": "https://www.kernel.org/doc/html/latest/admin-guide/serial-console.html",
+      "resolution": "Keep tty0 primary after the diagnostic serial console; ordinary installations never add serial output. New encrypted prompt is 4.9 seconds at 1 GiB and 4.6 seconds at 4 GiB. Password submission to Harness is 8.1/8.3 seconds including diagnostic login.",
+      "verified_run_id": 37119543543
+    },
+    "extraction_cache_reference": "https://github.com/plougher/squashfs-tools/blob/master/Documentation/4.7.5/USAGE-UNSQUASHFS",
+    "post_diagnostic_local_checks": {
+      "completed_utc": "2026-10-03T11:12:50.086227+00:00",
+      "result": "51 portable OS tests passed; Python/JSON/XML/shell checks and Node syntax for the browser acceptance script passed. Naming System relative links resolve. No new full CLI suite: CLI/runtime source is unchanged from passed run 37116593867."
+    },
+    "next_image_run": {
+      "run_id": 37119543543,
+      "url": "https://github.com/autonomous-ai/openharness/actions/runs/37119543543",
+      "source_commit": "21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8",
+      "started_utc": "2026-10-03T11:24:19Z",
+      "status": "passed: image, native checks, 1 GiB BIOS/plain and UEFI/encrypted journeys",
+      "initial_machine_memory_mib": 1024,
+      "transport": "usb",
+      "required_followups": [],
+      "publishable": true
+    },
+    "previous_verified_image": {
+      "run_id": 37116595898,
+      "source_commit": "67958156da30d2983daee22ddab48c43970fa244",
+      "iso_bytes": 1612300288,
+      "iso_sha256": "52c14dd1aab5498141e260915798dd59c6f4d525115d86fd1fad8e9ffdaa328f",
+      "package_count": 405,
+      "native_validation": "337 Rust tests (1 ignored), 89 affected CLI tests (1 skipped), all 10 native TUI fixtures, portable tests, workflow lint and actual SquashFS inspection passed. Full CLI suite passed separately on the same runtime source.",
+      "manifest_from_log": "os/work/preview4-build-37116595898/manifest-from-build-log.json",
+      "publishable": false
+    },
+    "release_preparation": {
+      "at_utc": "2026-10-03T12:00:41.137169+00:00",
+      "status": "Complete; matching guide included and its public checksum matches the repository guide.",
+      "changes": [
+        "Include a version-matched INSTALL.md in the verified public asset set; reject a mismatched guide.",
+        "Use harness-examples.zip for this new preview; preserve historical artifact URLs.",
+        "Include installed/recovered boot journals with timing evidence.",
+        "New development/example test copy uses Harness."
+      ],
+      "validation": "52 portable OS tests, Python/JSON/XML/shell checks, git diff --check and static site/doc assets/links passed after final edits. Actual CI guest screenshots reviewed. Browser layout/interaction remains unverified due the saved permission block; no new full CLI/TUI suite required for these docs/packaging-only edits.",
+      "completed_utc": "2026-10-03T12:01:42.412522+00:00"
+    },
+    "final_machine_evidence": {
+      "iso_sha256": "d111c2127e503818e4fccba62b8460e6160063bbf3b48e004e51516416229a92",
+      "image_source_commit": "21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8",
+      "iso_bytes": 1612300288,
+      "package_count": 405,
+      "memory_1gib_idle_mib": [
+        396.02,
+        399.43
+      ],
+      "memory_4gib_idle_mib": [
+        480.62,
+        511.13
+      ],
+      "bios_install_seconds_1gib": 35.774,
+      "encrypted_install_seconds_1gib": 57.81,
+      "bios_install_seconds_4gib": 29.965,
+      "encrypted_install_seconds_4gib": 44.577,
+      "bios_boot_hn_seconds_4gib": 17.318,
+      "encrypted_prompt_seconds_4gib": 4.618,
+      "encrypted_password_to_hn_seconds_4gib": 8.299,
+      "project_checks": "31 unit tests and all independent keyboard/browser/API acceptance checks passed; three prior completed project sources reused, game agent ran again.",
+      "dsh_checks": "Three fresh default-OpenCode turns passed: HTML viewer edit/reload, CSV tool, game play/pause/reset/export.",
+      "visual_review": "Inspected actual welcome, installer, first typed reply, masked disk unlock, installed home, game, mobile website and DSH game-viewer screenshots.",
+      "public_receipt": "os/work/release-preview4-37119543543/publication-ci/publication.json"
+    },
+    "mac_compatibility": {
+      "verified_utc": "2026-10-03T12:00:41.137169+00:00",
+      "host_model": "Mac14,6",
+      "host_cpu": "Apple M2 Max",
+      "host_architecture": "arm64",
+      "iso_architecture": "x86_64",
+      "native_iso_install": "unsupported on this Apple Silicon Mac",
+      "native_app_and_tui": "macOS binaries available for arm64 and x64",
+      "vm_status": "Earlier emulation rendered a browser project, then reboot checks failed with guest soft-lockups. Preview 4 full Mac VM experience unverified."
+    },
+    "publication_trigger_utc": "2026-10-03T12:02:13Z",
+    "publication_run_id": 37121570059,
+    "publication_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37121570059",
+    "publication_source_commit": "1eb64ffe6e76505261f994fd2d530a8340f2a10c",
+    "merge_utc": null,
+    "publication_verified_utc": "2026-10-03T12:04:09.527570+00:00",
+    "publication_receipt": "os/work/release-preview4-37119543543/publication-ci/publication.json",
+    "publication_completion_reported_utc": "2026-10-03T12:05:00Z",
+    "publication_completion_reported_basis": "Approximate commentary time after live release and successful publication workflow were read; exact message timestamp unavailable.",
+    "elapsed_seconds": {
+      "first_recorded_work_to_verified_publication": 12944.453,
+      "implementation_and_overlapping_validation_or_diagnosis": 10550.361,
+      "final_machine_validation_after_implementation": 1153.565,
+      "evidence_review_and_docs_packaging_before_publication": 1124.0,
+      "publication_including_all_public_download_verification": 116.528,
+      "merge": null,
+      "notes": "Wall-clock intervals, not hands-on effort; earlier validation overlaps implementation. Actual user request timestamp unknown. Local optional image download and permission waiting are tracked separately, not subtracted."
+    }
+  },
+  "previous_goal_turn_classification": {
+    "status": "meaningful progress",
+    "at_utc": "2026-10-03T13:03:55.739443+00:00",
+    "progress": [
+      "Preview 4 ISO downloaded to the Mac and checksum verified",
+      "Small 7.4 MB OS update built and exercised on an encrypted installed VM, including failure, rollback and live process/project preservation",
+      "All three new public update assets downloaded and fully verified",
+      "Shared hn behavior explained; user explicitly approved immediate Terminal creation across platforms"
+    ],
+    "blocking_condition_repeated": false
+  },
+  "publication_history": [
+    {
+      "version": "0.1.0-preview.3",
+      "source_commit": "bbf6442d9c62fc8a4e9ad9acf5668159f35c99f0",
+      "release_url": "https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.3",
+      "published_at": "2026-10-03T07:53:11Z",
+      "verified_at": "2026-10-03T07:53:47.799570+00:00",
+      "verified_assets": [
+        "boot-layout.txt",
+        "inspection.json",
+        "machine-evidence.zip",
+        "manifest.json",
+        "packages.txt",
+        "programmer-os-0.1.0-preview.3-x86_64.iso",
+        "programmer-os-0.1.0-preview.3-x86_64.iso.sha256",
+        "validation.json"
+      ],
+      "receipt": "os/work/release-preview3/publication-ci/publication.json",
+      "verification_run": "https://github.com/autonomous-ai/openharness/actions/runs/37107746318"
+    }
+  ],
+  "mac_support_and_feedback_loop": {
+    "first_recorded_utc": "2026-10-03T12:08:01Z",
+    "request_received_utc": null,
+    "status": "Mac targets documented; small development update/rollback implemented, validated and publicly available for installed preview 4. Mac hardware ports remain unimplemented.",
+    "document": "os/DEVELOPMENT.md",
+    "documented_utc": "2026-10-03T12:12:18.648429+00:00",
+    "targets": [
+      "Older 64-bit Intel Macs without T2 first",
+      "Intel T2 Macs with a separate kernel/driver/firmware profile",
+      "Apple Silicon arm64 via Asahi platform integration, initially explicitly supported M1/M2 models"
+    ],
+    "recommended_feedback_loop": "One preview 4 install on the ThinkPad for daily work; native x86 KVM server VMs for repeatable installer/boot tests; Mac as development/control machine. M2 x86 emulation is not the primary feedback loop.",
+    "current_gap": "Physical ThinkPad update test and native Mac hardware integration remain unverified. Remote VM options have portable checks only.",
+    "next_implementation": [
+      "Remote interactive test VM mode with SSH-tunneled display and optional localhost guest SSH forwarding",
+      "Versioned and checksummed development deployment to a dedicated test machine with rollback and preserved projects",
+      "Stopped-VM snapshot/restore",
+      "Per-model Intel Mac hardware evidence; evaluate Asahi Minimal for the arm64 hardware port"
+    ],
+    "sources": [
+      "https://www.qemu.org/docs/master/system/introduction.html",
+      "https://wiki.t2linux.org/distributions/arch/installation/",
+      "https://wiki.t2linux.org/guides/postinstall/",
+      "https://asahilinux.org/fedora/",
+      "https://asahilinux.org/docs/platform/feature-support/m2/",
+      "https://asahilinux.org/docs/project/faq/"
+    ],
+    "validation": "Documentation local links and JSON checked; no native Mac install, server deployment, new ARM image or hardware success claimed."
+  },
+  "local_preview4_iso": {
+    "path": "/Users/ab/Downloads/harness-0.1.0-preview.4-x86_64.iso",
+    "bytes": 1612300288,
+    "sha256": "d111c2127e503818e4fccba62b8460e6160063bbf3b48e004e51516416229a92",
+    "checksum_verified": true,
+    "download_complete_utc": "2026-10-03T12:32:00Z",
+    "timestamp_basis": "Approximate completion reported by preceding download/copy sessions; local file verified present this turn."
+  },
+  "small_development_update": {
+    "request_received_utc": null,
+    "first_recorded_utc": "2026-10-03T12:12:18.648429+00:00",
+    "implementation_ready_utc": "2026-10-03T12:51:11.390514+00:00",
+    "status": "Published optional 7.4 MB update bundle on preview 4 release. Native encrypted update/failure/rollback/reboot and preserved-work checks passed; all three public assets verified.",
+    "merge_utc": null,
+    "publication_utc": "2026-10-03T13:02:00.808820+00:00",
+    "validation_plan": [
+      "Portable package identity, hash, architecture, source, archive path and rollback guards; Python/shell/JSON/XML syntax and workflow actionlint",
+      "Build exact-source Linux runtime and standalone native package; apply it offline to published preview 4 in an encrypted disposable KVM guest",
+      "Reject truncated download; exercise failed pacman transaction and retained recovery; verify apply, rollback, repeat apply, running terminal and project survival through daemon/screen restarts, encrypted reboot and physical-keyboard input",
+      "Reuse unchanged CLI/TUI source evidence from full CLI run 37116593867 and exact-image native run 37119543543; no redundant full suites"
+    ],
+    "changes": [
+      "Shared package assembly for ISO and development bundle with source/hash manifest",
+      "Explicit installed-OS update and rollback using pacman plus Btrfs checkpoint; no automatic service restart",
+      "Standalone bootstrap for existing preview 4 installations",
+      "Optional loopback-only remote VM launcher endpoints; real remote UI/SSH remains unverified"
+    ],
+    "waiting": [
+      {
+        "reason": "Local ISO transfer/copy was separate from server-side build and public publication; now complete.",
+        "started_utc": null,
+        "completed_utc": "2026-10-03T12:32:00Z"
+      }
+    ],
+    "research_page": {
+      "url": "https://chatgpt.com/space/page_d5d04ee40e348191b2b1aa9274b14e53",
+      "status": "page_read_forbidden; content not read, update implementation proceeds independently"
+    },
+    "shared_runtime_scope": "No cli/ or tui/ edits in this update. Earlier shared chooser/agent fixes remain on OS branch, not merged to main or published in a general TUI release.",
+    "source_commit": "42c22cece04cc49c1e2b6227ae5e40481072e779",
+    "validation_started_utc": "2026-10-03T12:51:36Z",
+    "native_run": {
+      "id": 37124241039,
+      "url": "https://github.com/autonomous-ai/openharness/actions/runs/37124241039",
+      "status": "passed"
+    },
+    "reused_source_trees": {
+      "cli": "d4cc9cddff97f0479b5a06a810d8535c557f44b6",
+      "tui": "ce54bd22a684d65b8433378468cfd56479612069",
+      "unchanged_since": "67958156da30d2983daee22ddab48c43970fa244"
+    },
+    "validation_complete_utc": "2026-10-03T12:56:11Z",
+    "native_result": {
+      "status": "passed",
+      "checks": [
+        "Truncated download rejected before runtime or package identity changed; running work survives",
+        "Real pacman failure records recoverable state; retry cannot replace it; rollback restores the original package",
+        "Small package installed offline and verified without restarting the existing terminal process",
+        "Repeated apply recognizes the installed build without another transaction",
+        "The same terminal process and project survive restarting both Harness daemon and screen",
+        "Rollback restores the prior package and source identity; the same process and project survive both service restarts again"
+      ],
+      "previous_package": "harness-os 0.1.0pre4-1",
+      "candidate": {
+        "name": "harness-os-0.1.0pre4.r1.g42c22cece0-1-x86_64.pkg.tar.gz",
+        "version": "0.1.0pre4.r1.g42c22cece0-1",
+        "bytes": 7364206,
+        "sha256": "99a00490fab414dc2cfc2ef1398f4b9f66714ed9b16397cbea016dfb6c1b8fab"
+      },
+      "source_commit": "42c22cece04cc49c1e2b6227ae5e40481072e779",
+      "apply_seconds": 3.089,
+      "rollback_seconds": 1.083
+    },
+    "visual_review": [
+      "Updated graphical hn received keyboard input and displayed its response",
+      "Encrypted reboot shows Harness wordmark and masked password prompt"
+    ],
+    "publication": {
+      "status": "verified",
+      "verified_at": "2026-10-03T13:02:00.808820+00:00",
+      "release": "https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.4",
+      "source_commit": "42c22cece04cc49c1e2b6227ae5e40481072e779",
+      "assets": [
+        {
+          "name": "harness-update-preview.4-42c22cece-x86_64-validation.json",
+          "bytes": 2034,
+          "sha256": "383e195799c63972721435c0ee7d34832ee5f822f172a8453d75a784d14a1262"
+        },
+        {
+          "name": "harness-update-preview.4-42c22cece-x86_64.zip",
+          "bytes": 7387295,
+          "sha256": "2f621ab2287585fd9ccb5b1b67cb5127d575d6372cd5cdb06c88d041eecabd6c"
+        },
+        {
+          "name": "harness-update-preview.4-42c22cece-x86_64.zip.sha256",
+          "bytes": 112,
+          "sha256": "ed5776b4b6d06a16c2b501a30cbad9b68fd0db65c587d315eafb37ff04dfe15f"
+        }
+      ]
+    },
+    "publication_time_basis": "Verification completion; exact upload start was not recorded.",
+    "publication_completion_reported_utc": "2026-10-03T13:03:55.739254+00:00",
+    "public_artifact": "https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.4/harness-update-preview.4-42c22cece-x86_64.zip",
+    "elapsed_seconds": {
+      "first_recorded_planning_to_verified_publication": 2982.160391,
+      "native_validation_including_runtime_build": 275,
+      "evidence_review_packaging_and_publication_after_ci": 349.80882,
+      "merge": null,
+      "notes": "Original user request timestamp unavailable. Implementation overlaps portable checks. Public packaging/transfer/verification follow native CI, not included in its duration. No main merge or general TUI publication."
+    },
+    "shared_terminal_behavior_approved": true,
+    "future_packaging_note": "Development versions include revision count and full source identity. CI shallow checkout yielded r1; before an automatic ordered update channel exists, replace the count with a source-date ordering key. Current explicit local pacman installs and rollback are validated."
+  },
+  "physical_preview4_user_report": {
+    "recorded_utc": "2026-10-03T13:29:43.451299+00:00",
+    "version": "0.1.0-preview.4",
+    "device": "ThinkPad (model not supplied)",
+    "reported": "User reported successful installation, boot and use of the new OS; described it as awesome.",
+    "timings_measured": false,
+    "limits": "No independent timing, Wi-Fi, suspend, or GPU evidence supplied."
+  },
+  "landing_narrative_and_merge": {
+    "request_received_utc": null,
+    "first_recorded_utc": "2026-10-03T13:29:43.451299+00:00",
+    "status": "Page static validation passed; visual review awaiting access or user feedback. Integrated main; native fixture expectation updated for main\u2019s shared Models picker; final CLI/TUI/OS validation next.",
+    "merge_authorized": true,
+    "base_commit": "423b47cf94b0b495d0a950ac05dbbb350281afe7",
+    "integration_commit": "dd8fb89c8a5e665153f5783d1651440d4d3321d9",
+    "narrative": "Agents are the new apps. Conversation is the interface. Terminal and optional browser are the working surfaces.",
+    "implementation_ready_utc": "2026-10-03T13:33:48.223860+00:00",
+    "validation_started_utc": "2026-10-03T13:21:52Z",
+    "validation_completed_utc": null,
+    "merge_utc": null,
+    "publication_utc": null,
+    "validation_plan": [
+      "Static HTML/CSS, local assets, headings, links and current public release asset names",
+      "Local browser visual/keyboard review; currently denied by saved permission; manual review requested",
+      "Full CLI scope including supported platform matrix after integrating main",
+      "Full TUI scope on x86_64 and aarch64 including native terminal fixtures after integrating main",
+      "Fresh exact-source OS build plus BIOS/plain and UEFI/encrypted installation/boot/agent/recovery checks; existing workload and development-update evidence remains tied to its original source"
+    ],
+    "os_integration_run": "https://github.com/autonomous-ai/openharness/actions/runs/37125918188",
+    "waiting": [
+      {
+        "kind": "visual review",
+        "reason": "Chrome rejected http://127.0.0.1:18092/ due a saved site permission despite earlier user approval. Manual review requested; no alternate route used.",
+        "started_utc": "2026-10-03T13:29:43.451299+00:00",
+        "completed_utc": null
+      }
+    ],
+    "follow_up_preserved": "Unvalidated session lock/suspend test script and workflow patch saved under ignored os/work/next-session; excluded from this merge.",
+    "hardware_priority": [
+      "Identify and validate one older Intel Mac without T2 from the user\u2019s MacBook Air/Pro collection",
+      "NVIDIA desktop 4090, then 5090",
+      "Separate T2 and Apple Silicon platform work"
+    ],
+    "integration_diagnosis": {
+      "failed_run": 37125918188,
+      "finding": "342 Rust tests and nine native fixtures passed. The e2e fixture still expected Sonnet / High, but current main intentionally replaced those engine rows with the shared subscriptions/local/Grid Models picker. Models source and stale fixture matched main.",
+      "change": "Update the existing native fixture to verify connected subscriptions, available Grid model, and shell focus guidance; no product model-picker behavior changed."
+    },
+    "static_validation": "Strict HTML5 and CSS parsing; local assets, fonts, dimensions, headings and fragments; release download names; 65 portable OS tests; Python/JSON/XML/shell checks; git diff --check passed."
+  }
+}

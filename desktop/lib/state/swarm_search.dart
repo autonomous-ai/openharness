@@ -10,6 +10,7 @@ import '../models/api_connections_controller.dart'
 import '../models/local_model.dart';
 import '../models/model_search_catalog.dart';
 import '../core/dsh_catalog.dart';
+import '../store/experimental_harnesses.dart';
 import '../core/machine_resources.dart';
 import '../core/models.dart'
     show Agent, ConnectionStatus, GridModels, GridModel;
@@ -90,6 +91,7 @@ class SwarmSearchController extends ChangeNotifier {
     }
     _refresh();
     app.addListener(_refresh);
+    app.experimentalFeatures.addListener(_refresh);
     projects?.addListener(_refresh);
     models?.addListener(_modelsChanged);
     app.gridPictures.addListener(_modelChoicesChanged);
@@ -462,12 +464,10 @@ class SwarmSearchController extends ChangeNotifier {
   /// Open Harness filters by latest activity; commands and splits keep relevance order.
   final bool activityFirst;
 
-  /// When this opening began: the list's ages are measured from it.
-  final DateTime openedAt = DateTime.now();
   final _activity = <String, DateTime?>{};
 
   /// A row's last activity as it was when this opening first listed it. The
-  /// list keeps the order and ages it opened with while agents work on:
+  /// list keeps its activity snapshot and order while agents work on:
   /// rows moving under the cursor as someone arrowed through them was the
   /// confusing part. The next opening reads activity afresh.
   DateTime? activityOf(SwarmDestination row) =>
@@ -1502,9 +1502,11 @@ class SwarmSearchController extends ChangeNotifier {
 
   bool _refreshStore() {
     final entries = {
-      for (final machine in app.machineStates.values)
-        for (final entry in machine.dsh.byId.values)
-          if (!entry.isViewerPackage) entry.id: entry,
+      for (final entry in storeVisibleHarnesses(
+        app.machineStates.values.expand((machine) => machine.dsh.byId.values),
+        app.experimentalFeatures,
+      ))
+        if (!entry.isViewerPackage) entry.id: entry,
     };
     if (mapEquals(entries, _storeEntries)) return false;
     _storeEntries = entries;
@@ -2322,6 +2324,7 @@ class SwarmSearchController extends ChangeNotifier {
     _modelUseTimer?.cancel();
     if (_modelUseWait?.isCompleted == false) _modelUseWait!.complete();
     app.removeListener(_refresh);
+    app.experimentalFeatures.removeListener(_refresh);
     projects?.removeListener(_refresh);
     models?.removeListener(_modelsChanged);
     app.gridPictures.removeListener(_modelChoicesChanged);

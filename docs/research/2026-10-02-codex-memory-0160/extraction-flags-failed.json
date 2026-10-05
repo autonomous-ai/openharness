@@ -1,0 +1,164 @@
+{
+  "date": "2026-10-02T22:45:01.415Z",
+  "engine": "codex",
+  "version": "codex-cli 0.160.0",
+  "model": "gpt-6-astra",
+  "disableCodeModeOverride": true,
+  "passed": false,
+  "runs": [
+    {
+      "mode": "text",
+      "requests": [
+        {
+          "model": "gpt-6-astra",
+          "tools": [],
+          "toolResults": []
+        }
+      ],
+      "events": [
+        {
+          "type": "thread.started"
+        },
+        {
+          "type": "item.completed",
+          "itemType": "error",
+          "syntheticDiagnostic": "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`."
+        },
+        {
+          "type": "turn.started"
+        },
+        {
+          "type": "item.completed",
+          "itemType": "agent_message"
+        },
+        {
+          "type": "turn.completed"
+        }
+      ],
+      "code": 0,
+      "signal": null,
+      "timedOut": false,
+      "oversized": false,
+      "invalidEvents": 0,
+      "expectedAnswer": true,
+      "forbiddenFileExists": false,
+      "diagnostics": {
+        "unknownFlag": false,
+        "networkError": false,
+        "fallbackModelMetadata": false
+      },
+      "passed": false
+    },
+    {
+      "mode": "request_user_input",
+      "requests": [
+        {
+          "model": "gpt-6-astra",
+          "tools": [],
+          "toolResults": []
+        },
+        {
+          "model": "gpt-6-astra",
+          "tools": [],
+          "toolResults": [
+            {
+              "unavailable": true,
+              "syntheticOutput": "request_user_input is unavailable in Default mode"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "type": "thread.started"
+        },
+        {
+          "type": "item.completed",
+          "itemType": "error",
+          "syntheticDiagnostic": "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`."
+        },
+        {
+          "type": "turn.started"
+        },
+        {
+          "type": "item.completed",
+          "itemType": "agent_message"
+        },
+        {
+          "type": "turn.completed"
+        }
+      ],
+      "code": 0,
+      "signal": null,
+      "timedOut": false,
+      "oversized": false,
+      "invalidEvents": 0,
+      "expectedAnswer": true,
+      "forbiddenFileExists": false,
+      "diagnostics": {
+        "unknownFlag": false,
+        "networkError": false,
+        "fallbackModelMetadata": false
+      },
+      "passed": true
+    },
+    {
+      "mode": "exec_command",
+      "requests": [
+        {
+          "model": "gpt-6-astra",
+          "tools": [],
+          "toolResults": []
+        },
+        {
+          "model": "gpt-6-astra",
+          "tools": [],
+          "toolResults": [
+            {
+              "unavailable": true,
+              "syntheticOutput": "unsupported call: exec_command"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "type": "thread.started"
+        },
+        {
+          "type": "item.completed",
+          "itemType": "error",
+          "syntheticDiagnostic": "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`."
+        },
+        {
+          "type": "turn.started"
+        },
+        {
+          "type": "item.completed",
+          "itemType": "agent_message"
+        },
+        {
+          "type": "turn.completed"
+        }
+      ],
+      "code": 0,
+      "signal": null,
+      "timedOut": false,
+      "oversized": false,
+      "invalidEvents": 0,
+      "expectedAnswer": true,
+      "forbiddenFileExists": false,
+      "diagnostics": {
+        "unknownFlag": false,
+        "networkError": false,
+        "fallbackModelMetadata": false
+      },
+      "passed": true
+    }
+  ],
+  "limitations": [
+    "Local mock responses with fake credentials; no model inference or quality measurement.",
+    "Native restrictions and event observations only; production adapter rejection also requires its regression tests.",
+    "Model identifiers are mock labels; native model metadata may fall back in the isolated home."
+  ]
+}

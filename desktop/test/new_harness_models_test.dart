@@ -168,6 +168,25 @@ void main() {
     app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
     addTearDown(app.dispose);
   });
+  test(
+    'desktop reuses the model route only after a successful launch',
+    () async {
+      final box = controller()..useDesktopChoices(true);
+      await load(box);
+      box.accept(localChoice(box, 'team-grid'));
+      expect(app.agentPreference.successfulLaunch, isNull);
+      expect(await box.create(), NewHarnessOutcome.created);
+      final next = controller()..useDesktopChoices(true);
+      await Future<void>.delayed(Duration.zero);
+      expect(next.model?.id, 'Qwen-35B');
+      expect(next.model?.grid, 'team-grid');
+      expect(next.model?.node, 'GPU Server');
+      expect(await next.create(), NewHarnessOutcome.created);
+      expect(connections['m']!.creates.last['gridModel'], 'Qwen-35B');
+      expect(connections['m']!.creates.last['gridName'], 'team-grid');
+    },
+  );
+
   test('creation rejects an old daemon, lost connection, unsupported engine and missing model before launching', () async {
     final connection = connections.putIfAbsent('m', _Connection.new);
     const model = GridModel(

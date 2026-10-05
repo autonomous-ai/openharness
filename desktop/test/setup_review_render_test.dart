@@ -186,6 +186,27 @@ void main() {
         await tester.pump();
         expect(find.text('Check again').hitTestable(), findsOneWidget);
         await capture('manual');
+        // What a fresh Mac shows now that an in-app plan installs unasked.
+        app.environmentReadiness = review.copyWith(
+          mode: EnvironmentSetupMode.automatic,
+          phase: EnvironmentSetupPhase.installing,
+          message: 'Installing the Harness CLI and its Node runtime…',
+          steps: {
+            EnvironmentStep.clipboard: EnvironmentStepStatus.notApplicable,
+            EnvironmentStep.tmux: EnvironmentStepStatus.ready,
+            EnvironmentStep.harness: EnvironmentStepStatus.running,
+          },
+          output: const ['Downloading Node 22.23.2', 'Verifying sha256'],
+        );
+        app.notifyListeners();
+        await tester.pump();
+        expect(
+          find.text('Preparing this computer').hitTestable(),
+          findsOneWidget,
+        );
+        expect(find.byType(FilledButton), findsNothing);
+        expect(find.text('Install 2 tools'), findsNothing);
+        await capture('installing');
         app.environmentReadiness = review.copyWith(
           mode: EnvironmentSetupMode.automatic,
           phase: EnvironmentSetupPhase.waitingForTerminal,

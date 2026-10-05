@@ -36,7 +36,7 @@ import {
   writeFileSync,
 } from 'fs'
 import { randomUUID } from 'crypto'
-import { join, basename, dirname, relative } from 'path'
+import { join, basename, dirname, relative, isAbsolute } from 'path'
 import { hostname, uptime } from 'os'
 import { cursorDataDir } from '../engines/cursor/home.js'
 import { env } from '../config/env.js'
@@ -204,9 +204,11 @@ export interface RegisteredSession {
    * The agent this one was FORKED from (`agent_fork`): a new session opened with the source's whole
    * history, the source left as it was. Recorded once at creation so the pane can say "forked from X"
    * and link back; `name` is the source's name at that moment, kept because the source may be renamed
-   * or gone by the time anyone reads it. Absent on every other agent.
+   * or gone by the time anyone reads it. The source's session at that moment is kept too (see `ForkOrigin`),
+   * so a Change agent before the fork's first answer can hand over the history it inherited. Absent on every
+   * other agent.
    */
-  forkedFrom?: { agentId: string; name: string } | null
+  forkedFrom?: ForkOrigin | null
   /** Legacy launcher-owned snapshots may still contain this field. New records never write it. */
   launcherId?: string
   transcriptPath: string | null
@@ -555,7 +557,8 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   if (new Set(placements).size !== placements.length) return null
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
-  const { lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, ...rest } = row
+  // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
+  const { lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   return {
     ...rest,
@@ -571,7 +574,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
     projectDir: row.projectDir,
     defaultName: normalizedDefaultName(row.defaultName),
     agent: normalizedAgentName((row as { agent?: unknown }).agent),
-    ...(normalizedForkedFrom((row as { forkedFrom?: unknown }).forkedFrom)),
+    ...normalizedForkedFrom(rawForkedFrom),
     cwd: typeof row.cwd === 'string' ? row.cwd : null,
     runtimes,
     primaryRuntimeKey: normalizedPrimary,
@@ -590,12 +593,42 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   }
 }
 
-/** `forkedFrom` as written by this daemon, or nothing: a row from before the field, or a hand-edited one. */
-function normalizedForkedFrom(value: unknown): { forkedFrom: { agentId: string; name: string } } | Record<string, never> {
+/**
+ * Where a fork came from. `sessionId` / `transcriptPath` are the PARENT's conversation at the moment of the
+ * fork; they let a fork that has not started its own conversation yet still say whose history it carries.
+ * Both are absent on forks recorded before the fields existed, and on forks of an unbound parent.
+ */
+export interface ForkOrigin {
+  agentId: string
+  name: string
+  sessionId?: string
+  transcriptPath?: string
+}
+
+const FORK_SESSION_ID_MAX = 256
+const FORK_TRANSCRIPT_PATH_MAX = 4096
+
+/**
+ * `forkedFrom` as written by this daemon, or nothing: a row from before the field, or a hand-edited one.
+ * Rebuilt key by key so nothing unknown rides along; a transcript path is kept only with its session id.
+ */
+function normalizedForkedFrom(value: unknown): { forkedFrom: ForkOrigin } | Record<string, never> {
   if (!value || typeof value !== 'object') return {}
-  const v = value as { agentId?: unknown; name?: unknown }
+  const v = value as { agentId?: unknown; name?: unknown; sessionId?: unknown; transcriptPath?: unknown }
   if (typeof v.agentId !== 'string' || !v.agentId) return {}
-  return { forkedFrom: { agentId: v.agentId, name: typeof v.name === 'string' ? v.name.slice(0, 120) : '' } }
+  const sessionId = typeof v.sessionId === 'string' && v.sessionId.length > 0 && v.sessionId.length <= FORK_SESSION_ID_MAX
+    ? v.sessionId : null
+  const transcriptPath = sessionId && typeof v.transcriptPath === 'string'
+    && v.transcriptPath.length <= FORK_TRANSCRIPT_PATH_MAX && isAbsolute(v.transcriptPath)
+    ? v.transcriptPath : null
+  return {
+    forkedFrom: {
+      agentId: v.agentId,
+      name: typeof v.name === 'string' ? v.name.slice(0, 120) : '',
+      ...(sessionId ? { sessionId } : {}),
+      ...(sessionId && transcriptPath ? { transcriptPath } : {}),
+    },
+  }
 }
 
 function normalizedLaunch(value: unknown): AgentLaunch | undefined {
@@ -885,8 +918,7 @@ class Registry {
     try {
       const stored = JSON.parse(readPrivateStateFile(FILE)) as unknown
       if (!Array.isArray(stored)) {
-        this.writeBlocked = true
-        console.error('[registry] registry root is not an array; refusing to overwrite it')
+        this.quarantine('root is not an array')
         return
       }
       const { rows: parsed, dropped, changed: strippedRetired } = withoutRetiredRows(stored)
@@ -898,15 +930,13 @@ class Registry {
       }
       const legacyRows = parsed.filter((row) => !row || typeof row !== 'object' || !Object.hasOwn(row, 'schemaVersion'))
       if (legacyRows.some((row) => !validLegacyRegistryRow(row))) {
-        this.writeBlocked = true
-        console.error('[registry] registry contains a malformed legacy row; refusing to overwrite it')
+        this.quarantine('contains a malformed legacy row')
         return
       }
       const v2Rows = parsed.filter((row) => !!row && typeof row === 'object'
         && (row as { schemaVersion?: unknown }).schemaVersion === 2)
       if (v2Rows.length && !validatedRows(v2Rows)) {
-        this.writeBlocked = true
-        console.error('[registry] registry contains a malformed v2 row; refusing to overwrite it')
+        this.quarantine('contains a malformed v2 row')
         return
       }
       const arr = parsed as Array<Partial<RegisteredSession>>
@@ -995,6 +1025,7 @@ class Registry {
           grid: normalizedGridAssignment(raw.grid),
           codexHome: typeof rawCodexHome === 'string' && rawCodexHome ? rawCodexHome : null,
           hermesHome: typeof raw?.hermesHome === 'string' && raw.hermesHome ? raw.hermesHome : null,
+          ...normalizedForkedFrom((raw as { forkedFrom?: unknown }).forkedFrom),
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
           dshRuntime: typeof raw.dshRuntime === 'string' && raw.dshRuntime ? raw.dshRuntime : null,
           agent: normalizedAgentName((raw as { agent?: unknown }).agent),
@@ -1051,32 +1082,49 @@ class Registry {
           || legacyLauncherId !== ''
         ) changed = true
         if (this.agents.has(s.agentId)) {
-          this.agents.clear()
-          this.sessionIndex.clear()
-          this.runtimeIndex.clear()
-          this.processIndex.clear()
-          this.writeBlocked = true
-          console.error('[registry] registry contains duplicate agent identities; refusing to load or overwrite it')
+          this.quarantine('contains duplicate agent identities')
           return
         }
         this.index(s)
       }
       if (!validatedRows(this.list().map(persistedRow))) {
-        this.agents.clear()
-        this.sessionIndex.clear()
-        this.runtimeIndex.clear()
-        this.processIndex.clear()
-        this.writeBlocked = true
-        console.error('[registry] registry violates global identity invariants; refusing to load or overwrite it')
+        this.quarantine('violates global identity invariants')
         return
       }
       if (changed) this.save()
     } catch (error) {
-      if (existsSync(FILE)) {
+      if (error instanceof SyntaxError) this.quarantine(`is not JSON (${error.message})`)
+      else if (existsSync(FILE)) {
         this.writeBlocked = true
         console.error('[registry] registry is unreadable; refusing to overwrite it:', error instanceof Error ? error.message : error)
       }
-      // A genuinely absent file starts empty. Any existing unreadable file is preserved byte-for-byte.
+      // A genuinely absent file starts empty. A file that cannot be opened safely (a symlink, another
+      // owner, open permissions) is left exactly as it is, and nothing is written over it.
+    }
+  }
+
+  /**
+   * Bytes no version of the registry can load — not JSON, the wrong shape, malformed or contradictory
+   * rows — are moved aside, kept byte-for-byte for an operator, and the daemon starts empty: discovery
+   * finds the agents still running in tmux again. Refusing every write instead left a daemon that could
+   * not start a single agent until someone repaired the file by hand. A newer version's rows (an
+   * unknown schema) are not corruption, and are still never touched.
+   */
+  private quarantine(reason: string): void {
+    this.agents.clear()
+    this.sessionIndex.clear()
+    this.runtimeIndex.clear()
+    this.processIndex.clear()
+    this.persistedBaseline.clear()
+    this.persistedContents = null
+    const aside = `${FILE}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`
+    try {
+      renameSync(FILE, aside)
+      this.writeBlocked = false
+      console.error(`[registry] registry ${reason}; moved it aside to ${aside} and started empty`)
+    } catch (error) {
+      this.writeBlocked = true
+      console.error(`[registry] registry ${reason}, and it could not be moved aside (${error instanceof Error ? error.message : error}); refusing to overwrite it`)
     }
   }
 
@@ -1265,7 +1313,7 @@ class Registry {
     /** Who the agent is, for the name Harness gives it: a DSH's own name ("Blender"); the engine's by default. */
     label?: string | null
     /** The agent this one is a fork of — see RegisteredSession.forkedFrom. */
-    forkedFrom?: { agentId: string; name: string } | null
+    forkedFrom?: ForkOrigin | null
   }): RegisteredSession | null {
     if (this.writeBlocked) return null
     const runtimes = normalizedRuntimes(input.runtimes)
@@ -1296,7 +1344,7 @@ class Registry {
       ...(input.bypassPermission ? { bypassPermission: true } : {}),
       ...(permissionModeName(input.permissionMode) ? { permissionMode: input.permissionMode } : {}),
       ...(isTerminalEngine(input.engine) ? { terminalHost: true } : {}),
-      ...(input.forkedFrom ? { forkedFrom: { agentId: input.forkedFrom.agentId, name: input.forkedFrom.name } } : {}),
+      ...normalizedForkedFrom(input.forkedFrom),
       transcriptPath: null,
       projectDir: basename(input.cwd ?? '') || agentId,
       cwd: input.cwd ?? null,

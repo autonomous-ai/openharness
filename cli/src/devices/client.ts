@@ -1,12 +1,12 @@
 /** Devices DSH tools use the same owned-machine bridge as Desktop. No serial or credential access. */
 import { randomUUID } from 'node:crypto'
-import type { PairSocket } from '../pair/client.js'
+import type { ClientSocket } from '../lib/clientSocket.js'
 import { deviceSettingsPatchSchema } from '../lib/harnessDevices.js'
 
 export interface DevicesClientDeps {
   port: number
   machineId(): Promise<string | null>
-  connect(url: string): PairSocket
+  connect(url: string): ClientSocket
   fetch?: typeof fetch
   request?: (machineId: string, type: string, payload?: Record<string, unknown>) => Promise<Record<string, unknown>>
   delay?: (ms: number) => Promise<void>

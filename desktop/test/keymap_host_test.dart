@@ -101,6 +101,7 @@ void main() {
       ('cmd+m', 'machines.list'),
       ('cmd+i', 'models.list'),
       ('cmd+shift+l', 'pane.layout'),
+      ('cmd+shift+f', 'pane.toggle_shading'),
       ('cmd+b', 'task.route'),
       ('cmd+w', 'swarm.close'),
       ('cmd+shift+w', 'pane.close'),

@@ -46,6 +46,8 @@ void main() {
     Brightness brightness = Brightness.dark,
     double scale = 1,
     Size size = const Size(850, 850),
+    VoidCallback? onOpenCompanion,
+    bool openingCompanion = false,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
@@ -75,7 +77,11 @@ void main() {
           home: Scaffold(
             body: SingleChildScrollView(
               padding: const EdgeInsets.all(24),
-              child: CodingMemoryView(library: library),
+              child: CodingMemoryView(
+                library: library,
+                onOpenCompanion: onOpenCompanion,
+                openingCompanion: openingCompanion,
+              ),
             ),
           ),
         ),
@@ -1050,6 +1056,348 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'stalled learning is visible from the library and review only navigates',
+    (tester) async {
+      transport.runtime = {
+        'state': 'ready',
+        'learning': {'state': 'waiting_for_model'},
+        'capture': {'state': 'unavailable', 'reason': 'memory_backlog_full'},
+      };
+      await mount(tester);
+      expect(find.text('Learning needs attention'), findsOneWidget);
+      expect(find.textContaining('queue is full'), findsOneWidget);
+      expect(
+        find.textContaining('terminal beside this viewer'),
+        findsOneWidget,
+      );
+      await tap(tester, 'Review learning');
+      expect(find.text('Learn from coding sessions'), findsOneWidget);
+      expect(find.textContaining('queue is full'), findsOneWidget);
+      expect(
+        transport.calls.every(
+          (p) => p['action'] != 'preview' && p['action'] != 'apply',
+        ),
+        isTrue,
+      );
+      expect(transport.learn, isTrue);
+      expect(transport.recall, isTrue);
+
+      transport.runtime = {
+        'state': 'ready',
+        'learning': {'state': 'idle'},
+        'capture': {'state': 'idle', 'sources': 0},
+      };
+      await library.refresh();
+      await tester.pumpAndSettle();
+      expect(find.textContaining('queue is full'), findsNothing);
+      expect(find.textContaining('No work is ready'), findsOneWidget);
+      await tap(tester, 'How you work');
+      expect(find.text('Learning needs attention'), findsNothing);
+    },
+  );
+
+  testWidgets('pausing learning hides stale failures and preserves recall', (
+    tester,
+  ) async {
+    transport.learn = false;
+    transport.runtime = {
+      'state': 'off',
+      'learning': {'state': 'failed'},
+      'capture': {'state': 'unavailable', 'reason': 'memory_backlog_full'},
+    };
+    await mount(tester);
+    expect(find.text('Learning needs attention'), findsNothing);
+    await tap(tester, 'Learning');
+    expect(find.textContaining('Learning is paused'), findsOneWidget);
+    expect(find.textContaining('queue is full'), findsNothing);
+    expect(tester.widgetList<Switch>(find.byType(Switch)).map((s) => s.value), [
+      false,
+      true,
+    ]);
+  });
+
+  for (final scale in [1.0, 2.0]) {
+    testWidgets(
+      'provider refusal explains recovery without changing settings at ${scale}x',
+      (tester) async {
+        transport.runtime = {
+          'state': 'ready',
+          'learning': {
+            'state': 'waiting_for_model',
+            'reason': 'inference_provider_restricted',
+          },
+        };
+        await mount(
+          tester,
+          scale: scale,
+          size: Size(scale == 1 ? 850 : 440, 900),
+        );
+        expect(find.text('Learning needs attention'), findsOneWidget);
+        expect(
+          find.textContaining('provider declined background learning'),
+          findsOneWidget,
+        );
+        await capture(tester, 'provider-refusal-${scale}x');
+        await tap(tester, 'Review learning');
+        expect(find.textContaining('Choose another model'), findsOneWidget);
+        expect(find.textContaining('complete any setup'), findsNothing);
+        expect(transport.learn, isTrue);
+        expect(transport.recall, isTrue);
+        expect(
+          transport.calls.every(
+            (p) => p['action'] != 'preview' && p['action'] != 'apply',
+          ),
+          isTrue,
+        );
+        expect(tester.takeException(), isNull);
+        transport.runtime = {
+          'state': 'ready',
+          'learning': {'state': 'learned', 'learned': 1},
+        };
+        await library.refresh();
+        await tester.pumpAndSettle();
+        expect(find.textContaining('provider declined'), findsNothing);
+        expect(find.textContaining('saved new memories'), findsOneWidget);
+      },
+    );
+  }
+
+  for (final state in [
+    ('off', null, 'Resume it', true),
+    ('unavailable', null, 'memory service', true),
+    ('ready', 'failed', 'could not finish', true),
+    ('ready', 'source_incomplete', 'incomplete source evidence', true),
+    ('ready', 'no_useful_memory', 'no useful memory to save', false),
+    ('ready', 'foreground_busy', 'until it is free', false),
+    ('ready', 'budget_deferred', 'next learning allowance', false),
+    ('ready', 'future_state', 'Learning is on.', false),
+  ]) {
+    testWidgets('learning distinguishes ${state.$1}/${state.$2}', (
+      tester,
+    ) async {
+      transport.runtime = {
+        'state': state.$1,
+        'learning': {'state': state.$2},
+      };
+      await mount(tester);
+      expect(
+        find.text('Learning needs attention'),
+        state.$4 ? findsOneWidget : findsNothing,
+      );
+      await tap(tester, 'Learning');
+      expect(find.textContaining(state.$3), findsOneWidget);
+      expect(
+        find.textContaining('Learning from completed coding work.'),
+        findsNothing,
+      );
+    });
+  }
+
+  for (final reason in [
+    'companion_unopened',
+    'companion_stopped',
+    'inference_provider_restricted',
+  ]) {
+    testWidgets('memory recovery explicitly opens the companion for $reason', (
+      tester,
+    ) async {
+      var opened = 0;
+      transport.runtime = {
+        'state': 'ready',
+        'learning': {'state': 'waiting_for_model', 'reason': reason},
+      };
+      await mount(tester, onOpenCompanion: () => opened++);
+      expect(opened, 0, reason: 'Reading memories cannot launch an agent.');
+      await tap(tester, 'Open companion terminal');
+      expect(opened, 1);
+      await tap(tester, 'Review learning');
+      await tap(tester, 'Open companion terminal');
+      expect(opened, 2);
+      expect(transport.learn, isTrue);
+      expect(transport.recall, isTrue);
+      expect(
+        transport.calls.where(
+          (p) => ['preview', 'apply'].contains(p['action']),
+        ),
+        isEmpty,
+      );
+      transport.runtime = {
+        'state': 'ready',
+        'learning': {'state': 'learned', 'learned': 1},
+      };
+      await library.refresh();
+      await tester.pumpAndSettle();
+      expect(find.text('Open companion terminal'), findsNothing);
+    });
+  }
+
+  testWidgets(
+    'pending recovery is disabled, while a paused or stale owner cannot open it',
+    (tester) async {
+      var opened = 0;
+      transport.runtime = {
+        'state': 'ready',
+        'learning': {
+          'state': 'waiting_for_model',
+          'reason': 'companion_stopped',
+        },
+      };
+      await mount(
+        tester,
+        onOpenCompanion: () => opened++,
+        openingCompanion: true,
+      );
+      expect(
+        tester
+            .widget<TextButton>(
+              find.byKey(const ValueKey('memory-open-companion')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(find.text('Opening terminal…'), findsOneWidget);
+      expect(opened, 0);
+
+      await mount(tester, onOpenCompanion: () => opened++);
+      final stale = tester
+          .widget<TextButton>(
+            find.byKey(const ValueKey('memory-open-companion')),
+          )
+          .onPressed!;
+      transport.learn = false;
+      await library.refresh();
+      stale();
+      await tester.pumpAndSettle();
+      expect(opened, 0);
+      expect(find.text('Open companion terminal'), findsNothing);
+      transport.learn = true;
+      await library.refresh();
+      await tester.pumpAndSettle();
+      final oldOwner = tester
+          .widget<TextButton>(
+            find.byKey(const ValueKey('memory-open-companion')),
+          )
+          .onPressed!;
+      transport.invalidate();
+      oldOwner();
+      expect(opened, 0);
+      await tester.pumpAndSettle();
+      expect(find.text('Open companion terminal'), findsNothing);
+    },
+  );
+
+  for (final reason in [
+    ('companion_unopened', 'Start your companion'),
+    ('companion_stopped', 'Reopen its conversation'),
+    ('companion_starting', 'finish starting'),
+    ('companion_model_unavailable', 'Choose a model'),
+    ('companion_connection_unavailable', 'current model connection'),
+    ('companion_account_unavailable', 'could not verify'),
+    ('companion_configuration_unsupported', 'agent or provider configuration'),
+    ('claude_version_uncertified', 'this version of your selected agent'),
+    ('codex_version_uncertified', 'this version of your selected agent'),
+    ('opencode_version_uncertified', 'this version of your selected agent'),
+    ('inference_context_changed', 'will check the new selection'),
+    (
+      'unknown-private-provider-text',
+      'Check that its terminal beside this viewer',
+    ),
+  ]) {
+    testWidgets('learning shows a recovery step for ${reason.$1}', (
+      tester,
+    ) async {
+      transport.runtime = {
+        'state': 'ready',
+        'learning': {'state': 'waiting_for_model', 'reason': reason.$1},
+      };
+      await mount(tester);
+      expect(find.textContaining(reason.$2), findsOneWidget);
+      expect(
+        find.textContaining('unknown-private-provider-text'),
+        findsNothing,
+      );
+      await tap(tester, 'Review learning');
+      expect(find.textContaining(reason.$2), findsOneWidget);
+      expect(transport.learn, isTrue);
+      expect(transport.recall, isTrue);
+      expect(
+        transport.calls.any((p) => ['preview', 'apply'].contains(p['action'])),
+        isFalse,
+      );
+      expect(tester.takeException(), isNull);
+
+      transport.runtime = {
+        'state': 'ready',
+        'learning': {'state': 'learned', 'learned': 1},
+      };
+      await library.refresh();
+      await tester.pumpAndSettle();
+      expect(find.textContaining(reason.$2), findsNothing);
+      expect(find.textContaining('saved new memories'), findsOneWidget);
+    });
+  }
+
+  for (final brightness in [Brightness.dark, Brightness.light]) {
+    testWidgets(
+      'stopped companion and backlog fit ${brightness.name} at large text',
+      (tester) async {
+        transport.runtime = {
+          'state': 'ready',
+          'learning': {
+            'state': 'waiting_for_model',
+            'reason': 'companion_stopped',
+          },
+          'capture': {'state': 'unavailable', 'reason': 'memory_backlog_full'},
+        };
+        await mount(
+          tester,
+          brightness: brightness,
+          scale: 2,
+          size: const Size(440, 1100),
+          onOpenCompanion: () {},
+        );
+        expect(find.textContaining('Reopen its conversation'), findsOneWidget);
+        expect(find.textContaining('queue is full'), findsOneWidget);
+        await capture(
+          tester,
+          'companion-stopped-${brightness.name}-large-text',
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  for (final brightness in [Brightness.dark, Brightness.light]) {
+    for (final scale in [1.0, 2.0]) {
+      testWidgets(
+        'learning backlog ${brightness.name} ${scale}x stays readable',
+        (tester) async {
+          transport.runtime = {
+            'state': 'ready',
+            'learning': {'state': 'waiting_for_model'},
+            'capture': {
+              'state': 'unavailable',
+              'reason': 'memory_backlog_full',
+            },
+          };
+          await mount(
+            tester,
+            brightness: brightness,
+            scale: scale,
+            size: Size(scale == 1 ? 850 : 440, 900),
+          );
+          await capture(tester, 'learning-notice-${brightness.name}-${scale}x');
+          await tap(tester, 'Review learning');
+          await capture(tester, 'learning-status-${brightness.name}-${scale}x');
+          await tester.ensureVisible(find.text('Recall useful memories'));
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
 
   testWidgets(
     'learning and recall remain independent and do not change until settings are applied',

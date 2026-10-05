@@ -356,6 +356,42 @@ describe('GroupSyncer', () => {
   })
 })
 
+describe('GroupSyncer — suspended keys', () => {
+  it('never pins, trusts or dials a suspended key; suspend() unlinks it, resume() puts it back', async () => {
+    vi.useFakeTimers()
+    const f = fleet()
+    const [a, b] = [f.add('a'), f.add('b')]
+    f.link(a, b)
+    expect(a.peers.get(b.machineId!)).not.toBeNull()
+    const suspended = new Set<string>()
+    ;(a.syncer as unknown as { deps: { suspended?: () => Set<string> } }).deps.suspended = () => suspended
+    suspended.add(b.pub)
+    a.syncer.suspend([b.pub])
+    expect(a.peers.get(b.machineId!)).toBeNull()
+    expect(a.trusted.has(b.pub)).toBe(false)
+    expect(a.droppedSessions).toContain(b.machineId)
+    a.syncer.resume()
+    expect(a.peers.get(b.machineId!)).toBeNull() // still suspended: not re-pinned
+    suspended.clear()
+    a.syncer.resume()
+    expect(a.peers.get(b.machineId!)?.pub).toBe(b.pub)
+    expect(a.trusted.has(b.pub)).toBe(true)
+    for (const n of f.nodes) n.syncer.stop()
+  })
+
+  it('a suspended member is not a syncAll target', async () => {
+    vi.useFakeTimers()
+    const f = fleet()
+    const [a, b] = [f.add('a'), f.add('b')]
+    f.link(a, b)
+    ;(a.syncer as unknown as { deps: { suspended?: () => Set<string> } }).deps.suspended = () => new Set([b.pub])
+    const spy = vi.spyOn(a.syncer, 'syncWith')
+    await a.syncer.syncAll()
+    expect(spy).not.toHaveBeenCalled()
+    for (const n of f.nodes) n.syncer.stop()
+  })
+})
+
 describe('relayRequester', () => {
   it('resolves with the matching _result and detaches; null on timeout', async () => {
     let detached = 0

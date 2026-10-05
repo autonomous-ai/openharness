@@ -1,0 +1,1519 @@
+{
+  "schemaVersion": 1,
+  "suite": "synthetic-memory-meaning-diagnostics-v1",
+  "suiteSha256": "657aae9de4f301b660cc2c57dce0f80ae801f49e71921a2365b862ba15d0023e",
+  "promptVersion": "coding-memory-v8",
+  "contextVersion": "coding-context-v1",
+  "sourceHashes": {
+    "learner.ts": "c6dbf9b688187d4450ca131666b654849da8dad9bb3350117221c78f1a1e7528",
+    "extractionEvidence.ts": "bbd9a59adab8acd3107d198fa3ad08aa246fb93afc489097b7292903efa1885d",
+    "evaluation.ts": "54a23974824a9c39a9b9ba8b2d54f780440c24b66341b33d89013682f463d9c6",
+    "store.ts": "491eb959f757b4f97be450bec415dc33e86e2c910adc8ede9bb40e4cb2b72dcf",
+    "admission.ts": "de6fe82c328763d0daad687373c345fa79dc7a48ae3ef8632de7729b419bb465",
+    "types.ts": "380a95c563c7c5254f4a2ad8ccf3858d21e88f76ab90a348f1be5e18aa273ec6",
+    "queue.ts": "95b1470a91332b62162b9860a27c1f817f8d860eb2d549f906450f14ba76a50a",
+    "context.ts": "d1e5e0797c065c7ce86cf6cfb1158a1702d10be2040a04a700a21d18b2c6fd70",
+    "evaluationReview.ts": "5607bd4ae70055756a69ec33e9e43dad0ea1ce6261435ee3453f197799303aee"
+  },
+  "runnerSha256": "ed62b191fe6e0dbfbd43b38e70e1d6bec6f23a4834a174dd79d8873ecc4a5dc4",
+  "startedAt": "2026-10-02T18:15:44.633Z",
+  "status": "completed",
+  "candidatePromptOnly": true,
+  "selected": {
+    "engine": "local-reference-llama",
+    "model": "Qwen3.8-27B-Q4_0",
+    "weightSha256": "ede16c7b36e578ca87a8c70e011e4b4633a32c831c0ce76d0f474582384e671d",
+    "selectionSource": "Explicit offline diagnostic reference; not the selected companion model"
+  },
+  "limits": {
+    "maxCalls": 8,
+    "timeoutPerCallMs": 90000,
+    "maxOutputTokens": 4096,
+    "contextTokens": 16384,
+    "temperature": 0,
+    "seed": 42,
+    "thinking": false,
+    "retries": 0,
+    "corpus": "synthetic_only",
+    "network": "OS sandbox denies non-loopback networking; cloud disabled",
+    "tools": "none"
+  },
+  "limitations": [
+    "Development diagnostic; not a held-out quality benchmark.",
+    "Different reference model from the selected companion; no claim of Muse quality, native agent delivery or live learning.",
+    "No private conversations, credentials, production memory or app settings used.",
+    "Expectations and recall probes are never supplied to extraction.",
+    "Mechanical checks measure record/recall presence; semantic review is separate.",
+    "Full local GGUF SHA-256 recorded; no model download or conversion."
+  ],
+  "cases": [
+    {
+      "id": "default-with-user-override",
+      "durationMs": 36940,
+      "outcome": {
+        "state": "learned",
+        "learned": 1
+      },
+      "checks": [
+        {
+          "name": "completed_extraction",
+          "passed": true
+        },
+        {
+          "name": "record_count",
+          "passed": true
+        },
+        {
+          "name": "scope",
+          "passed": true
+        },
+        {
+          "name": "no_invented_rationale",
+          "passed": true
+        },
+        {
+          "name": "recall:same-project",
+          "passed": true
+        },
+        {
+          "name": "recall:different-project",
+          "passed": true
+        },
+        {
+          "name": "recall:unrelated-topic",
+          "passed": true
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "query": "compact navigation expanded default",
+          "projectIds": [
+            "editor"
+          ],
+          "conditions": {},
+          "expected": "recall",
+          "status": "ok",
+          "returnedIds": [
+            "3355baf2-4d07-4d5b-8f70-3bf06417f2fe"
+          ],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "{\"type\":\"coding_memory_context\",\"notice\":\"Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.\",\"items\":[{\"id\":\"3355baf2-4d07-4d5b-8f70-3bf06417f2fe\",\"revision\":1,\"kind\":\"project_decision\",\"assertionType\":\"project_constraint\",\"scope\":{\"profileId\":\"synthetic-owner\",\"projectId\":\"editor\"},\"claim\":\"In the editor project, compact navigation is the default state. This default must not be replaced, though users can manually expand navigation and keep it expanded for the current visit.\",\"rationale\":null,\"futureAction\":\"Preserve compact navigation as the default state in the editor. Do not implement changes that replace this default, while ensuring the manual expansion feature remains available for the current visit.\",\"conditions\":{},\"exceptions\":[],\"evidenceClass\":\"user_stated\",\"verification\":[],\"cautions\":[],\"sources\":[{\"id\":\"default-with-user-override-0\",\"engine\":\"local-reference-llama\",\"role\":\"user\",\"observedAt\":1790964946441}]}]}",
+            "bytes": 1072,
+            "maxBytes": 3000,
+            "estimatedTokens": 358
+          }
+        },
+        {
+          "id": "different-project",
+          "query": "compact navigation expanded default",
+          "projectIds": [
+            "unrelated-project"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        },
+        {
+          "id": "unrelated-topic",
+          "query": "PostgreSQL partition pruning",
+          "projectIds": [
+            "editor"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        }
+      ],
+      "records": [
+        {
+          "kind": "project_decision",
+          "facet": "navigation-default",
+          "assertionType": "project_constraint",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "editor"
+          },
+          "claim": "In the editor project, compact navigation is the default state. This default must not be replaced, though users can manually expand navigation and keep it expanded for the current visit.",
+          "rationale": null,
+          "futureAction": "Preserve compact navigation as the default state in the editor. Do not implement changes that replace this default, while ensuring the manual expansion feature remains available for the current visit.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "editor",
+            "navigation",
+            "compact",
+            "default",
+            "UI"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "default-with-user-override-0",
+              "quote": "In our editor, compact navigation is the default. Do not replace that default. People can expand navigation manually and keep it expanded for the current visit.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability"
+              ]
+            }
+          ],
+          "conflictKey": "editor-navigation-default",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          },
+          "schemaVersion": 1,
+          "id": "3355baf2-4d07-4d5b-8f70-3bf06417f2fe",
+          "revision": 1,
+          "state": "active",
+          "createdAt": 1790964983373,
+          "updatedAt": 1790964983373
+        }
+      ],
+      "episodes": {
+        "expected": 1,
+        "reviewed": 1,
+        "jobs": {
+          "learned": 1
+        },
+        "boundary": "bounded"
+      },
+      "semanticReview": {
+        "status": "pending",
+        "criteria": [
+          "Retain compact navigation as the default and preserve the explicitly permitted manual expansion for the current visit.",
+          "Do not prohibit expansion, force compact mode after a user override, or invent persistence beyond the current visit.",
+          "This specifies product behavior; do not invent a coding-task applicability filter that prevents work on navigation from recalling it."
+        ]
+      },
+      "promptSha256": "dc64950b472c6c297e7c1b92cdf641104ce8644f10ed36450b24f8024fdd5afd",
+      "answer": {
+        "text": "{\n  \"proposals\": [\n    {\n      \"kind\": \"project_decision\",\n      \"facet\": \"navigation-default\",\n      \"assertionType\": \"project_constraint\",\n      \"scope\": {\n        \"profileId\": \"synthetic-owner\",\n        \"projectId\": \"editor\"\n      },\n      \"claim\": \"In the editor project, compact navigation is the default state. This default must not be replaced, though users can manually expand navigation and keep it expanded for the current visit.\",\n      \"rationale\": null,\n      \"futureAction\": \"Preserve compact navigation as the default state in the editor. Do not implement changes that replace this default, while ensuring the manual expansion feature remains available for the current visit.\",\n      \"applicability\": {},\n      \"exceptions\": [],\n      \"retrievalCues\": [\n        \"editor\",\n        \"navigation\",\n        \"compact\",\n        \"default\",\n        \"UI\"\n      ],\n      \"evidenceClass\": \"user_stated\",\n      \"evidence\": [\n        {\n          \"ref\": \"s0p0\",\n          \"paths\": [\n            \"/claim\",\n            \"/futureAction\",\n            \"/applicability\"\n          ]\n        }\n      ],\n      \"conflictKey\": \"editor-navigation-default\",\n      \"validity\": {\n        \"validFrom\": null,\n        \"validUntil\": null,\n        \"recheckWhen\": []\n      }\n    }\n  ]\n}",
+        "metrics": {
+          "model": "memory-reference",
+          "finishReason": "stop",
+          "usage": {
+            "completion_tokens": 329,
+            "prompt_tokens": 3433,
+            "total_tokens": 3762,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 3433,
+            "prompt_ms": 18028.353,
+            "prompt_per_token_ms": 5.25148645499563,
+            "prompt_per_second": 190.4222754014191,
+            "predicted_n": 329,
+            "predicted_ms": 18863.879,
+            "predicted_per_token_ms": 57.33701823708207,
+            "predicted_per_second": 17.440739521282975
+          }
+        }
+      }
+    },
+    {
+      "id": "firm-request-with-unresolved-placement",
+      "durationMs": 35475,
+      "outcome": {
+        "state": "learned",
+        "learned": 1
+      },
+      "checks": [
+        {
+          "name": "completed_extraction",
+          "passed": true
+        },
+        {
+          "name": "record_count",
+          "passed": true
+        },
+        {
+          "name": "scope",
+          "passed": true
+        },
+        {
+          "name": "no_invented_rationale",
+          "passed": true
+        },
+        {
+          "name": "recall:same-project",
+          "passed": true
+        },
+        {
+          "name": "recall:different-project",
+          "passed": true
+        },
+        {
+          "name": "recall:unrelated-topic",
+          "passed": true
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "query": "build log preserve history chooser",
+          "projectIds": [
+            "build-monitor"
+          ],
+          "conditions": {},
+          "expected": "recall",
+          "status": "ok",
+          "returnedIds": [
+            "ee68d515-6fe4-4394-a928-a37223d94cbf"
+          ],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "{\"type\":\"coding_memory_context\",\"notice\":\"Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.\",\"items\":[{\"id\":\"ee68d515-6fe4-4394-a928-a37223d94cbf\",\"revision\":1,\"kind\":\"project_decision\",\"assertionType\":\"project_constraint\",\"scope\":{\"profileId\":\"synthetic-owner\",\"projectId\":\"build-monitor\"},\"claim\":\"The build-monitor project must preserve the last successful build log when another build starts.\",\"rationale\":null,\"futureAction\":\"Implement or verify that the system retains the last successful build log during the start of a new build.\",\"conditions\":{},\"exceptions\":[],\"evidenceClass\":\"user_stated\",\"verification\":[],\"cautions\":[],\"sources\":[{\"id\":\"firm-request-with-unresolved-placement-0\",\"engine\":\"local-reference-llama\",\"role\":\"user\",\"observedAt\":1790964983386}]}]}",
+            "bytes": 907,
+            "maxBytes": 3000,
+            "estimatedTokens": 303
+          }
+        },
+        {
+          "id": "different-project",
+          "query": "build log preserve history chooser",
+          "projectIds": [
+            "unrelated-project"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        },
+        {
+          "id": "unrelated-topic",
+          "query": "PostgreSQL partition pruning",
+          "projectIds": [
+            "build-monitor"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        }
+      ],
+      "records": [
+        {
+          "kind": "project_decision",
+          "facet": "build-log-preservation",
+          "assertionType": "project_constraint",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "build-monitor"
+          },
+          "claim": "The build-monitor project must preserve the last successful build log when another build starts.",
+          "rationale": null,
+          "futureAction": "Implement or verify that the system retains the last successful build log during the start of a new build.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "build log",
+            "preserve",
+            "successful build",
+            "build-monitor"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "firm-request-with-unresolved-placement-0",
+              "quote": "Preserve the last successful build log when another build starts. Maybe the history chooser belongs in the footer, or beside Run? Let us settle its placement later.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability"
+              ]
+            }
+          ],
+          "conflictKey": "build-log-preservation",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          },
+          "schemaVersion": 1,
+          "id": "ee68d515-6fe4-4394-a928-a37223d94cbf",
+          "revision": 1,
+          "state": "active",
+          "createdAt": 1790965018850,
+          "updatedAt": 1790965018850
+        }
+      ],
+      "episodes": {
+        "expected": 1,
+        "reviewed": 1,
+        "jobs": {
+          "learned": 1
+        },
+        "boundary": "bounded"
+      },
+      "semanticReview": {
+        "status": "pending",
+        "criteria": [
+          "Retain the explicit request to preserve the last successful build log when another build starts.",
+          "Do not choose the footer or Run-button placement, claim it is decided, or discard the firm request because the same message contains an unresolved detail."
+        ]
+      },
+      "promptSha256": "228480d02fd383943dd33b79c01b6fa99d61f9741f867df01415398becee0ec9",
+      "answer": {
+        "text": "{\n  \"proposals\": [\n    {\n      \"kind\": \"project_decision\",\n      \"facet\": \"build-log-preservation\",\n      \"assertionType\": \"project_constraint\",\n      \"scope\": {\n        \"profileId\": \"synthetic-owner\",\n        \"projectId\": \"build-monitor\"\n      },\n      \"claim\": \"The build-monitor project must preserve the last successful build log when another build starts.\",\n      \"rationale\": null,\n      \"futureAction\": \"Implement or verify that the system retains the last successful build log during the start of a new build.\",\n      \"applicability\": {},\n      \"exceptions\": [],\n      \"retrievalCues\": [\n        \"build log\",\n        \"preserve\",\n        \"successful build\",\n        \"build-monitor\"\n      ],\n      \"evidenceClass\": \"user_stated\",\n      \"evidence\": [\n        {\n          \"ref\": \"s0p0\",\n          \"paths\": [\n            \"/claim\",\n            \"/futureAction\",\n            \"/applicability\"\n          ]\n        }\n      ],\n      \"conflictKey\": \"build-log-preservation\",\n      \"validity\": {\n        \"validFrom\": null,\n        \"validUntil\": null,\n        \"recheckWhen\": []\n      }\n    }\n  ]\n}",
+        "metrics": {
+          "model": "memory-reference",
+          "finishReason": "stop",
+          "usage": {
+            "completion_tokens": 299,
+            "prompt_tokens": 3443,
+            "total_tokens": 3742,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 3443,
+            "prompt_ms": 18266.115,
+            "prompt_per_token_ms": 5.305290444379902,
+            "prompt_per_second": 188.49109402847841,
+            "predicted_n": 299,
+            "predicted_ms": 17166.566,
+            "predicted_per_token_ms": 57.41326421404682,
+            "predicted_per_second": 17.417577866184768
+          }
+        }
+      }
+    },
+    {
+      "id": "polite-request",
+      "durationMs": 35679,
+      "outcome": {
+        "state": "learned",
+        "learned": 1
+      },
+      "checks": [
+        {
+          "name": "completed_extraction",
+          "passed": true
+        },
+        {
+          "name": "record_count",
+          "passed": true
+        },
+        {
+          "name": "scope",
+          "passed": true
+        },
+        {
+          "name": "no_invented_rationale",
+          "passed": true
+        },
+        {
+          "name": "recall:same-project",
+          "passed": true
+        },
+        {
+          "name": "recall:different-project",
+          "passed": true
+        },
+        {
+          "name": "recall:unrelated-topic",
+          "passed": true
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "query": "keyboard focus search box",
+          "projectIds": [
+            "review-tool"
+          ],
+          "conditions": {},
+          "expected": "recall",
+          "status": "ok",
+          "returnedIds": [
+            "9e3a3fdc-d882-46d8-b57d-40a358475a4c"
+          ],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "{\"type\":\"coding_memory_context\",\"notice\":\"Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.\",\"items\":[{\"id\":\"9e3a3fdc-d882-46d8-b57d-40a358475a4c\",\"revision\":1,\"kind\":\"working_preference\",\"assertionType\":\"stated_preference\",\"scope\":{\"profileId\":\"synthetic-owner\",\"projectId\":\"review-tool\"},\"claim\":\"The user prefers that keyboard focus remains in the search box after a search is executed in the review tool.\",\"rationale\":null,\"futureAction\":\"Ensure that the search box retains keyboard focus after search operations are performed in the review tool.\",\"conditions\":{},\"exceptions\":[],\"evidenceClass\":\"user_stated\",\"verification\":[],\"cautions\":[],\"sources\":[{\"id\":\"polite-request-0\",\"engine\":\"local-reference-llama\",\"role\":\"user\",\"observedAt\":1790965018872}]}]}",
+            "bytes": 896,
+            "maxBytes": 3000,
+            "estimatedTokens": 299
+          }
+        },
+        {
+          "id": "different-project",
+          "query": "keyboard focus search box",
+          "projectIds": [
+            "unrelated-project"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        },
+        {
+          "id": "unrelated-topic",
+          "query": "PostgreSQL partition pruning",
+          "projectIds": [
+            "review-tool"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        }
+      ],
+      "records": [
+        {
+          "kind": "working_preference",
+          "facet": "search-focus-retention",
+          "assertionType": "stated_preference",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "review-tool"
+          },
+          "claim": "The user prefers that keyboard focus remains in the search box after a search is executed in the review tool.",
+          "rationale": null,
+          "futureAction": "Ensure that the search box retains keyboard focus after search operations are performed in the review tool.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "search box",
+            "keyboard focus",
+            "review tool",
+            "search execution"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "polite-request-0",
+              "quote": "Could you please keep keyboard focus in the search box after running a search in this review tool?",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability"
+              ]
+            }
+          ],
+          "conflictKey": "review-tool-search-focus",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          },
+          "schemaVersion": 1,
+          "id": "9e3a3fdc-d882-46d8-b57d-40a358475a4c",
+          "revision": 1,
+          "state": "active",
+          "createdAt": 1790965054538,
+          "updatedAt": 1790965054538
+        }
+      ],
+      "episodes": {
+        "expected": 1,
+        "reviewed": 1,
+        "jobs": {
+          "learned": 1
+        },
+        "boundary": "bounded"
+      },
+      "semanticReview": {
+        "status": "pending",
+        "criteria": [
+          "Recognize this polite question as a concrete requested behavior and remember it within the review-tool project.",
+          "Do not claim it is already implemented or invent a reason, shortcut, global preference or exception."
+        ]
+      },
+      "promptSha256": "dce6a96316c37f8509f83fdebed932668ae46bd35dcde64e5ad77113c0ff5bc1",
+      "answer": {
+        "text": "{\n  \"proposals\": [\n    {\n      \"kind\": \"working_preference\",\n      \"facet\": \"search-focus-retention\",\n      \"assertionType\": \"stated_preference\",\n      \"scope\": {\n        \"profileId\": \"synthetic-owner\",\n        \"projectId\": \"review-tool\"\n      },\n      \"claim\": \"The user prefers that keyboard focus remains in the search box after a search is executed in the review tool.\",\n      \"rationale\": null,\n      \"futureAction\": \"Ensure that the search box retains keyboard focus after search operations are performed in the review tool.\",\n      \"applicability\": {},\n      \"exceptions\": [],\n      \"retrievalCues\": [\n        \"search box\",\n        \"keyboard focus\",\n        \"review tool\",\n        \"search execution\"\n      ],\n      \"evidenceClass\": \"user_stated\",\n      \"evidence\": [\n        {\n          \"ref\": \"s0p0\",\n          \"paths\": [\n            \"/claim\",\n            \"/futureAction\",\n            \"/applicability\"\n          ]\n        }\n      ],\n      \"conflictKey\": \"review-tool-search-focus\",\n      \"validity\": {\n        \"validFrom\": null,\n        \"validUntil\": null,\n        \"recheckWhen\": []\n      }\n    }\n  ]\n}",
+        "metrics": {
+          "model": "memory-reference",
+          "finishReason": "stop",
+          "usage": {
+            "completion_tokens": 304,
+            "prompt_tokens": 3414,
+            "total_tokens": 3718,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 3414,
+            "prompt_ms": 18144.747,
+            "prompt_per_token_ms": 5.314805799648506,
+            "prompt_per_second": 188.15362925699654,
+            "predicted_n": 304,
+            "predicted_ms": 17478.173,
+            "predicted_per_token_ms": 57.49399013157895,
+            "predicted_per_second": 17.393122267413194
+          }
+        }
+      }
+    },
+    {
+      "id": "exploratory-question",
+      "durationMs": 18366,
+      "outcome": {
+        "state": "no_useful_memory",
+        "learned": 0
+      },
+      "checks": [
+        {
+          "name": "completed_extraction",
+          "passed": true
+        },
+        {
+          "name": "record_count",
+          "passed": true
+        },
+        {
+          "name": "scope",
+          "passed": true
+        },
+        {
+          "name": "no_invented_rationale",
+          "passed": true
+        },
+        {
+          "name": "recall:same-project",
+          "passed": true
+        },
+        {
+          "name": "recall:different-project",
+          "passed": true
+        },
+        {
+          "name": "recall:unrelated-topic",
+          "passed": true
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "query": "keyboard focus search box",
+          "projectIds": [
+            "review-tool"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        },
+        {
+          "id": "different-project",
+          "query": "keyboard focus search box",
+          "projectIds": [
+            "unrelated-project"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        },
+        {
+          "id": "unrelated-topic",
+          "query": "PostgreSQL partition pruning",
+          "projectIds": [
+            "review-tool"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        }
+      ],
+      "records": [],
+      "episodes": {
+        "expected": 1,
+        "reviewed": 1,
+        "jobs": {
+          "no_useful_memory": 1
+        },
+        "boundary": "bounded"
+      },
+      "semanticReview": {
+        "status": "pending",
+        "criteria": [
+          "Do not turn this unresolved design question into a preference for either keeping or moving focus.",
+          "This bounded excerpt contains no adopted choice or self-contained requested product behavior."
+        ]
+      },
+      "promptSha256": "bd28c94ee2c65f846924f34d7541eece7d78d3e3649f59f70aeb1f5a450f24c7",
+      "answer": {
+        "text": "{\"proposals\": []}",
+        "metrics": {
+          "model": "memory-reference",
+          "finishReason": "stop",
+          "usage": {
+            "completion_tokens": 8,
+            "prompt_tokens": 3426,
+            "total_tokens": 3434,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 3426,
+            "prompt_ms": 17904.105,
+            "prompt_per_token_ms": 5.225950087565674,
+            "prompt_per_second": 191.35276518988243,
+            "predicted_n": 8,
+            "predicted_ms": 408.15,
+            "predicted_per_token_ms": 51.01875,
+            "predicted_per_second": 19.600637020703175
+          }
+        }
+      }
+    },
+    {
+      "id": "tentative-number",
+      "durationMs": 18330,
+      "outcome": {
+        "state": "no_useful_memory",
+        "learned": 0
+      },
+      "checks": [
+        {
+          "name": "completed_extraction",
+          "passed": true
+        },
+        {
+          "name": "record_count",
+          "passed": true
+        },
+        {
+          "name": "scope",
+          "passed": true
+        },
+        {
+          "name": "no_invented_rationale",
+          "passed": true
+        },
+        {
+          "name": "recall:same-project",
+          "passed": true
+        },
+        {
+          "name": "recall:different-project",
+          "passed": true
+        },
+        {
+          "name": "recall:unrelated-topic",
+          "passed": true
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "query": "log retention days policy",
+          "projectIds": [
+            "build-monitor"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        },
+        {
+          "id": "different-project",
+          "query": "log retention days policy",
+          "projectIds": [
+            "unrelated-project"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        },
+        {
+          "id": "unrelated-topic",
+          "query": "PostgreSQL partition pruning",
+          "projectIds": [
+            "build-monitor"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        }
+      ],
+      "records": [],
+      "episodes": {
+        "expected": 1,
+        "reviewed": 1,
+        "jobs": {
+          "no_useful_memory": 1
+        },
+        "boundary": "bounded"
+      },
+      "semanticReview": {
+        "status": "pending",
+        "criteria": [
+          "Do not adopt either numeric retention option, average them, or manufacture an implementation requirement.",
+          "An unresolved brainstorming question in bounded context is not an accepted project decision."
+        ]
+      },
+      "promptSha256": "116934947e964a7ac21d36447b159e038fa7e8f166a6d4f337520766f3b738f7",
+      "answer": {
+        "text": "{\"proposals\": []}",
+        "metrics": {
+          "model": "memory-reference",
+          "finishReason": "stop",
+          "usage": {
+            "completion_tokens": 8,
+            "prompt_tokens": 3423,
+            "total_tokens": 3431,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 3423,
+            "prompt_ms": 17874.928,
+            "prompt_per_token_ms": 5.222006427110721,
+            "prompt_per_second": 191.49727484217,
+            "predicted_n": 8,
+            "predicted_ms": 411.193,
+            "predicted_per_token_ms": 51.399125,
+            "predicted_per_second": 19.455584117433908
+          }
+        }
+      }
+    },
+    {
+      "id": "accepted-number",
+      "durationMs": 34754,
+      "outcome": {
+        "state": "learned",
+        "learned": 1
+      },
+      "checks": [
+        {
+          "name": "completed_extraction",
+          "passed": true
+        },
+        {
+          "name": "record_count",
+          "passed": true
+        },
+        {
+          "name": "scope",
+          "passed": true
+        },
+        {
+          "name": "no_invented_rationale",
+          "passed": true
+        },
+        {
+          "name": "recall:same-project",
+          "passed": true
+        },
+        {
+          "name": "recall:different-project",
+          "passed": true
+        },
+        {
+          "name": "recall:unrelated-topic",
+          "passed": true
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "query": "completed log retention days",
+          "projectIds": [
+            "build-monitor"
+          ],
+          "conditions": {},
+          "expected": "recall",
+          "status": "ok",
+          "returnedIds": [
+            "79efa99a-7151-4502-8d9a-a2e2f53f790c"
+          ],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "{\"type\":\"coding_memory_context\",\"notice\":\"Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.\",\"items\":[{\"id\":\"79efa99a-7151-4502-8d9a-a2e2f53f790c\",\"revision\":1,\"kind\":\"project_decision\",\"assertionType\":\"accepted_decision\",\"scope\":{\"profileId\":\"synthetic-owner\",\"projectId\":\"build-monitor\"},\"claim\":\"The build monitor project retains completed logs for 14 days.\",\"rationale\":null,\"futureAction\":\"Implement or maintain log retention logic to delete completed logs after 14 days.\",\"conditions\":{},\"exceptions\":[],\"evidenceClass\":\"user_stated\",\"verification\":[],\"cautions\":[],\"sources\":[{\"id\":\"accepted-number-0\",\"engine\":\"local-reference-llama\",\"role\":\"user\",\"observedAt\":1790965091272}]}]}",
+            "bytes": 823,
+            "maxBytes": 3000,
+            "estimatedTokens": 275
+          }
+        },
+        {
+          "id": "different-project",
+          "query": "completed log retention days",
+          "projectIds": [
+            "unrelated-project"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        },
+        {
+          "id": "unrelated-topic",
+          "query": "PostgreSQL partition pruning",
+          "projectIds": [
+            "build-monitor"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        }
+      ],
+      "records": [
+        {
+          "kind": "project_decision",
+          "facet": "log-retention-policy",
+          "assertionType": "accepted_decision",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "build-monitor"
+          },
+          "claim": "The build monitor project retains completed logs for 14 days.",
+          "rationale": null,
+          "futureAction": "Implement or maintain log retention logic to delete completed logs after 14 days.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "log retention",
+            "14 days",
+            "completed logs",
+            "build monitor"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "accepted-number-0",
+              "quote": "For this build monitor, retain completed logs for 14 days. This is the policy we agreed to; keep it.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability"
+              ]
+            }
+          ],
+          "conflictKey": "build-monitor-log-retention",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          },
+          "schemaVersion": 1,
+          "id": "79efa99a-7151-4502-8d9a-a2e2f53f790c",
+          "revision": 1,
+          "state": "active",
+          "createdAt": 1790965126015,
+          "updatedAt": 1790965126015
+        }
+      ],
+      "episodes": {
+        "expected": 1,
+        "reviewed": 1,
+        "jobs": {
+          "learned": 1
+        },
+        "boundary": "bounded"
+      },
+      "semanticReview": {
+        "status": "pending",
+        "criteria": [
+          "Retain the explicitly agreed 14-day retention for completed logs in this project.",
+          "Do not reject an explicit number merely because a different example used tentative numbers, broaden it to all logs, or invent rationale."
+        ]
+      },
+      "promptSha256": "9fd54222f68c869d765053447c0150c9c1560f28739b6b600b06a2141ff63fba",
+      "answer": {
+        "text": "{\n  \"proposals\": [\n    {\n      \"kind\": \"project_decision\",\n      \"facet\": \"log-retention-policy\",\n      \"assertionType\": \"accepted_decision\",\n      \"scope\": {\n        \"profileId\": \"synthetic-owner\",\n        \"projectId\": \"build-monitor\"\n      },\n      \"claim\": \"The build monitor project retains completed logs for 14 days.\",\n      \"rationale\": null,\n      \"futureAction\": \"Implement or maintain log retention logic to delete completed logs after 14 days.\",\n      \"applicability\": {},\n      \"exceptions\": [],\n      \"retrievalCues\": [\n        \"log retention\",\n        \"14 days\",\n        \"completed logs\",\n        \"build monitor\"\n      ],\n      \"evidenceClass\": \"user_stated\",\n      \"evidence\": [\n        {\n          \"ref\": \"s0p0\",\n          \"paths\": [\n            \"/claim\",\n            \"/futureAction\",\n            \"/applicability\"\n          ]\n        }\n      ],\n      \"conflictKey\": \"build-monitor-log-retention\",\n      \"validity\": {\n        \"validFrom\": null,\n        \"validUntil\": null,\n        \"recheckWhen\": []\n      }\n    }\n  ]\n}",
+        "metrics": {
+          "model": "memory-reference",
+          "finishReason": "stop",
+          "usage": {
+            "completion_tokens": 295,
+            "prompt_tokens": 3416,
+            "total_tokens": 3711,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 3416,
+            "prompt_ms": 17874.365,
+            "prompt_per_token_ms": 5.232542447306792,
+            "prompt_per_second": 191.11168424724457,
+            "predicted_n": 295,
+            "predicted_ms": 16826.499,
+            "predicted_per_token_ms": 57.038979661016945,
+            "predicted_per_second": 17.53187041463587
+          }
+        }
+      }
+    },
+    {
+      "id": "quoted-plan-and-user-correction",
+      "durationMs": 53348,
+      "outcome": {
+        "state": "learned",
+        "learned": 2
+      },
+      "checks": [
+        {
+          "name": "completed_extraction",
+          "passed": true
+        },
+        {
+          "name": "record_count",
+          "passed": true
+        },
+        {
+          "name": "scope",
+          "passed": true
+        },
+        {
+          "name": "no_invented_rationale",
+          "passed": true
+        },
+        {
+          "name": "recall:same-project",
+          "passed": true
+        },
+        {
+          "name": "recall:different-project",
+          "passed": true
+        },
+        {
+          "name": "recall:unrelated-topic",
+          "passed": true
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "query": "network failure display retry delay",
+          "projectIds": [
+            "network-client"
+          ],
+          "conditions": {},
+          "expected": "recall",
+          "status": "ok",
+          "returnedIds": [
+            "35b7d8f2-349c-4143-8d6a-5b18b4807236",
+            "7641e7ae-23fa-424f-92b2-39d973c702d0"
+          ],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "{\"type\":\"coding_memory_context\",\"notice\":\"Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.\",\"items\":[{\"id\":\"35b7d8f2-349c-4143-8d6a-5b18b4807236\",\"revision\":1,\"kind\":\"project_decision\",\"assertionType\":\"accepted_decision\",\"scope\":{\"profileId\":\"synthetic-owner\",\"projectId\":\"network-client\"},\"claim\":\"The retry delay for the network-client project has not been set to 2 seconds; the user stated that the retry delay still needs measurement.\",\"rationale\":null,\"futureAction\":\"Do not hardcode the retry delay to 2 seconds in network-client; the value remains unresolved pending measurement.\",\"conditions\":{},\"exceptions\":[],\"evidenceClass\":\"user_stated\",\"verification\":[],\"cautions\":[],\"sources\":[{\"id\":\"quoted-plan-and-user-correction-0\",\"engine\":\"local-reference-llama\",\"role\":\"user\",\"observedAt\":1790965126037}]},{\"id\":\"7641e7ae-23fa-424f-92b2-39d973c702d0\",\"revision\":1,\"kind\":\"project_decision\",\"assertionType\":\"accepted_decision\",\"scope\":{\"profileId\":\"synthetic-owner\",\"projectId\":\"network-client\"},\"claim\":\"For the network-client project, failures must be shown to users; the assistant's suggestion to hide failures was explicitly not approved.\",\"rationale\":null,\"futureAction\":\"When implementing or modifying error handling in network-client, ensure that failures are displayed to users rather than hidden.\",\"conditions\":{},\"exceptions\":[],\"evidenceClass\":\"user_stated\",\"verification\":[],\"cautions\":[],\"sources\":[{\"id\":\"quoted-plan-and-user-correction-0\",\"engine\":\"local-reference-llama\",\"role\":\"user\",\"observedAt\":1790965126037}]}]}",
+            "bytes": 1674,
+            "maxBytes": 3000,
+            "estimatedTokens": 558
+          }
+        },
+        {
+          "id": "different-project",
+          "query": "network failure display retry delay",
+          "projectIds": [
+            "unrelated-project"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        },
+        {
+          "id": "unrelated-topic",
+          "query": "PostgreSQL partition pruning",
+          "projectIds": [
+            "network-client"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        }
+      ],
+      "records": [
+        {
+          "kind": "project_decision",
+          "facet": "network-client-retry-delay",
+          "assertionType": "accepted_decision",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "network-client"
+          },
+          "claim": "The retry delay for the network-client project has not been set to 2 seconds; the user stated that the retry delay still needs measurement.",
+          "rationale": null,
+          "futureAction": "Do not hardcode the retry delay to 2 seconds in network-client; the value remains unresolved pending measurement.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "network-client",
+            "retry delay",
+            "retry configuration",
+            "unresolved parameter"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "quoted-plan-and-user-correction-0",
+              "quote": "An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability"
+              ]
+            }
+          ],
+          "conflictKey": "network-client-retry-delay-value",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          },
+          "schemaVersion": 1,
+          "id": "35b7d8f2-349c-4143-8d6a-5b18b4807236",
+          "revision": 1,
+          "state": "active",
+          "createdAt": 1790965179379,
+          "updatedAt": 1790965179379
+        },
+        {
+          "kind": "project_decision",
+          "facet": "network-client-error-handling",
+          "assertionType": "accepted_decision",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "network-client"
+          },
+          "claim": "For the network-client project, failures must be shown to users; the assistant's suggestion to hide failures was explicitly not approved.",
+          "rationale": null,
+          "futureAction": "When implementing or modifying error handling in network-client, ensure that failures are displayed to users rather than hidden.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "network-client",
+            "error handling",
+            "failure visibility",
+            "user-facing errors"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "quoted-plan-and-user-correction-0",
+              "quote": "An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability"
+              ]
+            }
+          ],
+          "conflictKey": "network-client-error-visibility",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          },
+          "schemaVersion": 1,
+          "id": "7641e7ae-23fa-424f-92b2-39d973c702d0",
+          "revision": 1,
+          "state": "active",
+          "createdAt": 1790965179378,
+          "updatedAt": 1790965179378
+        }
+      ],
+      "episodes": {
+        "expected": 1,
+        "reviewed": 1,
+        "jobs": {
+          "learned": 1
+        },
+        "boundary": "bounded"
+      },
+      "semanticReview": {
+        "status": "pending",
+        "criteria": [
+          "Retain the explicit user request to show failures in this network client.",
+          "Do not adopt the assistant's two-second retry delay or hiding policy, invent the opposite retry policy, or imply measurement has happened."
+        ]
+      },
+      "promptSha256": "bc698531713654cf032e3f1c0a1bb5560964eec2b1d75fc24d5ca62d62496a98",
+      "answer": {
+        "text": "{\n  \"proposals\": [\n    {\n      \"kind\": \"project_decision\",\n      \"facet\": \"network-client-error-handling\",\n      \"assertionType\": \"accepted_decision\",\n      \"scope\": {\n        \"profileId\": \"synthetic-owner\",\n        \"projectId\": \"network-client\"\n      },\n      \"claim\": \"For the network-client project, failures must be shown to users; the assistant's suggestion to hide failures was explicitly not approved.\",\n      \"rationale\": null,\n      \"futureAction\": \"When implementing or modifying error handling in network-client, ensure that failures are displayed to users rather than hidden.\",\n      \"applicability\": {},\n      \"exceptions\": [],\n      \"retrievalCues\": [\n        \"network-client\",\n        \"error handling\",\n        \"failure visibility\",\n        \"user-facing errors\"\n      ],\n      \"evidenceClass\": \"user_stated\",\n      \"evidence\": [\n        {\n          \"ref\": \"s0p0\",\n          \"paths\": [\n            \"/claim\",\n            \"/futureAction\",\n            \"/applicability\"\n          ]\n        }\n      ],\n      \"conflictKey\": \"network-client-error-visibility\",\n      \"validity\": {\n        \"validFrom\": null,\n        \"validUntil\": null,\n        \"recheckWhen\": []\n      }\n    },\n    {\n      \"kind\": \"project_decision\",\n      \"facet\": \"network-client-retry-delay\",\n      \"assertionType\": \"accepted_decision\",\n      \"scope\": {\n        \"profileId\": \"synthetic-owner\",\n        \"projectId\": \"network-client\"\n      },\n      \"claim\": \"The retry delay for the network-client project has not been set to 2 seconds; the user stated that the retry delay still needs measurement.\",\n      \"rationale\": null,\n      \"futureAction\": \"Do not hardcode the retry delay to 2 seconds in network-client; the value remains unresolved pending measurement.\",\n      \"applicability\": {},\n      \"exceptions\": [],\n      \"retrievalCues\": [\n        \"network-client\",\n        \"retry delay\",\n        \"retry configuration\",\n        \"unresolved parameter\"\n      ],\n      \"evidenceClass\": \"user_stated\",\n      \"evidence\": [\n        {\n          \"ref\": \"s0p0\",\n          \"paths\": [\n            \"/claim\",\n            \"/futureAction\",\n            \"/applicability\"\n          ]\n        }\n      ],\n      \"conflictKey\": \"network-client-retry-delay-value\",\n      \"validity\": {\n        \"validFrom\": null,\n        \"validUntil\": null,\n        \"recheckWhen\": []\n      }\n    }\n  ]\n}",
+        "metrics": {
+          "model": "memory-reference",
+          "finishReason": "stop",
+          "usage": {
+            "completion_tokens": 616,
+            "prompt_tokens": 3452,
+            "total_tokens": 4068,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 3452,
+            "prompt_ms": 18030.728,
+            "prompt_per_token_ms": 5.223269988412515,
+            "prompt_per_second": 191.45094973425367,
+            "predicted_n": 616,
+            "predicted_ms": 35273.119,
+            "predicted_per_token_ms": 57.261556818181816,
+            "predicted_per_second": 17.463723579420353
+          }
+        }
+      }
+    },
+    {
+      "id": "limited-control-set",
+      "durationMs": 38881,
+      "outcome": {
+        "state": "learned",
+        "learned": 1
+      },
+      "checks": [
+        {
+          "name": "completed_extraction",
+          "passed": true
+        },
+        {
+          "name": "record_count",
+          "passed": true
+        },
+        {
+          "name": "scope",
+          "passed": true
+        },
+        {
+          "name": "no_invented_rationale",
+          "passed": true
+        },
+        {
+          "name": "recall:same-project",
+          "passed": true
+        },
+        {
+          "name": "recall:different-project",
+          "passed": true
+        },
+        {
+          "name": "recall:unrelated-topic",
+          "passed": true
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "query": "export conflict prompt cancel save copy",
+          "projectIds": [
+            "exporter"
+          ],
+          "conditions": {},
+          "expected": "recall",
+          "status": "ok",
+          "returnedIds": [
+            "2c41d8af-2d46-46c6-818d-974211f37f20"
+          ],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "{\"type\":\"coding_memory_context\",\"notice\":\"Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.\",\"items\":[{\"id\":\"2c41d8af-2d46-46c6-818d-974211f37f20\",\"revision\":1,\"kind\":\"project_decision\",\"assertionType\":\"accepted_decision\",\"scope\":{\"profileId\":\"synthetic-owner\",\"projectId\":\"exporter\"},\"claim\":\"The export dialog's conflict prompt should include only Cancel and Save copy, with Replace and Skip removed. This decision is limited to the conflict prompt and does not apply to other export actions.\",\"rationale\":null,\"futureAction\":\"When modifying the export dialog's conflict prompt, ensure it presents only Cancel and Save copy options. Do not remove Replace or Skip from other export actions or dialogs.\",\"conditions\":{},\"exceptions\":[],\"evidenceClass\":\"user_stated\",\"verification\":[],\"cautions\":[],\"sources\":[{\"id\":\"limited-control-set-0\",\"engine\":\"local-reference-llama\",\"role\":\"user\",\"observedAt\":1790965179385}]}]}",
+            "bytes": 1053,
+            "maxBytes": 3000,
+            "estimatedTokens": 351
+          }
+        },
+        {
+          "id": "different-project",
+          "query": "export conflict prompt cancel save copy",
+          "projectIds": [
+            "unrelated-project"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        },
+        {
+          "id": "unrelated-topic",
+          "query": "PostgreSQL partition pruning",
+          "projectIds": [
+            "exporter"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        }
+      ],
+      "records": [
+        {
+          "kind": "project_decision",
+          "facet": "export-dialog-conflict-prompt-actions",
+          "assertionType": "accepted_decision",
+          "scope": {
+            "profileId": "synthetic-owner",
+            "projectId": "exporter"
+          },
+          "claim": "The export dialog's conflict prompt should include only Cancel and Save copy, with Replace and Skip removed. This decision is limited to the conflict prompt and does not apply to other export actions.",
+          "rationale": null,
+          "futureAction": "When modifying the export dialog's conflict prompt, ensure it presents only Cancel and Save copy options. Do not remove Replace or Skip from other export actions or dialogs.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "export dialog",
+            "conflict prompt",
+            "Replace",
+            "Skip",
+            "Cancel",
+            "Save copy"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "limited-control-set-0",
+              "quote": "For the export dialog's conflict prompt, remove Replace and Skip. Keep Cancel and Save copy. This change is only about that prompt; do not remove any other export actions.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability"
+              ]
+            }
+          ],
+          "conflictKey": "export-dialog-conflict-prompt-actions",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          },
+          "schemaVersion": 1,
+          "id": "2c41d8af-2d46-46c6-818d-974211f37f20",
+          "revision": 1,
+          "state": "active",
+          "createdAt": 1790965218262,
+          "updatedAt": 1790965218262
+        }
+      ],
+      "episodes": {
+        "expected": 1,
+        "reviewed": 1,
+        "jobs": {
+          "learned": 1
+        },
+        "boundary": "bounded"
+      },
+      "semanticReview": {
+        "status": "pending",
+        "criteria": [
+          "Keep removal/retention instructions within the export conflict prompt and preserve the request not to remove other export actions.",
+          "Do not claim that the whole exporter or every dialog may only offer Cancel and Save copy, or assert the changes are already implemented."
+        ]
+      },
+      "promptSha256": "ba06f5e232a6d6b5fe4efed34804ad9a9429562bb190bc2f75ccf89c540c1bc2",
+      "answer": {
+        "text": "{\n  \"proposals\": [\n    {\n      \"kind\": \"project_decision\",\n      \"facet\": \"export-dialog-conflict-prompt-actions\",\n      \"assertionType\": \"accepted_decision\",\n      \"scope\": {\n        \"profileId\": \"synthetic-owner\",\n        \"projectId\": \"exporter\"\n      },\n      \"claim\": \"The export dialog's conflict prompt should include only Cancel and Save copy, with Replace and Skip removed. This decision is limited to the conflict prompt and does not apply to other export actions.\",\n      \"rationale\": null,\n      \"futureAction\": \"When modifying the export dialog's conflict prompt, ensure it presents only Cancel and Save copy options. Do not remove Replace or Skip from other export actions or dialogs.\",\n      \"applicability\": {},\n      \"exceptions\": [],\n      \"retrievalCues\": [\n        \"export dialog\",\n        \"conflict prompt\",\n        \"Replace\",\n        \"Skip\",\n        \"Cancel\",\n        \"Save copy\"\n      ],\n      \"evidenceClass\": \"user_stated\",\n      \"evidence\": [\n        {\n          \"ref\": \"s0p0\",\n          \"paths\": [\n            \"/claim\",\n            \"/futureAction\",\n            \"/applicability\"\n          ]\n        }\n      ],\n      \"conflictKey\": \"export-dialog-conflict-prompt-actions\",\n      \"validity\": {\n        \"validFrom\": null,\n        \"validUntil\": null,\n        \"recheckWhen\": []\n      }\n    }\n  ]\n}",
+        "metrics": {
+          "model": "memory-reference",
+          "finishReason": "stop",
+          "usage": {
+            "completion_tokens": 349,
+            "prompt_tokens": 3431,
+            "total_tokens": 3780,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 3431,
+            "prompt_ms": 18509.064,
+            "prompt_per_token_ms": 5.394655785485281,
+            "prompt_per_second": 185.3686388463512,
+            "predicted_n": 349,
+            "predicted_ms": 20345.723,
+            "predicted_per_token_ms": 58.29720057306591,
+            "predicted_per_second": 17.153482331397118
+          }
+        }
+      }
+    }
+  ],
+  "inferenceCalls": 8,
+  "networkGuard": {
+    "nonLoopbackConnectError": 1
+  },
+  "runtime": {
+    "health": {
+      "status": "ok"
+    },
+    "version": "9870 (2d973636e)"
+  },
+  "workerExit": {
+    "code": 0,
+    "signal": null
+  },
+  "completedCases": 8,
+  "finishedAt": "2026-10-02T18:20:18.402Z",
+  "rawReportSha256": "2c1ab128820ffc4ec1c58467b8b54d64fada33a0fa4d449b7d9c963efc780df5"
+}

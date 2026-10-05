@@ -8,6 +8,7 @@ import { atomicWriteJson, engineKeepsTranscriptFile, validTranscriptPath, type R
 import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
 import { sqliteReadAll } from './sqliteRead.js'
 import { hermesDbPath } from '../engines/hermes/home.js'
+import { findResumedTranscript } from './sessionRepair.js'
 
 export class SessionCheckpointError extends Error {
   readonly code = 'HISTORY_NOT_SAVED'
@@ -105,7 +106,13 @@ export class SessionCheckpointStore {
       }
       const checkpoint: Checkpoint = { version: 1, agentId: s.agentId, sessionId: s.sessionId,
         engine: s.engine, codexHome: s.codexHome ?? null, savedAt: Date.now(), source: null, file, bytes: 0 }
-      if (!s.sessionId || s.engine === 'terminal') {
+      const source = s.transcriptPath ?? (s.engine === 'pi' && s.sessionId
+        ? await findResumedTranscript('pi', s.sessionId, { cwd: s.cwd ?? undefined }) : null)
+      // Pi announces a session ID before it writes any history. In particular,
+      // missing credentials can leave it here indefinitely. Preserve the screen
+      // just as for an unbound chat; a known/resumed transcript must still save.
+      const unwrittenPi = s.engine === 'pi' && !source && !s.resumeOnly && !previous?.source
+      if (!s.sessionId || s.engine === 'terminal' || unwrittenPi) {
         // A shell or unused chat has no native conversation. Save its terminal
         // instead; the close service owns the activity check and confirmation.
         if (options.screen == null) {
@@ -113,10 +120,9 @@ export class SessionCheckpointStore {
             && (await lstat(join(this.directory, previous.file)).catch(() => null))?.isFile()) return
           throw new SessionCheckpointError('Could not save this terminal before closing it. Keep it open and try again.')
         }
-        atomicWriteJson(temporary, { version: 1, agentId: s.agentId, engine: s.engine, cwd: s.cwd,
+        atomicWriteJson(temporary, { version: 1, agentId: s.agentId, sessionId: s.sessionId, engine: s.engine, cwd: s.cwd,
           savedAt: checkpoint.savedAt, screen: options.screen })
       } else if (engineKeepsTranscriptFile(s.engine)) {
-        const source = s.transcriptPath
         if (!source || !validTranscriptPath(s.engine, source, s.codexHome ?? undefined)) {
           throw new SessionCheckpointError('The conversation file is unavailable. The session has not been closed.')
         }

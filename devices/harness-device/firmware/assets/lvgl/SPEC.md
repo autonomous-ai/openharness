@@ -17,15 +17,8 @@ decode, reproduced in terminal.c: `adv_w` is 1/16 px and the advance is
 
 | use | font | line / base | bytes kept |
 |---|---|---|---|
-| the agent name | `geist_med_38` | 51 / 10 | 135,945 |
-| the working status | `geist_med_32` | 43 / 8 | 102,197 |
-| the recap card | `geist_med_28` | 38 / 7 | 76,762 |
-| "No activity yet" | `geist_reg_38` | 51 / 10 | 132,519 |
-| an inbox message | `geist_reg_25` | 35 / 7 | 63,720 |
-| an inbox machine and agent name | `geist_reg_20` | 28 / 5 | 45,200 |
-| the tab pill | `montserrat_24` | 27 / 5 | 14,362 |
-| the bell count and the close cross | `montserrat_22` | 24 / 4 | 13,014 |
-| the bell glyph in the pill | `montserrat_14` | 16 / 3 | 8,222 |
+| the close cross | `montserrat_22` | 24 / 4 | 161 |
+| the bell glyph in the pill | `montserrat_14` | 16 / 3 | 131 |
 
 ## Icons
 
@@ -38,7 +31,11 @@ ARGB8888 (B,G,R,A, straight alpha), blended with `lv_color_24_16_mix`.
 | microphone | `icon_act_voice`, 44×44, `#00ff2f` baked | native, centred on (233, 393) |
 | bell, cross | FontAwesome U+F0F3 / U+F00D in Montserrat | text |
 
-## Layout (COL_FG `0xeaeaf0`, COL_MUTED `0x8a8a99`)
+## Layout of the LVGL firmware (COL_FG `0xeaeaf0`, COL_MUTED `0x8a8a99`)
+
+Historical: the face names below are the old firmware's Geist ones. The Focus skin now sets every word and
+number in Inter (focus_faces.c, gen_focus_faces.py, docs/plans/2026-10-03-inter-sf-compact.md); only the
+boxes, colours and spacing here still apply.
 
 | item | values |
 |---|---|

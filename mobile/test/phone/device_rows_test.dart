@@ -152,22 +152,4 @@ void main() {
       },
     );
   });
-
-  test('rowFromMember: the key code from the key, never this phone, and '
-      'the member with its added time kept', () {
-    final m = member(
-      pubOf(5),
-      label: 'iPad',
-      addedAt: ago(const Duration(hours: 3)),
-    );
-    final r = rowFromMember(m);
-    expect(r.fingerprint, fpOf(pubOf(5)));
-    expect(r.fingerprint, matches(RegExp(r'^[0-9A-F]{4}(·[0-9A-F]{4}){3}$')));
-    expect(r.self, isFalse);
-    expect(r.member.addedAt, m.addedAt);
-    expect(
-      rowFromMember(member('not base64!', addedAt: 0)).fingerprint,
-      isEmpty,
-    );
-  });
 }

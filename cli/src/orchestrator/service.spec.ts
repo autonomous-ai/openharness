@@ -274,10 +274,14 @@ describe('durable orchestrator lifecycle', () => {
     expect(launches[0].cwd).toBe(join(realpathSync(root), '.harness-projects', id))
   })
   it('lists recent projects in order without exposing their full briefs', async () => {
+    // Recency needs distinct timestamps even when CI completes both starts in one millisecond.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1000)
     await start(); await active()
+    clock.mockReturnValue(2000)
     const second = 'f'.repeat(32)
     await service.start({ id: second, engine: 'claude', prompt: 'A'.repeat(500) })
     await vi.waitFor(() => expect(service.snapshot(second).state).toBe('active'))
+    clock.mockReturnValue(3000)
     service.chat(second, '1'.repeat(32), 'More detail')
     expect(service.list().map(r => r.id)).toEqual([second, id])
     expect(String(service.list()[0].prompt)).toHaveLength(160)

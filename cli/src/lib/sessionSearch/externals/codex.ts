@@ -95,7 +95,7 @@ export function codexServer(row: RunningProcess | undefined): boolean {
  * `turn_aborted` event near its end says. What was said can name the events; only events count.
  * A file that cannot say counts as busy.
  */
-export async function codexTurnOpen(path: string): Promise<boolean> {
+export async function codexTurnOpen(path: string, unknown: boolean | null = true): Promise<boolean | null> {
   for (const bytes of [256 * 1024, 4 * 1024 * 1024]) {
     const lines = (await readTail(path, bytes)).split('\n')
     for (let i = lines.length - 1; i > 0; i--) {
@@ -106,7 +106,7 @@ export async function codexTurnOpen(path: string): Promise<boolean> {
       if (kind === 'task_complete' || kind === 'turn_aborted') return false
     }
   }
-  return true
+  return unknown
 }
 
 export function codexProvider(options: { home: string }): ExternalProvider {
@@ -145,6 +145,6 @@ export function codexProvider(options: { home: string }): ExternalProvider {
       }
       return claims
     },
-    busy: (owner) => codexTurnOpen(owner.record),
+    busy: (owner) => codexTurnOpen(owner.record, null),
   }
 }

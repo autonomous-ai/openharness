@@ -103,14 +103,13 @@ void main() {
         expect(app.actions, isEmpty);
 
         await openWorkspaceManagement(tester, 'harnesses');
-        await tester.pumpAndSettle();
+        // The command helper pumps the navigation transition. The monitor's
+        // fake terminal stays loading, so its animation never settles.
         expect(app.activeSwarm.name, harnessMonitorName);
         await openWorkspaceManagement(tester, 'machines');
-        await tester.pumpAndSettle();
         expect(app.activeSwarm.name, harnessMonitorName);
         expect(resourceScope('@'), findsOneWidget);
         await openWorkspaceManagement(tester, 'models');
-        await tester.pumpAndSettle();
         expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
         expect(find.byType(ModelsPanel), findsOneWidget);
         await openWorkspaceTool(tester, 'store');

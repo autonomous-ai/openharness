@@ -3,6 +3,7 @@
 import { join } from 'node:path'
 import { DialVerdicts } from './dialPortVerdicts.js'
 import { findDialPorts, portInUse, SerialLink, type DialPort } from './serial.js'
+import { isUsbConsoleUser } from './usbConsoleUser.js'
 import type { CableSession, CableHost, CablePort, DialStatus, PortOpener } from './cableSession.js'
 import type { DialLog } from './dialLog.js'
 
@@ -20,6 +21,8 @@ export interface CableFleetOptions {
   verdicts?: DialVerdicts
   /** Does another process have this tty open? A port somebody else is using is not looked at. */
   inUse?: (path: string) => Promise<boolean>
+  /** Only the foreground macOS account may automatically own physical USB. */
+  canUseUsb?: () => boolean
   /** How often a board ruled out is checked for another program working on it. */
   watchEveryMs?: number
 }
@@ -34,6 +37,8 @@ export class CableFleet {
   private readonly serials: Set<string>
   private readonly verdicts: DialVerdicts
   private readonly inUse: (path: string) => Promise<boolean>
+  private readonly canUseUsb: () => boolean
+  private waitingForConsole = false
   /** Ports already reported as in use, so the log says it once rather than every scan. */
   private readonly heldNotes = new Set<string>()
   /** For each board ruled out: when it was last checked for another program's use, and whether it was in use. */
@@ -48,6 +53,7 @@ export class CableFleet {
     this.serials = new Set((options.serials ?? []).map(s => s.toUpperCase()))
     this.verdicts = options.verdicts ?? new DialVerdicts()
     this.inUse = options.inUse ?? portInUse
+    this.canUseUsb = options.canUseUsb ?? isUsbConsoleUser
     this.watchEveryMs = options.watchEveryMs ?? 8_000
   }
 
@@ -101,6 +107,14 @@ export class CableFleet {
   }
 
   private async reconcile(): Promise<void> {
+    if (!this.canUseUsb()) {
+      if (!this.waitingForConsole) this.host.log('cable: USB belongs to the active macOS account — releasing this connection')
+      this.waitingForConsole = true
+      await Promise.allSettled([...this.entries.values()].map(entry => entry.session.stop()))
+      if (this.entries.size) { this.entries.clear(); this.publish() }
+      return
+    }
+    this.waitingForConsole = false
     const ports = await this.discover()
     if (this.stopped) return
     const present = new Map<string, DialPort>()
@@ -176,10 +190,10 @@ export class CableFleet {
         },
       })
       const opener: PortOpener = async (onData, onClosed) => {
-        if (this.stopped || this.entries.get(id) !== entry) return null
+        if (this.stopped || this.entries.get(id) !== entry || !this.canUseUsb()) return null
         const opened = await this.open(port.path, onData, onClosed)
-        if (this.stopped || this.entries.get(id) !== entry) {
-          await opened.close('USB dial removed while opening')
+        if (this.stopped || this.entries.get(id) !== entry || !this.canUseUsb()) {
+          await opened.close('USB dial ownership changed while opening')
           return null
         }
         return opened

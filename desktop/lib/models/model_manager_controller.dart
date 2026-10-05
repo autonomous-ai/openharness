@@ -21,6 +21,7 @@ class ModelManagerController extends ChangeNotifier {
     this.app, {
     LocalKeyValueStore? storage,
     this.poll = true,
+    this.backgroundInventory = false,
     String? targetMachineId,
   }) : _targetMachineId =
            targetMachineId ??
@@ -32,6 +33,10 @@ class ModelManagerController extends ChangeNotifier {
   final AppNotifier app;
   final LocalKeyValueStore? _storage;
   final bool poll;
+
+  /// Keep a remote machine's installed-model inventory warm for the footer.
+  /// Uses cached inventory reads, never forced scans, downloads or Grid setup.
+  final bool backgroundInventory;
 
   /// A remote host uses the same inventory and lifecycle RPCs, without setting
   /// up a Model Manager harness or reading another copy of the shared catalog.
@@ -54,6 +59,7 @@ class ModelManagerController extends ChangeNotifier {
   AgentCreationAttempt? _creation;
   ProjectFolderRequest? _folder;
   DateTime? _lastModelsRead, _lastLocalRead;
+  DateTime? _lastInventoryAttempt;
   bool _panelVisible = false;
   int _actionRevision = 0;
   String? _dismissedReadyId;
@@ -147,13 +153,29 @@ class ModelManagerController extends ChangeNotifier {
         // A minimised or background app reads nothing, busy or not: the daemon owns the operation
         // either way, and the one refresh on return ([_foregroundChanged]) catches up.
         if (!app.inForeground) return;
+        if (backgroundInventory && !_panelVisible && !busy) {
+          if (machine?.connectionStatus != ConnectionStatus.connected ||
+              machine?.isOffline == true) {
+            return;
+          }
+          if (_lastInventoryAttempt != null &&
+              DateTime.now().difference(_lastInventoryAttempt!) <
+                  const Duration(minutes: 1)) {
+            return;
+          }
+        }
         // Grid not set up and nobody looking: nothing to watch. While a picker is open it keeps
         // reading, so grid set up some other way — a terminal's `harness grid login` — shows at
         // once instead of leaving a Set up row that is no longer true.
         if (gridSetupNeeded && !settingUpGrid && !busy && !_panelVisible) {
           return;
         }
-        if (targetMachineId != null && !_panelVisible && !busy) return;
+        if (targetMachineId != null &&
+            !backgroundInventory &&
+            !_panelVisible &&
+            !busy) {
+          return;
+        }
         if (busy ||
             _panelVisible ||
             _lastLocalRead == null ||
@@ -186,6 +208,7 @@ class ModelManagerController extends ChangeNotifier {
       _refreshing = null;
       _lastModelsRead = null;
       _lastLocalRead = null;
+      _lastInventoryAttempt = null;
       preparing = false;
       opening = false;
       scanning = false;
@@ -221,7 +244,8 @@ class ModelManagerController extends ChangeNotifier {
       // The Model Manager is NOT prepared here: it is a grid feature, made ready when it is opened
       // ([open]), never by the app starting on a machine that may not use grid at all.
       // In the background the first read waits for the app to come back ([_foregroundChanged]).
-      if (app.inForeground && (targetMachineId == null || _panelVisible)) {
+      if (app.inForeground &&
+          (targetMachineId == null || backgroundInventory || _panelVisible)) {
         unawaited(refresh());
       }
     }
@@ -244,7 +268,12 @@ class ModelManagerController extends ChangeNotifier {
   /// Back in front of the person: exactly one refresh, whatever the background skipped.
   void _foregroundChanged() {
     if (_disposed || !app.inForeground) return;
-    if (targetMachineId != null && !_panelVisible && !busy) return;
+    if (targetMachineId != null &&
+        !backgroundInventory &&
+        !_panelVisible &&
+        !busy) {
+      return;
+    }
     final owner = machine;
     if (owner == null || owner.connectionStatus != ConnectionStatus.connected) {
       return;
@@ -498,6 +527,7 @@ class ModelManagerController extends ChangeNotifier {
       return;
     }
     scanning = true;
+    _lastInventoryAttempt = DateTime.now();
     _changed();
     final readShared =
         force ||

@@ -1,0 +1,35 @@
+[Unit]
+Description=Persistent hn terminal surface
+ConditionPathExists=!/etc/harness-live
+PartOf=harness-os.target
+Wants=harness-daemon.service
+After=harness-daemon.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+Environment=ADAPTER_UPDATE_DISABLE=true
+Environment=HARNESS_TUI_BIN=/usr/lib/harness/hn
+Environment=HARNESS_TUI_NOTIFY=off
+Environment=HARNESS_TUI_DESK=off
+Environment=HARNESS_TUI_TMUX_CONF=/usr/share/harness-os/tmux.conf
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
+Environment=npm_config_prefix=%h/.local
+Environment=HARNESS_OS=1
+Environment=BROWSER=hn-browser
+ExecStartPre=/usr/bin/python3 /usr/lib/harness-os/projects.py prepare
+WorkingDirectory=-%h/projects
+ExecStart=/usr/bin/foot --config=/usr/share/harness-os/foot.ini /usr/bin/hn
+# Old saved hn servers retain OS settings even after a package update. Migrate
+# those defaults via hn's API; a failed migration must not stop the terminal.
+ExecStartPost=-/usr/bin/python3 /usr/lib/harness-os/session-settings.py
+Restart=always
+RestartSec=1
+RestartSteps=5
+RestartMaxDelaySec=30
+KillMode=process
+# Agent daemons and PTY owners must be outside this service. The launcher starts
+# the daemon through its own service; reconnect never kills the work.
+
+[Install]
+WantedBy=harness-os.target

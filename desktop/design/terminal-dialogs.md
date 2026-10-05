@@ -8,14 +8,14 @@ are retired for app UI. Older screenshots are historical evidence only.
 
 ## Shared ownership
 
-Reuse the existing controllers, launch paths, and draft stores. Cmd-N and the
+Reuse the existing controllers, launch paths, and receipt recovery. Cmd-N and the
 full-page welcome use the same form. Cmd-P scopes use the same query editor,
 result selection, and resource preview. Styling must not fork their behavior.
 The detailed creation contract is [new-harness-entry-rules.md](new-harness-entry-rules.md).
 
-Fresh creation uses saved successful choices on the local machine. Explicit
-Store/split requests and restored drafts retain their own destination and
-reviewed values. Never substitute another branch, folder, agent, or profile,
+Fresh creation combines the last successful setup with the last focused real
+project and its machine. Explicit Store/split requests and pending launch receipts
+retain their destination and reviewed values. Closing cancels an ordinary form. Never substitute another branch, folder, agent, or profile,
 or disable Worktree after a failure. Browsing options does not commit them.
 Searching and highlighting never creates a folder or launches a harness.
 A held Return cannot accept a choice and launch in the same keypress.

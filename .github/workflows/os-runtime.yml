@@ -1,0 +1,90 @@
+name: Harness OS native runtimes
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['os-polish/arm-runtime']
+    paths: ['os/tools/build-runtime.sh', 'os/tests/runtime_native.py', '.github/workflows/os-runtime.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-native-runtime-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { architecture: x86_64, runner: ubuntu-24.04 }
+          - { architecture: aarch64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.architecture }}-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tui
+          shared-key: tui-${{ matrix.architecture }}-unknown-linux-musl
+          cache-bin: false
+      - name: Native build tools and portable OS checks
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools libevent-dev libncurses-dev libutf8proc-dev bison
+          make -C os check
+      - name: Use the OS tmux release for native comparison
+        run: |
+          curl --fail --location --retry 3 --max-time 120 \
+            https://github.com/tmux/tmux/releases/download/3.7c/tmux-3.7c.tar.gz \
+            --output "$RUNNER_TEMP/tmux.tar.gz"
+          echo '7c60cae9a0e25288e2e24750aafc9e8800fc7fd4555e447e1b29ee4201cfb3bf  tmux.tar.gz' > "$RUNNER_TEMP/tmux.sha256"
+          (cd "$RUNNER_TEMP" && sha256sum --check tmux.sha256)
+          mkdir "$RUNNER_TEMP/tmux-source"
+          tar -xzf "$RUNNER_TEMP/tmux.tar.gz" -C "$RUNNER_TEMP/tmux-source" --strip-components=1
+          cd "$RUNNER_TEMP/tmux-source"
+          ./configure --prefix="$RUNNER_TEMP/tmux-reference"
+          make -j2
+          make install
+          "$RUNNER_TEMP/tmux-reference/bin/tmux" -V
+          echo "$RUNNER_TEMP/tmux-reference/bin" >> "$GITHUB_PATH"
+      - name: Build the exact native Harness runtime
+        run: bash os/tools/build-runtime.sh
+      - name: Existing native terminal acceptance
+        run: python3 scripts/validate-tui-native.py os/work/runtime/harness-tui
+      - name: Install the agent only on the disposable test runner
+        run: |
+          npm install --prefix "$RUNNER_TEMP/harness-native-agent" --no-audit --no-fund opencode-ai
+          mkdir -p os/test-results
+          cp "$RUNNER_TEMP/harness-native-agent/package-lock.json" os/test-results/agent-test-lock.json
+      - name: Real daemon, panes, default agent and surviving work
+        run: |
+          python3 os/tests/runtime_native.py --architecture '${{ matrix.architecture }}' \
+            --runtime os/work/runtime \
+            --opencode "$RUNNER_TEMP/harness-native-agent/node_modules/.bin/opencode" \
+            --output os/test-results/native-runtime
+      - name: Retain runtime and scoped native evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-native-runtime-${{ matrix.architecture }}
+          path: |
+            os/work/runtime/
+            os/test-results/native-runtime/
+            os/test-results/agent-test-lock.json
+            .harness/validation/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

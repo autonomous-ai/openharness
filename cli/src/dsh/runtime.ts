@@ -12,7 +12,6 @@ import { installedDsh, type InstalledDsh } from './installed.js'
 import { dshAccountEnv, dshLaunch, type DshAccount, type DshLaunch } from './launch.js'
 import { compatibleHarnessEngines } from './compatibility.js'
 import { skillDirsIn } from './materialize.js'
-import { installLessons, type RuntimeLessons } from '../pair/learn/publish.js'
 
 const Snapshot = z.object({
   version: z.literal(1),
@@ -168,13 +167,8 @@ export function harnessLaunchOrRefusal(prepare: () => DshLaunch):
   }
 }
 
-/**
- * `lessons`: the approved lesson skills this session loads (pair/learn/publish.ts runtimeLessons). They are
- * copied, read-only, to `<runtime>/lessons` and indexed in CONTEXT.md, one line each — the Store runtime path is how a
- * lesson reaches every engine without a byte in an engine's own folders. Never fails a launch.
- */
 export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engine: AgentEngine,
-  key: string, account: DshAccount = {}, sourceKey?: string | null, lessons?: RuntimeLessons | null): DshLaunch {
+  key: string, account: DshAccount = {}, sourceKey?: string | null): DshLaunch {
   const adapter = harnessAdapter(engine)
   if (dsh.manifest.kind === 'viewer') throw new Error(`${dsh.id} is a viewer, not a harness`)
   const ws = realpathSync(workspace)
@@ -212,7 +206,6 @@ export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engin
   }
   migrateHarnessInstructions(ws, dsh)
   installBootstrap(ws, engine)
-  const lessonIndex = installLessons(dir, lessons)
   const env: Record<string, string> = { ...data.env, ...dshAccountEnv(account), HARNESS_CONTEXT_FILE: join(dir, 'CONTEXT.md'), HARNESS_SKILLS_DIR: skillsDir }
   // Spec-1 packages used their default engine's discovery paths in env. Translate the path, not
   // arbitrary engine names or source paths inside an upstream installation.
@@ -232,7 +225,6 @@ export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engin
     '', '## Harness skills',
     ...data.skills.map(skill => `- ${skill.name}: ${JSON.stringify(join(skillsDir, skill.name, 'SKILL.md'))}`),
     '',
-    ...lessonIndex,
   ].join('\n')
   writeManagedFile(env.HARNESS_CONTEXT_FILE!, context)
   if (!existsSync(file)) writeManagedFile(file, `${JSON.stringify(data, null, 2)}\n`)

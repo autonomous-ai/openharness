@@ -1,3 +1,5 @@
+import 'core/connected_semantics.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -13,7 +15,7 @@ import 'state/app_state.dart';
 /// This entrypoint fails closed unless every value is supplied explicitly by
 /// `scripts/start-terminal-local-manual.sh`. It is not used by release builds.
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  HarnessWidgetsBinding();
   const enabled = bool.fromEnvironment('LOCAL_TERMINAL_MANUAL');
   const apiBaseUrl = String.fromEnvironment('LOCAL_MANUAL_API_BASE_URL');
   const apiKey = String.fromEnvironment('LOCAL_MANUAL_API_KEY');

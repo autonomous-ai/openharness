@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { appendFile, mkdtemp, mkdir, rm, realpath, symlink, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, mkdir, readFile, rm, realpath, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { agentProject, canonicalRepository, createAgentProjectReader, type AgentProject } from './agentProject.js'
 
 const roots: string[] = []
@@ -31,6 +31,50 @@ describe('owning-machine project metadata', () => {
     git('remote', 'set-url', 'origin', 'git@github.com:Org/Other.git')
     git('symbolic-ref', 'HEAD', 'refs/heads/next')
     expect(await agentProject(cwd, 60_000)).toMatchObject({ remote: 'github.com/org/other', branch: 'next' })
+  })
+  it.each([
+    { mode: 'attached', processes: 2 },
+    { mode: 'unborn', processes: 3 },
+    { mode: 'detached', processes: 3 },
+    { mode: 'ambiguous', processes: 2 },
+  ])('inspects an $mode HEAD with $processes Git processes', async ({ mode, processes }) => {
+    const root = await mkdtemp(join(tmpdir(), 'harness-project-processes-')); roots.push(root)
+    const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' })
+    git('init', '-b', 'main')
+    if (mode !== 'unborn') git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'initial')
+    if (mode === 'detached') git('checkout', '--quiet', '--detach')
+    if (mode === 'ambiguous') {
+      git('tag', 'main')
+      git('config', 'core.warnAmbiguousRefs', 'false')
+    }
+    const branch = mode === 'detached' ? `Detached ${git('rev-parse', '--short', 'HEAD').toString().trim()}`
+      : git('symbolic-ref', '--quiet', '--short', 'HEAD').toString().trim()
+    git('config', 'remote.origin.url', 'git@github.com:Org/App.git')
+    if (mode !== 'detached') git('config', `branch.${branch}.harness`, 'placeholder')
+    const trace = join(root, 'git-trace.jsonl')
+    vi.stubEnv('GIT_TRACE2_EVENT', trace)
+    try {
+      expect(await createAgentProjectReader().read(root)).toMatchObject({
+        cwd: root, root: await realpath(root), branch,
+        remote: 'github.com/org/app', ...(mode !== 'detached' ? { branchPending: true } : {}),
+      })
+    } finally { vi.unstubAllEnvs() }
+    const starts = (await readFile(trace, 'utf8')).trim().split('\n')
+      .map(line => JSON.parse(line)).filter(event => event.event === 'start')
+    expect(starts).toHaveLength(processes)
+  })
+  it('retains symbolic-ref semantics when HEAD is also a ref name', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'harness-project-ambiguous-head-')); roots.push(root)
+    const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' }).toString().trim()
+    git('init', '-b', 'main')
+    git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'initial')
+    git('update-ref', 'refs/heads/HEAD', git('rev-parse', 'HEAD'))
+    git('symbolic-ref', 'HEAD', 'refs/heads/HEAD')
+    const branch = git('symbolic-ref', '--quiet', '--short', 'HEAD')
+    git('config', `branch.${branch}.harness`, 'placeholder')
+    expect(await createAgentProjectReader().read(root)).toMatchObject({
+      root: await realpath(root), branch, branchPending: true,
+    })
   })
   it('names a linked worktree for its repository rather than its folder', async () => {
     const root = await mkdtemp(join(tmpdir(), 'harness-v2-worktree-')); roots.push(root)
@@ -102,6 +146,7 @@ describe('owning-machine project metadata', () => {
     const marker = `branch.${branch}.harness`
     const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' })
     git('init', '-b', branch)
+    git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'initial')
     const included = join(root, 'included config')
     git('config', '--file', included, 'remote.origin.url', 'git@github.com:Org/Included.git')
     git('config', '--file', included, marker, 'placeholder')

@@ -1,5 +1,12 @@
 # Coding memory: sequential review and implementation
 
+Current priority: the user replaced open-ended research with a
+[bounded personal-memory MVP](2026-10-03-personal-memory-mvp.md) on October 3.
+Council and benchmark work is deferred until the user reviews the MVP and
+authorizes further scope. The
+historical entries below record evidence and remaining broader work; they do not
+expand the current milestone.
+
 Status: in progress, 2026-09-30. The objective remains a thoroughly reviewed, useful coding memory system across agent frameworks. Passing an isolated core suite does not establish completion or perfection.
 
 These reviews are performed by Codex using the published principles collected in the [historical council](2026-09-30-coding-memory-council.md) and [modern practitioner study](../research/2026-09-30-modern-coding-memory.md). They are not personal participation, simulated quotations, or endorsements by the named programmers. Each perspective produces a concrete question, a change or open requirement, and evidence needed to close it. Review again after integration, not just after the design document.
@@ -775,3 +782,353 @@ type is now set without prematurely sending headers. No product device behavior 
 This change prevents new duplicate capture; it does not rewrite previously saved evidence or
 memories. No live memory, installed app, global plugin, provider setting or release was changed.
 The real-session quality sample still requires explicit approval for its external model destination.
+
+### Keep the companion available for continuous learning
+
+A read-only completion audit found a live memory service with Learn and Recall enabled, learning
+waiting for a model, and capture at its bounded backlog limit. The selected collection conversation
+was saved as stopped. This does not establish whether that specific stop was manual or automatic.
+It exposed a reproducible lifecycle gap: the collection's ten-minute idle timer stops its native
+runtime even when background coding-memory learning remains enabled. OpenCode requires that live
+runtime for its observed account/model binding; cached names cannot replace that authority.
+
+The collection now remains open while its current owner has authorized background learning. This
+applies equally to Claude, Codex and OpenCode, including time between reviews or while work is
+deferred. It does not send a keepalive prompt, launch a model request, reopen a stopped conversation,
+switch engines, retain provider credentials on disk or enlarge the queue. Normal idle shutdown
+resumes when learning is disabled. Explicit stop and experiment-off still take precedence, and
+account or watching changes immediately revoke the memory runtime's keep-open requirement.
+
+The regression first failed for all three engines: a synthetic idle collection was stopped despite
+its background-use requirement. After the fix it stayed live for three idle intervals, with no
+prompt or resume calls, and stopped on the next check after learning was disabled. Runtime checks
+cover an empty queue, Recall-only mode, identity changes, watching/experimental-off and pause.
+This is lifecycle validation with synthetic state. The live stopped conversation and its backlog
+were left untouched; a fresh model connection and real-user extraction-quality validation remain
+necessary before claiming end-to-end completion.
+
+### Claude 2.1.287 compatibility — October 2
+
+The installed Claude release had advanced to 2.1.287 while the extraction and prompt-recall
+allowlists still stopped at earlier native observations. The actual production extraction adapter
+initially refused it as `claude_version_uncertified`, with zero provider requests. This prevented
+learning through that selected companion runtime; it was not evidence of a model-quality failure.
+
+The [native recording](../research/2026-10-02-memory-claude-2.1.287.json) now covers this exact release.
+A disposable launcher redirects only native home/config/provider environment, forwards the actual
+version and unchanged production arguments, and uses fake credentials against localhost. The real
+adapter accepted the synthetic completed response with an empty tool catalogue, omitted the
+workspace-instruction canary, and rejected a provider-sent Bash attempt before any fixture hook,
+MCP command, or shell sentinel was written. The selected mock model and effort remain explicit.
+The separate native lifecycle probe observed fresh context on the next prompt after resume,
+manual compaction, and a model change.
+
+Only 2.1.287 is added to the existing tested versions. Unknown releases still decline automatic
+extraction and prompt delivery; explicit scoped recall remains available. Host-bound receipt tests
+and shared correction/forgetting checks cover the new Claude version alongside Codex and OpenCode.
+No real account, model selection, conversation, installed application, or release was changed.
+Print-mode transport is the measured boundary: production account/profile changes, interactive TUI
+paths, semantic quality, and coding-task usefulness are not established by these mock observations.
+
+### Stop repeating a provider's non-retryable refusal — October 2
+
+A synthetic READY request through the saved OpenCode Muse free model received HTTP 403 with the
+provider's `FreeTierError`: this route was restricted to use within OpenCode. No extraction case
+completed. This is a provider refusal, not a memory-quality score. A similar custom-agent restriction
+is [reported upstream](https://github.com/anomalyco/opencode/issues/50627); that report does not prove
+the cause of this particular request. No private conversations or personal credentials were supplied.
+
+The production adapter previously turned this error into a generic model outage. Its selected
+connection remained ready, allowing another background call after the queue's one-minute defer.
+The adapter now recognizes the exact recorded, non-retryable refusal. Companion intelligence retains
+only an opaque connection fingerprint in memory, stops further background calls on that connection,
+and clears the refusal when the observed model, account, owner or native process changes. A routine
+refresh of the same snapshot does not reset it; a late error cannot block a replacement connection.
+Ordinary outages and quota failures retain their existing handling. No credential or refusal is added
+to the saved companion profile, and no alternative model is selected automatically.
+
+Learning keeps its sources queued under the existing retention and capacity limits, preserves the
+refusal during the deferred interval, and keeps notebook work pending as well. Memories explains
+that the selected provider declined background learning and points to the companion's existing model
+control. Reviewing that explanation does not change Learn or Recall. The foreground terminal remains
+available; saved memories remain subject to the existing Recall setting.
+
+The [recording](../research/2026-10-02-memory-provider-refusal.json) includes the real OpenCode 1.18.34
+binary receiving the same refusal from a localhost mock: exactly one request, no tools, no forbidden
+action, and disposable native storage removed. Synthetic integration checks exercise the production
+intelligence, learner and queue over more than an hour, then resume on a new connection without
+dropping source evidence. These checks establish refusal handling, not semantic extraction quality,
+live user learning, or improved coding outcomes. The selected external route was not retried or
+bypassed, and real-session quality evaluation remains incomplete.
+
+### Clarify extraction fields after actual local model failures — October 2
+
+Offline reference models exposed ambiguity that the mocked transport checks could
+not: evidence paths pointed into source text instead of the proposed memory,
+required topic identifiers were null, and verification and validity dates were
+invented. The extraction prompt now gives one explicit field contract, including
+the difference between required scope/topic IDs and host-owned record identity.
+It preserves episode boundaries, source roles, bounded-context restrictions,
+scope, exact quotations, contradiction handling and unknowns. Storage, admission,
+recall and inference selection are unchanged.
+
+The [local comparison](../research/2026-10-02-memory-local-extraction.md) records
+both gains and failures. On the six frozen cases, the same cached 27B model went
+from three completed negative cases and no stored memories to six completed
+cases, with two of three memories judged supported/useful and correctly recalled.
+All seven negative recall probes passed. The third memory still invented an
+implementation-only condition for an unconditional preference. A separate frozen
+batch check retained both personal preferences correctly, but another batch failed
+the unchanged field-coverage guard. Its unrun probes remain unmeasured.
+
+These are attributed agent judgments over synthetic model outputs, not independent
+human review, selected-companion certification, real-user learning or coding-task
+benefit. The programmer perspectives continue to mean source-grounded design
+reviews. No private transcript, live memory, account setting, app or firmware was
+changed. The experimental implementation has clearer instructions; the full
+memory-quality gates remain unmet.
+
+### Resolve exact evidence in the host, then review meaning — October 2
+
+An actual offline extraction rejected a useful proposal after the model normalized
+whitespace in its quotation. The host now supplies bounded source-excerpt references
+and resolves selected references into exact original text, source identity and
+captured verification. Existing storage, scope, authorship, coverage, size and
+durable queue checks remain in force. Unknown references and metadata overrides
+fail; legacy quotations still need exact matching. Original source text and episode
+boundaries remain available in full. The prompt is versioned `coding-memory-v6`.
+
+The [measured comparison](../research/2026-10-02-memory-source-references.md) covers
+unchanged single and multi-episode diagnostic suites with the same local model.
+All eight cases completed, retaining six memories judged supported and useful by
+the implementing agent; six positive and twelve negative recall probes passed
+semantic review. This is development evidence, not an independent or held-out score.
+
+Five consented private excerpts were also processed entirely offline with external
+networking blocked on both the driver and model worker. The whitespace failure was
+resolved, but semantic review rejected two of six memories for overgeneralization
+and treating tentative options as settled. Their private evidence remains local.
+All structural presence checks passed, demonstrating why presence alone is an
+insufficient quality measure. Faithful real-user extraction, selected-companion
+learning, automatic contextual recall and coding-task benefit remain open.
+
+Review against Parnas's module boundaries, Liskov/Wing's behavioral contracts,
+Dijkstra's distinction between checks and broader claims, and Knuth's readable
+explanations is recorded with the evidence. These remain our applications of
+published principles, not reviews or endorsements by those authors.
+
+### Reject prompt-only fixes that still change the user's meaning — October 2
+
+The offline diagnostic runner now records complete versus bounded source context
+and rejects review/report boundary mismatches. A frozen eight-case corpus exercises
+defaults and overrides, polite requests and exploratory questions, tentative and
+accepted numbers, quoted assistant plans, and limited control changes.
+
+The [measured comparison](../research/2026-10-02-memory-meaning.md) keeps failures
+visible. Production v6 completed seven cases; one positive recall omitted a permitted
+override and another case failed admission. Two candidate prompts completed all
+eight cases but each retained two records rejected for overstating the source.
+The implementing agent judged five of seven memories and four of six positive
+recall packets supported; all eighteen abstention probes passed. An approved offline
+private check also failed to show improvement. Neither candidate was promoted.
+
+Production extraction remains v6. Diagnostic typechecking and 27 tests passed;
+the retained changes are evaluation coverage and attributed evidence. Semantic
+checking of proposals is a future experiment, not a shipped safeguard. Selected
+companion learning, automatic contextual recall, independent quality assessment
+and improved coding outcomes remain unproven. No app or firmware was released.
+
+### Give receiving agents the supporting words — October 2
+
+A [separate model review](../research/2026-10-02-memory-source-audit.md) accepted
+both subtle interpretation errors from the earlier extraction experiments. It is
+not promoted to an automatic admission gate. Instead, native prompt and collection
+MCP recall now use `coding_memory_sources`: exact selected evidence excerpts with
+captured author, engine, time, verification limits and memory revision/scope. The
+generated claim and action still support search and the owner library, but are not
+included in this context format. Existing direct summary callers retain their
+contract. Extraction remains v6; no schema migration or extra model call is added.
+
+Selection keeps the existing account, project, task, branch, applicability, privacy,
+revision and deletion rules. Excerpts shared by several records appear once. The
+same byte cap applies to the complete packet: an oversized candidate is omitted
+whole, with no qualification trimming or fallback to a generated instruction.
+Explicit viewer corrections retain their field labels and replace old evidence.
+Missing or altered source evidence cannot be invented by serialization. The wrapper
+identifies historical excerpts as fallible context, not current instructions or
+permission. Surrounding source context may still be absent.
+
+The [synthetic coding comparison](../research/2026-10-02-memory-source-recall/comparison.json)
+records two of five assessable tasks passing with generated summaries, three with
+summaries plus excerpts, and four with excerpts alone. The actual store format also
+passed four of five. The last two arms were added after inspecting the earlier
+results; this is adaptive development evidence, not a held-out improvement claim.
+An underspecified sixth task and strict-JSON failures remain visible. The model
+still removes unrelated export actions despite the original qualification.
+
+Native localhost probes observed exact context in [Claude 2.1.287](../research/2026-10-02-memory-source-recall/native/claude.json)
+and [Codex 0.160.0](../research/2026-10-02-memory-source-recall/native/codex.json).
+Codex also made an unidentified request without context; its runtime allowlist is
+unchanged. The [OpenCode 1.18.34 probe](../research/2026-10-02-memory-source-recall/native/opencode.json)
+exercised the shared store/runtime and real plugin through correction, forgetting,
+privacy, Recall off, manual/automatic compaction and overflow replay. Its isolated
+startup originally waited for npm registry retries before loading the local plugin;
+the SDK-free fixture now explicitly uses npm offline mode under the same OS network
+block. No installed engine configuration changes.
+
+This applies the council's evidence and behavioral-contract principles without
+treating a fluent paraphrase or a passing transport test as proof of intent. Private
+real-user quality, independent review, native lifecycle coverage, paired framework
+workflows and the broader rollout gates remain open. No app or firmware release.
+
+### Codex 0.160 prompt recall lifecycle — October 2
+
+The [native lifecycle report](../research/2026-10-02-codex-memory-0160/lifecycle.json)
+observed the complete source-excerpt packet on each of five user prompts across
+manual compaction, restart, model change and native configuration-profile selection.
+Each prompt receives a fresh marker; old context in history cannot satisfy that check.
+The first [incomplete run](../research/2026-10-02-codex-memory-0160/lifecycle-incomplete.json)
+exhausted its initial deadline during individual hook review. It remains failed.
+The probe now allows that setup time, stops on a timeout even when the native CLI
+exits zero, and checks ordered PreCompact/PostCompact events instead of assuming
+every provider uses the remote compaction endpoint. Native checks use synthetic
+localhost responses, fake credentials and disposable homes with execution disabled.
+
+Codex 0.160.0 is added only to prompt recall. A lesson captured through Claude can
+be recalled through the verified Codex adapter while learning is off, with the same
+ownership, correction, deletion and recall controls. Real-session delivery receipts
+still say unverified. Five additional native requests omitted context; their purpose
+is not established by the metadata probe. Configuration-profile selection does not
+certify a real login/account or Harness-owner change.
+
+Restricted background extraction remains uncertified. Both the
+[original command](../research/2026-10-02-codex-memory-0160/extraction-failed.json)
+and [explicit Code Mode disable flags](../research/2026-10-02-codex-memory-0160/extraction-flags-failed.json)
+produced a startup error with the current model. The installed catalog specifies
+Code Mode for that model independently of those feature switches. Neither the
+execution host nor a different model is enabled to make this test pass, and the
+adapter's error rejection remains intact. [Conditions and source identities](../research/2026-10-02-codex-memory-0160/conditions.json)
+separate this transport evidence from the still-open quality and usefulness gates.
+
+### Score the source context actually recalled — October 2
+
+Extraction diagnostics now request the source-excerpt format used by native recall.
+`--recall-format summary` retains the earlier format as an explicit comparison arm.
+Reports include sanitized source snapshots captured before maintenance. Review checks
+each packet's exact excerpts, author role, engine, timestamp, verification metadata,
+record revision, scope, source links and evidence-field coverage. The validator does
+not call the production serializer. It binds captured text and role to the frozen
+fixture and rejects missing, duplicated, altered or extra supporting material.
+
+Older summary reports remain reviewable and keep their format label; they do not
+acquire source-validation evidence retroactively. Review scores name the context
+formats inspected, and the offline runner records the validator's source hash.
+Neither exact text nor a matching hash proves semantic support or authentic authorship.
+The attributed reviewer still assesses meaning, qualifications, relevance and missing
+knowledge. Unsupported stored records continue to fail correct-memory recall even
+when their source packet preserves the original words.
+
+A private offline replay used only five previously consented excerpts and their six
+already-generated proposals. It made no new model calls. The original record-quality
+judgements were retained and the new packets inspected against their frozen sources.
+All three positive source contexts preserved the original full excerpt, including
+qualifications, compared with one faithful positive summary context. **Both formats
+still scored four of six supported/useful records and one of three fully correct
+recalls.** All twelve negative probes abstained. The two overbroad records remain
+failures; these results do not establish improved extraction or coding-task outcomes.
+
+The replay preserved project scope, text, source role/engine, bounded context and
+probes. Only disposable profile/source identifiers and generated replay metadata
+changed, with mappings retained privately. Original files and production memory were
+read-only. The OS sandbox denied networking and limited writes to the private test
+folder. An initial SQLite temporary-file failure was preserved; directing temporary
+files into that folder allowed the replay to finish under the same restrictions.
+All excerpts, records, labels, hashes and detailed reports remain local. This is a
+small, attributed development review, not independent or held-out release evidence.
+
+The storage failure also exposed a separate diagnosis problem: an unexpected store
+error can surface as `waiting_for_model / inference_unavailable`. That classification
+needs a focused follow-up; it does not explain the live provider blockage without
+additional evidence. Live automatic learning, wider native lifecycles and the
+planned quality/benefit gates remain unfinished.
+
+### Explain why continuous learning is waiting — October 3
+
+The collection now carries bounded availability reasons from its observed runtime
+through the memory adapter, queue and Memories viewer. A stopped or unopened
+companion, incomplete startup, unavailable model/account connection, unsupported
+configuration and unverified native version have distinct recovery explanations.
+An unavailable account observation does not claim the user is signed out. Native
+version refusal remains separate from model quality and provider refusal.
+
+Extraction jobs retain their last recognized reason in existing queue metadata.
+During the retry delay, an idle check no longer describes that deferred work as an
+empty queue. This survives store/learner restart without another account lookup,
+version probe or inference call. Learning-off, excluded/private sources and expired
+work suppress the notice; a successful later review clears it. Only fixed reason
+codes are retained or shown, never native/provider error text. Notebook claim
+failures forward the current reason, but notebook-only delay metadata still lacks
+the durable per-job reason used by extraction jobs.
+
+The Desktop points to the existing companion terminal and model controls. Reading
+or reviewing the explanation does not reopen an agent or change Learn/Recall.
+This improves recovery diagnosis; it does not unblock the installed stopped
+conversation, change the selected provider, or establish successful real-user
+learning. The separate in-process diagnostic storage-error classification and the
+two unsupported private-example memories remain open.
+
+### Separate reasoning quality from completion time — October 3
+
+A [local comparison](../research/2026-10-03-memory-reasoning.md) kept production
+extraction v6 unchanged and varied only the reference model's reasoning budget.
+The control completed seven of eight frozen synthetic cases. A 1,024-token budget
+preserved the first case's manual override but timed out on the second. One
+adaptive 512-token follow-up completed all eight, with six of six stored memories
+judged supported/useful, six correct positive recalls and eighteen abstentions.
+The reviewer was the implementing agent, and these already-inspected examples
+remain development evidence. Source-excerpt recall, already shipped separately,
+preserved qualifications that the control's generated summary omitted.
+
+The approved offline private follow-up timed out on its first excerpt, committed
+no memory there, and did not run the other four. Its quality remains unmeasured;
+it does not replace the earlier four-of-six private finding. Original inputs were
+unchanged, external networking was blocked, and all private artifacts stay local.
+No production prompt, model/effort selection, deadline, admission rule or live
+memory changed. Lower extraction overhead is the next investigation; stronger
+reasoning by itself is not a verified live-learning fix.
+
+### Reject optional empty fields as an efficiency fix — October 3
+
+A [compact-response candidate](../research/2026-10-03-memory-compact.md) allowed
+the model to omit only unknown rationale, empty exceptions and empty validity.
+Harness expanded them before the unchanged full record and admission checks.
+Typecheck and 115 focused tests passed. On the same eight synthetic examples,
+all cases completed; the attributed development review found six supported/useful
+records, six correct positive recalls and eighteen abstentions.
+
+The response saved only 42 completion tokens while adding 448 input tokens.
+Average attempt time was 55.35 seconds versus 55.07 for the earlier control;
+the slightly lower median did not establish a reliable improvement from one run.
+The candidate was rejected and archived with its exact patch and evidence.
+Production remains v6. No further private model call, native setting change,
+release or installation followed. This closes the compact-defaults experiment,
+not the live-learning blockage or the broader memory quality gates.
+
+### Reach the existing companion from a learning notice — October 3
+
+Memories now offers **Open companion terminal** when learning is waiting for its
+model. The action uses the same conversation in the existing DSH, is disabled
+while opening, and supports retry after failure. Rendering the notice does not
+trigger it. Stale owner/companion actions and paused learning are guarded; model
+selection, setup and trust remain in the real terminal.
+
+The [recovery review](../research/2026-10-03-memory-recovery.md) records layout,
+identity, retry, ownership and synthetic key-delivery checks. The native recovery
+journey passed across native attempts. Earlier foreground checks failed even
+after mounting a first frame and waiting three seconds. The final native command
+passed both cases, observing focus within its first second without a manual
+click; it allowed a bounded native review but needed no app-control action.
+The intermittent startup-focus cause remains unestablished. Physical input and
+the actual live model still need verification. This supplies a missing user
+action without claiming that the installed stopped conversation or its provider
+refusal was resolved.

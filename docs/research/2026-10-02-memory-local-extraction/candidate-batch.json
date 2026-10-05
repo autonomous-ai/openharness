@@ -1,0 +1,483 @@
+{
+  "schemaVersion": 1,
+  "suite": "synthetic-batch-extraction-diagnostics-v1",
+  "suiteSha256": "4ef4d98a8a628390b729f9a0b5a4c7ff2a9ff83995e398a48144a4c94a617059",
+  "promptVersion": "coding-memory-v5",
+  "contextVersion": "coding-context-v1",
+  "sourceHashes": {
+    "learner.ts": "c44bd238641ef585df42f432a3e34d1ad6f880471dbe9fa931b33733fe7eb375",
+    "evaluation.ts": "91e35b391ec7231cb35c248e9e325f6c27de651632e4c74f4ce09f1afe756b17",
+    "store.ts": "491eb959f757b4f97be450bec415dc33e86e2c910adc8ede9bb40e4cb2b72dcf",
+    "admission.ts": "de6fe82c328763d0daad687373c345fa79dc7a48ae3ef8632de7729b419bb465",
+    "types.ts": "380a95c563c7c5254f4a2ad8ccf3858d21e88f76ab90a348f1be5e18aa273ec6",
+    "queue.ts": "95b1470a91332b62162b9860a27c1f817f8d860eb2d549f906450f14ba76a50a",
+    "context.ts": "d1e5e0797c065c7ce86cf6cfb1158a1702d10be2040a04a700a21d18b2c6fd70",
+    "evaluationReview.ts": "da4c153d69c6cdf26bd8135993e576bc3f60c4042fc2c11829880b2be295bea3"
+  },
+  "runnerSha256": "f89ae3c8acb7c297125c41374dbbb4be78307aeee86ceddba1ba00c9323acada",
+  "startedAt": "2026-10-02T16:26:06.461Z",
+  "status": "completed",
+  "candidatePromptOnly": true,
+  "selected": {
+    "engine": "local-reference-llama",
+    "model": "Qwen3.8-27B-Q4_0",
+    "weightSha256": "ede16c7b36e578ca87a8c70e011e4b4633a32c831c0ce76d0f474582384e671d",
+    "selectionSource": "Explicit offline diagnostic reference; not the selected companion model"
+  },
+  "limits": {
+    "maxCalls": 6,
+    "timeoutPerCallMs": 90000,
+    "maxOutputTokens": 4096,
+    "contextTokens": 16384,
+    "temperature": 0,
+    "seed": 42,
+    "thinking": false,
+    "retries": 0,
+    "corpus": "synthetic_only",
+    "network": "OS sandbox denies non-loopback networking; cloud disabled",
+    "tools": "none"
+  },
+  "limitations": [
+    "Development diagnostic; not a held-out quality benchmark.",
+    "Different reference model from the selected companion; no claim of Muse quality, native agent delivery or live learning.",
+    "No private conversations, credentials, production memory or app settings used.",
+    "Expectations and recall probes are never supplied to extraction.",
+    "Mechanical checks measure record/recall presence; semantic review is separate.",
+    "Full local GGUF SHA-256 recorded; no model download or conversion."
+  ],
+  "cases": [
+    {
+      "id": "personal-mixed-episodes",
+      "durationMs": 68599,
+      "outcome": {
+        "state": "learned",
+        "learned": 2
+      },
+      "checks": [
+        {
+          "name": "completed_extraction",
+          "passed": true
+        },
+        {
+          "name": "record_count",
+          "passed": true
+        },
+        {
+          "name": "scope",
+          "passed": true
+        },
+        {
+          "name": "no_invented_rationale",
+          "passed": true
+        },
+        {
+          "name": "recall:debugging",
+          "passed": true
+        },
+        {
+          "name": "recall:incident",
+          "passed": true
+        },
+        {
+          "name": "recall:database-default",
+          "passed": true
+        },
+        {
+          "name": "recall:no-borrowed-opinion",
+          "passed": true
+        },
+        {
+          "name": "recall:no-unbound-project-fact",
+          "passed": true
+        }
+      ],
+      "probes": [
+        {
+          "id": "debugging",
+          "query": "debugging failing test implementation",
+          "projectIds": [
+            "alpha"
+          ],
+          "conditions": {
+            "taskType": "debugging",
+            "productionIncident": false
+          },
+          "expected": "recall",
+          "status": "ok",
+          "returnedIds": [
+            "81be7192-d3dd-42eb-82fb-98bcf83bffac"
+          ],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "{\"type\":\"coding_memory_context\",\"notice\":\"Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.\",\"items\":[{\"id\":\"81be7192-d3dd-42eb-82fb-98bcf83bffac\",\"revision\":1,\"kind\":\"working_preference\",\"assertionType\":\"stated_preference\",\"scope\":{\"profileId\":\"synthetic-owner\"},\"claim\":\"When debugging, the user prefers to write a small failing test before changing the implementation.\",\"rationale\":null,\"futureAction\":\"When assisting with debugging tasks, suggest or prioritize creating a small failing test before modifying the implementation code.\",\"conditions\":{\"taskType\":\"debugging\"},\"exceptions\":[{\"when\":{\"productionIncident\":true},\"reason\":\"The user explicitly stated this preference does not apply during production incidents.\"}],\"evidenceClass\":\"user_stated\",\"verification\":[],\"cautions\":[],\"sources\":[{\"id\":\"personal-mixed-episodes-debugging-0\",\"engine\":\"local-reference-llama\",\"role\":\"user\",\"observedAt\":1790958368467}]}]}",
+            "bytes": 1057,
+            "maxBytes": 3000,
+            "estimatedTokens": 353
+          }
+        },
+        {
+          "id": "incident",
+          "query": "debugging failing test implementation",
+          "projectIds": [
+            "alpha"
+          ],
+          "conditions": {
+            "taskType": "debugging",
+            "productionIncident": true
+          },
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        },
+        {
+          "id": "database-default",
+          "query": "PostgreSQL",
+          "projectIds": [
+            "alpha"
+          ],
+          "conditions": {},
+          "expected": "recall",
+          "status": "ok",
+          "returnedIds": [
+            "01b1d55d-5f11-4d80-9f1f-2a52b3630970"
+          ],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "{\"type\":\"coding_memory_context\",\"notice\":\"Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.\",\"items\":[{\"id\":\"01b1d55d-5f11-4d80-9f1f-2a52b3630970\",\"revision\":1,\"kind\":\"working_preference\",\"assertionType\":\"stated_preference\",\"scope\":{\"profileId\":\"synthetic-owner\"},\"claim\":\"The user's default database preference for coding projects is PostgreSQL.\",\"rationale\":null,\"futureAction\":\"When selecting a database for new coding projects without specific constraints, default to PostgreSQL.\",\"conditions\":{},\"exceptions\":[],\"evidenceClass\":\"user_stated\",\"verification\":[],\"cautions\":[],\"sources\":[{\"id\":\"personal-mixed-episodes-database-default-0\",\"engine\":\"local-reference-llama\",\"role\":\"user\",\"observedAt\":1790958368474}]}]}",
+            "bytes": 855,
+            "maxBytes": 3000,
+            "estimatedTokens": 285
+          }
+        },
+        {
+          "id": "no-borrowed-opinion",
+          "query": "microservices",
+          "projectIds": [
+            "alpha"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        },
+        {
+          "id": "no-unbound-project-fact",
+          "query": "Redis billing queue",
+          "projectIds": [
+            "alpha"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "ok",
+          "returnedIds": [],
+          "passed": true,
+          "measurement": "presence_only",
+          "context": {
+            "text": "",
+            "bytes": 0,
+            "maxBytes": 3000,
+            "estimatedTokens": 0
+          }
+        }
+      ],
+      "records": [
+        {
+          "kind": "working_preference",
+          "facet": "database_default",
+          "assertionType": "stated_preference",
+          "scope": {
+            "profileId": "synthetic-owner"
+          },
+          "claim": "The user's default database preference for coding projects is PostgreSQL.",
+          "rationale": null,
+          "futureAction": "When selecting a database for new coding projects without specific constraints, default to PostgreSQL.",
+          "applicability": {},
+          "exceptions": [],
+          "retrievalCues": [
+            "database",
+            "PostgreSQL",
+            "default",
+            "coding projects"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "personal-mixed-episodes-database-default-0",
+              "quote": "My default database preference for coding projects is PostgreSQL. Please remember that preference.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability"
+              ]
+            }
+          ],
+          "conflictKey": "database-default",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          },
+          "schemaVersion": 1,
+          "id": "01b1d55d-5f11-4d80-9f1f-2a52b3630970",
+          "revision": 1,
+          "state": "active",
+          "createdAt": 1790958437055,
+          "updatedAt": 1790958437055
+        },
+        {
+          "kind": "working_preference",
+          "facet": "debugging_workflow",
+          "assertionType": "stated_preference",
+          "scope": {
+            "profileId": "synthetic-owner"
+          },
+          "claim": "When debugging, the user prefers to write a small failing test before changing the implementation.",
+          "rationale": null,
+          "futureAction": "When assisting with debugging tasks, suggest or prioritize creating a small failing test before modifying the implementation code.",
+          "applicability": {
+            "taskType": "debugging"
+          },
+          "exceptions": [
+            {
+              "when": {
+                "productionIncident": true
+              },
+              "reason": "The user explicitly stated this preference does not apply during production incidents."
+            }
+          ],
+          "retrievalCues": [
+            "debugging",
+            "failing test",
+            "TDD",
+            "production incident"
+          ],
+          "evidenceClass": "user_stated",
+          "evidence": [
+            {
+              "sourceEventId": "personal-mixed-episodes-debugging-0",
+              "quote": "Across my coding projects, when debugging I prefer a small failing test before changing implementation. This preference does not apply during production incidents.",
+              "paths": [
+                "/claim",
+                "/futureAction",
+                "/applicability",
+                "/exceptions"
+              ]
+            }
+          ],
+          "conflictKey": "debugging-test-first",
+          "validity": {
+            "validFrom": null,
+            "validUntil": null,
+            "recheckWhen": []
+          },
+          "schemaVersion": 1,
+          "id": "81be7192-d3dd-42eb-82fb-98bcf83bffac",
+          "revision": 1,
+          "state": "active",
+          "createdAt": 1790958437053,
+          "updatedAt": 1790958437053
+        }
+      ],
+      "episodes": {
+        "expected": 4,
+        "reviewed": 4,
+        "jobs": {
+          "learned": 2,
+          "no_useful_memory": 2
+        }
+      },
+      "semanticReview": {
+        "status": "pending",
+        "criteria": [
+          "Retains the debugging preference with its production-incident exception and the unconditional PostgreSQL default as separate supported memories.",
+          "Does not transfer the quoted author's microservices or testing opinion to the user or invent the user's opposite opinion.",
+          "Does not reinterpret the billing repository's unbound Redis decision as a personal preference.",
+          "Cites each retained claim's own supporting episode; unrelated source text is not corroboration.",
+          "Invents no rationale, expertise, measured benefit or verification claim."
+        ]
+      },
+      "promptSha256": "dc7d7929911e4699f84b8979b679b904009e10c634c6352a8fcd8e28e168137c",
+      "answer": {
+        "text": "{\n  \"proposals\": [\n    {\n      \"kind\": \"working_preference\",\n      \"facet\": \"debugging_workflow\",\n      \"assertionType\": \"stated_preference\",\n      \"scope\": {\n        \"profileId\": \"synthetic-owner\"\n      },\n      \"claim\": \"When debugging, the user prefers to write a small failing test before changing the implementation.\",\n      \"rationale\": null,\n      \"futureAction\": \"When assisting with debugging tasks, suggest or prioritize creating a small failing test before modifying the implementation code.\",\n      \"applicability\": {\n        \"taskType\": \"debugging\"\n      },\n      \"exceptions\": [\n        {\n          \"when\": {\n            \"productionIncident\": true\n          },\n          \"reason\": \"The user explicitly stated this preference does not apply during production incidents.\"\n        }\n      ],\n      \"retrievalCues\": [\n        \"debugging\",\n        \"failing test\",\n        \"TDD\",\n        \"production incident\"\n      ],\n      \"evidenceClass\": \"user_stated\",\n      \"evidence\": [\n        {\n          \"sourceEventId\": \"personal-mixed-episodes-debugging-0\",\n          \"quote\": \"Across my coding projects, when debugging I prefer a small failing test before changing implementation. This preference does not apply during production incidents.\",\n          \"paths\": [\n            \"/claim\",\n            \"/futureAction\",\n            \"/applicability\",\n            \"/exceptions\"\n          ]\n        }\n      ],\n      \"conflictKey\": \"debugging-test-first\",\n      \"validity\": {\n        \"validFrom\": null,\n        \"validUntil\": null,\n        \"recheckWhen\": []\n      }\n    },\n    {\n      \"kind\": \"working_preference\",\n      \"facet\": \"database_default\",\n      \"assertionType\": \"stated_preference\",\n      \"scope\": {\n        \"profileId\": \"synthetic-owner\"\n      },\n      \"claim\": \"The user's default database preference for coding projects is PostgreSQL.\",\n      \"rationale\": null,\n      \"futureAction\": \"When selecting a database for new coding projects without specific constraints, default to PostgreSQL.\",\n      \"applicability\": {},\n      \"exceptions\": [],\n      \"retrievalCues\": [\n        \"database\",\n        \"PostgreSQL\",\n        \"default\",\n        \"coding projects\"\n      ],\n      \"evidenceClass\": \"user_stated\",\n      \"evidence\": [\n        {\n          \"sourceEventId\": \"personal-mixed-episodes-database-default-0\",\n          \"quote\": \"My default database preference for coding projects is PostgreSQL. Please remember that preference.\",\n          \"paths\": [\n            \"/claim\",\n            \"/futureAction\",\n            \"/applicability\"\n          ]\n        }\n      ],\n      \"conflictKey\": \"database-default\",\n      \"validity\": {\n        \"validFrom\": null,\n        \"validUntil\": null,\n        \"recheckWhen\": []\n      }\n    }\n  ]\n}",
+        "metrics": {
+          "model": "memory-reference",
+          "finishReason": "stop",
+          "usage": {
+            "completion_tokens": 689,
+            "prompt_tokens": 3830,
+            "total_tokens": 4519,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 3830,
+            "prompt_ms": 24959.166,
+            "prompt_per_token_ms": 6.5167535248041775,
+            "prompt_per_second": 153.4506401375751,
+            "predicted_n": 689,
+            "predicted_ms": 43586.692,
+            "predicted_per_token_ms": 63.26080116110305,
+            "predicted_per_second": 15.807577230224307
+          }
+        }
+      }
+    },
+    {
+      "id": "separate-conversation-acceptance",
+      "durationMs": 44996,
+      "outcome": {
+        "state": "failed",
+        "reason": "evidence_coverage"
+      },
+      "checks": [
+        {
+          "name": "completed_extraction",
+          "passed": false
+        },
+        {
+          "name": "record_count",
+          "passed": null
+        },
+        {
+          "name": "scope",
+          "passed": null
+        },
+        {
+          "name": "recall:same-repository",
+          "passed": null
+        },
+        {
+          "name": "recall:different-repository",
+          "passed": null
+        },
+        {
+          "name": "recall:no-cross-conversation-approval",
+          "passed": null
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-repository",
+          "query": "SQLite",
+          "projectIds": [
+            "desktop-repo"
+          ],
+          "conditions": {},
+          "expected": "recall",
+          "status": "not_run",
+          "returnedIds": [],
+          "passed": null,
+          "context": null
+        },
+        {
+          "id": "different-repository",
+          "query": "SQLite",
+          "projectIds": [
+            "server-repo"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "not_run",
+          "returnedIds": [],
+          "passed": null,
+          "context": null
+        },
+        {
+          "id": "no-cross-conversation-approval",
+          "query": "MongoDB",
+          "projectIds": [
+            "desktop-repo"
+          ],
+          "conditions": {},
+          "expected": "abstain",
+          "status": "not_run",
+          "returnedIds": [],
+          "passed": null,
+          "context": null
+        }
+      ],
+      "records": [],
+      "episodes": {
+        "expected": 3,
+        "reviewed": 0,
+        "jobs": {
+          "failed": 3
+        }
+      },
+      "semanticReview": {
+        "status": "not_reviewable",
+        "criteria": [
+          "Retains the explicit SQLite decision for desktop-repo, with only the stated deployment rationale.",
+          "Does not treat the acknowledgement in a different conversation as approval of the assistant's MongoDB experiment.",
+          "Does not infer the user's general database preference or fabricate a conflict from unrelated conversations.",
+          "Cites the explicit project-decision episode without borrowing support from the experiment or acknowledgement."
+        ]
+      },
+      "promptSha256": "113433412f8b363c5ac11b89dae37e05ea39d4fb3b22d6122b1ec198f78bd1b8",
+      "answer": {
+        "text": "{\n  \"proposals\": [\n    {\n      \"kind\": \"project_decision\",\n      \"facet\": \"database-selection\",\n      \"assertionType\": \"accepted_decision\",\n      \"scope\": {\n        \"profileId\": \"synthetic-owner\",\n        \"projectId\": \"desktop-repo\"\n      },\n      \"claim\": \"The project has decided to use SQLite for the local-first desktop app to ensure deployment is a single file without a database server.\",\n      \"rationale\": \"Deployment should be one file with no database server.\",\n      \"futureAction\": \"Continue using SQLite for this application.\",\n      \"applicability\": {},\n      \"exceptions\": [],\n      \"retrievalCues\": [\n        \"SQLite\",\n        \"database\",\n        \"local-first\",\n        \"desktop app\",\n        \"deployment\"\n      ],\n      \"evidenceClass\": \"user_stated\",\n      \"evidence\": [\n        {\n          \"sourceEventId\": \"separate-conversation-acceptance-explicit-project-decision-0\",\n          \"quote\": \"For this local-first desktop app, we have decided on SQLite because deployment should be one file with no database server. This is a decision for this repository, not my general database preference. Keep using SQLite for this app.\",\n          \"paths\": [\n            \"/claim\",\n            \"/rationale\",\n            \"/futureAction\"\n          ]\n        }\n      ],\n      \"conflictKey\": \"desktop-repo-database-choice\",\n      \"validity\": {\n        \"validFrom\": null,\n        \"validUntil\": null,\n        \"recheckWhen\": []\n      }\n    }\n  ]\n}",
+        "metrics": {
+          "model": "memory-reference",
+          "finishReason": "stop",
+          "usage": {
+            "completion_tokens": 371,
+            "prompt_tokens": 3666,
+            "total_tokens": 4037,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 3666,
+            "prompt_ms": 21769.218,
+            "prompt_per_token_ms": 5.938139116202946,
+            "prompt_per_second": 168.40292563563835,
+            "predicted_n": 371,
+            "predicted_ms": 23194.441,
+            "predicted_per_token_ms": 62.518708894878706,
+            "predicted_per_second": 15.99521195617519
+          }
+        }
+      }
+    }
+  ],
+  "inferenceCalls": 2,
+  "networkGuard": {
+    "nonLoopbackConnectError": 1
+  },
+  "runtime": {
+    "health": {
+      "status": "ok"
+    },
+    "version": "9870 (2d973636e)"
+  },
+  "workerExit": {
+    "code": 0,
+    "signal": null
+  },
+  "completedCases": 1,
+  "finishedAt": "2026-10-02T16:28:02.251Z",
+  "originalReportSha256": "6f3b85d0130fb983eeb2ca1dd749be6c000556045af68f84c59e74a6f97d9345",
+  "redaction": "Only local runtime stderr was omitted; synthetic sources, answers, stored records and recall packets are unchanged."
+}

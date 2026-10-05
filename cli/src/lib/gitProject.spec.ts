@@ -489,4 +489,15 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     expect(await readFile(join(linked, 'src', 'value'), 'utf8')).toBe('feature')
     expect(await git('branch', '--show-current')).toBe('main')
   })
+
+  it.each(['No space left on device', 'Disk quota exceeded'])('explains worktree disk exhaustion: %s', async (message) => {
+    const hooks = join(root, 'hooks')
+    await mkdir(hooks)
+    await writeFile(join(hooks, 'post-checkout'), `#!/bin/sh\necho 'private-file: ${message}' >&2\nexit 1\n`, { mode: 0o755 })
+    await git('config', 'core.hooksPath', hooks)
+    await expect(prepare('worktree')).rejects.toMatchObject({
+      code: 'WORKTREE_FAILED',
+      message: 'Not enough disk space to create the worktree. Free space on this machine, then retry.',
+    })
+  })
 })

@@ -89,7 +89,12 @@ class PaneStartingChip extends StatelessWidget {
 
 /// The room [PaneStartingChip] asks for in a header, so the header can leave it that much beside
 /// the agent's name.
-double paneStartingChipWidth(ModelStartPhase phase, TextScaler scaler) {
+double paneStartingChipWidth(
+  ModelStartPhase phase,
+  TextScaler scaler, {
+  bool narrow = false,
+}) {
+  if (narrow) return _kChipMark + _kChipPadding.horizontal;
   final painter = TextPainter(
     text: TextSpan(text: startingChipLabel(phase), style: _chipStyle()),
     textDirection: TextDirection.ltr,

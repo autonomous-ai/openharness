@@ -60,6 +60,7 @@ import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
 import '../phone/phone_name_store.dart';
 import '../viewer/device_log.dart';
+import '../viewer/device_history.dart';
 import '../viewer/device_log_sync.dart';
 
 enum AppStatus { bootstrapping, unauthenticated, authenticated }
@@ -1246,6 +1247,10 @@ class AppNotifier extends ChangeNotifier {
   Future<void> _finishBootstrapSignedIn() async {
     final revision = _authRevision;
     if (!_authWorkCurrent(revision)) return;
+    // Before ANYTHING below can start a connection, a machine refresh or a pane restore — each can
+    // end in a read of the device log, which must be judged by THIS sign-in (a hand sign-in mints its
+    // id here), not the previous account's. Synchronous: no await may come first.
+    _beginDeviceLogSignIn(revision);
     // Stays on the pre-navigation `bootstrapping` screen (main.dart) until the local state is
     // restored. A phone has no local service to start — the desktop's "Starting local service…"
     // was a sentence about somebody else's computer shown while this one read its own disk.
@@ -1309,6 +1314,12 @@ class AppNotifier extends ChangeNotifier {
     _bootStatusMessage = null;
     status = AppStatus.authenticated;
     notifyListeners();
+    // What the device log announced while the app was still starting up (see [_whenSignedIn]).
+    _flushDeviceNotices(revision);
+    // The device log is joined NOW, not after the machine list or the profile: a read of it that
+    // landed first (a push, a reconnect) would judge a just-signed-in phone by the old sign-in's
+    // file, and the log has to know the sign-in is fresh before anything waits.
+    _registerDeviceLog(revision);
     // Signed in. Display-name/avatar metadata is independent of machine
     // discovery and must not delay work.
     unawaited(_loadProfile());
@@ -1378,6 +1389,7 @@ class AppNotifier extends ChangeNotifier {
     signingIn = false;
     // The code was scanned into the session that just ended — see [logout].
     pendingPairing = null;
+    _clearDeviceNotices();
     _desk.reset();
     zoo.reset();
     unawaited(_pool?.closeAll());
@@ -1525,10 +1537,24 @@ class AppNotifier extends ChangeNotifier {
     unawaited(_machineCache?.clear());
     sessionPreviews.clear();
     agentNotices.reset();
+    // The account's device notices go with it: the next sign-in may be another account's, and what
+    // is still pending comes back from its own log once it registers.
+    _clearDeviceNotices();
     expandedMachines.clear();
     selectedMachineId = null;
     status = AppStatus.unauthenticated;
     notifyListeners();
+  }
+
+  /// Forget every device notice of the account that just left (banner, removals), and make a read of
+  /// its `pending` that is still in flight drop its result: the next sign-in may be another account's.
+  void _clearDeviceNotices() {
+    _pendingSyncGen++;
+    _startupDeviceNotices.clear();
+    newDevices.clear();
+    departedDevices.clear();
+    deviceRemovals.clear();
+    _failedDismissals.clear();
   }
 
   void _onLocalFailure(String machineId, int code, String reason) {
@@ -1668,12 +1694,6 @@ class AppNotifier extends ChangeNotifier {
     }
     try {
       await _refreshMachines(revision);
-      // The account's device key log: this phone's key joins it (an existing sign-in too, from
-      // before the log existed), and every machine it names is reached with no password.
-      if (_authWorkCurrent(revision) && status == AppStatus.authenticated && _deviceLogRegistered != revision) {
-        _deviceLogRegistered = revision;
-        unawaited(_deviceLog?.register(freshSignIn: viewer.auth.consumeFreshSignIn()));
-      }
     } finally {
       // Said out loud: the list's own notify fires before this, so a flag
       // dropped silently here would leave the rail on its placeholders.
@@ -1682,6 +1702,37 @@ class AppNotifier extends ChangeNotifier {
         notifyListeners();
       }
     }
+  }
+
+  /// Tell the device log who is signed in, once per sign-in, synchronously (see
+  /// [ViewerDeviceLog.beginSignIn]); [_registerDeviceLog] then finds it done.
+  void _beginDeviceLogSignIn(int revision) {
+    if (_deviceLogBegun == revision) return;
+    _deviceLogBegun = revision;
+    _deviceLog?.beginSignIn(fresh: viewer.auth.consumeFreshSignIn());
+  }
+
+  /// The account's device key log: this phone's key joins it (an existing sign-in too, from
+  /// before the log existed), and every machine it names is reached with no password. Once per
+  /// sign-in, the moment the app is authenticated ([_finishBootstrapSignedIn]) — before the machine
+  /// list and the profile, and not waiting for either. Which account the log belongs to is a local
+  /// fact the log keeps itself ([_beginDeviceLogSignIn]), never something the backend says, so
+  /// there is nothing to read first.
+  void _registerDeviceLog(int revision) {
+    if (!_authWorkCurrent(revision) || status != AppStatus.authenticated || _deviceLogRegistered == revision) {
+      return;
+    }
+    _deviceLogRegistered = revision;
+    final log = _deviceLog;
+    if (log == null) return;
+    // Normally already begun at the top of [_finishBootstrapSignedIn]; a no-op then.
+    _beginDeviceLogSignIn(revision);
+    unawaited(
+      log
+          .register()
+          // Then what is still pending from before (a restart) comes back as the banner.
+          .whenComplete(_syncPendingDevices),
+    );
   }
 
   Future<void> _refreshMachines(int revision) async {
@@ -1982,14 +2033,96 @@ class AppNotifier extends ChangeNotifier {
 
   ViewerDeviceLog? _deviceLog;
   int? _deviceLogRegistered;
+  int? _deviceLogBegun;
 
-  /// Devices that joined the account and this phone had never trusted, not yet dismissed.
+  /// What the device log announced (a new device, a removal) while the app was still starting up:
+  /// the OS notice and the banner wait for [_flushDeviceNotices], so a read that lands before the
+  /// app is `authenticated` is not lost. Each carries the sign-in it belongs to; only a signed-out
+  /// app drops them.
+  final List<({int revision, void Function() run})> _startupDeviceNotices = [];
+
+  /// Run [notice] now when the app is signed in; park it while it is still starting up; drop it
+  /// when signed out (an in-flight read of the account that just left must not raise anything).
+  void _whenSignedIn(void Function() notice) {
+    if (_disposed || status == AppStatus.unauthenticated) return;
+    if (status == AppStatus.bootstrapping) {
+      _startupDeviceNotices.add((revision: _authRevision, run: notice));
+      return;
+    }
+    notice();
+  }
+
+  void _flushDeviceNotices(int revision) {
+    final parked = [..._startupDeviceNotices];
+    _startupDeviceNotices.clear();
+    for (final p in parked) {
+      // Another sign-in began meanwhile: these are the previous account's.
+      if (p.revision != revision || !_authWorkCurrent(revision)) continue;
+      p.run();
+    }
+    // The replay put keys on the banner as they were when they were read; the log may have moved
+    // on since (dismissed, removed): the banner is what the log holds now.
+    if (parked.isNotEmpty) unawaited(_syncPendingDevices());
+  }
+
+  /// Devices that joined the account and this phone had never trusted, not yet dismissed. Rebuilt
+  /// from the log's persisted `pending` ([_syncPendingDevices]), so a restart does not lose them.
   final List<DevLogMember> newDevices = [];
+
+  /// Which of [newDevices] a fork suspended (not trusted here until the list is reviewed), as of the
+  /// last read of the log. "Mine" on the banner cannot lift that, so for these it opens the device's
+  /// page, which says why.
+  final Set<String> _suspendedNew = {};
+
+  bool newDeviceSuspended(String pub) => _suspendedNew.contains(pub);
+
+  /// Devices taken out of the account by another device, until dismissed. Not persisted: the device
+  /// history is the durable record.
+  final List<DeviceRemovalNotice> deviceRemovals = [];
+
+  /// Devices that joined and left the account before anyone here looked, until "Got it" (read from
+  /// the log's persisted `departed`, so a restart does not lose them), oldest first.
+  final List<DeviceLogDeparted> departedDevices = [];
+
+  /// The key that removed [d] is itself a device nobody looked at (still new, or itself gone before
+  /// anyone looked) — the alarming case. A device that signed itself out is never red.
+  bool departedRed(DeviceLogDeparted d) =>
+      !d.selfRemoved &&
+      d.removedBy.isNotEmpty &&
+      (newDevices.any((n) => n.pub == d.removedBy) ||
+          departedDevices.any((o) => o.pub == d.removedBy));
+
+  /// "Got it" on a device that left before it was looked at: saved, so the banner does not come back.
+  void dismissDeparted(String pub) {
+    _pendingSyncGen++;
+    departedDevices.removeWhere((d) => d.pub == pub);
+    // A "signed out" notice for the same key is the same ghost: the banner leaves it out while the
+    // departed mark is up, so this "Got it" is its dismissal too (it must not surface afterwards).
+    deviceRemovals.removeWhere((r) => r.pub == pub && r.selfRemoved);
+    unawaited(_dismissInLog(pubs: [pub]));
+    devicesRevision++;
+    notifyListeners();
+  }
 
   /// Bumped whenever the account's devices may have changed; the Devices page re-reads on it.
   int devicesRevision = 0;
 
   ViewerDeviceLog? get deviceLog => _deviceLog;
+
+  /// Devices this phone dismissed whose write to the log failed: the banner must not bring them back
+  /// on the next read of `pending`. Gone with the sign-in, or when the key is announced afresh.
+  final Set<String> _failedDismissals = {};
+
+  Future<void> _dismissInLog({String? pub, List<String>? pubs}) async {
+    final log = _deviceLog;
+    if (log == null) return;
+    try {
+      await log.dismiss(pub: pub, pubs: pubs);
+    } catch (error) {
+      debugPrint('devices: could not save the dismissal: $error');
+      _failedDismissals.addAll([...?pubs, ?pub]);
+    }
+  }
 
   void _initDeviceLog() {
     final log = _deviceLog = ViewerDeviceLog(
@@ -1997,7 +2130,11 @@ class AppNotifier extends ChangeNotifier {
       fetch: (since) => api.deviceKeys(since),
       append: (entry) => api.appendDeviceKey(entry),
       label: () => phoneClientDescriptor().name,
-      onAnnounce: (m) {
+      // The log saves "announced" before it calls back, so a call that found the app still starting
+      // up and was dropped would never be made again: [_whenSignedIn] parks it instead. Only a
+      // signed-out app (an in-flight read of the account that just left) drops one.
+      onAnnounce: (m) => _whenSignedIn(() {
+        _failedDismissals.remove(m.pub);
         if (newDevices.any((d) => d.pub == m.pub)) return;
         newDevices.add(m);
         devicesRevision++;
@@ -2009,7 +2146,8 @@ class AppNotifier extends ChangeNotifier {
               'your machines. Not yours? Remove it in Settings ▸ Your devices.',
         ));
         if (!_disposed) notifyListeners();
-      },
+      }),
+      onRemoved: (n) => _whenSignedIn(() => announceDeviceRemoval(n)),
       onSignedOut: () async {
         // Sign out first: it takes this phone's key out of the log, which needs the key it is about.
         await logout();
@@ -2017,12 +2155,83 @@ class AppNotifier extends ChangeNotifier {
       },
       onChanged: () {
         devicesRevision++;
+        unawaited(_syncPendingDevices());
         unawaited(_redialNewlyTrusted());
         if (!_disposed) notifyListeners();
       },
     );
     final links = peerLinks;
     if (links is DirectLink) links.deviceLog = log;
+  }
+
+  /// A device was taken out of the account (not by this phone): say so, once. A removal by a new
+  /// device nobody looked at is the alarming one; its notice opens that signer, the rest open the list.
+  void announceDeviceRemoval(DeviceRemovalNotice n) {
+    if (deviceRemovals.any((r) => r.pub == n.pub)) return;
+    deviceRemovals.add(n);
+    devicesRevision++;
+    unawaited(agentNotices.system.showAccountNotice(
+      key: n.red ? 'removedBy:${n.signer}:${n.pub}' : 'removed:${n.pub}',
+      title: n.title,
+      body: n.sentence,
+    ));
+    if (!_disposed) notifyListeners();
+  }
+
+  void dismissDeviceRemoval(String pub) {
+    // Only the notice. The same event may also be kept by the log as "left before you looked" (the
+    // departed band, which has its own "Got it" and is a durable mark): a notice dismissed here —
+    // however benign it reads, e.g. a self sign-out — never clears it.
+    deviceRemovals.removeWhere((r) => r.pub == pub);
+    notifyListeners();
+  }
+
+  /// Bumped by every read of `pending` and every local dismissal: a read that started before either
+  /// is stale and must not put dismissed devices back on the banner.
+  int _pendingSyncGen = 0;
+
+  /// Rebuild [newDevices] from the log's persisted `pending`, oldest first: what survived a restart,
+  /// and what another path (a `group_sync`, a dismiss) changed.
+  Future<void> _syncPendingDevices() async {
+    final log = _deviceLog;
+    if (log == null) return;
+    final gen = ++_pendingSyncGen;
+    final DeviceLogListing listing;
+    try {
+      listing = await log.list();
+    } catch (_) {
+      return;
+    }
+    if (_disposed || gen != _pendingSyncGen || status != AppStatus.authenticated) return;
+    final pending = listing.pending.toSet();
+    _suspendedNew
+      ..clear()
+      ..addAll([
+        for (final r in listing.members)
+          if (r.suspended) r.member.pub,
+      ]);
+    final next = [
+      for (final r in listing.members)
+        if (pending.contains(r.member.pub) &&
+            !r.self &&
+            !_failedDismissals.contains(r.member.pub))
+          r.member,
+    ]..sort((a, b) => a.seq.compareTo(b.seq));
+    final nextDeparted = [
+      for (final d in listing.departed)
+        if (!_failedDismissals.contains(d.pub)) d,
+    ];
+    final same = listEquals([for (final m in next) m.pub], [for (final m in newDevices) m.pub]);
+    final sameDeparted =
+        listEquals([for (final d in nextDeparted) d.pub], [for (final d in departedDevices) d.pub]);
+    if (same && sameDeparted) return;
+    newDevices
+      ..clear()
+      ..addAll(next);
+    departedDevices
+      ..clear()
+      ..addAll(nextDeparted);
+    notifyListeners();
   }
 
   /// A machine waiting for its password that the device key log now vouches for: dial it again.
@@ -2058,17 +2267,62 @@ class AppNotifier extends ChangeNotifier {
     unawaited(log.refresh());
   }
 
-  /// The devices list was opened: every device announced so far has been seen.
-  void seenNewDevices() {
-    if (newDevices.isEmpty) return;
-    newDevices.clear();
+  /// The devices list was opened: every device announced so far has been seen — the banner's, and
+  /// [pending], what the list itself read from the log (after a restart, before the banner is rebuilt
+  /// from it). Persisted, so the banner does not come back.
+  ///
+  /// [shown] is the banner's set as it was when the list was read: pass it when the page awaited
+  /// anything in between, or a device announced meanwhile — never shown — would be dismissed unseen.
+  /// Without it, the banner as it is now.
+  void seenNewDevices({Iterable<String> pending = const [], Iterable<String>? shown}) {
+    final bannerPubs = (shown ?? newDevices.map((d) => d.pub)).toList();
+    if (bannerPubs.isEmpty && pending.isEmpty) return;
+    // Exactly what was shown, never "all": a device added since (and not yet shown) stays pending.
+    // And a device that left before anyone looked is cleared by its own "Got it" only: opening the
+    // list is not that.
+    final departed = {for (final d in departedDevices) d.pub};
+    final marked = {...pending, ...bannerPubs}.where((p) => !departed.contains(p)).toList();
+    // Nothing marked: a read of `pending` under way (the one a startup replay starts, which takes a
+    // departed key's stale "New device" down) is not stale — let it land.
+    if (marked.isEmpty) return;
+    // A read of `pending` already under way predates this: it must not put them back.
+    _pendingSyncGen++;
+    unawaited(_dismissInLog(pubs: marked));
+    final before = newDevices.length;
+    newDevices.removeWhere((d) => marked.contains(d.pub));
+    if (newDevices.length != before) notifyListeners();
+  }
+
+  /// "It's mine" on [pub]. Only the device's own page, which shows why a key is Suspended, passes
+  /// [liftSuspension]: that is the person vouching for it. Anywhere else the key stays suspended —
+  /// the banner never said so.
+  void dismissNewDevice(String pub, {bool liftSuspension = false}) {
+    newDevices.removeWhere((d) => d.pub == pub);
+    // A key that joined and left before anyone looked: a "New device" for it is a stale replay, and its
+    // flag is cleared by its own "Got it" only ([dismissDeparted]) — "It's mine" here takes the banner
+    // down and marks nothing.
+    if (departedDevices.any((d) => d.pub == pub)) {
+      notifyListeners();
+      return;
+    }
+    _pendingSyncGen++;
+    unawaited(liftSuspension ? _dismissInLog(pub: pub) : _dismissInLog(pubs: [pub]));
     notifyListeners();
   }
 
-  void dismissNewDevice(String pub) {
-    newDevices.removeWhere((d) => d.pub == pub);
-    notifyListeners();
+  /// "Got it" on the Devices page's "Already on your account" list: persisted, shown once.
+  Future<void> seeDeviceBaseline() async {
+    try {
+      await deviceLog?.seeBaseline();
+    } catch (error) {
+      debugPrint('devices: could not save the baseline as seen: $error');
+    }
   }
+
+  /// Every add and remove on the account as this phone verified it. A seam of its own so a test can
+  /// answer without a real device log.
+  Future<DeviceLogHistory> deviceHistory() async =>
+      await _deviceLog?.history() ?? const DeviceLogHistory(rows: [], complete: false);
 
   /// Take [pub] out of the account on every device. Null when done, else why not.
   Future<String?> removeDevice(String pub) async {

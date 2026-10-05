@@ -12,6 +12,13 @@ export class GitProjectError extends Error {
   constructor(readonly code: string, message: string) { super(message) }
 }
 
+const worktreeDiskFull = 'Not enough disk space to create the worktree. Free space on this machine, then retry.'
+function diskFull(error: unknown): boolean {
+  const failure = error as { code?: string; stderr?: string }
+  return failure?.code === 'ENOSPC' || failure?.code === 'EDQUOT' ||
+    /no space left on device|disk quota exceeded/i.test(failure?.stderr ?? '')
+}
+
 export function validGitPath(path: unknown): path is string {
   return typeof path === 'string' && isAbsolute(path) && path.length <= 4096 && !/[\x00-\x1f\x7f]/.test(path)
 }
@@ -281,7 +288,10 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
       try { await mkdir(folder); destination = folder }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
     }
-  } catch { destination = undefined }
+  } catch (error) {
+    if (diskFull(error)) throw new GitProjectError('WORKTREE_FAILED', worktreeDiskFull)
+    destination = undefined
+  }
   if (!destination) throw new GitProjectError('WORKTREE_FAILED', 'Could not create a worktree folder. Check folder permissions, then retry.')
   const remote = remoteBranch(options.ref)
   try {
@@ -303,8 +313,9 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
       : remote && remote.branch === branch
         ? ['worktree', 'add', '--track', '-b', branch, '--', destination, options.ref!]
         : ['worktree', 'add', '--no-track', '-b', branch, '--', destination, head], 120_000)
-  } catch {
+  } catch (error) {
     // Keep any partial checkout and branch available for recovery.
+    if (diskFull(error)) throw new GitProjectError('WORKTREE_FAILED', worktreeDiskFull)
     throw new GitProjectError('WORKTREE_FAILED', `Could not create the worktree at ${destination}. Check Git and folder permissions, then retry.`)
   }
   // Harness made this branch: its cleanup may remove it, and a made-up name gives way to the session's.

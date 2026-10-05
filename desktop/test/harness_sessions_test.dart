@@ -74,10 +74,10 @@ void main() {
       expect(harnessActivityAge(null, now), '—');
       expect(
         harnessActivityAge(now.add(const Duration(minutes: 4)), now),
-        '0m',
+        'now',
       );
       for (final sample in [
-        (59, '0m'),
+        (59, 'now'),
         (300, '5m'),
         (3599, '59m'),
         (3600, '1h'),
@@ -120,41 +120,38 @@ void main() {
     );
   });
 
-  test(
-    'recent sorts by last use: a harness opened anywhere outranks a busier one',
-    () {
-      app.machineStates['m']!.agents = [
-        Agent.fromJson({'id': 'busy', 'updatedAt': '2026-09-26T11:00:00Z'}),
-        // Quiet since nine, but somebody opened it at noon — in any client.
-        Agent.fromJson({
-          'id': 'opened',
-          'updatedAt': '2026-09-26T09:00:00Z',
-          'lastOpenedAt': '2026-09-26T12:00:00Z',
-        }),
-        // Opened long ago and busy since: the later of the two counts.
-        Agent.fromJson({
-          'id': 'worked',
-          'updatedAt': '2026-09-26T10:00:00Z',
-          'lastOpenedAt': '2026-09-26T08:00:00Z',
-        }),
-        const Agent(id: 'unknown', name: 'Unknown'),
-      ];
-      for (final id in ['busy', 'opened', 'worked', 'unknown']) {
-        app.rememberOpenedHarness('m', id);
-      }
-      expect(SessionSort.recent.label, 'Recently used');
-      expect(
-        visibleHarnessSessions(harnessSessions(app)).map((row) => row.agent.id),
-        ['opened', 'busy', 'worked', 'unknown'],
-      );
-      expect(
-        harnessSessions(app)
-            .singleWhere((row) => row.agent.id == 'opened')
-            .lastUsedAt,
-        DateTime.utc(2026, 9, 26, 12),
-      );
-    },
-  );
+  test('recent activity ignores opening a quiet harness in any client', () {
+    app.machineStates['m']!.agents = [
+      Agent.fromJson({'id': 'busy', 'updatedAt': '2026-09-26T11:00:00Z'}),
+      // Opening it at noon does not change its nine o'clock activity.
+      Agent.fromJson({
+        'id': 'opened',
+        'updatedAt': '2026-09-26T09:00:00Z',
+        'lastOpenedAt': '2026-09-26T12:00:00Z',
+      }),
+      // Activity counts independently of when it was opened.
+      Agent.fromJson({
+        'id': 'worked',
+        'updatedAt': '2026-09-26T10:00:00Z',
+        'lastOpenedAt': '2026-09-26T08:00:00Z',
+      }),
+      const Agent(id: 'unknown', name: 'Unknown'),
+    ];
+    for (final id in ['busy', 'opened', 'worked', 'unknown']) {
+      app.rememberOpenedHarness('m', id);
+    }
+    expect(SessionSort.recent.label, 'Recently active');
+    expect(
+      visibleHarnessSessions(harnessSessions(app)).map((row) => row.agent.id),
+      ['busy', 'worked', 'opened', 'unknown'],
+    );
+    expect(
+      harnessSessions(app)
+          .singleWhere((row) => row.agent.id == 'opened')
+          .lastActivityAt,
+      DateTime.utc(2026, 9, 26, 9),
+    );
+  });
 
   test('attention filters live questions, retains missing agents, excludes paused history', () {
     app.rememberOpenedHarness('m', 'missing');

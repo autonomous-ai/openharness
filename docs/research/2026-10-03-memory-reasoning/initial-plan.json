@@ -1,0 +1,30 @@
+{
+  "started_at": "2026-10-03T00:36:53Z",
+  "hypothesis": "Keeping production extraction v6 unchanged, a bounded reasoning budget may preserve qualifications better than the same model with thinking disabled.",
+  "suite": "docs/research/2026-10-02-memory-meaning-cases.json",
+  "suite_sha256": "657aae9de4f301b660cc2c57dce0f80ae801f49e71921a2365b862ba15d0023e",
+  "arms": [
+    {
+      "id": "baseline",
+      "thinking": false,
+      "reasoning_tokens": 0
+    },
+    {
+      "id": "reasoning",
+      "thinking": true,
+      "reasoning_tokens": 1024
+    }
+  ],
+  "model": "Qwen3.8-27B-Q4_0.gguf",
+  "runtime": "llama.cpp 9870 (2d973636e)",
+  "max_calls": 16,
+  "max_output_tokens": 4096,
+  "context_tokens": 16384,
+  "timeout_per_call_ms": 90000,
+  "temperature": 0,
+  "seed": 42,
+  "retries": 0,
+  "production_writes": false,
+  "corpus": "synthetic only; private follow-up only if this comparison improves fidelity without losing abstention",
+  "decision": "Inspect stored claims, future actions, qualifiers, relevance and missing knowledge against frozen criteria. Do not promote a prompt change or provider setting from this local-reference result. Independent real-history release gates remain separate."
+}

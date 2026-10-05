@@ -217,6 +217,10 @@ Future<GroupSyncOutcome> syncTrustGroup({
   Duration timeout = const Duration(seconds: 20),
   Map<String, Object?>? devlog,
   Future<void> Function(String machinePub, Object? devlog)? onDevlog,
+
+  /// Keys a fork put out of trust here until reviewed (device_log_sync.dart): never pinned or seeded.
+  /// Asked again after [onDevlog], which can suspend a key in this very exchange.
+  Future<Set<String>> Function()? suspended,
 }) async {
   WebSocketChannel? channel;
   try {
@@ -224,7 +228,7 @@ Future<GroupSyncOutcome> syncTrustGroup({
     if (pin == null) return GroupSyncOutcome.none;
     final identity = await keys.identity();
     final selfPub = b64e(identity.pub);
-    final local = await _seeded(keys, selfPub);
+    final local = await _seeded(keys, selfPub, await suspended?.call() ?? const {});
     final self = GroupMember(
       pub: selfPub,
       kind: 'viewer',
@@ -268,7 +272,7 @@ Future<GroupSyncOutcome> syncTrustGroup({
       selfPub,
     );
     await keys.writeGroupRoster(merged.roster.toJson());
-    return await _apply(keys, merged);
+    return await _apply(keys, merged, await suspended?.call() ?? const {});
   } catch (_) {
     return GroupSyncOutcome.none;
   } finally {
@@ -278,7 +282,11 @@ Future<GroupSyncOutcome> syncTrustGroup({
 
 /// This phone's roster, with every machine it has pinned folded in — how a machine this phone linked
 /// by password reaches the rest of the group, and how links made before the group existed join it.
-Future<GroupRoster> _seeded(ViewerKeyStore keys, String selfPub) async {
+Future<GroupRoster> _seeded(
+  ViewerKeyStore keys,
+  String selfPub,
+  Set<String> suspended,
+) async {
   final stored = GroupRoster.parse(await keys.groupRoster());
   // Only pins the roster does not name yet: a pin's `linkedAt` is when THIS device pinned it (the
   // group's own pins included), and folding that in again would restamp the member as new on every
@@ -286,7 +294,7 @@ Future<GroupRoster> _seeded(ViewerKeyStore keys, String selfPub) async {
   final known = {for (final m in stored.members) m.pub};
   final pins = [
     for (final p in await keys.peers())
-      if (!known.contains(b64e(p.pub)))
+      if (!known.contains(b64e(p.pub)) && !suspended.contains(b64e(p.pub)))
         ?GroupMember.tryParse({
           'pub': b64e(p.pub),
           'machineId': p.machineId,
@@ -298,11 +306,15 @@ Future<GroupRoster> _seeded(ViewerKeyStore keys, String selfPub) async {
   return mergeGroupRoster(stored, GroupRoster(pins, const []), selfPub).roster;
 }
 
-Future<GroupSyncOutcome> _apply(ViewerKeyStore keys, GroupMerge merged) async {
+Future<GroupSyncOutcome> _apply(
+  ViewerKeyStore keys,
+  GroupMerge merged,
+  Set<String> suspended,
+) async {
   final pinned = <String>[], unpinned = <String>[];
   for (final m in merged.upserted) {
     final id = m.machineId;
-    if (!m.isMachine || id == null) continue;
+    if (!m.isMachine || id == null || suspended.contains(m.pub)) continue;
     final current = await keys.peer(id);
     if (current != null && b64e(current.pub) == m.pub) continue;
     await keys.pin(id, b64d(m.pub), label: m.label);

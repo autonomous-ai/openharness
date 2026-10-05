@@ -1,0 +1,43 @@
+{
+  "name": "@openharness/companions",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Optional companion experience with isolated companion and coding-memory subsystems.",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:bundle": "node --test scripts/test-bundle.mjs"
+  },
+  "dependencies": {
+    "ws": "8.21.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.43",
+    "@types/ws": "8.18.1",
+    "esbuild": "0.27.7",
+    "tsx": "4.23.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10",
+    "vite": "8.1.4"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    "./companion": {
+      "types": "./src/companion/api.ts",
+      "import": "./dist/companion.js"
+    },
+    "./memory": {
+      "types": "./src/memory/index.ts",
+      "import": "./dist/memory.js"
+    },
+    "./application": {
+      "types": "./src/application/index.ts",
+      "import": "./dist/application.js"
+    }
+  }
+}

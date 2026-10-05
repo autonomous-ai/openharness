@@ -56,18 +56,9 @@ export function ensureBundledCoreHarnesses(log: (line: string) => void = console
   return ready
 }
 
-/** The pair harness (pair/pairHarness.ts): generated on this machine, never listed in the Store or the picker. */
-export const PAIR_BUILTIN_SOURCE = 'builtin:pair'
-
-/** Install the pair harness's generated package. True once it is installed at this revision. */
-export function ensureBuiltinPair(id: string, files: BundledFiles): boolean {
-  if (!files['harness.json']) return false
-  return installBuiltin({ id, source: PAIR_BUILTIN_SOURCE, folder: 'pair', files, what: 'pair harness' })
-}
-
 /** Built-ins opened through their own product entry points, absent from the public picker. */
 export function isHiddenBuiltin(record: { source?: string | null }): boolean {
-  return record.source === PAIR_BUILTIN_SOURCE || record.source === DEVICES_BUILTIN_SOURCE
+  return record.source === 'builtin:pair' || record.source === DEVICES_BUILTIN_SOURCE
 }
 
 /** Materialize `files` under `.bundled/<folder>/<revision>` and point the index at it. Idempotent per revision. */

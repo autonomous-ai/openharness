@@ -14,18 +14,31 @@ api ?    web ⠹    blender ✓  +                   Search  Bell  (✿ Harness 
 
                                  panes
 
-Harnesses 118
+Harnesses 118   Machines 3   Models 4   [Claude icon] 68%   [Codex icon] 18%
                                                      M2 > project > branch > #439
 ```
 
 The context follows the focused pane. The branch stays clickable in the
-footer; pane headers do not repeat it. An empty New Tab keeps the footer when
-there are live sessions to inspect.
+footer; pane headers do not repeat it. An empty New Tab and the first welcome
+screen keep the footer visible, including zero counts, so Machines and Models
+are discoverable. Leave the right-side context blank on Welcome and New Tab;
+show machine/project/branch context only when a harness is open. A fresh computer
+with no sessions or installed models shows `Harnesses 0`, `Machines 1`, and
+`Models 0` after local setup and inventory finish; unread model inventory shows
+`—`.
 
-The left side shows only the number of open harnesses across connected owned machines, including
+The left side shows the number of open harnesses across connected owned machines, including
 idle and starting sessions. Count each live session even when no tab currently displays it. The
 focused-pane context remains at the right. Clicking Harnesses selects the existing Harness Monitor
 across all tabs/machines, creating one only when absent.
+
+Machines counts linked owned computers, including this computer; hover explains online/offline
+counts and click opens `@`. Models counts unique installed local variants (model id and
+quantization) across those machines, including stopped models. Downloads in the catalog, shared
+grids, APIs and subscriptions do not contribute. Click opens local models. Unknown inventory
+shows `—`; known cached inventory remains during outages with a tooltip explaining stale or
+missing machines. The model picker and footer share per-machine inventories; background
+reads never force a scan or set up Grid.
 
 Monitor starts with open sessions; a Stopped harnesses filter exposes retained work for cleanup.
 Storage is shown as separate Workspace and Session data columns before RAM, CPU and GPU. Explicit
@@ -38,14 +51,13 @@ Use spaces of 0.75 character cells within components and two cells between compl
 including the count. Adjacent controls contribute one cell of horizontal padding on each side;
 before the fixed companion slot, omit the preceding control's trailing cell because the artwork
 already has its own optical gutter. Do not add extra separation. The shared `workspaceBarValueGapCells`
-and `workspaceBarGroupGapCells` keep Flutter and native views aligned. Use neutral
-workspace ink at every usage level. Do not pad numbers or add dots, decimal figures or plus suffixes.
+and `workspaceBarGroupGapCells` keep Flutter and native views aligned. Count labels use neutral
+workspace ink. Do not pad numbers or add dots or decimal figures.
 
-The footer reads existing live inventory and never polls resource metrics. The Monitor viewer samples
+The footer reads existing live harness inventory and never polls resource metrics. The Monitor viewer samples
 local inventory every four seconds and linked machines every fifteen seconds while visible, with
 bounded storage work cached separately. Native and Flutter footers share the count, tooltip and
-navigation. Keep the count usable at narrow widths and preserve focused context. Subscription usage
-remains in Models/Subscriptions.
+navigation. Keep counts usable at narrow widths and preserve focused context.
 
 The captures below are historical and include resource groups that have since moved into Monitor.
 
@@ -204,13 +216,14 @@ truncate without moving or covering the close target. Clicking the model focuses
 that pane and opens the same unified Models picker as Cmd-:, preserving the
 existing target and availability guards.
 
-The footer shows subscription allowance **used**, alongside harness resource totals.
-Read the same deduplicated account rows as Models: each percentage uses the
-limiting window and expires under the same rules. Compute used = 100 − remaining
-and round to a whole percentage. Different accounts remain distinct. Unknown
-usage shows `-`; exhausted allowance shows `100%`. Names and percentages use
-the same neutral ink. Hover explains usage, account identity and reset windows;
-click opens Subscriptions. Do not invent account or usage readings.
+The footer shows subscription allowance **remaining**, with one provider icon and percentage
+per deduplicated account. Use the same limiting window and freshness rules as Models. Floor
+whole percentages, preserve a positive fraction as `<1%`, and show unknown as `—` and exhausted
+as `0%`. Healthy values are neutral, 6–20% uses `usageLow`, and 5% or less uses `usageCritical`.
+Only percentages change color; provider icons retain their real artwork. Each tooltip identifies
+its account, machines, remaining allowance, freshness and reset windows. Click selects that
+account in Subscriptions. At narrow widths, keep whole icon/value pairs and use `+N` to open
+overflow subscriptions. Do not invent account or usage readings.
 
 For the model label, prefer
 its local model ID or the daemon's observed subscription model (`selectedModel`),

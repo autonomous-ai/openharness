@@ -8,6 +8,7 @@ import 'dart:ui' show SemanticsAction, Tristate;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/local_key_value_store.dart';
@@ -17,6 +18,7 @@ import 'package:harness/notify/alert_sounds.dart';
 import 'package:harness/notify/system_notifications.dart';
 import 'package:harness/settings/sections/alerts_card.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/viewer/device_log_sync.dart' show DeviceRemovalCopy;
 
 class _Memory implements LocalKeyValueStore {
   final values = <String, String?>{};
@@ -102,6 +104,17 @@ AgentAlert _alert(
   kind: kind,
   at: DateTime(2026, 9, 25, 12),
 );
+
+class _ConflictApi extends ApiClient {
+  _ConflictApi() : super(config: AppConfig.dev, session: AuthSession());
+
+  @override
+  Future<Map<String, dynamic>?> daemonDevices() async => {
+    'members': <Object?>[],
+    'pending': <String>[],
+    'conflict': {'pub': 'holder', 'label': 'Old install', 'fingerprint': 'AAAA·BBBB', 'addedAt': 5, 'afterJoin': true},
+  };
+}
 
 const _machine = Machine(
   machineId: 'm1',
@@ -424,6 +437,7 @@ void main() {
       addTearDown(app.dispose);
       app.machines = [_machine];
       app.machineStates['m1'] = MachineState(_machine);
+      app.ownDaemonMachineIdForTest('m1');
       await app.handleEventForTest('m1', {
         'type': 'device_key_added',
         'payload': {'pub': 'pub-1', 'label': 'Test iPad', 'kind': 'viewer', 'fingerprint': 'AAAA·BBBB·CCCC·DDDD'},
@@ -436,6 +450,120 @@ void main() {
       expect(shown.body, endsWith('Not yours? Remove it in Settings ▸ Your devices.'));
       expect(shown.body, contains('Test iPad'));
       expect((shown.machineId, shown.agentId), ('@device', 'pub-1'));
+    });
+
+    Map<String, Object?> removedFrame({bool signerPending = false, bool selfRemoved = false, String pub = 'gone'}) => {
+      'type': 'device_key_removed',
+      'payload': {
+        'pub': pub, 'label': 'Old iPad', 'kind': 'viewer', 'fingerprint': 'AAAA·BBBB',
+        'signer': 'signer', 'signerLabel': 'MacBook', 'signerFingerprint': 'E2FB·0DF5·5FD8·E6C7',
+        'signerPending': signerPending, 'selfRemoved': selfRemoved, 'at': 1,
+      },
+    };
+
+    test('a removal the daemon reports reaches the system and the band; a red one opens the signer', () async {
+      final os = _Recorder();
+      final app = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+        systemNotifications: SystemNotifications(store: store(), notifier: os),
+      );
+      addTearDown(app.dispose);
+      app.machines = [_machine];
+      app.machineStates['m1'] = MachineState(_machine);
+      app.ownDaemonMachineIdForTest('m1');
+      await app.handleEventForTest('m1', removedFrame());
+      await app.handleEventForTest('m1', removedFrame(signerPending: true));
+      await Future<void>.delayed(Duration.zero);
+      // The same device twice is one notice, the later word.
+      expect(app.deviceRemovals.single.signerPending, isTrue);
+      expect(os.shown.map((n) => n.title), ['Device removed', 'Removed by a new device']);
+      expect(os.shown.first.body, 'Old iPad was removed from your account by MacBook.');
+      expect((os.shown.first.machineId, os.shown.first.agentId), ('', ''));
+      expect((os.shown.last.machineId, os.shown.last.agentId), ('@device', 'signer'));
+      // A new device that signs itself out is its own act: not red, and nothing to open.
+      await app.handleEventForTest('m1', removedFrame(signerPending: true, selfRemoved: true, pub: 'other'));
+      expect(os.shown.last.title, 'Device signed out');
+      expect((os.shown.last.machineId, os.shown.last.agentId), ('', ''));
+      app.dismissDeviceRemoval('gone');
+      app.dismissDeviceRemoval('other');
+      expect(app.deviceRemovals, isEmpty);
+      // A frame that is not whole raises nothing.
+      await app.handleEventForTest('m1', {'type': 'device_key_removed', 'payload': {'pub': 'x'}});
+      expect(app.deviceRemovals, isEmpty);
+    });
+
+    test('a red removal is never softened by a later plain one for the same device', () async {
+      final os = _Recorder();
+      final app = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+        systemNotifications: SystemNotifications(store: store(), notifier: os),
+      );
+      addTearDown(app.dispose);
+      app.machines = [_machine];
+      app.machineStates['m1'] = MachineState(_machine);
+      app.ownDaemonMachineIdForTest('m1');
+      await app.handleEventForTest('m1', removedFrame(signerPending: true));
+      await app.handleEventForTest('m1', removedFrame());
+      expect(app.deviceRemovals.single.red, isTrue);
+      expect(os.shown.map((n) => n.title), ['Removed by a new device']);
+    });
+
+    test('device frames from any machine but this computer’s own daemon raise nothing', () async {
+      final os = _Recorder();
+      final app = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+        systemNotifications: SystemNotifications(store: store(), notifier: os),
+      );
+      addTearDown(app.dispose);
+      const relayed = Machine(machineId: 'relayed', authMode: MachineAuthMode.remote, name: 'Remote');
+      app.machines = [_machine, relayed];
+      app.machineStates['m1'] = MachineState(_machine);
+      // The relayed machine carries a backend-supplied computer id that says it is "local": still not the daemon.
+      app.machineStates['relayed'] = MachineState(relayed)..localOnly = true;
+      app.ownDaemonMachineIdForTest('m1');
+      await app.handleEventForTest('relayed', {
+        'type': 'device_key_added',
+        'payload': {'pub': 'fake', 'label': 'X', 'kind': 'viewer'},
+      });
+      await app.handleEventForTest('relayed', removedFrame(signerPending: true));
+      await app.handleEventForTest('relayed', {'type': 'device_conflict', 'payload': {'pub': 'holder', 'label': 'H', 'fingerprint': 'AAAA', 'addedAt': 5, 'afterJoin': true}});
+      await Future<void>.delayed(Duration.zero);
+      expect(app.newDevices, isEmpty);
+      expect(app.deviceRemovals, isEmpty);
+      expect(app.deviceConflict, isNull);
+      expect(os.shown, isEmpty);
+      // The same frames from the own daemon are the daemon's word.
+      await app.handleEventForTest('m1', removedFrame(signerPending: true));
+      expect(app.deviceRemovals.single.red, isTrue);
+    });
+
+    test('a conflict frame is only a hint: the conflict is re-read from the daemon, and stays dismissed', () async {
+      final app = AppNotifier(config: AppConfig.dev, authSession: AuthSession(), configStore: null);
+      addTearDown(app.dispose);
+      final api = _ConflictApi();
+      app.api = api;
+      app.machines = [_machine];
+      app.machineStates['m1'] = MachineState(_machine);
+      app.ownDaemonMachineIdForTest('m1');
+      // A frame carrying a fake holder changes nothing by itself: what the daemon lists is what shows.
+      final frame = {
+        'type': 'device_conflict',
+        'payload': {'pub': 'fake', 'label': 'Fake', 'fingerprint': 'FFFF', 'addedAt': 5, 'afterJoin': true},
+      };
+      await app.handleEventForTest('m1', frame);
+      await Future<void>.delayed(Duration.zero);
+      expect(app.deviceConflict?.pub, 'holder');
+      expect(app.deviceConflict?.afterJoin, isTrue);
+      app.dismissDeviceConflict();
+      await app.handleEventForTest('m1', frame);
+      await Future<void>.delayed(Duration.zero);
+      expect(app.deviceConflict, isNull);
     });
   });
 

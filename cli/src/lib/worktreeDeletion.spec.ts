@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { RegisteredSession } from './registry.js'
-import { inspectWorktree, removeReviewedWorktree } from './worktreeDeletion.js'
+import { inspectWorkspace, inspectWorktree, removeReviewedWorktree } from './worktreeDeletion.js'
 
 const exec = promisify(execFile)
 describe('explicit worktree deletion', { timeout: 30_000 }, () => {
@@ -26,6 +26,21 @@ describe('explicit worktree deletion', { timeout: 30_000 }, () => {
     session = { agentId: 'selected', cwd: tree } as RegisteredSession
   })
   afterEach(() => rm(root, { recursive: true, force: true }))
+
+  it('describes full working, worktree and main paths without changing files, including subfolders', async () => {
+    await mkdir(join(tree, 'src'))
+    expect(await inspectWorkspace({ ...session, cwd: join(tree, 'src') }, [session])).toMatchObject({
+      kind: 'worktree', path: join(tree, 'src'), worktreePath: tree, mainPath: repo, canDelete: true,
+    })
+    expect(await inspectWorkspace({ ...session, cwd: repo }, [])).toMatchObject({ kind: 'main', path: repo, mainPath: repo, canDelete: false })
+    expect(await inspectWorkspace({ ...session, cwd: root }, [])).toMatchObject({ kind: 'folder', path: root, canDelete: false })
+    expect(await inspectWorkspace({ ...session, cwd: join(root, 'missing') }, [])).toMatchObject({ kind: 'unavailable', canDelete: false })
+    const shared = await inspectWorkspace(session, [session, { ...session, agentId: 'other' }])
+    expect(shared).toMatchObject({ kind: 'worktree', worktreePath: tree, mainPath: repo, canDelete: false })
+    expect(shared.reason).toContain('Another harness')
+    expect(await exists(tree)).toBe(true)
+    expect(await git(repo, 'show', 'feature:source')).toBe('keep main')
+  })
 
   it('removes the reviewed linked checkout and ignored output, retaining main and its branch', async () => {
     await mkdir(join(tree, 'node_modules'))

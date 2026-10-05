@@ -20,10 +20,22 @@ pub struct TmuxBackend<W: Write> {
     extra_shadow: std::collections::HashMap<(u16, u16), Extra>,
     /// A frame with several changes is one synchronized update (?2026), closed at its flush.
     syncing: bool,
+    /// Whether that is done at all (`HARNESS_TUI_SYNC=off` turns it off).
+    sync_ok: bool,
+    /// The next clear-all writes the screen again row by row instead of erasing it first (see
+    /// [`TmuxBackend::soft_clear_next`]); `force_whole` is that rewrite waiting for its draw.
+    soft: bool,
+    force_whole: bool,
     /// The cursor as last written: a frame that changes nothing writes nothing (an idle hn is
     /// silent, as tmux is — a terminal's or an outer tmux's activity mark stays clear).
     cursor_at: Option<Position>,
     cursor_shown: Option<bool>,
+}
+
+/// Whether a frame is wrapped in synchronized output (?2026): yes, unless `HARNESS_TUI_SYNC=off`
+/// (a terminal that mishandles it, e.g. ghostty-org/ghostty discussion 12062).
+fn sync_wanted(setting: &str) -> bool {
+    !matches!(setting.to_ascii_lowercase().as_str(), "off" | "0" | "false")
 }
 
 /// A cluster whose width terminals may count otherwise than hn does: several code points (a
@@ -84,7 +96,12 @@ impl Pen {
             match &want_link { Some(uri) => write!(w, "\x1b]8;;{uri}\x1b\\")?, None => w.write_all(b"\x1b]8;;\x1b\\")? }
             self.link = want_link;
         }
-        w.write_all(cell.symbol().as_bytes())
+        // A cell is printed, never executed: a control character (a tab a pane's grid keeps, a
+        // stray escape) would move the terminal's cursor where hn does not count it, and every
+        // cell after it on the row would land elsewhere. It goes as the blank it stands for.
+        let symbol = cell.symbol();
+        if symbol.chars().any(char::is_control) { return w.write_all(b" ") }
+        w.write_all(symbol.as_bytes())
     }
 
     /// Everything back to the terminal's defaults (and so known).
@@ -147,7 +164,16 @@ pub fn outer_features(features: &[String]) -> (bool, bool) {
 }
 
 impl<W: Write> TmuxBackend<W> {
-    pub fn new(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer), shadow: Vec::new(), extra_shadow: Default::default(), syncing: false, cursor_at: None, cursor_shown: None } }
+    pub fn new(writer: W) -> Self {
+        let sync_ok = sync_wanted(&std::env::var("HARNESS_TUI_SYNC").unwrap_or_default());
+        Self { sync_ok, ..Self::with_sync(writer) }
+    }
+
+    fn with_sync(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer), shadow: Vec::new(), extra_shadow: Default::default(), syncing: false, sync_ok: true, soft: false, force_whole: false, cursor_at: None, cursor_shown: None } }
+
+    /// The next `clear()` does not erase the screen: every row is written again, each erased and
+    /// rewritten in the same write, so a stale cell goes but the screen is never seen blank.
+    pub fn soft_clear_next(&mut self) { self.soft = true }
 
     fn row_risky(&self, y: u16) -> bool { self.shadow.get(y as usize).map(|r| r.iter().any(|c| risky(c.symbol()))).unwrap_or(false) }
 
@@ -173,6 +199,7 @@ impl<W: Write> Write for Counted<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let n = self.0.write(buf)?;
         WRITTEN.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+        crate::verify::capture(&buf[..n]);
         Ok(n)
     }
     fn flush(&mut self) -> io::Result<()> { self.0.flush() }
@@ -523,17 +550,23 @@ impl<W: Write> Backend for TmuxBackend<W> {
         }
         self.extra_shadow = extras;
         // Nothing changed: nothing written.
-        if cells.is_empty() { return Ok(()) }
+        let all = std::mem::take(&mut self.force_whole);
+        if cells.is_empty() && !all { return Ok(()) }
         // A row that holds (or held) a cluster the terminal may count otherwise is written again
         // whole from its first column, as fzf writes a line: a cell-by-cell update there would
         // leave a stale character where the two counts part (a Thai vowel beside a keycap).
         let touched: std::collections::BTreeSet<u16> = cells.iter().map(|c| c.1).collect();
         let was: std::collections::HashSet<u16> = touched.iter().copied().filter(|y| self.row_risky(*y)).collect();
         for (x, y, c) in &cells { self.remember(*x, *y, c) }
-        let whole: std::collections::BTreeSet<u16> = touched.into_iter().filter(|y| was.contains(y) || self.row_risky(*y)).collect();
+        let mut whole: std::collections::BTreeSet<u16> = touched.into_iter().filter(|y| was.contains(y) || self.row_risky(*y)).collect();
+        // A soft clear: every row of the screen (the terminal's height; else the rows known).
+        if all {
+            let rows = self.inner.size().map(|s| s.height as usize).unwrap_or(self.shadow.len()).max(self.shadow.len());
+            whole.extend((0..rows).map(|y| y as u16));
+        }
         // A single-cell update fits in the writer's one buffered flush; synchronizing it
         // adds sixteen bytes to an ordinary one-byte echo without hiding any redraw.
-        if !self.syncing && (cells.len() > 1 || !whole.is_empty()) { self.inner.write_all(b"\x1b[?2026h")?; self.syncing = true }
+        if self.sync_ok && !self.syncing && (cells.len() > 1 || !whole.is_empty()) { self.inner.write_all(b"\x1b[?2026h")?; self.syncing = true }
         let (usstyle, links) = frame.map(|f| (f.usstyle, f.links)).unwrap_or((false, false));
         let extra_at = |x: u16, y: u16| frame.and_then(|f| f.extras.get(&(x, y)));
         // CrosstermBackend writes through to its writer.
@@ -548,7 +581,11 @@ impl<W: Write> Backend for TmuxBackend<W> {
             self.cursor_at = Some(Position::new(x.saturating_add(width), *y));
         }
         for y in whole {
-            let Some(row) = self.shadow.get(y as usize) else { continue };
+            // A row of a soft clear with nothing on it is still erased: a stale cell may be there.
+            let Some(row) = self.shadow.get(y as usize) else {
+                if all { write!(w, "\x1b[{};1H", y + 1)?; pen.reset(w)?; w.write_all(b"\x1b[2K")?; self.cursor_at = None }
+                continue
+            };
             write!(w, "\x1b[{};1H", y + 1)?;
             self.cursor_at = Some(Position::new(0, y));
             pen.reset(w)?;
@@ -583,7 +620,16 @@ impl<W: Write> Backend for TmuxBackend<W> {
         self.inner.set_cursor_position(p)
     }
     fn clear(&mut self) -> io::Result<()> { self.shadow.clear(); self.extra_shadow.clear(); self.cursor_at = None; self.cursor_shown = None; self.inner.clear() }
-    fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> { if matches!(clear_type, ClearType::All) { self.shadow.clear(); self.extra_shadow.clear() } self.inner.clear_region(clear_type) }
+    fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> {
+        if matches!(clear_type, ClearType::All) {
+            self.shadow.clear();
+            self.extra_shadow.clear();
+            // A soft clear forgets what was written but erases nothing: the draw that follows writes
+            // every row, each erased and rewritten at once, so the screen is never seen blank.
+            if std::mem::take(&mut self.soft) { self.cursor_at = None; self.force_whole = true; return Ok(()) }
+        }
+        self.inner.clear_region(clear_type)
+    }
     fn append_lines(&mut self, n: u16) -> io::Result<()> { self.cursor_at = None; self.inner.append_lines(n) }
     fn size(&self) -> io::Result<Size> { self.inner.size() }
     fn window_size(&mut self) -> io::Result<WindowSize> { self.inner.window_size() }
@@ -596,6 +642,77 @@ impl<W: Write> Backend for TmuxBackend<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_control_character_in_a_cell_is_never_sent_to_the_terminal() {
+        // A tab written as a cell moves the terminal's cursor to its next tab stop: every cell after
+        // it on the row, written without a cursor move, then lands to the right of where hn put it.
+        use alacritty_terminal::index::{Column, Line};
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        let (mut a, mut tab, mut b) = (Cell::default(), Cell::default(), Cell::default());
+        a.set_char('a'); tab.set_symbol("\t"); b.set_char('b');
+        backend.draw([(0u16, 0u16, &a), (1, 0, &tab), (2, 0, &b)].into_iter()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        assert!(!written.contains(&b'\t'), "{:?}", String::from_utf8_lossy(&written));
+        let mut pane = crate::pane::Pane::new(1, "m", "a", 20, 2);
+        pane.feed(&written);
+        assert_eq!(pane.term.grid()[Line(0)][Column(2)].c, 'b', "b lands where hn drew it");
+    }
+
+    #[test]
+    fn a_soft_clear_writes_every_row_over_the_screen_without_erasing_it() {
+        use alacritty_terminal::index::{Column, Line};
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        let (mut a, mut b) = (Cell::default(), Cell::default());
+        a.set_char('a'); b.set_char('b');
+        backend.draw([(0u16, 0u16, &a), (1, 0, &b)].into_iter()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        // The next frame is the same (so a normal draw would write nothing), but a cell the terminal
+        // holds wrongly — a ghost — is the reason to write the screen again, and with no blank flash.
+        backend.soft_clear_next();
+        Backend::clear_region(&mut backend, ClearType::All).unwrap();
+        backend.draw([(0u16, 0u16, &a), (1, 0, &b)].into_iter()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let mut pane = crate::pane::Pane::new(1, "m", "a", 20, 4);
+        // The terminal before the repaint: the first frame, and a stale X the backend never wrote.
+        let first_len = written.iter().position(|&c| c == b'a').unwrap_or(0);
+        let _ = first_len;
+        pane.feed(b"\x1b[1;6HX\x1b[1;1H");
+        pane.feed(&written);
+        let text = String::from_utf8_lossy(&written);
+        assert!(!text.contains("\x1b[2J"), "a soft clear must not erase the screen: {text:?}");
+        assert_eq!(pane.term.grid()[Line(0)][Column(0)].c, 'a');
+        assert_eq!(pane.term.grid()[Line(0)][Column(5)].c, ' ', "the stale cell was erased by its row being written again");
+    }
+
+    #[test]
+    fn synchronized_output_is_on_unless_turned_off() {
+        assert!(sync_wanted(""));
+        assert!(sync_wanted("on"));
+        assert!(!sync_wanted("off"));
+        assert!(!sync_wanted("OFF"));
+    }
+
+    #[test]
+    fn a_frame_is_not_wrapped_in_2026_when_it_is_left_out() {
+        let draw = |sync_ok: bool| {
+            let mut written = Vec::new();
+            let mut backend = TmuxBackend::with_sync(&mut written);
+            backend.sync_ok = sync_ok;
+            let (mut a, mut b) = (Cell::default(), Cell::default());
+            a.set_char('a'); b.set_char('b');
+            backend.draw([(0u16, 0u16, &a), (1, 0, &b)].into_iter()).unwrap();
+            Backend::flush(&mut backend).unwrap();
+            drop(backend);
+            String::from_utf8_lossy(&written).to_string()
+        };
+        assert!(draw(true).contains("\x1b[?2026h") && draw(true).contains("\x1b[?2026l"));
+        assert!(!draw(false).contains("2026"));
+    }
 
     #[test]
     fn single_symbols_terminals_count_otherwise_are_risky_too() {

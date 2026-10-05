@@ -134,8 +134,55 @@ class ModelSearchCatalog extends ChangeNotifier {
   final _hosts = <String, ModelManagerController>{};
   final _managedRowIds = <String, String>{};
   bool _visible = false;
+  bool _watchInstalled = false;
   Map<String, ModelSearchEntry> entries = {};
   List<SwarmDestination> rows = const [];
+
+  /// The footer shares the picker's per-machine inventory, without loading API
+  /// catalogs or marking the picker visible. Start after the first frame.
+  void watchInstalled() {
+    if (_watchInstalled) return;
+    _watchInstalled = true;
+    _machinesChanged();
+  }
+
+  List<ModelManagerController> get _inventories => [manager, ..._hosts.values];
+
+  /// Same daemon model id + quantization on several machines is one variant.
+  /// Catalog downloads, API rows, subscriptions and shared grids are excluded.
+  int? get installedCount {
+    final inventories = _inventories.where((owner) => owner.loaded);
+    if (inventories.isEmpty) return null;
+    return {
+      for (final owner in inventories)
+        for (final model in owner.localModels)
+          if (model.downloaded || model.canStop)
+            (model.id.trim().toLowerCase(), model.quantization?.toLowerCase()),
+    }.length;
+  }
+
+  String get installedDetail {
+    final count = installedCount;
+    final machines = _inventories
+        .where(
+          (owner) => owner.localModels.any(
+            (model) => model.downloaded || model.canStop,
+          ),
+        )
+        .length;
+    final unknown = _inventories
+        .where((owner) => !owner.inventoryAvailable)
+        .length;
+    return [
+      count == null
+          ? 'Installed local models have not been read yet.'
+          : '$count local model${count == 1 ? '' : 's'} installed across '
+                '$machines machine${machines == 1 ? '' : 's'}.',
+      if (unknown > 0)
+        'Inventory unavailable on $unknown machine${unknown == 1 ? '' : 's'}; showing last known models.',
+      'Open local models.',
+    ].join('\n');
+  }
 
   void setVisible(bool visible) {
     if (_visible == visible) return;
@@ -153,17 +200,19 @@ class ModelSearchCatalog extends ChangeNotifier {
     for (final id in _hosts.keys.toList()) {
       final machine = machines[id];
       if (machine == null ||
-          machine.isLocalMachine ||
-          machine.machine.isShared) {
+          id == manager.machine?.machine.machineId ||
+          machine.machine.isShared ||
+          machine.needsLink) {
         _hosts.remove(id)!.dispose();
         _managedRowIds.removeWhere((key, _) => key.startsWith('$id:'));
       }
     }
-    if (_visible) {
+    if (_visible || _watchInstalled) {
       for (final machine in machines.values) {
         final id = machine.machine.machineId;
-        if (machine.isLocalMachine ||
+        if (id == manager.machine?.machine.machineId ||
             machine.machine.isShared ||
+            machine.needsLink ||
             _hosts.containsKey(id)) {
           continue;
         }
@@ -171,10 +220,11 @@ class ModelSearchCatalog extends ChangeNotifier {
           manager.app,
           targetMachineId: id,
           poll: manager.poll && pollHosts,
+          backgroundInventory: _watchInstalled,
         );
         _hosts[id] = controller;
         controller.addListener(_refresh);
-        controller.setPanelVisible(true);
+        controller.setPanelVisible(_visible);
         controller.start();
       }
     }
@@ -202,7 +252,9 @@ class ModelSearchCatalog extends ChangeNotifier {
     );
     if (matching.length != 1) return null;
     final host = matching.single;
-    return host.isLocalMachine ? manager : _hosts[host.machine.machineId];
+    return host.machine.machineId == manager.machine?.machine.machineId
+        ? manager
+        : _hosts[host.machine.machineId];
   }
 
   String _managedKey(ModelManagerController owner, LocalModel model) =>
@@ -335,7 +387,7 @@ class ModelSearchCatalog extends ChangeNotifier {
       ...discovered.where((entry) => !entry.own),
       for (final row in subscriptions.rows)
         ModelSearchEntry(
-          id: 'model:subscription:${row['engine']}:${row['title']}:${row['account']}',
+          id: subscriptionSearchId(row),
           name: [
             '${row['title'] ?? 'Subscription'}',
             if ('${row['account'] ?? ''}'.isNotEmpty) '${row['account']}',

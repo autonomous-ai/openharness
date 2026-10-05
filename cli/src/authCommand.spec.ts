@@ -5,12 +5,12 @@ import { hostname, tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { useBundledCli } from './__fixtures__/bundledCli.js'
 import { b64d, b64e, fingerprint, newIdentity } from './lib/e2ee/core.js'
 import { listenLocalSocket, localSocketPath } from './lib/localSocket.js'
 
 const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
-const CLI_SOURCE = join(CLI_ROOT, 'src', 'cli.ts')
-const TSX = join(CLI_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs')
+const cli = useBundledCli()
 const FP = /^[0-9A-F]{4}(·[0-9A-F]{4}){3}$/
 const dirs: string[] = []
 const servers: Server[] = []
@@ -72,7 +72,7 @@ function recordingGrid(root: string): string {
 }
 
 function runSync(root: string, args: string[], backendUrl?: string) {
-  return spawnSync(process.execPath, [TSX, CLI_SOURCE, ...args], {
+  return spawnSync(process.execPath, [cli(), ...args], {
     cwd: CLI_ROOT,
     encoding: 'utf8',
     env: envFor(root, backendUrl),
@@ -84,7 +84,7 @@ function runSync(root: string, args: string[], backendUrl?: string) {
  *  so a fake server living here could never answer the child's request and the pair would deadlock. */
 function runAsync(root: string, args: string[], backendUrl?: string): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [TSX, CLI_SOURCE, ...args], { cwd: CLI_ROOT, env: envFor(root, backendUrl) })
+    const child = spawn(process.execPath, [cli(), ...args], { cwd: CLI_ROOT, env: envFor(root, backendUrl) })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (c: Buffer) => { stdout += c.toString() })
@@ -361,7 +361,7 @@ describe('harness status — device row', () => {
 /** A `harness … --json` child driven the way the desktop app drives it: stdin left open (closing it is
  *  the app going away), stdout read one JSON line at a time. */
 function jsonChild(root: string, backendUrl: string, args: string[]) {
-  const child = spawn(process.execPath, [TSX, CLI_SOURCE, ...args], { cwd: CLI_ROOT, env: envFor(root, backendUrl) })
+  const child = spawn(process.execPath, [cli(), ...args], { cwd: CLI_ROOT, env: envFor(root, backendUrl) })
   const lines: Record<string, unknown>[] = []
   const waiters: Array<(line: Record<string, unknown>) => void> = []
   let buffer = ''
@@ -466,7 +466,8 @@ describe('harness login --json', () => {
     expect(await login.next()).toEqual({ type: 'result', status: 'success', email: 'dee@example.com', fingerprint: expect.stringMatching(FP) })
     expect(await login.exit).toBe(0)
     const session = JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8')) as Record<string, unknown>
-    expect(session).toMatchObject({ accessToken: 'tok_qr', method: 'qr' })
+    // A sign-in by hand: a sign-in epoch of its own, which the device key log keeps its marks by.
+    expect(session).toMatchObject({ accessToken: 'tok_qr', method: 'qr', signInEpoch: expect.stringMatching(/^[0-9a-f]{32}@\d+$/) })
     expect(calls.map((c) => c.url)).not.toContain('/api/auth/qr/cancel')
   }, 30_000)
 
@@ -566,7 +567,7 @@ describe('harness login --json', () => {
     })
 
     const gridCalls = recordingGrid(root)
-    const child = spawn(process.execPath, [TSX, CLI_SOURCE, 'login', '--json'], {
+    const child = spawn(process.execPath, [cli(), 'login', '--json'], {
       cwd: CLI_ROOT,
       env: envFor(root, base),
     })
