@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { env } from '../config/env.js'
 import {
   AGENT_NAME_RE,
   BYPASS_PERMISSION_FLAGS,
@@ -16,6 +17,9 @@ import {
   terminalHintLines,
   buildEngineCommandArgv,
   buildEngineLaunchArgv,
+  buildTerminalLaunchArgv,
+  interactiveEngineShell,
+  isPosixShell,
   commandAvailableInInteractiveShell,
   commandSupportsFlagInInteractiveShell,
   dropPermissionFlagIfUnsupported,
@@ -490,6 +494,57 @@ describe('buildEngineLaunchArgv', () => {
       'muse', 'amp', 'grok', 'agy', 'copilot', 'devin'] as const) {
       expect(LAUNCH_RESUME_FLAG[engine]?.length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('a login shell that is not POSIX', () => {
+  let dataDir = ''
+  let savedDataDir = ''
+  beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'launch-shell-')); savedDataDir = env.ADAPTER_DATA_DIR; env.ADAPTER_DATA_DIR = dataDir })
+  afterEach(() => { env.ADAPTER_DATA_DIR = savedDataDir; rmSync(dataDir, { recursive: true, force: true }) })
+
+  it('tells the POSIX shells from the rest by name', () => {
+    for (const shell of ['/bin/sh', '/bin/bash', '/bin/zsh', '/usr/bin/dash', '/bin/ksh', '/usr/local/bin/mksh', '/bin/ash', '/usr/bin/yash']) expect(isPosixShell(shell), shell).toBe(true)
+    for (const shell of ['/usr/local/bin/fish', '/bin/tcsh', '/bin/csh', '/opt/homebrew/bin/nu', '/usr/bin/xonsh', '/usr/bin/elvish']) expect(isPosixShell(shell), shell).toBe(false)
+  })
+
+  it('asks each its own way for the person\'s interactive startup files', () => {
+    expect(interactiveEngineShell('/bin/zsh')?.args).toEqual(['-lic'])
+    expect(interactiveEngineShell('/bin/bash')?.args).toEqual(['-ic'])
+    expect(interactiveEngineShell('/usr/bin/dash')?.args).toEqual(['-ic'])
+    expect(interactiveEngineShell('/usr/local/bin/fish')).toMatchObject({ args: ['-i', '-c'], label: 'fish shell' })
+    expect(interactiveEngineShell('/bin/tcsh')?.args).toEqual(['-i', '-c'])
+    expect(interactiveEngineShell('/opt/homebrew/bin/nu')?.args).toEqual(['-c'])
+  })
+
+  it('launches an engine through the shell, which hands a one-time POSIX script to /bin/sh', () => {
+    const argv = buildEngineLaunchArgv('claude', { cwd: "/work/it's here" }, '/usr/local/bin/fish', '/opt/node/bin/node', '/opt/grid/bin/grid', '/usr/bin/tmux')
+    expect(argv.slice(0, 3)).toEqual(['/usr/local/bin/fish', '-i', '-c'])
+    expect(argv).toHaveLength(4)
+    const file = /^exec \/bin\/sh '(.+)'$/.exec(argv[3])?.[1]
+    expect(file && file.startsWith(join(dataDir, 'launch'))).toBe(true)
+    const script = readFileSync(file!, 'utf8')
+    // It removes itself first, then takes the arguments a POSIX shell would have been given.
+    expect(script.startsWith(`rm -f -- "$0"\nset -- '/work/it'"'"'s here' '${engineBin('claude')}'`)).toBe(true)
+    expect(script).toContain('harness_engine "$@"')
+    // The same launch for zsh is unchanged: no file, the script straight to zsh.
+    const zsh = buildEngineLaunchArgv('claude', { cwd: '/work' }, '/bin/zsh', '/opt/node/bin/node', '/opt/grid/bin/grid', '/usr/bin/tmux')
+    expect(zsh.slice(0, 4)).toEqual(['/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', '/bin/zsh', '-lic'])
+  })
+
+  it.skipIf(!existsSync('/bin/tcsh'))('runs that script for real under tcsh, with its arguments intact and the file gone', () => {
+    const argv = buildEngineLaunchArgv('claude', { cwd: dataDir, installFirst: undefined }, '/bin/tcsh', '/opt/node/bin/node', '/opt/grid/bin/grid', null)
+    const file = /^exec \/bin\/sh '(.+)'$/.exec(argv[argv.length - 1])![1]
+    // Run the file the way tcsh would hand it over, with the engine replaced by printf.
+    writeFileSync(file, readFileSync(file, 'utf8').replace(/harness_engine "\$@"\s*$/, 'printf "%s|" "$PWD" "$@"'))
+    const out = execFileSync('/bin/tcsh', ['-i', '-c', argv[argv.length - 1]], { encoding: 'utf8', env: { ...process.env, HOME: dataDir }, stdio: ['ignore', 'pipe', 'ignore'] })
+    expect(out).toContain(`${dataDir}|${engineBin('claude')}|`)
+    expect(existsSync(file)).toBe(false)
+  })
+
+  it('opens a terminal tile with /bin/sh entering the folder, then the person\'s own shell', () => {
+    expect(buildTerminalLaunchArgv({ cwd: '/work' }, '/usr/local/bin/fish')).toEqual(['/bin/sh', '-c', expect.stringContaining('exec "$@"'), 'harness-terminal', '/work', '/usr/local/bin/fish'])
+    expect(buildTerminalLaunchArgv({ cwd: '/work' }, '/bin/zsh').slice(0, 2)).toEqual(['/bin/zsh', '-c'])
   })
 })
 

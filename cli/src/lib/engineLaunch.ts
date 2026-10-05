@@ -1,6 +1,9 @@
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import { isAbsolute, basename, dirname, join } from 'node:path'
+import { env } from '../config/env.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { isOpencodeV2 } from '../engines/opencode/version.js'
 import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
@@ -400,13 +403,32 @@ function currentUserShell(): string | undefined {
   }
 }
 
+/**
+ * The shells that speak the POSIX shell language every launch script here is written in. Any other
+ * login shell (fish, tcsh, csh, nushell, xonsh) cannot run one: handed the script with `-c`, it fails
+ * on the first `if … then` or `"$@"`, and the engine never starts. tcsh ships with macOS and stands
+ * in for all of them: before this, no agent started at all for a person whose shell was not POSIX,
+ * and no terminal tile either (e2e/shells.e2e.ts).
+ */
+const POSIX_SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'oksh', 'pdksh', 'ash', 'yash', 'posh', 'busybox'])
+/** Shells that are not POSIX but take `-i` to load the person's interactive startup files. */
+const INTERACTIVE_FLAG_SHELLS = new Set(['fish', 'tcsh', 'csh', 'xonsh'])
+
+export function isPosixShell(path: string): boolean {
+  return POSIX_SHELLS.has(basename(path).toLowerCase())
+}
+
 export function interactiveEngineShell(shell: string | undefined = undefined): InteractiveEngineShell | null {
   const candidate = shell === undefined ? currentUserShell() : shell
   if (!candidate || !isAbsolute(candidate)) return null
-  switch (basename(candidate).toLowerCase()) {
+  const name = basename(candidate).toLowerCase()
+  switch (name) {
     case 'zsh': return { path: candidate, args: ['-lic'], label: 'zsh login shell' }
     case 'bash': return { path: candidate, args: ['-ic'], label: 'bash interactive shell' }
-    default: return { path: candidate, args: ['-ic'], label: `${basename(candidate)} interactive shell` }
+    default: return isPosixShell(candidate)
+      ? { path: candidate, args: ['-ic'], label: `${name} interactive shell` }
+      // Separate flags: not every one of these reads them combined.
+      : { path: candidate, args: INTERACTIVE_FLAG_SHELLS.has(name) ? ['-i', '-c'] : ['-c'], label: `${name} shell` }
   }
 }
 
@@ -415,10 +437,28 @@ export function interactiveEngineShell(shell: string | undefined = undefined): I
  * DISABLE_UPDATE_PROMPT would auto-update instead; DISABLE_AUTO_UPDATE skips that work entirely.
  * Keep ordinary terminal launches unchanged, and keep loading rc files for PATH/version managers. */
 function engineShellArgv(shell: InteractiveEngineShell, args: readonly string[]): string[] {
+  if (!isPosixShell(shell.path)) return throughPosixShell(shell, args)
   const prefix = basename(shell.path).toLowerCase() === 'zsh'
     ? ['/usr/bin/env', 'DISABLE_AUTO_UPDATE=true']
     : []
   return [...prefix, shell.path, ...shell.args, ...args]
+}
+
+/**
+ * For a shell that is not POSIX: it loads the person's environment (their PATH, their version
+ * managers), then hands the script to /bin/sh. The script and its arguments go in a one-time file, so
+ * all the person's shell parses is `exec /bin/sh '<file>'`, which fish, tcsh, nushell and xonsh read
+ * alike; the file removes itself as it starts. It sits in the daemon's own data folder, private to
+ * this user, and holds no secret: those reach the pane through the session's environment, never its
+ * command. `args` is what a POSIX shell would take after `-c`: the script, `$0`, then the arguments.
+ */
+function throughPosixShell(shell: InteractiveEngineShell, args: readonly string[]): string[] {
+  const [script = '', , ...positional] = args
+  const directory = join(env.ADAPTER_DATA_DIR, 'launch')
+  mkdirSync(directory, { recursive: true, mode: 0o700 })
+  const file = join(directory, `${randomUUID()}.sh`)
+  writeFileSync(file, `rm -f -- "$0"\nset -- ${positional.map(shellSingleQuote).join(' ')}\n${script}`, { mode: 0o600 })
+  return [shell.path, ...shell.args, `exec /bin/sh ${shellSingleQuote(file)}`]
 }
 
 /**
@@ -644,7 +684,10 @@ export function buildTerminalLaunchArgv(
   const hintPrelude = opts.terminalHint && process.env.HARNESS_OS !== '1'
     ? `printf '%s\\n' ${terminalHintLines(opts.terminalHint.machineName).map(shellSingleQuote).join(' ')}\n`
     : ''
-  return [path, '-c', RAISE_OPEN_FILES_SH + clearEnvPrelude(opts.clearEnv) + cwdPrelude + hintPrelude + 'shift\nexec "$@"', 'harness-terminal', opts.cwd ?? '', path, ...loginArgs]
+  // The prelude is a POSIX script. For a shell that is not POSIX, /bin/sh runs it and then execs the
+  // person's shell, which loads its own startup files as it always does.
+  const interpreter = isPosixShell(path) ? path : '/bin/sh'
+  return [interpreter, '-c', RAISE_OPEN_FILES_SH + clearEnvPrelude(opts.clearEnv) + cwdPrelude + hintPrelude + 'shift\nexec "$@"', 'harness-terminal', opts.cwd ?? '', path, ...loginArgs]
 }
 
 /**
