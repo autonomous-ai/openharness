@@ -271,9 +271,17 @@ describe('refuseServedDataFolder', () => {
     }
     expect(await run(['none'])).toEqual({ outcome: 'started', waited: 0, lines: [] })
     expect(await run([{ pid: 7, corePid: 8 }, { pid: 7, corePid: 8 }, 'none'])).toMatchObject({ outcome: 'started', waited: 500 })
-    const silent = await run(['unknown', 'none'])
-    expect(silent).toMatchObject({ outcome: 'started', waited: 250 })
-    expect(silent.lines[0]).toContain('without saying who it is')
+    // A daemon that does not say who it is is busy or hung, not leaving: every release with this socket
+    // says its pid. Refused at once, as before: a person waiting on a start never waits out the bound
+    // for it (the fake daemon of cliCommand.spec.ts answered without a pid, and each start took 20 s).
+    expect(await run(['unknown', 'none'])).toMatchObject({ outcome: 'EADDRINUSE', waited: 0, lines: [] })
+    // The orphan itself may go quiet while it stops, once it has been seen to be one.
+    const stopping = await run([{ pid: 7, corePid: 8 }, 'unknown', 'none'])
+    expect(stopping).toMatchObject({ outcome: 'started', waited: 500 })
+    expect(stopping.lines).toEqual([
+      '[cli] this data folder is still served by the core (pid 8) of a master that is gone (pid 7) — waiting for it to leave',
+      '[cli] the core whose master is gone has left — starting',
+    ])
     // Its master alive, or no master at all: another daemon.
     expect(await run([{ pid: 7, corePid: 8 }], () => true)).toMatchObject({ outcome: 'EADDRINUSE', waited: 0 })
     expect(await run([{ pid: 8, corePid: 8 }])).toMatchObject({ outcome: 'EADDRINUSE', waited: 0 })

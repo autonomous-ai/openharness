@@ -216,31 +216,34 @@ const SERVED_FOLDER_DEFAULTS: ServedFolderDeps = {
  * or systemd a master that died is started again at once, and its new core found the old one still
  * there: refused, it exits for good, its master with it, cleanly, and neither launchd's
  * `SuccessfulExit=false` nor systemd's `Restart=on-failure` starts a clean exit again, so the daemon stayed
- * down until the next login. Such a core is waited for, a bounded while, and so is one that answers
- * nothing while it stops. A daemon whose master is alive, or that runs without one, is another daemon,
- * and refused at once as before.
+ * down until the next login. Such a core is waited for, a bounded while, and once it has said so, so is
+ * a silence from it while it stops. A daemon whose master is alive, or that runs without one, is another
+ * daemon, and refused at once as before. So is one that answers without saying who it is: every release
+ * with this socket has said its pid in `/api/status`, so a silence or an answer without one is a daemon
+ * that is busy or hung, not one that is leaving, and a person waiting on `harness start` or the app must
+ * not wait out the orphan's bound for it (cliCommand.spec.ts, the CI runs of #819).
  */
 export async function refuseServedDataFolder(
   path: string | null, timeoutMs = 1_000, deps: ServedFolderDeps = SERVED_FOLDER_DEFAULTS, waitMs = ORPHAN_WAIT_MS,
 ): Promise<void> {
   if (!path) return
   const deadline = deps.now() + waitMs
-  let said = false
+  let orphanSeen = false
   for (;;) {
     const server = await deps.who(path, timeoutMs)
     if (server === 'none') {
-      if (said) deps.log('[cli] the core whose master is gone has left — starting')
+      if (orphanSeen) deps.log('[cli] the core whose master is gone has left — starting')
       return
     }
-    const orphan = server !== 'unknown' && server.pid !== server.corePid && !deps.alive(server.pid)
-    if (server !== 'unknown' && !orphan) throw alreadyServing(path)
-    if (deps.now() >= deadline) throw alreadyServing(path)
-    if (!said) {
-      deps.log(server === 'unknown'
-        ? '[cli] something answers on this data folder\'s socket without saying who it is — waiting for it to leave'
-        : `[cli] this data folder is still served by the core (pid ${server.corePid}) of a master that is gone (pid ${server.pid}) — waiting for it to leave`)
-      said = true
+    if (server === 'unknown') {
+      // Only the core already seen to be an orphan may go quiet while it stops.
+      if (!orphanSeen) throw alreadyServing(path)
+    } else {
+      if (server.pid === server.corePid || deps.alive(server.pid)) throw alreadyServing(path)
+      if (!orphanSeen) deps.log(`[cli] this data folder is still served by the core (pid ${server.corePid}) of a master that is gone (pid ${server.pid}) — waiting for it to leave`)
+      orphanSeen = true
     }
+    if (deps.now() >= deadline) throw alreadyServing(path)
     await deps.sleep(ORPHAN_POLL_MS)
   }
 }
