@@ -19,11 +19,15 @@ describe('the core API services stand on', () => {
       externalSessions: { list: vi.fn(), scan: vi.fn() } as unknown as CoreApiDeps['externalSessions'],
       openSessions: { known: vi.fn(), fresh: vi.fn() } as unknown as CoreApiDeps['openSessions'],
       syncSession: vi.fn(),
+      runtimeModels: vi.fn(async () => []),
       viewerChanged: vi.fn(),
       gridNamed: vi.fn(),
+      gridModelsChanged: vi.fn(),
       dshInstallStatus: vi.fn(),
       mintGridName: vi.fn(async () => 'grid-1'),
       accessToken: vi.fn(async () => 'token'),
+      privateGridName: vi.fn(async () => 'grid-1'),
+      machineName: vi.fn(() => 'Studio'),
     }
     const core = createCoreApi(deps)
     expect(core.dataDir).toBe('/data')
@@ -37,12 +41,16 @@ describe('the core API services stand on', () => {
     expect(core.agents.byAgent('gone')).toBeUndefined()
     expect(core.agents.terminalAvailable('live')).toBe(true)
     expect(core.agents.sync).toBe(deps.syncSession)
+    expect(core.agents.runtimeModels).toBe(deps.runtimeModels)
     expect(core.clients.viewerChanged).toBe(deps.viewerChanged)
     expect(core.clients.dshInstallStatus).toBe(deps.dshInstallStatus)
     expect(core.agents.advertised().map((s) => s.agentId)).toEqual(['live'])
     expect(core.clients.gridNamed).toBe(deps.gridNamed)
+    expect(core.clients.gridModelsChanged).toBe(deps.gridModelsChanged)
     expect(core.account.mintGridName).toBe(deps.mintGridName)
     expect(core.account.accessToken).toBe(deps.accessToken)
+    expect(core.account.privateGridName).toBe(deps.privateGridName)
+    expect(core.account.machineName).toBe(deps.machineName)
   })
 
   it('falls back, when the teams fail, to an undo that has nothing to undo', () => {

@@ -106,5 +106,23 @@ describe('closing agents no window shows', () => {
       expect(request).toHaveBeenCalledWith({ agentId: 'changing', sessionId: 's1', createdAt: new Date(0).toISOString(), mode: 'inspect' })
       expect(request).toHaveBeenCalledTimes(3)
     })
+
+    it('a close asked for while the preview is reading the agent is carried out, not answered with the reading', async () => {
+      // The preview inspects every hidden agent; a window's close of one of them arriving meanwhile was
+      // once answered with that inspect's `{ activity }`, and the agent left running (e2e/windows.e2e.ts).
+      const busy = row({ agentId: 'busy', sessionId: 's9', runtimes: [] })
+      const registry = { advertised: vi.fn(() => [busy]), byAgent: vi.fn((id: string) => (id === 'busy' ? busy : undefined)),
+        list: vi.fn(() => [busy]), setClosePlan: vi.fn() }
+      const { deps, closing } = setup({ registry: registry as unknown as ClosingDeps['registry'] })
+      let read!: (screen: string) => void
+      vi.mocked(deps.captureTerminal).mockImplementationOnce(() => new Promise<string | null>((resolve) => { read = resolve }))
+      const preview = closing.cleanupPreview()
+      await vi.waitFor(() => expect(read).toBeTypeOf('function'))
+      const close = closing.closeAgentService.request({ agentId: 'busy', sessionId: 's9', createdAt: new Date(0).toISOString(), mode: 'now' })
+      read('screen')
+      expect((await preview).agents).toEqual([expect.objectContaining({ agentId: 'busy' })])
+      expect(await close).toEqual({ closed: true })
+      expect(deps.stopAgent).toHaveBeenCalledOnce()
+    })
   })
 })

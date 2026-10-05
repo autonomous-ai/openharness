@@ -229,7 +229,11 @@ describe('the viewers in their own process', () => {
     await expect(api.external.open.fresh()).resolves.toEqual(new Map())
     await expect(api.account.mintGridName()).resolves.toBeNull()
     await expect(api.account.accessToken()).rejects.toThrow('the viewers hold no credential')
+    await expect(api.account.privateGridName()).resolves.toBeNull()
+    expect(api.account.machineName()).toBeNull()
+    await expect(api.agents.runtimeModels()).resolves.toEqual([])
     api.clients.gridNamed('grid')
+    api.clients.gridModelsChanged()
     api.clients.dshInstallStatus({ phase: 'clone' })
   })
 

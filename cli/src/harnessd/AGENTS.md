@@ -1,6 +1,7 @@
 # harnessd's master
 
-The process `harness start` launches. It keeps the core and the services running, and nothing else.
+The process `harness start` launches (or launchd or systemd, once `harness service install` opted in).
+It keeps the core and the services running, and nothing else.
 
 ## Rules
 
@@ -14,3 +15,8 @@ The process `harness start` launches. It keeps the core and the services running
    unknown ones are ignored, because during an update an older master supervises a newer core.
 4. **The core is always restarted; a service may be parked.** Never let a failing service stop the
    core or the master.
+5. **Platform supervision is opt-in** (`platform.ts`, `harness service install`): launchd or systemd runs
+   the master in the foreground, and the CLI starts and stops it through the platform, never beside it.
+   Under systemd, never stop the unit with a stop job (`systemctl stop`, `restart`, `disable --now`):
+   tmux built with systemd support makes every pane PartOf the unit that started its server, so a stop
+   job ends every agent. `stop()` signals the master instead. The desktop app does not use it yet.

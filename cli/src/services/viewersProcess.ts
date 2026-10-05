@@ -58,14 +58,20 @@ export function viewersCoreApi(dataDir: string, sessions: ReadonlyMap<string, Re
       advertised: () => [],
       terminalAvailable: () => true,
       sync: (session) => tell(session.agentId),
+      runtimeModels: async () => [],
     },
     transcripts: { databaseHistory: () => undefined },
     external: {
       sessions: { list: () => [], scan: async () => [] },
       open: { known: () => new Map(), fresh: async () => new Map() },
     },
-    account: { mintGridName: async () => null, accessToken: () => Promise.reject(new Error('the viewers hold no credential')) },
-    clients: { viewerChanged: tell, gridNamed: () => {}, dshInstallStatus: () => {} },
+    account: {
+      mintGridName: async () => null,
+      accessToken: () => Promise.reject(new Error('the viewers hold no credential')),
+      privateGridName: async () => null,
+      machineName: () => null,
+    },
+    clients: { viewerChanged: tell, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {} },
   }
 }
 
