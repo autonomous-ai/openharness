@@ -125,7 +125,9 @@ class _SessionClosePromptState extends State<_SessionClosePrompt> {
                 Text(
                   widget.error == null
                       ? 'Stopping ${count == 1 ? 'this session' : 'all $count sessions'} will close $scope. History will be saved.'
-                      : '${widget.tabName == null ? 'This pane' : 'The tab'} stays open.',
+                      : widget.tabName == null
+                      ? 'You can close this pane. The session may still be running.'
+                      : 'You can close this tab. Some sessions may still be running.',
                   style: DesktopChrome.text(size: 13),
                 ),
                 const SizedBox(height: DesktopChrome.groupGap),
@@ -165,7 +167,7 @@ class _SessionClosePromptState extends State<_SessionClosePrompt> {
             TextButton(
               focusNode: _cancel,
               onPressed: _choose,
-              child: Text(widget.error == null ? 'Cancel' : 'OK'),
+              child: Text(widget.error == null ? 'Cancel' : 'Keep open'),
             ),
             if (widget.error == null) ...[
               FilledButton(
@@ -174,7 +176,14 @@ class _SessionClosePromptState extends State<_SessionClosePrompt> {
                 onPressed: () => _choose('now'),
                 child: const Text('Stop'),
               ),
-            ],
+            ] else
+              FilledButton(
+                key: const Key('session-close-view'),
+                onPressed: () => _choose('close_view'),
+                child: Text(
+                  widget.tabName == null ? 'Close pane' : 'Close Tab',
+                ),
+              ),
           ],
         ),
       ),
