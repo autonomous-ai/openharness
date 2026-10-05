@@ -38,6 +38,7 @@ DOWNLOAD_CHUNK = 1024 * 1024
 RESTART_REQUIRED = Path('/run/harness-os-restart-required')
 SYSTEM_LOCK = Path('/run/lock/hn-os.lock')
 BOOT_ID = Path('/proc/sys/kernel/random/boot_id')
+PROC = Path('/proc')
 WORDMARK = ('█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀', '█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█')
 
 
@@ -76,6 +77,39 @@ def write(path, data):
             sync_directory(path.parent)
         finally:
             temporary.unlink(missing_ok=True)
+
+
+@contextmanager
+def screen_registration():
+    """Publish only an active Updates UI, not the rest of its process lifetime."""
+    pane, socket = os.environ.get('TMUX_PANE', ''), os.environ.get('HN_SOCKET', '')
+    if re.fullmatch(r'%\d+', pane) and socket.startswith('/'):
+        (STATE / 'screens').mkdir(parents=True, exist_ok=True, mode=0o700)
+        start = (PROC / str(os.getpid()) / 'stat').read_text().rsplit(')', 1)[1].split()[19]
+        # Do not acquire open.lock here: the opener can be waiting for this
+        # registration while serializing another simultaneous shortcut.
+        write(STATE / 'screens' / str(os.getpid()), dict(
+            pid=os.getpid(), start=start, pane=pane, socket=socket, boot_id=BOOT_ID.read_text().strip()))
+    try:
+        yield
+    finally:
+        unregister_screen()
+
+
+def unregister_screen():
+    (STATE / 'screens' / str(os.getpid())).unlink(missing_ok=True)
+
+
+def close_screen():
+    # Serialize the final close decision with Super+u's request and selection.
+    # A request arriving after the last UI poll must be handled, not abandoned
+    # while this Python process is still alive in curses cleanup.
+    with (STATE / 'open.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if (STATE / 'request.json').exists():
+            return False
+        unregister_screen()
+        return True
 
 
 @contextmanager
@@ -292,7 +326,7 @@ def prepared():
 
 
 def notice(message):
-    # Only OS configuration renders this option. No shared hn welcome/UI change.
+    # Retained for an explicitly customized footer; the OS uses hn's standard bar.
     try:
         run('/usr/bin/hn', 'set-option', '-g', '@harness-update', message)
     except (OSError, subprocess.SubprocessError):
@@ -718,18 +752,22 @@ def screen(window, message='', refresh=False):
         refresh = False
         key = window.getch()
         if key in (27, ord('q')):
-            return
+            if close_screen():
+                return
         if key in (9, curses.KEY_BTAB, curses.KEY_LEFT, curses.KEY_RIGHT):
             choice = (choice + 1) % len(choices)
         elif key in (10, 13, curses.KEY_ENTER):
-            return choices[choice % len(choices)][1]
+            action = choices[choice % len(choices)][1]
+            if action is not None or close_screen():
+                return action
         elif key == curses.KEY_MOUSE:
             try:
                 _, x, y, _, buttons = curses.getmouse()
                 if buttons & (curses.BUTTON1_CLICKED | curses.BUTTON1_RELEASED):
                     for row, left, right, action in targets:
                         if y == row and left <= x < right:
-                            return action
+                            if action is not None or close_screen():
+                                return action
             except curses.error:
                 pass
 
@@ -748,33 +786,8 @@ def main(argv=None):
         check(read(args.feeds) if args.feeds else None)
         finish_approved_update()
     elif args.action == 'screen':
-        message = ''
-        # A prepared release can be applied immediately. Otherwise check now
-        # instead of exposing another command or making the user wait for a timer.
-        refresh = not (prepared() or system_channel().get('available'))
-        while True:
-            action = curses.wrapper(screen, message, refresh)
-            if action is None:
-                break
-            message, refresh = '', action == 'check'
-            try:
-                if action == 'check':
-                    # Retry means finish updating, without another confirmation
-                    # after the connection or release has recovered.
-                    write(STATE / 'request.json', {'requested_at': time.time()})
-                if action == 'reboot':
-                    subprocess.run(['systemctl', 'reboot'], check=True)
-                    break
-                if action == 'update':
-                    print('Updating Harness… Your agents keep running.', flush=True)
-                    update_all()
-                elif action == 'restore-system':
-                    subprocess.run(['sudo', '-n', '/usr/bin/harness', 'rollback'], check=True)
-                    (STATE / 'system.json').unlink(missing_ok=True)
-                    (STATE / 'approved.json').unlink(missing_ok=True)
-            except (ValueError, OSError, subprocess.SubprocessError) as error:
-                write(STATE / 'error.json', {'at': time.time(), 'error': str(error)})
-                message = 'The update did not finish. Try again.'
+        with screen_registration():
+            run_screen()
     elif args.action in ('apply', 'rollback'):
         apply(rollback=args.action == 'rollback')
     else:
@@ -782,6 +795,36 @@ def main(argv=None):
                           'ready': str(prepared()) if prepared() else None,
                           'restart_required': RESTART_REQUIRED.exists(),
                           'system': system_channel(), 'check': read(STATE / 'check.json')}, indent=2))
+
+
+def run_screen():
+    message = ''
+    # A prepared release can be applied immediately. Otherwise check now
+    # instead of exposing another command or making the user wait for a timer.
+    refresh = not (prepared() or system_channel().get('available'))
+    while True:
+        action = curses.wrapper(screen, message, refresh)
+        if action is None:
+            break
+        message, refresh = '', action == 'check'
+        try:
+            if action == 'check':
+                # Retry means finish updating, without another confirmation
+                # after the connection or release has recovered.
+                write(STATE / 'request.json', {'requested_at': time.time()})
+            if action == 'reboot':
+                subprocess.run(['systemctl', 'reboot'], check=True)
+                break
+            if action == 'update':
+                print('Updating Harness… Your agents keep running.', flush=True)
+                update_all()
+            elif action == 'restore-system':
+                subprocess.run(['sudo', '-n', '/usr/bin/harness', 'rollback'], check=True)
+                (STATE / 'system.json').unlink(missing_ok=True)
+                (STATE / 'approved.json').unlink(missing_ok=True)
+        except (ValueError, OSError, subprocess.SubprocessError) as error:
+            write(STATE / 'error.json', {'at': time.time(), 'error': str(error)})
+            message = 'The update did not finish. Try again.'
 
 
 if __name__ == '__main__':

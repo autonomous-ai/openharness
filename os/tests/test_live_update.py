@@ -4,6 +4,7 @@ import fcntl
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -404,6 +405,54 @@ class FastUpdates(unittest.TestCase):
         update.write(self.state / 'request.json', {'requested_at': 1})
         self.assertEqual(self.show([]), 'update')
         self.assertFalse((self.state / 'request.json').exists())
+
+    def test_shortcut_after_last_poll_prevents_close_and_needs_no_second_key(self):
+        with self.feed(): update.check()
+        def keys():
+            # The screen has polled request.json already. Super+u arrives just
+            # before an older Escape is handled, while the process is alive.
+            update.write(self.state / 'request.json', {'requested_at': 2})
+            yield 27
+            self.fail('The pending shortcut needed another key')
+        self.assertEqual(self.show(keys()), 'update')
+        self.assertFalse((self.state / 'request.json').exists())
+
+    def test_screen_registration_ends_before_close_returns_even_if_process_is_alive(self):
+        proc = self.root / 'proc'
+        pid = os.getpid()
+        (proc / str(pid)).mkdir(parents=True)
+        (proc / str(pid) / 'stat').write_text(f'{pid} (python) ' + ' '.join(['S'] + ['0'] * 18 + ['123']))
+        with (patch.object(update, 'PROC', proc),
+              patch.dict(os.environ, {'TMUX_PANE': '%7', 'HN_SOCKET': '/tmp/hn/default.sock'})):
+            with update.screen_registration():
+                record = update.read(self.state / 'screens' / str(pid))
+                self.assertEqual(record, dict(pid=pid, start='123', pane='%7',
+                                             socket='/tmp/hn/default.sock', boot_id='first-boot'))
+                self.assertTrue(update.close_screen())
+                self.assertFalse((self.state / 'screens' / str(pid)).exists())
+                self.assertEqual(os.getpid(), pid)  # Still before context/process cleanup.
+
+    def test_close_waits_for_shortcut_handoff_then_preserves_its_pending_intent(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        self.state.mkdir()
+        marker = self.state / 'screens' / str(os.getpid())
+        marker.parent.mkdir()
+        marker.write_text('{}')
+        entering = threading.Event()
+        def close():
+            entering.set()
+            return update.close_screen()
+        with (self.state / 'open.lock').open('a') as lock, ThreadPoolExecutor(max_workers=1) as pool:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            future = pool.submit(close)
+            self.assertTrue(entering.wait(timeout=2))
+            update.write(self.state / 'request.json', {'requested_at': 3})
+            self.assertFalse(future.done())
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            self.assertFalse(future.result(timeout=2))
+        self.assertTrue(marker.exists())
+        self.assertTrue((self.state / 'request.json').exists())
 
     def test_restart_is_never_the_default_action_or_triggered_by_update_shortcut(self):
         self.state.mkdir()

@@ -1,5 +1,134 @@
-#!/bin/sh
-# Reuse hn's existing surface, including when the browser has focus.
-[ ! -f /etc/harness-live ] || exit 0
-harness updates request || exit
-hn select-window -t Updates 2>/dev/null || hn new-window -n Updates '/usr/bin/harness updates'
+#!/usr/bin/python3
+"""Open the live updater pane; its display name is not an ownership marker."""
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import time
+
+STATE = Path.home() / '.local/state/harness-os/updates'
+PROC = Path('/proc')
+BOOT_ID = Path('/proc/sys/kernel/random/boot_id')
+UPDATER = '/usr/lib/harness-os/live_update.py'
+FORMAT = '#{pane_id}\t#{pane_pid}\t#{pane_dead}\t#{window_id}\t#{socket_path}'
+
+
+def hn(*args, socket=None):
+    target = ['-S', socket] if socket is not None else []
+    return subprocess.check_output(['/usr/bin/hn', *target, *args], text=True, timeout=5).strip()
+
+
+def process(pid):
+    """Read a Linux process identity without mistaking a reused PID for its owner."""
+    try:
+        path = PROC / str(pid)
+        fields = (path / 'stat').read_text().rsplit(')', 1)[1].split()
+        if path.stat().st_uid != os.getuid() or fields[0] in ('Z', 'X'):
+            return None
+        return {'pid': pid, 'start': fields[19], 'group': fields[2], 'foreground': fields[5]}
+    except (OSError, IndexError):
+        return None
+
+
+def registration(pane, owner):
+    try:
+        record = json.loads((STATE / 'screens' / str(owner['pid'])).read_text())
+        if (record['pid'] == owner['pid'] and record['start'] == owner['start']
+                and record['pane'] == pane and record['boot_id'] == BOOT_ID.read_text().strip()
+                and isinstance(record['socket'], str) and record['socket'].startswith('/')):
+            return record
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return None
+
+
+def updater_process(pane, pid):
+    # A manually opened updater can be the shell's child. Inspect only this
+    # pane's bounded process tree, and only a foreground, OS-owned entry point.
+    pending, visited = [pid], set()
+    while pending and len(visited) < 32:
+        current = pending.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+        before = process(current)
+        if not before:
+            continue
+        path = PROC / str(current)
+        try:
+            argv = (path / 'cmdline').read_bytes().rstrip(b'\0').split(b'\0')
+            env = (path / 'environ').read_bytes().split(b'\0')
+            active = registration(pane, before)
+            if (argv in ([b'/usr/bin/python3', UPDATER.encode()],
+                         [b'/usr/bin/python3', UPDATER.encode(), b'screen'])
+                    and active
+                    and before['group'] == before['foreground']
+                    and ('TMUX_PANE=' + pane).encode() in env
+                    and ('HN_SOCKET=' + active['socket']).encode() in env
+                    and process(current) == before):
+                # hn keeps HN_SOCKET at a stable primary alias while a new
+                # renderer's socket_path can be name@pid.sock. Resolve the
+                # alias through hn and prove that it identifies this same pane
+                # process; basename or pathname equality is not sufficient.
+                try:
+                    actual = hn('display-message', '-p', '-t', pane, '#{pane_pid}', socket=active['socket'])
+                except (OSError, subprocess.SubprocessError):
+                    actual = ''
+                if actual == str(pid):
+                    return before
+            pending.extend(int(child) for child in (path / 'task' / str(current) / 'children').read_text().split())
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def updater_panes(socket):
+    for line in hn('list-panes', '-s', '-F', FORMAT, socket=socket).splitlines():
+        parts = line.split('\t')
+        if len(parts) != 5:
+            continue
+        pane, pid, dead, window, actual_socket = parts
+        if not (re.fullmatch(r'%\d+', pane) and pid.isdigit() and dead == '0'
+                and re.fullmatch(r'@\d+', window) and actual_socket == socket):
+            continue
+        owner = updater_process(pane, int(pid))
+        if owner:
+            yield pane, window, owner
+
+
+def open_updates():
+    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Serialize shortcut handoff, not downloads or activation. Waiting for a new
+    # pane's actual process prevents rapid shortcuts from creating duplicate tabs.
+    with (STATE / 'open.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        subprocess.run(['/usr/bin/harness', 'updates', 'request'], check=True, timeout=5)
+        socket = hn('display-message', '-p', '#{socket_path}')
+        if not socket.startswith('/'):
+            raise ValueError('Harness has no active terminal. Open a terminal and try again.')
+        for pane, window, owner in updater_panes(socket):
+            try:
+                hn('select-window', '-t', window, socket=socket)
+                hn('select-pane', '-t', pane, socket=socket)
+            except subprocess.CalledProcessError:
+                continue  # The old pane can finish closing during selection.
+            if process(owner['pid']) == owner and registration(pane, owner):
+                return
+        pane = hn('new-window', '-P', '-F', '#{pane_id}', '-n', 'Updates',
+                  'exec /usr/bin/harness updates', socket=socket)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if any(item[0] == pane for item in updater_panes(socket)):
+                return
+            time.sleep(.05)
+        raise ValueError('The Updates screen did not start. Press Super+u to try again.')
+
+
+if __name__ == '__main__':
+    if not Path('/etc/harness-live').exists():
+        try:
+            open_updates()
+        except (ValueError, OSError, subprocess.SubprocessError) as error:
+            raise SystemExit('Harness updates: ' + str(error))
