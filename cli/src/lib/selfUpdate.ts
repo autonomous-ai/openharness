@@ -134,12 +134,68 @@ export function shouldAutoUpdate(candidate: string, current: string): boolean {
   return semverGt(candidate, current)
 }
 
+/**
+ * How long a transfer may go without a byte (`idleMs`) and take in all (`deadlineMs`). A link that
+ * stalls without dropping (a lid closed, a network changed, a proxy that holds the connection) answered
+ * nothing and closed nothing: the check waited on undici's own five-minute body timeout, and a trickle
+ * held it for as long as the trickle lasted, every later check skipped meanwhile, with a fix waiting
+ * (e2e/updateHostile.e2e.ts). Each is now its own failure, retried at the next check.
+ */
+export interface TransferLimits { idleMs: number; deadlineMs: number }
+/** A bundle: a minute without a byte, a quarter of an hour in all (4.4 MB at 5 KB/s). */
+export const DOWNLOAD_LIMITS: TransferLimits = { idleMs: 60_000, deadlineMs: 15 * 60_000 }
+/** The manifest is a few hundred bytes. */
+export const MANIFEST_LIMITS: TransferLimits = { idleMs: 30_000, deadlineMs: 60_000 }
+
+/** The transfer went quiet for too long, or took too long in all. */
+export class TransferStalledError extends Error {}
+
+/** GET `url` whole within `limits`: the status, and the body once it has all arrived. */
+async function fetchWithin(url: string, limits: TransferLimits): Promise<{ ok: boolean; status: number; body: Buffer }> {
+  const controller = new AbortController()
+  let stalled!: (error: TransferStalledError) => void
+  const gaveUp = new Promise<never>((_, reject) => { stalled = reject })
+  gaveUp.catch(() => {})
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
+  const giveUp = (why: string): void => {
+    stalled(new TransferStalledError(`${url} ${why}`))
+    controller.abort()
+    void reader?.cancel().catch(() => {})
+  }
+  const timer = (ms: number, why: string): NodeJS.Timeout => {
+    const handle = setTimeout(() => giveUp(why), ms)
+    handle.unref?.()
+    return handle
+  }
+  const deadline = timer(limits.deadlineMs, `took longer than ${limits.deadlineMs} ms in all`)
+  let idle = timer(limits.idleMs, `sent nothing for ${limits.idleMs} ms`)
+  const heard = (): void => { clearTimeout(idle); idle = timer(limits.idleMs, `sent nothing for ${limits.idleMs} ms`) }
+  try {
+    const res = await Promise.race([fetch(url, { signal: controller.signal }), gaveUp])
+    heard()
+    const chunks: Buffer[] = []
+    if (res.body) {
+      reader = res.body.getReader()
+      for (;;) {
+        const { done, value } = await Promise.race([reader.read(), gaveUp])
+        if (done) break
+        chunks.push(Buffer.from(value))
+        heard()
+      }
+    }
+    return { ok: res.ok, status: res.status, body: Buffer.concat(chunks) }
+  } finally {
+    clearTimeout(deadline)
+    clearTimeout(idle)
+  }
+}
+
 /** Fetch + parse the manifest; return this adapter's entry, or null (unreachable / malformed / absent). */
-export async function fetchManifest(url: string, key: string): Promise<UpdateEntry | null> {
+export async function fetchManifest(url: string, key: string, limits: TransferLimits = MANIFEST_LIMITS): Promise<UpdateEntry | null> {
   // No `cache` option needed: undici doesn't HTTP-cache by default and GCS serves the manifest no-cache.
-  const res = await fetch(url)
+  const res = await fetchWithin(url, limits)
   if (!res.ok) return null
-  const json = (await res.json()) as Record<string, unknown>
+  const json = JSON.parse(res.body.toString('utf8')) as Record<string, unknown>
   const entry = json?.[key] as Partial<UpdateEntry> | undefined
   const okFile = (f: unknown): f is FileRef =>
     !!f && typeof (f as FileRef).url === 'string' && typeof (f as FileRef).sha256 === 'string'
@@ -150,16 +206,16 @@ export async function fetchManifest(url: string, key: string): Promise<UpdateEnt
 /** The whole download arrived, and it is not what the manifest names. */
 export class DigestMismatchError extends Error {}
 
-/** Download one file and verify its sha256 in memory; throws on a non-2xx or a digest mismatch. */
-export async function downloadVerified(ref: FileRef): Promise<Buffer> {
-  const res = await fetch(ref.url)
+/** Download one file within `limits` and verify its sha256 in memory; throws on a non-2xx, a stall or a
+ *  digest mismatch. */
+export async function downloadVerified(ref: FileRef, limits: TransferLimits = DOWNLOAD_LIMITS): Promise<Buffer> {
+  const res = await fetchWithin(ref.url, limits)
   if (!res.ok) throw new Error(`download ${ref.url} → HTTP ${res.status}`)
-  const buf = Buffer.from(await res.arrayBuffer())
-  const got = sha256(buf)
+  const got = sha256(res.body)
   if (got.toLowerCase() !== ref.sha256.toLowerCase()) {
     throw new DigestMismatchError(`sha256 mismatch for ${ref.url}: expected ${ref.sha256}, got ${got}`)
   }
-  return buf
+  return res.body
 }
 
 /**
@@ -383,6 +439,8 @@ export function startSelfUpdater(opts: {
   /** Wrap the swap + `onStaged` in a mutual exclusion with every other process that writes the
    *  bundle or spawns the daemon. Default: none (tests, and callers that hold their own). */
   withLock?: <T>(fn: () => Promise<T>) => Promise<T>
+  /** How long a download may go without a byte, and take in all; the manifest gets at most its own. */
+  limits?: TransferLimits
 }): Poller {
   let checking = false
   let done = false
@@ -399,6 +457,10 @@ export function startSelfUpdater(opts: {
   let toldRejected: string | null = null
 
   const now = opts.now ?? Date.now
+  const download = opts.limits ?? DOWNLOAD_LIMITS
+  const manifest: TransferLimits = {
+    idleMs: Math.min(download.idleMs, MANIFEST_LIMITS.idleMs), deadlineMs: Math.min(download.deadlineMs, MANIFEST_LIMITS.deadlineMs),
+  }
   const stop = (): void => { if (timer) { clearTimeout(timer); timer = null } }
   const schedule = (): void => {
     stop()
@@ -416,7 +478,7 @@ export function startSelfUpdater(opts: {
     if (checking) return
     checking = true
     try {
-      const entry = await fetchManifest(opts.url, opts.key)
+      const entry = await fetchManifest(opts.url, opts.key, manifest)
       if (!entry || !shouldAutoUpdate(entry.version, opts.currentVersion)) return
       const unremembered = settleRolledBack(opts.dir)
       if (unremembered === entry.version || rejectedVersions(opts.dir).includes(entry.version)) {
@@ -439,8 +501,8 @@ export function startSelfUpdater(opts: {
         let cliBuf: Buffer
         let notifyBuf: Buffer
         try {
-          cliBuf = await downloadVerified(entry.cli)
-          notifyBuf = await downloadVerified(entry.notify)
+          cliBuf = await downloadVerified(entry.cli, download)
+          notifyBuf = await downloadVerified(entry.notify, download)
         } catch (error) {
           if (!(error instanceof DigestMismatchError)) throw error
           refuse(`does not match its manifest (${error.message})`)

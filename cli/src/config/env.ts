@@ -347,6 +347,10 @@ const envSchema = z.object({
   // keeping the update handoff 30s away from that is what stops the two from fighting over the spawn
   // lock. Set to a negative number to keep the plain interval.
   ADAPTER_UPDATE_SLOT_SEC: z.string().default('45').transform(Number),
+  // How long an update's download may go without a byte, and take in all, before the check gives up and
+  // the next one tries again (lib/selfUpdate.ts `TransferLimits`). The manifest gets at most a minute.
+  ADAPTER_UPDATE_IDLE_MS: z.string().default('60000').transform(Number),
+  ADAPTER_UPDATE_DEADLINE_MS: z.string().default('900000').transform(Number),
   // Set 'true' to disable self-update entirely.
   ADAPTER_UPDATE_DISABLE: z.string().default('false').transform((v) => v === 'true'),
   /** How long a daemon whose start-up failed stays up serving nothing but its updater, before it

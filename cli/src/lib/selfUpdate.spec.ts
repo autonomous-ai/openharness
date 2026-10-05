@@ -4,8 +4,8 @@ import { join } from 'path'
 import { createHash } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  REFUSED_RETRY_MAX_MS, canary, confirm, downloadVerified, fetchManifest, isLocalDevBuild, msUntilSlot, rejectedVersions, restore, runCanary, semverGt,
-  settleRolledBack, shouldAutoUpdate, stage, startSelfUpdater, unjudgedUpdate,
+  DOWNLOAD_LIMITS, MANIFEST_LIMITS, REFUSED_RETRY_MAX_MS, TransferStalledError, canary, confirm, downloadVerified, fetchManifest, isLocalDevBuild,
+  msUntilSlot, rejectedVersions, restore, runCanary, semverGt, settleRolledBack, shouldAutoUpdate, stage, startSelfUpdater, unjudgedUpdate,
 } from './selfUpdate.js'
 import { SpawnLockBusyError } from './daemonSpawnLock.js'
 
@@ -213,7 +213,8 @@ describe('startSelfUpdater', () => {
     vi.useFakeTimers()
     try {
       vi.setSystemTime(new Date('2026-09-15T10:00:44.000Z'))
-      // The first manifest fetch hangs for two minutes (a stalled link); later ones answer at once.
+      // The first manifest fetch outlasts the interval (a slow link, inside the manifest's own limits);
+      // later ones answer at once.
       let release: () => void = () => {}
       const stalled = new Promise<Response>((resolve) => { release = () => resolve(new Response(JSON.stringify({ adapter: { version: '1.0.0' } }))) })
       const fetchMock = vi.fn()
@@ -222,14 +223,14 @@ describe('startSelfUpdater', () => {
       vi.stubGlobal('fetch', fetchMock)
       const poller = startSelfUpdater({
         currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: tempDir(),
-        intervalMs: 60_000, slotSecond: 45, onStaged: () => {},
+        intervalMs: 20_000, slotSecond: 45, onStaged: () => {},
       })
-      await vi.advanceTimersByTimeAsync(1_000) // :45 — the stalled check starts
+      await vi.advanceTimersByTimeAsync(1_000) // :45 — the slow check starts
       expect(fetchMock).toHaveBeenCalledTimes(1)
-      await vi.advanceTimersByTimeAsync(60_000) // next :45 — skipped, still checking
+      await vi.advanceTimersByTimeAsync(20_000) // :05 — skipped, still checking
       expect(fetchMock).toHaveBeenCalledTimes(1)
       release()
-      await vi.advanceTimersByTimeAsync(60_000) // the :45 after that — the chain is still booked
+      await vi.advanceTimersByTimeAsync(20_000) // :25 — the chain is still booked
       expect(fetchMock).toHaveBeenCalledTimes(2)
       poller.stop()
     } finally {
@@ -797,5 +798,94 @@ describe('a rollback a full disk kept from being remembered (e2e/updateHostile.e
       expect(staged).toEqual([])
       expect(downloads).toBe(0)
     } finally { poller.stop() }
+  })
+})
+
+describe('a link that stalls without dropping (e2e/updateHostile.e2e.ts)', () => {
+  const sha = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+    dirs = []
+  })
+
+  /** A body that sends `first`, then a byte every `everyMs` if asked, and never ends. */
+  const stalling = (first: Buffer, everyMs?: number): ReadableStream<Uint8Array> => {
+    let timer: NodeJS.Timeout | undefined
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(first))
+        if (everyMs) timer = setInterval(() => controller.enqueue(new Uint8Array([7])), everyMs)
+      },
+      cancel() { clearInterval(timer) },
+    })
+  }
+  const limits = { idleMs: 60, deadlineMs: 400 }
+
+  it('gives up on a download that goes quiet, one that trickles past its deadline, and one whose answer never starts', async () => {
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url.endsWith('/quiet.js')) return new Response(stalling(Buffer.from('half of it')))
+      if (url.endsWith('/trickle.js')) return new Response(stalling(Buffer.from('a'), 20))
+      return new Promise<Response>(() => {})
+    })
+    const started = Date.now()
+    await expect(downloadVerified({ url: 'https://updates.test/quiet.js', sha256: 'x' }, limits))
+      .rejects.toThrow(new TransferStalledError('https://updates.test/quiet.js sent nothing for 60 ms'))
+    await expect(downloadVerified({ url: 'https://updates.test/trickle.js', sha256: 'x' }, limits))
+      .rejects.toThrow('https://updates.test/trickle.js took longer than 400 ms in all')
+    await expect(downloadVerified({ url: 'https://updates.test/silent.js', sha256: 'x' }, limits))
+      .rejects.toBeInstanceOf(TransferStalledError)
+    await expect(fetchManifest('https://updates.test/silent.json', 'adapter', limits)).rejects.toBeInstanceOf(TransferStalledError)
+    expect(Date.now() - started).toBeLessThan(5_000)
+  })
+
+  it('takes a whole answer that keeps coming, however slowly, within its deadline, and one with no body', async () => {
+    const bytes = Buffer.from('console.log("9.9.9")\n')
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url.endsWith('/empty.js')) return new Response(null, { status: 200 })
+      let sent = 0
+      return new Response(new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          await new Promise((resolve) => setTimeout(resolve, 30))
+          if (sent >= bytes.length) { controller.close(); return }
+          controller.enqueue(new Uint8Array(bytes.subarray(sent, sent + 4)))
+          sent += 4
+        },
+      }))
+    })
+    await expect(downloadVerified({ url: 'https://updates.test/slow.js', sha256: sha(bytes) }, { idleMs: 200, deadlineMs: 5_000 })).resolves.toEqual(bytes)
+    await expect(downloadVerified({ url: 'https://updates.test/empty.js', sha256: sha(Buffer.alloc(0)) }, limits)).resolves.toEqual(Buffer.alloc(0))
+  })
+
+  it('is a failed check, tried again at the next one, with the limits it was given; the manifest gets at most its own', async () => {
+    const cli = Buffer.from('console.log("9.9.9")\n')
+    const notify = Buffer.from('export {}\n')
+    let attempts = 0
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url.endsWith('/metadata.json')) {
+        return new Response(JSON.stringify({ adapter: {
+          version: '9.9.9',
+          cli: { url: 'https://updates.test/cli.js', sha256: sha(cli) },
+          notify: { url: 'https://updates.test/notify.mjs', sha256: sha(notify) },
+        } }))
+      }
+      if (url.endsWith('cli.js') && ++attempts === 1) return new Response(stalling(cli.subarray(0, 4)))
+      return new Response(url.endsWith('cli.js') ? cli : notify)
+    })
+    const errors: string[] = []
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation((...parts: unknown[]) => { errors.push(parts.join(' ')) })
+    const staged: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: tempDir(), intervalMs: 10,
+      limits: { idleMs: 50, deadlineMs: 120_000 }, onStaged: (version) => { staged.push(version) },
+    })
+    try {
+      await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
+      expect(attempts).toBe(2)
+      expect(errors).toEqual(['[update] check failed (will retry): https://updates.test/cli.js sent nothing for 50 ms'])
+    } finally { poller.stop() }
+    expect(MANIFEST_LIMITS.deadlineMs).toBeLessThan(DOWNLOAD_LIMITS.deadlineMs)
   })
 })
