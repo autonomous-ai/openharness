@@ -167,10 +167,19 @@ class SessionVM(VM):
                          '; then exit 0; fi; sleep .5; done; exit 1', timeout=seconds + 10)
 
     def frame(self, name, text, seconds=60, absent=()):
+        from PIL import Image, ImageOps
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             self.screenshot(name)
-            output = subprocess.check_output(['tesseract', str(self.folder / (name + '.png')), 'stdout', '--psm', '11'],
+            # Match click_word's treatment of small controls. Preserve the real
+            # framebuffer too; OCR must not miss a visibly rendered button just
+            # because its native text is close to the border or only 12 px tall.
+            ocr_frame = self.folder / (name + '-frame-ocr.png')
+            with Image.open(self.folder / (name + '.png')) as frame:
+                width, height = frame.size
+                readable = ImageOps.invert(frame.convert('L')).resize((width * 2, height * 2))
+                ImageOps.expand(readable, border=24, fill=255).save(ocr_frame)
+            output = subprocess.check_output(['tesseract', str(ocr_frame), 'stdout', '--psm', '11'],
                                              text=True, stderr=subprocess.DEVNULL, timeout=15)
             (self.folder / (name + '.txt')).write_text(output)
             if frame_contains(output, text, absent):
