@@ -9,6 +9,10 @@ module.exports = {
     // '/cli/install.sh' and '/desktop/install.sh' moved to the CDN (see redirects() below) — nothing
     // left here to trace for either.
     '/flash-circle.sh': ['./src/app/flash-circle.sh/flash-circle.sh'],
+    '/explore/[id]': ['./public/open-harnesses/**/*'],
+    '/explore/[id]/fork': ['./public/open-harnesses/**/*'],
+    '/explore/[id]/download': ['./public/open-harnesses/**/*'],
+    '/explore/[id]/snapshot': ['./public/open-harnesses/**/*'],
   },
   turbopack: {},
   // Local dev is reached through the local-harness.autonomous.ai hostname (proxied to :3000) — allow it
@@ -48,8 +52,8 @@ module.exports = {
   compress: true,
   // Performance optimizations
   poweredByHeader: false,
-  // Everything user-facing is the Flutter app; this host only adds the routes below (install and
-  // download pages, download and installer redirects). Flutter's base
+  // The workspace is the Flutter app; this host also serves the public /explore community,
+  // install and download pages, and installer redirects. Flutter's base
   // href places its assets under /harness-web/ without changing the visible URL.
   async rewrites() {
     return {

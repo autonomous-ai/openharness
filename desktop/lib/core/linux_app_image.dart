@@ -41,7 +41,15 @@ Future<void> registerAppImageLauncher({
     final entry = File('$dataHome/applications/harness.desktop');
     if (await entry.exists()) {
       final target = _execTarget(await entry.readAsString());
-      if (target != null && await File(target).exists()) return;
+      if (target != null && await File(target).exists()) {
+        // Upgrade this executable's own entry, without taking over another copy.
+        if (target != appImage) return;
+        final existing = await entry.readAsString();
+        if (existing.contains('MimeType=x-scheme-handler/harness;') &&
+            existing.contains(' %u\n')) {
+          return;
+        }
+      }
     }
     // The bundle's icon sits beside the executable, inside the mounted image.
     final bundleIcon = File(
@@ -59,12 +67,20 @@ Future<void> registerAppImageLauncher({
       'Type=Application\n'
       'Name=Harness\n'
       'Comment=Attach terminals to the agents running on your Harness machines\n'
-      'Exec=${_quoteExec(appImage)}\n'
+      'Exec=${_quoteExec(appImage)} %u\n'
+      'MimeType=x-scheme-handler/harness;\n'
       'Icon=${icon.path}\n'
       'Terminal=false\n'
       'Categories=Development;\n'
       'StartupWMClass=$kLinuxAppId\n',
     );
+    if (environment == null) {
+      try {
+        await Process.run('update-desktop-database', [entry.parent.path]);
+      } on ProcessException {
+        /* Optional desktop utility. */
+      }
+    }
     appLog.info('app', 'registered launcher entry for $appImage');
   } on FileSystemException catch (error) {
     appLog.warn('app', 'could not register a launcher entry: ${error.message}');

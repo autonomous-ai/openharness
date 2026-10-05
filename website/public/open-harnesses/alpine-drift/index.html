@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Alpine Drift</title>
+  </head>
+  <body>
+    <canvas id="world" aria-label="Alpine mountain game" tabindex="0"></canvas>
+    <div id="intro" class="intro">
+      <span>FIRST TRACKS</span>
+      <h1>A little mountain.<br />A lot of possibilities.</h1>
+      <p>
+        Explore the world, then press Play in the studio.<br />Carve through six
+        golden gates on your way down.
+      </p>
+    </div>
+    <div id="hud" class="hud" hidden>
+      <div>
+        <span>GATES</span><b id="gates">0 <small>/ 6</small></b>
+      </div>
+      <div>
+        <span>DISTANCE</span><b id="distance">0<small> m</small></b>
+      </div>
+      <div>
+        <span>TIME</span><b id="time">0.0<small> s</small></b>
+      </div>
+    </div>
+    <div id="end" class="end" hidden>
+      <span id="end-label">THE FINISH LINE</span>
+      <h2 id="end-title">Fresh tracks.</h2>
+      <p id="end-summary"></p>
+      <button id="again">One more run ↗</button>
+    </div>
+    <div id="touch" class="touch" hidden>
+      <button data-key="ArrowLeft" aria-label="Carve left">←</button
+      ><button data-key="Space" aria-label="Jump">Jump</button
+      ><button data-key="ArrowRight" aria-label="Carve right">→</button>
+    </div>
+    <div id="pause-label" class="pause-label" hidden>Paused</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

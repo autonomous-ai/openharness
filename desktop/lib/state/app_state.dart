@@ -245,8 +245,9 @@ class _AgentChange {
 }
 
 class AgentCreationAttempt {
-  AgentCreationAttempt({this.background = false});
-  String _id = _newCreationId();
+  AgentCreationAttempt({this.background = false, String? creationId})
+    : _id = creationId ?? _newCreationId();
+  String _id;
   String? _machineId, _targetId;
   Map<String, dynamic>? _choices;
   PaneSplitRequest? _split;

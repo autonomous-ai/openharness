@@ -1,0 +1,51 @@
+{
+  "objects": [
+    "Ribbon 1",
+    "Ribbon 2",
+    "Ribbon 3",
+    "Ribbon 4",
+    "Ribbon 5",
+    "Ribbon 6",
+    "Ribbon 7",
+    "Ribbon 8",
+    "Ribbon 9",
+    "Ribbon 10",
+    "Ribbon 11",
+    "Ribbon 12",
+    "Ribbon 13",
+    "Ribbon 14",
+    "Ribbon 15",
+    "Ribbon 16",
+    "Ribbon 17",
+    "Ribbon 18",
+    "Ribbon 19",
+    "Ribbon 20",
+    "Ribbon 21",
+    "Ribbon 22",
+    "Ribbon 23",
+    "Ribbon 24",
+    "Foot"
+  ],
+  "vertices": 3936,
+  "faces": 3794,
+  "size_mm": [
+    135.2,
+    135.2,
+    268.03
+  ],
+  "materials": [
+    "Ivory"
+  ],
+  "collections": [],
+  "cameras": [
+    "Camera"
+  ],
+  "lights": [
+    "Key"
+  ],
+  "files": {
+    "glb": "out/model.glb"
+  },
+  "wall_seconds": 0.2,
+  "blender": "5.0.1"
+}
