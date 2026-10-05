@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -268,6 +268,23 @@ describe('attaching a session', () => {
       run.normalizers.piNormalizers.delete(s.sessionId)
       vi.mocked(run.deps.emit).mockClear()
       await run.attach.attachSession(s, true, false, true)
+      expect(run.deps.emit).not.toHaveBeenCalled()
+    })
+
+    it('never replays a conversation its engine was relaunched on, however new its transcript', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      // A restore after a restart: the transcript is minutes old and was born after its agent, which is
+      // what the first-turn rule asks, but its engine was relaunched on it, so it is history.
+      const lines = [CLAUDE_PROMPT, { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }], stop_reason: 'end_turn' }, uuid: 'a1' }]
+      const s = session('claude', transcript(lines))
+      const take = vi.fn((_sessionId: string): number | undefined => statSync(s.transcriptPath!).size)
+      const run = setup({ relaunchMarks: { take } })
+      await run.attach.attachSession(s, false, false, true)
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      expect(log.mock.calls.map(([line]) => String(line)).some((line) => line.includes('replayed the first turn'))).toBe(false)
+      // Cursor's own replay from the start is held to the same rule.
+      const cursor = session('cursor', undefined, { sessionId: 'cursor-relaunched' })
+      await run.attach.attachSession(cursor, false, true)
       expect(run.deps.emit).not.toHaveBeenCalled()
     })
 

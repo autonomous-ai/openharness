@@ -141,8 +141,15 @@ export function createAttach({
     // than history, and swallowing it loses the whole thing without a trace. `replayLive` routes the same
     // fold to `initialEvents`, which is emitted below. Cursor has always done this for its own discovery
     // path; the flag simply makes it available to every engine.
-    const replayLive = (replayFromStart && !replayedFirstTurn.has(session.sessionId))
-      || (session.engine === 'cursor' && replayCursorFromStart)
+    //
+    // Never for a conversation its engine was just relaunched on (a resume, a restart, a restore after
+    // the machine came back): everything before its relaunch mark existed before this launch, and is
+    // history. A restore is not a resume to `bind.ts`, so a transcript under ten minutes old
+    // (lib/firstTurnReplay.ts) went out live again after a daemon restart: its turns, and their recaps
+    // and notifications, a second time (found end to end, e2e/machine.e2e.ts).
+    const replayLive = relaunchedAt === undefined && (
+      (replayFromStart && !replayedFirstTurn.has(session.sessionId))
+      || (session.engine === 'cursor' && replayCursorFromStart))
     const historyEvents: LiveEvent[] = []
     let historyTurnOpen = false
     const observe = device()?.needsTranscript(session.agentId, session.sessionId, session.engine)
