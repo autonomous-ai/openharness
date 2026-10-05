@@ -32,7 +32,7 @@ import { sid } from '../../lib/log.js'
 import { foldTranscript, lineToEvents, newTurnState, TranscriptFold, type LiveEvent } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { RuntimeField, RuntimeProfileManager } from '../../lib/runtimeProfile.js'
-import { tailFile } from '../../lib/transcriptTail.js'
+import { tailFileCapped, WHOLE_READ_CAP_BYTES } from '../../lib/transcriptTail.js'
 import type { TailHold, Watcher } from '../../watcher/watcher.js'
 import type { SessionNormalizers } from './normalizers.js'
 import type { RelaunchMarks } from './relaunch.js'
@@ -60,11 +60,14 @@ export interface AttachDeps {
   concurrency: number
   /** Where an engine's writing became live again after a relaunch (core/transcripts/relaunch.ts): the fold stops there. */
   relaunchMarks?: Pick<RelaunchMarks, 'take'>
+  /** The most of a transcript an engine without its own reader from the end folds, from its end. */
+  wholeReadCapBytes?: number
 }
 
 export function createAttach({
   validateTerminal, normalizers, watcher, cursorDiscovery, device, runtimeProfiles, captureTerminal, emit,
   announceTurnAborted, questionWatcher, terminalLabel, dbs, devinHome, hermesDb, concurrency, relaunchMarks,
+  wholeReadCapBytes = WHOLE_READ_CAP_BYTES,
 }: AttachDeps) {
   const {
     turnStates, codexNormalizers, cursorNormalizers, opencodeReaders, kiloReaders, museNormalizers, ampNormalizers,
@@ -209,7 +212,15 @@ export function createAttach({
       historyTurnOpen = take(stream.finish())
       console.log(`[agent] ${sid(session.agentId)} read the transcript from its end · turn @${read.turnFrom} · profile @${read.profileFrom} · ${read.end} bytes${handover.hold ? ' · took over its tail' : ''}`)
     }
-    const lines = session.transcriptPath && !fromEnd ? await tailFile(session.transcriptPath, Infinity) : []
+    // An engine without a reader from the end folds its transcript from the start, bounded: one huge
+    // transcript read whole would take every agent's daemon down (the October 3 crash, on Codex). Its
+    // oldest history past the cap is not folded; its last turns, which say whether it is working, are.
+    let lines: string[] = []
+    if (session.transcriptPath && !fromEnd) {
+      const read = await tailFileCapped(session.transcriptPath, wholeReadCapBytes)
+      if (read.truncated) console.warn(`[agent] ${sid(session.agentId)} transcript over ${Math.round(wholeReadCapBytes / 1024 / 1024)} MB · folded from its newest ${Math.round(wholeReadCapBytes / 1024 / 1024)} MB`)
+      lines = read.lines
+    }
     if (!fromEnd) {
       if (observe) for (const line of lines) observe(line)
       runtimeProfiles.hydrate(session, lines)

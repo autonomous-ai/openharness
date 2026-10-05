@@ -379,6 +379,21 @@ describe('attaching a session', () => {
       expect(run.normalizers.turnStates.has('terminal-s')).toBe(true)
       expect(run.deps.questionWatcher.start).not.toHaveBeenCalled()
     })
+
+    it('folds only the newest part of a transcript over the cap, and says so', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const records = Array.from({ length: 20 }, (_, i) => JSON.stringify({ n: i, pad: 'x'.repeat(40) }))
+      const capBytes = records.slice(-5).reduce((sum, record) => sum + Buffer.byteLength(record), 0)
+      const run = setup({ wholeReadCapBytes: capBytes })
+      await run.attach.attachSession(session('terminal', transcript(records)))
+      expect(warn).toHaveBeenCalledWith('[agent] terminal transcript over 0 MB · folded from its newest 0 MB')
+      // The profile was hydrated from what was read: the newest records that fit, in order.
+      expect(run.deps.runtimeProfiles.hydrate).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'terminal-agent' }), records.slice(-5))
+      warn.mockClear()
+      await run.attach.attachSession(session('terminal', transcript(records.slice(0, 3)), { agentId: 'small', sessionId: 'small-s' }))
+      expect(warn).not.toHaveBeenCalled()
+    })
   })
 
   it('says when an attach is slow', async () => {
