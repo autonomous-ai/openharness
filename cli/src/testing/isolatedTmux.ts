@@ -29,7 +29,10 @@ export async function isolatedTmux(inherited: NodeJS.ProcessEnv = process.env) {
     run,
     async close() {
       await run('kill-server').catch(() => { /* this disposable server may already have exited */ })
-      await rm(root, { recursive: true, force: true })
+      // kill-server returns before its panes have exited, and a zsh among them writes its history as
+      // it goes (macOS's /etc/zshrc sets HISTFILE): the folder filled up under the removal, and a
+      // passing tmuxmoves.e2e.ts test failed in its teardown with ENOTEMPTY. Asked again, it is empty.
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     },
   }
 }
