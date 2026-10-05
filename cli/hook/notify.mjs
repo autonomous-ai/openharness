@@ -242,11 +242,23 @@ function boundedPrompt(prompt) {
   return Buffer.byteLength(JSON.stringify(prompt)) <= 128 * 1024 ? prompt : ''
 }
 
+/**
+ * POST one hook event to the daemon. Resolves true when it answered 2xx, false when it could not be
+ * reached or refused, and 'late' when it took the request but did not answer within the budget.
+ *
+ * 'late' is not "the daemon is down", and nothing may be written behind its back for it: the request is
+ * in its socket, and it handles it once it gets to it. A daemon whose event loop is held for a few
+ * seconds (or one simply slow to answer a session-start, which waits for a discovery pass) used to get
+ * the offline fallback on every hook meanwhile, each a registry row rebuilt without the name, launch,
+ * permission mode or close plan the daemon kept, merged over its own at its next save
+ * (e2e/stall.e2e.ts).
+ */
 function post(port, path, body, onResponse) {
   return new Promise((resolve) => {
     const payload = JSON.stringify(body)
     const credential = readHookCredential()
     if (!credential) { resolve(false); return }
+    let connected = false
     const req = http.request(
       {
         host: '127.0.0.1',
@@ -273,10 +285,14 @@ function post(port, path, body, onResponse) {
         })
       }
     )
+    req.on('socket', (socket) => {
+      if (!socket.connecting) connected = true
+      else socket.once('connect', () => { connected = true })
+    })
     req.on('error', () => resolve(false))
     req.on('timeout', () => {
       req.destroy()
-      resolve(false)
+      resolve(connected ? 'late' : false)
     })
     req.write(payload)
     req.end()
@@ -1353,7 +1369,7 @@ async function main() {
     const cwd = input.cwd
     if (copilotEvent === 'sessionEnd') {
       const ok = await post(port, '/api/hook/session-end', { sessionId, reason: input.reason, ...mutationFields })
-      if (!ok) await fallbackSessionEnd(sessionId, input.reason, engine, tmuxPane)
+      if (ok === false) await fallbackSessionEnd(sessionId, input.reason, engine, tmuxPane)
       return
     }
     if (copilotEvent === 'agentStop') {
@@ -1373,7 +1389,7 @@ async function main() {
       ...terminalHookFields(tmuxPane),
     }
     const registered = await post(port, '/api/hook/session-start', body)
-    if (!registered) {
+    if (registered === false) {
       await fallbackRegister({
         ...input, hook_event_name: 'SessionStart', session_id: sessionId, transcript_path: transcriptPath, cwd,
       }, engine, tmuxPane)
@@ -1428,7 +1444,7 @@ async function main() {
       model: modelName(input.modelName),
     }
     const registered = await post(port, '/api/hook/session-start', body)
-    if (!registered) {
+    if (registered === false) {
       await fallbackRegister({
         ...input,
         hook_event_name: 'SessionStart',
@@ -1447,7 +1463,7 @@ async function main() {
     const transcriptPath = grokTranscriptPath(paths(), cwd, sessionId)
     if (grokEventName === 'SessionEnd') {
       const ok = await post(port, '/api/hook/session-end', { sessionId, reason: input.reason, ...mutationFields })
-      if (!ok) await fallbackSessionEnd(sessionId, input.reason, engine, tmuxPane)
+      if (ok === false) await fallbackSessionEnd(sessionId, input.reason, engine, tmuxPane)
       return
     }
     if (grokEventName === 'StopFailure') {
@@ -1467,7 +1483,7 @@ async function main() {
       cliVersion: input.cliVersion || input.version,
     }
     const registered = await post(port, '/api/hook/session-start', body)
-    if (!registered) {
+    if (registered === false) {
       await fallbackRegister({
         ...input,
         hook_event_name: grokEventName,
@@ -1486,7 +1502,7 @@ async function main() {
       reason: input.reason,
       ...mutationFields,
     })
-    if (!ok) await fallbackSessionEnd(input.session_id || input.conversation_id, input.reason, engine, tmuxPane)
+    if (ok === false) await fallbackSessionEnd(input.session_id || input.conversation_id, input.reason, engine, tmuxPane)
     if (engine === 'cursor' && ok) await clearCursorTasks(input.session_id || input.conversation_id)
     return
   }
@@ -1528,14 +1544,14 @@ async function main() {
       cliVersion: input.cursor_version || input.version,
     }
     const registered = await post(port, '/api/hook/session-start', body)
-    if (!registered) await fallbackRegister(input, engine, tmuxPane)
+    if (registered === false) await fallbackRegister(input, engine, tmuxPane)
     const stopped = await post(port, '/api/hook/turn-stop', {
       sessionId,
       status: input.status,
       transcriptPath: input.transcript_path,
       ...mutationFields,
     })
-    if (stopped) await clearCursorTasks(sessionId)
+    if (stopped === true) await clearCursorTasks(sessionId)
     return
   }
 
@@ -1563,7 +1579,7 @@ async function main() {
         model: modelName(input.model),
         cliVersion: input.cli_version || input.version,
       })
-      if (!registered) await fallbackRegister(input, engine, tmuxPane)
+      if (registered === false) await fallbackRegister(input, engine, tmuxPane)
     }
     await post(port, '/api/hook/turn-stop', {
       sessionId: input.session_id,
@@ -1603,7 +1619,7 @@ async function main() {
     cliVersion: input.cli_version || input.cursor_version || input.version,
   }
   const ok = await post(port, '/api/hook/session-start', body)
-  if (!ok) await fallbackRegister(input, engine, tmuxPane)
+  if (ok === false) await fallbackRegister(input, engine, tmuxPane)
 }
 
 main()
