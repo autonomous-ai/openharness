@@ -31,6 +31,7 @@ import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 
 const FROM = process.env.REHEARSE_FROM
 const SIGNED_IN = process.env.REHEARSE_SIGNED_IN === '1'
+const TO = process.env.REHEARSE_TO
 const MACHINE: FakeMachine = { machineId: 'b2'.repeat(16), computerId: 'e2e-computer-0000-0000-00000000000b', name: 'rehearsal', token: 'e2e-token-rehearsal' }
 const NEXT = '0.99.0'
 const SLOW = '!slow 20000'
@@ -83,6 +84,30 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
     await client.waitForBinary((frame) => frame.streamId === streamId && frame.kind === TerminalBinaryKind.keyframe, 30_000, 'the tile\'s keyframe', since)
     return streamId
   }
+  /**
+   * harnessd's processes as their master logs them (never by title: the master and its services rename
+   * themselves): the master this test started, its latest core, and each service's latest process, alive.
+   */
+  const harnessdProcesses = (): Array<{ role: string; pid: number }> => {
+    const text = logs()
+    const alive = (pid: number) => IsolatedDaemon.alive(pid)
+    const found: Array<{ role: string; pid: number }> = []
+    if (daemon!.pid && alive(daemon!.pid) && !daemon!.options.noMaster) found.push({ role: 'master', pid: daemon!.pid })
+    const cores = [...text.matchAll(/\[harnessd\] core started \(pid (\d+)\)/g)]
+    const core = cores.length ? Number(cores[cores.length - 1][1]) : listeners()[0]
+    if (core && alive(core)) found.push({ role: 'core', pid: core })
+    const latest = new Map<string, number>()
+    for (const match of text.matchAll(/\[harnessd\] service (\w+) started \(pid (\d+)\)/g)) latest.set(match[1], Number(match[2]))
+    for (const [name, pid] of latest) if (alive(pid)) found.push({ role: `service ${name}`, pid })
+    return found
+  }
+  /** What each of them holds in memory now (resident, MiB): `REHEARSAL_MEMORY=<file>` keeps it. */
+  const memory = (when: string): Array<{ role: string; pid: number; mib: number }> => {
+    const rows = harnessdProcesses().map((one) => ({ ...one, mib: Number(execFileSync('ps', ['-o', 'rss=', '-p', String(one.pid)], { encoding: 'utf8' }).trim() || 0) / 1024 }))
+    const text = rows.map((row) => `${when}\t${row.role}\t${row.pid}\t${row.mib.toFixed(1)} MiB`).join('\n')
+    if (process.env.REHEARSAL_MEMORY) writeFileSync(process.env.REHEARSAL_MEMORY, `${text}\n`, { flag: 'a' })
+    return rows
+  }
   /** A window on this machine: signed in, it is the account's machine it selects, not this computer. */
   const connect = (d: IsolatedDaemon) => LocalClient.connect(d, backend ? { machineId: MACHINE.machineId } : {})
   /** Everything the daemon has said: what the processes this test started printed, and the log file a
@@ -92,6 +117,13 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
     try { file = readFileSync(join(daemon!.dataDir, 'harness.log'), 'utf8') } catch { /* none yet */ }
     return `${daemon!.log()}\n${file}`
   }
+  /** Session search answers, from wherever this build runs it (in the core, or in its own process), and
+   *  finds the agent by what it was told. */
+  const searchFinds = (client: LocalClient, agent: Row, words: string) => until(`search to find ${agent.engine}'s conversation`, async () => {
+    const answer = await client.request('session_search', { query: words, limit: 20 }, 30_000)
+    expect(answer.error, JSON.stringify(answer)).toBeUndefined()
+    return JSON.stringify(answer).includes(agent.sessionId) || null
+  }, 90_000, 1_000)
   const hookFiles = () => ({
     claude: join(daemon!.env.HOME!, '.claude', 'settings.json'),
     codex: join(daemon!.env.CODEX_HOME!, 'hooks.json'),
@@ -99,8 +131,10 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
 
   beforeAll(async () => {
     scratch = mkdtempSync(join(tmpdir(), 'harness-rehearsal-'))
-    const out = join(scratch, 'build')
-    execFileSync(process.execPath, ['build-bundle.mjs'], { cwd: CLI_ROOT, env: { ...process.env, ADAPTER_VERSION: NEXT, BUNDLE_OUT_DIR: out }, stdio: 'pipe' })
+    // `REHEARSE_TO` names another build to update to (a branch built at ${NEXT}), this checkout's otherwise.
+    const out = TO ? dirname(TO) : join(scratch, 'build')
+    if (!TO) execFileSync(process.execPath, ['build-bundle.mjs'], { cwd: CLI_ROOT, env: { ...process.env, ADAPTER_VERSION: NEXT, BUNDLE_OUT_DIR: out }, stdio: 'pipe' })
+    expect(execFileSync(process.execPath, [join(out, 'cli.js'), 'version'], { encoding: 'utf8' }).trim()).toBe(NEXT)
     bundles.set('next', { cli: readFileSync(join(out, 'cli.js')), notify: readFileSync(join(out, 'notify.mjs')), version: NEXT })
     fromVersion = execFileSync(process.execPath, [FROM!, 'version'], { encoding: 'utf8' }).trim()
     const fromCli = readFileSync(FROM!)
@@ -247,6 +281,8 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
     }
     await openTile(client, agents[0].id)
     for (const agent of agents) await turn(client, agent.id, `on ${NEXT}, handed over (${agent.engine})`)
+    // The services answer after the update, wherever the new build runs them.
+    await searchFinds(client, agents[0], 'handed')
     // The hooks the release installed reach the new core through the new notify.mjs, whichever command
     // the files now name.
     for (const agent of agents) {
@@ -272,6 +308,7 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
       expect(listeners()).toEqual([cores[0].pid])
     }
     expect(existsSync(join(cliDir(), 'cli.js.prev')) || existsSync(join(cliDir(), 'update-pending.json'))).toBe(false)
+    memory(`after the update from ${fromVersion}`)
     client.close()
 
     // The next `harness start` (a reboot, the desktop app) starts this checkout as harnessd: master and core.
@@ -286,8 +323,16 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
     if (backend) await until('this master\'s core to connect as the machine\'s node', () => backend!.nodeUp(MACHINE.machineId) || null, 60_000, 250)
     await openTile(client, agents[0].id)
     for (const agent of agents) await turn(client, agent.id, `on ${NEXT}, under the master (${agent.engine})`)
+    await searchFinds(client, agents[1], 'master')
     await until('only the master and its own children', () => daemonProcesses().every((one) => one.pid === d.pid || one.ppid === d.pid) || null, 15_000, 200)
     expect(daemonProcesses().filter((one) => one.command.endsWith(' __run'))).toHaveLength(1)
+    const under = memory(`under this master`)
+    // Every service this build runs in its own process is the master's child, and answers (search did).
+    const services = under.filter((row) => row.role.startsWith('service '))
+    for (const service of services) {
+      expect(Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(service.pid)], { encoding: 'utf8' }).trim()), service.role).toBe(d.pid)
+    }
+    if (process.env.REHEARSE_EXPECT_SERVICES) expect(services.length).toBe(Number(process.env.REHEARSE_EXPECT_SERVICES))
     client.close()
   }, 900_000)
 })
