@@ -40,6 +40,7 @@ class TerminalView extends StatefulWidget {
     this.autofocus = false,
     this.onTapDown,
     this.onTapUp,
+    this.onLongPressStart,
     this.onSecondaryTapDown,
     this.onSecondaryTapUp,
     this.mouseCursor = SystemMouseCursors.text,
@@ -110,6 +111,11 @@ class TerminalView extends StatefulWidget {
 
   /// Callback for a primary click handled locally, including [onTapDown].
   final void Function(TapUpDetails, CellOffset)? onTapUp;
+
+  /// Return true to take a touch long press in the host instead of selecting
+  /// the word under it. The drag that follows the press is then the host's
+  /// too: the terminal neither selects nor extends a selection for it.
+  final bool Function(LongPressStartDetails, CellOffset)? onLongPressStart;
 
   /// Function called when the user taps on the terminal with a secondary
   /// button.
@@ -366,6 +372,8 @@ class TerminalViewState extends State<TerminalView> {
       terminalController: _controller,
       onTapUp: _onTapUp,
       onTapDown: _onTapDown,
+      onLongPressStart:
+          widget.onLongPressStart != null ? _onLongPressStart : null,
       onSecondaryTapDown:
           widget.onSecondaryTapDown != null ? _onSecondaryTapDown : null,
       onSecondaryTapUp:
@@ -434,6 +442,13 @@ class TerminalViewState extends State<TerminalView> {
       }
     }
     return false;
+  }
+
+  bool _onLongPressStart(LongPressStartDetails details) {
+    final offset = renderTerminal.getCellOffset(
+      renderTerminal.globalToLocal(details.globalPosition),
+    );
+    return widget.onLongPressStart?.call(details, offset) ?? false;
   }
 
   void _onSecondaryTapDown(TapDownDetails details) {

@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:xterm/xterm.dart';
 
+import 'package:harness_mobile/clipboard/native_clipboard.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/terminal/key_hints.dart';
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
@@ -29,7 +32,7 @@ import 'tty.dart';
 /// phone keyboard cannot produce, or buries, and a pane is driven by:
 ///
 /// ```
-/// esc tab clear ← ↑ ↓ → /  │  🖼 ⌄
+/// esc ^C tab clear paste ⇧ ctrl ← ↑ ↓ →  │  img ▾
 /// ```
 ///
 /// Every key stays in the same place every time; this strip is used while
@@ -57,6 +60,8 @@ class TerminalKeyBar extends StatefulWidget {
     required this.enabled,
     required this.onDismissKeyboard,
     this.onPromptEdited,
+    this.onClearPrompt,
+    this.onPaste,
     this.onPickImage,
     this.onTakePhoto,
     this.questionOpen = false,
@@ -88,6 +93,14 @@ class TerminalKeyBar extends StatefulWidget {
   /// prompt no longer holds.
   final VoidCallback? onPromptEdited;
 
+  /// `clear`: empties the prompt being typed into. Null leaves the key out.
+  final VoidCallback? onClearPrompt;
+
+  /// `paste`: the phone's clipboard into the prompt, its image as well as its
+  /// text. Null leaves the key out; so does a clipboard with nothing on it —
+  /// the one key on the strip that comes and goes.
+  final VoidCallback? onPaste;
+
   /// False while the stream is not accepting input — the strip stays visible
   /// (it moves with the keyboard, and a row that vanished would take the
   /// keyboard's place with it) but dims and stops answering.
@@ -106,9 +119,75 @@ class TerminalKeyBar extends StatefulWidget {
   State<TerminalKeyBar> createState() => _TerminalKeyBarState();
 }
 
-class _TerminalKeyBarState extends State<TerminalKeyBar> {
+class _TerminalKeyBarState extends State<TerminalKeyBar>
+    with WidgetsBindingObserver {
   bool get _canSendImage =>
       widget.onPickImage != null || widget.onTakePhoto != null;
+
+  /// Whether the phone's clipboard holds anything `paste` would send: text,
+  /// or an image where this pane takes one. The key is drawn only then — a
+  /// `paste` that answers "nothing on the clipboard" is a key that did
+  /// nothing.
+  bool _clipboardFull = false;
+  bool _clipboardChecking = false;
+
+  /// Asks again every [_clipboardEvery] while the strip is up. Neither phone
+  /// says when its clipboard changes, and it does change under the strip: a
+  /// reply copied off the pane, text copied in another app over this one.
+  Timer? _clipboardPoll;
+  static const _clipboardEvery = Duration(seconds: 1);
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _watchClipboard();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Back from another app — where the copy usually happened.
+    if (state == AppLifecycleState.resumed) unawaited(_checkClipboard());
+  }
+
+  /// Starts asking about the clipboard while there is a `paste` to show, and
+  /// stops when there is not.
+  void _watchClipboard() {
+    if (widget.onPaste == null) {
+      _clipboardPoll?.cancel();
+      _clipboardPoll = null;
+      return;
+    }
+    _clipboardPoll ??= Timer.periodic(
+      _clipboardEvery,
+      (_) => unawaited(_checkClipboard()),
+    );
+    unawaited(_checkClipboard());
+  }
+
+  /// ⚠️ **Asked, never read.** [Clipboard.hasStrings] and
+  /// [NativeClipboard.hasImage] answer without iOS's "Allow Paste" prompt or
+  /// Android's "pasted from your clipboard" toast; reading the clipboard every
+  /// second would bring up one or the other each time.
+  Future<void> _checkClipboard() async {
+    if (_clipboardChecking || widget.onPaste == null) return;
+    // Only while the app is in front: Android hands an app in the background
+    // no clipboard at all, and the key would go away for nothing.
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (lifecycle != null && lifecycle != AppLifecycleState.resumed) return;
+    _clipboardChecking = true;
+    try {
+      var full = await Clipboard.hasStrings();
+      if (!full && _canSendImage) full = await NativeClipboard.hasImage();
+      if (mounted && full != _clipboardFull) {
+        setState(() => _clipboardFull = full);
+      }
+    } on PlatformException {
+      // No answer: the key stays as it was rather than flickering.
+    } finally {
+      _clipboardChecking = false;
+    }
+  }
 
   void _send(void Function() action) {
     if (!widget.enabled) return;
@@ -217,7 +296,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
     AppTheme.watch(context);
     // What drives an engine and a phone keyboard lacks: leave a mode, walk
     // history, move through a menu.
-    final keys = <Widget>[
+    final keys = <_Slot>[
       _key(label: 'esc', onTap: () => _sendKey(TerminalKey.escape)),
       // The other key a terminal person reaches for without looking: stop, now.
       _key(
@@ -230,6 +309,33 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
       ),
       // Completes a path or a command, and moves through Claude Code's menus.
       _key(label: 'tab', onTap: () => _sendKey(TerminalKey.tab, edits: true)),
+      // Empties what is typed: Ctrl+K, then Ctrl+U — not Ctrl+C, which on an
+      // empty Claude Code prompt is the first half of quitting. See
+      // `TerminalSession.clearPrompt`.
+      if (widget.onClearPrompt case final clear?)
+        _key(
+          label: 'clear',
+          semanticLabel: 'Clear prompt',
+          wide: true,
+          onTap: () {
+            _disarm();
+            clear();
+          },
+        ),
+      // The phone's clipboard, text or image — iOS's keyboard has no paste
+      // key. Beside `clear`: the two edit what is typed as a whole. Only while
+      // the clipboard holds something to paste — see [_clipboardFull].
+      if (widget.onPaste case final paste? when _clipboardFull)
+        _key(
+          label: 'paste',
+          semanticLabel: 'Paste',
+          wide: true,
+          onTap: () {
+            _disarm();
+            paste();
+            widget.onPromptEdited?.call();
+          },
+        ),
       // ⚠️ **The two modifiers stand together, before the keys they modify.**
       // Apart — one here, one at the far end of the row — they read as two
       // unrelated keys that happen to light up, and the pair a thumb reaches
@@ -282,7 +388,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
     // OS picker, the other drops the keyboard. Sharing a row taught the eye they
     // were the same kind of thing, and an image button that looks like `esc`
     // reads as something that will be typed at the agent.
-    final apart = <Widget>[
+    final apart = <_Slot>[
       if (_canSendImage)
         _key(
           label: 'img',
@@ -315,7 +421,8 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
           // at a large scale the keys stop fitting the row.
           child: MediaQuery.withNoTextScaling(
             // Every key the same width, the two apart ones included — they are
-            // separated by the rule, not by being a different size.
+            // separated by the rule, not by being a different size. Only the
+            // two five-letter words are wider: see [_wideParts].
             child: widget.hints.isEmpty
                 ? Row(children: [..._row(keys), ..._rule(), ..._row(apart)])
                 : LayoutBuilder(
@@ -328,13 +435,25 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
     );
   }
 
-  /// A run of keys for the strip's one [Row], each `Expanded` with the same
-  /// flex — so every key on the strip, on either side of the rule, gets the
-  /// same width, and the row fills the phone rather than ending in a gap.
-  List<Widget> _row(List<Widget> keys) => [
+  /// How many parts of the row a key takes: [_keyParts] for most,
+  /// [_wideParts] for `clear` and `paste`.
+  ///
+  /// ⚠️ **A word as long as `clear` in a cell sized for `esc` is shrunk to half
+  /// the size of the rest of the row.** The label scales down to fit rather
+  /// than clip, so the two words came out a size nobody could read. Five parts
+  /// to three gives them the room of the letters they have, and the row
+  /// reads at one size.
+  static const _keyParts = 3;
+  static const _wideParts = 5;
+
+  /// A run of keys for the strip's one [Row], each `Expanded` with its
+  /// [_Slot.parts] as the flex — so every key on the strip, on either side of
+  /// the rule, gets the same width but the wide two, and the row fills the
+  /// phone rather than ending in a gap.
+  List<Widget> _row(List<_Slot> keys) => [
     for (var index = 0; index < keys.length; index++) ...[
       if (index > 0) const SizedBox(width: 4),
-      Expanded(child: keys[index]),
+      Expanded(flex: keys[index].parts, child: keys[index].key),
     ],
   ];
 
@@ -360,17 +479,21 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
   /// [TerminalKeyBar.hints], scrolling sideways together; the two apart keys
   /// stay pinned past the rule.
   ///
-  /// ⚠️ **Every fixed key keeps exactly the width [_row] gives it.** The cell
+  /// ⚠️ **Every fixed key keeps exactly the width [_row] gives it.** The part
   /// is worked out the way the `Expanded` row divides [width] — the same keys,
   /// gaps and rule — so the keys do not shrink or move when a hint arrives:
   /// they fill the visible part of the row as they always do, and the hints
   /// start where it ends. [_revealHints] then scrolls them into view.
-  Widget _rowWithHints(List<Widget> keys, List<Widget> apart, double width) {
+  Widget _rowWithHints(List<_Slot> keys, List<_Slot> apart, double width) {
     const gap = 4.0;
     final gaps =
         gap * (keys.length - 1) + _ruleWidth + gap * (apart.length - 1);
-    final cell = (width - gaps) / (keys.length + apart.length);
-    if (!cell.isFinite || cell <= 0) {
+    final parts = [
+      ...keys,
+      ...apart,
+    ].fold<int>(0, (sum, key) => sum + key.parts);
+    final part = (width - gaps) / parts;
+    if (!part.isFinite || part <= 0) {
       return Row(children: [..._row(keys), ..._rule(), ..._row(apart)]);
     }
     final hints = widget.hints;
@@ -382,7 +505,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                ..._cells(keys, cell),
+                ..._cells(keys, part),
                 // The pane's keys are not the strip's: a hairline says so,
                 // the way the rule sets the phone's own two apart.
                 const SizedBox(width: 6),
@@ -397,17 +520,18 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
           ),
         ),
         ..._rule(),
-        ..._cells(apart, cell),
+        ..._cells(apart, part),
       ],
     );
   }
 
-  /// A run of keys at a fixed [width] each — [_row]'s layout, in a row that
-  /// scrolls and so cannot divide itself with `Expanded`.
-  List<Widget> _cells(List<Widget> keys, double width) => [
+  /// A run of keys at a fixed width each, [part] times its [_Slot.parts] —
+  /// [_row]'s layout, in a row that scrolls and so cannot divide itself with
+  /// `Expanded`.
+  List<Widget> _cells(List<_Slot> keys, double part) => [
     for (var index = 0; index < keys.length; index++) ...[
       if (index > 0) const SizedBox(width: 4),
-      SizedBox(width: width, child: keys[index]),
+      SizedBox(width: part * keys[index].parts, child: keys[index].key),
     ],
   ];
 
@@ -426,10 +550,19 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
     if (widget.hints.isNotEmpty && !listEquals(widget.hints, oldWidget.hints)) {
       _revealHints();
     }
+    // `paste` came or went, or an image stopped (or started) counting.
+    final couldSendImage =
+        oldWidget.onPickImage != null || oldWidget.onTakePhoto != null;
+    if ((widget.onPaste == null) != (oldWidget.onPaste == null) ||
+        _canSendImage != couldSendImage) {
+      _watchClipboard();
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _clipboardPoll?.cancel();
     _scroll.dispose();
     super.dispose();
   }
@@ -464,31 +597,39 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
     ),
   );
 
-  Widget _key({
+  _Slot _key({
     String? label,
     IconData? icon,
     String? semanticLabel,
     bool alwaysEnabled = false,
     bool armed = false,
+    bool wide = false,
     required VoidCallback onTap,
   }) {
     assert((label == null) != (icon == null), 'a key carries one of the two');
     final live = widget.enabled || alwaysEnabled;
-    return Semantics(
-      button: true,
-      label: semanticLabel ?? label,
-      // Named so a test can reach the icon keys, which carry no text.
-      key: ValueKey('terminal-key-${semanticLabel ?? label}'),
-      child: _KeyCap(
-        label: label,
-        icon: icon,
-        live: live,
-        armed: armed,
-        onTap: alwaysEnabled ? onTap : () => _send(onTap),
+    return (
+      key: Semantics(
+        button: true,
+        label: semanticLabel ?? label,
+        // Named so a test can reach the icon keys, which carry no text.
+        key: ValueKey('terminal-key-${semanticLabel ?? label}'),
+        child: _KeyCap(
+          label: label,
+          icon: icon,
+          live: live,
+          armed: armed,
+          onTap: alwaysEnabled ? onTap : () => _send(onTap),
+        ),
       ),
+      parts: wide ? _wideParts : _keyParts,
     );
   }
 }
+
+/// One key of the strip, and how many parts of the row it takes — see
+/// [_TerminalKeyBarState._wideParts].
+typedef _Slot = ({Widget key, int parts});
 
 /// One key of the bar, lit while a thumb is on it.
 ///

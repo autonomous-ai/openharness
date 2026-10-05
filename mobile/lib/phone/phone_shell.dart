@@ -285,23 +285,36 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
                 Expanded(
                   // While a band shows it has taken the status-bar inset, so the pages under it must
                   // not take it again (a blank gap the height of the notch otherwise).
-                  child: MediaQuery.removePadding(
-                    context: context,
-                    removeTop: NewDeviceBanner.showing(widget.notifier),
-                    child: HeroControllerScope(
-                      controller: _heroController,
-                      child: Navigator(
-                        key: _navigator,
-                        // ⚠️ The controller goes in the SCOPE ONLY, never also in `observers`.
-                        // `NavigatorState._updateEffectiveObservers` appends the scope's controller to
-                        // `widget.observers` itself, so listing it here registers it twice and trips
-                        // "A HeroController can not be shared by multiple Navigators" — which reads
-                        // like a sharing bug and is really a double-subscription by one navigator.
-                        onGenerateRoute: (_) => MaterialPageRoute<void>(
-                          builder: (_) => AgentHome(
-                            notifier: widget.notifier,
-                            openMachineId: _linkedMachineId,
-                            openAgent: _openAgentRequest,
+                  //
+                  // ⚠️ **Read under the Scaffold, through this Builder — never through the shell's
+                  // own context.** The Scaffold has resized its body for the keyboard, and hands the
+                  // body a MediaQuery with the keyboard's inset taken out so nothing below takes it
+                  // again. The shell's context sits ABOVE the Scaffold and still holds that inset:
+                  // rebuilt from it, every page in this navigator read the keyboard afresh and its
+                  // own Scaffold shrank for it a second time. The terminal page lost twice the
+                  // keyboard's height, its key bar left floating halfway up the screen over an
+                  // empty band. See `TerminalPage.didChangeMetrics`, which relies on the inset
+                  // being gone here.
+                  child: Builder(
+                    builder: (context) => MediaQuery.removePadding(
+                      context: context,
+                      removeTop: NewDeviceBanner.showing(widget.notifier),
+                      child: HeroControllerScope(
+                        controller: _heroController,
+                        child: Navigator(
+                          key: _navigator,
+                          // ⚠️ The controller goes in the SCOPE ONLY, never also in `observers`.
+                          // `NavigatorState._updateEffectiveObservers` appends the scope's controller
+                          // to `widget.observers` itself, so listing it here registers it twice and
+                          // trips "A HeroController can not be shared by multiple Navigators" — which
+                          // reads like a sharing bug and is really a double-subscription by one
+                          // navigator.
+                          onGenerateRoute: (_) => MaterialPageRoute<void>(
+                            builder: (_) => AgentHome(
+                              notifier: widget.notifier,
+                              openMachineId: _linkedMachineId,
+                              openAgent: _openAgentRequest,
+                            ),
                           ),
                         ),
                       ),

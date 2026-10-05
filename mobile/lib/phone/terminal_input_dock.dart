@@ -32,6 +32,8 @@ class TerminalInputDock extends StatefulWidget {
     required this.session,
     required this.keyboardUp,
     required this.onDismiss,
+    this.onClearPrompt,
+    this.onPaste,
     this.onPickImage,
     this.onTakePhoto,
     this.questionOpen = false,
@@ -52,6 +54,11 @@ class TerminalInputDock extends StatefulWidget {
 
   /// `⌄` on the key bar: puts the keyboard away.
   final VoidCallback onDismiss;
+
+  /// `clear` and `paste` on the key bar — see [TerminalKeyBar.onClearPrompt]
+  /// and [TerminalKeyBar.onPaste].
+  final VoidCallback? onClearPrompt;
+  final VoidCallback? onPaste;
   final VoidCallback? onPickImage;
   final VoidCallback? onTakePhoto;
 
@@ -121,6 +128,8 @@ class _TerminalInputDockState extends State<TerminalInputDock>
         enabled: widget.session.acceptsInput,
         onPromptEdited: widget.session.resetInputBuffer,
         onDismissKeyboard: widget.onDismiss,
+        onClearPrompt: widget.onClearPrompt,
+        onPaste: widget.onPaste,
         onPickImage: widget.onPickImage,
         onTakePhoto: widget.onTakePhoto,
         questionOpen: widget.questionOpen,

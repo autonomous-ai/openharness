@@ -17,6 +17,7 @@ class TerminalGestureHandler extends StatefulWidget {
     this.onTapUp,
     this.onSingleTapUp,
     this.onTapDown,
+    this.onLongPressStart,
     this.onSecondaryTapDown,
     this.onSecondaryTapUp,
     this.onTertiaryTapDown,
@@ -35,6 +36,10 @@ class TerminalGestureHandler extends StatefulWidget {
   final GestureTapUpCallback? onSingleTapUp;
 
   final bool Function(TapDownDetails)? onTapDown;
+
+  /// Return true to take the long press in the host — see
+  /// [TerminalView.onLongPressStart].
+  final bool Function(LongPressStartDetails)? onLongPressStart;
 
   final GestureTapDownCallback? onSecondaryTapDown;
 
@@ -60,6 +65,8 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   LongPressStartDetails? _lastLongPressStartDetails;
 
   bool _hostHandlesTap = false;
+
+  bool _hostHandlesLongPress = false;
 
   @override
   Widget build(BuildContext context) {
@@ -174,11 +181,14 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   }
 
   void onLongPressStart(LongPressStartDetails details) {
+    _hostHandlesLongPress = widget.onLongPressStart?.call(details) ?? false;
+    if (_hostHandlesLongPress) return;
     _lastLongPressStartDetails = details;
     renderTerminal.selectWord(details.localPosition);
   }
 
   void onLongPressMoveUpdate(LongPressMoveUpdateDetails details) {
+    if (_hostHandlesLongPress) return;
     renderTerminal.selectWord(
       _lastLongPressStartDetails!.localPosition,
       details.localPosition,

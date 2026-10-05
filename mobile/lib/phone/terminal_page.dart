@@ -50,6 +50,7 @@ import 'terminal_action_column.dart';
 import 'team_page.dart';
 import 'terminal_chrome_scroll.dart';
 import 'terminal_input_dock.dart';
+import 'terminal_copy.dart';
 import 'terminal_paste.dart';
 import 'terminal_search.dart';
 import 'tty.dart';
@@ -2074,6 +2075,10 @@ class _TerminalPageState extends State<TerminalPage>
                                                       ? _answerBands
                                                       : null,
                                                   onBandTap: _onAnswerBand,
+                                                  // A long press on the prompt offers Paste, as
+                                                  // a text field's does — see [_paste].
+                                                  onPaste: () =>
+                                                      _paste(session),
                                                   // Where the reader is in the history —
                                                   // what holds the view still under them.
                                                   scrollback: _scrollback,
@@ -2163,6 +2168,12 @@ class _TerminalPageState extends State<TerminalPage>
                               session: session,
                               keyboardUp: _keyBarUp,
                               onDismiss: _dismissInput,
+                              // `clear` and `paste` on the key bar: the prompt
+                              // emptied, and the phone's clipboard — text or
+                              // image — through the same path as the sheet's
+                              // Paste. See [_paste].
+                              onClearPrompt: session.clearPrompt,
+                              onPaste: () => _paste(session),
                               // A dialog the watcher can read is open: the
                               // strip offers Enter for it. See
                               // [TerminalKeyBar.questionOpen].
@@ -2439,6 +2450,10 @@ class _TerminalPageState extends State<TerminalPage>
             // Hidden rather than dimmed while the stream is read-only: reclaiming is the header's
             // job, and a paste that silently goes nowhere is worse than no row.
             if (session != null && session.acceptsInput) _pasteAction(session),
+            // Beside Paste, its other half. Copying reads and sends nothing, so it is offered on a
+            // terminal only being watched too — but only while there is a reply on it to copy.
+            if (session != null && hasLastReply(session))
+              _copyReplyAction(session),
             ..._agentActions(agent),
           ],
         ),
@@ -2494,30 +2509,56 @@ class _TerminalPageState extends State<TerminalPage>
     // was meant — and the phone's is the surprising answer, since the agent runs
     // somewhere else. See [pasteClipboard], which says the same in its doc.
     label: 'Paste from clipboard',
-    onTap: () {
-      final messenger = ScaffoldMessenger.maybeOf(context);
-      unawaited(
-        pasteClipboard(
-          session: session,
-          machine: widget.notifier.stateOf(widget.machineId),
-          stillShowing: () =>
-              mounted &&
-              widget.isActive &&
-              identical(
-                widget.notifier
-                    .paneOfAgent(widget.machineId, widget.agentId)
-                    ?.session,
-                session,
-              ),
-          report: (message) {
-            if (mounted) {
-              messenger?.showSnackBar(SnackBar(content: Text(message)));
-            }
-          },
-        ),
-      );
-    },
+    onTap: () => _paste(session),
   );
+
+  /// The clipboard into [session] — the sheet's Paste row, and the Paste of a long press on the
+  /// prompt (`TerminalPanel.onPaste`). One path for both, so both read the image as well as the
+  /// text, ask iOS once, and send only into the terminal still on screen.
+  void _paste(TerminalSession session) {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    unawaited(
+      pasteClipboard(
+        session: session,
+        machine: widget.notifier.stateOf(widget.machineId),
+        stillShowing: () =>
+            mounted &&
+            widget.isActive &&
+            identical(
+              widget.notifier
+                  .paneOfAgent(widget.machineId, widget.agentId)
+                  ?.session,
+              session,
+            ),
+        report: (message) {
+          if (mounted) {
+            messenger?.showSnackBar(SnackBar(content: Text(message)));
+          }
+        },
+      ),
+    );
+  }
+
+  /// Copy last reply: what the agent last said, onto the phone's clipboard, without selecting it
+  /// first. What it reads and copies lives in [copyLastReply].
+  PhoneSheetAction _copyReplyAction(TerminalSession session) =>
+      PhoneSheetAction(
+        icon: LucideIcons.copy300,
+        label: 'Copy last reply',
+        onTap: () {
+          final messenger = ScaffoldMessenger.maybeOf(context);
+          unawaited(
+            copyLastReply(
+              session: session,
+              report: (message) {
+                if (mounted) {
+                  messenger?.showSnackBar(SnackBar(content: Text(message)));
+                }
+              },
+            ),
+          );
+        },
+      );
 
   /// What acts on this agent and can be taken back — the first card of its sheet.
   List<PhoneSheetAction> _agentActions(Agent agent) => [

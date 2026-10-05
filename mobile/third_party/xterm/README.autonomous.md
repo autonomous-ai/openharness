@@ -36,6 +36,13 @@ fix and the regression in `test/terminal_session_test.dart` passes against it.
   Ordinary clicks and drag selection keep their existing behavior. Regressions:
   `test/terminal_link_gesture_test.dart`, `test/terminal_panel_links_test.dart`.
 
+- **Host-handled long presses** (`lib/src/terminal_view.dart`,
+  `lib/src/ui/gesture/gesture_handler.dart`). `TerminalView.onLongPressStart`
+  gets the touch long press first; returning true skips the word selection and
+  the drag-to-extend that follows it. The phone uses it to select a whole agent
+  message (`lib/terminal/output_blocks.dart`), and to open the prompt's Paste
+  menu. Without the callback, a long press selects the word as before.
+
 Each of these has to survive an upstream bump — the tests named are what catch
 it if one is dropped.
 

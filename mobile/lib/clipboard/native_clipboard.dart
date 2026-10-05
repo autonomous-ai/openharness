@@ -38,6 +38,23 @@ class NativeClipboard {
     }
   }
 
+  /// Whether the system clipboard holds an image, asked without reading it — so iOS shows no
+  /// "Allow Paste" prompt and Android no "pasted from your clipboard" toast, and it can be asked as
+  /// often as the key strip's `paste` needs to know whether to show (`phone/terminal_key_bar.dart`).
+  ///
+  /// False on any platform without a native handler for it (iOS and Android only), or when the
+  /// question cannot be answered.
+  static Future<bool> hasImage() async {
+    if (!Platform.isIOS && !Platform.isAndroid) return false;
+    try {
+      return await _channel.invokeMethod<bool>('hasImage') ?? false;
+    } on MissingPluginException {
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Writes `pngBytes` onto the system clipboard, replacing whatever was there — the LOCAL half
   /// of native image drag-drop (see `_dropImage` in `widgets/pane_grid.dart`): when the pane's
   /// machine is this same computer, the app puts the bytes on ITS OWN clipboard directly instead

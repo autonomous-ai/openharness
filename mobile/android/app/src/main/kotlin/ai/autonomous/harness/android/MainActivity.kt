@@ -39,10 +39,18 @@ class MainActivity : FlutterActivity() {
 
     // `harness/clipboard_image` — the image on the clipboard, as PNG bytes (Dart:
     // `lib/clipboard/native_clipboard.dart`). Flutter's own clipboard reads text only, so a
-    // screenshot copied from the share sheet was invisible to Paste. Only `readImagePng` is
-    // implemented here, since nothing on the phone writes an image.
+    // screenshot copied from the share sheet was invisible to Paste. Only `readImagePng` and
+    // `hasImage` are implemented here, since nothing on the phone writes an image.
     MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "harness/clipboard_image")
       .setMethodCallHandler { call, result ->
+        // Whether an image is there, for the key strip's `paste` (Dart:
+        // `phone/terminal_key_bar.dart`), which is asked about every second while the keyboard is
+        // up. Read off the clip's DESCRIPTION alone: opening the clip itself is what Android 12+
+        // tells the person about, with its "pasted from your clipboard" toast.
+        if (call.method == "hasImage") {
+          result.success(clipboardHasImage())
+          return@setMethodCallHandler
+        }
         if (call.method != "readImagePng") { result.notImplemented(); return@setMethodCallHandler }
         val uri = clipboardImageUri()
         if (uri == null) { result.success(null); return@setMethodCallHandler }
@@ -90,6 +98,13 @@ class MainActivity : FlutterActivity() {
           else -> result.notImplemented()
         }
       }
+  }
+
+  /** Whether the clipboard holds an image, from its description alone — the clip is never opened. */
+  private fun clipboardHasImage(): Boolean {
+    val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return false
+    val description = try { clipboard.primaryClipDescription } catch (e: Exception) { null }
+    return description?.hasMimeType("image/*") == true
   }
 
   /** The first image on the clipboard, or null. The description is checked before any item, so a

@@ -24,12 +24,20 @@ import UserNotifications
 /// `harness/clipboard_image` — the image on the clipboard, as PNG bytes (Dart:
 /// `lib/clipboard/native_clipboard.dart`). Flutter's own clipboard reads `text/plain` only, so a
 /// screenshot or a "Copy" from Photos was invisible to Paste. The same channel the desktop runners
-/// answer; only `readImagePng` is implemented here, since nothing on the phone writes an image.
+/// answer; only `readImagePng` and `hasImage` are implemented here, since nothing on the phone
+/// writes an image.
 enum ClipboardImageChannel {
   static func register(with registry: FlutterPluginRegistry) {
     guard let messenger = registry.registrar(forPlugin: "HarnessClipboardImage")?.messenger() else { return }
     let channel = FlutterMethodChannel(name: "harness/clipboard_image", binaryMessenger: messenger)
     channel.setMethodCallHandler { call, result in
+      // Whether an image is there, for the key strip's `paste` (Dart: `phone/terminal_key_bar.dart`),
+      // which is asked about every second while the keyboard is up. `hasImages` never brings up the
+      // system's paste prompt: only reading the image does.
+      if call.method == "hasImage" {
+        result(UIPasteboard.general.hasImages)
+        return
+      }
       guard call.method == "readImagePng" else { result(FlutterMethodNotImplemented); return }
       // `hasImages` answers without the system's paste prompt, so an empty clipboard never asks.
       let pasteboard = UIPasteboard.general

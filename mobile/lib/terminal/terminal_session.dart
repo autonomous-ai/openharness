@@ -11,6 +11,7 @@ import 'control_chord.dart';
 import 'screen_snapshot.dart';
 import 'terminal_binary.dart';
 import 'terminal_input.dart';
+import 'terminal_prompt_zone.dart';
 import 'terminal_viewport.dart';
 import 'utf8_chunks.dart';
 
@@ -1060,17 +1061,30 @@ class TerminalSession extends ChangeNotifier {
     if (identical(_viewport, viewport)) _viewport = null;
   }
 
-  /// Empties the prompt being typed into: Ctrl+E to its end, then Ctrl+U to
-  /// delete back to its start — what a shell and Claude Code's prompt both
-  /// read as "clear the line" — and the keyboard's own buffer with it (see
-  /// [TerminalViewport.clearInputBuffer]).
+  /// Empties the prompt being typed into, all of it: Ctrl+K until nothing is
+  /// after the cursor, then Ctrl+U until nothing is before it — what a shell
+  /// and both agents' prompts read as "kill the line" — and the keyboard's own
+  /// buffer with it (see [TerminalViewport.clearInputBuffer]).
+  ///
+  /// ⚠️ **One kill is one ROW, not the prompt.** Claude Code's Ctrl+U deletes
+  /// back to the start of the row as WRAPPED, and at a row's start only the
+  /// newline before it; Ctrl+K likewise forwards. A phone's pane is about
+  /// forty columns wide, so two pastes already wrap, and a single Ctrl+E,
+  /// Ctrl+U left all but the last row behind. So each is sent twice per row
+  /// the prompt can take on screen ([promptRowsBound]): a kill past the
+  /// prompt's ends does nothing.
   ///
   /// ⚠️ Not Ctrl+C: to Claude Code an empty prompt's Ctrl+C is the first half
   /// of quitting.
   void clearPrompt() {
     if (!acceptsInput) return;
-    terminal.keyInput(TerminalKey.keyE, ctrl: true);
-    terminal.keyInput(TerminalKey.keyU, ctrl: true);
+    final kills = 2 * promptRowsBound(terminal.buffer);
+    for (var i = 0; i < kills; i++) {
+      terminal.keyInput(TerminalKey.keyK, ctrl: true);
+    }
+    for (var i = 0; i < kills; i++) {
+      terminal.keyInput(TerminalKey.keyU, ctrl: true);
+    }
     resetInputBuffer();
   }
 
