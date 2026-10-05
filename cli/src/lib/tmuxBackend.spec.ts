@@ -60,19 +60,20 @@ esac
     ])
   })
 
-  it.each(['gone', 'present', 'unknown', 'malformed', 'no server'] as const)('verifies %s inventory after a failed pane-close reply', async mode => {
+  it.each(['gone', 'present', 'unknown', 'malformed', 'no server', 'no socket'] as const)('verifies %s inventory after a failed pane-close reply', async mode => {
     const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-close-'))
     dirs.push(dir)
     const inventory = mode === 'gone' ? "printf '%%43\\n'" : mode === 'present' ? "printf '%%42\\n'"
       : mode === 'malformed' ? "printf 'not a pane\\n'" : mode === 'no server'
-        ? "printf 'no server running on /tmp/fixture\\n' >&2; exit 1" : 'exit 1'
+        ? "printf 'no server running on /tmp/fixture\\n' >&2; exit 1"
+        : mode === 'no socket' ? `printf 'error connecting to ${join(dir, 'gone')} (No such file or directory)\\n' >&2; exit 1` : 'exit 1'
     writeFileSync(join(dir, 'tmux'), `#!/bin/sh\nif [ "$1" = list-panes ]; then\n${inventory}\nelse\nexit 1\nfi\n`, { mode: 0o700 })
     process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
     const backend = new TmuxBackend()
     // Even if discovery hides this pane (e.g. its session was renamed), the
     // exact-pane check must see it and refuse a false successful pause.
     const discovery = vi.spyOn(backend, 'inventory').mockResolvedValue({ state: 'available', roots: [] })
-    expect((await backend.kill({ backend: 'tmux', paneId: '%42' })).state).toBe(mode === 'gone' || mode === 'no server' ? 'succeeded' : 'unknown')
+    expect((await backend.kill({ backend: 'tmux', paneId: '%42' })).state).toBe(mode === 'gone' || mode === 'no server' || mode === 'no socket' ? 'succeeded' : 'unknown')
     expect(discovery).not.toHaveBeenCalled()
   })
 
@@ -199,13 +200,17 @@ esac
     ])
   })
 
-  it('treats a fresh tmux installation with no server as an available empty inventory', async () => {
+  it.each([
+    ['a stale socket', 'no server running on /tmp/tmux-1000/default'],
+    // What `kill-server`, a tmux crash and a reboot leave: the socket file itself gone.
+    ['no socket', 'error connecting to /nonexistent/tmux-1000/default (No such file or directory)'],
+  ])('treats no tmux server (%s) as an available empty inventory', async (_name, message) => {
     const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-no-server-'))
     dirs.push(dir)
     const tmux = join(dir, 'tmux')
     writeFileSync(tmux, `#!/bin/sh
 if [ "$1" = list-panes ]; then
-  printf 'no server running on /tmp/tmux-1000/default\\n' >&2
+  printf '${message}\\n' >&2
   exit 1
 fi
 `)
@@ -216,6 +221,25 @@ fi
       state: 'available',
       roots: [],
     })
+  })
+
+  it('reads a pane as gone, not unknown, when no tmux server is running at all', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-validate-'))
+    dirs.push(dir)
+    const tmux = join(dir, 'tmux')
+    writeFileSync(tmux, `#!/bin/sh
+printf 'error connecting to ${join(dir, 'gone')} (No such file or directory)\\n' >&2
+exit 1
+`)
+    chmodSync(tmux, 0o700)
+    process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
+    await expect(new TmuxBackend().validate({ backend: 'tmux', paneId: '%42' }, { engine: 'claude' })).resolves.toMatchObject({ state: 'gone' })
+    // A socket it cannot reach for another reason still says nothing about the pane.
+    writeFileSync(tmux, `#!/bin/sh
+printf 'error connecting to ${dir} (Permission denied)\\n' >&2
+exit 1
+`)
+    await expect(new TmuxBackend().validate({ backend: 'tmux', paneId: '%42' }, { engine: 'claude' })).resolves.toMatchObject({ state: 'unknown' })
   })
 
   it('respawns a pane in place with -k, an optional cwd, and the exact argv, no shell', async () => {
