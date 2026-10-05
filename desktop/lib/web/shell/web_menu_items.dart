@@ -1,10 +1,21 @@
+import 'package:flutter/widgets.dart';
+
+import '../../shared/theme/app_icons.dart';
+import '../../shared/theme/app_pane_icon.dart';
+
 /// Which layouts a menu row belongs to: some rows repeat a control the wide
 /// bar already shows, others make no sense on a phone.
 enum WebMenuWidth { any, compact, wide }
 
-/// One entry of the web app menu: a workspace command id and its menu label.
-/// The command itself lives in the workspace's shared command table.
-typedef WebMenuItem = ({String command, String label, WebMenuWidth width});
+/// One entry of the web app menu: a workspace command id, its menu label and
+/// the glyph the desktop menu bar gives the same command. The command itself
+/// lives in the workspace's shared command table.
+typedef WebMenuItem = ({
+  String command,
+  String label,
+  Widget icon,
+  WebMenuWidth width,
+});
 
 /// What the menu offers, in groups a thin rule separates. Only what has no
 /// other door in the browser chrome: new work is the `+` beside the tabs
@@ -17,29 +28,70 @@ typedef WebMenuItem = ({String command, String label, WebMenuWidth width});
 /// All commands still reaches every one.
 const List<List<WebMenuItem>> kWebMenuGroups = [
   [
-    (command: 'machines.list', label: 'Machines', width: WebMenuWidth.any),
-    (command: 'models.list', label: 'Models', width: WebMenuWidth.any),
+    (
+      command: 'machines.list',
+      label: 'Machines',
+      icon: Icon(AppIcons.server),
+      width: WebMenuWidth.any,
+    ),
+    (
+      command: 'models.list',
+      label: 'Models',
+      icon: Icon(AppIcons.cpu),
+      width: WebMenuWidth.any,
+    ),
     // The wide bar has its own Store button; the phone bar gives it up.
-    (command: 'app.store', label: 'Store', width: WebMenuWidth.compact),
+    (
+      command: 'app.store',
+      label: 'Store',
+      icon: Icon(AppIcons.store),
+      width: WebMenuWidth.compact,
+    ),
   ],
   [
     // One split, always to the right: a second "down" row only lengthens the
     // menu, and All commands still has Split down.
-    (command: 'pane.split_right', label: 'Split pane', width: WebMenuWidth.any),
-  ],
-  [
-    (command: 'navigation.history', label: 'History', width: WebMenuWidth.any),
     (
-      command: 'navigation.commands',
-      label: 'All commands',
+      command: 'pane.split_right',
+      label: 'Split pane',
+      icon: AppPaneIcon(AppPaneSymbol.splitRight, size: AppIcons.inlineSize),
       width: WebMenuWidth.any,
     ),
   ],
   [
-    (command: 'app.settings', label: 'Settings', width: WebMenuWidth.any),
-    (command: 'app.customize', label: 'Customize', width: WebMenuWidth.any),
+    (
+      command: 'navigation.history',
+      label: 'History',
+      icon: Icon(AppIcons.history),
+      width: WebMenuWidth.any,
+    ),
+    (
+      command: 'navigation.commands',
+      label: 'All commands',
+      icon: Icon(AppIcons.command),
+      width: WebMenuWidth.any,
+    ),
+  ],
+  [
+    (
+      command: 'app.settings',
+      label: 'Settings',
+      icon: Icon(AppIcons.settings),
+      width: WebMenuWidth.any,
+    ),
+    (
+      command: 'app.customize',
+      label: 'Customize',
+      icon: Icon(AppIcons.palette),
+      width: WebMenuWidth.any,
+    ),
     // Pairing a phone is for a computer; a phone is already here.
-    (command: 'app.add_phone', label: 'Add phone', width: WebMenuWidth.wide),
+    (
+      command: 'app.add_phone',
+      label: 'Add phone',
+      icon: Icon(AppIcons.smartphone),
+      width: WebMenuWidth.wide,
+    ),
   ],
 ];
 
