@@ -194,7 +194,7 @@ describe('a failing service never takes the core down', () => {
   it('with the fleet not starting, or failing on every call, ⌘K says so and the core runs its agents on', async () => {
     for (const [faults, reason, said] of [
       ['fleet', 'no agent list yet', '[services] fleet did not start · injected fault: fleet · the core runs without it'],
-      ['fleet.routeTask,fleet.sendTurn', 'the fleet service is unavailable', '[services] fleet.sendTurn failed · injected fault: fleet.sendTurn'],
+      ['fleet.routeTask,fleet.routeSend', 'the fleet service is unavailable', '[services] fleet.routeSend failed · injected fault: fleet.routeSend'],
     ]) {
       daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: faults } })
       const d = daemon

@@ -2,7 +2,7 @@
 // answer reaching it there. Every caller (⌘K, the voice route, the dial) goes through one of these.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { FleetMachine, MachineFleet } from '../cable/machineFleet.js'
+import { FleetError, type FleetMachine, type MachineFleet } from '../cable/machineFleet.js'
 import type { ReviewedAnswer } from '../cable/questionInbox.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { FleetRouter, type FleetLocal } from './fleetRouter.js'
@@ -335,28 +335,24 @@ describe('a turn, delivered and said so', () => {
 })
 
 describe('a fork, on the agent’s own machine', () => {
-  it('forks a local agent through the daemon, notes the fork here, and says how the attempt went', async () => {
+  it('forks a local agent through the daemon, notes the fork here, and says which machine was asked', async () => {
     const forkAgent = vi.fn(async () => ({ ok: true as const, agentId: 'a1-fork' }))
     const router = new FleetRouter(localOf({ forkAgent }, [session('a1', 1, 'claude')]))
     await router.listAgentsFlat()
-    const attempted = vi.fn()
-    expect(await router.forkAgent('a1', attempted)).toEqual({ ok: true, agentId: 'a1-fork' })
-    expect(attempted).toHaveBeenCalledWith('mine', { ok: true, agentId: 'a1-fork' })
+    expect(await router.forkAgent('a1')).toEqual({ result: { ok: true, agentId: 'a1-fork' }, machineId: 'mine', asked: true })
     expect(router.machineOf('a1-fork')).toBe('mine')
     forkAgent.mockResolvedValueOnce({ ok: false, error: 'BUSY' } as never)
-    expect(await router.forkAgent('a1')).toEqual({ ok: false, error: 'BUSY' })
+    expect(await router.forkAgent('a1')).toEqual({ result: { ok: false, error: 'BUSY' }, machineId: 'mine', asked: true })
   })
 
   it('refuses without asking anyone for an agent never listed, or a daemon that cannot fork', async () => {
-    const attempted = vi.fn()
     const router = new FleetRouter(localOf({}, [session('a1', 1, 'claude')]))
     await router.listAgentsFlat()
-    expect(await router.forkAgent('ghost', attempted)).toMatchObject({ ok: false, error: 'AGENT_NOT_FOUND' })
-    expect(await router.forkAgent('a1', attempted)).toMatchObject({ ok: false, error: 'UNSUPPORTED' })
+    expect(await router.forkAgent('ghost')).toMatchObject({ result: { ok: false, error: 'AGENT_NOT_FOUND' }, machineId: '', asked: false })
+    expect(await router.forkAgent('a1')).toMatchObject({ result: { ok: false, error: 'UNSUPPORTED' }, machineId: 'mine', asked: false })
     // A remote agent heard from, with no fleet to fork it through.
     router.noteAgent('other', 'r1')
-    expect(await router.forkAgent('r1', attempted)).toEqual({ ok: false, error: 'UNSUPPORTED_ON_REMOTE' })
-    expect(attempted).not.toHaveBeenCalled()
+    expect(await router.forkAgent('r1')).toEqual({ result: { ok: false, error: 'UNSUPPORTED_ON_REMOTE' }, machineId: 'other', asked: false })
   })
 
   it('forks a remote agent on its machine, and reports the far end’s refusal', async () => {
@@ -364,9 +360,41 @@ describe('a fork, on the agent’s own machine', () => {
     fleet.forkAgent = vi.fn(async (_m: string, id: string) => { if (id === 'r1') return 'r1-fork'; throw new Error('r2 is in the middle of a turn') })
     const router = new FleetRouter(localOf(), fleet)
     await settled(router)
-    expect(await router.forkAgent('r1')).toEqual({ ok: true, agentId: 'r1-fork' })
+    expect(await router.forkAgent('r1')).toEqual({ result: { ok: true, agentId: 'r1-fork' }, machineId: 'other', asked: true })
     expect(router.machineOf('r1-fork')).toBe('other')
-    expect(await router.forkAgent('r2')).toEqual({ ok: false, error: 'FORK_FAILED', detail: 'r2 is in the middle of a turn' })
+    expect((await router.forkAgent('r2')).result).toEqual({ ok: false, error: 'FORK_FAILED', detail: 'r2 is in the middle of a turn' })
+  })
+})
+
+describe('the lane, held while a dial is plugged in', () => {
+  it('is there only with a fleet, and comes online, selects and lets go through it', async () => {
+    expect(new FleetRouter(localOf()).hasLane()).toBe(false)
+    // Nothing to let go of without one.
+    new FleetRouter(localOf()).release(true)
+    const fleet = fleetOf([REMOTE])
+    fleet.online = vi.fn(async () => {})
+    fleet.select = vi.fn(async () => {})
+    const router = new FleetRouter(localOf(), fleet)
+    expect(router.hasLane()).toBe(true)
+    expect(await router.online()).toEqual({ ok: true })
+    expect(await router.select('other')).toEqual({ ok: true })
+    expect(fleet.select).toHaveBeenCalledWith('other')
+    router.release(true)
+    router.release()
+    expect((fleet.release as ReturnType<typeof vi.fn>).mock.calls).toEqual([[true], [undefined]])
+  })
+
+  it('answers a lane that will not open and a refused selection, rather than throwing them', async () => {
+    const fleet = fleetOf([REMOTE])
+    fleet.online = vi.fn(async () => { throw new Error('backend unreachable') })
+    fleet.select = vi.fn(async (machineId: string) => {
+      if (machineId === 'other') throw new FleetError('NEEDS_LINK', 'Link office-imac to this computer first')
+      throw new Error('socket closed')
+    })
+    const router = new FleetRouter(localOf(), fleet)
+    expect(await router.online()).toEqual({ ok: false, message: 'backend unreachable' })
+    expect(await router.select('other')).toEqual({ ok: false, code: 'NEEDS_LINK', message: 'Link office-imac to this computer first' })
+    expect(await router.select('third')).toEqual({ ok: false, code: 'UNREACHABLE', message: 'socket closed' })
   })
 })
 

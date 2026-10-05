@@ -179,7 +179,6 @@ import { startViewers } from './services/viewers.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { startWorkspaces } from './services/workspaces.js'
 import { startFleet } from './services/fleet.js'
-import type { FleetRouter } from './services/fleetRouter.js'
 import { describeMasterStatus, probeMaster, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, refuseServedDataFolder, type LocalSocketServer } from './lib/localSocket.js'
@@ -3148,7 +3147,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // difference (local → the same door the web and the hooks use, remote → the fleet), and it is the
     // one the dial uses for every voice turn.
     onRouteSend: backend.ownerCommands.onRouteSend = (agentId, text) => {
-      const sent = ports.fleet?.sendTurn(agentId, text) ?? { ok: false as const, machine: '', reason: 'no agent list yet' }
+      const sent = ports.fleet?.routeSend(agentId, text) ?? { ok: false as const, machine: '', reason: 'no agent list yet' }
       console.log(`[route] ⌘K → ${sid(agentId)} · bytes=${Buffer.byteLength(text, 'utf8')}`
         + (sent.ok ? '' : ` · REFUSED: ${sent.reason}${sent.machine ? ` (${sent.machine})` : ''}`))
       return sent
@@ -3884,9 +3883,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // route and the dial send every turn through. The list is the same cache the local `/api/machines`
   // handler answers from (built up near `proxyBackend`), so the dial's wheel and the desktop's list
   // cannot disagree — and neither can go stale while the other is fresh.
-  const fleetService: { router?: FleetRouter } = {}
   serviceHost.start('fleet', (core, started) => {
-    fleetService.router = startFleet(core, started, {
+    startFleet(core, started, {
       machines: machineListCache, guestMachines: guestMachinesBody, computerId, machineId: () => backend.machineId,
       machineName: dialMachineName, desk: () => appPaneAgents, auth,
       autonomousEnv: readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV, identity: relayIdentityStore.getIdentity(),
@@ -3960,7 +3958,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     form: command => windowForm.command(command),
     clearForm: () => windowForm.clear(),
     log: (line) => console.log(`[cable] ${line}`),
-  }, fleetService.router)
+    // Which machine an agent is on, and getting there: the fleet's router, through its port (D1).
+    fleet: () => ports.fleet,
+  })
   cableHostRef = cableHost
   backend.harnessDevices = {
     status: () => cableHost.currentDialStatus(),
@@ -4080,7 +4080,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // event kind lands on both surfaces the day it lands on either.
   // The fleet has already noted which machine the agent is on (services/fleet.ts), so a question from it
   // can be named and, tapped, opened.
-  fleetService.router?.fleet?.onEvent((event) => {
+  ports.fleet?.onEvent((event) => {
     // A `state` event is about the WHEEL, not about a turn — live machine presence, which matters
     // whichever machine is selected. Filtering it with the guard below would freeze the dots the moment
     // the dial came back to this computer, which is where it sits most of the time.

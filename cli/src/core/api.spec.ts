@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
 import { createCoreApi, emptyPorts, FLEET_FALLBACKS, TEAMS_FALLBACKS, type CoreApiDeps } from './api.js'
+import { FAIL } from './serviceHost.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
@@ -65,8 +66,18 @@ describe('the core API services stand on', () => {
   })
 
   it('answers ⌘K, when the fleet fails, with no agent picked and nothing sent, saying why', () => {
-    expect(FLEET_FALLBACKS.sendTurn).toEqual({ ok: false, machine: '', reason: 'the fleet service is unavailable' })
+    expect(FLEET_FALLBACKS.routeSend).toEqual({ ok: false, machine: '', reason: 'the fleet service is unavailable' })
     expect(FLEET_FALLBACKS.stop).toBeUndefined()
+    // No cards, and nothing to stop hearing.
+    expect((FLEET_FALLBACKS.onEvent as () => void)()).toBeUndefined()
+  })
+
+  it('fails the dial\'s routing, when the fleet fails, rather than making an answer up', () => {
+    // The dial routes this computer by itself then (cable/cableHost.ts): a made-up answer read as the
+    // fleet's would send a turn nowhere and say it went.
+    for (const member of ['agentTotal', 'describe', 'machineOf', 'knows', 'isLocalAgent', 'sendTurn', 'hasLane', 'release'] as const) {
+      expect(FLEET_FALLBACKS[member], member).toBe(FAIL)
+    }
   })
 
   it('falls back, when the teams fail, to an undo that has nothing to undo', () => {
