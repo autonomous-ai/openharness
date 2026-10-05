@@ -83,19 +83,28 @@ def needs_broadcom(device):
     return device['driver'] == 'wl' or not any(i['wireless'] for i in device['interfaces'])
 
 
-def report(sysfs=Path('/sys'), proc=Path('/proc')):
-    fields = {}
+def opencode_cpu_supported(proc=Path('/proc')):
+    """Return None when the x86 instruction requirement cannot be determined."""
+    architecture = os.uname().machine
+    if architecture != 'x86_64' and not re.fullmatch(r'i[3-6]86', architecture):
+        return None
+    flags = []
     for line in read(proc / 'cpuinfo').splitlines():
-        if ':' in line:
-            key, value = line.split(':', 1)
-            fields.setdefault(key.strip(), value.strip())
-    flags = fields.get('flags')
+        key, separator, value = line.partition(':')
+        if separator and key.strip() == 'flags':
+            flags.append(value.split())
+    if not flags or any(not features for features in flags):
+        return None
+    return all('sse4_2' in features for features in flags)
+
+
+def report(sysfs=Path('/sys'), proc=Path('/proc')):
     return {'architecture': os.uname().machine, 'kernel': os.uname().release,
             'computer': {'vendor': read(sysfs / 'class/dmi/id/sys_vendor') or None,
                          'model': read(sysfs / 'class/dmi/id/product_name') or None},
             'efi_bits': read(sysfs / 'firmware/efi/fw_platform_size') or None,
             'opencode_cpu': {'required_x86_feature': 'sse4_2',
-                             'available': 'sse4_2' in flags.split() if flags is not None else None},
+                             'available': opencode_cpu_supported(proc)},
             'pci': pci_devices(sysfs),
             'installation_blocker': installation_blocker(sysfs),
             'backlights': [p.name for p in sorted((sysfs / 'class/backlight').glob('*'))],

@@ -29,15 +29,25 @@ INSTALL_LOG = Path('/var/log/harness-install.log')
 LAST_LOG = None
 
 
-def require_install_platform(sysfs=Path('/sys')):
+def hardware_module():
     # Load the root-owned packaged sibling, never a module from the working
-    # directory. Only tests supply a different sysfs root.
+    # directory.
     spec = importlib.util.spec_from_file_location('harness_os_hardware', Path(__file__).with_name('hardware.py'))
     hardware = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(hardware)
-    blocker = hardware.installation_blocker(sysfs)
+    return hardware
+
+
+def require_install_platform(sysfs=Path('/sys')):
+    blocker = hardware_module().installation_blocker(sysfs)
     if blocker:
         raise ValueError(blocker)
+
+
+def installation_notice():
+    if hardware_module().opencode_cpu_supported() is False:
+        return 'This CPU cannot run bundled OpenCode (SSE4.2 required).'
+    return ''
 
 
 def encryption_memory(meminfo=Path('/proc/meminfo')):
@@ -536,12 +546,13 @@ def disk_label(disk, width=None):
 
 class InstallForm:
     """Small keyboard form using the Python/ncurses already in the image."""
-    def __init__(self, screen, candidates, username, hostname, encrypt):
+    def __init__(self, screen, candidates, username, hostname, encrypt, notice=''):
         self.screen, self.disks = screen, candidates
         self.username, self.hostname, self.encrypt = username, hostname, encrypt
         self.selected, self.focus = 0, 2
         self.passwords, self.positions = ['', ''], [0, 0]
         self.error = ''
+        self.notice = notice
         self.title = None
         self.cursor_visible = None
         self.top, self.left, self.width = 0, 2, 60
@@ -675,6 +686,8 @@ class InstallForm:
         while True:
             if not self.begin(''):
                 continue
+            for row, line in enumerate(textwrap.wrap(self.notice, self.width)):
+                self.line(1 + row, line, accent=True)
             disk = self.disks[self.selected]
             # Identical models/capacities need a visible discriminator after selection.
             duplicate = sum(disk_label(d) == disk_label(disk) for d in self.disks) > 1
@@ -745,7 +758,8 @@ def interactive(username='me', hostname='harness', encrypt=True):
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise ValueError('Interactive installation needs a terminal. Use --config for unattended installation.')
     curses.set_escdelay(25)
-    return curses.wrapper(lambda screen: InstallForm(screen, candidates, username, hostname, encrypt).run())
+    notice = installation_notice()
+    return curses.wrapper(lambda screen: InstallForm(screen, candidates, username, hostname, encrypt, notice).run())
 
 
 def completion(screen, boot=False):
