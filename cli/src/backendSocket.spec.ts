@@ -32,7 +32,7 @@ import { fakeGridAnswers, installFakeGrid, type FakeGrid } from './lib/__fixture
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { LocalModels } from './lib/localModels.js'
 import type { GridAttachResult } from './lib/gridAttach.js'
-import { STRICT_DOWN_TYPES, encryptDownFrame, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
+import { STRICT_DOWN_TYPES, encryptDownFrame, encryptDownFrameFor, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
 import { CloseAgentService } from './lib/closeAgentService.js'
 import { env } from './config/env.js'
 
@@ -940,12 +940,14 @@ describe('BackendSocket outbound queue', () => {
     expect(JSON.stringify((socket as unknown as { queue: unknown[] }).queue)).not.toContain('gone-')
     ws.open()
     expect(JSON.stringify(parseSent(ws))).not.toContain('gone-')
-    // A request from the relay is still answered on the relay, as before.
+    // A request from the relay is still answered on the relay, sealed to the session that asked.
+    vi.spyOn(socket.e2ee, 'hasSession').mockImplementation((connId) => connId === 'web-1')
+    vi.spyOn(socket.e2ee, 'wrapRpcReply').mockImplementation((_connId, type) => ({ type, payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'ciphertext' } } }))
     vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValueOnce({ type: 'terminal_info', payload: { requestId: 'relay-info', agentId: 'a1' } })
     ws.message({ t: 'down', connId: 'web-1', frame: { type: 'terminal_info', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } } })
     await vi.waitFor(() => expect(answers.has('relay-info')).toBe(true))
     answers.get('relay-info')!({ error: 'AGENT_NOT_FOUND' })
-    expect(parseSent(ws)).toContainEqual({ t: 'up', targetConnId: 'web-1', frame: { type: 'terminal_info_result', payload: { requestId: 'relay-info', error: 'AGENT_NOT_FOUND' } } })
+    expect(parseSent(ws)).toContainEqual({ t: 'up', targetConnId: 'web-1', frame: { type: 'terminal_info_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'ciphertext' } } } })
     await socket.stop()
   })
 
@@ -968,6 +970,45 @@ describe('BackendSocket outbound queue', () => {
     // The backend's own request has no connection to be answered on: it still hears its answer on the bus.
     ws.message({ t: 'down', connId: '', frame: { type: 'voice_route', payload: { requestId: 'b-1', transcript: 'route this' } } })
     await vi.waitFor(() => expect(parseSent(ws)).toContainEqual({ t: 'up', frame: { type: 'voice_route_result', payload: { requestId: 'b-1', error: 'E2EE_REQUIRED' } } }))
+    await socket.stop()
+  })
+
+  it('seals what a pane runs and where a spoken task went to a requester that holds a session, and to it alone', async () => {
+    // A pane's folder, pid and tty, and the router's restatement of a spoken task, used to go to every
+    // web client in the clear. Every client that holds a session opens a sealed payload of any type.
+    const socket = new BackendSocket('token')
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    vi.spyOn(socket.e2ee, 'hasSession').mockImplementation((connId) => connId === 'web-1')
+    const wrap = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockImplementation((_connId, type) => ({ type, payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'ciphertext' } } }))
+    const unwrap = vi.spyOn(socket.e2ee, 'unwrapDown')
+    const ask = (connId: string, type: string, payload: Record<string, unknown>) => {
+      unwrap.mockReturnValueOnce({ type, payload })
+      ws.message({ t: 'down', connId, frame: { type, payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } } })
+    }
+    const answers = () => parseSent(ws).filter((item) => ['terminal_info_result', 'voice_route_result'].includes(String((item.frame as { type?: unknown })?.type)))
+    ask('web-1', 'terminal_info', { requestId: 'info-1', agentId: 'no-such-agent' })
+    ask('web-1', 'voice_route', { requestId: 'route-1', transcript: '' })
+    await vi.waitFor(() => expect(answers()).toHaveLength(2))
+    expect(wrap).toHaveBeenCalledWith('web-1', 'terminal_info_result', 'info-1', { error: 'AGENT_NOT_FOUND' })
+    expect(wrap).toHaveBeenCalledWith('web-1', 'voice_route_result', 'route-1', { error: 'MISSING_TRANSCRIPT' })
+    const sealed = { __e2e: { v: 1, k: 'p', n: 1, ct: 'ciphertext' } }
+    expect(answers()).toEqual([
+      { t: 'up', targetConnId: 'web-1', frame: { type: 'terminal_info_result', payload: sealed } },
+      { t: 'up', targetConnId: 'web-1', frame: { type: 'voice_route_result', payload: sealed } },
+    ])
+    // A requester whose session went away meanwhile gets the bare refusal a refused request gets, never
+    // the answer in the clear.
+    ask('web-2', 'terminal_info', { requestId: 'info-2', agentId: 'no-such-agent' })
+    await vi.waitFor(() => expect(answers()).toHaveLength(3))
+    expect(answers()[2]).toEqual({ t: 'up', targetConnId: 'web-2', frame: { type: 'terminal_info_result', payload: { requestId: 'info-2', error: 'E2EE_REQUIRED' } } })
+    // Only the replies: the requests keep the rule they had, since an older daemon reads a sealed one as empty.
+    for (const type of ['terminal_info', 'voice_route']) {
+      expect(encryptDownFrame(type)).toBe(false)
+      expect(encryptDownFrameFor(type, { strictDown: true })).toBe(false)
+      expect(encryptRpcResult(`${type}_result`)).toBe(true)
+    }
     await socket.stop()
   })
 

@@ -73,6 +73,23 @@ export const encryptDownFrameFor = (type: string, peer: { strictDown: boolean })
  * machine relaying for its app — rather than being broadcast to every window and web client of this
  * machine. Here and not in core.ts's pinned set: the reply is the same frame, only its route changes. */
 const QUESTION_RESULT = 'question_response_result'
+/**
+ * Replies a daemon used to send in the clear, and to every web client: sealed to the requester now.
+ * Only the replies. Their requests keep the rule they had (sealed only where STRICT_DOWN_TYPES says, to
+ * a daemon whose welcome says it opens them), because an older daemon reads a sealed request as empty.
+ * No client tells the daemon it can open these, and none has to: every client that holds a session
+ * opens a sealed payload of any type with its session key, and has since it was written (relayClient.ts
+ * and relay_session_crypto.dart in the desktop and phone apps, `unwrapIncoming`). A requester with no
+ * session gets the bare E2EE_REQUIRED a refused request already gets, and a window on this computer the
+ * plain reply it always had.
+ */
+const SEALED_REPLIES = new Set([
+  // What a pane runs and where: its folder, pid and tty.
+  'terminal_info_result',
+  // Which agent a spoken task went to, and the router's reason, which restates the task.
+  'voice_route_result',
+])
 export const encryptRpcResult = (type: string): boolean =>
   ENCRYPTED_RPC_RESULT_TYPES.has(type) || MACHINE_RESULTS.has(type) || FLEET_RESULTS.has(type) || SHARE_RESULT_TYPES.has(type)
   || PAIR_RESULTS.has(type) || type === LOCAL_PAIR_RESULT || type === QUESTION_RESULT || type === PLATE_RESULT || TEAM_RESULT_TYPES.has(type)
+  || SEALED_REPLIES.has(type)
