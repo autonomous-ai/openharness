@@ -29,6 +29,12 @@ const FIRST = '43.0.1'
 const DISKFULL = process.env.DISKFULL === '1' && process.platform === 'darwin'
 /** Passes the updater's canary (`cli.js version`), then dies on every start as a core. */
 const CRASHES_AS_A_CORE = 'if(process.argv[2]==="__run")process.exit(3);'
+/**
+ * A core that runs as any other, until it hands over to an update: then the first interval it clears
+ * throws, as a teardown step that fails does (core/updateHandoff.ts). Told by the line the handoff
+ * starts with, wherever the daemon's timestamp puts it among the arguments.
+ */
+const TEARDOWN_THROWS = 'if(process.argv[2]==="__run"){let f=false;const l=console.log;console.log=function(...a){if(a.some((x)=>typeof x==="string"&&x.includes("[update] applying")))f=true;return l.apply(this,a)};const c=globalThis.clearInterval;globalThis.clearInterval=function(...a){if(f){f=false;throw new Error("a teardown step that throws")}return c.apply(this,a)}}'
 const sha = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
 const count = (text: string, part: string): number => text.split(part).length - 1
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms))
@@ -70,8 +76,9 @@ class Releases {
 }
 
 /** What a download of cli.js meets: cut short with a length to match, a connection that dies halfway
- *  through the length it promised, or a wait until the test lets it through. */
-type Fault = 'truncate' | 'drop' | 'hold'
+ *  through the length it promised, one that stays open halfway through and sends nothing more, or a
+ *  wait until the test lets it through. */
+type Fault = 'truncate' | 'drop' | 'stall' | 'hold'
 
 interface Offer {
   version: string
@@ -89,6 +96,8 @@ class UpdateServer {
   /** Every download of a cli.js asked for, by version, in order. */
   readonly downloads: string[] = []
   private held: Array<() => void> = []
+  /** Answers left open halfway, ended only when the server stops. */
+  private stalled: ServerResponse[] = []
   private server: Server | null = null
 
   constructor(private readonly releases: Releases, first: string) { this.offer = { version: first } }
@@ -104,6 +113,7 @@ class UpdateServer {
 
   stop(): Promise<void> {
     this.release()
+    for (const response of this.stalled) response.socket?.destroy()
     return new Promise((done) => this.server ? this.server.close(() => done()) : done())
   }
 
@@ -142,6 +152,10 @@ class UpdateServer {
       } else if (fault === 'drop') {
         response.setHeader('content-length', bytes.length)
         response.write(half, () => setTimeout(() => response.socket?.destroy(), 20))
+      } else if (fault === 'stall') {
+        response.setHeader('content-length', bytes.length)
+        response.write(half)
+        this.stalled.push(response)
       } else if (fault === 'hold') {
         this.held.push(() => response.end(bytes))
       } else {
@@ -174,7 +188,7 @@ class Installed {
 
   constructor(readonly releases: Releases, readonly server: UpdateServer, readonly cliDir: string) {}
 
-  async boot(first: string, dataDir?: string): Promise<void> {
+  async boot(first: string, dataDir?: string, env: Record<string, string> = {}): Promise<void> {
     mkdirSync(this.cliDir, { recursive: true })
     writeFileSync(join(this.cliDir, 'cli.js'), this.releases.cli.get(first)!)
     writeFileSync(join(this.cliDir, 'notify.mjs'), this.releases.notify.get(first)!)
@@ -195,6 +209,7 @@ class Installed {
         HARNESS_TUI_MANIFEST_URL: `${local}/tui/metadata.json`,
         ADAPTER_RUNTIME_METADATA_URL: `${local}/runtime/metadata.json`,
         ADAPTER_GRID_RUNTIME_METADATA_URL: `${local}/grid/metadata.json`,
+        ...env,
       },
     })
     await this.daemon.start()
@@ -211,10 +226,6 @@ class Installed {
           return row?.sessionId && row.status === 'active' ? row : null
         }, 90_000, 500))
       }
-      // At work before any update: a daemon that has finished a turn has made the folders a turn's end
-      // writes to. (On a data folder that never had them, a turn ending while the disk is full is lost:
-      // the orchestrator's state folder cannot be made. Reported with round 40, not part of updating.)
-      for (const agent of this.agents) await turn(client, agent.id, `before any update (${agent.engine})`)
     } finally { client.close() }
   }
 
@@ -314,12 +325,15 @@ describe('an update under hostile conditions', () => {
   let machine: Installed
 
   beforeAll(async () => {
-    for (let patch = 1; patch <= 12; patch++) releases.add(`43.0.${patch}`, patch === 10 || patch === 11 ? CRASHES_AS_A_CORE : '')
+    for (let patch = 1; patch <= 15; patch++) {
+      releases.add(`43.0.${patch}`, patch === 10 || patch === 11 ? CRASHES_AS_A_CORE : patch === 14 ? TEARDOWN_THROWS : '')
+    }
     scratch = mkdtempSync(join(tmpdir(), 'harnessd-hostile-'))
     server = new UpdateServer(releases, FIRST)
     await server.start()
     machine = new Installed(releases, server, join(scratch, 'cli'))
-    await machine.boot(FIRST)
+    // A link that sends nothing for two seconds is given up on (lib/selfUpdate.ts TransferLimits).
+    await machine.boot(FIRST, undefined, { ADAPTER_UPDATE_IDLE_MS: '2000' })
   }, 300_000)
 
   afterAll(async () => {
@@ -454,6 +468,30 @@ describe('an update under hostile conditions', () => {
     server.offer = { version: '43.0.12' }
     await machine.settled('43.0.12', { rejected: ['43.0.10', '43.0.11'] })
   }, 300_000)
+
+  it('a link that stalls halfway without dropping is given up on, and the build lands at the next check', async () => {
+    machine.showLogOnFailure()
+    const from = machine.log().length
+    server.faults = ['stall']
+    server.offer = { version: '43.0.13' }
+    // Before, the check waited out undici's five-minute body timeout, every later check skipped meanwhile.
+    await until('the stalled download to be given up', () => machine.log().slice(from).includes('cli-43.0.13.js sent nothing for 2000 ms'), 60_000)
+    await machine.settled('43.0.13', { rejected: ['43.0.10', '43.0.11'] })
+    expect(server.downloadsOf('43.0.13')).toBe(2)
+  }, 300_000)
+
+  it('a core whose teardown throws as it hands over still hands over, and the new build is kept', async () => {
+    machine.showLogOnFailure()
+    server.offer = { version: '43.0.14' }
+    await machine.settled('43.0.14', { rejected: ['43.0.10', '43.0.11'] })
+    // 43.0.14's own handoff is the one that throws. Before, the core stayed on it, half torn down, with
+    // 43.0.15 staged and never judged.
+    const from = machine.log().length
+    server.offer = { version: '43.0.15' }
+    await machine.settled('43.0.15', { rejected: ['43.0.10', '43.0.11'] })
+    expect(machine.log().slice(from)).toMatch(/\[update\] [^\n]* did not let go \(a teardown step that throws\) — handing over all the same/)
+    expect(machine.log().slice(from)).not.toContain('restart failed — staying on current build')
+  }, 300_000)
 })
 
 describe.skipIf(!DISKFULL)('an update on a disk that fills', () => {
@@ -565,21 +603,25 @@ describe.skipIf(!DISKFULL)('an update on a disk that fills', () => {
     await machine.settled('44.0.3', { rejected: [] })
   }, 400_000)
 
-  it('the disk fills just after the swap: the master outlives it, and the daemon is back on a working build, the new one kept or the old one with the new remembered', async () => {
+  it('the disk fills just after the swap: the new build cannot start for want of room, which is no verdict on it, and it is kept once there is room', async () => {
     machine.showLogOnFailure()
     const from = machine.log().length
     const master = machine.daemon.pid
     server.offer = { version: '44.0.4' }
     await until('the core to stage 44.0.4', () => machine.log().slice(from).includes('[update] staged 44.0.4'), 90_000, 50)
     fill()
-    // A core cannot open its socket on a full disk (listen ENOSPC): one started on the new bundle comes up
-    // in safe mode, and the master rolls the update back, the rollback itself freeing the room the build
-    // before needs. One that came up before the disk filled stays up and is kept.
-    await until('the update to be kept or rolled back on the full disk', () => /the update stayed up — keeping it|the updated core failed[^\n]*rolled back/.test(machine.log().slice(from)), 150_000, 100)
+    // A core cannot claim its socket on a full disk (listen ENOSPC), so the core on the new bundle starts in
+    // safe mode. The build before would too: the master keeps the update on trial and tries again,
+    // backing off. Before, it rolled back (the rollback freeing the room the build before needed) and
+    // remembered a good build as bad.
+    await until('the master to try the new bundle again for want of room', () => count(machine.log().slice(from), 'had no room to start') >= 2, 150_000, 100)
+    expect(machine.log().slice(from)).toContain('could not start on the new bundle for want of room on the disk (listen ENOSPC')
+    expect(machine.log().slice(from)).not.toContain('the updated core failed')
     expect(IsolatedDaemon.alive(master), 'the master outlives a full disk in the middle of an update').toBe(true)
+    machine.holds('44.0.4')
     unfill()
-    if (machine.log().slice(from).includes('the update stayed up — keeping it')) await machine.settled('44.0.4', { masters: ['44.0.3', '44.0.4'], rejected: [] })
-    else await machine.settled('44.0.3', { masters: ['44.0.3', '44.0.4'], rejected: ['44.0.4'] })
+    await machine.settled('44.0.4', { masters: ['44.0.3', '44.0.4'], rejected: [] })
+    expect(machine.log().slice(from)).toContain('the update stayed up — keeping it')
     expect(machine.daemon.pid).toBe(master)
   }, 400_000)
 

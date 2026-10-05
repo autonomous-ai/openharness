@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, HARNESSD_PROTOCOL, type MasterMessage } from './protocol.js'
 import {
-  DEFAULT_SUPERVISOR_OPTIONS, Supervisor, type CoreHandle, type ReexecOutcome, type ResumeState, type SupervisorDeps, type SupervisorOptions,
+  DEFAULT_SUPERVISOR_OPTIONS, Supervisor, namesTheDisk, type CoreHandle, type ReexecOutcome, type ResumeState, type SupervisorDeps, type SupervisorOptions,
   type SupervisorStatus,
 } from './supervisor.js'
 
@@ -480,6 +480,66 @@ describe('Supervisor', () => {
       core().up()
       vi.runOnlyPendingTimers()
       expect(calls).toEqual(['claim', 'restore'])
+    })
+
+    it('takes a core on the new bundle that has no room on the disk to start for no verdict: the update stays on trial, tried again, backing off', () => {
+      const supervisor = make()
+      supervisor.start()
+      core().up()
+      core().exit(CORE_EXIT_UPDATE)
+      vi.advanceTimersByTime(0)
+      // Its socket's claim could not be written: the disk is full, and the build before would fail too.
+      core().bind()
+      core().ready('listen ENOSPC: no space left on device /data/.claim-1')
+      expect(core().kills).toEqual(['SIGKILL'])
+      expect(lines.at(-1)).toBe('[harnessd] core could not start on the new bundle for want of room on the disk (listen ENOSPC: no space left on device /data/.claim-1) — not a verdict on the build — killing it')
+      core().exit(null, 'SIGKILL')
+      expect(calls).toEqual(['claim'])
+      expect(lines.at(-1)).toBe(`[harnessd] the updated core had no room to start (signal SIGKILL) — keeping the update on trial; trying again in ${options.initialBackoffMs} ms`)
+      expect(supervisor.status()).toMatchObject({ state: 'restarting', lastExitReason: 'not-ready', safeMode: null })
+      vi.advanceTimersByTime(options.initialBackoffMs - 1)
+      expect(cores).toHaveLength(2)
+      vi.advanceTimersByTime(1)
+      expect(cores).toHaveLength(3)
+      // Not a crash: no safe mode for the next, however many times the disk is still full.
+      expect(core().env.HARNESSD_SAFE_MODE).toBeUndefined()
+      core().bind()
+      core().ready('EDQUOT: disk quota exceeded, write')
+      core().exit(null, 'SIGKILL')
+      expect(lines.at(-1)).toContain(`trying again in ${options.initialBackoffMs * 2} ms`)
+      vi.advanceTimersByTime(options.initialBackoffMs * 2)
+      core().bind()
+      core().ready('EROFS: read-only file system, open')
+      core().exit(null, 'SIGKILL')
+      vi.advanceTimersByTime(options.initialBackoffMs * 4)
+      expect(cores).toHaveLength(5)
+      expect(core().env.HARNESSD_SAFE_MODE).toBeUndefined()
+      // Room again: it comes up, and is judged on the update from ready, as any update is.
+      core().up()
+      vi.advanceTimersByTime(options.updateProbationMs)
+      expect(calls).toEqual(['claim', 'confirm'])
+    })
+
+    it('still rolls back an update whose core fails on the disk once it was up, or for any other reason', () => {
+      const supervisor = make()
+      supervisor.start()
+      core().up()
+      core().exit(CORE_EXIT_UPDATE)
+      vi.advanceTimersByTime(0)
+      core().up()
+      // Up and on probation, then gone: whatever it says, the build did not stay up.
+      core().exit(1)
+      expect(calls).toEqual(['claim', 'restore'])
+      expect(supervisor.status().state).toBe('restarting')
+    })
+
+    it('knows a failure that names the disk from one that names the build', () => {
+      for (const disk of ['listen ENOSPC: no space left on device /d/.claim-1', 'ENOSPC: no space left on device, write', 'EDQUOT: disk quota exceeded', 'EROFS: read-only file system, mkdir \'/d\'']) {
+        expect(namesTheDisk(disk), disk).toBe(true)
+      }
+      for (const build of ['start-up failed', 'Cannot find module \'./x.js\'', 'SyntaxError: Unexpected token', 'listen EADDRINUSE: address already in use', 'spaces left over']) {
+        expect(namesTheDisk(build), build).toBe(false)
+      }
     })
 
     it('judges the newer build a core on probation staged, instead of rolling it back as a failure', () => {

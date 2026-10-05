@@ -141,6 +141,7 @@ import { createQuestions } from './core/questions.js'
 import { createTurnActivity } from './core/turns/activity.js'
 import { createLastTurnReader } from './core/transcripts/lastTurn.js'
 import { createRecaps } from './core/turns/recaps.js'
+import { createUpdateHandoff, type HandoffChild } from './core/updateHandoff.js'
 import { createHeartbeats } from './core/turns/heartbeats.js'
 import { createEventFunnel, outsideConsumers } from './core/turns/funnel.js'
 import { createAgyBackstop } from './core/turns/agyBackstop.js'
@@ -552,6 +553,64 @@ function bootHandoff(version: string): void {
     exit: (code) => process.exit(code),
     log: (message) => console.log(message),
   })
+}
+
+/**
+ * The update handoff of a core run on its own (core/updateHandoff.ts, once the teardown is done): hand
+ * off to a freshly spawned daemon running the just-swapped cli.js, then SUPERVISE it and roll back to the
+ * .prev bytes if it fails to come up. NOT launch() — that refuses while a daemon is alive.
+ *
+ * Runs under the spawn lock for its whole length (the updater's `withLock` wraps the staging and this
+ * together), so no `harness start` can spawn into the seconds where the port is free and the pid file
+ * names nothing. `track` names the child a signal mid-handoff must take down with us, rather than leave
+ * two daemons — see shutdown(); null the moment the handoff is CONFIRMED, when that child is the daemon.
+ */
+async function handOffWithoutMaster(newVersion: string, track: (child: HandoffChild | null) => void): Promise<void> {
+  const sinceOffset = existsSync(LOG_FILE) ? statSync(LOG_FILE).size : 0
+  const child = spawnDaemonChild({ ADAPTER_UPDATED_TO: newVersion })
+  track(child)
+  let childExited = false
+  child.on('exit', () => { childExited = true })
+
+  // Two phases. First the child has to BIND the port — it claims the pid file itself at that
+  // moment, and nothing else writes that file any more. A child that exits or stalls before then
+  // is a bad build (or a port it could not take): roll back at once instead of burning the whole
+  // connect window on it. Then, bound, wait for the backend: KEEP on connected/unreachable/busy
+  // (the new build RAN), ROLL BACK only on `fatal`. unreachable = backend transient, not a bad build.
+  const bind = await waitForBind(child.pid ?? -1, () => childExited, BIND_WAIT_MS, launchDeps)
+  const ready = bind === 'bound' ? await waitForReady(sinceOffset, 30_000, launchDeps) : null
+  if (bind === 'bound' && !childExited && ready?.state !== 'fatal') {
+    // Confirmed: it is the daemon now. Let go of it BEFORE anything else — a SIGTERM landing between
+    // here and the exit below must not take it down with us (see shutdown()).
+    track(null)
+    child.unref()
+    confirmUpdate(env.ADAPTER_CLI_DIR) // drop the .prev backups
+    console.log(`[update] now running ${newVersion} (pid ${child.pid})`)
+    process.exit(0)
+  }
+  console.error(`[update] new build failed to start (${bind !== 'bound' ? bind : childExited ? 'exited' : ready?.state}) — rolling back`)
+  try { if (child.pid) process.kill(child.pid, 'SIGKILL') } catch { /* ignore */ }
+  // A killed child cannot remove its own pid file; do it for it — but only once it is actually
+  // dead (SIGKILL is asynchronous, and a child mid-bind could still write the file after our
+  // removal) and only if it is still ITS file.
+  if (child.pid) {
+    const gone = Date.now() + 2_000
+    while (Date.now() < gone && isAlive(child.pid)) await new Promise((r) => setTimeout(r, 50))
+  }
+  removePidFileIf(child.pid)
+  restoreUpdate(env.ADAPTER_CLI_DIR) // restore .prev → cli.js/notify.mjs
+  const good = spawnDaemonChild({})
+  track(good)
+  let goodExited = false
+  good.on('exit', () => { goodExited = true })
+  // Hold the lock — and this process — until the rollback child has bound too. Exiting the moment it
+  // is spawned would free the lock while the port is still unclaimed, which is the window this whole
+  // arrangement exists to close. Nothing to do if it fails: the .prev bytes were the build that was
+  // running a minute ago, and `harness start` can be tried by hand.
+  const goodBind = await waitForBind(good.pid ?? -1, () => goodExited, BIND_WAIT_MS, launchDeps)
+  if (goodBind !== 'bound') console.error(`[update] rollback build did not come up either (${goodBind}) — run harness start`)
+  good.unref()
+  process.exit(0)
 }
 
 /** This computer's identity — see lib/computerIdentity.ts. Sent on connect so the backend can enforce
@@ -1603,16 +1662,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // there is no supervisor, and the desktop app only re-runs `harness start` on the same broken bytes.
   // Started here, a published fix lands on its own however badly the rest of the boot goes.
   //
-  // `onStaged` is one indirection on purpose: `restartForUpdate` does not exist yet and must not move
+  // `onStaged` is one indirection on purpose: the handoff's teardown does not exist yet and must not move
   // (it tears down two dozen subsystems declared further down). Until it is ready, a staged update is
   // applied by `bootHandoff`, which hands the machine over without finishing start-up.
-  // Update-handoff state, declared here — ahead of the /api/status handler that reads `restarting` —
-  // rather than beside the updater that writes it, so the closure never reaches a `let` in its TDZ.
-  let restarting = false
-  // The child a handoff is supervising, so a signal that lands mid-handoff can take it down with us
-  // rather than leaving two daemons — see shutdown(). Cleared the moment the handoff is CONFIRMED:
-  // from then on that child is the daemon, and a signal must not take it down with the old one.
-  let handoffChild: ReturnType<typeof spawn> | null = null
 
   // Self-update ONLY manages the INSTALLED copy (`~/.harness/cli/cli.js`). A dev/repo run — `tsx`
   // (`npm run dev`) OR `node dist/cli.js` from the checkout — must NEVER self-update: it would swap
@@ -1636,6 +1688,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         onWaiting: (owner) => console.log(`[update] waiting — the daemon is ${describeSpawnLockOwner(owner)}`),
       }),
       onStaged: (v) => daemonBoot.applyStagedUpdate(v),
+      limits: { idleMs: env.ADAPTER_UPDATE_IDLE_MS, deadlineMs: env.ADAPTER_UPDATE_DEADLINE_MS },
     })
     const slotted = env.ADAPTER_UPDATE_SLOT_SEC >= 0 && 60_000 % env.ADAPTER_UPDATE_CHECK_MS === 0
     console.log(`[update] self-update on · v${VERSION} · every ${Math.round(env.ADAPTER_UPDATE_CHECK_MS / 1000)}s`
@@ -1651,6 +1704,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     disabled: env.ADAPTER_UPDATE_DISABLE,
     intervalMs: env.ADAPTER_UPDATE_CHECK_MS,
     slotSecond: env.ADAPTER_UPDATE_SLOT_SEC,
+  })
+  // The update handoff (core/updateHandoff.ts): after the updaters, never above them (startupOrder.spec.ts),
+  // and ahead of the /api/status handler that reads whether it is under way and of shutdown(), which takes
+  // a successor it is judging down with us.
+  const updateHandoff = createUpdateHandoff({
+    version: VERSION, supervised: coreLink.supervised, exitForUpdate: () => process.exit(CORE_EXIT_UPDATE),
+    handOff: handOffWithoutMaster, log: (line) => console.log(line), error: (line) => console.error(line),
   })
 
   // Another daemon serves this data folder: leave before reading or writing anything of its — its
@@ -2796,7 +2856,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       harnessd: coreLink.supervised ? { masterPid: coreLink.masterPid, ...coreLink.status() } : null,
       // True for the few hundred ms between an update being staged and this server closing for the
       // handoff. Informational: nothing should build readiness on a field the server stops serving.
-      restarting,
+      restarting: updateHandoff.restarting(),
       discoveryReady,
       discoveryError: discoveryError ?? (tmuxUnavailable ? `tmux unavailable: ${tmuxUnavailable}` : null),
       // Present only when start-up failed and this daemon is holding the machine open for its
@@ -3713,122 +3773,33 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     console.log(`[cli] not signed in — serving this computer only · watching registered sessions for ${ENGINES.length} engines`)
   }
 
-  // ── self-update: poll GCS for a newer bundle → verify+swap → restart IMMEDIATELY (supervised rollback) ──
-  //
-  // The restart used to wait for the computer to go idle. That wait was unbounded, and "idle" is a set of
-  // latches — open turn, settling composer, awaited submit, control lock, recap in flight — so ONE latch
-  // left stuck deferred the restart forever. Seen on 2026-07-31: 0.0.26 staged, then eight minutes of
-  // "deferring restart — sessions still processing" with the daemon otherwise silent. A daemon that
-  // quietly never updates is the exact failure this updater exists to prevent, so the wait is gone
-  // (owner call, 2026-07-31): staged means restart now.
-  //
-  // The cost is real and accepted: a turn streaming at that moment loses the rest of its events, and its
-  // clients see no turn_end for it until the new daemon re-attaches the session and the next turn runs.
-
-  // Hand off to a freshly-spawned daemon running the just-swapped cli.js, then SUPERVISE it and roll
-  // back to the .prev bytes if it fails to come up. NOT launch() — that refuses while a daemon is alive.
-  //
-  // Runs under the spawn lock for its whole length (the updater's `withLock` wraps the staging and
-  // this together), so no `harness start` can spawn into the seconds where the port is free and the
-  // pid file names nothing.
-  const restartForUpdate = async (newVersion: string): Promise<void> => {
-    if (restarting) return
-    restarting = true
-    console.log(`[update] applying ${VERSION} → ${newVersion} — restarting daemon`)
-    registry.flush()
-    daemonBoot.updater?.stop()
-    daemonBoot.tuiUpdater?.stop()
-    agentReconciler.stop()
-    clearInterval(logTrimTimer)
-    clearInterval(runtimeReconcileTimer)
-    clearInterval(paneTitleSyncTimer)
-    questionWatcher.stopAll()
-    for (const t of heartbeats.values()) clearInterval(t)
-    heartbeats.clear()
-    cursorSubagents.stop()
-    normalizers.stopPollers()
-    await cursorDiscovery.stop()
-    await watcher.stop()
-    // Fully release the FIXED hook port BEFORE the child binds (no fallback → EADDRINUSE otherwise).
-    ;(hookServer as unknown as { closeAllConnections?: () => void }).closeAllConnections?.()
-    // Release the fixed hook port before the child binds. Process-owned agents stay in the persisted
-    // registry and are revalidated by the new daemon's first discovery passes.
-    shareRelay.close()
-    sharedViewers.stop()
-    await localWsServer.close()
-    hookServer.close()
-    await localSocket?.close()
-    codexActivity.close()
-    shutdownVoiceRouter()
-    // The new daemon starts its own viewers for the agents it restores; ours must not hold the ports.
-    await ports.viewers?.stop()
-    autonomousDeviceDirect?.stop()
-    await backend.stop() // graceful WS close → releases the Redis machine-owner claim
-    await new Promise((r) => setTimeout(r, 1000)) // grace before the same-machine reclaim
-
-    if (coreLink.supervised) {
-      // Everything above is released; the master starts the new bundle as soon as this exits and
-      // rolls back to the .prev bytes if it does not come up and stay up (harnessd/supervisor.ts).
-      console.log(`[update] handing ${newVersion} to harnessd`)
-      process.exit(CORE_EXIT_UPDATE)
-    }
-    const sinceOffset = existsSync(LOG_FILE) ? statSync(LOG_FILE).size : 0
-    const child = spawnDaemonChild({ ADAPTER_UPDATED_TO: newVersion })
-    handoffChild = child
-    let childExited = false
-    child.on('exit', () => { childExited = true })
-
-    // Two phases. First the child has to BIND the port — it claims the pid file itself at that
-    // moment, and nothing else writes that file any more. A child that exits or stalls before then
-    // is a bad build (or a port it could not take): roll back at once instead of burning the whole
-    // connect window on it. Then, bound, wait for the backend: KEEP on connected/unreachable/busy
-    // (the new build RAN), ROLL BACK only on `fatal`. unreachable = backend transient, not a bad build.
-    const bind = await waitForBind(child.pid ?? -1, () => childExited, BIND_WAIT_MS, launchDeps)
-    const ready = bind === 'bound' ? await waitForReady(sinceOffset, 30_000, launchDeps) : null
-    if (bind === 'bound' && !childExited && ready?.state !== 'fatal') {
-      // Confirmed: it is the daemon now. Let go of it BEFORE anything else — a SIGTERM landing between
-      // here and the exit below must not take it down with us (see shutdown()).
-      handoffChild = null
-      child.unref()
-      confirmUpdate(env.ADAPTER_CLI_DIR) // drop the .prev backups
-      console.log(`[update] now running ${newVersion} (pid ${child.pid})`)
-      process.exit(0)
-    }
-    console.error(`[update] new build failed to start (${bind !== 'bound' ? bind : childExited ? 'exited' : ready?.state}) — rolling back`)
-    try { if (child.pid) process.kill(child.pid, 'SIGKILL') } catch { /* ignore */ }
-    // A killed child cannot remove its own pid file; do it for it — but only once it is actually
-    // dead (SIGKILL is asynchronous, and a child mid-bind could still write the file after our
-    // removal) and only if it is still ITS file.
-    if (child.pid) {
-      const gone = Date.now() + 2_000
-      while (Date.now() < gone && isAlive(child.pid)) await new Promise((r) => setTimeout(r, 50))
-    }
-    removePidFileIf(child.pid)
-    restoreUpdate(env.ADAPTER_CLI_DIR) // restore .prev → cli.js/notify.mjs
-    const good = spawnDaemonChild({})
-    handoffChild = good
-    let goodExited = false
-    good.on('exit', () => { goodExited = true })
-    // Hold the lock — and this process — until the rollback child has bound too. Exiting the moment it
-    // is spawned would free the lock while the port is still unclaimed, which is the window this whole
-    // arrangement exists to close. Nothing to do if it fails: the .prev bytes were the build that was
-    // running a minute ago, and `harness start` can be tried by hand.
-    const goodBind = await waitForBind(good.pid ?? -1, () => goodExited, BIND_WAIT_MS, launchDeps)
-    if (goodBind !== 'bound') console.error(`[update] rollback build did not come up either (${goodBind}) — run harness start`)
-    good.unref()
-    process.exit(0)
-  }
-
-  // The handoff handler stops being `bootHandoff` HERE, and not a line earlier: everything
-  // `restartForUpdate` tears down — the hook server, the reconciler, the three interval timers, the
-  // watcher, the backend socket — exists by now. A straight-line assignment, never a wait: if the
-  // body never reaches this line the handler stays `bootHandoff`, and the fix still lands.
-  daemonBoot.applyStagedUpdate = (v) => restartForUpdate(v).catch((err) => {
-    // If the restart handoff itself throws/rejects (I/O fault during teardown), don't let it become
-    // an unhandledRejection — log, un-latch `restarting`, and stay on the current build.
+  // ── self-update: a staged bundle restarts the daemon IMMEDIATELY (core/updateHandoff.ts, and
+  // handOffWithoutMaster for a core run on its own). The handler stops being `bootHandoff` HERE, and not a
+  // line earlier: everything the teardown releases exists by now. A straight-line assignment, never a
+  // wait: if the body never reaches this line the handler stays `bootHandoff`, and the fix still lands.
+  daemonBoot.applyStagedUpdate = (v) => updateHandoff.restartForUpdate(v, [
+    ['the registry', () => registry.flush()], ['the updaters', () => { daemonBoot.updater?.stop(); daemonBoot.tuiUpdater?.stop() }],
+    ['the reconciler', () => agentReconciler.stop()],
+    ['the timers', () => { clearInterval(logTrimTimer); clearInterval(runtimeReconcileTimer); clearInterval(paneTitleSyncTimer) }],
+    ['the question watchers', () => questionWatcher.stopAll()],
+    ['the turn heartbeats', () => { for (const t of heartbeats.values()) clearInterval(t); heartbeats.clear() }],
+    ['the Cursor sub-agents', () => cursorSubagents.stop()], ['the normalizers', () => normalizers.stopPollers()],
+    ['Cursor discovery', () => cursorDiscovery.stop()], ['the transcript watcher', () => watcher.stop()],
+    // The FIXED hook port, released before the successor binds it (no fallback → EADDRINUSE otherwise).
+    // Process-owned agents stay in the persisted registry and are revalidated by its first discovery passes.
+    ['the hook connections', () => (hookServer as unknown as { closeAllConnections?: () => void }).closeAllConnections?.()],
+    ['the share relay', () => shareRelay.close()], ['the shared viewers', () => sharedViewers.stop()],
+    ['the local websocket', () => localWsServer.close()], ['the hook server', () => hookServer.close()],
+    ['the local socket', () => localSocket?.close()], ['Codex activity', () => codexActivity.close()],
+    ['the voice router', () => shutdownVoiceRouter()],
+    // The successor starts its own viewers for the agents it restores; ours must not hold the ports.
+    ['the viewers', () => ports.viewers?.stop()], ['the device link', () => autonomousDeviceDirect?.stop()],
+    // A graceful close releases the backend's one-machine claim, given a moment before the reclaim.
+    ['the backend', () => backend.stop()], ['a grace', () => new Promise((r) => setTimeout(r, 1000))],
+  ]).catch((err) => {
+    // Only without a master: a step or the successor failed before anything was handed over.
     console.error('[update] restart failed — staying on current build:', err instanceof Error ? err.message : err)
-    restarting = false
-    handoffChild = null
+    updateHandoff.abandon()
   })
 
   /** Stopping for good — removed from the account, or connected from elsewhere: tell harnessd's master,
@@ -3839,8 +3810,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Mid-handoff everything below has already been torn down once, and the daemon that matters is
     // the child being supervised. Take it down with us and leave — a second teardown of closed servers
     // is noise, and a child left running would be a daemon nothing manages.
-    if (restarting) {
-      const child = handoffChild // null once the handoff was confirmed — that daemon stays up
+    if (updateHandoff.restarting()) {
+      const child = updateHandoff.child() // null once the handoff was confirmed — that daemon stays up
       if (child?.pid) {
         console.log(`[cli] ${signal} during an update handoff — stopping the new daemon (pid ${child.pid}) too`)
         try { process.kill(child.pid, 'SIGTERM') } catch { /* ignore */ }

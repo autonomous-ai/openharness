@@ -67,6 +67,18 @@ function callArgument(source: string, call: string): { body: string; at: number 
   throw new Error(`unbalanced braces after ${call}`)
 }
 
+/** A call and its arguments, by parenthesis balance: what it is handed, whatever brackets they use. */
+function callArguments(source: string, call: string): { text: string; at: number } {
+  const at = source.indexOf(call)
+  expect(at, `cli.ts still contains \`${call}\``).toBeGreaterThan(-1)
+  let depth = 0
+  for (let i = at + call.length - 1; i < source.length; i++) {
+    if (source[i] === '(') depth++
+    else if (source[i] === ')' && --depth === 0) return { text: source.slice(at, i + 1), at }
+  }
+  throw new Error(`unbalanced parentheses after ${call}`)
+}
+
 /** Every call whose dependencies run DURING start-up, before `runForeground` has finished its body. */
 const STARTUP_CALLS = ['await repairClaudeCwd({', 'await restoreAgents({', 'startSelfUpdater({', 'startTuiUpdater({']
 
@@ -128,15 +140,19 @@ describe('cli.ts start-up order', () => {
   })
 
   it('only swaps in the full restart handler once everything it tears down exists', () => {
-    // `bootHandoff` hands the machine over without finishing start-up; `restartForUpdate` tears down
-    // two dozen subsystems and may only be armed after every one of them is built.
+    // `bootHandoff` hands the machine over without finishing start-up; the full handoff
+    // (core/updateHandoff.ts) tears down two dozen subsystems, handed to it here as its teardown, and may
+    // only be armed after every one of them is built.
     const source = code(SOURCE)
     const flip = source.indexOf('daemonBoot.applyStagedUpdate = ')
     expect(flip, 'the handoff handler is still swapped in cli.ts').toBeGreaterThan(-1)
-    const { body } = callArgument(source, 'const restartForUpdate = ')
+    const body = callArguments(source, 'updateHandoff.restartForUpdate(')
+    expect(body.at, 'the handler is the one it swaps in').toBeGreaterThan(flip)
     const declaredAt = localsOf(source)
-    const late = referencedIn(body).filter(used => (declaredAt.get(used) ?? -1) > flip).sort()
-    expect(late, 'these are torn down by restartForUpdate but declared after it is armed').toEqual([])
+    const late = referencedIn(body.text).filter(used => (declaredAt.get(used) ?? -1) > flip).sort()
+    expect(late, 'these are torn down by the update handoff but declared after it is armed').toEqual([])
+    // What it tears down is all there is to it: the handoff module reaches nothing of runForeground's.
+    expect(referencedIn(body.text)).toEqual(expect.arrayContaining(['registry', 'hookServer', 'localWsServer', 'backend', 'watcher']))
   })
 
   it('the daemon arm survives its own start-up failure', () => {

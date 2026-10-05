@@ -137,6 +137,24 @@ describe('ensureManagedRuntime', () => {
     expect(readdirSync(runtimeDir).filter((n) => n.startsWith('.node-staging-'))).toEqual([])
   })
 
+  it('downloads a runtime with no deadline, only a silence of five minutes: a slow link must be able to finish it', async () => {
+    // The bundle's own limits (a quarter of an hour in all) would cut a runtime of tens of MB off on a
+    // slow link, and every daemon runs on it (lib/selfUpdate.ts RUNTIME_DOWNLOAD_LIMITS).
+    const key = currentPlatformKey()
+    const { bytes, root: archiveRoot } = buildArchive('v22.23.3', key)
+    stubFetch({ node: { [key]: { version: 'v22.23.3', url: 'https://example.test/runtime/node.tar.gz', sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length, archiveRoot } } }, bytes)
+    const limits: unknown[] = []
+    vi.doMock('./selfUpdate.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./selfUpdate.js')>()
+      return { ...actual, downloadVerified: (ref: Parameters<typeof actual.downloadVerified>[0], given?: Parameters<typeof actual.downloadVerified>[1]) => { limits.push(given); return actual.downloadVerified(ref, given) } }
+    })
+    try {
+      const { ensureManagedRuntime } = await load()
+      expect(await ensureManagedRuntime()).toBe(join(runtimeDir, `node-v22.23.3-${key}`, 'bin', 'node'))
+      expect(limits).toEqual([{ idleMs: 300_000, deadlineMs: Number.POSITIVE_INFINITY }])
+    } finally { vi.doUnmock('./selfUpdate.js') }
+  })
+
   it('refuses an archive whose bytes do not match the manifest', async () => {
     const key = currentPlatformKey()
     const { bytes, root: archiveRoot } = buildArchive('v22.23.2', key)
