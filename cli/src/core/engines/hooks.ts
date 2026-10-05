@@ -4,7 +4,10 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 12: docs/design/2026-10-03-harnessd.md).
  */
+import { dirname, join } from 'node:path'
+import { env } from '../../config/env.js'
 import { chooseHookAgent, type HookServerHandlers } from '../../hookServer.js'
+import { adoptEngineHomes, movedEngineHomes } from '../../lib/engineHomes.js'
 import {
   installAgyHooks, installAmpPlugin, installCodexHooks, installCommandCodeHooks, installCopilotHooks, installCursorHooks,
   installDevinHooks, installGrokHooks, installHermesHooks, installKiloPlugin, installOpencodePlugin, installPiExtension,
@@ -97,6 +100,15 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
   return { resolveHookAgent, onSessionEnd }
 }
 
+export interface InstallEngineHooksOptions {
+  /** Only these engines' hooks (`HOOK_INSTALL_ENGINES`); every engine's when absent. */
+  only?: ReadonlySet<string> | null
+  /** The daemon's own environment, for the homes it moves; `process.env` when absent. */
+  environment?: NodeJS.ProcessEnv
+  /** The login shell's environment, when it has been read (`warmLoginShellEnvironment`). */
+  loginShell?: Promise<NodeJS.ProcessEnv>
+}
+
 /**
  * Install every engine's hooks with the port the local server actually bound.
  *
@@ -104,12 +116,30 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
  * files owned by thirteen different CLIs, and one that is malformed, read-only or mid-write is not
  * a reason for the other twelve to go uninstalled — let alone for the daemon not to come up.
  */
-export function installEngineHooks(port: number): void {
+export function installEngineHooks(port: number, options: InstallEngineHooksOptions = {}): void {
   const hookStep = (vendor: string, install: () => void): void => {
+    if (options.only && !options.only.has(vendor)) return
     try { install() } catch (error) {
       console.warn(`[hooks] ${vendor} install skipped · ${error instanceof Error ? error.message : error}`)
     }
   }
+  // The homes the person moved (lib/engineHomes.ts) get the hooks too: every one adopted before, those
+  // the daemon's own environment names, and those of the login shell every engine is launched through
+  // once it has been read. That read is never waited on (cli.ts), so an engine started in the first
+  // seconds of a daemon's very first start with a moved home may miss its first hook.
+  const installIn = (homes: { claude: Array<string | null>; codex: Array<string | null> }): void => {
+    for (const home of homes.claude) if (home) hookStep('claude', () => installSessionHooks(port, join(home, 'settings.json')))
+    for (const home of homes.codex) if (home) hookStep('codex', () => installCodexHooks(port, home))
+  }
+  const adopt = (environment: NodeJS.ProcessEnv): void => {
+    const moved = adoptEngineHomes(environment, { claudeHome: dirname(env.CLAUDE_PROJECTS_DIR), codexHome: env.CODEX_HOME })
+    if (!moved.claude && !moved.codex) return
+    console.log(`[hooks] engines keep their data elsewhere here: ${[moved.claude && `Claude Code in ${moved.claude}`, moved.codex && `Codex in ${moved.codex}`].filter(Boolean).join(', ')}`)
+    installIn({ claude: [moved.claude], codex: [moved.codex] })
+  }
+  installIn(movedEngineHomes())
+  adopt(options.environment ?? process.env)
+  void options.loginShell?.then(adopt)
   hookStep('claude', () => installSessionHooks(port))
   hookStep('codex', () => installCodexHooks(port))
   hookStep('cursor', () => installCursorHooks(port))

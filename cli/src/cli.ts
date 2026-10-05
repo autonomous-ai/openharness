@@ -3246,7 +3246,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     localClient: () => ({ kind: 'desktop', name: terminalHintMachineName().slice(0, 64), machineId: backend.machineId }),
   })
   // Every engine's hooks, pointed at the port the local server actually bound (core/engines/hooks.ts).
-  if (!env.DISABLE_HOOK_INSTALL) installEngineHooks(hookPort)
+  if (!env.DISABLE_HOOK_INSTALL) installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise })
   backend.setDashboardPort(hookPort) // surfaced to the web (e2e_status) so it can link here to approve
   console.log(`[cli] local dashboard → http://127.0.0.1:${hookPort}`)
 
