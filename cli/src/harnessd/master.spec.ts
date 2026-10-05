@@ -336,7 +336,7 @@ describe('runMaster', () => {
     writeFileSync(script, `
       const { appendFileSync } = require('node:fs')
       const role = process.argv[2] === '__service' ? 'service:' + process.argv[3] : process.argv[2]
-      appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ role, token: process.env.HARNESSD_SERVICE_TOKEN, name: process.env.HARNESSD_SERVICE, restarts: process.env.HARNESSD_RESTARTS, flags: process.execArgv }) + '\\n')
+      appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ role, token: process.env.HARNESSD_SERVICE_TOKEN, name: process.env.HARNESSD_SERVICE, restarts: process.env.HARNESSD_RESTARTS, flags: process.execArgv, processes: process.env.HARNESSD_SERVICE_PROCESSES, services: process.env.HARNESSD_SERVICES }) + '\\n')
       if (role === '__run') { process.send({ type: 'harnessd:bound', protocol: 2, port: 1 }); process.send({ type: 'harnessd:ready' }) }
       setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 }), 50)
       process.on('SIGTERM', () => process.exit(0))
@@ -358,6 +358,8 @@ describe('runMaster', () => {
     expect(services[0]).toMatchObject({ name: 'search', flags: ['--max-old-space-size=1024'] })
     expect(services[0].token).toMatch(/^[0-9a-f]{48}$/)
     expect(core.token).toBe(services[0].token)
+    // The core is told exactly what runs out here, in a form a core from before the list reads too.
+    expect(core).toMatchObject({ processes: 'search', services: 'search' })
     expect(lines().some((line) => line.role === 'service:unknown')).toBe(false)
     signals.get('SIGTERM')!()
     await until('the master to finish', () => exits.length > 0)

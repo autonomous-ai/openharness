@@ -323,6 +323,34 @@ export function serviceOptions(env: NodeJS.ProcessEnv): ServiceSupervisorOptions
   }
 }
 
+/** How a master tells the core it starts which services it runs in their own processes. */
+export const SERVICE_PROCESSES_ENV = 'HARNESSD_SERVICE_PROCESSES'
+
+/**
+ * What a master puts in its core's environment about the services it runs in their own processes: the
+ * list, and `HARNESSD_SERVICES` set to the same (`none` for none), so that a core from before the list,
+ * one this master finds back on disk after a rollback, reads the same answer for the services it knows
+ * and runs none of them a second time.
+ */
+export function serviceProcessesEnv(specs: readonly ServiceSpec[]): Record<string, string> {
+  const names = specs.map((spec) => spec.name).join(',')
+  return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none' }
+}
+
+/**
+ * The services the core's master runs in their own processes, which the core routes to and does not
+ * run itself: what the master says it runs (`serviceProcessesEnv`), never what this build would choose.
+ * A master too old to say runs exactly the services `HARNESSD_SERVICES` names, as every master did; a
+ * core that worked it out from its own default instead took every service for out of process under a
+ * released master that ran none, and answered search, the viewers, workspaces and the teams
+ * SERVICE_UNAVAILABLE until the master restarted (e2e/releaseRehearsal.e2e.ts). None without a master.
+ */
+export function servicesTheMasterRuns(env: NodeJS.ProcessEnv, known: Readonly<Record<string, unknown>>): Set<string> {
+  if (env.HARNESSD_SUPERVISED !== '1' || !env.HARNESSD_SERVICE_TOKEN) return new Set()
+  const said = env[SERVICE_PROCESSES_ENV] ?? env.HARNESSD_SERVICES ?? ''
+  return new Set(said.split(',').map((name) => name.trim()).filter((name) => name && Object.hasOwn(known, name)))
+}
+
 /** The services to run, from `HARNESSD_SERVICES` (`search,devices`): only names this build knows.
  *  `HARNESSD_SERVICE_HEAP_LIMIT_MIB` gives every one the same heap limit instead (tests, support). */
 export function serviceSpecs(env: NodeJS.ProcessEnv, known: Readonly<Record<string, Omit<ServiceSpec, 'name'>>>): ServiceSpec[] {

@@ -13,7 +13,7 @@ import type { MasterMessage } from './protocol.js'
 import {
   PROBE_ANSWER, RESUME_ENV, createReexec, decodeResume, fingerprint, readMarker, recoverFailedReexec, removeMarker, runProbe, writeMarker,
 } from './reexec.js'
-import { KNOWN_SERVICES, ServiceSupervisor, serviceOptions, serviceSpecs } from './services.js'
+import { KNOWN_SERVICES, ServiceSupervisor, serviceOptions, serviceProcessesEnv, serviceSpecs } from './services.js'
 import {
   DEFAULT_SUPERVISOR_OPTIONS, Supervisor, type CoreHandle, type SupervisorDeps, type SupervisorOptions, type SupervisorStatus,
 } from './supervisor.js'
@@ -260,7 +260,8 @@ export function runMaster(config: MasterConfig): Supervisor {
   // A new one every boot, given to the core and to each service: how the core knows a service
   // connection is one this master started, and no other local process.
   const token = randomBytes(24).toString('hex')
-  const services = new ServiceSupervisor(serviceSpecs(env, KNOWN_SERVICES), {
+  const specs = serviceSpecs(env, KNOWN_SERVICES)
+  const services = new ServiceSupervisor(specs, {
     spawnService: (spec, extra) => coreHandle(spawn(config.nodePath, [...coreExecArgv(config.execArgv, spec.heapLimitMiB), config.scriptPath, '__service', spec.name], {
       env: { ...env, ...extra },
       stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
@@ -285,7 +286,8 @@ export function runMaster(config: MasterConfig): Supervisor {
   }) : null
   const supervisor = new Supervisor({
     spawnCore: (extra) => coreHandle(spawn(config.nodePath, [...execArgv, config.scriptPath, '__run'], {
-      env: { ...env, ...extra, HARNESSD_SERVICE_TOKEN: token },
+      // Told which services this master runs, so it routes to exactly those and runs the rest itself.
+      env: { ...env, ...extra, HARNESSD_SERVICE_TOKEN: token, ...serviceProcessesEnv(specs) },
       stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
     })),
     now: () => performance.now(),
