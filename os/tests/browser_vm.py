@@ -301,6 +301,12 @@ def check_browser_suspend(vm, config, manifest, result):
         vm.keys('ret')
         state(vm, path=path)
         page_fills_display(vm, 'suspend-page' + path.replace('/', '-'))
+        # The previous click leaves the VGA software cursor over this label.
+        # Move it away without clicking before locating the exact visible word.
+        vm.monitor('input-send-event', events=[
+            {'type': 'abs', 'data': {'axis': 'x', 'value': 0}},
+            {'type': 'abs', 'data': {'axis': 'y', 'value': 0}}])
+        time.sleep(.2)
         vm.click_word('suspend-input' + path.replace('/', '-'), 'Keyboard')
         state(vm, path=path, ready=True)
         vm.type_probe(value)
@@ -475,7 +481,7 @@ def main():
                   observer=dict(sha256=hashlib.sha256(args.wlrctl.read_bytes()).hexdigest(),
                                 version=subprocess.check_output([str(args.wlrctl),'--version'],text=True).strip()),
                   limitations=['Only the recorded candidate files replace packaged files in the disposable guest.',
-                               'Native virtual display and physical-keyboard events; not a physical laptop or GPU claim.',
+                               'Virtual display and QMP virtual keyboard events; not a physical laptop or GPU claim.',
                                'Observer and screenshot overhead are included in transition timings.'])
     if args.check == 'suspend':
         result['test_inputs'] = {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
