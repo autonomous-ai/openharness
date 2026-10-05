@@ -64,6 +64,24 @@ describe('what a message is not typed into', () => {
     expect(messageHold('claude', plan)).toBe('permission_open')
   })
 
+  it('is not a numbered list in the output of a turn at work, over its spinner', () => {
+    const working = [
+      '❯ tidy up the release script',
+      '',
+      '⏺ Here is the plan:',
+      '  1. Run the existing tests first',
+      '  2. Rename the helper',
+      '  3. Stop publishing the debug build',
+      '',
+      '✻ Pondering… (12s · ↓ 1.2k tokens · esc to interrupt)',
+      '',
+      RULE, '❯ ', RULE, '  ? for shortcuts',
+    ].join('\n')
+    expect(messageHold('claude', working)).toBeNull()
+    const codex = ['› tidy up the release script', '', '• Plan:', '  1. Run the existing tests first', '  2. Stop publishing the debug build', '', '◦ Working (5s • esc to interrupt)', '', '› ', '', '  ? for shortcuts'].join('\n')
+    expect(messageHold('codex', codex)).toBeNull()
+  })
+
   it('is not a draft or an echo that asks a question of its own', () => {
     expect(messageHold('claude', CLAUDE_PROMPT.replace('Try "fix lint errors"', 'Do you want to add tests? Would you like to proceed?'))).toBeNull()
     const answered = [
