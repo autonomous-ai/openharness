@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -389,6 +389,25 @@ describe('ensureManagedGrid', () => {
     expect(await ensureManagedGrid()).toBeNull()
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(existsSync(join(runtimeDir, 'current-grid'))).toBe(false)
+  })
+
+  it('clears the staging a process that is gone left behind, and leaves a running one\'s', async () => {
+    // A core that exited mid-unpack (an update's handoff) left its staging, archive and partial tree.
+    const gone = spawnSync('/usr/bin/true').pid!
+    const left = join(runtimeDir, `.grid-staging-${gone}-1790000000000`)
+    const running = join(runtimeDir, `.grid-staging-${process.pid}-1790000000001`)
+    const other = join(runtimeDir, `.node-staging-${gone}-1790000000002`)
+    for (const dir of [left, running, other]) {
+      mkdirSync(join(dir, 'grid-0.3.47', 'bin'), { recursive: true })
+      writeFileSync(join(dir, 'grid.tar.gz'), 'partial')
+    }
+    stubFetch(null)
+    const { ensureManagedGrid } = await load()
+    await ensureManagedGrid()
+    expect(existsSync(left)).toBe(false)
+    expect(existsSync(running)).toBe(true)
+    // Each runtime sweeps its own.
+    expect(existsSync(other)).toBe(true)
   })
 
   it('keeps the grid it has when the manifest is unreachable, and has nothing when it has nothing', async () => {
