@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 from hardware_update_guest import (EARLY, NVIDIA, database, expected_versions,
-    initramfs_identity, payload_identity, validate_lock, validate_probe, validate_recovery, validate_transition)
+    initramfs_identity, module_identity, payload_identity, validate_lock, validate_probe, validate_recovery, validate_transition)
 from hardware_update_vm import verify_image
 
 LOCK = json.loads(Path(__file__).with_name('hardware-update.lock.json').read_text())
@@ -24,11 +24,14 @@ def probe(candidate=False):
                      'version': '615.71.09', 'owner': 'nvidia-open-lts'} for name in NVIDIA}
     modules['wl'] = {'path': f'/usr/lib/modules/{kernel}/updates/dkms/wl.ko.zst',
                      'vermagic': kernel + ' SMP preempt mod_unload', 'sha256': 'b' * 64, 'version': '6.30.223.271'}
+    for row in modules.values():
+        row.update(resolved_path=row['path'], module_root=f'/usr/lib/modules/{kernel}')
     kernel_hash, initrd_hash = ('c' * 64, 'd' * 64) if candidate else ('e' * 64, 'f' * 64)
     return {'running_kernel': kernel, 'installed_kernel': kernel, 'packages': packages,
             'headers_kernel': kernel, 'package_kernel_sha256': kernel_hash,
             'boot': {'vmlinuz-linux-lts': kernel_hash, 'initramfs-linux-lts.img': initrd_hash, 'grub/grub.cfg': '9' * 64},
-            'modules': modules, 'dkms': f'broadcom-wl/6.30.223.271, {kernel}, x86_64: installed',
+            'modules': modules, 'module_root': f'/usr/lib/modules/{kernel}',
+            'dkms': f'broadcom-wl/6.30.223.271, {kernel}, x86_64: installed',
             'initramfs': {'kernel_namespaces': [kernel], 'early_modules': dict.fromkeys(EARLY, 'present')},
             'runtime': {'files': LOCK['baseline']['runtime_files'], 'runtime_json_sha256': '8' * 64},
             'system_sha256': '7' * 64, 'pacman_config': 'original dated config', 'install': {'root_uuid': 'root', 'boot_uuid': 'boot'}}
@@ -98,6 +101,37 @@ class ArtifactTests(unittest.TestCase):
 
 
 class AutomaticHooksTests(unittest.TestCase):
+    def test_module_alias_resolution_is_strict_and_kernel_scoped(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            kernel = LOCK['baseline']['kernel']
+            modules = root / 'usr/lib/modules'
+            installed = modules / kernel / 'extramodules/wl.ko'
+            installed.parent.mkdir(parents=True)
+            installed.write_bytes(b'actual module payload')
+            (root / 'lib').symlink_to('usr/lib', target_is_directory=True)
+            raw = root / 'lib/modules' / kernel / 'extramodules/wl.ko'
+            row = module_identity(raw, kernel, modules)
+            self.assertEqual(row['path'], str(raw))
+            self.assertEqual(row['resolved_path'], str(installed.resolve()))
+            self.assertEqual(row['module_root'], str((modules / kernel).resolve()))
+            self.assertEqual(row['sha256'], hashlib.sha256(installed.read_bytes()).hexdigest())
+            for other in (LOCK['candidate']['kernel'], kernel + '-other'):
+                outside = modules / other / 'wl.ko'
+                outside.parent.mkdir()
+                outside.write_bytes(installed.read_bytes())
+                with self.assertRaisesRegex(AssertionError, 'escapes expected kernel'):
+                    module_identity(outside, kernel, modules)
+                alias = installed.with_name('escaped.ko')
+                alias.symlink_to(outside)
+                with self.assertRaisesRegex(AssertionError, 'escapes expected kernel'):
+                    module_identity(alias, kernel, modules)
+                alias.unlink()
+            with self.assertRaisesRegex(AssertionError, 'Not a regular module'):
+                module_identity(installed.parent, kernel, modules)
+            with self.assertRaises(FileNotFoundError):
+                module_identity(installed.with_name('missing.ko'), kernel, modules)
+
     def test_pre_reboot_uname_stays_old_but_new_modules_are_checked(self):
         row = probe(True)
         row['running_kernel'] = LOCK['baseline']['kernel']
@@ -111,6 +145,8 @@ class AutomaticHooksTests(unittest.TestCase):
                      lambda p: p['modules']['nvidia_uvm'].update(vermagic=LOCK['baseline']['kernel'] + ' SMP'),
                      lambda p: p['modules']['nvidia'].update(owner='nvidia-open-dkms'),
                      lambda p: p['modules']['nvidia_modeset'].update(version='previous-version'),
+                     lambda p: p['modules']['wl'].update(resolved_path='/tmp/usr/lib/modules/' + LOCK['candidate']['kernel'] + '/wl.ko'),
+                     lambda p: p['modules']['wl'].update(resolved_path='/usr/lib/modules/' + LOCK['baseline']['kernel'] + '/wl.ko'),
                      lambda p: p.update(headers_kernel=LOCK['baseline']['kernel']),
                      lambda p: p.update(package_kernel_sha256='stale-boot-kernel')]
         for mutation in mutations:

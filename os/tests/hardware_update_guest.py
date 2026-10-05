@@ -160,17 +160,33 @@ def payload_identity(segments, identity, modules, firmware_root=Path('/usr/lib/f
     return result
 
 
+def module_identity(path, kernel, modules_root=Path('/usr/lib/modules')):
+    """Resolve the guest's real aliases before accepting or hashing a module."""
+    raw = Path(path)
+    root = (modules_root / kernel).resolve(strict=True)
+    resolved = raw.resolve(strict=True)
+    assert raw.is_absolute() and root.is_dir() and resolved.is_file(), ('Not a regular module file', raw, resolved)
+    assert resolved.is_relative_to(root), ('Module escapes expected kernel directory', raw, resolved, root)
+    return {'path': str(raw), 'resolved_path': str(resolved), 'module_root': str(root), 'sha256': digest(resolved)}
+
+
 def validate_probe(result, lock, candidate, running_kernel):
     expected = lock['candidate' if candidate else 'baseline']['kernel']
     assert result['running_kernel'] == running_kernel
     assert result['installed_kernel'] == expected and result['headers_kernel'] == expected
     assert_versions(result['packages'], expected_versions(lock, candidate))
     assert result['boot']['vmlinuz-linux-lts'] == result['package_kernel_sha256']
+    root = Path(result['module_root'])
+    assert root.is_absolute() and root.name == expected and '..' not in root.parts
     version = result['packages']['nvidia-utils'].rsplit('-', 1)[0]
     for name in ('wl',) + NVIDIA:
         row = result['modules'][name]
         assert row['vermagic'].split()[0] == expected, ('Wrong module ABI', name, row)
-        assert row['sha256'] and '/usr/lib/modules/' + expected + '/' in row['path']
+        # These are already resolved in the guest. Never resolve guest paths on
+        # the host when replaying pure receipt assertions.
+        resolved = Path(row['resolved_path'])
+        assert row['module_root'] == str(root) and row['sha256']
+        assert resolved.is_absolute() and '..' not in resolved.parts and resolved != root and resolved.is_relative_to(root)
         if name in NVIDIA:
             assert row['owner'] == 'nvidia-open-lts', 'NVIDIA must remain the prebuilt package, not DKMS'
             assert row['version'] == version, ('NVIDIA userspace/module mismatch', row, version)
@@ -188,6 +204,9 @@ def probe(lock, candidate, running_kernel, output):
               'headers_kernel': Path(f'/usr/lib/modules/{kernel}/build/include/config/kernel.release').read_text().strip(),
               'package_kernel_sha256': digest(f'/usr/lib/modules/{kernel}/vmlinuz'),
               'boot': system.boot_hashes(Path('/boot')), 'modules': {}, 'dkms': run('dkms', 'status'),
+              'module_root': str(Path(f'/usr/lib/modules/{kernel}').resolve(strict=True)),
+              'lib_alias': {'target': os.readlink('/lib') if Path('/lib').is_symlink() else None,
+                            'resolved': str(Path('/lib').resolve(strict=True))},
               'runtime': runtime(lock), 'system_sha256': digest(SYSTEM),
               'pacman_config': Path('/etc/pacman.conf').read_text(), 'node': run('node', '--version'),
               'networking': run('nmcli', 'networking'),
@@ -198,7 +217,7 @@ def probe(lock, candidate, running_kernel, output):
     for name in ('wl',) + NVIDIA:
         path = run('modinfo', '-k', kernel, '-F', 'filename', name)
         row = {key: run('modinfo', '-k', kernel, '-F', key, name) for key in ('vermagic', 'version')}
-        row.update(path=path, sha256=digest(path))
+        row.update(module_identity(path, kernel))
         if name in NVIDIA:
             row['owner'] = run('pacman', '-Qqo', path)
         result['modules'][name] = row
@@ -238,6 +257,8 @@ def probe(lock, candidate, running_kernel, output):
                                 for path in root.glob(pattern) if path.is_file() or path.is_symlink())
                 for segment, root in segments.items()}
             save(partial, result)
+    result['probe_stage'] = 'module-consistency'
+    save(partial, result)
     validate_probe(result, lock, candidate, running_kernel)
     snapshot = lock['candidate' if candidate else 'baseline']['snapshot']
     assert set(re.findall(r'archive.archlinux.org/repos/(\d{4}/\d{2}/\d{2})/', result['pacman_config'])) == {snapshot}
