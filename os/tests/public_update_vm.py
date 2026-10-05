@@ -17,6 +17,7 @@ import time
 import package_image_binding as binding
 import public_update_transport as transport
 from footprint_vm import copy_file
+from hardware_update_vm import graceful_stop
 from session_vm import PROBE, screen_text
 from vm import VM, check_graphical_keyboard
 
@@ -71,24 +72,10 @@ def installed_matches(record, receipt):
 
 
 def shutdown(vm, record, name, root=False):
-    vm.send(('' if root else 'sudo -n ') + 'systemctl poweroff\n')
-    events = []
-    deadline = time.monotonic() + 45
-    vm.qmp.settimeout(45)
-    while time.monotonic() < deadline:
-        raw = vm.qmp_file.readline()
-        if not raw:
-            break
-        event = json.loads(raw)
-        if event.get('event'):
-            events.append(event)
-        if event.get('event') == 'SHUTDOWN':
-            break
-    code = vm.process.wait(timeout=max(1, deadline - time.monotonic()))
-    record.setdefault('shutdowns', []).append({'name': name, 'events': events, 'exit_code': code})
-    if code != 0 or not any(event.get('event') == 'SHUTDOWN' and event.get('data', {}).get('guest') is True for event in events):
-        raise ValueError('Guest did not complete its own shutdown: ' + name)
-    vm.stop()
+    # Drain the diagnostic serial socket while waiting for the fresh QMP
+    # shutdown event. An unread console can stall QEMU during guest poweroff.
+    event = graceful_stop(vm, privileged=not root)
+    record.setdefault('shutdowns', []).append({'name': name, **event})
 
 
 def main():
@@ -118,7 +105,8 @@ def main():
               'binding_receipt': binding.identity(args.candidate_image_binding), 'checks': [],
               'test_inputs': {name: binding.identity(Path(__file__).with_name(name)) for name in
                              ['public_update_vm.py', 'public_update_guest.py', 'public_update_transport.py',
-                              'package_image_binding.py', 'vm.py', 'session_vm.py', 'footprint_vm.py']},
+                              'package_image_binding.py', 'vm.py', 'session_vm.py', 'footprint_vm.py',
+                              'hardware_update_vm.py', 'hardware_update_guest.py', 'hardware_install_vm.py']},
               'limits': ['Private official-path HTTPS fixture; not GitHub/CDN publication.',
                          'Same Arch snapshot; no kernel migration or physical hardware claim.']}
     for name, path in [('baseline-manifest.json', iso.with_name('manifest.json')),
