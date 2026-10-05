@@ -992,8 +992,9 @@ export class BackendSocket {
   send(frame: Frame): void {
     this.monitorCompletions.observe(frame)
     // Only an already-open orchestration service observes events; ordinary sessions
-    // do not create project state or incur disk work. Project payloads stay local.
-    this.orchestratorService?.ingest(frame)
+    // do not create project state or incur disk work. Project payloads stay local. Its state it cannot
+    // read (a full disk: reading makes its folder) must not cost every frame after it (e2e/diskfull.e2e.ts).
+    try { this.orchestratorService?.ingest(frame) } catch { /* the frame goes out regardless */ }
     if (env.LOG_FRAMES) logFrame('→', 'web', frame)
     for (const [connId, sink] of this.localClients) {
       if (!sink.sendFrame(frame)) void this.unregisterLocalClient(connId)

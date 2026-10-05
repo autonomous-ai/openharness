@@ -628,6 +628,21 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('sends a frame though the orchestrator watching the frames cannot read its state', async () => {
+    // A full disk: reading the orchestrator's state makes its folder, and that threw out of every send,
+    // so a turn's end never reached a window (e2e/diskfull.e2e.ts).
+    const socket = new BackendSocket('token')
+    ;(socket as unknown as { orchestratorService: { ingest(): void; stop(): void } }).orchestratorService = {
+      ingest: () => { throw new Error('ENOSPC: no space left on device, mkdir') }, stop: () => {},
+    }
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    socket.send({ type: 'turn_ended', dbSessionId: 's1', payload: { sessionId: 's1' } })
+    expect(parseSent(ws).map((sent) => (sent.frame as { type?: string }).type)).toContain('turn_ended')
+    await socket.stop()
+  })
+
   it('bounds the opening handshake and reconnects when it times out', async () => {
     // A connect attempt whose TCP side came up but whose upgrade was never answered used to sit in
     // CONNECTING forever: no 'open', so no heartbeat to terminate it, and `this.ws` set, so every
