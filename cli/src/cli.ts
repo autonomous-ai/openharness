@@ -1665,12 +1665,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // `onStaged` is one indirection on purpose: the handoff's teardown does not exist yet and must not move
   // (it tears down two dozen subsystems declared further down). Until it is ready, a staged update is
   // applied by `bootHandoff`, which hands the machine over without finishing start-up.
-  // The handoff itself (core/updateHandoff.ts) is made here — ahead of the /api/status handler that reads
-  // whether it is under way, and of shutdown(), which takes a successor it is judging down with us.
-  const updateHandoff = createUpdateHandoff({
-    version: VERSION, supervised: coreLink.supervised, exitForUpdate: () => process.exit(CORE_EXIT_UPDATE),
-    handOff: handOffWithoutMaster, log: (line) => console.log(line), error: (line) => console.error(line),
-  })
 
   // Self-update ONLY manages the INSTALLED copy (`~/.harness/cli/cli.js`). A dev/repo run — `tsx`
   // (`npm run dev`) OR `node dist/cli.js` from the checkout — must NEVER self-update: it would swap
@@ -1710,6 +1704,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     disabled: env.ADAPTER_UPDATE_DISABLE,
     intervalMs: env.ADAPTER_UPDATE_CHECK_MS,
     slotSecond: env.ADAPTER_UPDATE_SLOT_SEC,
+  })
+  // The update handoff (core/updateHandoff.ts): after the updaters, never above them (startupOrder.spec.ts),
+  // and ahead of the /api/status handler that reads whether it is under way and of shutdown(), which takes
+  // a successor it is judging down with us.
+  const updateHandoff = createUpdateHandoff({
+    version: VERSION, supervised: coreLink.supervised, exitForUpdate: () => process.exit(CORE_EXIT_UPDATE),
+    handOff: handOffWithoutMaster, log: (line) => console.log(line), error: (line) => console.error(line),
   })
 
   // Another daemon serves this data folder: leave before reading or writing anything of its — its
