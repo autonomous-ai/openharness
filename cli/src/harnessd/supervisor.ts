@@ -427,6 +427,14 @@ export class Supervisor {
     this.update = 'probation'
     this.armTimer('probationTimer', () => {
       this.probationTimer = null
+      // The core on probation has staged a newer build and is on its way out for it (a teardown can
+      // take seconds). Kept now, the newer build's pending note and the backup to roll it back to were
+      // deleted with this one's, and it ran on probation with nothing to restore. Left on probation, its
+      // exit for the update is the superseded one, and the newer build is judged on its own.
+      if (this.stagedSinceSpawn()) {
+        this.deps.log('[harnessd] the update stayed up, but has staged a newer build — leaving that one to be judged')
+        return
+      }
       this.update = null
       this.deps.confirmUpdate()
       this.deps.log('[harnessd] the update stayed up — keeping it')

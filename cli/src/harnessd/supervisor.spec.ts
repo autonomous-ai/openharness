@@ -565,6 +565,31 @@ describe('Supervisor', () => {
       expect(supervisor.status()).toMatchObject({ state: 'running', restarts: 2, lastExitReason: 'update' })
     })
 
+    it('does not keep an update whose core has staged a newer build while it tears down for it', () => {
+      // The probation ends in the seconds between v2's core staging v3 and its exit for it. Kept then,
+      // v3's pending note and the backup to roll it back to went with v2's, and v3 had nothing to restore.
+      let disk = 'v1'
+      const supervisor = make({}, { bundle: () => disk })
+      supervisor.start()
+      core().up()
+      disk = 'v2'
+      core().exit(CORE_EXIT_UPDATE)
+      vi.advanceTimersByTime(0)
+      core().up()
+      vi.advanceTimersByTime(options.updateProbationMs - 1)
+      disk = 'v3'
+      vi.advanceTimersByTime(1)
+      expect(calls).toEqual(['claim'])
+      expect(lines.at(-1)).toBe('[harnessd] the update stayed up, but has staged a newer build — leaving that one to be judged')
+      core().exit(CORE_EXIT_UPDATE)
+      vi.advanceTimersByTime(0)
+      // v3 on probation of its own: a failure rolls it back, as any update's.
+      core().up()
+      core().exit(1)
+      expect(calls).toEqual(['claim', 'restore'])
+      expect(supervisor.status().state).toBe('restarting')
+    })
+
     it('judges the newer build a core still starting on an update staged, and rolls that one back if it fails', () => {
       let disk = 'v1'
       make({}, { bundle: () => disk }).start()
