@@ -107,6 +107,11 @@ def main():
         assert status == 0, phase + ' failed; see its full log and serial.log'
         result = json.loads(vm.read_file(destination))
         (folder / (phase + '.json')).write_text(json.dumps(result, indent=2) + '\n')
+        probe = 'pre-reboot' if phase == 'update' else phase
+        if probe in ('baseline', 'pre-reboot', 'candidate', 'recovered'):
+            for suffix in ('.partial.json', '.initramfs.txt', '.initramfs-early.txt', '.initramfs-main.txt'):
+                name = probe + suffix
+                (folder / name).write_bytes(vm.read_file(prefix + '/hardware-update/' + name))
         receipt['phases'][phase] = {'seconds': round(time.monotonic() - started, 3), 'status': 'passed'}
         return result
 
@@ -153,8 +158,7 @@ def main():
         authenticate()
         vm.command('sudo -n cp /var/log/pacman.log /tmp/hardware-update/pacman.log && '
                    'sudo -n chmod -R a+rX /tmp/hardware-update')
-        for name in ('baseline.initramfs.txt', 'pre-reboot.initramfs.txt', 'pacman.log'):
-            (folder / name).write_bytes(vm.read_file('/tmp/hardware-update/' + name))
+        (folder / 'pacman.log').write_bytes(vm.read_file('/tmp/hardware-update/pacman.log'))
         vm.screenshot('02-applied-before-reboot')
         graceful_stop(vm, True)
 
@@ -211,7 +215,9 @@ def main():
             vm.screenshot('failure')
             diagnostics, _ = vm.command('cat /var/log/pacman.log; dkms status; systemctl --failed --no-pager', timeout=20, check=False)
             (folder / 'failure-diagnostics.log').write_text(diagnostics)
-            for name in ('transaction.json', 'pre-reboot.json', 'pre-reboot.initramfs.txt'):
+            names = ['transaction.json'] + [phase + suffix for phase in ('baseline', 'pre-reboot', 'candidate', 'recovered')
+                    for suffix in ('.json', '.partial.json', '.initramfs.txt', '.initramfs-early.txt', '.initramfs-main.txt')]
+            for name in names:
                 remote = '/tmp/hardware-update/' + name
                 _, exists = vm.command('test -r ' + shlex.quote(remote), timeout=5, check=False)
                 if exists == 0:

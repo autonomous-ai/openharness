@@ -111,7 +111,8 @@ def initramfs_identity(listing, kernel, firmware):
         modules[name] = found[0]
     assert firmware, 'No declared NVIDIA GSP firmware'
     for name in firmware:
-        assert re.search(r'(?:^|/)usr/lib/firmware/' + re.escape(name) + r'(?:\.(?:zst|xz|gz))?(?=\s|$)', listing, re.M), ('Missing GSP firmware', name)
+        found = re.findall(r'(?:^|/)usr/lib/firmware/' + re.escape(name) + r'(?:\.(?:zst|xz|gz))?(?=\s|$)', listing, re.M)
+        assert len(found) == 1, ('Missing or ambiguous GSP firmware', name, found)
     return {'kernel_namespaces': namespaces, 'early_modules': modules, 'firmware': firmware}
 
 
@@ -131,23 +132,29 @@ def content_digest(path):
         return hashlib.file_digest(handle, 'sha256').hexdigest()
 
 
-def payload_identity(extracted, identity, modules, firmware_root=Path('/usr/lib/firmware')):
-    pairs = [(name, path, Path(modules[name]['path'])) for name, path in identity['early_modules'].items()]
+def payload_identity(segments, identity, modules, firmware_root=Path('/usr/lib/firmware')):
+    pairs = []
+    for name, relative in identity['early_modules'].items():
+        found = [(segment, root / relative) for segment, root in segments.items() if (root / relative).is_file()]
+        assert len(found) == 1, ('Missing or ambiguous archived module', name, found)
+        segment, archived = found[0]
+        pairs.append((name, segment, archived, Path(modules[name]['path'])))
     for name in identity['firmware']:
         installed = [firmware_root / (name + suffix) for suffix in ('', '.zst', '.xz', '.gz')]
         present = [path for path in installed if path.is_file()]
         assert len(present) == 1, ('Ambiguous installed GSP payload', name, present)
-        archived = [extracted / 'usr/lib/firmware' / (name + suffix) for suffix in ('', '.zst', '.xz', '.gz')]
-        archived = [path for path in archived if path.is_file()]
+        archived = [(segment, root / 'usr/lib/firmware' / (name + suffix))
+                    for segment, root in segments.items() for suffix in ('', '.zst', '.xz', '.gz')]
+        archived = [(segment, path) for segment, path in archived if path.is_file()]
         assert len(archived) == 1, ('Missing or ambiguous archived GSP payload', name, archived)
-        pairs.append((name, str(archived[0].relative_to(extracted)), present[0]))
+        pairs.append((name, *archived[0], present[0]))
     result = {}
-    for name, relative, installed in pairs:
-        archived = extracted / relative
-        assert archived.resolve().is_relative_to(extracted.resolve()), 'Initramfs link escapes its extracted payload'
+    for name, segment, archived, installed in pairs:
+        root = segments[segment]
+        assert archived.resolve().is_relative_to(root.resolve()), 'Initramfs link escapes its extracted payload'
         expected, actual = content_digest(installed), content_digest(archived)
         assert expected == actual, ('Initramfs contains different payload bytes', name)
-        result[name] = {'archive_path': relative, 'installed_path': str(installed),
+        result[name] = {'segment': segment, 'archive_path': str(archived.relative_to(root)), 'installed_path': str(installed),
                         'installed_file_sha256': digest(installed), 'archive_file_sha256': digest(archived),
                         'decompressed_sha256': actual}
     return result
@@ -185,6 +192,9 @@ def probe(lock, candidate, running_kernel, output):
               'pacman_config': Path('/etc/pacman.conf').read_text(), 'node': run('node', '--version'),
               'networking': run('nmcli', 'networking'),
               'install': json.loads(Path('/var/lib/harness-os/install.json').read_text())}
+    partial = Path(output).with_suffix('.partial.json')
+    result['probe_stage'] = 'modules'
+    save(partial, result)
     for name in ('wl',) + NVIDIA:
         path = run('modinfo', '-k', kernel, '-F', 'filename', name)
         row = {key: run('modinfo', '-k', kernel, '-F', key, name) for key in ('vermagic', 'version')}
@@ -192,17 +202,42 @@ def probe(lock, candidate, running_kernel, output):
         if name in NVIDIA:
             row['owner'] = run('pacman', '-Qqo', path)
         result['modules'][name] = row
-    listing = run('lsinitcpio', '/boot/initramfs-linux-lts.img')
+    result['probe_stage'] = 'initramfs-listings'
+    save(partial, result)
+    listings = {}
+    for segment, option in [('early', '--early'), ('main', '--cpio')]:
+        listings[segment] = run('lsinitcpio', '--list', option, '/boot/initramfs-linux-lts.img')
+        Path(output).with_suffix('.initramfs-' + segment + '.txt').write_text(listings[segment] + '\n')
+    listing = '\n'.join(listings.values())
     Path(output).with_suffix('.initramfs.txt').write_text(listing + '\n')
     firmware = run('modinfo', '-k', kernel, '-F', 'firmware', 'nvidia').splitlines()
     result['initramfs'] = initramfs_identity(listing, kernel, firmware)
-    # Filenames cannot prove that early boot contains the same driver. Inspect
-    # the actual generated main CPIO without running any build/repair command.
-    # lsinitcpio(1): --extract --cpio extracts that image into the current folder.
+    result['initramfs']['segments'] = {segment: {'listing_sha256': hashlib.sha256((text + '\n').encode()).hexdigest(),
+                                                'entries': len(text.splitlines())} for segment, text in listings.items()}
+    # mkinitcpio 42.1 puts compressed modules/firmware in early CPIO. Inspect
+    # both parts separately; matching names in both must not silently overwrite
+    # one another. No build or repair command runs here.
     with tempfile.TemporaryDirectory(prefix='kernel-update-initrd-', dir='/var/tmp') as directory:
-        subprocess.run(['lsinitcpio', '--extract', '--cpio', '/boot/initramfs-linux-lts.img'],
-                       cwd=directory, check=True, timeout=60, stdout=subprocess.DEVNULL)
-        result['initramfs']['payloads'] = payload_identity(Path(directory), result['initramfs'], result['modules'])
+        segments = {name: Path(directory) / name for name in ('early', 'main')}
+        try:
+            for segment, option in [('early', '--early'), ('main', '--cpio')]:
+                result['probe_stage'] = 'initramfs-extract-' + segment
+                save(partial, result)
+                segments[segment].mkdir()
+                subprocess.run(['lsinitcpio', '--extract', option, '/boot/initramfs-linux-lts.img'],
+                               cwd=segments[segment], check=True, timeout=60, stdout=subprocess.DEVNULL)
+            result['probe_stage'] = 'initramfs-payload-bytes'
+            result['initramfs']['payloads'] = payload_identity(segments, result['initramfs'], result['modules'])
+        except Exception as error:
+            result['probe_error'] = repr(error)
+            raise
+        finally:
+            result['initramfs']['extracted_candidates'] = {
+                segment: sorted(str(path.relative_to(root)) for pattern in
+                                ('usr/lib/modules/**/nvidia*.ko*', 'usr/lib/firmware/nvidia/**/*')
+                                for path in root.glob(pattern) if path.is_file() or path.is_symlink())
+                for segment, root in segments.items()}
+            save(partial, result)
     validate_probe(result, lock, candidate, running_kernel)
     snapshot = lock['candidate' if candidate else 'baseline']['snapshot']
     assert set(re.findall(r'archive.archlinux.org/repos/(\d{4}/\d{2}/\d{2})/', result['pacman_config'])) == {snapshot}
@@ -213,6 +248,8 @@ def probe(lock, candidate, running_kernel, output):
         assert Path('/sys/module/wl').is_dir()
         result['wl_loaded'] = True
         run('modprobe', '-r', 'wl')
+    result['probe_stage'] = 'complete'
+    save(partial, result)
     save(output, result)
     return result
 

@@ -163,14 +163,61 @@ class AutomaticHooksTests(unittest.TestCase):
             archived = extracted / 'usr/lib/firmware' / firmware
             archived.parent.mkdir(parents=True)
             archived.write_bytes(original.read_bytes())
-            result = payload_identity(extracted, identity, modules, installed / 'firmware')
+            result = payload_identity({'main': extracted}, identity, modules, installed / 'firmware')
             self.assertEqual(set(result), set(EARLY) | {firmware})
             for bad in (extracted / identity['early_modules']['nvidia'], archived):
                 good = bad.read_bytes()
                 bad.write_bytes(b'stale or corrupt payload under the correct filename')
                 with self.assertRaisesRegex(AssertionError, 'different payload bytes'):
-                    payload_identity(extracted, identity, modules, installed / 'firmware')
+                    payload_identity({'main': extracted}, identity, modules, installed / 'firmware')
                 bad.write_bytes(good)
+
+    def test_compressed_payload_keeps_its_path_in_early_archive(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            segments = {name: root / name for name in ('early', 'main')}
+            kernel = LOCK['baseline']['kernel']
+            modules, listings = {}, {'early': [], 'main': []}
+            for index, name in enumerate(EARLY):
+                segment = 'early' if index == 0 else 'main'
+                relative = f'usr/lib/modules/{kernel}/extramodules/{name}.ko' + ('.gz' if segment == 'early' else '')
+                archived = segments[segment] / relative
+                archived.parent.mkdir(parents=True, exist_ok=True)
+                opener = gzip.open if segment == 'early' else open
+                with opener(archived, 'wb') as handle:
+                    handle.write(('module ' + name).encode())
+                source = root / ('installed-' + name + '.ko')
+                source.write_bytes(('module ' + name).encode())
+                modules[name] = {'path': str(source)}
+                listings[segment].append(relative)
+            firmware = 'nvidia/615.71.09/gsp_tu10x.bin'
+            original = root / 'firmware' / firmware
+            original.parent.mkdir(parents=True)
+            original.write_bytes(b'GSP bytes')
+            archived = segments['early'] / 'usr/lib/firmware' / (firmware + '.gz')
+            archived.parent.mkdir(parents=True)
+            with gzip.open(archived, 'wb') as handle:
+                handle.write(original.read_bytes())
+            listings['early'].append(str(archived.relative_to(segments['early'])))
+            identity = initramfs_identity('\n'.join(listings['early'] + listings['main']), kernel, [firmware])
+            # Reproduce attempt 1: the unchanged compressed filename is listed,
+            # but selecting only the main archive cannot find its payload.
+            with self.assertRaisesRegex(AssertionError, 'Missing or ambiguous archived module'):
+                payload_identity({'main': segments['main']}, identity, modules, root / 'firmware')
+            result = payload_identity(segments, identity, modules, root / 'firmware')
+            self.assertEqual(result['nvidia']['segment'], 'early')
+            self.assertEqual(result['nvidia_drm']['segment'], 'main')
+            self.assertEqual(result[firmware]['segment'], 'early')
+            for name, relative in [('nvidia', identity['early_modules']['nvidia']),
+                                   (firmware, 'usr/lib/firmware/' + firmware + '.gz')]:
+                duplicate = segments['main'] / relative
+                duplicate.parent.mkdir(parents=True, exist_ok=True)
+                duplicate.write_bytes((segments['early'] / relative).read_bytes())
+                with self.assertRaisesRegex(AssertionError, 'ambiguous archived'):
+                    payload_identity(segments, identity, modules, root / 'firmware')
+                with self.assertRaises(AssertionError):
+                    initramfs_identity('\n'.join(listings['early'] + listings['main'] + [relative]), kernel, [firmware])
+                duplicate.unlink()
 
     def test_runtime_must_stay_frozen_while_distro_packages_may_change(self):
         old, new = probe(), probe(True)
