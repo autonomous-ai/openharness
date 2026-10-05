@@ -164,8 +164,10 @@ import { databaseHistory } from './core/transcripts/databaseHistory.js'
 import { createCoreApi, emptyPorts, MODELS_FALLBACKS, SEARCH_FALLBACKS, TEAMS_FALLBACKS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type TeamsPort } from './core/api.js'
 import { createServiceHost, testFaults } from './core/serviceHost.js'
 import { createServiceLinks } from './core/serviceLinks.js'
+import { createViewersLink } from './core/viewersLink.js'
 import { KNOWN_SERVICES, serviceSpecs } from './harnessd/services.js'
 import { runSearchService } from './services/searchProcess.js'
+import { runViewersService } from './services/viewersProcess.js'
 import { SEARCH_REQUESTS, startSearch } from './services/search.js'
 import { STORE_REQUESTS, startStore } from './services/store.js'
 import { startViewers } from './services/viewers.js'
@@ -1811,8 +1813,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Each service starts and is called through the host, so one that fails is logged and left off and
   // the core carries on without it (core/serviceHost.ts).
   const serviceHost = createServiceHost(ports, { faults: testFaults(process.env.HARNESSD_TEST_FAULTS) })
-  // The DSH companions: each harness agent's viewer and verdict watch (services/viewers.ts).
-  serviceHost.start('viewers', startViewers, coreApi, VIEWERS_FALLBACKS)
+  // The DSH companions: each harness agent's viewer and verdict watch (services/viewers.ts), started below.
   dshFrameContextRef = (s) => ports.viewers?.frameContext(s) ?? null
   const attachDsh = (s: RegisteredSession): void => ports.viewers?.attach(s)
   const detachDsh = (agentId: string): void => ports.viewers?.detach(agentId)
@@ -2188,11 +2189,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const outOfProcess = new Set(serviceToken ? serviceSpecs(process.env, KNOWN_SERVICES).map((spec) => spec.name) : [])
   // The requests each service that can run in its own process answers (its own module declares them).
   const requestsOf: Record<string, readonly string[]> = { search: SEARCH_REQUESTS }
+  // What the core keeps of the viewers in their own process, for the frames it builds (core/viewersLink.ts).
+  const viewersLink = createViewersLink(coreApi, (frame, opts) => serviceLinks.notify('viewers', frame, opts))
   const serviceLinks = createServiceLinks({
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
-    // Every agent, live then stopped, with the name the apps show for it: what search indexes.
-    answer: (_service, query) => query === 'agents'
+    // Search asks for every agent, live then stopped, with the name the apps show for it: what it indexes.
+    answer: (service, query, payload) => service === 'viewers' ? viewersLink.answer(query, payload) : query === 'agents'
       ? { agents: coreApi.agents.all().map((session) => ({ ...session, displayName: coreApi.agents.displayName(session) })) }
       : { error: 'UNKNOWN_QUERY' },
   })
@@ -2214,6 +2217,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   // What the core calls search through: guarded, so it answers its fallbacks once search is switched off.
   const sessionSearch = ports.search
+  // The DSH viewers: in this process, or in its own (services/viewersProcess.ts), told of each agent.
+  if (outOfProcess.has('viewers')) ports.viewers = viewersLink.port
+  else serviceHost.start('viewers', startViewers, coreApi, VIEWERS_FALLBACKS)
   // The harnesses installed here, and installing, updating and removing one (services/store.ts).
   serviceHost.serve('store', startStore, coreApi, STORE_REQUESTS)
 
@@ -5573,12 +5579,13 @@ switch (cmd) {
     break
   case '__service': { // internal: a service harnessd's master runs in its own process (services/process.ts)
     const socketPath = localSocketPath(env.ADAPTER_DATA_DIR, env.PORT)
-    if (rest[0] !== 'search' || !socketPath) {
+    const runService = rest[0] === 'search' ? runSearchService : rest[0] === 'viewers' ? runViewersService : null
+    if (!runService || !socketPath) {
       console.error(`[service] ${rest[0] ?? '(none)'}: ${socketPath ? 'no such service in this build' : 'the core has no local socket to reach'}`)
       process.exit(2)
     }
     process.title = `harnessd ${rest[0]}`
-    runSearchService({ dataDir: env.ADAPTER_DATA_DIR, socketPath, machineId: computerId(), token: process.env.HARNESSD_SERVICE_TOKEN ?? '' })
+    runService({ dataDir: env.ADAPTER_DATA_DIR, socketPath, machineId: computerId(), token: process.env.HARNESSD_SERVICE_TOKEN ?? '' })
     break
   }
   case '__run': // internal: the detached daemon child reads the durable SSO session — or runs without one

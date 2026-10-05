@@ -39,7 +39,7 @@ let several people build features at once without touching the core or each othe
 ## Running in its own process
 
 A service that can crash natively, hang or leak should run in its own process, where it costs only
-itself. Search does: `HARNESSD_SERVICES=search`.
+itself. Search and the viewers do: `HARNESSD_SERVICES=search,viewers` (either alone, too).
 
 - `src/harnessd/services.ts` runs it (`KNOWN_SERVICES`, with its memory budget). The core routes the
   requests it declared (its `<NAME>_REQUESTS`) to its process, and the same handlers answer them there.
@@ -49,6 +49,12 @@ itself. Search does: `HARNESSD_SERVICES=search`.
   `SERVICE_UNAVAILABLE` while it is down, and holds what the service must not miss.
 - `src/services/searchProcess.ts` is the example to copy. `e2e/serviceProcesses.e2e.ts` is the proof
   to copy: killed, hung (SIGSTOP), leaking, crashing on every start.
+- A port the core calls in line (while it builds a frame, say) cannot wait on another process. The
+  viewers show how (`src/services/viewersProcess.ts`, `src/core/viewersLink.ts`): the process tells
+  the core its answers whenever they change (a `service_query` kind the core answers), the core keeps
+  the last ones and its port answers from them, or from the fallbacks before it has heard any. The
+  process asks the core for everything it should hold each time it connects, which a restarted
+  process needs anyway. `e2e/viewersProcess.e2e.ts` proves it with a real harness agent's viewer.
 
 ## Do not
 
