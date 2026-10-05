@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from arm_boot import digest
-from arm_session import fixture_identity, runtime_identity, stage
+from arm_session import fixture_identity, frame_contains, runtime_identity, stage
 
 
 class ARMFixture(unittest.TestCase):
@@ -114,6 +114,21 @@ class PortableFixture(unittest.TestCase):
         self.save()
         with self.assertRaisesRegex(ValueError, 'kernel and compressed private disk'):
             fixture_identity(self.folder, 'a' * 40)
+
+
+class VisibleBrowser(unittest.TestCase):
+    def test_agent_transcript_is_not_a_loaded_browser_page(self):
+        # The retained failure frame showed the generated HTML in OpenCode
+        # while Chromium was still starting in the background.
+        transcript = ('Terminal harness 10-5 5:53 [me@harness ~]$\n'
+                      'Wrote index.html\n<title>Harness ARM Demo</title>\n'
+                      'The page displays Count: 0 and an Increment button.\n'
+                      'Build Big Pickle OpenCode Zen')
+        expected = ['Harness ARM Demo', 'Count: 0', 'Increment']
+        self.assertFalse(frame_contains(transcript, expected, absent=['me@harness']))
+        self.assertFalse(frame_contains('Harness ARM Demo', expected, absent=['me@harness']))
+        browser = 'Harness ARM Demo\n/home/me/projects/demo/index.html\nHarness ARM Demo\nCount: 0\nIncrement'
+        self.assertTrue(frame_contains(browser, expected, absent=['me@harness']))
 
 
 if __name__ == '__main__':

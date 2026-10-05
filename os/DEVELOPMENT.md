@@ -587,6 +587,10 @@ It records the accelerator, real agent/browser interaction and the second boot.
 The prepared fixture has an empty test password and must never be installed on
 hardware or published as an OS release. Preparation and acceptance have separate
 receipts. Set `prepare_only=false` to exercise the full sequence on the CI runner.
+When correcting test assertions, an existing immutable fixture can be selected
+explicitly with `--fixture-source FULL_PRODUCER_SHA`. Its hashes are still checked;
+the acceptance receipt records the image source and test source separately. This
+tests that older image, not product changes in the newer test checkout.
 
 Apple firmware provisioning, physical drivers, platform installation and Fedora
 update/recovery integration remain separate work before releasing this port.

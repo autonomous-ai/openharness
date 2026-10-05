@@ -25,6 +25,13 @@ ROOT = Path(__file__).resolve().parents[2]
 USER = 'runuser -u me -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus '
 
 
+def frame_contains(output, expected, absent=()):
+    expected = [expected] if isinstance(expected, str) else expected
+    visible = ' '.join(output.casefold().split())
+    return (all(' '.join(word.casefold().split()) in visible for word in expected) and
+            not any(word.casefold() in visible for word in absent))
+
+
 def runtime_identity(runtime, commit):
     info = json.loads((runtime / 'source.json').read_text())
     if (info.get('dirty') is not False or info.get('source_commit') != commit or
@@ -159,17 +166,17 @@ class SessionVM(VM):
         return self.user('for n in $(seq 1 ' + str(seconds * 2) + '); do if ' + command +
                          '; then exit 0; fi; sleep .5; done; exit 1', timeout=seconds + 10)
 
-    def frame(self, name, text, seconds=60):
+    def frame(self, name, text, seconds=60, absent=()):
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             self.screenshot(name)
             output = subprocess.check_output(['tesseract', str(self.folder / (name + '.png')), 'stdout', '--psm', '11'],
                                              text=True, stderr=subprocess.DEVNULL, timeout=15)
             (self.folder / (name + '.txt')).write_text(output)
-            if text.lower() in output.lower():
+            if frame_contains(output, text, absent):
                 return
             time.sleep(1)
-        raise TimeoutError('Expected visible text was not rendered: ' + text)
+        raise TimeoutError('Expected visible screen was not rendered: ' + repr(text))
 
     def keyboard(self, name):
         before, _ = self.user('hn display-message -p "#{pane_id}"')
@@ -230,9 +237,11 @@ def exercise(vm, result):
     vm.screenshot('03-agent-project')
     result['checks'].append('Upstream-default OpenCode creates Python and HTML; independent Python execution checks the result')
     vm.user('hn-browser ' + shlex.quote('file://' + project + '/index.html'))
-    vm.frame('04-browser', 'Harness ARM Demo', 90)
+    # The agent's transcript contains the same page title and HTML. Wait for
+    # the rendered page after Chromium takes focus, not that earlier terminal.
+    vm.frame('04-browser', ['Harness ARM Demo', 'Count: 0', 'Increment'], 90, absent=['me@harness'])
     vm.click_word('05-increment', 'Increment')
-    vm.frame('06-counter', 'Count: 1')
+    vm.frame('06-counter', 'Count: 1', absent=['me@harness'])
     output, _ = vm.command('python3 - <<\'PY\'\nfrom pathlib import Path\n'
         'renderers=[]\nfor p in Path("/proc").glob("[0-9]*"):\n'
         ' try:\n  cmd=(p/"cmdline").read_bytes()\n'
@@ -326,10 +335,10 @@ def prepare_fixture(disk, image, output, receipt, run):
     print('Fresh private fixture prepared; graphical acceptance has not run', flush=True)
 
 
-def run_fixture(folder, output, source):
+def run_fixture(folder, output, source, test_source):
     info = fixture_identity(folder, source)
     receipt = {**info, 'status': 'running', 'checks': [], 'started_at_unix': time.time(),
-               'fixture_manifest_sha256': digest(folder / 'manifest.json')}
+               'fixture_manifest_sha256': digest(folder / 'manifest.json'), 'test_source_commit': test_source}
     machine = None
     with tempfile.TemporaryDirectory(prefix='harness-arm-acceptance-') as temporary:
         disk = Path(temporary) / 'guest.raw'
@@ -366,6 +375,7 @@ def main():
     inputs = parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument('--runtime', type=Path, help='Build a fresh fixture on native ARM Linux.')
     inputs.add_argument('--fixture', type=Path, help='Exercise an exact-source prepared fixture on ARM Linux or macOS.')
+    parser.add_argument('--fixture-source', help='Explicit full source SHA of an older immutable fixture; recorded separately from the test source.')
     parser.add_argument('--prepare-only', action='store_true', help='Prepare a private fixture without claiming acceptance.')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
@@ -373,6 +383,8 @@ def main():
         parser.error('Use an ordinary user.')
     if args.fixture and args.prepare_only:
         parser.error('--prepare-only requires --runtime.')
+    if args.fixture_source and (not args.fixture or not re.fullmatch(r'[a-f0-9]{40}', args.fixture_source)):
+        parser.error('--fixture-source requires --fixture and its full source SHA.')
     if args.runtime and (platform.system(), platform.machine()) != ('Linux', 'aarch64'):
         parser.error('Build the fixture on a native ARM Linux runner.')
     if args.fixture and (platform.system(), platform.machine()) not in [('Linux', 'aarch64'), ('Darwin', 'arm64')]:
@@ -392,7 +404,7 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     if args.fixture:
-        run_fixture(args.fixture.resolve(), output, source)
+        run_fixture(args.fixture.resolve(), output, args.fixture_source or source, source)
         return
     runtime = args.runtime.resolve()
     runtime_identity(runtime, source)
