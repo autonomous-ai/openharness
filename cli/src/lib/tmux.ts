@@ -488,12 +488,19 @@ export function isNoTmuxServerError(error: string): boolean {
 /** The tmux server the last inventory was read from (`rememberTmuxServer`); null until one was. */
 let knownServer: number | null = null
 
-/** Whether `pid` is a running process named tmux: never a pid since reused by something else. */
+/**
+ * Whether `pid` is a running tmux server: never a pid since reused by something else. macOS names it by
+ * its executable (`/opt/homebrew/bin/tmux`). Linux names it as tmux names itself, `tmux: server`
+ * (`prctl(PR_SET_NAME)` in tmux's compat/setproctitle.c), so a check for `tmux` alone never revived a
+ * socket on Linux, where systemd-tmpfiles is the cleaner that removes it. A client (`tmux: client`) is
+ * not the server.
+ */
 function isTmuxProcess(pid: number): Promise<boolean> {
   try { process.kill(pid, 0) } catch { return Promise.resolve(false) }
   return new Promise((resolve) => {
     run('ps', ['-o', 'comm=', '-p', String(pid)], { timeout: 2_000, env: psEnv() }, (err, stdout) => {
-      resolve(!err && basename(String(stdout ?? '').trim()) === 'tmux')
+      const name = basename(String(stdout ?? '').trim())
+      resolve(!err && (name === 'tmux' || name === 'tmux: server'))
     })
   })
 }

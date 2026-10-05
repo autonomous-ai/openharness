@@ -562,6 +562,30 @@ describe('runMaster', () => {
       } finally { log.mockRestore() }
     })
 
+    it('asks whether the bundle on disk after a recovery is unjudged, not the bundle it started from', async () => {
+      // A re-execution that never came up is rolled back at start; with no room to remember the build,
+      // its pending note stays and names the bundle this master started from. That is not the bundle its
+      // first core runs: the build before, put back, is no update to judge.
+      const lines: string[] = []
+      const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+      try {
+        const script = bundle('')
+        const startedFrom = fingerprint(script)!
+        writeMarker(marker(), { pid: DEAD_PID, from: 'the one before', to: startedFrom, at: 1 })
+        const asked: Array<string | null> = []
+        const master = start(script, {
+          restoreUpdate: () => { writeFileSync(script, readFileSync(script, 'utf8') + '\n// the build before\n') },
+          unjudgedUpdate: (onDisk: string | null) => { asked.push(onDisk); return onDisk === startedFrom ? '2.0.0' : null },
+        })
+        await until('the master to re-execute on the bundle restored', () => master.execs.length > 0)
+        expect(asked).toEqual([fingerprint(script)])
+        expect(asked[0]).not.toBe(startedFrom)
+        expect(lines.some((line) => line.includes('an update no master kept or rolled back'))).toBe(false)
+        expect(decodeResume(master.execs[0].env[RESUME_ENV])?.update).toBeNull()
+        await master.stop()
+      } finally { log.mockRestore() }
+    })
+
     it('judges the newer build a core on probation staged, instead of rolling it back as a failure', async () => {
       // Its first core stages a build and exits for the update; the next, on probation, stages another before it is kept.
       const script = bundle(`if (process.env.HARNESSD_RESTARTS !== '2') setTimeout(() => { fs.appendFileSync(__filename, '\\n// a newer build\\n'); process.exit(75) }, process.env.HARNESSD_RESTARTS === '0' ? 100 : 20)`)
@@ -570,6 +594,57 @@ describe('runMaster', () => {
       expect(master.calls).toEqual(['confirm'])
       expect(master.supervisor.status()).toMatchObject({ state: 'running', restarts: 2 })
       await master.stop()
+    })
+
+    it('starts its services once it carries on, never while it replaces itself before its first core', async () => {
+      // A rollback found at start moves this master onto the bundle restored before it starts anything.
+      // Its services were started beside that move: they ran through the probe and were cut off by the
+      // exec, children no one reaps, and a probe that refused the bundle started them a second time.
+      const started = (lines: string[]) => lines.filter((line) => line.includes('[harnessd] service search started'))
+      const lines: string[] = []
+      const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+      const env = { ...process.env, HARNESSD_INITIAL_BACKOFF_MS: '10', HARNESSD_SERVICES: 'search' }
+      const restore = (file: string) => () => { writeFileSync(file, readFileSync(file, 'utf8') + '\n// the build before\n') }
+      try {
+        const script = bundle('')
+        writeMarker(marker(), { pid: DEAD_PID, from: 'the one before', to: fingerprint(script)!, at: 1 })
+        let atExec: string[] | null = null
+        const moving = start(script, { env, restoreUpdate: restore(script), execve: () => { atExec = started(lines) } })
+        await until('the master to re-execute on the bundle restored', () => atExec !== null)
+        expect(atExec).toEqual([])
+        await moving.stop()
+
+        // The bundle restored refuses its probe: this master carries on as itself, with each service once.
+        lines.length = 0
+        const refusing = bundle('', `console.error('Unknown command: ' + process.argv[2]); process.exit(1)`)
+        writeMarker(marker(), { pid: DEAD_PID, from: 'the one before', to: fingerprint(refusing)!, at: 1 })
+        const staying = start(refusing, { env, restoreUpdate: restore(refusing) })
+        await until('a core on the bundle restored', () => staying.supervisor.status().state === 'running')
+        expect(started(lines)).toHaveLength(1)
+        await staying.stop()
+      } finally { log.mockRestore() }
+    })
+
+    it('takes its own marker with it when it is stopped before its first core is up, and leaves another\'s', async () => {
+      // Stopped between its exec and its first core, a re-executed master left its marker, and the next
+      // start took that for a re-execution that never came up: a good update rolled back, its version
+      // rejected (recoverFailedReexec, selfUpdate.restore).
+      const script = join(dir, 'unbound.cjs')
+      writeFileSync(script, `setInterval(() => {}, 1000); process.on('SIGTERM', () => process.exit(0))`)
+      const resume = encodeResume({ restarts: 1, lastExit: 'code 75', lastExitReason: 'update', update: 'pending', claimed: true, reexecs: 1, unproven: 1 })
+      writeMarker(marker(), { pid: process.pid, from: 'the one before', to: fingerprint(script)!, at: 1 })
+      const own = start(script, { env: { ...process.env, [RESUME_ENV]: resume } })
+      await until('its core', () => own.supervisor.status().corePid !== null)
+      await own.stop()
+      expect(readMarker(marker())).toBeNull()
+      expect(own.calls).toEqual([])
+
+      const another = { pid: process.ppid, from: 'the one before', to: fingerprint(script)!, at: 1 }
+      writeMarker(marker(), another)
+      const beside = start(script)
+      await until('its core', () => beside.supervisor.status().corePid !== null)
+      await beside.stop()
+      expect(readMarker(marker())).toEqual(another)
     })
 
     it('removes its marker once its core is up, and leaves alone what it does not judge', async () => {

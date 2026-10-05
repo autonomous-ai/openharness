@@ -249,8 +249,12 @@ export function runMaster(config: MasterConfig): Supervisor {
     })
   }
   // Started fresh on an update the master judging it never finished with (it died: a crash, a kill, a
-  // power cut): this master judges it. A re-executed master was handed its own.
-  const unjudged = resume ? null : config.unjudgedUpdate?.(own) ?? null
+  // power cut): this master judges it. A re-executed master was handed its own. Asked of the bundle on
+  // disk now, which the first core runs, not of this master's own: a recovery just above may have put
+  // the build before back, and when its rollback could not write the rejected list the pending note
+  // still names this master's bundle. Asked of that, the restored build's first core was put on trial,
+  // and keeping it would have dropped the note that remembers the failed one (selfUpdate.settleRolledBack).
+  const unjudged = resume ? null : config.unjudgedUpdate?.(bundle()) ?? null
   if (unjudged) log(`[harnessd] the bundle on disk is ${unjudged}, an update no master kept or rolled back — its first core is on probation`)
   let stopping = false
   // A new one every boot, given to the core and to each service: how the core knows a service
@@ -299,6 +303,10 @@ export function runMaster(config: MasterConfig): Supervisor {
     exit: (code) => {
       stopping = true
       reexec?.cancel()
+      // A master stopped before its first core came up has not failed to come up: its own marker goes
+      // with it. Left behind by a stop, a sign-out or a shutdown in the seconds after a re-execution, it
+      // made the next start roll a good update back and reject its version (recoverFailedReexec).
+      if (markerFile && readMarker(markerFile)?.pid === process.pid) removeMarker(markerFile)
       services.stop(() => {
         stopTrimming()
         exit(code)
@@ -321,7 +329,12 @@ export function runMaster(config: MasterConfig): Supervisor {
   }
   supervisor.start()
   // Not waiting on the core: a service reaches it through its socket, and retries until it answers.
-  services.start()
+  // Nor while this master is replacing itself before its first core, as it does when a re-execution
+  // before it never came up and the previous bundle was put back (recoverFailedReexec): started here,
+  // the services ran through the probe and were cut off by the exec, children no one reaps, or ran
+  // twice once a refused probe started them again. Whoever goes on starts them: this master if it
+  // carries on as itself, the new one if it does not.
+  if (!reexec?.replacing()) services.start()
   return supervisor
 }
 
