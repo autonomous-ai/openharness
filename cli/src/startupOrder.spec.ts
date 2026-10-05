@@ -141,7 +141,9 @@ describe('cli.ts start-up order', () => {
 
   it('the daemon arm survives its own start-up failure', () => {
     const source = code(SOURCE)
-    const arm = source.slice(source.indexOf("case '__run'"), source.indexOf("case '__run'") + 400)
+    // The whole arm, to its break: a fixed window read past it as the arm grew a line (the stall fault).
+    const start = source.indexOf("case '__run'")
+    const arm = source.slice(start, source.indexOf('break', start))
     expect(arm).toContain('catch(enterSafeMode)')
     expect(arm, 'a daemon that exits here can never be updated').not.toContain('catch(onError)')
   })

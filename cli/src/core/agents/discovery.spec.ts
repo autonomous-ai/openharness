@@ -4,7 +4,7 @@ import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.j
 import { bypassPermissionActive, permissionModeFromArgv, tmuxPaneState } from '../../lib/tmux.js'
 import { createDiscoveryHandlers, type DiscoveryDeps } from './discovery.js'
 
-vi.mock('../../lib/tmux.js', async (real) => ({ ...await real<object>(), tmuxPaneState: vi.fn(async () => null) }))
+vi.mock('../../lib/tmux.js', async (real) => ({ ...await real<object>(), tmuxPaneState: vi.fn(async () => 'gone') }))
 
 const row = (over: Partial<RegisteredSession> = {}): RegisteredSession =>
   ({ agentId: 'a1', sessionId: 's1', engine: 'claude', active: true, ...over }) as RegisteredSession
@@ -65,7 +65,7 @@ const grid = (name: string) => ({ grid: name, baseUrl: `http://${name}.local`, m
 describe('discovery', () => {
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    vi.mocked(tmuxPaneState).mockReset().mockResolvedValue(null)
+    vi.mocked(tmuxPaneState).mockReset().mockResolvedValue('gone')
   })
   afterEach(() => vi.restoreAllMocks())
 
@@ -233,7 +233,10 @@ describe('discovery', () => {
     it('holds a failed resume while its pane may still be about to launch the engine', async () => {
       const run = setup()
       const failed = row({ resumeOnly: true, tmuxPane: '%0', launch: { state: 'failed' } } as Partial<RegisteredSession>)
-      await run.handlers.onDormant(failed, 'x') // no pane state at all
+      await run.handlers.onDormant(failed, 'x') // the pane is gone: the reconciler's to remove
+      // tmux could not be asked, as when the daemon's event loop was held: no news either way.
+      vi.mocked(tmuxPaneState).mockResolvedValueOnce('unknown')
+      await run.handlers.onDormant(failed, 'x')
       vi.mocked(tmuxPaneState).mockResolvedValueOnce({ dead: false, engineExit: null } as never)
       await run.handlers.onDormant(failed, 'x') // a live shell, no engine exit
       expect(run.deps.retainExitedSession).not.toHaveBeenCalled()

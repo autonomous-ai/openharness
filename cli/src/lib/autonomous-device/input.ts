@@ -223,7 +223,13 @@ export class AutonomousDeviceInput {
       if (allowRetry && evidence === 'pending' && item.retry && item.retries < 2 && !state.userAction) {
         state.writing = true
         const session = this.deps.getSession(id)
-        if (!session || !await this.deps.validateRuntime(session)) { this.delivery(id, item, 'unknown', 'runtime_gone_post_paste'); return }
+        // The write is over either way: left active, it held every message behind it until a turn began
+        // or ended, and an agent that had gone, or could not be checked, never gave one.
+        if (!session || !await this.deps.validateRuntime(session)) {
+          this.delivery(id, item, 'unknown', 'runtime_gone_post_paste')
+          this.finishWrite(id, state, item)
+          return
+        }
         const blocked = await this.deps.isAwaitingUser?.(session)
         if (this.states.get(id) !== state || state.active !== item || item.started) return
         if (!blocked) {

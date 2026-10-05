@@ -1,4 +1,5 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { patientDeadline } from './patientExec.js'
 import { pasteRawIntoTmux } from './tmux.js'
 import {
   TERMINAL_ACTION_SUCCEEDED,
@@ -301,7 +302,8 @@ interface PendingControlCommand {
   command: string
   lines: Buffer[]
   commandNumber: string | null
-  timer: ReturnType<typeof setTimeout> | null
+  /** Cancels the head's deadline (`armHead`). */
+  timer: (() => void) | null
   onEnd?: () => void
   resolve: (result: ControlCommandResult) => void
 }
@@ -373,7 +375,7 @@ export class ControlCommandQueue {
     const head = this.outstanding[0]
     if (!head || head.commandNumber !== commandNumber) return false
     this.outstanding.shift()
-    if (head.timer) clearTimeout(head.timer)
+    head.timer?.()
     head.timer = null
     if (kind === 'end') head.onEnd?.()
     head.resolve({ ok: kind === 'end', stdout: decodeControlResponse(head.lines) })
@@ -384,7 +386,7 @@ export class ControlCommandQueue {
   failAll(): void {
     const abandoned = [...this.outstanding.splice(0), ...this.waiting.splice(0)]
     for (const command of abandoned) {
-      if (command.timer) clearTimeout(command.timer)
+      command.timer?.()
       command.timer = null
       command.resolve(CONTROL_COMMAND_FAILED)
     }
@@ -417,10 +419,13 @@ export class ControlCommandQueue {
   private armHead(): void {
     const head = this.outstanding[0]
     if (!head || head.timer) return
-    head.timer = setTimeout(() => {
+    // Running time, not wall time: a daemon whose event loop was held wakes to this deadline before it
+    // reads the reply tmux sent meanwhile, and took the stream down for a command that had answered
+    // (patientExec.ts, e2e/stall.e2e.ts).
+    head.timer = patientDeadline(this.timeoutMs, () => {
       if (this.outstanding[0] !== head) return
       this.deps.onFatal('tmux control command timed out')
-    }, this.timeoutMs)
+    })
   }
 }
 

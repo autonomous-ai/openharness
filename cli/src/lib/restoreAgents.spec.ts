@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentLaunch, ProcessIdentity, RegisteredSession } from './registry.js'
 import type { TerminalRuntimeRef, TmuxRuntimeRef } from './terminalTypes.js'
-import { GRID_CREDENTIAL_REQUIRED, restoreAgents, type RestoreAgentsDeps, type RestoreLaunch } from './restoreAgents.js'
+import { GRID_CREDENTIAL_REQUIRED, restoreAgents, tmuxSurvey, type RestoreAgentsDeps, type RestoreLaunch } from './restoreAgents.js'
 import type { GridLaunchOverride } from './gridLaunch.js'
 
 const GRID: GridLaunchOverride = {
@@ -50,7 +50,7 @@ interface Harness {
   launched: Array<{ agentId: string; launch: RestoreLaunch }>
   /** Per-pane scripted answers for probeProcess; shifted on each call. */
   probes: Map<string, Array<ProcessIdentity | null>>
-  states: Map<string, Array<{ dead: boolean; engineExit?: number | null } | null>>
+  states: Map<string, Array<{ dead: boolean; engineExit?: number | null } | 'gone' | 'unknown'>>
   nextPane: string[]
   paneCreates: number
   respawns: number
@@ -157,6 +157,59 @@ function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; aliveP
 const settled = (h: Harness, watches: number, successes = 0) =>
   vi.waitFor(() => { expect(h.released.length).toBe(watches + successes) })
 
+describe('restoreAgents — a survey that could not tell', () => {
+  it('asks a probe that could not answer again, and judges the row by the answer it then gives', async () => {
+    const h = harness([row()])
+    const asked: string[] = []
+    const panes: Array<boolean | 'unknown'> = ['unknown', 'unknown', true]
+    const engines: Array<ProcessIdentity | null | 'unknown'> = ['unknown', identity(7)]
+    h.deps.livePane = async () => { asked.push('pane'); return panes.shift()! }
+    h.deps.liveProcess = async () => { asked.push('engine'); return engines.shift()! }
+    const summary = await restoreAgents(h.deps)
+    // Its engine is still running: left alone, re-identified, and no second pane opened beside it.
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [], unsurveyed: [] })
+    expect(asked).toEqual(['pane', 'pane', 'pane', 'engine', 'engine'])
+    expect(h.paneCreates).toBe(0)
+    expect(h.calls).toContain('updateIdentity:agent-a:7')
+  })
+
+  it('leaves a row alone when tmux or ps cannot say, however often it is asked', async () => {
+    // Still unknown after every wait: neither archived as exited nor given a second pane resuming the
+    // conversation its first may still be in. The caller keeps discovery from retiring it this boot.
+    const alive = row({ agentId: 'alive' })
+    const gone = row({ agentId: 'gone', tmuxPane: '%4', runtimes: [{ backend: 'tmux', paneId: '%4' }], primaryRuntimeKey: 'tmux\u0000%4' })
+    const h = harness([alive, gone])
+    h.deps.livePane = async (runtime) => runtime.paneId === '%3' ? true : false
+    let asked = 0
+    h.deps.liveProcess = async () => { asked++; return 'unknown' }
+    h.deps.surveyRetryMs = [1, 1]
+    const summary = await restoreAgents(h.deps)
+    expect(summary.unsurveyed).toEqual(['alive', 'gone'])
+    // The waits are spent once: the second row, after them, is asked once and left alone.
+    expect(asked).toBe(3 + 1)
+    expect(summary.failed).toEqual([])
+    expect(h.paneCreates).toBe(0)
+    expect(h.calls.filter((call) => /releaseEngine|createPane/.test(call))).toEqual([])
+  })
+
+  it('the tmux survey reads one pane listing, again only after a read that failed', async () => {
+    const listings: Array<{ ok: true; panes: Array<{ tmuxPane: string }> } | { ok: false }> = [
+      { ok: false }, { ok: true, panes: [{ tmuxPane: '%3' }] },
+    ]
+    let reads = 0
+    const survey = tmuxSurvey(async () => { reads++; return listings.shift()! }, async (pane) =>
+      pane === '%1' ? { ok: true, identity: identity(1) } : { ok: false, unknown: pane === '%2' })
+    const runtime = (paneId: string): TmuxRuntimeRef => ({ backend: 'tmux', paneId })
+    expect(await survey.livePane!(runtime('%3'))).toBe('unknown')
+    expect(await survey.livePane!(runtime('%3'))).toBe(true)
+    expect(await survey.livePane!(runtime('%5'))).toBe(false)
+    expect(reads).toBe(2)
+    expect(await survey.liveProcess(row(), runtime('%1'))).toEqual(identity(1))
+    expect(await survey.liveProcess(row(), runtime('%2'))).toBe('unknown')
+    expect(await survey.liveProcess(row(), runtime('%3'))).toBeNull()
+  })
+})
+
 describe('restoreAgents — which agents get a pane back', () => {
   it('recreates a missing pane with a resume launch and hands the row over to discovery', async () => {
     const h = harness([row()])
@@ -164,7 +217,7 @@ describe('restoreAgents — which agents get a pane back', () => {
 
     const summary = await restoreAgents(h.deps)
 
-    expect(summary).toEqual({ restored: ['agent-a'], skipped: [], failed: [] })
+    expect(summary).toEqual({ restored: ['agent-a'], skipped: [], failed: [], unsurveyed: [] })
     expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'session-a' }])
     // Every registry write of phase 1 happens inside the one transaction, in this order.
     expect(h.calls.slice(0, 5)).toEqual([
@@ -197,7 +250,7 @@ describe('restoreAgents — which agents get a pane back', () => {
   it('leaves a pane that still runs its engine alone, re-identifying a row that lost its pid', async () => {
     const h = harness([row()], { livePanes: ['%3'] })
     const summary = await restoreAgents(h.deps)
-    expect(summary).toEqual({ restored: [], skipped: [], failed: [] })
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [], unsurveyed: [] })
     expect(h.paneCreates).toBe(0)
     // No identity on the row (a misread reboot, a tmux server that outlived the daemon): the live
     // pid is written back so discovery adopts by process rather than by route.
@@ -225,7 +278,7 @@ describe('restoreAgents — which agents get a pane back', () => {
     const h = harness([row({ agentId: 'gridded', grid: { baseUrl: GRID.baseUrl, model: null }, gridLaunch: GRID })])
     h.probes.set('%0', [identity(7)])
     const summary = await restoreAgents(h.deps)
-    expect(summary).toEqual({ restored: ['gridded'], skipped: [], failed: [] })
+    expect(summary).toEqual({ restored: ['gridded'], skipped: [], failed: [], unsurveyed: [] })
     expect(h.launched).toEqual([{ agentId: 'gridded', launch: { argv: ['claude', '--resume', 'session-a', '--grid', 'grid-abc'], env: { GRID_API_KEY: 'gridkey-abc123' } } }])
     await settled(h, 1, 1)
   })
@@ -390,10 +443,34 @@ describe('restoreAgents — waiting for the engine', () => {
 
   it('fails the launch when the pane vanishes entirely', async () => {
     const h = harness([row()])
-    h.states.set('%0', [null])
+    h.states.set('%0', ['gone'])
     await restoreAgents(h.deps)
     await settled(h, 1)
     expect(h.rows.get('agent-a')?.launch).toMatchObject({ state: 'failed', error: 'ENGINE_DID_NOT_START' })
+  })
+
+  it('asks again when tmux could not say how the pane is, and binds the engine once it shows', async () => {
+    // A read that timed out while the daemon's event loop was held: it failed the restore on the spot.
+    const h = harness([row()])
+    h.probes.set('%0', [null, null, identity(500)])
+    h.states.set('%0', ['unknown', 'unknown'])
+    await restoreAgents(h.deps)
+    await settled(h, 1, 1)
+    expect(h.calls).toContain('updateIdentity:agent-a:500')
+    expect(h.calls.some((call) => call.startsWith('setLaunch:agent-a:failed'))).toBe(false)
+  })
+
+  it('a pane tmux could not read while the resumed engine settles is no reason to start it over', async () => {
+    // The relaunch this used to set off unbound the conversation and respawned the pane over an engine
+    // that was working.
+    const h = harness([row()], { settleMs: 50 })
+    h.probes.set('%0', [identity(500)])
+    h.states.set('%0', ['unknown', 'unknown', 'unknown'])
+    await restoreAgents(h.deps)
+    await settled(h, 1, 1)
+    expect(h.respawns).toBe(0)
+    expect(h.calls.some((call) => call.startsWith('unbind:'))).toBe(false)
+    expect(h.calls).toContain('triggerHint:%0')
   })
 
   it('times out with the launch marked, never leaving the route held', async () => {
@@ -423,7 +500,7 @@ describe('restoreAgents — terminals', () => {
   it('leaves a terminal whose pane is still there alone — a shell has no engine process to look for', async () => {
     const h = harness([terminal()], { alivePanes: ['%3'] })
     const summary = await restoreAgents(h.deps)
-    expect(summary).toEqual({ restored: [], skipped: [], failed: [] })
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [], unsurveyed: [] })
     expect(h.paneCreates).toBe(0)
     expect(h.calls).toEqual([])
   })
@@ -431,7 +508,7 @@ describe('restoreAgents — terminals', () => {
   it('recreates a terminal whose pane is gone as a ready shell: no hold, no engine watch', async () => {
     const h = harness([terminal()])
     const summary = await restoreAgents(h.deps)
-    expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [] })
+    expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [], unsurveyed: [] })
     expect(h.launches).toEqual([{ agentId: 'term-1' }])
     expect(h.calls).toEqual([
       'clearIdentity:term-1@tx',
@@ -446,7 +523,7 @@ describe('restoreAgents — terminals', () => {
   it('puts a terminal whose adopted engine exited while the daemon was down back to a shell, pane kept', async () => {
     const h = harness([terminal({ engine: 'claude', sessionId: 'session-t', boundAt: 1, processIdentity: identity(7) })], { alivePanes: ['%3'] })
     const summary = await restoreAgents(h.deps)
-    expect(summary).toEqual({ restored: [], skipped: [], failed: [] })
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [], unsurveyed: [] })
     expect(h.calls).toEqual(['releaseEngine:term-1'])
     expect(h.rows.get('term-1')).toMatchObject({ engine: 'terminal', sessionId: '' })
   })
@@ -454,7 +531,7 @@ describe('restoreAgents — terminals', () => {
   it('keeps a terminal whose adopted engine is still running exactly as an agent', async () => {
     const h = harness([terminal({ engine: 'claude', sessionId: 'session-t', boundAt: 1 })], { alivePanes: ['%3'], livePanes: ['%3'] })
     const summary = await restoreAgents(h.deps)
-    expect(summary).toEqual({ restored: [], skipped: [], failed: [] })
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [], unsurveyed: [] })
     expect(h.calls).toEqual(['updateIdentity:term-1:1003'])
     expect(h.rows.get('term-1')?.engine).toBe('claude')
   })
@@ -463,7 +540,7 @@ describe('restoreAgents — terminals', () => {
     const h = harness([row({ agentId: 'agent-a', terminalHost: true })], { alivePanes: ['%3'] })
     // `terminalHost` is what releaseEngine's stub keys on; the real registry sets it for any row.
     const summary = await restoreAgents(h.deps)
-    expect(summary).toEqual({ restored: [], skipped: [], failed: [] })
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [], unsurveyed: [] })
     expect(h.paneCreates).toBe(0)
     expect(h.calls).toEqual(['releaseEngine:agent-a'])
     expect(h.rows.get('agent-a')).toMatchObject({ engine: 'terminal', sessionId: '' })
@@ -482,7 +559,7 @@ describe('restoreAgents — terminals', () => {
   it('brings a terminal whose adopted engine AND pane are gone back as a shell, never as the engine', async () => {
     const h = harness([terminal({ engine: 'claude', sessionId: 'session-t', boundAt: 1 })])
     const summary = await restoreAgents(h.deps)
-    expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [] })
+    expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [], unsurveyed: [] })
     expect(h.calls[0]).toBe('releaseEngine:term-1')
     expect(h.launches).toEqual([{ agentId: 'term-1' }])
     expect(h.launched[0].launch.argv[0]).toBe('terminal')
