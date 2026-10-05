@@ -511,6 +511,15 @@ export function startSelfUpdater(opts: {
   withLock?: <T>(fn: () => Promise<T>) => Promise<T>
   /** How long a download may go without a byte, and take in all; the manifest gets at most its own. */
   limits?: TransferLimits
+  /**
+   * Whether a newer build may be staged while the bundle on disk is itself an update still being judged.
+   * A master from before #807 (v0.3.58) rolls back on ANY exit of a core on probation, the exit for the
+   * newer build included: it put back the backup, which #807's `stage` keeps as the last build kept (two
+   * builds back), and rejected the newer one for good. A core such a master runs waits for its own build
+   * to be kept, then stages. True when left out, and for every master that says it judges such an exit
+   * itself (HARNESSD_JUDGES_SUPERSEDED).
+   */
+  stageWhileJudged?: boolean
 }): Poller {
   let checking = false
   let done = false
@@ -525,6 +534,7 @@ export function startSelfUpdater(opts: {
   let refused: { entry: string; tries: number; until: number } | null = null
   // Said once per version: the check repeats every interval.
   let toldRejected: string | null = null
+  let toldWaiting: string | null = null
 
   const now = opts.now ?? Date.now
   const download = opts.limits ?? DOWNLOAD_LIMITS
@@ -596,6 +606,11 @@ export function startSelfUpdater(opts: {
         verified.canaried = true
       }
       const ready = verified
+      if (opts.stageWhileJudged === false && unjudgedUpdate(opts.dir, fileSha256(join(opts.dir, CLI)))) {
+        if (toldWaiting !== ready.version) console.log(`[update] ${ready.version} is ready — waiting for this build to be kept before staging it`)
+        toldWaiting = ready.version
+        return
+      }
       // Downloaded and verified OUTSIDE the lock (that can take a while on a slow link and touches
       // nothing shared); swapped and handed off INSIDE it.
       await withLock(async () => {

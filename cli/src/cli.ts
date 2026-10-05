@@ -1688,6 +1688,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }),
       onStaged: (v) => daemonBoot.applyStagedUpdate(v),
       limits: { idleMs: env.ADAPTER_UPDATE_IDLE_MS, deadlineMs: env.ADAPTER_UPDATE_DEADLINE_MS, floorBytesPerSecond: DOWNLOAD_LIMITS.floorBytesPerSecond },
+      stageWhileJudged: !coreLink.supervised || process.env.HARNESSD_JUDGES_SUPERSEDED === '1',
     })
     const slotted = env.ADAPTER_UPDATE_SLOT_SEC >= 0 && 60_000 % env.ADAPTER_UPDATE_CHECK_MS === 0
     console.log(`[update] self-update on · v${VERSION} · every ${Math.round(env.ADAPTER_UPDATE_CHECK_MS / 1000)}s`

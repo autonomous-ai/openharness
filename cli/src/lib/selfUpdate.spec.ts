@@ -176,6 +176,34 @@ describe('startSelfUpdater', () => {
     expect(existsSync(join(dir, 'cli.js'))).toBe(false)
   })
 
+  it('under a master that would roll both back, waits for the build on probation to be kept before staging a newer one', async () => {
+    // v0.3.58's master rolls back on any exit of a core on probation, the one for a newer build included.
+    serveUpdate()
+    const dir = tempDir()
+    const running = Buffer.from('console.log("1.5.0")\n')
+    writeFileSync(join(dir, 'cli.js'), running)
+    writeFileSync(join(dir, 'update-pending.json'), JSON.stringify({ version: '1.5.0', sha256: sha(running), at: 1 }))
+    const staged: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const poller = startSelfUpdater({
+      currentVersion: '1.5.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 20,
+      stageWhileJudged: false, onStaged: (version) => { staged.push(version) },
+    })
+    try {
+      await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[update] 9.9.9 is ready — waiting for this build to be kept before staging it'), { timeout: 5_000 })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(staged).toEqual([])
+      expect(readFileSync(join(dir, 'cli.js'))).toEqual(running)
+      expect(log.mock.calls.filter(([line]) => String(line).includes('waiting for this build to be kept'))).toHaveLength(1)
+      // Its master keeps it (the pending note goes): the newer build is staged at the next check.
+      rmSync(join(dir, 'update-pending.json'))
+      await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
+    } finally {
+      poller.stop()
+      log.mockRestore()
+    }
+  })
+
   it('is already stopped when onStaged runs — a handler that defers loses the updater for good', async () => {
     // `done = true` and `stop()` happen BEFORE `onStaged`, so a handler that returns without handing
     // the machine over leaves no timer and no way back. This is why the daemon's boot-time handler
