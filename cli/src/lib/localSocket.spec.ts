@@ -3,7 +3,10 @@ import { connect } from 'node:net'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { isLocalSocketName, isTrustedLocal, listenLocalSocket, localSocketName, localSocketPath, refuseServedDataFolder, type LocalSocketServer } from './localSocket.js'
+import {
+  askDataFolderServer, isLocalSocketName, isTrustedLocal, listenLocalSocket, localSocketName, localSocketPath, ORPHAN_WAIT_MS,
+  refuseServedDataFolder, type DataFolderServer, type LocalSocketServer, type ServedFolderDeps,
+} from './localSocket.js'
 
 const LOCAL_SOCKET_NAME = localSocketName(18473)
 
@@ -190,6 +193,10 @@ describe('listenLocalSocket', () => {
 })
 
 describe('refuseServedDataFolder', () => {
+  /** A daemon's answer to `GET /api/status`, as `harness start` gives it. */
+  const status = (pid: number, corePid?: number) => (_req: unknown, res: { end(body: string): void }) =>
+    res.end(JSON.stringify({ pid, ...(corePid === undefined ? {} : { corePid }) }))
+
   it('refuses only a data folder a daemon is serving right now, as the bind would', async () => {
     const dir = shortDir()
     const path = join(dir, LOCAL_SOCKET_NAME)
@@ -203,9 +210,76 @@ describe('refuseServedDataFolder', () => {
     writeFileSync(plain, 'not a socket')
     await expect(refuseServedDataFolder(plain)).resolves.toBeUndefined()
 
-    const running = await listenLocalSocket((_req, res) => res.end(), path)
-    opened.push(running)
-    const refused = await refuseServedDataFolder(path).catch((error: unknown) => error as NodeJS.ErrnoException)
-    expect(refused).toMatchObject({ code: 'EADDRINUSE', message: `A Harness daemon is already serving ${path}` })
+    // A daemon with no master, and one whose master is this live process: refused at once.
+    for (const answer of [status(process.pid), status(process.pid, process.ppid)]) {
+      const running = await listenLocalSocket(answer as never, path)
+      const startedAt = Date.now()
+      const refused = await refuseServedDataFolder(path).catch((error: unknown) => error as NodeJS.ErrnoException)
+      expect(refused).toMatchObject({ code: 'EADDRINUSE', message: `A Harness daemon is already serving ${path}` })
+      expect(Date.now() - startedAt).toBeLessThan(2_000)
+      await running.close()
+    }
+  })
+
+  it('waits for the core of a master that is gone to leave, and starts once it has', async () => {
+    // Under launchd or systemd a master that died is started again at once, while its old core still
+    // serves until it notices. Refused, the new core exited for good and the daemon stayed down.
+    const path = join(shortDir(), LOCAL_SOCKET_NAME)
+    const orphan = await listenLocalSocket(status(2_000_000_000, process.pid) as never, path)
+    const lines: string[] = []
+    setTimeout(() => void orphan.close(), 600)
+    await expect(refuseServedDataFolder(path, 1_000, {
+      who: askDataFolderServer, alive: () => false, sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
+      now: () => performance.now(), log: (line) => lines.push(line),
+    })).resolves.toBeUndefined()
+    expect(lines).toEqual([
+      `[cli] this data folder is still served by the core (pid ${process.pid}) of a master that is gone (pid 2000000000) — waiting for it to leave`,
+      '[cli] the core whose master is gone has left — starting',
+    ])
+  })
+
+  it('reads who serves: a daemon and its master, one from before harnessd as its own, and anything else as unknown', async () => {
+    const path = join(shortDir(), LOCAL_SOCKET_NAME)
+    expect(await askDataFolderServer(path, 500)).toBe('none')
+    const answers: Array<[unknown, DataFolderServer]> = [
+      [status(10, 20), { pid: 10, corePid: 20 }],
+      [status(10), { pid: 10, corePid: 10 }],
+      [status(0, 20), 'unknown'],
+      [(_req: unknown, res: { end(body: string): void }) => res.end('not json'), 'unknown'],
+    ]
+    for (const [handler, expected] of answers) {
+      const server = await listenLocalSocket(handler as never, path)
+      expect(await askDataFolderServer(path, 500)).toEqual(expected)
+      await server.close()
+    }
+    // One that takes the connection and never answers.
+    const silent = await listenLocalSocket(() => {}, path)
+    expect(await askDataFolderServer(path, 200)).toBe('unknown')
+    await silent.close()
+  })
+
+  it('decides from who serves: waits on an orphan or a silence until it goes or the wait is over, refuses a live daemon at once', async () => {
+    const run = async (answers: DataFolderServer[], alive: (pid: number) => boolean = () => false) => {
+      let clock = 0
+      const lines: string[] = []
+      const deps: ServedFolderDeps = {
+        who: async () => answers.length > 1 ? answers.shift()! : answers[0], alive,
+        sleep: async (ms) => { clock += ms }, now: () => clock, log: (line) => lines.push(line),
+      }
+      const outcome = await refuseServedDataFolder('/data/daemon-1.sock', 1_000, deps).then(() => 'started', (error: NodeJS.ErrnoException) => error.code)
+      return { outcome, waited: clock, lines }
+    }
+    expect(await run(['none'])).toEqual({ outcome: 'started', waited: 0, lines: [] })
+    expect(await run([{ pid: 7, corePid: 8 }, { pid: 7, corePid: 8 }, 'none'])).toMatchObject({ outcome: 'started', waited: 500 })
+    const silent = await run(['unknown', 'none'])
+    expect(silent).toMatchObject({ outcome: 'started', waited: 250 })
+    expect(silent.lines[0]).toContain('without saying who it is')
+    // Its master alive, or no master at all: another daemon.
+    expect(await run([{ pid: 7, corePid: 8 }], () => true)).toMatchObject({ outcome: 'EADDRINUSE', waited: 0 })
+    expect(await run([{ pid: 8, corePid: 8 }])).toMatchObject({ outcome: 'EADDRINUSE', waited: 0 })
+    // One that never leaves is refused once the wait is over.
+    const lingering = await run([{ pid: 7, corePid: 8 }])
+    expect(lingering).toMatchObject({ outcome: 'EADDRINUSE', waited: ORPHAN_WAIT_MS })
+    expect(lingering.lines).toHaveLength(1)
   })
 })

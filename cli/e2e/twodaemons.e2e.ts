@@ -20,6 +20,7 @@
  *   user's daemon does, and the release daemon keeps its port, its socket and its agents.
  */
 import { spawn } from 'node:child_process'
+import { createServer } from 'node:http'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -199,6 +200,39 @@ describe('two daemons on one computer', () => {
     expect(await running(client)).toEqual([[agent.id, agent.tmuxPane, agent.sessionId]])
     expect(winner!.coresStarted()).toBe(1)
     client.close()
+  })
+
+  it('a master started again while the core of the one that died still serves waits for that core to leave; another live daemon is still refused', async () => {
+    // What launchd or systemd does when a master dies: the same master again, at once, while its old core
+    // has yet to notice and stop. Stood in for by a socket that answers as such a core does: its master's
+    // pid, long gone, and its own. Refused, the new core exited for good, its master with it, cleanly,
+    // and neither platform starts a clean exit again: the daemon stayed down until the next login.
+    const gone = 2_000_000_000
+    const restarted = await make('restarted', { env: { HARNESSD_INITIAL_BACKOFF_MS: '200' } })
+    const orphan = createServer((_req, res) => res.end(JSON.stringify({ pid: gone, corePid: process.pid })))
+    await new Promise<void>((resolve) => orphan.listen(restarted.socketPath, resolve))
+    setTimeout(() => orphan.close(), 3_000)
+    await restarted.start({ ready: 'none' })
+    await until('the new core to finish starting', () => /\[cli\] ready/.test(restarted.log()) || null, 90_000, 200)
+    expect(restarted.log()).toContain(`of a master that is gone (pid ${gone}) — waiting for it to leave`)
+    expect(restarted.log()).not.toMatch(/core stopped for good/)
+    const client = await LocalClient.connect(restarted)
+    const agent = await create(restarted, client, 'claude', 'after-the-orphan')
+    await turn(client, agent.id, 'served once the old core left')
+    client.close()
+
+    // A daemon that answers for itself, with no master that is gone, is another daemon: refused at once.
+    const refused = await make('refused', { env: { HARNESSD_INITIAL_BACKOFF_MS: '200' } })
+    const live = createServer((_req, res) => res.end(JSON.stringify({ pid: process.pid, corePid: process.pid })))
+    await new Promise<void>((resolve) => live.listen(refused.socketPath, resolve))
+    try {
+      await refused.start({ ready: 'none' })
+      await until('the refused master to leave', () => refused.child === null || null, 60_000, 250)
+      expect(refused.log()).toMatch(/\[harnessd\] core stopped for good/)
+      expect(refused.log()).not.toMatch(/waiting for it to leave/)
+    } finally {
+      await new Promise((resolve) => live.close(resolve))
+    }
   })
 
   it('a dev daemon started on the release daemon\'s port takes another, and the release daemon keeps its own', async () => {
