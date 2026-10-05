@@ -51,9 +51,19 @@ export interface PlatformDaemonDeps {
   sleep(ms: number): Promise<void>
 }
 
+/**
+ * The platform that would supervise harnessd here: this operating system's, or the one
+ * HARNESSD_TEST_PLATFORM names, for the end-to-end suite only, which runs both definitions on any
+ * computer against fake launchctl and systemctl (e2e/cli.e2e.ts). Unset, it changes nothing.
+ */
+export function supervisingPlatform(os: NodeJS.Platform, env: NodeJS.ProcessEnv): PlatformName | null {
+  const forced = env.HARNESSD_TEST_PLATFORM
+  return forced === 'launchd' || forced === 'systemd' ? forced : platformFor(os)
+}
+
 /** This computer's: its platform, its pid file, the status file its master writes. */
 export function platformDaemonDeps(overrides: Partial<PlatformDaemonDeps> = {}): PlatformDaemonDeps {
-  const platform = platformFor(process.platform)
+  const platform = supervisingPlatform(process.platform, process.env)
   return {
     service: platform ? new PlatformService(platform, defaultPlatformDeps()) : null,
     logFile: DAEMON_LOG_FILE,

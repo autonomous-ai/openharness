@@ -8,7 +8,7 @@ import { fakePlatform, type FakePlatform } from '../testing/fakePlatform.js'
 import { HARNESSD_STATUS_FILE } from './daemonState.js'
 import {
   CARRIED_ENV, describeState, installedPlatform, platformDaemonDeps, serviceDefinition, startUnderPlatform, stopUnderPlatform,
-  waitForMaster, waitGone, type PlatformDaemonDeps,
+  supervisingPlatform, waitForMaster, waitGone, type PlatformDaemonDeps,
 } from './platformDaemon.js'
 
 /** A fake clock and a pid file the fake platform writes, over fake launchctl or systemctl. */
@@ -33,6 +33,17 @@ function world(platform: PlatformName) {
   const definition = serviceDefinition({ logFile: deps.logFile, source: {}, nodePath: '/opt/node/bin/node', scriptPath: join(dir, 'cli.js'), home })
   return { dir, home, pidFile, fake, clock, dead, service, deps, definition }
 }
+
+describe('the platform that supervises harnessd', () => {
+  it('is this operating system\'s, unless the end-to-end suite names another', () => {
+    expect(supervisingPlatform('darwin', {})).toBe('launchd')
+    expect(supervisingPlatform('linux', {})).toBe('systemd')
+    expect(supervisingPlatform('win32', {})).toBeNull()
+    expect(supervisingPlatform('darwin', { HARNESSD_TEST_PLATFORM: 'systemd' })).toBe('systemd')
+    expect(supervisingPlatform('win32', { HARNESSD_TEST_PLATFORM: 'launchd' })).toBe('launchd')
+    expect(supervisingPlatform('linux', { HARNESSD_TEST_PLATFORM: 'upstart' })).toBe('systemd')
+  })
+})
 
 describe('the definition for this install', () => {
   it('carries only the settings that decide which daemon this is, and only when set', () => {
