@@ -298,16 +298,10 @@ export function inspectRuntimePane(engine: RegisteredSession['engine'], capture:
   if (engine === 'grok') return inspectGrokPane(capture)
   const rawLines = capture.split('\n')
   const marks = promptMarker(engine)
-  const promptIndex = rawLines.findLastIndex((line) => {
-    const visible = stripAnsi(line)
-    const marker = visible.search(marks)
-    return marker >= 0 && !/^\s*\d+\.\s/.test(visible.slice(marker + 1))
-  })
+  const promptIndex = latestPromptLine(rawLines, marks)
   const prompt = promptIndex >= 0 ? rawLines[promptIndex] : ''
-  // Old picker/plan text can remain in tmux history. Only UI below the latest prompt belongs to the
-  // current interaction; if no prompt is visible, inspect the whole capture as a conservative fallback.
-  const currentUi = stripAnsi((promptIndex >= 0 ? rawLines.slice(promptIndex) : rawLines).join('\n')).replace(/\u00a0/g, ' ')
-  const dialog = DIALOG_UI.test(currentUi) || (engine === 'codex' && CODEX_TRANSCRIPT_BROWSING.test(currentUi))
+  const currentUi = currentPaneUi(rawLines, promptIndex)
+  const dialog = DIALOG_UI.test(currentUi) || rewindPickerIn(engine, capture, currentUi)
   const plan = engine === 'codex' ? /\bplan mode\b/i.test(currentUi) : /\bplan mode on\b/i.test(currentUi)
   const marker = stripAnsi(prompt).search(marks)
   let visible = marker >= 0 ? stripAnsi(prompt).slice(marker + 1).replace(/\u00a0/g, ' ').trim() : ''
@@ -317,6 +311,44 @@ export function inspectRuntimePane(engine: RegisteredSession['engine'], capture:
   if (placeholder) visible = ''
   const draft = visible.length > 0
   return { idle: !!prompt && !dialog && !draft, plan, dialog, draft }
+}
+
+/** The latest composer prompt line; picker rows use the same glyphs, but numbered rows are not prompts. */
+function latestPromptLine(rawLines: string[], marks: RegExp): number {
+  return rawLines.findLastIndex((line) => {
+    const visible = stripAnsi(line)
+    const marker = visible.search(marks)
+    return marker >= 0 && !/^\s*\d+\.\s/.test(visible.slice(marker + 1))
+  })
+}
+
+/**
+ * Old picker/plan text can remain in tmux history. Only UI below the latest prompt belongs to the
+ * current interaction; if no prompt is visible, inspect the whole capture as a conservative fallback.
+ */
+function currentPaneUi(rawLines: string[], promptIndex: number): string {
+  return stripAnsi((promptIndex >= 0 ? rawLines.slice(promptIndex) : rawLines).join('\n')).replace(/\u00a0/g, ' ')
+}
+
+/** The engines that have one, so a caller can leave every other pane unread. */
+export const REWIND_PICKER_ENGINES: ReadonlySet<string> = new Set(['claude', 'codex'])
+
+/**
+ * Whether the pane shows a picker for a point in the conversation to go back to, over its composer:
+ * Codex browsing its transcript, or Claude Code's Rewind menu. Nothing typed there is a message, and
+ * Enter there picks a point to go back to, so nothing is typed into one: not a team delivery (read
+ * as a dialog, through [inspectRuntimePane]) and not a person's own message either.
+ */
+export function rewindPickerOpen(engine: RegisteredSession['engine'], capture: string | null): boolean {
+  if (!capture || !REWIND_PICKER_ENGINES.has(engine)) return false
+  const rawLines = capture.split('\n')
+  return rewindPickerIn(engine, capture, currentPaneUi(rawLines, latestPromptLine(rawLines, promptMarker(engine))))
+}
+
+function rewindPickerIn(engine: RegisteredSession['engine'], capture: string, currentUi: string): boolean {
+  if (engine === 'codex') return CODEX_TRANSCRIPT_BROWSING.test(currentUi)
+  if (engine === 'claude') return claudeRewindMenuOpen(capture)
+  return false
 }
 
 /**
@@ -331,11 +363,35 @@ const DIALOG_UI = /Select Model(?: and Effort)?|Select Reasoning Level|Advanced 
 /**
  * Codex browsing its own transcript: Esc twice on an empty composer, and its footer row reads
  * `Browsing transcript · ↑↓/jk scroll · ←→/hl prompts · … · ↵ rewind · esc back`, down to a bare
- * `Browsing` as the pane narrows (0.160, tui/src/app_backtrack/prompt_navigation.rs). The composer is
- * dimmed meanwhile, its placeholder and any draft in it alike, so it read as empty and idle: a delivery
- * typed into it lands as keys that scroll, and its Enter rewinds the conversation. A modal, then.
+ * `Browsing` as the pane narrows (0.160, tui/src/app_backtrack/prompt_navigation.rs). In its default
+ * fullscreen mode the composer stays, dimmed whole, placeholder and any draft in it alike, so it read
+ * as empty and idle; in its scrollback mode (`tui.fullscreen_transcript = false`, no alternate screen,
+ * or over SSH) the footer closes a transcript pager drawn over the whole pane. Either way Enter
+ * reverts the conversation to the prompt in view. A paste leaves the fullscreen browser and lands in
+ * the composer, but the scrollback one drops it, and its Enter then rewinds (app.rs and
+ * pager_overlay/transcript.rs).
  */
 const CODEX_TRANSCRIPT_BROWSING = /^\s*Browsing(?: transcript)?(?:\s+·|\s*$)/m
+
+/**
+ * Claude Code's Rewind menu (Esc twice on an empty prompt, or `/rewind`), which hides the prompt while
+ * it is open. Under its title, `Rewind`, it lists the messages sent so far, `(current)` focused, behind
+ * one of these lines, or asks to confirm one picked (2.1.289, MessageSelector). Enter on a message asks
+ * to confirm it, and Enter again restores the conversation, the code or both to before it (with file
+ * checkpoints off, the first Enter restores the conversation); Enter on `(current)` closes the menu.
+ * A message pasted into it is dropped either way. Its focused row is drawn `❯ (current)` in italics,
+ * which read as an empty, idle prompt.
+ */
+const CLAUDE_REWIND_BODY = /^(?:Restore the code and\/or conversation to the point before|Restore and fork the conversation to the point before|Confirm you want to restore|Nothing to rewind to yet)/
+
+function claudeRewindMenuOpen(capture: string): boolean {
+  const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n').map((line) => line.trim())
+  // The title, with its body a blank line under it, and no rule after it: the prompt the menu hides
+  // comes back between two rules once it closes.
+  return lines.some((line, index) => line === 'Rewind'
+    && lines.slice(index + 1, index + 4).some((next) => CLAUDE_REWIND_BODY.test(next))
+    && !lines.slice(index + 1).some((next) => /[─━]{8,}/u.test(next)))
+}
 
 /** The rule a gutter-box composer is closed with: `╹▀▀▀▀…`. */
 const GUTTER_BOX_RULE = /[─▀▁▔]{8,}/u
