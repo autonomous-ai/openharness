@@ -47,11 +47,11 @@ on:
         default: false
         type: boolean
       checks:
-        description: 'Image journey, browser focus, lock/suspend, Wi-Fi/audio, or offline hardware installation; image_run_id reuses an image'
+        description: 'Image journey, browser focus, lock/suspend, compositor recovery, Wi-Fi/audio, or hardware; image_run_id reuses an image'
         required: false
         default: image
         type: choice
-        options: [image, browser, session, essentials, hardware]
+        options: [image, browser, session, recovery, essentials, hardware]
   push:
     branches: ['os/**']
     paths: ['os/**', 'tui/**', 'cli/**', '.github/workflows/os.yml']
@@ -61,7 +61,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'browser' && 'browser' || inputs.checks == 'session' && 'session' || inputs.checks == 'essentials' && 'essentials' || inputs.checks == 'hardware' && 'hardware' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
+  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'browser' && 'browser' || inputs.checks == 'session' && 'session' || inputs.checks == 'recovery' && 'recovery' || inputs.checks == 'essentials' && 'essentials' || inputs.checks == 'hardware' && 'hardware' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
   cancel-in-progress: false
 
 jobs:
@@ -186,7 +186,7 @@ jobs:
         if: ${{ inputs.checks == 'browser' }}
         run: sudo apt-get install -y wlrctl
       - name: Check the focused session test and workflow
-        if: ${{ inputs.checks == 'session' || inputs.checks == 'browser' }}
+        if: ${{ inputs.checks == 'session' || inputs.checks == 'recovery' || inputs.checks == 'browser' }}
         run: |
           make -C os check
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
@@ -199,7 +199,7 @@ jobs:
           run-id: ${{ inputs.workload_seed_run_id }}
           github-token: ${{ github.token }}
       - name: Boot, operate, install and reboot the real image
-        if: ${{ inputs.checks != 'session' && inputs.checks != 'browser' }}
+        if: ${{ inputs.checks != 'session' && inputs.checks != 'recovery' && inputs.checks != 'browser' }}
         env:
           OS_WORKLOAD_SOURCE_RUN: ${{ inputs.workload_seed_run_id }}
           OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
@@ -216,6 +216,9 @@ jobs:
       - name: Exercise password lock and actual suspend/resume
         if: ${{ inputs.checks == 'session' }}
         run: python3 os/tests/session_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --session-file os/root/usr/lib/harness-os/session --theme-directory os/root/usr/share/plymouth/themes/harness
+      - name: Exercise installed compositor crash and recovery
+        if: ${{ inputs.checks == 'recovery' }}
+        run: python3 os/tests/session_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --check recovery
       - name: Exercise installed browser focus and physical keyboard routing
         if: ${{ inputs.checks == 'browser' }}
         env:
@@ -267,7 +270,7 @@ jobs:
         run: |
           args=(--iso os/dist/*.iso)
           if [[ -n "$REUSED_IMAGE" ]]; then
-            args+=(--candidate-hardware os/hardware.py)
+            args+=(--candidate-hardware os/hardware.py --candidate-installer os/installer.py)
           fi
           python3 os/tests/hardware_install_vm.py "${args[@]}"
       - name: Retain hardware installation and rebuild evidence

@@ -5,6 +5,7 @@ import { ADMIN_EMAILS } from '../config/env.js'
 import { hashPassword } from '../lib/password.js'
 import { ConflictError, NotFoundError } from '../errors/index.js'
 import type { AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
+import type { SignInAttribution } from '../lib/signInAttribution.js'
 
 export type PublicUser = Omit<User, 'passwordHash'>
 
@@ -169,6 +170,16 @@ export const userService = {
       if (raced) return raced
       throw err
     }
+  },
+
+  /** Stamp a tagged sign-in: always the latest, and the first only while the user has none. */
+  async recordSignInAttribution(userId: string, attribution: SignInAttribution): Promise<void> {
+    const recorded = { ...attribution, recordedAt: new Date() }
+    await prisma.user.update({ where: { id: userId }, data: { lastAttribution: recorded } })
+    await prisma.user.updateMany({
+      where: { id: userId, firstAttribution: { isSet: false } },
+      data: { firstAttribution: recorded },
+    })
   },
 
   get(id: string): Promise<User | null> {

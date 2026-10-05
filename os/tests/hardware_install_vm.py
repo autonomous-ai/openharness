@@ -41,6 +41,8 @@ def main():
     parser.add_argument('--output', type=Path, default=Path('os/test-results/hardware-install'))
     parser.add_argument('--candidate-hardware', type=Path,
                         help='Test a committed hardware.py over the verified image; retain its hash and source separately')
+    parser.add_argument('--candidate-installer', type=Path,
+                        help='Test a committed installer.py over the verified image; retain its hash and source separately')
     args = parser.parse_args()
     if not os.access('/dev/kvm', os.R_OK | os.W_OK):
         parser.error('Native x86 KVM is required')
@@ -58,6 +60,8 @@ def main():
                    limitations=['Synthetic PCI selection; physical Wi-Fi association and Mac sleep/wake remain unverified.'])
     if args.candidate_hardware:
         receipt['candidate_hardware'] = candidate_record(args.candidate_hardware)
+    if args.candidate_installer:
+        receipt['candidate_installer'] = candidate_record(args.candidate_installer)
     vm = VM(folder, iso, 'uefi', 1024, 'usb')
     try:
         vm.start(live=True)
@@ -74,6 +78,11 @@ def main():
             copy_file(vm, args.candidate_hardware.read_bytes(), '/run/hardware-candidate.py')
             command += ['--candidate-hardware', '/run/hardware-candidate.py',
                         '--candidate-sha256', candidate['sha256']]
+        if args.candidate_installer:
+            candidate = receipt['candidate_installer']
+            copy_file(vm, args.candidate_installer.read_bytes(), '/run/installer-candidate.py')
+            command += ['--candidate-installer', '/run/installer-candidate.py',
+                        '--installer-sha256', candidate['sha256']]
         receipt['guest_fixture_sha256'] = digest(script)
         output, _ = vm.command(shlex.join(command), timeout=1200)
         (folder / 'installation.log').write_text(output)
@@ -82,7 +91,9 @@ def main():
         receipt['installation'] = json.loads(match.group(1))
         assert receipt['installation']['status'] == 'passed'
         if args.candidate_hardware:
-            assert receipt['installation']['hardware_sha256'] == candidate['sha256']
+            assert receipt['installation']['hardware_sha256'] == receipt['candidate_hardware']['sha256']
+        if args.candidate_installer:
+            assert receipt['installation']['installer_sha256'] == receipt['candidate_installer']['sha256']
         vm.screenshot('01-live-install-complete')
         vm.command('sync')
         vm.stop()
@@ -94,6 +105,9 @@ def main():
         installed_hardware = vm.read_file('/usr/lib/harness-os/hardware.py')
         receipt['installed_hardware_sha256'] = hashlib.sha256(installed_hardware).hexdigest()
         assert receipt['installed_hardware_sha256'] == receipt['installation']['hardware_sha256'], 'Installed hardware policy differs'
+        installed_installer = vm.read_file('/usr/lib/harness-os/install.py')
+        receipt['installed_installer_sha256'] = hashlib.sha256(installed_installer).hexdigest()
+        assert receipt['installed_installer_sha256'] == receipt['installation']['installer_sha256'], 'Installed installer differs'
         vm.command('test ! -e /usr/share/harness-os/hardware/broadcom && test ! -e /etc/harness-live')
         output, _ = vm.command('pacman -Q broadcom-wl-dkms dkms gcc linux-lts-headers; dkms status; harness hardware')
         (folder / 'installed-hardware.txt').write_text(output)

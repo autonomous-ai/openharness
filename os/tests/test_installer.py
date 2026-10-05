@@ -114,6 +114,45 @@ class LivePayload(unittest.TestCase):
                 explicit.touch()
                 self.assertEqual(installer.live_payload(explicit), explicit)
 
+    def test_only_matching_available_live_packages_are_excluded(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bundle = root / 'bundle'
+            (bundle / 'packages').mkdir(parents=True)
+            package = bundle / 'packages/package.pkg.tar.zst'
+            package.write_bytes(b'archive')
+            manifest = {'packages': {package.name: {}}, 'files': {
+                str(package.relative_to(bundle)): {'bytes': 7, 'sha256': hashlib.sha256(b'archive').hexdigest()}}}
+            manifest_path = bundle / 'manifest.json'
+            manifest_path.write_text(json.dumps(manifest))
+            excluded = 'usr/share/harness-os/hardware/broadcom/packages'
+            with patch.object(installer, 'run', return_value=json.dumps(manifest)) as run:
+                installer.copy_image(root / 'image.sfs', root / 'target', bundle)
+                self.assertIn(excluded, run.call_args.args)
+                for changed in ['missing', 'wrong-size', 'symlink', 'different-manifest']:
+                    with self.subTest(changed=changed):
+                        package.unlink(missing_ok=True)
+                        manifest_path.write_text(json.dumps(manifest))
+                        if changed == 'wrong-size':
+                            package.write_bytes(b'bad')
+                        elif changed == 'symlink':
+                            (root / 'outside').write_bytes(b'archive')
+                            package.symlink_to(root / 'outside')
+                        elif changed == 'different-manifest':
+                            package.write_bytes(b'archive')
+                            manifest_path.write_text(json.dumps(dict(manifest, source='another-image')))
+                        installer.copy_image(root / 'image.sfs', root / 'target', bundle)
+                        self.assertNotIn(excluded, run.call_args.args)
+
+    def test_unreadable_live_manifest_retains_embedded_packages(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'manifest.json').write_text('not-json')
+            with patch.object(installer, 'run') as run:
+                installer.copy_image(root / 'image.sfs', root / 'target', root)
+            self.assertEqual(run.call_count, 1)
+            self.assertNotIn('usr/share/harness-os/hardware/broadcom/packages', run.call_args.args)
+
 
 class EncryptionMemory(unittest.TestCase):
     def budget(self, total_mib, available_mib, swap_mib=0):
