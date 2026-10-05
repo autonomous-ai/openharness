@@ -81,7 +81,8 @@ def main():
         (folder / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
 
     def user(command):
-        return 'runuser -u me -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus sh -c ' + shlex.quote(command)
+        # runuser retains the serial root shell's cwd; new panes need me's home.
+        return 'runuser -u me -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus sh -c ' + shlex.quote('cd /home/me && ' + command)
 
     def record(name, command, timeout=45, check=True):
         output, status = vm.command(command, timeout=timeout, check=False)
@@ -133,12 +134,15 @@ def main():
         checksums = ''.join(info['sha256'] + '  /usr/lib/harness/' + name + '\n'
                             for name, info in manifest['harness_inputs']['files'].items())
         record('01-frozen-runtime', 'printf %s ' + shlex.quote(checksums) + ' | sha256sum -c -')
-        record('01-host-identity', 'hostname > /tmp/context-hostname && uname -a > /tmp/context-kernel && ' +
+        record('01-host-identity', 'uname -n > /tmp/context-hostname && uname -a > /tmp/context-kernel && ' +
                user('hn -V > /tmp/context-client-version'))
         receipt['guest'] = {key: vm.read_file('/tmp/context-' + key).decode().strip()
                             for key in ['hostname', 'kernel', 'client-version']}
         paths = ['/usr/bin/harness', '/usr/lib/harness-os/live_update.py', '/usr/lib/harness-os/open-updates']
         receipt['packaged_files'] = {path:hashlib.sha256(vm.read_file(path)).hexdigest() for path in paths}
+        record('02-live-session-ready', user('timeout 30 sh -c ' + shlex.quote(
+            'until systemctl --user is-active --quiet harness-install.service 2>/dev/null && '
+            'pgrep -u 1000 -x labwc >/dev/null; do sleep .2; done')), timeout=35)
         record('02-private-session', user('systemctl --user stop harness-install.service harness-update.timer harness-update.service') +
             ' && rm /etc/harness-live && ' + user('mkdir -p ~/.local/state/harness-os ~/projects; touch ~/.local/state/harness-os/onboarded; systemctl --user start harness-daemon.service hn-screen.service'), timeout=100)
         record('03-runtime-ready', user('/usr/lib/harness-os/wait-runtime && hn list-panes -s -F ' + shlex.quote(FORMAT)), timeout=45)
