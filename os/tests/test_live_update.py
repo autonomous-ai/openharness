@@ -581,6 +581,7 @@ class FastUpdates(unittest.TestCase):
         self.assertEqual(update.read(self.state / 'request.json'), other)
 
     def test_retry_keeps_the_request_so_recovered_downloads_apply_without_another_key(self):
+        self.state.mkdir()  # main() creates this before entering run_screen().
         calls = []
         def screen(function, message, refresh, intent):
             calls.append((refresh, intent.pending))
