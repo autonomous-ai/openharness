@@ -1515,17 +1515,15 @@ export class BackendSocket {
       const wrapped = this.e2ee.wrapRpcReply(connId, resultType, requestId, replyPayload)
       if (wrapped) { this.sendTo(connId, wrapped); return }
     }
-    // Enforcement ("no E2EE ⇒ no adapter data"): content-bearing RPC replies must never leave the
-    // adapter plaintext. A real client gets a targeted error; the legacy backend nodeRequest awaiter
-    // (`connId === ''`) gets a broadcast error with the same requestId so it fails closed without data.
-    // 
-    if (encryptRpcResult(resultType)) {
-      const errorFrame = { type: resultType, payload: { requestId, error: 'E2EE_REQUIRED' } }
-      if (connId) this.sendTo(connId, errorFrame)
-      else this.send(errorFrame)
-      return
-    }
-    this.send({ type: resultType, payload: { requestId, ...payload } })
+    // Enforcement ("no E2EE ⇒ no adapter data"): a content-bearing reply that could not be sealed is a
+    // bare E2EE_REQUIRED, never its content in the clear. Either way it goes to the requester alone:
+    // through `send()` a reply went to every web client of this machine and every window on it, though
+    // each app takes a reply by its own request id and ignores the rest (ws_conn.dart in the desktop and
+    // phone apps, hn's daemon.rs, the CLI's relay pool). The backend's own nodeRequest (`connId === ''`)
+    // has no connection to be answered on: it hears the reply on the bus, and fails closed on the error.
+    const reply = { type: resultType, payload: encryptRpcResult(resultType) ? { requestId, error: 'E2EE_REQUIRED' } : { requestId, ...payload } }
+    if (connId) this.sendTo(connId, reply)
+    else this.send(reply)
   }
 
   private async dispatchDown(frame: Frame, connId: string, transport: DownTransport = 'relay'): Promise<void> {

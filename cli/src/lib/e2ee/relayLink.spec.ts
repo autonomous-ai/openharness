@@ -365,6 +365,31 @@ describe('remote-password link + relay session crypto (interop with the real E2e
     expect(manager.untrustPeer(C.b64e(other.pub))).toBe(false)
   })
 
+  it('replies the daemon now seals to the requester open on the relay client as it has always shipped', async () => {
+    // The relay client opens a sealed payload of any type with its session key, and has since it was
+    // written: a reply type the daemon starts sealing reaches every CLI relaying for a desktop or hn.
+    const frames: Frame[] = []
+    const manager = new E2eeManagerCtor({ machineId: MACHINE_ID, sendTo: (_c, f) => frames.push(f), isConnected: () => true })
+    const client = C.newIdentity()
+    manager.trustPeer({ pub: C.b64e(client.pub), machineId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90', kind: 'machine', label: 'relay' })
+    const { peekIdentityPub } = await import('./store.js')
+    const crypto = new RelaySessionCrypto({ machineId: MACHINE_ID, selfIdentity: client, peerPub: C.b64d(peekIdentityPub()!) })
+    expect(manager.handleFrame('session-conn', crypto.helloFrame())).toBe(true)
+    expect(crypto.handleWelcome(frames.at(-1)!.payload as Record<string, unknown>)).toBe(true)
+    const replies: Array<[string, string, Record<string, unknown>]> = [
+      ['terminal_info_result', '/private/work/app', { requestId: 'info-1', command: 'node', path: '/private/work/app', pid: 4242, tty: '/dev/ttys001' }],
+      ['voice_route_result', 'the login page', { requestId: 'route-1', agentId: 'a1', agentName: 'api', reason: 'asked to fix the login page', confidence: 0.9, needNewAgent: false }],
+    ]
+    for (const type of ['dsh_list', 'dsh_install', 'dsh_update', 'dsh_remove', 'engines_probe', 'grid_models_list', 'claude_login_status', 'agent_retarget', 'remote_terminal_handoff']) {
+      replies.push([`${type}_result`, 'what-the-machine-said', { requestId: `${type}-1`, detail: 'what-the-machine-said' }])
+    }
+    for (const [type, secret, answer] of replies) {
+      const sealed = manager.wrapRpcReply('session-conn', type, answer.requestId, answer)!
+      expect(JSON.stringify(sealed)).not.toContain(secret)
+      expect(crypto.unwrapIncoming(sealed)).toEqual({ type, payload: answer })
+    }
+  })
+
   it('NO_REMOTE_PASSWORD when the target machine never set one', async () => {
     const { manager, wsBase, close } = fakeMachine()
     try {
