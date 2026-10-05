@@ -11,7 +11,7 @@ on:
       probe:
         description: 'Laptop controls, Apple boot modules, install refusal or updater pane ownership'
         type: choice
-        options: [laptop-input, apple-boot, install-preflight, update-pane]
+        options: [laptop-input, apple-boot, install-preflight, update-pane, update-context]
         default: laptop-input
         required: true
   push:
@@ -42,8 +42,8 @@ jobs:
         env:
           PROBE: ${{ inputs.probe }}
         run: |
-          if [[ "$PROBE" == update-pane ]]; then
-            python3 -m py_compile os/tests/update_pane_vm.py os/tests/update_pane_guest.py os/live_update.py os/root/usr/lib/harness-os/open-updates
+          if [[ "$PROBE" == update-pane || "$PROBE" == update-context ]]; then
+            python3 -m py_compile os/tests/update_pane_vm.py os/tests/update_pane_guest.py os/tests/update_context_vm.py os/live_update.py os/root/usr/lib/harness-os/open-updates
           elif [[ "$PROBE" == install-preflight ]]; then
             PYTHONPATH=os/tests python3 -m unittest test_hardware test_installer
             python3 -m py_compile os/tests/platform_preflight_vm.py os/tests/platform_preflight_guest.py
@@ -67,6 +67,9 @@ jobs:
       - name: Check actual updater pane ownership and closing handoff
         if: ${{ inputs.probe == 'update-pane' }}
         run: python3 os/tests/update_pane_vm.py --iso os/dist/*.iso
+      - name: Observe shipped updater pane identity interfaces without installing
+        if: ${{ inputs.probe == 'update-context' }}
+        run: python3 os/tests/update_context_vm.py --iso os/dist/*.iso
       - name: Retain actual input, module and display evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -77,6 +80,7 @@ jobs:
             os/test-results/apple-boot/
             os/test-results/install-preflight/
             os/test-results/update-pane/
+            os/test-results/update-context/
             !os/test-results/input/*.qcow2
             !os/test-results/input/OVMF_VARS.fd
             !os/test-results/apple-boot/*.qcow2
@@ -85,5 +89,7 @@ jobs:
             !os/test-results/install-preflight/OVMF_VARS.fd
             !os/test-results/update-pane/*.qcow2
             !os/test-results/update-pane/OVMF_VARS.fd
+            !os/test-results/update-context/*.qcow2
+            !os/test-results/update-context/OVMF_VARS.fd
           retention-days: 14
           compression-level: 0
