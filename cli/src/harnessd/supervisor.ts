@@ -57,6 +57,12 @@ export interface SupervisorDeps {
   reexec?(state: ResumeState, proceed: (outcome: ReexecOutcome) => void): void
   /** A core is up: ready, or bound for a protocol 1 core. A re-executed master has proved itself. */
   coreUp?(): void
+  /**
+   * The bundle on disk now (its sha256, ./reexec.ts `fingerprint`), or null when it cannot be read: a
+   * core judged on an update that exits for another has staged a newer bundle only if this changed
+   * since it started. Left out, such an exit is the update failing, as it was before.
+   */
+  bundle?(): string | null
 }
 
 /**
@@ -89,6 +95,14 @@ export type ReexecOutcome = 'same' | 'kept' | 'refused'
 export interface SupervisorIdentity {
   version?: string
   resume?: ResumeState | null
+  /**
+   * The bundle this master starts on is an update no master kept or rolled back (the version it names,
+   * `selfUpdate.unjudgedUpdate`): the master judging it died first (a crash, a kill, a power cut). Its
+   * first core is on probation, as it would have been. Before, a fresh master ran it unwatched, and a
+   * build whose core crashed at start crash-looped for good (e2e/updateHostile.e2e.ts). Ignored when
+   * `resume` is given: a re-executed master carries its own.
+   */
+  unjudgedUpdate?: string | null
 }
 
 export interface SupervisorOptions {
@@ -198,6 +212,8 @@ export class Supervisor {
   private readonly masterVersion: string | null
   private reexecs = 0
   private unproven = 0
+  /** The bundle on disk when the running core was started (`deps.bundle`). */
+  private spawnedOn: string | null = null
 
   constructor(
     private readonly deps: SupervisorDeps,
@@ -218,6 +234,8 @@ export class Supervisor {
       this.claimed = resume.claimed
       this.reexecs = resume.reexecs
       this.unproven = resume.unproven
+    } else if (identity.unjudgedUpdate) {
+      this.update = 'pending'
     }
   }
 
@@ -312,6 +330,7 @@ export class Supervisor {
     }
     if (this.lastExit) env.HARNESSD_LAST_EXIT = this.lastExit
     if (this.safeMode) env.HARNESSD_SAFE_MODE = this.safeMode
+    this.spawnedOn = this.deps.bundle?.() ?? null
     const core = this.deps.spawnCore(env)
     this.core = core
     core.onMessage((message) => { if (this.core === core && isCoreMessage(message)) this.onMessage(core, message) })
@@ -412,7 +431,13 @@ export class Supervisor {
     this.lastExit = exit
     this.lastExitReason = reason
     this.restarts++
-    if (this.update) {
+    // A core still being judged on an update that exits for another has staged a newer bundle: the
+    // build it ran came up far enough to find the next and stage it, and the next is judged on its own.
+    // Read as the update failing, the newer build was rolled back and remembered as bad on every machine
+    // that found it while the one before was on probation (e2e/updateHostile.e2e.ts: a fix published
+    // moments after the release it fixes).
+    const superseded = this.update !== null && reason === 'update' && this.stagedSinceSpawn()
+    if (this.update && !superseded) {
       // The core on the new bundle did not come up, or did not stay up: the bundle before it did.
       this.update = null
       this.deps.restoreUpdate()
@@ -434,7 +459,9 @@ export class Supervisor {
       this.update = 'pending'
       this.crashes = []
       this.safeMode = null
-      this.deps.log(`[harnessd] core exited (${exit}) for an update — restarting`)
+      this.deps.log(superseded
+        ? `[harnessd] the updated core staged a newer build before it was kept (${exit}) — restarting onto that one`
+        : `[harnessd] core exited (${exit}) for an update — restarting`)
       this.scheduleSpawn(0)
       return
     }
@@ -458,6 +485,12 @@ export class Supervisor {
     this.upAt = 0
     this.deps.log(`[harnessd] core exited (${exit}, ${reason}) — restarting in ${delay} ms`)
     this.scheduleSpawn(delay)
+  }
+
+  /** Whether the bundle on disk changed since the running core was started (`deps.bundle`). */
+  private stagedSinceSpawn(): boolean {
+    const now = this.deps.bundle?.() ?? null
+    return now !== null && now !== this.spawnedOn
   }
 
   private scheduleSpawn(delay: number): void {

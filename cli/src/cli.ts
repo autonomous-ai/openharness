@@ -217,7 +217,7 @@ import { DeviceLogSyncer, type DeviceLogFetched } from './lib/e2ee/deviceLogSync
 import { DeviceLogStore } from './lib/e2ee/deviceLogStore.js'
 import { TrustGroupStore, type GroupMember } from './lib/e2ee/trustGroup.js'
 import {
-  startSelfUpdater, restore as restoreUpdate, confirm as confirmUpdate,
+  startSelfUpdater, restore as restoreUpdate, confirm as confirmUpdate, unjudgedUpdate,
   fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild,
   type Poller, type UpdateEntry,
 } from './lib/selfUpdate.js'
@@ -5522,6 +5522,7 @@ switch (cmd) {
       confirmUpdate: () => confirmUpdate(env.ADAPTER_CLI_DIR),
       version: VERSION,
       reexecMarkerFile: HARNESSD_REEXEC_FILE,
+      unjudgedUpdate: (bundle) => unjudgedUpdate(env.ADAPTER_CLI_DIR, bundle),
     })
     break
   case '__harnessd-probe': // internal: a master about to re-execute on this bundle asks it first (harnessd/reexec.ts)

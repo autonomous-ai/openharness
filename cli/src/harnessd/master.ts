@@ -46,6 +46,9 @@ export interface MasterConfig {
   reexecMarkerFile?: string
   /** Replace this process (`process.execve`); defaults to this Node's, null where it has none. */
   execve?: Execve | null
+  /** The version of the update the bundle with this fingerprint is, when it is one no master kept or
+   *  rolled back (`selfUpdate.unjudgedUpdate`); null otherwise. Left out, never. */
+  unjudgedUpdate?: (bundle: string | null) => string | null
 }
 
 export type Execve = (file: string, args: string[], env: NodeJS.ProcessEnv) => void
@@ -245,6 +248,10 @@ export function runMaster(config: MasterConfig): Supervisor {
       restoreUpdate: config.restoreUpdate, removeMarker: () => removeMarker(markerFile), log,
     })
   }
+  // Started fresh on an update the master judging it never finished with (it died: a crash, a kill, a
+  // power cut): this master judges it. A re-executed master was handed its own.
+  const unjudged = resume ? null : config.unjudgedUpdate?.(own) ?? null
+  if (unjudged) log(`[harnessd] the bundle on disk is ${unjudged}, an update no master kept or rolled back — its first core is on probation`)
   let stopping = false
   // A new one every boot, given to the core and to each service: how the core knows a service
   // connection is one this master started, and no other local process.
@@ -286,6 +293,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     releasePidFile: () => { if (readPid() === process.pid) rmSync(config.pidFile, { force: true }) },
     restoreUpdate: config.restoreUpdate,
     confirmUpdate: config.confirmUpdate,
+    bundle,
     log,
     // The services go with the master, after the core: none is left holding the core's socket.
     exit: (code) => {
@@ -301,7 +309,7 @@ export function runMaster(config: MasterConfig): Supervisor {
       // The re-executed master has brought a core up: its marker has served.
       coreUp: () => removeMarker(markerFile),
     } : {}),
-  }, options, { version: config.version, resume })
+  }, options, { version: config.version, resume, unjudgedUpdate: unjudged })
   // Services stop beside the core, inside the same grace `harness stop` gives the whole daemon.
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
     onSignal(signal, () => {
