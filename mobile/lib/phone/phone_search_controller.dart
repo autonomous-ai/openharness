@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 
 import 'package:harness_mobile/core/phone_search_history.dart';
 import 'package:harness_mobile/logging/typing_trace.dart';
@@ -309,7 +310,25 @@ class PhoneSearchController extends ChangeNotifier {
           notifier.searchableMachineIds.contains(row.machineId),
   };
 
+  /// The app changed while the box is open: the catalog is read again at the
+  /// start of the next frame, once.
+  ///
+  /// ⚠️ **Once a frame, not once a notify.** A machine coming back notifies a
+  /// dozen times in one go — its status, its link, its agents — and reading the
+  /// catalog after each one was 2–5ms apiece, 35ms of a single frame (measured
+  /// on a phone, 217 rows, 2026-10-05). The list could not show the steps
+  /// between anyway: it repaints once a frame.
   void _rebuild() {
+    if (_rebuildFrame != null || _disposed) return;
+    _rebuildFrame = SchedulerBinding.instance.scheduleFrameCallback((_) {
+      _rebuildFrame = null;
+      if (!_disposed) _readCatalog();
+    });
+  }
+
+  int? _rebuildFrame;
+
+  void _readCatalog() {
     final took = kTypingTrace ? (Stopwatch()..start()) : null;
     final next = _cache.read(notifier);
     // Nothing about the fleet changed shape, so the rows cannot have either —
@@ -547,6 +566,10 @@ class PhoneSearchController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    final rebuild = _rebuildFrame;
+    if (rebuild != null) {
+      SchedulerBinding.instance.cancelFrameCallbackWithId(rebuild);
+    }
     _content
       ..removeListener(_contentChanged)
       ..dispose();

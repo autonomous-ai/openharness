@@ -140,6 +140,8 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
   void initState() {
     super.initState();
     final notifier = widget.notifier;
+    final sliding = widget.opening?.status;
+    _rowsDue = sliding == null || sliding == AnimationStatus.completed;
     // ⚠️ **Opening the search is what re-reaches the fleet.** Until here the app
     // has only the machines that happened to answer at launch, and a machine the
     // account reported down was never even dialled. Asked on the way in, not
@@ -157,6 +159,7 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     // the phone has; the reach only adds to them, a few hundred milliseconds later.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      if (!_rowsDue) setState(() => _rowsDue = true);
       final opening = widget.opening;
       if (opening == null || opening.status == AnimationStatus.completed) {
         unawaited(notifier.reachAllMachines());
@@ -174,6 +177,15 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
 
   /// The sheet still sliding up, waited on before the machines are reached — see [initState].
   Animation<double>? _opening;
+
+  /// False on the sheet's first frame alone, while it is on its way up: the rows are built on the
+  /// next one.
+  ///
+  /// ⚠️ **One frame carried the sheet, its field and a screen of rows at once** — 16–23ms, a
+  /// dropped frame on every opening, most of it the rows being built and their text laid out
+  /// (measured on a phone, 2026-10-05). On that first frame the sheet has barely left the
+  /// screen's edge, so the list arriving a frame later is not something anyone sees.
+  bool _rowsDue = true;
 
   /// Only `completed` ends the wait: a sheet dragged by a finger passes through every other
   /// status on its way up, and one closed again before it was up takes this list — and the
@@ -228,12 +240,14 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
               onSelected: (id) => setState(() => _tabId = id),
             ),
           Expanded(
-            child: _find(
-              search,
-              _narrowed(all, tab),
-              tab: tab,
-              everywhere: _sessions(all),
-            ),
+            child: _rowsDue
+                ? _find(
+                    search,
+                    _narrowed(all, tab),
+                    tab: tab,
+                    everywhere: _sessions(all),
+                  )
+                : const SizedBox.shrink(),
           ),
         ],
       );

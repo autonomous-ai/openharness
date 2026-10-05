@@ -139,6 +139,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     inputTrace(() => 'ime set by embedder "${traceText(value.text)}"');
     _settleRewrite();
     _cancelPendingDeletes();
+    _dropPush();
     _currentEditingState = value;
     _terminalText = value.text;
     _connection?.setEditingState(value);
@@ -158,10 +159,114 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     // What the keyboard was rewriting reaches the terminal before the buffer is emptied under it.
     _settleRewrite();
     _cancelPendingDeletes();
+    // Read before the mirror is emptied: the keyboard keeps it until the push lands.
+    final keyboardText = _keyboardText ?? _currentEditingState.text;
     _currentEditingState = _initEditingState.copyWith();
     _terminalText = _currentEditingState.text;
     widget.onComposing(null, 0);
-    _connection?.setEditingState(_currentEditingState);
+    _pushSoon(keyboardText);
+  }
+
+  /// AUTONOMOUS PATCH: what the keyboard's own buffer holds while this side's
+  /// state waits to be handed to it — see [_pushSoon]. Null when it has it.
+  String? _keyboardText;
+  Timer? _pushTimer;
+
+  /// Long enough to land behind the microtasks the keyboard's callback queued
+  /// — see [_pushSoon].
+  static const _pushDelay = Duration(milliseconds: 4);
+
+  /// AUTONOMOUS PATCH: hands the keyboard [_currentEditingState] a moment from
+  /// now, not from inside the callback that changed it.
+  ///
+  /// ⚠️ **The keystroke has to leave before the keyboard is handed its buffer.**
+  /// Dart's calls into iOS run on the main thread one after another, in the
+  /// order they were made, and `setEditingState` is the expensive one: the
+  /// keyboard reloads itself, 30–80ms on an iPhone 14. Made at once, the push
+  /// went ahead of the keystroke the same callback typed — whose send is still
+  /// a microtask then — so a Backspace that spent the padding waited 44–93ms to
+  /// leave the phone, and Return 105ms (measured on a phone, 2026-10-05). The
+  /// engine runs the callback's microtasks in a task it posts as the callback
+  /// returns; a timer's task is posted when it fires, so [_pushDelay] puts the
+  /// push behind the keystroke.
+  ///
+  /// Until it lands the keyboard still holds [keyboardText], and an edit it
+  /// makes to that is carried over by [_editOnStaleBuffer].
+  void _pushSoon(String keyboardText) {
+    if (!hasInputConnection) {
+      _dropPush();
+      return;
+    }
+    _keyboardText = keyboardText;
+    _pushTimer ??= Timer(_pushDelay, _pushNow);
+  }
+
+  void _pushNow() {
+    _pushTimer?.cancel();
+    _pushTimer = null;
+    if (_keyboardText == null) return;
+    _keyboardText = null;
+    if (!hasInputConnection) return;
+    inputTrace(
+      () => 'ime → keyboard "${traceText(_currentEditingState.text)}"',
+    );
+    _connection!.setEditingState(_currentEditingState);
+  }
+
+  /// Forgets a push that something else has made unnecessary — a push of its
+  /// own, or a connection gone.
+  void _dropPush() {
+    _pushTimer?.cancel();
+    _pushTimer = null;
+    _keyboardText = null;
+  }
+
+  /// AUTONOMOUS PATCH: an edit the keyboard made to the buffer it still had,
+  /// before [_pushSoon] handed it this side's.
+  ///
+  /// ⚠️ **Not diffed against the mirror.** The value is relative to
+  /// [_keyboardText] — after a submit, the line just sent — and diffed against
+  /// the emptied mirror it would type that line again. What the keyboard
+  /// changed is carried over onto the mirror instead, and the result goes on
+  /// as if the keyboard had sent it.
+  void _editOnStaleBuffer(TextEditingValue value) {
+    final stale = _keyboardText!;
+    if (value.text == stale) {
+      // Only a selection or a marked range moved, on a buffer being replaced.
+      inputTrace(
+          () => 'ime   ignored: the keyboard has not been handed its buffer');
+      return;
+    }
+    final edit = _TextEdit.between(stale, value.text);
+    final mirror = _currentEditingState.text.runes.toList();
+    final removed = edit.removed.runes.length;
+    final kept = mirror.length > removed ? mirror.length - removed : 0;
+    final text = String.fromCharCodes(mirror.take(kept)) + edit.inserted;
+    // Marked text sits in what was inserted, at the end: it moves with it.
+    final shift = text.length - value.text.length;
+    final composing = value.composing;
+    final rebased = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+      composing: composing.isValid &&
+              !composing.isCollapsed &&
+              composing.start + shift >= 0
+          ? TextRange(
+              start: composing.start + shift,
+              end: composing.end + shift,
+            )
+          : TextRange.empty,
+    );
+    inputTrace(
+      () => 'ime   rebased onto the mirror: del=$removed'
+          ' ins="${traceText(edit.inserted)}" → "${traceText(text)}"',
+    );
+    _keyboardText = value.text;
+    _applyEditingValue(
+      rebased,
+      hasTextMutation: rebased.text != _currentEditingState.text,
+    );
+    _pushSoon(value.text);
   }
 
   void setEditableRect(Rect rect, Rect caretRect) {
@@ -305,6 +410,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
       // setEditableRect(Rect.zero, Rect.zero);
 
+      _dropPush();
       _connection!.setEditingState(_initEditingState);
     }
   }
@@ -377,6 +483,10 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     );
     if (_consumeActionEcho(value)) {
       inputTrace(() => 'ime   dropped: the newline echo of an action');
+      return;
+    }
+    if (_keyboardText != null) {
+      _editOnStaleBuffer(value);
       return;
     }
     if (_holdRewrite(value)) return;
@@ -512,7 +622,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
         value.text != '${_initEditingState.text}\n') {
       return false;
     }
-    _connection?.setEditingState(_currentEditingState);
+    _pushSoon(value.text);
     return true;
   }
 
@@ -599,8 +709,9 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     // The line goes as the keyboard ended it, before the action acts on it.
     _settleRewrite();
     // Captured before the handler runs: it is what the pty has been sent, and
-    // what iOS is about to append its newline to. See [_pendingActionEcho].
-    _pendingActionEcho = _currentEditingState.text;
+    // what iOS is about to append its newline to — its own buffer, if this
+    // side's has not reached it yet. See [_pendingActionEcho].
+    _pendingActionEcho = _keyboardText ?? _currentEditingState.text;
     widget.onAction(action);
   }
 
@@ -651,6 +762,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
         composing: TextRange.empty,
       );
       _currentEditingState = next;
+      _dropPush();
       _connection?.setEditingState(next);
       _syncTerminalText(next.text);
       return;

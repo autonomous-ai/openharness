@@ -782,6 +782,14 @@ class _TerminalPageState extends State<TerminalPage>
     widget.notifier.addListener(_onNotifier);
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Which of the page's rebuilds an inherited widget asked for — against
+    // `page.update` (its parent) and `page.build` (all of them).
+    if (kTypingTrace) typingCount('page.deps');
+  }
+
   /// Releases the resize hold when this page is parked mid-animation.
   ///
   /// A settle left running would end on a page that is no longer on screen, and
@@ -789,6 +797,7 @@ class _TerminalPageState extends State<TerminalPage>
   @override
   void didUpdateWidget(TerminalPage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (kTypingTrace) typingCount('page.update');
     if (!identical(oldWidget.notifier, widget.notifier)) {
       oldWidget.notifier.removeListener(_onNotifier);
       widget.notifier.addListener(_onNotifier);
@@ -1904,9 +1913,7 @@ class _TerminalPageState extends State<TerminalPage>
               child: const SizedBox.expand(),
             ),
           ),
-          MediaQuery.removePadding(
-            context: context,
-            removeBottom: true,
+          _NoBottomPadding(
             child: SafeArea(
               bottom: false,
               // ⚠️ **The one bottom inset that IS taken back, by hand rather than
@@ -2729,6 +2736,29 @@ class _TerminalPageState extends State<TerminalPage>
     if (error == null || messenger == null || !mounted) return;
     messenger.showSnackBar(SnackBar(content: Text(error)));
   }
+}
+
+/// The page's MediaQuery with the bottom inset taken out — see the note on
+/// `removePadding` in [_TerminalPageState.build].
+///
+/// ⚠️ **Its own widget so the PAGE does not depend on the MediaQuery.**
+/// `MediaQuery.removePadding` reads the whole of it through the context it is
+/// given, and given the page's, every change to any field rebuilt the page and
+/// the terminal under it — once a frame while a keyboard slid (measured on a
+/// phone, 2026-10-05: ~13 rebuilds a slide, all of them `didChangeDependencies`).
+/// Here only this rebuilds, and hands the same [child] on: what lies below is
+/// rebuilt only where it reads a value that actually changed.
+class _NoBottomPadding extends StatelessWidget {
+  const _NoBottomPadding({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => MediaQuery.removePadding(
+    context: context,
+    removeBottom: true,
+    child: child,
+  );
 }
 
 /// What the terminal shows when the agent it opened on is not there any more.
