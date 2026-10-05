@@ -119,7 +119,8 @@ disk. Changing the account password later does not change the disk password.
 There is no cloud account that resets the disk password.
 
 First boot opens OpenCode on the left and two terminal panes on the right.
-If disconnected, Wi-Fi opens first; you can connect or choose **Set up later**.
+If disconnected, Wi-Fi opens first. **Super+t** opens a terminal if you need to
+work offline or fix networking.
 Subsequent launches restore your existing work. **Super+w** opens network setup from any
 pane. Ethernet connects automatically when available.
 

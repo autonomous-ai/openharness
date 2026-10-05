@@ -3,15 +3,12 @@
 import argparse
 import curses
 import os
-from pathlib import Path
 import subprocess
 import time
 import uuid
 import unicodedata
 
 WORDMARK = ('█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀', '█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█')
-INSTALL = 10
-OFFLINE = 11
 
 
 def nmcli(*args, secret=None, wait=8):
@@ -151,8 +148,8 @@ def fit(text, width):
 
 
 class NetworkPage:
-    def __init__(self, screen, first_use=False, live=False):
-        self.screen, self.first_use, self.live = screen, first_use, live
+    def __init__(self, screen, first_use=False):
+        self.screen, self.first_use = screen, first_use
         self.networks, self.wired, self.selected, self.message = [], [], 0, ''
         screen.keypad(True)
         screen.timeout(800)
@@ -192,9 +189,7 @@ class NetworkPage:
         self.top = max(1, (height - 26) // 2)
         for row, text in enumerate(WORDMARK):
             self.line(row, text.center(self.width), accent=True)
-        if self.first_use:
-            self.line(3, 'The operating system built by agents, for agents.'.center(self.width))
-        self.line(6, 'Connect to Wi-Fi to get started' if self.first_use else 'Connect to Wi-Fi')
+        self.line(6, 'Connect to Wi-Fi')
         return height
 
     def refresh(self):
@@ -266,17 +261,15 @@ class NetworkPage:
                 checked = time.monotonic()
             rows = [('wifi', network) for network in self.networks] + [('rescan', None)]
             rows += [('wired', device) for device in self.wired]
-            if self.first_use:
-                rows += [('install' if self.live else 'offline', None)]
             self.selected = min(self.selected, len(rows) - 1)
             height = self.begin()
             try:
                 curses.curs_set(0)
             except curses.error:
                 pass
-            # Scroll networks only. Rescan, Ethernet and the offline escape stay
-            # below the list, even when a scan finds dozens of access points.
-            visible = max(1, min(10, height - self.top - 14 - len(self.wired) - (2 if self.first_use else 0)))
+            # Both entry points share the same layout. Super+t remains available
+            # from the compositor when setup cannot finish without a terminal.
+            visible = max(1, min(10, height - self.top - 14 - len(self.wired)))
             offset = max(0, min(self.selected, len(self.networks) - 1) - visible + 1)
             networks = self.networks[offset:offset + visible]
             for index, value in enumerate(networks, start=offset):
@@ -288,9 +281,6 @@ class NetworkPage:
             for index, device in enumerate(self.wired):
                 self.line(bottom + 2 + index, 'Ethernet  ' + device[0],
                           self.selected == len(self.networks) + 1 + index)
-            if self.first_use:
-                self.button(bottom + 3 + len(self.wired), 'Install without connecting' if self.live else 'Set up later',
-                            self.selected == len(rows) - 1)
             self.line(height - self.top - 2, self.message or ('' if self.networks else 'No Wi-Fi networks found. Rescan or use Ethernet.'))
             self.screen.refresh()
             try:
@@ -305,12 +295,8 @@ class NetworkPage:
                 self.selected = (self.selected + 1) % len(rows)
             elif key in ('r', 'R'):
                 self.refresh()
-            elif key in ('i', 'I') and self.first_use and self.live:
-                return INSTALL
             elif key in ('\n', '\r', curses.KEY_ENTER):
                 kind, value = rows[self.selected]
-                if kind in ('install', 'offline'):
-                    return INSTALL if kind == 'install' else OFFLINE
                 if kind == 'rescan':
                     self.refresh()
                     continue
@@ -343,7 +329,7 @@ def main():
         # workspace. Ordinary Wi-Fi and the password field still handle it as
         # their existing Back action. wrapper restores the terminal on exit.
         curses.raw()
-        return NetworkPage(screen, args.first_use, Path('/etc/harness-live').exists()).run()
+        return NetworkPage(screen, args.first_use).run()
     return curses.wrapper(page)
 
 
