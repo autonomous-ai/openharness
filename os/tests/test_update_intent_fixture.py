@@ -10,6 +10,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -20,6 +21,14 @@ from session_vm import PROBE
 
 
 class ObserverContracts(unittest.TestCase):
+    def x86_trace(self):
+        tree = ast.parse((ROOT / 'os/tests/update_pane_vm.py').read_text())
+        traces = [node.value.value for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                  and any(isinstance(target, ast.Name) and target.id == 'trace' for target in node.targets)
+                  and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)]
+        self.assertEqual(len(traces), 1)
+        return traces[0]
+
     def test_serial_and_direct_formats_keep_exact_unique_pane_window_pairs(self):
         self.assertEqual(pane_windows('%0|@0\n%3|@1\n', '|'),
                          pane_windows('%0\t@0\n%3\t@1\n', '\t'))
@@ -229,16 +238,94 @@ class ObserverContracts(unittest.TestCase):
             self.assertIsNone(claim['after'])
             self.assertFalse((product.STATE / 'request.json').exists())
 
+    def test_x86_owner_acknowledges_before_publication_after_an_inflight_empty_poll(self):
+        token = 'a' * 32
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            state = folder / 'state'
+            state.mkdir()
+            proc = folder / 'proc' / str(os.getpid())
+            proc.mkdir(parents=True)
+            (proc / 'stat').write_text('1 (python) ' + ' '.join(['S'] + ['0'] * 18 + ['123']))
+            def path(value):
+                original = Path(value)
+                return folder / original.name if str(original).startswith('/tmp/update-pane-') else original
+            modules = []
+            for name, environment in [('owner', {'HARNESS_UPDATE_INSTANCE': token}), ('direct', {})]:
+                spec = importlib.util.spec_from_file_location('x86_route_' + name, ROOT / 'os/live_update.py')
+                product = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(product)
+                product.STATE, product.PROC, product.Path = state, proc.parent, path
+                # Separate guest processes have independent environments and
+                # observer globals; retain real file/lock operations here.
+                product.os = SimpleNamespace(environ=environment, getpid=os.getpid, open=os.open,
+                                             close=os.close, fsync=os.fsync, O_RDONLY=os.O_RDONLY)
+                exec(compile(self.x86_trace(), 'private-x86-ownership-hook.py', 'exec'), product.__dict__)
+                modules.append(product)
+            owner, direct = modules
+            gate = path('/tmp/update-pane-route-gate')
+            armed = path('/tmp/update-pane-route-armed.json')
+            rejected = path('/tmp/update-pane-route-rejected.json')
+            claimed = path('/tmp/update-pane-route-claimed.json')
+            real_flock, attempted, acknowledged = fcntl.flock, threading.Event(), threading.Event()
+            def acquire(fd, operation):
+                if operation == fcntl.LOCK_EX:
+                    attempted.set()
+                return real_flock(fd, operation)
+            original_write = owner.write
+            def write(destination, value):
+                result = original_write(destination, value)
+                if destination == armed:
+                    acknowledged.set()
+                return result
+            owner.write = write
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                # Drain an already-entered empty consume before the host can
+                # observe the next poll's gate acknowledgement and send a key.
+                with (state / 'open.lock').open('a') as lock:
+                    real_flock(lock, fcntl.LOCK_EX)
+                    with patch.object(owner.fcntl, 'flock', side_effect=acquire):
+                        empty = pool.submit(owner.consume_request)
+                        try:
+                            self.assertTrue(attempted.wait(2))
+                            self.assertFalse(empty.done())
+                            gate.write_text(token)
+                        finally:
+                            real_flock(lock, fcntl.LOCK_UN)
+                        self.assertIs(empty.result(timeout=2), False)
+                self.assertFalse(armed.exists())
+                waiting = pool.submit(owner.consume_request)
+                self.assertTrue(acknowledged.wait(2))
+                self.assertFalse(waiting.done())
+                self.assertFalse((state / 'request.json').exists())
+                self.assertIs(direct.consume_request(), False)
+                self.assertFalse(rejected.exists())
+                request = dict(requested_at=1, target=token)
+                with (state / 'open.lock').open('a') as lock:
+                    real_flock(lock, fcntl.LOCK_EX)
+                    owner.write(state / 'request.json', request)
+                    real_flock(lock, fcntl.LOCK_UN)
+                self.assertIs(direct.consume_request(), False)
+                self.assertIs(waiting.result(timeout=2), True)
+            records = [json.loads(p.read_text()) for p in [armed, rejected, claimed]]
+            self.assertEqual(records[0]['token'], token)
+            self.assertIs(records[1]['claimed'], False)
+            self.assertIsNone(records[1]['token'])
+            self.assertIs(records[2]['claimed'], True)
+            self.assertEqual(records[2]['token'], token)
+            self.assertEqual(records[1]['locked_reads'], [request])
+            self.assertEqual(records[2]['locked_reads'], [request])
+            self.assertEqual(records[2]['before'], {})
+            self.assertEqual(records[2]['after'], {})
+            self.assertLessEqual(records[0]['at'], records[1]['at'])
+            self.assertLessEqual(records[1]['at'], records[2]['at'])
+            self.assertFalse((state / 'request.json').exists())
+
     def test_generated_guest_sources_compile_without_execution(self):
         source = (ROOT / 'os/live_update.py').read_text()
         compile(observed_source(source), 'private-observed-live-update.py', 'exec')
         compile(PROBE, 'private-terminal-probe.py', 'exec')
-        x86 = ast.parse((ROOT / 'os/tests/update_pane_vm.py').read_text())
-        traces = [node.value.value for node in ast.walk(x86) if isinstance(node, ast.Assign)
-                  and any(isinstance(target, ast.Name) and target.id == 'trace' for target in node.targets)
-                  and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)]
-        self.assertEqual(len(traces), 1)
-        compile(traces[0], 'private-x86-ownership-hook.py', 'exec')
+        compile(self.x86_trace(), 'private-x86-ownership-hook.py', 'exec')
         with self.assertRaisesRegex(ValueError, 'entrypoint'):
             observed_source(source.replace("if __name__ == '__main__':", ''))
 

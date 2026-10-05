@@ -193,24 +193,46 @@ else: raise TimeoutError('Previous updater process did not exit')
         # open.lock and removed its registration. No close result is forged.
         trace = '''
 _observed_consume_request = consume_request
+_observed_read = read
+_observed_consuming = None
+def read(path, *args, **kwargs):
+    value = _observed_read(path, *args, **kwargs)
+    if _observed_consuming is not None and path == STATE / 'request.json':
+        _observed_consuming.append(value)
+    return value
+
 def consume_request():
+    global _observed_consuming
     gate = Path('/tmp/update-pane-route-gate')
-    request = read(STATE / 'request.json', {})
     target = gate.read_text().strip() if gate.exists() else None
-    if target and request.get('target') == target:
-        token = os.environ.get('HARNESS_UPDATE_INSTANCE')
-        if token == target:
-            deadline = time.monotonic() + 10
-            while not Path('/tmp/update-pane-route-rejected.json').exists():
-                if time.monotonic() >= deadline:
-                    raise TimeoutError('Direct inspection did not reject targeted request')
-                time.sleep(.05)
+    token = os.environ.get('HARNESS_UPDATE_INSTANCE')
+    before = read(STATE / 'request.json', {})
+    if target and token == target:
+        armed = Path('/tmp/update-pane-route-armed.json')
+        if not armed.exists():
+            write(armed, dict(pid=os.getpid(), token=token, at=time.monotonic(),
+                start=(PROC / str(os.getpid()) / 'stat').read_text().rsplit(')', 1)[1].split()[19]))
+        deadline = time.monotonic() + 10
+        while not Path('/tmp/update-pane-route-rejected.json').exists():
+            if time.monotonic() >= deadline:
+                write(Path('/tmp/update-pane-route-error.json'), dict(pid=os.getpid(), token=token,
+                    target=target, before=before, reason='Direct inspection did not reject targeted request'))
+                raise TimeoutError('Direct inspection did not reject targeted request')
+            time.sleep(.05)
+    locked_reads = []
+    _observed_consuming = locked_reads
+    try:
         claimed = _observed_consume_request()
+    finally:
+        _observed_consuming = None
+    after = read(STATE / 'request.json', {})
+    if target and (token == target or any(isinstance(value, dict) and value.get('target') == target for value in locked_reads)):
         kind = 'claimed' if token == target else 'rejected'
-        write(Path('/tmp/update-pane-route-' + kind + '.json'), dict(
-            pid=os.getpid(), token=token, request=request, claimed=claimed))
-        return claimed
-    return _observed_consume_request()
+        path = Path('/tmp/update-pane-route-' + kind + '.json')
+        if not path.exists():
+            write(path, dict(pid=os.getpid(), token=token, before=before, after=after,
+                locked_reads=locked_reads, claimed=claimed, at=time.monotonic()))
+    return claimed
 
 _observed_close_screen = close_screen
 def close_screen():
@@ -231,7 +253,7 @@ def close_screen():
         receipt['private_observer'] = dict(sha256=hashlib.sha256(fixture.encode()).hexdigest(),
             differences=['hn and CLI feed URLs use loopback version 0.0.0 metadata.',
                          'OS discovery receives its supported explicit loopback feed argument; endpoint returns 404.',
-                         'For one targeted handoff, owned consume waits up to 10 seconds for a direct inspection to execute the real consume and reject that target; both actual outcomes are retained.',
+                         'Before one shortcut, owned consume acknowledges the target gate independently of request presence, then waits up to the same 10 seconds for actual direct rejection. Both real helper outcomes and their in-lock request reads are retained.',
                          'After real close_screen returns True, one selected test process waits for release, at most 30 seconds.'])
         copy_file(vm, fixture.encode(), '/tmp/update-pane-ui.py')
         copy_file(vm, candidates[OPENER].read_bytes(), '/tmp/update-pane-opener')
@@ -326,6 +348,11 @@ def close_screen():
         assert vm.read_file('/tmp/update-pane-headless-before') == vm.read_file('/tmp/update-pane-headless-after')
         assert not inspected['request_pending']
         vm.command('printf %s ' + owner['token'] + ' > /tmp/update-pane-route-gate')
+        vm.command("timeout 5 sh -c 'until test -s /tmp/update-pane-route-armed.json; do sleep .05; done'")
+        armed = json.loads(vm.read_file('/tmp/update-pane-route-armed.json'))
+        assert (armed['pid'], armed['start'], armed['token']) == (owner['pid'], owner['start'], owner['token']), armed
+        vm.command('test ! -e ' + STATE + '/request.json')
+        (folder / '07-target-gate-armed.json').write_text(json.dumps(armed, indent=2) + '\n')
         focus_terminal()
         vm.keys('meta_l', 'u')
         delivered, _ = wait_active('07-targeted-delivery', owner)
@@ -336,7 +363,10 @@ def close_screen():
         rejected, claimed = evidence['rejected'], evidence['claimed']
         assert rejected['pid'] == inspection['pid'] and rejected['token'] is None and rejected['claimed'] is False
         assert claimed['pid'] == owner['pid'] and claimed['token'] == owner['token'] and claimed['claimed'] is True
-        assert rejected['request'] == claimed['request'] and claimed['request']['target'] == owner['token']
+        assert len(rejected['locked_reads']) == len(claimed['locked_reads']) == 1
+        assert rejected['locked_reads'] == claimed['locked_reads'] and claimed['locked_reads'][0]['target'] == owner['token']
+        assert armed['at'] <= rejected['at'] <= claimed['at'] and claimed['after'] == {}
+        assert not delivered['request_pending']
         assert any(p['pid'] == inspection['pid'] and p['start'] == inspection['start'] and p['registration'] is None
                    for p in delivered['screens'])
         (folder / '07-targeted-delivery-outcomes.json').write_text(json.dumps(evidence, indent=2) + '\n')
@@ -373,6 +403,19 @@ def close_screen():
     except BaseException as error:
         receipt.update(status='failed', error=repr(error))
         if vm.process and vm.process.poll() is None:
+            receipt['partial_route_evidence'] = {}
+            for name in ['gate', 'armed.json', 'rejected.json', 'claimed.json', 'error.json']:
+                path = '/tmp/update-pane-route-' + name
+                try:
+                    _, status = vm.command('test -f ' + shlex.quote(path), timeout=5, check=False)
+                    record = {'present': status == 0}
+                    if status == 0:
+                        content = vm.read_file(path)
+                        (folder / ('failure-route-' + name)).write_bytes(content)
+                        record.update(bytes=len(content), sha256=hashlib.sha256(content).hexdigest())
+                    receipt['partial_route_evidence'][path] = record
+                except Exception as collection_error:
+                    receipt['partial_route_evidence'][path] = {'collection_error': repr(collection_error)}
             try:
                 vm.screenshot('failure')
                 output, _ = vm.command('journalctl --user -n 150 --no-pager; hn list-panes -a -F "#{pane_id} #{pane_pid} #{pane_dead} #{window_name} #{socket_path}"', timeout=15, check=False)
