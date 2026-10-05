@@ -3569,6 +3569,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     keepAbandonedConversation,
   })
   const restartJobs = paneSwap.restartJobs
+  // A message sent while an engine is being replaced waits for the new one instead of being refused.
+  terminals.whileChanging((agentId) => restartJobs.busy(agentId))
   const sameRestartTarget = paneSwap.sameRestartTarget
   const paneSwapDeps = paneSwap.paneSwapDeps
   const liveBypassPermission = paneSwap.liveBypassPermission

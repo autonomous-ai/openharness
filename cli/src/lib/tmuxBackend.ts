@@ -353,7 +353,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
       }
       if (expected.processIdentity
         && (expected.processIdentity.pid !== live.pid || expected.processIdentity.startMarker !== live.startMarker)) {
-        return { state: 'gone', reason: 'process changed under tmux pane' }
+        return { state: 'gone', reason: 'process changed under tmux pane', replaced: true }
       }
       return { state: 'alive' }
     } catch {

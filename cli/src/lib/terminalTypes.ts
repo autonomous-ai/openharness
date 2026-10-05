@@ -34,7 +34,9 @@ export type TerminalInventoryResult =
 
 export type RuntimeValidation =
   | { state: 'alive' }
-  | { state: 'gone'; reason: string }
+  /** `replaced`: the pane runs this engine, but not the process the row recorded. An engine restarted,
+   *  retargeted or resumed in place reads this way until its new identity is recorded. */
+  | { state: 'gone'; reason: string; replaced?: true }
   | { state: 'unknown'; reason: string }
 
 /**
