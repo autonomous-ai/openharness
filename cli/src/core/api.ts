@@ -11,13 +11,16 @@
  * returns. The core routes them to it; a port is only for what the core itself must ask.
  */
 import type { RecentTurn } from '../cable/cableHost.js'
-import type { ReviewedAnswer } from '../cable/questionInbox.js'
+import type { CableAgent, CableMachine, CableMachineSource } from '../cable/cableSession.js'
+import type { FleetEvent } from '../cable/machineFleet.js'
+import type { AnswerReceipt, ReviewedAnswer } from '../cable/questionInbox.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
 import type { AgentGridTarget } from '../lib/gridModels.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../lib/registry.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
+import type { RouterContinuity } from '../lib/voiceRouter.js'
 import type { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
@@ -212,23 +215,78 @@ export type TeamsEvent = { seq: number; core: string; at: number; agentId: strin
   | { kind: 'replied'; teamId: string; questionId: string }
 )
 
+/** What a delivered turn answers: delivered, or refused with the machine's name and a reason a person can read. */
+export type SendResult = { ok: true } | { ok: false; machine: string; reason: string }
+/** What a fork answers: the new agent's id, or why not. */
+export type ForkResult = { ok: true; agentId: string } | { ok: false; error: string; detail?: string }
+/** A fork and where it was asked: `asked` is false for a refusal made before asking anyone (an agent
+ *  never listed, a daemon or a fleet that cannot fork), which nobody needs to hear about. */
+export interface ForkOutcome { result: ForkResult; machineId: string; asked: boolean }
+/** A machine selected for the dial, or the refusal a person can act on. */
+export type SelectResult = { ok: true } | { ok: false; code: string; message: string }
+
+/**
+ * Which machine an agent is on, and a turn, a stop or an answer reaching it there: the fleet's router
+ * (services/fleetRouter.ts), as the dial asks it. Also the lane to the other machines, which the dial
+ * holds while it is plugged in. A refusal is an answer here, never a throw: through the port, a throw is
+ * a failure of the fleet service, and counts toward switching it off.
+ */
+export interface FleetRouting {
+  listMachines(): Promise<{ machines: CableMachine[]; source: CableMachineSource }>
+  listAgentsFlat(): Promise<CableAgent[]>
+  agentTotal(): number
+  describe(agentId: string): { name: string; engine: string; machine: string } | undefined
+  noteAgent(machineId: string, agentId: string): void
+  machineOf(agentId: string): string
+  knows(agentId: string): boolean
+  isLocalAgent(agentId: string): boolean
+  sendTurn(agentId: string, text: string): SendResult
+  lastRouted(): RouterContinuity | undefined
+  stopTurn(agentId: string): void
+  canSpeakQuestion(agentId: string): boolean
+  answerReviewed(answer: ReviewedAnswer): Promise<AnswerReceipt>
+  answer(agentId: string, requestId: string, answers: Record<string, string>): void
+  updateAgent(agentId: string, model?: string, effort?: string): void
+  recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string }>>
+  recentAsks(agentId: string): Promise<string[]>
+  listModels(agentId: string): Promise<string[]>
+  forkAgent(agentId: string): Promise<ForkOutcome>
+  /** Whether a lane to the other machines exists: signed in, with the fleet's own fleet. */
+  hasLane(): boolean
+  /** Hold the lane for a dial, attached to no machine. Resolves with how it went; never rejects. */
+  online(): Promise<{ ok: true } | { ok: false; message: string }>
+  select(machineId: string): Promise<SelectResult>
+  release(immediate?: boolean): void
+}
+
 /** The core's calls into the fleet: ⌘K's two requests — which agent a typed task belongs to, on any of
- *  the owner's machines, and delivering it to that agent's own machine — and stopping the lane to the
- *  other machines for a shutdown. */
-export interface FleetPort {
+ *  the owner's machines, and delivering it to that agent's own machine — the routing the dial asks of
+ *  it, the cards the other machines send, and stopping the lane to them for a shutdown. */
+export interface FleetPort extends FleetRouting {
   routeTask(text: string): Promise<RouteAnswer>
-  sendTurn(agentId: string, text: string): { ok: true } | { ok: false; machine: string; reason: string }
+  routeSend(agentId: string, text: string): SendResult
+  /** The other machines' cards, for the dial. Returns how to stop hearing them. */
+  onEvent(listener: (event: FleetEvent) => void): () => void
   stop(): void
 }
 
 const FLEET_UNAVAILABLE = 'the fleet service is unavailable'
 
-/** What the core gets when the fleet fails: ⌘K says so, picking no agent and sending nothing, and a
- *  shutdown goes on. */
+/**
+ * What the core gets when the fleet fails. ⌘K says so, picking no agent and sending nothing; a shutdown
+ * goes on; the cards stop. The dial's routing FAILs: the dial routes this computer by itself then, as it
+ * does with the fleet off (cable/cableHost.ts), rather than reading a made-up answer as the fleet's.
+ */
 export const FLEET_FALLBACKS: PortFallbacks<FleetPort> = {
   routeTask: later({ agentId: '', machineId: '', name: '', confidence: 0, reason: FLEET_UNAVAILABLE, candidates: [], weighed: 0, machines: 0, via: '' }),
-  sendTurn: { ok: false, machine: '', reason: FLEET_UNAVAILABLE },
+  routeSend: { ok: false, machine: '', reason: FLEET_UNAVAILABLE },
+  onEvent: () => {},
   stop: undefined,
+  listMachines: later(FAIL), listAgentsFlat: later(FAIL), agentTotal: FAIL, describe: FAIL, noteAgent: FAIL,
+  machineOf: FAIL, knows: FAIL, isLocalAgent: FAIL, sendTurn: FAIL, lastRouted: FAIL, stopTurn: FAIL,
+  canSpeakQuestion: FAIL, answerReviewed: later(FAIL), answer: FAIL, updateAgent: FAIL, recentSummaries: later(FAIL),
+  recentAsks: later(FAIL), listModels: later(FAIL), forkAgent: later(FAIL), hasLane: FAIL, online: later(FAIL),
+  select: later(FAIL), release: FAIL,
 }
 
 /** Each port is filled by the service that owns it when that service starts, and is null while the

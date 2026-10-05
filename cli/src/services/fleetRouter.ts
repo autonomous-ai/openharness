@@ -12,19 +12,16 @@
  * fleet (its tests, and a daemon whose fleet service is off) without loading the cloud socket and the
  * E2EE stores the service starts.
  */
+import type { FleetRouting, ForkOutcome, ForkResult, SelectResult, SendResult } from '../core/api.js'
 import { extendShortRecap } from '../lib/deviceRecap.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { RouterContinuity } from '../lib/voiceRouter.js'
 import type { RecentTurn } from '../cable/cableHost.js'
 import type { CableAgent, CableMachine, CableMachineSource } from '../cable/cableSession.js'
-import type { FleetMachine, MachineFleet } from '../cable/machineFleet.js'
+import { FleetError, type FleetMachine, type MachineFleet } from '../cable/machineFleet.js'
 import type { AnswerReceipt, ReviewedAnswer } from '../cable/questionInbox.js'
 
-/** What a fork answers: the new agent's id, or why not. */
-export type ForkResult = { ok: true; agentId: string } | { ok: false; error: string; detail?: string }
-
-/** What a delivered turn answers: delivered, or refused with the machine's name and a reason a person can read. */
-export type SendResult = { ok: true } | { ok: false; machine: string; reason: string }
+export type { ForkResult, SendResult }
 
 /**
  * This computer, as the router needs it: its identity, its agents, the window's tiles, and the doors a
@@ -95,7 +92,7 @@ function chipsFromProfile(profile: string | null | undefined): { model?: string;
   return { model: model || undefined, effort: effort || undefined }
 }
 
-export class FleetRouter {
+export class FleetRouter implements FleetRouting {
   /** The last turn this daemon delivered, for [lastRouted]. In memory only: a conversation that spans a
    *  daemon restart is not one the five-minute window would have carried anyway. */
   private lastTurn?: { agentId: string; at: number }
@@ -311,19 +308,20 @@ export class FleetRouter {
 
   /**
    * Fork an agent on its own machine: the same `agent_fork` the window sends. The new agent is noted on
-   * that machine at once, so the open that follows lands before any list has named it. `attempted` hears
-   * how a fork that was actually asked for went, with the machine it was asked of: a refusal before
-   * asking anyone (an agent never listed, a daemon or a fleet that cannot fork) is only returned.
+   * that machine at once, so the open that follows lands before any list has named it. The outcome says
+   * which machine was asked, and whether anyone was: a refusal before asking (an agent never listed, a
+   * daemon or a fleet that cannot fork) is only an answer.
    */
-  async forkAgent(agentId: string, attempted?: (machineId: string, result: ForkResult) => void): Promise<ForkResult> {
+  async forkAgent(agentId: string): Promise<ForkOutcome> {
     const machineId = this.machineOf(agentId)
-    if (!machineId) return { ok: false, error: 'AGENT_NOT_FOUND', detail: 'The dial named an agent this daemon has never listed.' }
+    const refused = (result: ForkResult): ForkOutcome => ({ result, machineId, asked: false })
+    if (!machineId) return refused({ ok: false, error: 'AGENT_NOT_FOUND', detail: 'The dial named an agent this daemon has never listed.' })
     let result: ForkResult
     if (this.isLocalAgent(agentId)) {
-      if (!this.local.forkAgent) return { ok: false, error: 'UNSUPPORTED', detail: 'This daemon cannot fork agents.' }
+      if (!this.local.forkAgent) return refused({ ok: false, error: 'UNSUPPORTED', detail: 'This daemon cannot fork agents.' })
       result = await this.local.forkAgent(agentId)
     } else {
-      if (!this.fleet?.forkAgent) return { ok: false, error: 'UNSUPPORTED_ON_REMOTE' }
+      if (!this.fleet?.forkAgent) return refused({ ok: false, error: 'UNSUPPORTED_ON_REMOTE' })
       try {
         result = { ok: true, agentId: await this.fleet.forkAgent(machineId, agentId) }
       } catch (err) {
@@ -331,8 +329,41 @@ export class FleetRouter {
       }
     }
     if (result.ok) this.seenOn.set(result.agentId, machineId)
-    attempted?.(machineId, result)
-    return result
+    return { result, machineId, asked: true }
+  }
+
+  // ── the lane, held while a dial is plugged in ───────────────────────────────────────────────────
+
+  hasLane(): boolean {
+    return !!this.fleet
+  }
+
+  /** Come online for a dial — see MachineFleet.online. A lane that will not open is an answer: the dial
+   *  says so in its log and carries on with this computer. */
+  async online(): Promise<{ ok: true } | { ok: false; message: string }> {
+    try {
+      await this.fleet!.online()
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, message: (err as Error).message }
+    }
+  }
+
+  /** Attach to a machine, which is also how the backend learns where the dial is. A refusal comes back with
+   *  the code the dial acts on and the words it shows; anything else unexpected reads as unreachable. */
+  async select(machineId: string): Promise<SelectResult> {
+    try {
+      await this.fleet!.select(machineId)
+      return { ok: true }
+    } catch (err) {
+      if (err instanceof FleetError) return { ok: false, code: err.code, message: err.message }
+      return { ok: false, code: 'UNREACHABLE', message: (err as Error).message }
+    }
+  }
+
+  /** Let go of what `select` acquired; `immediate` when the dial is gone — see MachineFleet.release. */
+  release(immediate?: boolean): void {
+    this.fleet?.release(immediate)
   }
 
   /**

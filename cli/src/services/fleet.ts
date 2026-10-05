@@ -5,9 +5,9 @@
  * which machine an agent is on, and a turn, a stop or an answer reaching it there (fleetRouter.ts).
  *
  * It was built inside the dial's wiring, and the router lived in the dial's host, so ⌘K and the
- * window's voice route reached another machine only through the dial. They reach the fleet through its
- * port now (`ports.fleet`), with the dial absent or off; the dial's host holds the same router until
- * the dial has a boundary of its own (step D1).
+ * window's voice route reached another machine only through the dial. ⌘K, the voice route and the dial
+ * all reach it through its port now (`ports.fleet`), and none holds the router itself (steps D0 and D1):
+ * a dial that moves into a process of its own asks the same port through the core.
  *
  * A service on the core boundary: it reads the core only through `CoreApi`, and the core reaches it
  * only through `ports.fleet`.
@@ -65,7 +65,8 @@ export interface FleetDeps {
   identity: Identity
 }
 
-/** Start the fleet: its port for ⌘K, and the router, which the dial's host is handed. */
+/** Start the fleet: its port, through which ⌘K and the dial reach the router. The router itself is
+ *  returned for this service's own tests; nothing else holds it. */
 export function startFleet(core: CoreApi, ports: CorePorts, deps: FleetDeps): FleetRouter {
   // Three independent things, on purpose. The LIST is a REST read that works while the backend socket is
   // down; `local` is derived from the computer id and needs no network at all; and the LANE is a device
@@ -132,8 +133,35 @@ export function startFleet(core: CoreApi, ports: CorePorts, deps: FleetDeps): Fl
   // named and, tapped, opened — whichever surface is listening, the dial or none.
   devices.onEvent((event) => { if (event.kind !== 'state') router.noteAgent(event.machineId, event.agentId) })
   ports.fleet = {
+    // ⌘K's two requests.
     routeTask: (text) => routeTask(router, text),
+    routeSend: (agentId, text) => router.sendTurn(agentId, text),
+    // What the dial asks: the router's own answers, through the core's port (step D1).
+    listMachines: () => router.listMachines(),
+    listAgentsFlat: () => router.listAgentsFlat(),
+    agentTotal: () => router.agentTotal(),
+    describe: (agentId) => router.describe(agentId),
+    noteAgent: (machineId, agentId) => router.noteAgent(machineId, agentId),
+    machineOf: (agentId) => router.machineOf(agentId),
+    knows: (agentId) => router.knows(agentId),
+    isLocalAgent: (agentId) => router.isLocalAgent(agentId),
     sendTurn: (agentId, text) => router.sendTurn(agentId, text),
+    lastRouted: () => router.lastRouted(),
+    stopTurn: (agentId) => router.stopTurn(agentId),
+    canSpeakQuestion: (agentId) => router.canSpeakQuestion(agentId),
+    answerReviewed: (answer) => router.answerReviewed(answer),
+    answer: (agentId, requestId, answers) => router.answer(agentId, requestId, answers),
+    updateAgent: (agentId, model, effort) => router.updateAgent(agentId, model, effort),
+    recentSummaries: (agentId) => router.recentSummaries(agentId),
+    recentAsks: (agentId) => router.recentAsks(agentId),
+    listModels: (agentId) => router.listModels(agentId),
+    forkAgent: (agentId) => router.forkAgent(agentId),
+    hasLane: () => router.hasLane(),
+    online: () => router.online(),
+    select: (machineId) => router.select(machineId),
+    release: (immediate) => router.release(immediate),
+    // The other machines' cards, for the dial's screen. The router notes their machines itself, above.
+    onEvent: (listener) => devices.onEvent(listener),
     stop: () => {
       clearInterval(machineListTimer)
       link.stop()

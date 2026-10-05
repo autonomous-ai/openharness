@@ -175,8 +175,28 @@ describe('two machines in one fleet', () => {
     onA.close()
   })
 
+  it('the dial\'s routing failing through the port leaves the dial serving A, and ⌘K serving both machines', async () => {
+    const f = await fresh({ dialOnA: true, envA: { HARNESSD_TEST_FAULTS: 'fleet.sendTurn' } })
+    const { a, b } = f
+    const dial = f.dial!
+    const { onA, onB, agentId } = await linked(f)
+    // The dial's send fails at the port, and the dial routes this computer by itself: its own agent's turn runs.
+    const onlyA = await boundAgent(a.daemon, onA, 'on-a')
+    const started = onA.next(isTurn('turn_started', onlyA), 30_000, 'turn_started on A')
+    dial.send({ t: 'turn.send', agentId: onlyA, text: 'from the dial on a' })
+    expect((await started).payload?.userMessage).toBe('from the dial on a')
+    expect(a.daemon.log()).toContain('[services] fleet.sendTurn failed · injected fault: fleet.sendTurn')
+    // ⌘K's own send is another member, and B is still reached through it.
+    const startedB = onB.next(isTurn('turn_started', agentId), 30_000, 'turn_started on B')
+    expect(await routeSend(onA, agentId, 'cmd-k still reaches b')).toMatchObject({ ok: true })
+    expect((await startedB).payload?.userMessage).toBe('cmd-k still reaches b')
+    expect(b.daemon.coresStarted()).toBe(1)
+    onA.close()
+    onB.close()
+  })
+
   it('A\'s fleet service failing costs A its routing to B and nothing else', async () => {
-    for (const [faults, reason] of [['fleet', 'no agent list yet'], ['fleet.routeTask,fleet.sendTurn', 'the fleet service is unavailable']]) {
+    for (const [faults, reason] of [['fleet', 'no agent list yet'], ['fleet.routeTask,fleet.routeSend', 'the fleet service is unavailable']]) {
       const f = await startFleet({ dialOnA: true, envA: { HARNESSD_TEST_FAULTS: faults } })
       fleet = f
       onTestFailed(() => { console.log(`---- daemon A log (${faults})\n${f.a.daemon.log().split('\n').slice(-80).join('\n')}`) })
@@ -202,7 +222,7 @@ describe('two machines in one fleet', () => {
       const startedB = onB.next(isTurn('turn_started', onlyB), 30_000, 'turn_started on B')
       onB.send('message', { agentId: onlyB, content: 'b runs on' })
       expect((await startedB).payload?.userMessage).toBe('b runs on')
-      expect(a.daemon.log()).toContain(faults === 'fleet' ? '[services] fleet did not start · injected fault: fleet' : '[services] fleet.sendTurn failed · injected fault: fleet.sendTurn')
+      expect(a.daemon.log()).toContain(faults === 'fleet' ? '[services] fleet did not start · injected fault: fleet' : '[services] fleet.routeSend failed · injected fault: fleet.routeSend')
       expect(a.daemon.coresStarted()).toBe(1)
       onA.close()
       onB.close()

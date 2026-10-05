@@ -20,6 +20,9 @@ const lane = vi.hoisted(() => ({
   stop: vi.fn(),
   rpc: vi.fn(async (_type: string): Promise<Record<string, unknown>> => ({})),
   sendSealed: vi.fn(async () => {}),
+  online: vi.fn(async () => {}),
+  attach: vi.fn(async (_machineId: string) => {}),
+  release: vi.fn(),
   peers: new Map<string, { pub: string }>(),
 }))
 vi.mock('../device/deviceLink.js', () => ({
@@ -30,6 +33,9 @@ vi.mock('../device/deviceLink.js', () => ({
     stop() { lane.stop() }
     rpc(type: string) { return lane.rpc(type) }
     sendSealed(...args: unknown[]) { return lane.sendSealed(...(args as [])) }
+    online() { return lane.online() }
+    attach(machineId: string) { return lane.attach(machineId) }
+    release() { lane.release() }
     resetSession() { return false }
   },
 }))
@@ -174,27 +180,67 @@ describe('this computer’s side of every route', () => {
       turns: { recent: vi.fn(() => [{ recap: 'Done', text: 'Done' }]), asks: vi.fn(() => ['what next?']) },
       questions: { answerReviewed: vi.fn(async () => true) },
     })
-    const { router, fleet } = setup({ desk: () => ['a1'] }, core)
-    expect(await router.listAgentsFlat()).toEqual([
+    // Asked as the dial asks it: through the port, the router's own answers.
+    const { fleet } = setup({ desk: () => ['a1'] }, core)
+    expect(await fleet.listAgentsFlat()).toEqual([
       { id: 'a1', name: 'api', engine: 'claude', machineId: 'mine', machine: 'MacbookPro.local', model: 'opus', effort: 'high' },
     ])
     expect(fleet.sendTurn('a1', 'hello')).toEqual({ ok: true })
     expect(core.turns.send).toHaveBeenCalledWith('a1', 'hello')
-    router.stopTurn('a1')
+    expect(fleet.routeSend('a1', 'from cmd-k')).toEqual({ ok: true })
+    expect(core.turns.send).toHaveBeenLastCalledWith('a1', 'from cmd-k')
+    fleet.stopTurn('a1')
     expect(core.turns.stop).toHaveBeenCalledWith('a1')
-    router.answer('a1', 'q', { scope: 'File' })
+    fleet.answer('a1', 'q', { scope: 'File' })
     expect(core.questions.answer).toHaveBeenCalledWith('a1', 'q', { scope: 'File' })
     const reviewed = { agentId: 'a1', requestId: 'q', questions: [], answers: {}, selections: {} }
-    expect(await router.answerReviewed(reviewed)).toEqual({ ok: true })
+    expect(await fleet.answerReviewed(reviewed)).toEqual({ ok: true })
     expect(core.questions.answerReviewed).toHaveBeenCalledWith(reviewed)
-    expect(await router.recentSummaries('a1')).toEqual([{ recap: 'Done', text: 'Done', ask: '' }])
+    expect(await fleet.recentSummaries('a1')).toEqual([{ recap: 'Done', text: 'Done', ask: '' }])
     expect(core.turns.recent).toHaveBeenCalledWith('a1', 3)
-    expect(await router.recentAsks('a1')).toEqual(['what next?'])
-    router.updateAgent('a1', 'sonnet', 'low')
+    expect(await fleet.recentAsks('a1')).toEqual(['what next?'])
+    fleet.updateAgent('a1', 'sonnet', 'low')
     expect(core.agents.setRuntime).toHaveBeenCalledWith('a1', 'sonnet', 'low')
-    expect(await router.listModels('a1')).toEqual(['opus'])
-    expect(await router.forkAgent('a1')).toEqual({ ok: true, agentId: 'a1-fork' })
+    expect(await fleet.listModels('a1')).toEqual(['opus'])
+    expect(await fleet.forkAgent('a1')).toEqual({ result: { ok: true, agentId: 'a1-fork' }, machineId: 'mine', asked: true })
     expect(core.agents.fork).toHaveBeenCalledWith('a1')
+  })
+})
+
+describe('what the dial asks through the port', () => {
+  it('is the router\'s: its machines, what it knows of an agent, the person\'s last turn, and the lane', async () => {
+    const core = fakeCore({ agents: { advertised: vi.fn(() => [session('a1')]), displayName: vi.fn(() => 'api') } })
+    const { fleet } = setup({}, core)
+    const { machines, source } = await fleet.listMachines()
+    expect(source).toBe('backend')
+    expect(machines.map((m) => m.id)).toEqual(['mine', 'other'])
+    await fleet.listAgentsFlat()
+    expect(fleet.agentTotal()).toBe(1)
+    expect(fleet.describe('a1')).toEqual({ name: 'api', engine: 'claude', machine: 'MacbookPro.local' })
+    fleet.noteAgent('other', 'r9')
+    expect(fleet.machineOf('r9')).toBe('other')
+    expect(fleet.knows('a1')).toBe(true)
+    expect(fleet.isLocalAgent('r9')).toBe(false)
+    expect(fleet.canSpeakQuestion('a1')).toBe(true)
+    expect(fleet.lastRouted()).toBeUndefined()
+    fleet.sendTurn('a1', 'hello')
+    expect(fleet.lastRouted()).toMatchObject({ agentId: 'a1' })
+    // The lane: there while signed in, held for a dial, and let go of.
+    expect(fleet.hasLane()).toBe(true)
+    expect(await fleet.online()).toEqual({ ok: true })
+    expect(await fleet.select('other')).toEqual({ ok: true })
+    fleet.release(true)
+    expect(lane.release).toHaveBeenCalled()
+  })
+
+  it('carries the other machines\' cards to whoever listens, until they stop', () => {
+    const { fleet } = setup()
+    const heard: unknown[] = []
+    const stop = fleet.onEvent((event) => heard.push(event))
+    lane.frames!({ type: 'commander_event', machineId: 'other', agentId: 'r1', payload: { kind: 'done' } })
+    stop()
+    lane.frames!({ type: 'commander_event', machineId: 'other', agentId: 'r1', payload: { kind: 'done' } })
+    expect(heard).toEqual([{ machineId: 'other', kind: 'done', agentId: 'r1', text: '', recap: '' }])
   })
 })
 

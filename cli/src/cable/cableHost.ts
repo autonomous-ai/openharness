@@ -10,9 +10,11 @@
 // again here, so the two device surfaces cannot drift.
 //
 // Which machine an agent is on, and every turn, stop and answer sent to it, is the fleet's router
-// (services/fleetRouter.ts), shared with ⌘K and the window's voice route. This host asks it; with no
-// router handed in (its tests, or a daemon whose fleet service is off) it builds one over the fleet it
-// is given, which is what it used to hold itself.
+// (services/fleetRouter.ts), shared with ⌘K and the window's voice route. This host asks it through the
+// core's port (`wiring.fleet`), never holding it (step D1): a dial in a process of its own asks the same
+// port across the service link. It keeps a router of its own for this computer alone, and uses it
+// whenever the fleet cannot answer — off, or its call failed — as the dial did before the fleet was a
+// service. Its tests give it a bare fleet to route over by itself.
 import { join } from 'node:path'
 import { notificationReadToken, type UnreadNotification } from './notificationRead.js'
 
@@ -21,14 +23,16 @@ import { registry, projectDisplayName, type RegisteredSession } from '../lib/reg
 import { fetchRelease, loadImage, otaKeyForBoard, shouldOffer } from './fwPush.js'
 import { routeVoiceTask, type RouterAgent, type RouterContinuity } from '../lib/voiceRouter.js'
 import { env } from '../config/env.js'
-import { FleetRouter, type ForkResult } from '../services/fleetRouter.js'
+import { FleetRouter } from '../services/fleetRouter.js'
+import type { FleetRouting, ForkResult } from '../core/api.js'
+import { ServiceUnavailableError } from '../core/serviceHost.js'
 
 import type { AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
 import type { FormCommand, FormResult } from './windowForm.js'
-import { FleetError, type MachineFleet } from './machineFleet.js'
+import type { MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 
 /** One completed turn's recap, as the mirror keeps them. */
@@ -92,6 +96,12 @@ export interface CableHostWiring {
   form?: (command: FormCommand) => Promise<FormResult>
   clearForm?: () => void
   log: (line: string) => void
+  /**
+   * Which machine an agent is on, and getting a turn, a stop or an answer there: the fleet service's
+   * routing, through the core's port (core/api.ts `FleetRouting`). Read at every call, and null while the
+   * fleet is off. Absent, this host routes by itself.
+   */
+  fleet?: () => FleetRouting | null
 }
 
 /** Whether an id is the router's placeholder for a machine with no id yet (`cable:` and the computer id;
@@ -101,11 +111,11 @@ function isPlaceholder(id: string): boolean {
 }
 
 export class DaemonCableHost implements CableHost {
-  /** Which machine each agent is on, and the turns, stops and answers sent to it: the fleet's router. */
-  private readonly router: FleetRouter
-  /** The lane to the other machines, held on the dial's behalf (`online`, `select`, `release`); the
-   *  router's own fleet. `undefined` = no lane exists; the wheel is the local row and nothing else. */
-  private readonly fleet?: MachineFleet
+  /**
+   * This host's own router: over the bare fleet it is given (its tests), or over none, for this computer
+   * alone. Asked whenever the fleet service cannot answer — see route.
+   */
+  private readonly local: FleetRouter
 
   /**
    * The machine whose agents are on the dial right now. Defaults to — and falls back to — the local one:
@@ -118,20 +128,39 @@ export class DaemonCableHost implements CableHost {
   private selected = ''
 
   /**
-   * `fleet` is the fleet service's router (services/fleet.ts), which ⌘K and the window's voice route send
-   * through as well, or a bare lane to the other machines this host routes over by itself — its tests,
-   * and a daemon whose fleet service is off. `undefined` = no lane to any other machine exists; the wheel
-   * is the local row and nothing else.
+   * `fleet` is a bare lane to the other machines for this host's own router — its tests give it one. A
+   * daemon gives none: its dial reaches the fleet service's router through the core (`wiring.fleet`).
+   * With neither, the wheel is the local row and nothing else.
    */
-  constructor(private readonly wiring: CableHostWiring, fleet?: MachineFleet | FleetRouter) {
-    this.router = fleet instanceof FleetRouter ? fleet : new FleetRouter({
+  constructor(private readonly wiring: CableHostWiring, fleet?: MachineFleet) {
+    this.local = new FleetRouter({
       ...wiring,
       // The same set `agents_list` answers the apps with — see the router's localAgents.
       sessions: () => registry.advertised(),
       displayName: projectDisplayName,
       desk: () => this.desk,
     }, fleet)
-    this.fleet = this.router.fleet
+  }
+
+  /**
+   * Ask the fleet service's router through the core's port, or this host's own when the fleet is off or
+   * its call came back unavailable (a failing port's fallback, core/api.ts FLEET_FALLBACKS). Either way the
+   * answer is a router's, refusals included: the dial never reads a made-up answer as the fleet's.
+   */
+  private viaFleet<T>(ask: (routing: FleetRouting) => T): T {
+    const fleet = this.wiring.fleet?.()
+    if (!fleet) return ask(this.local)
+    const unavailable = (error: unknown): T => {
+      if (error instanceof ServiceUnavailableError) return ask(this.local)
+      throw error
+    }
+    let answer: T
+    try {
+      answer = ask(fleet)
+    } catch (error) {
+      return unavailable(error)
+    }
+    return answer instanceof Promise ? answer.catch(unavailable) as T : answer
   }
 
   /** The identity of the computer at the other end of the cable. */
@@ -140,7 +169,7 @@ export class DaemonCableHost implements CableHost {
   }
 
   private localId(): string {
-    return this.router.localId()
+    return this.local.localId()
   }
 
   /** Whether the dial is looking at THIS computer. Everything forks on this one question. */
@@ -154,7 +183,7 @@ export class DaemonCableHost implements CableHost {
 
   /** The local row, then the fleet's — the router's list, which ⌘K reads too. */
   listMachines(): Promise<{ machines: CableMachine[]; source: CableMachineSource }> {
-    return this.router.listMachines()
+    return this.viaFleet((r) => r.listMachines())
   }
 
   async selectMachine(machineId: string): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
@@ -163,19 +192,15 @@ export class DaemonCableHost implements CableHost {
       // Let go of the REMOTE machine after a linger, keeping the socket — then announce where the dial
       // actually is. `activeMachineId` on the account is then true for this machine too, instead of
       // silently going stale on whatever was selected last.
-      this.fleet?.release()
+      this.viaFleet((r) => r.release())
       void this.announceSelection()
       return { ok: true }
     }
-    if (!this.fleet) {
+    if (!this.viaFleet((r) => r.hasLane())) {
       return { ok: false, code: 'UNAVAILABLE', message: 'Sign in on this computer to reach other machines' }
     }
-    try {
-      await this.fleet.select(machineId)
-    } catch (err) {
-      if (err instanceof FleetError) return { ok: false, code: err.code, message: err.message }
-      return { ok: false, code: 'UNREACHABLE', message: (err as Error).message }
-    }
+    const selected = await this.viaFleet((r) => r.select(machineId))
+    if (!selected.ok) return selected
     this.selected = machineId
     return { ok: true }
   }
@@ -189,8 +214,7 @@ export class DaemonCableHost implements CableHost {
    * it loses the race; a failure marks the machine unreachable rather than pretending it has no agents.
    */
   onDialAttached(): void {
-    if (!this.fleet) return
-    const fleet = this.fleet
+    if (!this.viaFleet((r) => r.hasLane())) return
     // Signed out there is no lane to open: the socket is authenticated, so dialling it would fail once
     // per plug-in and log a failure for something nobody asked for. The dial still works — it is on the
     // cable, and everything it shows on this computer is served in-process.
@@ -202,7 +226,8 @@ export class DaemonCableHost implements CableHost {
     void (async () => {
       // The socket first, and unconditionally: it is what makes the machine wheel's dots live, and it is
       // held for as long as the dial is plugged in whether or not anything is selected.
-      await fleet.online()
+      const online = await this.viaFleet((r) => r.online())
+      if (!online.ok) throw new Error(online.message)
       await this.announceSelection()
     })().catch((err) => this.wiring.log(`cable: could not open the lane (${(err as Error).message})`))
   }
@@ -217,16 +242,13 @@ export class DaemonCableHost implements CableHost {
    * Skipped only for the placeholder id, which is not a machineId and means nothing to the backend.
    */
   private async announceSelection(): Promise<void> {
-    if (!this.fleet) return
+    if (!this.viaFleet((r) => r.hasLane())) return
     const machineId = this.selectedMachine()
     if (isPlaceholder(machineId)) return
-    try {
-      await this.fleet.select(machineId)
-    } catch (err) {
-      // Never fatal. The local machine in particular must stay usable with no backend at all — it is the
-      // one machine the cable can vouch for on its own.
-      this.wiring.log(`cable: could not announce ${machineId} (${(err as Error).message})`)
-    }
+    const selected = await this.viaFleet((r) => r.select(machineId))
+    // Never fatal. The local machine in particular must stay usable with no backend at all — it is the
+    // one machine the cable can vouch for on its own.
+    if (!selected.ok) this.wiring.log(`cable: could not announce ${machineId} (${selected.message})`)
   }
 
   /**
@@ -241,7 +263,7 @@ export class DaemonCableHost implements CableHost {
     this.wiring.clearSelection?.()
     this.wiring.clearVisit?.()
     this.wiring.clearForm?.()
-    this.fleet?.release(true)
+    this.viaFleet((r) => r.release(true))
   }
 
   /**
@@ -389,13 +411,13 @@ export class DaemonCableHost implements CableHost {
       this.deskShape = shape
       this.wiring.log(`cable: tab ${shape} · ${flat.length} in all`)
     }
-    return { agents: out, tab, total: this.router.agentTotal() }
+    return { agents: out, tab, total: this.viaFleet((r) => r.agentTotal()) }
   }
 
   /** How many agents the account has across every machine — the overview's number, sent beside the
    *  tab's list rather than as 70 rows the dial would hold for a digit. See the router's agentTotal. */
   agentTotal(): number {
-    return this.router.agentTotal()
+    return this.viaFleet((r) => r.agentTotal())
   }
 
   /** The active tab's id, or '' with no window. Travels on `agents.end` so the dial can tell an empty
@@ -409,17 +431,17 @@ export class DaemonCableHost implements CableHost {
    * about one the dial no longer holds. See the router's describe.
    */
   describe(agentId: string): { name: string; engine: string; machine: string } | undefined {
-    return this.router.describe(agentId)
+    return this.viaFleet((r) => r.describe(agentId))
   }
 
   async activityText(agentId: string): Promise<string | null> {
-    if (!this.router.isLocalAgent(agentId)) return null
+    if (!this.viaFleet((r) => r.isLocalAgent(agentId))) return null
     return await this.wiring.activityText?.(agentId) ?? null
   }
 
   /** A card arrived from a machine for an agent — see the router's noteAgent. */
   noteAgent(machineId: string, agentId: string): void {
-    this.router.noteAgent(machineId, agentId)
+    this.viaFleet((r) => r.noteAgent(machineId, agentId))
   }
 
   /**
@@ -428,12 +450,12 @@ export class DaemonCableHost implements CableHost {
    * re-cut around the tiles the window has open.
    */
   listAgentsFlat(): Promise<CableAgent[]> {
-    return this.router.listAgentsFlat()
+    return this.viaFleet((r) => r.listAgentsFlat())
   }
 
   /** Which machine an agent lives on, or '' — never a guess. See the router's machineOf. */
   private machineOf(agentId: string): string {
-    return this.router.machineOf(agentId)
+    return this.viaFleet((r) => r.machineOf(agentId))
   }
 
   openAgent(agentId: string, reason?: OpenReason): void {
@@ -467,7 +489,8 @@ export class DaemonCableHost implements CableHost {
   forkAgent(agentId: string): Promise<ForkResult> {
     // On the agent's own machine, through the router, which notes the new agent there. A fork it
     // actually asked for is said, and opened in the window.
-    return this.router.forkAgent(agentId, (machineId, result) => {
+    return this.viaFleet((r) => r.forkAgent(agentId)).then(({ result, machineId, asked }) => {
+      if (!asked) return result
       if (result.ok) {
         this.wiring.log(`cable: fork ${machineId}/${agentId} → ${result.agentId}`)
         if (this.wiring.forked) this.wiring.forked(machineId, result.agentId, agentId)
@@ -475,12 +498,13 @@ export class DaemonCableHost implements CableHost {
       } else {
         this.wiring.log(`cable: fork ${machineId}/${agentId} refused (${result.error}${result.detail ? `: ${result.detail}` : ''})`)
       }
+      return result
     })
   }
 
   /** Whether this daemon's last list held that agent — see CableHost.knows. */
   knows(agentId: string): boolean {
-    return this.router.knows(agentId)
+    return this.viaFleet((r) => r.knows(agentId))
   }
 
   /**
@@ -488,28 +512,28 @@ export class DaemonCableHost implements CableHost {
    * the refusal for a machine whose last request did not come back. See the router's sendTurn.
    */
   sendTurn(agentId: string, text: string): { ok: true } | { ok: false; machine: string; reason: string } {
-    return this.router.sendTurn(agentId, text)
+    return this.viaFleet((r) => r.sendTurn(agentId, text))
   }
 
   /** Who the last delivered turn went to, and how long ago — by any of the router's callers. */
   lastRouted(): RouterContinuity | undefined {
-    return this.router.lastRouted()
+    return this.viaFleet((r) => r.lastRouted())
   }
 
   stopTurn(agentId: string): void {
-    this.router.stopTurn(agentId)
+    this.viaFleet((r) => r.stopTurn(agentId))
   }
 
   canSpeakQuestion(agentId: string): boolean {
-    return this.router.canSpeakQuestion(agentId)
+    return this.viaFleet((r) => r.canSpeakQuestion(agentId))
   }
 
   answerReviewed(answer: ReviewedAnswer): Promise<AnswerReceipt> {
-    return this.router.answerReviewed(answer)
+    return this.viaFleet((r) => r.answerReviewed(answer))
   }
 
   answer(agentId: string, requestId: string, answers: Record<string, string>): void {
-    this.router.answer(agentId, requestId, answers)
+    this.viaFleet((r) => r.answer(agentId, requestId, answers))
   }
 
 
@@ -568,21 +592,21 @@ export class DaemonCableHost implements CableHost {
   }
 
   updateAgent(agentId: string, model?: string, effort?: string): void {
-    this.router.updateAgent(agentId, model, effort)
+    this.viaFleet((r) => r.updateAgent(agentId, model, effort))
   }
 
   /** The last few turns, newest first, in the shape the dial's tile draws — from the agent's own machine. */
   recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string }>> {
-    return this.router.recentSummaries(agentId)
+    return this.viaFleet((r) => r.recentSummaries(agentId))
   }
 
   /** The person's own last questions to an agent, newest first — what the router ranks on. */
   recentAsks(agentId: string): Promise<string[]> {
-    return this.router.recentAsks(agentId)
+    return this.viaFleet((r) => r.recentAsks(agentId))
   }
 
   listModels(agentId: string): Promise<string[]> {
-    return this.router.listModels(agentId)
+    return this.viaFleet((r) => r.listModels(agentId))
   }
 
   /**
