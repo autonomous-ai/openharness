@@ -35,11 +35,14 @@ class Fixture(session.Setup):
             if 'is-active' in command:
                 return 'inactive'
             if 'is-enabled' in command:
-                return 'disabled'
+                return ('enabled' if command[-1] == 'greetd.service' and
+                        self.snapshot(session.ALIAS) == session.link('/usr/lib/systemd/system/greetd.service')
+                        else 'disabled')
             if 'get-default' in command:
                 return self.default
             if 'enable' in command:
-                self.path(session.ALIAS).symlink_to('/usr/lib/systemd/system/greetd.service')
+                if not self.path(session.ALIAS).is_symlink():
+                    self.path(session.ALIAS).symlink_to('/usr/lib/systemd/system/greetd.service')
             if 'set-default' in command:
                 path = self.path(session.TARGET)
                 if path.is_symlink():
@@ -132,6 +135,16 @@ class FedoraSession(unittest.TestCase):
         self.assertFalse(any('set-default' in command for command in self.setup.commands))
         self.setup.disable()
         self.assertIsNone(self.setup.snapshot(session.TARGET))
+
+    def test_pristine_vendor_preset_alias_survives_enable_and_disable(self):
+        previous = session.link('/usr/lib/systemd/system/greetd.service')
+        self.setup.path(session.ALIAS).symlink_to(previous['target'])
+        self.setup.enable('owner')
+        self.assertEqual(self.setup.load()['files'][session.ALIAS], {'before': previous, 'after': previous})
+        self.setup.disable()
+        self.assertEqual(self.setup.snapshot(session.ALIAS), previous)
+        self.setup.path(session.ALIAS).unlink()
+        self.assert_original()
 
     def test_missing_autologin_flag_is_rejected_before_host_access(self):
         result = subprocess.run([sys.executable, str(SOURCE), 'enable', '--user', 'owner'], capture_output=True, text=True)

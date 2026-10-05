@@ -160,7 +160,7 @@ def main():
                            check=True, timeout=180)
             assert disk.stat().st_size == image['raw_disk']['bytes'] and digest(disk) == image['raw_disk']['sha256']
 
-            def boot(name, offline=False):
+            def boot(name, offline=False, allow_relabel=False):
                 nonlocal machine
                 if machine:
                     diagnostics(machine, 'completed')
@@ -168,7 +168,30 @@ def main():
                     machine.close()
                 machine = SessionVM(output / name, disk, fixture / 'Image')
                 result['boots'].append({'name': name, 'started_at': time.time()})
-                machine.start(offline=offline)
+                try:
+                    machine.start(offline=offline)
+                except RuntimeError:
+                    # Fedora's initial policy install requests one full relabel
+                    # and reboot before a login console can become available.
+                    # QEMU -no-reboot exits for that request; retain and verify
+                    # the actual guest reset before starting the next cold boot.
+                    serial = (machine.folder / 'serial.log').read_text(errors='replace')
+                    if (not allow_relabel or 'selinux-autorelabel.service' not in serial or
+                            'Relabeling / ' not in serial or 'reboot: Restarting system' not in serial):
+                        raise
+                    exit_code = machine.process.wait(timeout=15)
+                    events = []
+                    while line := machine.qmp_file.readline():
+                        events.append(json.loads(line))
+                    assert exit_code == 0 and any(event.get('event') == 'SHUTDOWN' and
+                        event.get('data', {}).get('guest') is True and
+                        event['data'].get('reason') == 'guest-reset' for event in events), 'Missing completed Fedora relabel reboot'
+                    result['boots'][-1]['relabel_reboot'] = {'exit_code': exit_code, 'events': events}
+                    (machine.folder / 'relabel-reboot.json').write_text(json.dumps(result['boots'][-1], indent=2) + '\n')
+                    machine.close()
+                    machine = SessionVM(output / (name + '-after-relabel'), disk, fixture / 'Image')
+                    result['boots'].append({'name': name + '-after-relabel', 'started_at': time.time()})
+                    machine.start(offline=offline)  # A second relabel/reboot is a failure.
                 result['boots'][-1]['accelerator'] = machine.accelerator
 
             boot('01-private-normalization', offline=True)
@@ -224,7 +247,7 @@ def main():
                 'Assigned existing private me account a test password; masked only its update timer',
                 'Added preservation project and exact-source helper/symlink; labeled only the private ext4 root']
 
-            boot('02-enforcing-console')
+            boot('02-enforcing-console', allow_relabel=True)
             machine.command('test "$(getenforce)" = Enforcing && test "$(systemctl get-default)" = multi-user.target && '
                             '! systemctl is-active --quiet greetd && ! pgrep -u 1000 -x labwc >/dev/null')
             console_login(machine, 1, 'baseline-console')

@@ -125,7 +125,8 @@ class Setup:
                 not USERNAME.fullmatch(str(state.get('user', ''))) or
                 set(state.get('files', {})) != set(PATHS)):
             raise SetupError('Unrecognized setup receipt; preserve it for recovery.')
-        expected = self.plan(state['user'], state['files'][TARGET]['before'], state['previous_target'])
+        expected = self.plan(state['user'], state['files'][TARGET]['before'], state['previous_target'],
+                             state['files'][ALIAS]['before'])
         if state['files'] != expected or state.get('created_dirs') != [
                 name for name in state.get('created_dirs', []) if name in {
                     'etc/systemd/system/greetd.service.d', 'var/lib/harness-os'}]:
@@ -198,10 +199,15 @@ class Setup:
         for service in ('greetd.service', 'display-manager.service'):
             if self.run('/usr/bin/systemctl', 'is-active', service, check=False) not in {'inactive', 'failed'}:
                 raise SetupError('An existing login manager is active; keep its configuration.')
-        if self.run('/usr/bin/systemctl', 'is-enabled', 'greetd.service', check=False) != 'disabled':
-            raise SetupError('greetd already has an enablement or mask; keep its configuration.')
+        alias_before = self.snapshot(ALIAS)
+        enabled = self.run('/usr/bin/systemctl', 'is-enabled', 'greetd.service', check=False)
+        if not ((enabled == 'disabled' and alias_before is None) or
+                (enabled == 'enabled' and alias_before == link('/usr/lib/systemd/system/greetd.service'))):
+            raise SetupError('greetd has a different enablement or mask; keep its configuration.')
         for prefix in ('etc', 'run', 'usr/lib'):
             for name in ('greetd.service', 'display-manager.service'):
+                if prefix == 'etc' and name == 'display-manager.service' and alias_before is not None:
+                    continue  # Fedora's pristine package preset is retained on disable.
                 if ((prefix != 'usr/lib' or name == 'display-manager.service') and
                         self.snapshot(prefix + '/systemd/system/' + name) is not None):
                     raise SetupError('An existing login-manager override or alias is present.')
@@ -217,19 +223,21 @@ class Setup:
         if before is not None and before not in [link('/' + directory + '/' + previous_target)
                                                 for directory in ('usr/lib/systemd/system', 'lib/systemd/system')]:
             raise SetupError('Keep the existing custom default-target configuration.')
-        files = self.plan(user, before, previous_target)
+        files = self.plan(user, before, previous_target, alias_before)
         for name, change in files.items():
             if self.snapshot(name) != change['before']:
                 raise SetupError('Configuration already exists: /' + name)
         return self.account(user), previous_target, files
 
-    def plan(self, user, target_before, previous_target):
+    def plan(self, user, target_before, previous_target, alias_before=None):
         if previous_target not in {'multi-user.target', 'graphical.target'}:
             raise SetupError('Unrecognized original target in setup receipt.')
         if target_before is not None and target_before not in [
                 link('/' + directory + '/' + previous_target)
                 for directory in ('usr/lib/systemd/system', 'lib/systemd/system')]:
             raise SetupError('Unrecognized original target link in setup receipt.')
+        if alias_before not in (None, link('/usr/lib/systemd/system/greetd.service')):
+            raise SetupError('Unrecognized original login-manager alias in setup receipt.')
         config = ('[terminal]\nvt = 1\n\n[general]\nsource_profile = false\n\n'
                   '[default_session]\ncommand = "/usr/bin/agreety --cmd /usr/bin/harness-session"\n'
                   'user = "greetd"\n\n[initial_session]\ncommand = "/usr/bin/harness-session"\n'
@@ -245,6 +253,7 @@ class Setup:
         ]}
         files[TARGET] = {'before': target_before, 'after': target_before if previous_target == 'graphical.target'
                          else link('/usr/lib/systemd/system/graphical.target')}
+        files[ALIAS]['before'] = alias_before
         return files
 
     def verify(self, state, partial=False):
