@@ -9,9 +9,9 @@ on:
         default: '37222390225'
         required: true
       probe:
-        description: 'Laptop controls, Apple boot modules or unsupported-platform install refusal'
+        description: 'Laptop controls, Apple boot modules, install refusal or updater pane ownership'
         type: choice
-        options: [laptop-input, apple-boot, install-preflight]
+        options: [laptop-input, apple-boot, install-preflight, update-pane]
         default: laptop-input
         required: true
   push:
@@ -42,7 +42,9 @@ jobs:
         env:
           PROBE: ${{ inputs.probe }}
         run: |
-          if [[ "$PROBE" == install-preflight ]]; then
+          if [[ "$PROBE" == update-pane ]]; then
+            python3 -m py_compile os/tests/update_pane_vm.py os/tests/update_pane_guest.py os/live_update.py os/root/usr/lib/harness-os/open-updates
+          elif [[ "$PROBE" == install-preflight ]]; then
             PYTHONPATH=os/tests python3 -m unittest test_hardware test_installer
             python3 -m py_compile os/tests/platform_preflight_vm.py os/tests/platform_preflight_guest.py
             python3 os/tools/check.py
@@ -54,7 +56,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
           sudo chmod a+rw /dev/kvm
       - name: Check actual media-key input on USB and installed sessions
-        if: ${{ inputs.probe != 'apple-boot' && inputs.probe != 'install-preflight' }}
+        if: ${{ inputs.probe == 'laptop-input' || !inputs.probe }}
         run: python3 os/tests/input_vm.py --iso os/dist/*.iso
       - name: Check Apple initramfs selection and encrypted boot
         if: ${{ inputs.probe == 'apple-boot' }}
@@ -62,6 +64,9 @@ jobs:
       - name: Check unsupported-platform refusal without disk writes
         if: ${{ inputs.probe == 'install-preflight' }}
         run: python3 os/tests/platform_preflight_vm.py --iso os/dist/*.iso
+      - name: Check actual updater pane ownership and closing handoff
+        if: ${{ inputs.probe == 'update-pane' }}
+        run: python3 os/tests/update_pane_vm.py --iso os/dist/*.iso
       - name: Retain actual input, module and display evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -71,11 +76,14 @@ jobs:
             os/test-results/input/
             os/test-results/apple-boot/
             os/test-results/install-preflight/
+            os/test-results/update-pane/
             !os/test-results/input/*.qcow2
             !os/test-results/input/OVMF_VARS.fd
             !os/test-results/apple-boot/*.qcow2
             !os/test-results/apple-boot/OVMF_VARS.fd
             !os/test-results/install-preflight/*.qcow2
             !os/test-results/install-preflight/OVMF_VARS.fd
+            !os/test-results/update-pane/*.qcow2
+            !os/test-results/update-pane/OVMF_VARS.fd
           retention-days: 14
           compression-level: 0
