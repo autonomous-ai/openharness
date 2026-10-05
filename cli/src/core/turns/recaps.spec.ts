@@ -59,6 +59,12 @@ describe('recaps', () => {
     expect(role).toHaveBeenCalledWith('a1')
   })
 
+  it('takes an agent whose role cannot be read for anyone\'s: the turn keeps its end (e2e/diskfull.e2e.ts)', () => {
+    const { deps, recaps } = setup()
+    vi.mocked(deps.orchestratorRoleOf).mockImplementationOnce(() => { throw new Error('ENOSPC: no space left on device, mkdir') })
+    expect(recaps.isSubagentSession('s1')).toBe(false)
+  })
+
   it('gives the mirror the clients, the device gates and an excerpt for a recap', async () => {
     const { deps, opts } = setup()
     vi.mocked(deps.turnActivity.snapshot).mockReturnValueOnce({ state: 'working' } as ActivityFrame).mockReturnValueOnce({ state: 'idle' } as ActivityFrame)

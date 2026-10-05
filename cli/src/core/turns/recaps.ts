@@ -64,7 +64,10 @@ export function createRecaps({
   const isSubagentSession = (sessionId: string): boolean => {
     const agentId = bySession(sessionId)?.agentId
     if (!agentId) return false
-    const role = orchestratorRoleOf(agentId)
+    // Asked at every turn's end, from the transcript's line handler. Reading the orchestrator makes its
+    // folder, which throws on a full disk (e2e/diskfull.e2e.ts): announced as anyone's, the turn keeps its end.
+    let role: ReturnType<typeof orchestratorRoleOf>
+    try { role = orchestratorRoleOf(agentId) } catch { return false }
     return role?.role === 'worker' || (role?.role === 'director' && role.busy)
   }
   const mirror = new CommanderMirror({
