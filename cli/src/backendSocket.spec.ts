@@ -148,6 +148,30 @@ describe('safe session close RPC', () => {
 
 describe('reviewed permanent deletion RPCs', () => {
   afterEach(() => vi.restoreAllMocks())
+  it('tells a relayed client whose sealed frame finds no session that its session is gone, and only then', async () => {
+    const socket = new BackendSocket('fixture')
+    const internals = socket as any
+    const sent = () => internals.queue.map((item: { msg: unknown }) => item.msg)
+    const sealed = { type: 'message', payload: { __e2e: { v: 1, k: 'p', n: 3, ct: 'fixture' } } }
+    await internals.dispatchDown(sealed, 'web:gone')
+    expect(sent()).toContainEqual({ t: 'up', targetConnId: 'web:gone', frame: { type: 'e2e_session_unknown', payload: { refused: { type: 'message', n: 3 } } } })
+    // A frame that does not open on a live session is dropped without a word.
+    const before = sent().length
+    vi.spyOn(internals.e2ee, 'sessionGone').mockReturnValue(null)
+    await internals.dispatchDown(sealed, 'web:live')
+    expect(sent()).toHaveLength(before)
+  })
+
+  it('tells a relayed client whose terminal bytes find no session that its session is gone', async () => {
+    const socket = new BackendSocket('fixture')
+    const internals = socket as any
+    const { sealTerminalBinary } = await import('./lib/terminalBinary.js')
+    const raw = sealTerminalBinary(new Uint8Array(32).fill(7), 9, { kind: 1, streamId: '00112233-4455-6677-8899-aabbccddeeff', seq: 1, bytes: new TextEncoder().encode('ls\r'), compressed: false })!
+    internals.enqueueTerminalBinary('web:gone', raw)
+    await internals.downChains.get('web:gone')
+    expect(internals.queue.map((item: { msg: unknown }) => item.msg)).toContainEqual({ t: 'up', targetConnId: 'web:gone', frame: { type: 'e2e_session_unknown', payload: { refused: { type: 'terminal_binary', kind: 1, n: 9 } } } })
+  })
+
   it.each(['agent_purge', 'agent_worktree_delete'])('%s requires an owner, explicit identity and a review token', async type => {
     const socket = new BackendSocket('fixture')
     const internals = socket as any, frames: any[] = []

@@ -1414,6 +1414,7 @@ export class BackendSocket {
       .then(async () => {
         const clear = this.e2ee.unwrapTerminalBinary(connId, raw)
         if (clear) await this.terminalStreams?.handleBinary(connId, clear)
+        else { const gone = this.e2ee.terminalSessionGone(connId, raw); if (gone) this.sendTo(connId, gone) }
       })
       .catch((err) => {
         console.error('[backend] binary terminal dispatch failed:', err instanceof Error ? err.message : err)
@@ -1594,7 +1595,8 @@ export class BackendSocket {
         }
       } else if (wrapped) {
         const dec = this.e2ee.unwrapDown(connId, frame)
-        if (!dec) return
+        // Sealed for a session this process never had: told, rather than dropped without a word.
+        if (!dec) { const gone = this.e2ee.sessionGone(connId, frame); if (gone) this.sendTo(connId, gone); return }
         frame = dec
       } else {
         console.warn(`[backend] refusing plaintext ${logSafeType(type)} from ${from} — E2EE required`)
