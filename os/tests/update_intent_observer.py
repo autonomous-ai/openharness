@@ -52,6 +52,16 @@ def install(namespace, folder):
             return None
 
     original_consume = namespace['consume_request']
+    original_read = namespace['read']
+    consuming = [None]
+    def read(path, *args, **kwargs):
+        value = original_read(path, *args, **kwargs)
+        if consuming[0] is not None and path == request_path:
+            # The unchanged consume helper reads this document under its own
+            # open.lock. Outside before/after samples are only diagnostics.
+            consuming[0].append(value)
+        return value
+
     def consume_request():
         token = os.environ.get('HARNESS_UPDATE_INSTANCE')
         if token and (folder / 'claim-arm').exists():
@@ -68,19 +78,24 @@ def install(namespace, folder):
                 event('observer-error', reason='Direct inspection observed a different target')
                 raise ValueError('Private target-claim barrier matched a different request')
         before = request()
-        result = original_consume()
+        locked_reads = []
+        consuming[0] = locked_reads
+        try:
+            result = original_consume()
+        finally:
+            consuming[0] = None
         after = request()
         if result:
-            event('request-claimed', result=result, before=before, after=after)
+            event('request-claimed', result=result, before=before, after=after, locked_reads=locked_reads)
         elif isinstance(before, dict) and before.get('target'):
-            event('request-rejected', result=result, before=before, after=after)
+            event('request-rejected', result=result, before=before, after=after, locked_reads=locked_reads)
         if (token is None and isinstance(before, dict) and before.get('target') and (before == after or result)
                 and not (folder / 'direct-poll.json').exists()):
             # Preserve the real result even if it is incorrectly True. Release
             # the other observer so acceptance can report the wrong claimant,
             # instead of disguising a product regression as a barrier timeout.
             original_write(folder / 'direct-poll.json', dict(pid=os.getpid(), token=token,
-                result=result, before=before, after=after, at=time.monotonic()))
+                result=result, before=before, after=after, locked_reads=locked_reads, at=time.monotonic()))
         return result
 
     original_locked = namespace['locked']
@@ -119,4 +134,4 @@ def install(namespace, folder):
             event('worker-result', status=0, stdout=result)
             return result
 
-    namespace.update(screen=screen, locked=locked, run=run, write=write, consume_request=consume_request)
+    namespace.update(screen=screen, locked=locked, run=run, write=write, read=read, consume_request=consume_request)

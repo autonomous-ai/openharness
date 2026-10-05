@@ -1,12 +1,15 @@
 """Portable observer contracts; no VM, worker unit or graphical acceptance."""
 import ast
 import copy
+from concurrent.futures import ThreadPoolExecutor
+import fcntl
 import importlib.util
 import json
 import os
 from pathlib import Path
 import tarfile
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -176,8 +179,55 @@ class ObserverContracts(unittest.TestCase):
             self.assertIs(records[1]['result'], False)
             self.assertIsNone(records[1]['token'])
             self.assertIs(records[-1]['result'], True)
+            self.assertEqual(records[-1]['locked_reads'], [request])
             self.assertEqual(records[-1]['token'], request['target'])
             self.assertLessEqual(json.loads(first_poll)['at'], records[-1]['at'])
+
+    def test_actual_claim_records_publication_after_unlocked_sample_while_waiting_for_lock(self):
+        spec = importlib.util.spec_from_file_location('intent_claim_product', ROOT / 'os/live_update.py')
+        product = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(product)
+        token = 'a' * 32
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {'HARNESS_UPDATE_INSTANCE': token}, clear=True):
+            root = Path(temporary)
+            product.STATE, product.PROC = root / 'state', root / 'proc'
+            product.STATE.mkdir()
+            proc = product.PROC / str(os.getpid())
+            proc.mkdir(parents=True)
+            (proc / 'stat').write_text('1 (python) ' + ' '.join(['S'] + ['0'] * 18 + ['123']))
+            fixture = root / 'fixture'
+            fixture.mkdir()
+            (fixture / 'gate.json').write_text('{"token":"reuse"}')
+            observer.install(product.__dict__, fixture)
+            real_flock = fcntl.flock
+            attempted = threading.Event()
+            def acquire(fd, operation):
+                if operation == fcntl.LOCK_EX:
+                    attempted.set()
+                return real_flock(fd, operation)
+            request = dict(requested_at=1, target=token)
+            with ThreadPoolExecutor(max_workers=1) as pool, (product.STATE / 'open.lock').open('a') as lock:
+                real_flock(lock, fcntl.LOCK_EX)
+                with patch.object(product.fcntl, 'flock', side_effect=acquire):
+                    future = pool.submit(product.consume_request)
+                    try:
+                        self.assertTrue(attempted.wait(2), 'Actual consume did not reach the held lock')
+                        self.assertFalse(future.done())
+                        product.write(product.STATE / 'request.json', request)
+                    finally:
+                        real_flock(lock, fcntl.LOCK_UN)
+                    self.assertIs(future.result(timeout=2), True)
+            with patch.object(guest, 'FIXTURE', fixture):
+                records = guest.events()
+            publication, claim = records
+            self.assertEqual(publication['event'], 'request-published')
+            self.assertEqual(claim['event'], 'request-claimed')
+            self.assertIsNone(claim['before'])
+            self.assertEqual(claim['locked_reads'], [publication['request']])
+            self.assertEqual(claim['token'], token)
+            self.assertIs(claim['result'], True)
+            self.assertIsNone(claim['after'])
+            self.assertFalse((product.STATE / 'request.json').exists())
 
     def test_generated_guest_sources_compile_without_execution(self):
         source = (ROOT / 'os/live_update.py').read_text()

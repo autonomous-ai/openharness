@@ -357,6 +357,7 @@ def exercise(machine, image, release, receipt, output, updates_url):
     receipt['direct_poll'] = direct_poll
     assert direct_poll['pid'] == direct['pid'] and direct_poll['token'] is None and direct_poll['result'] is False, direct_poll
     assert direct_poll['before'] == direct_poll['after'], direct_poll
+    assert direct_poll['locked_reads'] == [direct_poll['before']], direct_poll
     updating = ui_waiting('shortcut', True)
     assert direct_poll['before']['target'] == updating['token']
     release_http('shortcut')
@@ -378,7 +379,7 @@ def exercise(machine, image, release, receipt, output, updates_url):
     assert publications[0]['request'] == direct_poll['before'] and publications[0]['request']['target'] == updating['token']
     claim = claims[0]
     assert (claim['pid'], claim['start'], claim['token']) == (updating['pid'], updating['start'], updating['token'])
-    assert claim['result'] is True and claim['before'] == direct_poll['before'] and claim['after'] is None
+    assert claim['result'] is True and claim['locked_reads'] == [direct_poll['before']] and claim['after'] is None
     assert publications[0]['at'] <= direct_poll['at'] <= claim['at']
     receipt['request_handoff'] = dict(publication=publications[0], rejected=direct_poll, claimed=claim)
     assert any(event['event'] == 'screen-enter' and event['pid'] == updating['pid'] and event['pending'] is True
@@ -416,7 +417,7 @@ def exercise(machine, image, release, receipt, output, updates_url):
     claims = [event for event in reused['events'] if event['phase'] == 'reuse' and event['event'] == 'request-claimed']
     assert len(publications) == len(claims) == 1 and publications[0]['request']['target'] == updating['token'], (publications, claims)
     assert (claims[0]['pid'], claims[0]['start'], claims[0]['token']) == (updating['pid'], updating['start'], updating['token'])
-    assert claims[0]['result'] is True and claims[0]['before'] == publications[0]['request'] and claims[0]['after'] is None
+    assert claims[0]['result'] is True and claims[0]['locked_reads'] == [publications[0]['request']] and claims[0]['after'] is None
     assert not any(event['event'] == 'worker-start' and event['phase'] == 'reuse' for event in reused['events'])
     assert len(reused['ownership']['panes']) == len(completed['ownership']['panes'])
     assert reused['selected_files'] == expected and reused['transaction'] == completed['transaction'] and not reused['request']
