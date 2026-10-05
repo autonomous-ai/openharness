@@ -98,9 +98,10 @@ export function runSearchService(options: SearchServiceOptions): ServiceProcess 
       const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : ''
       if (!sessionId || !index) return
       // A turn boundary: the agents may have changed (a new one, a new conversation), and this
-      // session has new turns to index.
-      if (payload.kind === 'touch') void refresh().then(() => index.touch(sessionId))
-      else if (payload.kind === 'deleteHistory') index.deleteHistory(sessionId)
+      // session has new turns to index. Returned, so a failure is logged rather than left unhandled,
+      // which would end this process.
+      if (payload.kind === 'touch') return refresh().then(() => index.touch(sessionId))
+      if (payload.kind === 'deleteHistory') index.deleteHistory(sessionId)
     },
     onConnected: (connection) => {
       core = connection

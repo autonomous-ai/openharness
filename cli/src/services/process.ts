@@ -30,8 +30,8 @@ export interface ServiceProcessOptions {
   token: string
   /** The requests the core routes here, by type: each answered under `<type>_result`. */
   requests: ServiceRequests
-  /** What the core tells this service (`service_event`). */
-  onEvent?: (payload: Payload) => void
+  /** What the core tells this service (`service_event`). A throw, or a rejection of what it returns, is logged. */
+  onEvent?: (payload: Payload) => void | Promise<unknown>
   /** Each time it is connected to a core: the first time, and after every core restart. */
   onConnected?: (core: CoreConnection) => void
   /** The master's spawn channel; this process when absent. */
@@ -46,19 +46,36 @@ export interface ServiceProcessOptions {
   maxBackoffMs?: number
 }
 
+/** What a test asked this service's process to do wrong. */
+export interface ServiceFaults {
+  start: boolean
+  crash: boolean
+  leak: boolean
+  /** The requests and events that fail on every call. */
+  calls: ReadonlySet<string>
+}
+
 /**
- * `HARNESSD_TEST_FAULTS` for a service's own process, as the end-to-end suite uses them: `<name>.crash`
- * exits soon after start, `<name>.leak` keeps allocating memory it never lets go. Each is what the master
- * must survive. (A hang needs no fault: a stopped process — SIGSTOP — beats no more than a hung one.)
+ * `HARNESSD_TEST_FAULTS` for a service's own process, as the end-to-end suite uses them. The names the
+ * core's host takes mean the same here (core/serviceHost.ts), so one test proves a guarantee whichever
+ * process the service runs in: `<name>` fails its start, `<name>.<request or event>` fails that request
+ * or event on every call. Two only a process has: `<name>.crash` exits soon after start, `<name>.leak`
+ * keeps allocating memory it never lets go. Each is what the master, or the core, must survive. (A hang
+ * needs no fault: a stopped process — SIGSTOP — beats no more than a hung one.)
  */
-export function serviceFaults(env: NodeJS.ProcessEnv, name: string): Set<'crash' | 'leak'> {
-  const faults = new Set<'crash' | 'leak'>()
+export function serviceFaults(env: NodeJS.ProcessEnv, name: string): ServiceFaults {
+  const faults = { start: false, crash: false, leak: false, calls: new Set<string>() }
   for (const entry of (env.HARNESSD_TEST_FAULTS ?? '').split(',')) {
     const [service, fault] = entry.trim().split('.')
-    if (service === name && (fault === 'crash' || fault === 'leak')) faults.add(fault)
+    if (service !== name) continue
+    if (fault === undefined) faults.start = true
+    else if (fault === 'crash' || fault === 'leak') faults[fault] = true
+    else faults.calls.add(fault)
   }
   return faults
 }
+
+const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
 export interface ServiceProcess {
   stop(): void
@@ -68,6 +85,9 @@ export interface ServiceProcess {
 export function runServiceProcess(options: ServiceProcessOptions): ServiceProcess {
   const channel: MasterChannel = options.channel ?? (process as unknown as MasterChannel)
   const env = options.env ?? process.env
+  const faults = serviceFaults(env, options.name)
+  // As a service whose start throws: this process ends, and the master decides whether to try again.
+  if (faults.start) throw new Error(`injected fault: ${options.name}`)
   const connect = options.connect ?? ((url: string) => new WebSocket(url))
   const exit = options.exit ?? ((code: number) => process.exit(code))
   const log = options.log ?? ((line: string) => console.log(line))
@@ -88,10 +108,9 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
   }
   const beating = channel.send ? setInterval(beat, heartbeatInterval(env)) : null
   if (channel.send) beat()
-  const faults = serviceFaults(env, options.name)
   const leaked: Buffer[] = []
-  if (faults.has('crash')) setTimeout(() => exit(1), 200)
-  const leaking = faults.has('leak') ? setInterval(() => { leaked.push(Buffer.alloc(8 * 1024 * 1024, 1)); leaked.push(Buffer.from(new Array(200_000).fill('x').join(''))) }, 100) : null
+  if (faults.crash) setTimeout(() => exit(1), 200)
+  const leaking = faults.leak ? setInterval(() => { leaked.push(Buffer.alloc(8 * 1024 * 1024, 1)); leaked.push(Buffer.from(new Array(200_000).fill('x').join(''))) }, 100) : null
   // The master is gone: so is this service, rather than an orphan holding what it holds.
   channel.once('disconnect', () => { stop(); exit(0) })
 
@@ -118,7 +137,17 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       options.onConnected?.(core)
       return
     }
-    if (frame.type === 'service_event') { options.onEvent?.(payload); return }
+    if (frame.type === 'service_event') {
+      // An event that fails is this service's alone: logged, and the next one handled as usual. Thrown
+      // out of the socket's listener it ended the process, and every request in flight with it.
+      const kind = typeof payload.kind === 'string' ? payload.kind : 'event'
+      const failed = (error: unknown): void => log(`[service ${options.name}] ${kind} failed · ${describe(error)}`)
+      try {
+        if (faults.calls.has(kind)) throw new Error(`injected fault: ${options.name}.${kind}`)
+        void Promise.resolve(options.onEvent?.(payload)).catch(failed)
+      } catch (error) { failed(error) }
+      return
+    }
     if (frame.type === 'service_query_result') {
       const waiting = pending.get(String(payload.requestId))
       if (!waiting) return
@@ -133,10 +162,17 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
     const requestId = payload.requestId
     // Who asked, as the core established it; read as the least it could be if it is missing.
     const asker = { local: frame.asker?.local === true, owner: frame.asker?.owner === true }
-    // A request that fails here is answered as failed, never left for the core's timeout.
+    // A request that fails here is answered as failed, never left for the core's timeout, and in the
+    // words the core's host uses: what went wrong goes to the log, not to whoever asked.
     void Promise.resolve()
-      .then(() => handle(payload, asker))
-      .catch((error: unknown) => ({ error: 'SERVICE_FAILED', detail: error instanceof Error ? error.message : String(error) }))
+      .then(() => {
+        if (faults.calls.has(type)) throw new Error(`injected fault: ${options.name}.${type}`)
+        return handle(payload, asker)
+      })
+      .catch((error: unknown) => {
+        log(`[service ${options.name}] ${type} failed · ${describe(error)}`)
+        return { error: 'SERVICE_FAILED', service: options.name }
+      })
       .then((result) => send({ type: `${type}_result`, payload: { ...result, requestId } }))
   }
 

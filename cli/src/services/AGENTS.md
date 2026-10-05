@@ -31,7 +31,8 @@ let several people build features at once without touching the core or each othe
 5. **Test it to 100%** with `fakeCore()` (`src/testing/fakeCore.ts`); `npm run test:core` covers this
    folder. Prove failure isolation end to end with `HARNESSD_TEST_FAULTS=<name>` (its start fails),
    `<name>.<member>` (one port call fails) and `<name>.<request type>` (one request fails); see
-   `e2e/services.e2e.ts`.
+   `e2e/services.e2e.ts`. The same names work in a service's own process, where `<name>.<event kind>`
+   fails an event; `<name>.crash` and `<name>.leak` exist only there (`src/services/process.ts`).
 
 `store.ts` (the Harness Store: no port, four requests) is the example to copy for a feature;
 `search.ts` for a service the core also calls.
