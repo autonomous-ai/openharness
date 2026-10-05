@@ -53,6 +53,12 @@ describe('a failing service never takes the core down', () => {
     for (const type of ['dsh_list', 'dsh_install', 'dsh_update', 'dsh_remove']) {
       expect(await client.request(type, { id: 'acme/thing' }), type).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'store', retryable: false })
     }
+    for (const type of ['grid_models_list', 'models_list', 'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop']) {
+      expect(await client.request(type, { modelId: 'org/Model-GGUF' }), type).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: false })
+    }
+    // The Model Manager's grid commands are still the socket's, and so is their handshake: models being
+    // off does not tell the Grid harness to update Harness.
+    expect(await client.request('grid_fleet_capabilities', {})).toMatchObject({ protocol: 1, thinkingControl: true })
 
     await daemon.restart()
     const again = await LocalClient.connect(daemon)
@@ -138,6 +144,21 @@ describe('a failing service never takes the core down', () => {
     expect(await client.request('dsh_install', { url: 'https://example.com/\n' })).toMatchObject({ error: 'INVALID_DSH' })
     const agentId = await boundAgent(daemon, client, 'store-failing')
     await turn(client, agentId, 'with the store failing')
+    expect(daemon.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  it('models answers from its own service; one of its requests failing leaves its others and the core alone', async () => {
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'models.grid_models_list' } })
+    onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
+    await daemon.start()
+    const client = await LocalClient.connect(daemon)
+    expect(await client.request('grid_models_list', {})).toMatchObject({ error: 'SERVICE_FAILED', service: 'models' })
+    expect(daemon.log()).toContain('[services] models.grid_models_list failed · injected fault: models.grid_models_list')
+    // Its other requests are still its own answers: with no agent here, no Model/Effort choices.
+    expect(await client.request('models_list', {})).toMatchObject({ models: [] })
+    expect(await client.request('grid_fleet_capabilities', {})).toMatchObject({ protocol: 1 })
+    expect((await client.request('agents_list', {})).agents).toEqual([])
     expect(daemon.coresStarted()).toBe(1)
     client.close()
   })

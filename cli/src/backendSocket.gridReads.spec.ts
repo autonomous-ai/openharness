@@ -1,7 +1,8 @@
 /**
  * The daemon's grid RPCs as a desktop drives them — `grid_models_list`, the Model Manager's
  * `grid_fleet_models_list` and `agent_retarget` — against a fake relay that records every request it
- * receives, and a fake `grid` first on PATH (grid-reads-without-waking issue 02).
+ * receives, and a fake `grid` first on PATH (grid-reads-without-waking issue 02). The first two are
+ * the models service's (services/models.ts), answered through a service host as the daemon runs it.
  *
  * The relay is the spy: nothing here recomputes what the daemon sends, it reads what arrived.
  */
@@ -12,9 +13,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BackendSocket } from './backendSocket.js'
 import { env } from './config/env.js'
+import { emptyPorts, MODELS_FALLBACKS } from './core/api.js'
+import { createServiceHost } from './core/serviceHost.js'
 import { fakeGridAnswers, installFakeGrid, type FakeGrid, type FakeGridPlan } from './lib/__fixtures__/fakeGrid.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { observeMachineList, resetGridModels, type GridModelsService } from './lib/gridModels.js'
+import { MODELS_REQUESTS, startModels } from './services/models.js'
+import { fakeCore } from './testing/fakeCore.js'
 
 const OWN = 'mine', OWN_ID = 'net-own'
 const OVERVIEW = '/relay/v1/grid/overview'
@@ -79,7 +84,8 @@ beforeEach(async () => {
   previousData = env.ADAPTER_DATA_DIR
   env.ADAPTER_DATA_DIR = join(root, 'data')
   clock = Date.parse('2026-09-24T10:00:00Z')
-  // Before the socket, which subscribes to the service it finds for its `grid_models_changed` push.
+  // Before the socket and the models service, which subscribe to the service they find: the socket for its
+  // `grid_models_changed` push, models for the agents' frames.
   service = resetGridModels({
     now: () => clock, dataDir: () => join(root, 'data'), gridHome: () => gridHome, email: () => null,
     // An explicit wake's 3 s pauses move the clock instead of the test.
@@ -88,6 +94,13 @@ beforeEach(async () => {
   grid = installFakeGrid(plan())
   socket = new BackendSocket('token')
   socket.setHarnessGridName(OWN)
+  const models = createServiceHost(emptyPorts(), { log: () => {} })
+  models.start('models', startModels, fakeCore({
+    dataDir: join(root, 'data'),
+    account: { privateGridName: () => socket.privateGridName(), machineName: () => socket.machineName() },
+    clients: { gridModelsChanged: () => { void socket.pushGridModels() } },
+  }), MODELS_FALLBACKS, MODELS_REQUESTS)
+  socket.serviceRouter = (type, payload, asker, reply) => models.route(type, payload, asker, reply)
   frames = []
   socket.registerLocalClient('local:grid-reads', { sendFrame: (frame) => { frames.push(frame as typeof frames[number]); return true }, sendBinary: () => true })
 })

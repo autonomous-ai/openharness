@@ -62,7 +62,7 @@ function runForegroundLines(): number {
  * the code belongs in a module or a service.
  */
 const RUN_FOREGROUND_BUDGET = 2_690
-const BACKEND_SOCKET_BUDGET = 3_160
+const BACKEND_SOCKET_BUDGET = 2_975
 
 /** Exceptions, each with its reason. Keep this short. */
 const SERVICE_MAY_IMPORT: Record<string, string> = {

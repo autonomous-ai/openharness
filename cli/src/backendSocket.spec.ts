@@ -5,9 +5,12 @@ import { readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
-import { AGENT_OPENED_THROTTLE_MS, BackendSocket, compactRuntimePickerModels, deviceAgentListItem, deviceAgentRow } from './backendSocket.js'
+import { AGENT_OPENED_THROTTLE_MS, BackendSocket, deviceAgentListItem, deviceAgentRow } from './backendSocket.js'
 import { grokHistoryPage } from './core/transcripts/history.js'
-import { ServiceUnavailableError } from './core/serviceHost.js'
+import { emptyPorts, MODELS_FALLBACKS } from './core/api.js'
+import { createServiceHost, ServiceUnavailableError } from './core/serviceHost.js'
+import { MODELS_REQUESTS, startModels } from './services/models.js'
+import { fakeCore } from './testing/fakeCore.js'
 import { AuthSessionError, type AuthSessionManager } from './lib/authSession.js'
 import { WS_IDLE_DEADLINE_MS as IDLE_DEADLINE_MS } from './lib/wsLiveness.js'
 import { TerminalStreamManager } from './lib/terminalStreamManager.js'
@@ -186,24 +189,10 @@ describe('reviewed permanent deletion RPCs', () => {
 
 describe('local model lifecycle RPCs', () => {
   afterEach(() => vi.restoreAllMocks())
-  it.each(['grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop'])('dispatches %s and returns its correlated result', async type => {
-    const socket = new BackendSocket('fixture')
-    socket.setHarnessGridName('home')
-    const frames: any[] = []
-    socket.registerLocalClient('local:models', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
-    const list = vi.spyOn(LocalModels.prototype, 'list').mockResolvedValue({ models: [], busy: false, observedAt: 'fixture' })
-    const act = vi.spyOn(LocalModels.prototype, 'act').mockResolvedValue({ error: 'fixture refusal' })
-    socket.handleLocalFrame('local:models', { type, payload: { requestId: 'models-rpc', modelId: 'fixture/model', refresh: true } })
-    await vi.waitFor(() => expect(frames.some(frame => frame.type === `${type}_result`)).toBe(true))
-    expect(frames.find(frame => frame.type === `${type}_result`).payload.requestId).toBe('models-rpc')
-    if (type === 'grid_fleet_models_list') expect(list).toHaveBeenCalledWith('home', true)
-    else expect(act).toHaveBeenCalledWith('home', 'fixture/model', type.endsWith('download') ? 'download' : type.endsWith('start') ? 'start' : 'stop')
-    await socket.stop()
-  })
-
   it('a slow catalog never blocks terminal or agent inventory, and errors stay redacted', async () => {
     const socket = new BackendSocket('fixture')
     socket.setHarnessGridName('home')
+    serveModels(socket)
     const frames: any[] = []
     socket.registerLocalClient('local:models', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
     let reject!: (cause: Error) => void
@@ -221,10 +210,13 @@ describe('local model lifecycle RPCs', () => {
 
   it('rejects unencrypted remote lifecycle requests before reaching the model service', async () => {
     const socket = new BackendSocket('fixture')
+    const models = serveModels(socket)
+    const routed = vi.spyOn(models, 'route')
     const act = vi.spyOn(LocalModels.prototype, 'act')
     for (const type of ['grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop']) {
       await (socket as any).dispatchDown({ type, payload: { requestId: 'unsafe', modelId: 'fixture/model' } }, 'remote')
     }
+    expect(routed).not.toHaveBeenCalled()
     expect(act).not.toHaveBeenCalled()
     await socket.stop()
   })
@@ -553,6 +545,21 @@ function sealedDown(socket: BackendSocket, connId: string, type: string, payload
   return { t: 'down', connId, frame: { type, payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture', clear: payload } } } }
 }
 
+/** The models service (services/models.ts) answering the socket's models requests through a service host,
+ *  as the daemon runs it: its core reads the grid name and this machine's name off the socket. */
+function serveModels(socket: BackendSocket, over: Parameters<typeof fakeCore>[0] = {}) {
+  const host = createServiceHost(emptyPorts(), { log: () => {} })
+  const core = fakeCore({
+    dataDir: process.env.ADAPTER_DATA_DIR,
+    ...over,
+    account: { privateGridName: () => socket.privateGridName(), machineName: () => socket.machineName(), ...over.account },
+    clients: { gridModelsChanged: () => { void socket.pushGridModels() }, ...over.clients },
+  })
+  host.start('models', startModels, core, MODELS_FALLBACKS, MODELS_REQUESTS)
+  socket.serviceRouter = (type, payload, asker, reply) => host.route(type, payload, asker, reply)
+  return host
+}
+
 describe('BackendSocket outbound queue', () => {
   afterEach(() => {
     wsMock.instances.length = 0
@@ -775,9 +782,9 @@ describe('BackendSocket outbound queue', () => {
 
   it('serves the opaque runtime catalog through the existing models_list RPC', async () => {
     const socket = new BackendSocket('token')
-    socket.runtimeModelsProvider = async () => [
+    serveModels(socket, { agents: { runtimeModels: async () => [
       { id: 'runtime-v1:s1:codex:gpt-5.6-sol@high', displayName: 'GPT-5.6 Sol / High' },
-    ]
+    ] } })
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1191,7 +1198,7 @@ describe('BackendSocket outbound queue', () => {
       { id: 'runtime-v1:s1:codex:o3@medium', displayName: 'o3 / Medium' },
       { id: 'runtime-v1:s1:codex:o3@auto', displayName: 'o3 / Auto' },
     ])
-    socket.runtimeModelsProvider = provider
+    serveModels(socket, { agents: { runtimeModels: provider } })
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1232,7 +1239,7 @@ describe('BackendSocket outbound queue', () => {
     const provider = vi.fn(async () => [
       { id: 'runtime-v1:s1:codex:gpt-5.6-sol@high', displayName: 'sensitive' },
     ])
-    socket.runtimeModelsProvider = provider
+    serveModels(socket, { agents: { runtimeModels: provider } })
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1254,9 +1261,9 @@ describe('BackendSocket outbound queue', () => {
 
   it('serves authenticated local RPCs in cleartext without weakening cloud E2EE', async () => {
     const socket = new BackendSocket('token')
-    socket.runtimeModelsProvider = async () => [
+    serveModels(socket, { agents: { runtimeModels: async () => [
       { id: 'runtime-v1:s1:codex:gpt-5.6-sol@high', displayName: 'Sol / High' },
-    ]
+    ] } })
     const frames: Array<Record<string, unknown>> = []
     expect(socket.registerLocalClient('local:test', {
       sendFrame: (frame) => { frames.push(frame); return true },
@@ -1297,7 +1304,7 @@ describe('BackendSocket outbound queue', () => {
       () => new Promise(resolve => { finish = resolve }),
     )
     const socket = new BackendSocket('token')
-    socket.runtimeModelsProvider = async () => []
+    serveModels(socket)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:stats', {
       sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true,
@@ -1351,7 +1358,7 @@ describe('BackendSocket outbound queue', () => {
     const socket = new BackendSocket('token')
     let finish!: (value: { sampledAt: string; agents: [] }) => void
     socket.harnessResourcesReader = vi.fn(() => new Promise<{ sampledAt: string; agents: [] }>(resolve => { finish = resolve }))
-    socket.runtimeModelsProvider = async () => []
+    serveModels(socket)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:monitor', {
       sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true,
@@ -1387,10 +1394,10 @@ describe('BackendSocket outbound queue', () => {
 
   it('never holds a connection\'s next request for a service still answering one', async () => {
     const socket = new BackendSocket('token')
-    socket.runtimeModelsProvider = async () => []
+    const models = serveModels(socket)
     let answerCatalog!: (result: Record<string, unknown>) => void
-    socket.serviceRouter = (type, _payload, _asker, reply) => {
-      if (type !== 'dsh_list') return false
+    socket.serviceRouter = (type, payload, asker, reply) => {
+      if (type !== 'dsh_list') return models.route(type, payload, asker, reply)
       answerCatalog = reply
       return true
     }
@@ -2501,43 +2508,6 @@ describe('agent_restart RPC', () => {
   })
 })
 
-describe('compact runtime picker catalog', () => {
-  const models = [
-    { id: 'runtime-v1:s1:codex:gpt-5.6-sol@auto', displayName: 'Sol / Auto' },
-    { id: 'runtime-v1:s1:codex:gpt-5.6-sol@medium', displayName: 'Sol / Medium' },
-    { id: 'runtime-v1:s1:codex:gpt-5.6-sol@high', displayName: 'Sol / High' },
-    { id: 'runtime-v1:s1:codex:o3@high', displayName: 'o3 / High' },
-    { id: 'runtime-v1:s2:claude:sonnet@high', displayName: 'Sonnet / High' },
-  ]
-
-  it('returns only explicit efforts for the selected session model', () => {
-    expect(compactRuntimePickerModels(
-      models,
-      's1',
-      'effort',
-      'runtime-v1:s1:codex:gpt-5.6-sol@medium',
-    )).toEqual([
-      { id: 'runtime-v1:s1:codex:gpt-5.6-sol@medium' },
-      { id: 'runtime-v1:s1:codex:gpt-5.6-sol@high' },
-    ])
-  })
-
-  it('caps the device model list and keeps the running model in it', () => {
-    // Devin publishes 72 models; a 49-row wheel already tripped the device's task watchdog once.
-    const many = Array.from({ length: 40 }, (_, i) => ({
-      id: `runtime-v1:s1:devin:model-${i}@auto`,
-      displayName: `Model ${i}`,
-    }))
-    const capped = compactRuntimePickerModels(many, 's1', 'model', 'runtime-v1:s1:devin:model-39@auto')
-
-    expect(capped).toHaveLength(24)
-    // The model the agent is running would have fallen off the end of the catalog order.
-    expect(capped[0]).toEqual({ id: 'runtime-v1:s1:devin:model-39@auto' })
-    // The web asks without a picker mode and still gets the whole catalog.
-    expect(compactRuntimePickerModels(many, 's1', undefined, null)).toHaveLength(40)
-  })
-})
-
 describe('device agent list contract', () => {
   it('keeps the engine discriminator while trimming web-only fields', () => {
     expect(deviceAgentListItem({ id: 's1', name: 'Codex agent', engine: 'codex', userId: 'secret' })).toEqual({
@@ -2841,6 +2811,7 @@ describe('grid_models_list says whether this machine has a grid CLI', () => {
 
   async function listModels(): Promise<Record<string, unknown> | undefined> {
     const socket = new BackendSocket('token')
+    serveModels(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -2866,20 +2837,14 @@ describe('grid is set up on demand — by an act, never by a read', () => {
 
   const READY: GridAttachResult = { status: 'signed-in', name: 'kelvin-1a2b3c4d', detail: '', ownGrid: 'created' }
 
-  /** A daemon whose grid set-up and local models are stubs, asked over a local frame. */
+  /** A daemon whose grid set-up is a stub, asked over a local frame. The models picker's Set up and a
+   *  local model's Get and Use are the models service's (services/models.spec.ts); a Grid harness command
+   *  and a move onto a grid model are the socket's. */
   function daemon(ready: GridAttachResult = READY) {
     const socket = new BackendSocket('token')
     socket.deriveGridName = async () => 'kelvin-1a2b3c4d'
-    let setUp = false
-    const ensureGrid = vi.fn(async (_request?: { ownGrid?: boolean }) => {
-      if (ready.status === 'signed-in' || ready.status === 'converged') setUp = true
-      return ready
-    })
+    const ensureGrid = vi.fn(async (_request?: { ownGrid?: boolean }) => ready)
     socket.ensureGrid = ensureGrid
-    socket.gridSetUp = () => setUp
-    const list = vi.fn(async () => ({ models: [], observedAt: 'now', busy: false }))
-    const act = vi.fn(async () => ({}))
-    Object.assign(socket as unknown as Record<string, unknown>, { localModels: { list, act } })
     socket.onRetargetAgent = async () => ({ ok: true })
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:grid', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
@@ -2893,54 +2858,8 @@ describe('grid is set up on demand — by an act, never by a read', () => {
       await vi.waitFor(() => expect(answer()).toBeDefined())
       return answer()!
     }
-    return { socket, ensureGrid, list, act, ask, done: async () => { await socket.unregisterLocalClient('local:grid'); await socket.stop() } }
+    return { socket, ensureGrid, ask, done: async () => { await socket.unregisterLocalClient('local:grid'); await socket.stop() } }
   }
-
-  it('the list read a picker polls sets nothing up, and says when it is needed', async () => {
-    const d = daemon()
-    const answer = await d.ask('grid_fleet_models_list')
-    expect(d.ensureGrid).not.toHaveBeenCalled()
-    expect(answer).toMatchObject({ gridSetupNeeded: true })
-    await d.done()
-  })
-
-  it("Set up — a list read carrying `setup` — signs grid in with the account's own grid, then answers", async () => {
-    const d = daemon()
-    const answer = await d.ask('grid_fleet_models_list', { setup: true })
-    expect(d.ensureGrid).toHaveBeenCalledExactlyOnceWith({ ownGrid: true })
-    expect(answer).not.toHaveProperty('gridSetupNeeded')
-    expect(answer).not.toHaveProperty('gridSetupError')
-    // Read fresh: the catalog was unreachable a moment ago.
-    expect(d.list).toHaveBeenCalledWith('kelvin-1a2b3c4d', true)
-    await d.done()
-  })
-
-  it("a Get signs grid in; a Use also makes sure of the account's grid; a Stop does neither", async () => {
-    const d = daemon()
-    await d.ask('grid_fleet_model_download', { modelId: 'org/Model-GGUF' })
-    await d.ask('grid_fleet_model_start', { modelId: 'org/Model-GGUF' })
-    await d.ask('grid_fleet_model_stop', { modelId: 'org/Model-GGUF' })
-    expect(d.ensureGrid.mock.calls).toEqual([[{ ownGrid: false }], [{ ownGrid: true }]])
-    expect(d.act.mock.calls.map((call) => (call as unknown[])[2])).toEqual(['download', 'start', 'stop'])
-    await d.done()
-  })
-
-  it('a set-up grid refused is said, and the act waiting on it does not run', async () => {
-    const d = daemon({ status: 'handoff-failed', name: 'kelvin-1a2b3c4d', detail: 'grid is too old for --harness' })
-    expect(await d.ask('grid_fleet_model_start', { modelId: 'org/Model-GGUF' })).toMatchObject({ error: 'grid is too old for --harness' })
-    expect(d.act).not.toHaveBeenCalled()
-    expect(await d.ask('grid_fleet_models_list', { setup: true }))
-      .toMatchObject({ gridSetupNeeded: true, gridSetupError: 'grid is too old for --harness' })
-    await d.done()
-  })
-
-  it("an account grid that could not be made fails a Use, not a Get", async () => {
-    const d = daemon({ status: 'signed-in', name: 'kelvin-1a2b3c4d', detail: 'free plan: one grid per account', ownGrid: 'failed' })
-    expect(await d.ask('grid_fleet_model_start', { modelId: 'org/Model-GGUF' })).toMatchObject({ error: 'free plan: one grid per account' })
-    await d.ask('grid_fleet_model_download', { modelId: 'org/Model-GGUF' })
-    expect(d.act.mock.calls.map((call) => (call as unknown[])[2])).toEqual(['download'])
-    await d.done()
-  })
 
   it('a Grid harness command runs against grid as it stands — its viewer asks on its own, so it never sets grid up', async () => {
     const d = daemon()
@@ -2977,6 +2896,7 @@ describe('the connect burst with no network', () => {
     const socket = new BackendSocket('token')
     socket.deriveGridName = () => new Promise<null>(() => {}) // a grid read that never lands
     socket.accountUsageReader = () => new Promise(() => {})   // a vendor that never answers
+    serveModels(socket)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:burst', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
 

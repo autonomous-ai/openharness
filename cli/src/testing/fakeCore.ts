@@ -19,6 +19,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       advertised: vi.fn(() => []),
       terminalAvailable: vi.fn(() => false),
       sync: vi.fn(),
+      runtimeModels: vi.fn(async () => []),
       ...over.agents,
     },
     transcripts: { databaseHistory: vi.fn(() => undefined), ...over.transcripts },
@@ -27,7 +28,13 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       open: { known: vi.fn(() => new Map()), fresh: vi.fn(async () => new Map()) },
       ...over.external,
     },
-    account: { mintGridName: vi.fn(async () => null), accessToken: vi.fn(async () => 'token'), ...over.account },
-    clients: { viewerChanged: vi.fn(), gridNamed: vi.fn(), dshInstallStatus: vi.fn(), ...over.clients },
+    account: {
+      mintGridName: vi.fn(async () => null),
+      accessToken: vi.fn(async () => 'token'),
+      privateGridName: vi.fn(async () => null),
+      machineName: vi.fn(() => null),
+      ...over.account,
+    },
+    clients: { viewerChanged: vi.fn(), gridNamed: vi.fn(), gridModelsChanged: vi.fn(), dshInstallStatus: vi.fn(), ...over.clients },
   }
 }
