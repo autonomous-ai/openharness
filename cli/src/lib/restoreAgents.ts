@@ -81,6 +81,8 @@ export interface RestoreAgentsDeps {
   >
   /** `tmux respawn-pane` over the restored pane — the resume → fresh fallback. */
   respawn: (runtime: TmuxRuntimeRef, launch: RestoreLaunch) => Promise<{ ok: boolean; reason?: string }>
+  /** A pane was rebuilt on this conversation: its engine is a new one (core/transcripts/relaunch.ts). */
+  engineStarted?: (sessionId: string) => void
   /** One probe of the pane for a recognizable engine process. */
   probeProcess: (runtime: TmuxRuntimeRef, engine: AgentEngine) => Promise<ProcessIdentity | null>
   /** `'gone'` when tmux no longer knows the pane, `'unknown'` when it could not be asked (`tmuxPaneState`).
@@ -317,6 +319,8 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
         deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not open a pane · ${created.reason}`)
         continue
       }
+      // A new engine on the conversation: a turn it left open is over (core/transcripts/relaunch.ts).
+      if (resumeSessionId) deps.engineStarted?.(resumeSessionId)
       const key = terminalRouteKey(created.runtime)
       // A terminal is up the moment its pane is — no engine to wait for, no route to hold.
       if (isTerminalEngine(entry.engine)) {

@@ -3363,6 +3363,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       retainStopped: retainExitedSession,
       keepAbandoned: keepAbandonedConversation,
       registry,
+      engineStarted: (sessionId) => relaunchMarks.engineStarted(sessionId),
       // "Alive" means the pane still runs THIS row's engine — not merely that tmux knows the id.
       // A new tmux server hands out `%N` from zero again, so a stale id can name someone's shell;
       // and a pane that outlived the daemon in a session discovery no longer lists still has its

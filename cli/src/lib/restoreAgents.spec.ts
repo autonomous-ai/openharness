@@ -242,8 +242,25 @@ describe('restoreAgents — which agents get a pane back', () => {
   it('launches fresh when the row has no session to resume', async () => {
     const h = harness([row({ sessionId: '', boundAt: null })])
     h.probes.set('%0', [identity(1)])
-    await restoreAgents(h.deps)
+    const engineStarted = vi.fn()
+    await restoreAgents({ ...h.deps, engineStarted })
     expect(h.launches).toEqual([{ agentId: 'agent-a' }])
+    // No conversation to carry over, so none whose open turn a new engine ends.
+    expect(engineStarted).not.toHaveBeenCalled()
+    await settled(h, 1, 1)
+  })
+
+  it('says a rebuilt pane runs a new engine on its conversation, and only once the pane is up', async () => {
+    const h = harness([row(), row({ agentId: 'agent-b', sessionId: 'session-b', tmuxPane: '%1' })])
+    h.probes.set('%0', [null, identity(500)])
+    h.probes.set('%1', [null, identity(501)])
+    const engineStarted = vi.fn()
+    let panes = 0
+    const createPane = h.deps.createPane
+    // The second pane cannot be opened: its conversation keeps whatever engine it had.
+    const summary = await restoreAgents({ ...h.deps, engineStarted, createPane: async (entry, launch) => (++panes === 2 ? { ok: false, reason: 'no room' } : createPane(entry, launch)) })
+    expect(summary.restored).toEqual(['agent-a'])
+    expect(engineStarted.mock.calls).toEqual([['session-a']])
     await settled(h, 1, 1)
   })
 

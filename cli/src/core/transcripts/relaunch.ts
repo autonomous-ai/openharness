@@ -29,19 +29,37 @@ export interface RelaunchMarkOptions {
   maxAgeMs?: number
 }
 
+/**
+ * Where a relaunched conversation's live writing begins, and whether a new engine was started on it. A
+ * daemon's start marks every conversation it restores, including those whose engine kept running in
+ * tmux; only a resume, or a restore that rebuilt the pane, starts a new engine. A turn left open before
+ * a new engine started died with the engine before it: announced again at the attach, it showed the
+ * interrupted message starting anew in every window (e2e/machine.e2e.ts, Codex after the tmux server
+ * died mid-turn).
+ */
+export interface RelaunchMark {
+  offset: number
+  engineStarted: boolean
+}
+
 export function createRelaunchMarks({ now = Date.now, maxAgeMs = RESUME_READINESS_BUDGET_MS }: RelaunchMarkOptions = {}) {
-  const marks = new Map<string, { offset: number; at: number }>()
+  const marks = new Map<string, RelaunchMark & { at: number }>()
   return {
     /** Before the engine is launched: its own writing starts at `offset`. */
-    note(sessionId: string, offset: number): void {
-      marks.set(sessionId, { offset, at: now() })
+    note(sessionId: string, offset: number, engineStarted = false): void {
+      marks.set(sessionId, { offset, engineStarted, at: now() })
     },
-    /** At the attach: where the fold stops, once. */
-    take(sessionId: string): number | undefined {
+    /** A restore rebuilt this conversation's pane, so its engine is a new one. */
+    engineStarted(sessionId: string): void {
+      const mark = marks.get(sessionId)
+      if (mark) mark.engineStarted = true
+    },
+    /** At the attach: where the fold stops, and whether the engine is new, once. */
+    take(sessionId: string): RelaunchMark | undefined {
       const mark = marks.get(sessionId)
       if (!mark) return undefined
       marks.delete(sessionId)
-      return now() - mark.at <= maxAgeMs ? mark.offset : undefined
+      return now() - mark.at <= maxAgeMs ? { offset: mark.offset, engineStarted: mark.engineStarted } : undefined
     },
     /** How many marks are waiting for an attach — for tests and diagnostics. */
     get size(): number {

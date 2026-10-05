@@ -6,6 +6,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import type { TailHold } from '../../watcher/watcher.js'
 import { createAttach, type AttachDeps } from './attach.js'
 import { createSessionNormalizers } from './normalizers.js'
+import type { RelaunchMark } from './relaunch.js'
 
 /**
  * The engines' own normalizers and readers are tested with each engine. Here each is a fake that
@@ -197,19 +198,19 @@ describe('attaching a session', () => {
 
     it('folds a resumed conversation only up to where its relaunched engine began, and tails the rest live', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
-      const take = vi.fn((_sessionId: string): number | undefined => undefined)
+      const take = vi.fn((_sessionId: string): RelaunchMark | undefined => undefined)
       const run = setup({ relaunchMarks: { take } })
       const history = JSON.stringify({ ...CLAUDE_PROMPT, uuid: 'before' })
       // The relaunched engine answered a message before this attach: a whole turn after the mark.
       const s = session('claude', transcript([history, { ...CLAUDE_PROMPT, uuid: 'after' }, { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }], stop_reason: 'end_turn' }, uuid: 'a1' }]))
       const mark = Buffer.byteLength(history) + 1
-      take.mockReturnValueOnce(mark)
+      take.mockReturnValueOnce({ offset: mark, engineStarted: true })
       expect(await run.attach.attachSession(s)).toBe(true)
       expect(take).toHaveBeenCalledWith(s.sessionId)
       // The tail starts where the engine's own writing began, so its turn reaches every window live.
       expect(vi.mocked(run.deps.watcher.addSession).mock.calls[0][1]).toEqual({ fromOffset: mark })
       // A mark is for the next attach only: taken even by an attach that only makes sure the tail runs.
-      take.mockReturnValueOnce(mark)
+      take.mockReturnValueOnce({ offset: mark, engineStarted: true })
       expect(await run.attach.attachSession(s)).toBe(true)
       expect(take).toHaveBeenCalledTimes(2)
     })
@@ -277,7 +278,7 @@ describe('attaching a session', () => {
       // what the first-turn rule asks, but its engine was relaunched on it, so it is history.
       const lines = [CLAUDE_PROMPT, { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }], stop_reason: 'end_turn' }, uuid: 'a1' }]
       const s = session('claude', transcript(lines))
-      const take = vi.fn((_sessionId: string): number | undefined => statSync(s.transcriptPath!).size)
+      const take = vi.fn((_sessionId: string): RelaunchMark | undefined => ({ offset: statSync(s.transcriptPath!).size, engineStarted: true }))
       const run = setup({ relaunchMarks: { take } })
       await run.attach.attachSession(s, false, false, true)
       expect(run.deps.emit).not.toHaveBeenCalled()
@@ -286,6 +287,22 @@ describe('attaching a session', () => {
       const cursor = session('cursor', undefined, { sessionId: 'cursor-relaunched' })
       await run.attach.attachSession(cursor, false, true)
       expect(run.deps.emit).not.toHaveBeenCalled()
+    })
+
+    it('announces a turn open at attach while its engine may still be running, never one a new engine left behind', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      // The engine was killed mid-turn (the tmux server died): the prompt is in, its answer never came.
+      const s = session('claude', transcript([CLAUDE_PROMPT]))
+      const size = statSync(s.transcriptPath!).size
+      // A daemon restart marks every conversation, and an engine that kept running is still in that turn.
+      const survived = setup({ relaunchMarks: { take: () => ({ offset: size, engineStarted: false }) } })
+      await survived.attach.attachSession(s)
+      expect(vi.mocked(survived.deps.emit).mock.calls.some((call) => call[2]?.resumed)).toBe(true)
+      // A resume, or a restore that rebuilt the pane, started a new engine: that turn died with the old one.
+      const restarted = setup({ relaunchMarks: { take: () => ({ offset: size, engineStarted: true }) } })
+      await restarted.attach.attachSession(s)
+      expect(restarted.deps.emit).not.toHaveBeenCalled()
+      expect(log.mock.calls.some(([line]) => String(line).includes('left the turn open at attach as history'))).toBe(true)
     })
 
     it('replays a Claude Code first turn live when born after its agent, unless a held tail already delivered it', async () => {

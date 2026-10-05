@@ -223,7 +223,8 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         // conversation only up to this byte. Taken after the history is prepared, which can rewrite it.
         if (resumeSessionId && saved.sessionId && saved.transcriptPath) {
           const offset = transcriptSize(saved.transcriptPath)
-          if (offset !== null) relaunchMarks?.note(saved.sessionId, offset)
+          // A resume always starts a new engine: a turn left open before it is over.
+          if (offset !== null) relaunchMarks?.note(saved.sessionId, offset, true)
         }
         const { extraArgs, clearEnv } = built.overrides
         const launchEnv = permissionMode === undefined ? built.overrides.env
