@@ -66,6 +66,67 @@ result={'pid':pid,'session':sid,'properties':properties,'environment':{k:env[k] 
 pathlib.Path('/tmp/harness-login-probe.json').write_text(json.dumps(result,indent=2)+'\\n')
 '''
 
+HANDOFF_PROBE = '''import hashlib,json,os,pathlib,re,shlex,subprocess,sys
+out=pathlib.Path('/var/lib/harness-test')
+stage=sys.argv[1]
+result={'processes':[], 'files':{}, 'process_tree':subprocess.check_output(
+ ['ps','-eo','pid,ppid,uid,stat,comm'],text=True)}
+for name in ['/usr/bin/hn','/usr/bin/hn-os','/usr/bin/harness','/usr/bin/opencode',
+ '/usr/lib/harness/hn','/usr/lib/harness/harness-tui','/usr/lib/harness/cli.mjs',
+ '/usr/lib/harness-os/onboarding.py','/usr/lib/harness-os/runtime-path',
+ '/home/me/.local/state/harness-os/onboarded']:
+ p=pathlib.Path(name)
+ result['files'][name]={'exists':p.exists(),'resolved':str(p.resolve())}
+ if p.is_file():
+  result['files'][name].update(sha256=hashlib.sha256(p.read_bytes()).hexdigest(),uid=p.stat().st_uid)
+for proc in pathlib.Path('/proc').iterdir():
+ if not proc.name.isdigit(): continue
+ try:
+  argv=(proc/'cmdline').read_text().strip('\\0').split('\\0')
+  if not any(arg in ['/usr/lib/harness-os/onboarding.py','/usr/lib/harness-os/network.py',
+    '/usr/lib/harness/cli.mjs','/usr/lib/harness/hn','/usr/bin/opencode'] for arg in argv): continue
+  env=dict(item.split('=',1) for item in (proc/'environ').read_text().split('\\0') if '=' in item)
+  record={'pid':int(proc.name),'uid':proc.stat().st_uid,'argv':argv,'exe':str((proc/'exe').readlink()),
+   'stdin':str((proc/'fd/0').readlink()),'cgroup':(proc/'cgroup').read_text(),
+   'environment':{k:env[k] for k in ['HOME','PATH','TMUX','TMUX_PANE','HARNESS_TUI_BIN',
+    'HARNESS_CLI','HARNESS_CLI_ARGS','HARNESS_OS','XDG_RUNTIME_DIR'] if k in env}}
+  result['processes'].append(record)
+  if stage=='before' and '/usr/lib/harness-os/onboarding.py' in argv:
+   assert record['uid']==1000 and re.fullmatch(r'%[0-9]+',env['TMUX_PANE'])
+   socket=pathlib.Path(env['TMUX'].split(',')[0])
+   assert socket.is_socket() and socket.stat().st_uid==1000
+   output='/home/me/.local/state/harness-os/login-welcome-output.log'
+   base=['runuser','-u','me','--','tmux','-S',str(socket)]
+   pane=subprocess.check_output(base+['display-message','-p','-t',env['TMUX_PANE'],
+    '#{pane_pid} #{pane_pipe}'],text=True).split()
+   assert len(pane)==2 and pane[1]=='0', ('Unexpected first-use pane',pane)
+   ancestors=[proc.name]
+   while ancestors[-1]!=pane[0] and len(ancestors)<8:
+    ancestors.append(re.search(r'^PPid:\\s+(\\d+)',
+     (pathlib.Path('/proc')/ancestors[-1]/'status').read_text(),re.M)[1])
+   assert ancestors[-1]==pane[0], ('First-use process is outside its tmux pane',ancestors,pane)
+   exited='printf "%s\\\\n" "pane=#{pane_id} status=#{pane_dead_status} signal=#{pane_dead_signal}" > '+output+'.exit'
+   subprocess.run(base+['set-hook','-p','-t',env['TMUX_PANE'],'pane-exited',
+    'run-shell '+shlex.quote(exited)],check=True,timeout=10)
+   subprocess.run(base+['pipe-pane','-t',env['TMUX_PANE'],'cat > '+output],check=True,timeout=10)
+   result['observed_pane']={'socket':str(socket),'pane':env['TMUX_PANE'],
+    'process_ancestry':ancestors,'output':output}
+ except (FileNotFoundError,ProcessLookupError): pass
+if stage=='before': assert 'observed_pane' in result, 'No exact first-use pane to observe'
+exited=pathlib.Path('/home/me/.local/state/harness-os/login-welcome-output.log.exit')
+result['pane_exit']=exited.read_text() if exited.exists() else None
+(out/('handoff-'+stage+'.json')).write_text(json.dumps(result,indent=2)+'\\n')
+'''
+
+
+def handoff_evidence(machine, stage):
+    machine.command('python3 /usr/local/lib/harness-test/login-handoff.py ' + stage, timeout=30)
+    (machine.folder / ('handoff-' + stage + '.json')).write_bytes(
+        machine.read_file('/var/lib/harness-test/handoff-' + stage + '.json'))
+    if stage != 'before':
+        (machine.folder / 'welcome-output.log').write_bytes(
+            machine.read_file('/home/me/.local/state/harness-os/login-welcome-output.log'))
+
 
 def wait_root(machine, condition, seconds=30):
     machine.command('for n in $(seq 1 ' + str(seconds * 2) + '); do if ' + condition +
@@ -123,6 +184,7 @@ def diagnostics(machine, name):
         text, _ = machine.command('getenforce; systemctl status greetd getty@tty1 getty@tty2 --no-pager; '
             'loginctl list-sessions; ls -lZ /etc/greetd /etc/sudoers.d; '
             'journalctl -b -u greetd -u getty@tty1 -u getty@tty2 --no-pager; '
+            'journalctl -b _UID=1000 --no-pager; '
             'journalctl -b -k --no-pager | tail -n 160', timeout=30, check=False)
         (machine.folder / (name + '-login-diagnostics.txt')).write_text(text)
     except (OSError, RuntimeError, TimeoutError) as error:
@@ -234,6 +296,7 @@ def main():
             machine.user('printf %s existing-private-project > ~/projects/login-preservation/proof.txt')
             put(machine, '/usr/lib/harness-os/fedora_session.py', HELPER.read_text())
             put(machine, '/usr/local/lib/harness-test/login-protected.py', PROTECTED)
+            put(machine, '/usr/local/lib/harness-test/login-handoff.py', HANDOFF_PROBE)
             machine.command('install -d /var/lib/harness-test')
             machine.command('chmod 755 /usr/lib/harness-os/fedora_session.py && '
                             'ln -s ../lib/harness-os/fedora_session.py /usr/bin/harness-session-setup')
@@ -271,8 +334,12 @@ def main():
             assert status != 0 and 'password' in text.lower(), 'Setup granted unrelated passwordless sudo'
             text, status = machine.user('sudo -n /usr/bin/python3 /usr/lib/harness-os/network.py --unexpected', check=False)
             assert status != 0 and 'password' in text.lower(), 'Network rule accepted extra arguments'
+            handoff_evidence(machine, 'before')
             machine.monitor('set_link', name='hnnet', up=True)
-            machine.wait_user('test -f ~/.local/state/harness-os/onboarded && pgrep -u 1000 -x opencode >/dev/null', 150)
+            try:
+                machine.wait_user('test -f ~/.local/state/harness-os/onboarded && pgrep -u 1000 -x opencode >/dev/null', 150)
+            finally:
+                handoff_evidence(machine, 'after')
             machine.frame('02-connected-workspace', ['OpenCode', 'Ask anything'], 90)
             machine.keys('meta_l', 'w')
             machine.frame('03-wifi-form', 'Wi-Fi', absent=['password for me'])
