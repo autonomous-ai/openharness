@@ -111,7 +111,7 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         // Keep tmux's familiar current/previous markers beside the name, then any other
         // flags, then the harness state. The selected tab needs no filled badge.
         for name in ["window-status-format", "window-status-current-format"] {
-            m.insert(name.into(), "#I:#{window_short_name}#{?window_active,*,#{?window_last_flag,-,}}#{s/[*-]//:window_flags}#{?#{==:#{window_agent_state},idle},,#{?window_agent_icon, #{window_agent_icon},}}".into());
+            m.insert(name.into(), status_window_format("tmux", true));
         }
         // Unread activity and bells already carry #/! markers. Keep a continuous status
         // background and emphasize text instead of introducing inverted tab badges.
@@ -140,6 +140,33 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         m.insert("status-keys".into(), keys.into());
         m
     })
+}
+
+/// The status bar's per-window text. [name] is the tab name source (`tmux` = the window's short
+/// name, `pane` = the window's full name); [star] is whether the window you are on is marked `*`
+/// (`false` for a filled tab, which needs no `*` beside its name).
+pub fn status_window_format(name: &str, star: bool) -> String {
+    let name_part = if name == "pane" { "#{window_name}" } else { "#{window_short_name}" };
+    let mark = if star { "#{?window_active,*,#{?window_last_flag,-,}}" } else { "#{?window_last_flag,-,}" };
+    format!("#I:{name_part}{mark}#{{s/[*-]//:window_flags}}#{{?#{{==:#{{window_agent_state}},idle}},,#{{?window_agent_icon, #{{window_agent_icon}},}}")
+}
+
+/// The status bar's `window-status-*` overrides for a tab name source [name] (`tmux`|`pane`) and a
+/// current-tab [active] (`star`|`filled`). Empty when they match the defaults (tmux + star), so a
+/// caller can leave the tmux defaults in place. Shared by boot (from `[look]`) and a live pick.
+pub fn window_status_overrides(name: &str, active: &str) -> Vec<(String, String)> {
+    let default_win = status_window_format("tmux", true);
+    let mut out = Vec::new();
+    let normal = status_window_format(name, true);
+    let current = status_window_format(name, active == "star");
+    if normal != default_win { out.push(("window-status-format".into(), normal)) }
+    if current != default_win { out.push(("window-status-current-format".into(), current)) }
+    if active == "filled" {
+        let pal = crate::theme::pane_palette();
+        let pair = |fg, bg| format!("fg={},bg={}", crate::tmuxconf::colour_name(fg), crate::tmuxconf::colour_name(bg));
+        out.push(("window-status-current-style".into(), format!("{},bold", pair(pal.status, pal.status_foreground))));
+    }
+    out
 }
 
 /// tmux 3.5a's own defaults, as `tmux show -g` prints them (mode-keys and status-keys following
