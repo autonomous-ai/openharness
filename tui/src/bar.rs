@@ -822,7 +822,7 @@ mod tests {
     // ── box panes ──
 
     /// Box panes: each pane its own frame, a cell apart (never one line shared by two panes) — the
-    /// focused one's in the theme foreground, the one waiting on you in the attention colour, the others quiet.
+    /// focused one's in the status bar's background colour, the one waiting on you in the attention colour, the others quiet.
     #[test]
     fn each_pane_is_its_own_box_in_the_focus_and_attention_colours() {
         let _colours = crate::term_out::colours_lock();
@@ -843,10 +843,10 @@ mod tests {
         assert_eq!(buf[(left.right() - 1, left.y)].symbol(), "┐", "each box its own corners, not a joint:\n{s}");
         assert_eq!(buf[(left.x, left.y)].symbol(), "┌");
         assert_eq!(buf[(top_right.x, top_right.y)].symbol(), "┌", "the right box is its own, not a joint:\n{s}");
-        let (foreground, attention) = (theme::paint(theme::pane_palette().foreground), theme::paint(theme::ATTENTION));
-        assert_eq!(buf[(left.right() - 1, mid)].fg, foreground, "the focused pane's frame");
+        let (status_bg, attention) = (theme::paint(app.status_style().bg.unwrap_or(Color::Reset)), theme::paint(theme::ATTENTION));
+        assert_eq!(buf[(left.right() - 1, mid)].fg, status_bg, "the focused pane's frame");
         assert_eq!(buf[(top_right.x, top_right.y + 1)].fg, attention, "the waiting pane's frame");
-        assert_ne!(buf[(below.x, below.y + 1)].fg, foreground, "a quiet frame");
+        assert_ne!(buf[(below.x, below.y + 1)].fg, status_bg, "a quiet frame");
         assert_ne!(buf[(below.x, below.y + 1)].fg, attention, "a quiet frame");
         // The program is inside its frame.
         assert_eq!(app.content_of(app.tab(), app.rects.iter().find(|(p, _)| *p == 1).unwrap().1), Rect::new(left.x + 1, left.y + 1, left.width - 2, left.height - 2));

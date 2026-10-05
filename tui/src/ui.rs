@@ -526,11 +526,11 @@ fn title_line(buf: &mut Buffer, app: &App, id: u64, area: Rect, style: Style) {
 // ── box panes ──
 
 /// Box panes (`@hn-border box`, the default): every pane its own frame in pane-border-lines' box
-/// lines — the theme's foreground around the focused one, the attention colour around one whose
-/// harness waits on you (a question, a permission, its input), as the app colours its line; the
-/// quiet border colour elsewhere (or your pane-border-style / pane-active-border-style). The
-/// pane's title is drawn into the frame's top or bottom line as ` title `, in the theme's
-/// foreground and bold when focused.
+/// lines — the status bar's background colour around the focused one, the attention colour around
+/// one whose harness waits on you (a question, a permission, its input), as the app colours its
+/// line; the quiet border colour elsewhere (or your pane-border-style / pane-active-border-style).
+/// The pane's title is drawn into the frame's top or bottom line as ` title `, in the status bar's
+/// background colour and bold when focused.
 fn boxes(buf: &mut Buffer, app: &App) {
     let tab = app.tab();
     let (canvas, status) = (app.window_area(tab), app.pane_status(tab));
@@ -567,14 +567,16 @@ fn boxes(buf: &mut Buffer, app: &App) {
     }
 }
 
-/// A box's frame colour: focused → the theme's foreground, waiting on you → the attention colour,
-/// else the quiet border colour; your own pane-(active-)border-style where you set one (and tmux's
-/// own under `@hn-look tmux`, which draws no boxes). The marked pane's frame is bold.
+/// A box's frame colour: focused → the status bar's background colour, waiting on you → the attention
+/// colour, else the quiet border colour; your own pane-(active-)border-style where you set one (and
+/// tmux's own under `@hn-look tmux`, which draws no boxes). The marked pane's frame is bold.
 fn box_style(app: &App, id: u64) -> Style {
     let active = Some(id) == app.focused();
     let own = if active { app.look.active_border.is_some() } else { app.look.border.is_some() };
     let style = if own { border_style(app, active) }
-        else if active { Style::default().fg(theme::paint(theme::pane_palette().foreground)).add_modifier(if theme::no_color() { Modifier::BOLD } else { Modifier::empty() }) }
+        // The focused frame is the status bar's own background colour, so the active pane's box
+        // always sits in the same colour as the bar — not the accent, and not the pane text.
+        else if active { Style::default().fg(theme::paint(app.status_style().bg.unwrap_or(Color::Reset))).add_modifier(if theme::no_color() { Modifier::BOLD } else { Modifier::empty() }) }
         else if app.pane_state(id) == Some(crate::fleet::State::NeedsInput) { Style::default().fg(theme::paint(theme::ATTENTION)) }
         else { Style::default().fg(theme::paint(theme::pane_palette().border)) };
     if app.marked == Some(id) { style.add_modifier(Modifier::BOLD) } else { style }
