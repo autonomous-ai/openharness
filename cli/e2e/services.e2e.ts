@@ -3,6 +3,7 @@
  * service made to fail as it starts, and services made to fail on every call, while a client starts an
  * agent, the agent binds, messages become turns that start and end, and the daemon restarts.
  */
+import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -22,6 +23,14 @@ async function boundAgent(daemon: IsolatedDaemon, client: LocalClient, name: str
   const agentId: string = created.agent.id
   await until('the agent to bind its conversation', async () => (await row(client, agentId))?.sessionId || null, 45_000, 500)
   return agentId
+}
+
+/** ⌘K's pick for a typed task: `route_task` answers as `route_result`, under the asker's request id. */
+async function routeTask(client: LocalClient, text: string): Promise<Record<string, any>> {
+  const requestId = randomUUID()
+  const answered = client.next((frame) => frame.type === 'route_result' && frame.payload?.requestId === requestId, 30_000, 'route_result')
+  client.send('route_task', { requestId, text })
+  return (await answered).payload as Record<string, any>
 }
 
 /** One message, one turn: it starts and it ends. */
@@ -161,6 +170,47 @@ describe('a failing service never takes the core down', () => {
     expect((await client.request('agents_list', {})).agents).toEqual([])
     expect(daemon.coresStarted()).toBe(1)
     client.close()
+  })
+
+  it('⌘K picks and delivers through the fleet, with the dial and the window bridges failing on every call', async () => {
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'dial,window' } })
+    onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
+    await daemon.start()
+    const client = await LocalClient.connect(daemon)
+    const agentId = await boundAgent(daemon, client, 'routed-by-cmd-k')
+    // The only agent on this computer, picked without asking any model, on this computer's own id.
+    expect(await routeTask(client, 'fix the parser')).toMatchObject({ agentId, machineId: daemon.computerId, confidence: 1, weighed: 1, machines: 1 })
+    const isTurn = (type: string) => (frame: Frame) => frame.type === type && frame.agentId === agentId
+    const started = client.next(isTurn('turn_started'), 30_000, 'turn_started (route_send)')
+    const ended = client.next(isTurn('turn_ended'), 30_000, 'turn_ended (route_send)')
+    expect(await client.request('route_send', { agentId, text: 'sent by cmd-k' })).toMatchObject({ ok: true })
+    expect((await started).payload?.userMessage).toBe('sent by cmd-k')
+    await ended
+    expect(daemon.log()).toContain('[devices] dial failed · injected fault: dial')
+    expect(daemon.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  it('with the fleet not starting, or failing on every call, ⌘K says so and the core runs its agents on', async () => {
+    for (const [faults, reason, said] of [
+      ['fleet', 'no agent list yet', '[services] fleet did not start · injected fault: fleet · the core runs without it'],
+      ['fleet.routeTask,fleet.sendTurn', 'the fleet service is unavailable', '[services] fleet.sendTurn failed · injected fault: fleet.sendTurn'],
+    ]) {
+      daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: faults } })
+      const d = daemon
+      onTestFailed(() => { console.log(`---- daemon log (${faults})\n${d.log().split('\n').slice(-80).join('\n')}`) })
+      await d.start()
+      const client = await LocalClient.connect(d)
+      const agentId = await boundAgent(d, client, `fleet-${faults.length}`)
+      expect(await routeTask(client, 'fix the parser')).toMatchObject({ agentId: '', reason, candidates: [] })
+      expect(await client.request('route_send', { agentId, text: 'not delivered' })).toMatchObject({ ok: false, machine: '', reason })
+      await turn(client, agentId, `the core runs on (${faults})`)
+      expect(d.log()).toContain(said)
+      expect(d.coresStarted()).toBe(1)
+      client.close()
+      await d.close()
+      daemon = undefined
+    }
   })
 
   it('the store lists what is installed here and what the registry offers', async () => {
