@@ -44,7 +44,7 @@ const active = (client: LocalClient, agentId: string, sessionId?: string) =>
 /** The engine as it is installed for the agents created next: its config, plus what the test says
  *  (e2e/harness/fakeEngine.mjs), written beside the old wrapper and renamed over it. */
 function install(d: IsolatedDaemon, engine: Engine, extra: Record<string, unknown>): void {
-  const config = { port: d.port, dataDir: d.dataDir, claudeProjectsDir: d.env.CLAUDE_PROJECTS_DIR, codexHome: d.env.CODEX_HOME, ...extra }
+  const config = { ...d.engineConfig, ...extra }
   const module = pathToFileURL(join(CLI_ROOT, 'e2e', 'harness', 'fakeEngine.mjs')).href
   const wrapper = join(d.root, 'bin', engine)
   writeFileSync(`${wrapper}.new`, `#!${process.execPath}\nimport(${JSON.stringify(module)}).then((m) => m.run(${JSON.stringify(engine)}, ${JSON.stringify(config)}))\n`, { mode: 0o755 })

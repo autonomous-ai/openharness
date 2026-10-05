@@ -169,12 +169,15 @@ export async function run(engine, config) {
   // nothing for a hook that exits 0, as notify.mjs always does, and a failure the fake once printed under
   // its composer read to the daemon as a draft the person had not sent, so a close waiting for the agent
   // to be idle waited for ever (e2e/ends.e2e.ts).
+  // Beside the daemon's data folder when a wrapper names no log, as IsolatedDaemon's would be: a refusal
+  // must reach the harness, which fails the test on it, from a wrapper a test wrote by hand as well.
+  const hookLogFile = config.hookLog ?? (config.dataDir ? join(dirname(config.dataDir), 'fake-engine-hooks.log') : null)
   const hookLog = (line) => {
-    if (!config.hookLog) return
-    try { appendFileSync(config.hookLog, `${new Date().toISOString()} ${engine} pid=${process.pid} ${line}\n`) } catch { /* a note, never a failure */ }
+    if (!hookLogFile) return
+    try { appendFileSync(hookLogFile, `${new Date().toISOString()} ${engine} pid=${process.pid} ${line}\n`) } catch { /* a note, never a failure */ }
   }
   if (!config.root || !within(config.root, hookSettingsFile)) {
-    hookLog(`REFUSED hooks outside the test root: ${hookSettingsFile}`)
+    hookLog(config.root ? `REFUSED hooks outside the test root: ${hookSettingsFile}` : `REFUSED hooks: the wrapper names no test root (use IsolatedDaemon.engineConfig)`)
     process.stderr.write(`[fake ${engine}] refusing to run the hooks in ${hookSettingsFile}: outside the test root ${config.root ?? '(none given)'}\r\n`)
     process.exit(78)
   }

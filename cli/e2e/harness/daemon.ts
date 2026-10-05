@@ -38,6 +38,8 @@ export interface EngineConfig {
   version?: string
   without?: string[]
   startDelayMs?: number
+  firstHookDelayMs?: number
+  updateAvailable?: string
 }
 
 export interface DaemonOptions {
@@ -252,7 +254,7 @@ export class IsolatedDaemon {
     const outside = hookFilesNamed(this.output).filter((file) => !inside(this.root, file))
     if (outside.length) throw new Error(`the daemon under test wrote hooks outside ${this.root}: ${[...new Set(outside)].join(', ')}`)
     const refused = this.hookLog().split('\n').filter((line) => line.includes('REFUSED'))
-    if (refused.length) throw new Error(`a fake engine refused hooks outside ${this.root}:\n${refused.join('\n')}`)
+    if (refused.length) throw new Error(`a fake engine refused to run hooks (test root ${this.root}):\n${refused.join('\n')}`)
   }
 
   get dataDir(): string { return this.env.ADAPTER_DATA_DIR! }
