@@ -19,6 +19,7 @@ import { execFile } from 'child_process'
 import { join } from 'path'
 import { SpawnLockBusyError, describeSpawnLockFailure } from './daemonSpawnLock.js'
 import { managedNodePath } from './nodeRuntime.js'
+import { patientDeadline } from './patientExec.js'
 
 export interface FileRef {
   url: string
@@ -238,6 +239,8 @@ export type CanaryResult = { ok: true } | { ok: false; problem: 'unwritable' | '
 
 /** How long the canary may take to answer. */
 export const CANARY_TIMEOUT_MS = 15_000
+/** How long a canary that outlived its deadline has between SIGTERM and SIGKILL. */
+export const CANARY_KILL_GRACE_MS = 2_000
 
 /** Cheap runnability check: write the new bundle into a temp install-shaped dir and run
  *  `node cli.js version`. This catches broken ESM/CJS packaging before the live install is touched.
@@ -263,17 +266,32 @@ export async function runCanary(cliBuf: Buffer, dir: string, version?: string, t
     }
     // The interpreter the NEXT daemon will run on — see managedNodePath(). Canarying on this
     // process's interpreter would assert about a Node the new build may never be started with.
+    // The deadline counts only time this process's event loop ran (patientDeadline): Node's own timeout,
+    // fired late after a held loop, threw a build's answer away and took it for no answer. A build that
+    // outlives it is sent SIGTERM, and SIGKILL [CANARY_KILL_GRACE_MS] later: one that ignores SIGTERM held
+    // the check open for good, and with it every later check (`checking`), a fixed release's included.
     const r = await new Promise<{ failure: string | null; stdout: string }>((resolve) => {
-      execFile(managedNodePath(), [tmpCli, 'version'], { timeout: timeoutMs, encoding: 'utf8' }, (error, stdout) => {
+      let timedOut = false
+      let grace: ReturnType<typeof setTimeout> | undefined
+      let cancel = (): void => {}
+      const child = execFile(managedNodePath(), [tmpCli, 'version'], { encoding: 'utf8' }, (error, stdout) => {
+        cancel()
+        clearTimeout(grace)
+        // An answer is an answer, even one that raced the kill.
         if (!error) { resolve({ failure: null, stdout }); return }
-        const failed = error as NodeJS.ErrnoException & { killed?: boolean; signal?: NodeJS.Signals | null; code?: number | string }
+        const failed = error as NodeJS.ErrnoException & { signal?: NodeJS.Signals | null; code?: number | string }
         resolve({
-          failure: failed.killed && failed.signal === 'SIGTERM' ? `no answer within ${timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)} s` : `${timeoutMs} ms`}`
+          failure: timedOut ? `no answer within ${timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)} s` : `${timeoutMs} ms`}`
             : typeof failed.code === 'number' ? `exit ${failed.code}`
             : failed.signal ? `signal ${failed.signal}`
             : failed.message,
           stdout: '',
         })
+      })
+      cancel = patientDeadline(timeoutMs, () => {
+        timedOut = true
+        child.kill('SIGTERM')
+        grace = setTimeout(() => child.kill('SIGKILL'), CANARY_KILL_GRACE_MS)
       })
     })
     if (r.failure !== null) return { ok: false, problem: 'failed', detail: r.failure }

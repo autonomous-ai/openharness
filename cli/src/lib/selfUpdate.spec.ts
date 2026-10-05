@@ -590,6 +590,14 @@ describe('the canary\'s verdicts', () => {
       .toEqual({ ok: false, problem: 'failed', detail: 'no answer within 1 s' })
   })
 
+  it('kills a build that ignores the SIGTERM at its deadline, so the next check can run', async () => {
+    const started = performance.now()
+    const stubborn = Buffer.from("process.on('SIGTERM', () => {})\nsetInterval(() => {}, 1000)\n")
+    expect(await runCanary(stubborn, tempDir(), '9.9.9', 300)).toEqual({ ok: false, problem: 'failed', detail: 'no answer within 300 ms' })
+    // SIGTERM at 300 ms, ignored; SIGKILL two seconds on.
+    expect(performance.now() - started).toBeLessThan(10_000)
+  }, 20_000)
+
   it('says why a canary that never ran failed', async () => {
     vi.resetModules()
     vi.doMock('./nodeRuntime.js', () => ({ managedNodePath: () => '/nonexistent/node' }))
