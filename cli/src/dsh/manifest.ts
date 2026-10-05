@@ -14,8 +14,9 @@ import { homedir } from 'node:os'
 import { isAbsolute } from 'node:path'
 import { z } from 'zod'
 import { ENGINES } from '../engines/types.js'
+import { DSH_ID_RE } from './id.js'
 
-export const DSH_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}\/[a-z0-9][a-z0-9-]{0,63}$/
+export { DSH_ID_RE }
 export const DSH_MANIFEST_FILE = 'harness.json'
 export const DEFAULT_VERDICT_PATH = '.harness/verdict.json'
 export { compatibleHarnessEngines as dshSupportedEngines } from './compatibility.js'
