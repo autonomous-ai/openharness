@@ -449,7 +449,23 @@ function readProcField(pid, field) {
 const HARNESS_OWNER_OPTION = '@harness_daemon'
 const HARNESS_SESSION_PREFIX = 'harness-'
 const OWNER_COMMAND_PREFIX = '/usr/bin/env HARNESS_DAEMON='
-const PANE_OWNER_FORMAT = `#{?#{m:${OWNER_COMMAND_PREFIX}*,#{pane_start_command}},#{=${OWNER_COMMAND_PREFIX.length + 16}:pane_start_command},#{${HARNESS_OWNER_OPTION}}}`
+// A pane's owner, read as the daemon reads it (harnessSessionLabel.ts paneOwnerFormat): from tmux 3.0 the
+// pane's own option, which stays with the pane wherever the person moves it; before 3.0 the tag in its start
+// command, or its window's tag in a session Harness named only, since elsewhere the window's tag names a
+// pane the person split into, or joined into, an agent's window.
+const PANE_OWNER_FORMAT = `#{${HARNESS_OWNER_OPTION}}`
+const PANE_OWNER_FORMAT_OLD_TMUX = `#{?#{m:${OWNER_COMMAND_PREFIX}*,#{pane_start_command}},#{=${OWNER_COMMAND_PREFIX.length + 16}:pane_start_command},`
+  + `#{?#{m:${HARNESS_SESSION_PREFIX}*,#{session_name}},#{${HARNESS_OWNER_OPTION}},}}`
+
+let paneOptions
+/** Whether this tmux has pane options (3.0+). A version it cannot read counts as new, as the daemon reads it (tmuxVersion.ts). */
+async function tmuxHasPaneOptions() {
+  if (paneOptions === undefined) {
+    const version = /(\d+)\.(\d+)/.exec((await execFileText('tmux', ['-V'], 2000)) || '')
+    paneOptions = !version || Number(version[1]) >= 3
+  }
+  return paneOptions
+}
 
 /** A daemon's tag: its data folder, symlinks resolved, hashed — `harnessPaneOwner` in the daemon. */
 function daemonPaneOwner(dataDir) {
@@ -469,7 +485,8 @@ function daemonPaneOwner(dataDir) {
  * Undefined when tmux could not answer.
  */
 async function paneFacts(pane, dataDir) {
-  const stdout = await execFileText('tmux', ['display-message', '-p', '-t', pane, `#{pane_pid}|#{session_name}|${PANE_OWNER_FORMAT}`], 2000)
+  const format = (await tmuxHasPaneOptions()) ? PANE_OWNER_FORMAT : PANE_OWNER_FORMAT_OLD_TMUX
+  const stdout = await execFileText('tmux', ['display-message', '-p', '-t', pane, `#{pane_pid}|#{session_name}|${format}`], 2000)
   if (stdout === null) return undefined
   const line = (stdout || '').trim()
   const first = line.indexOf('|')

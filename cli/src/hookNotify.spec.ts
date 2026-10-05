@@ -1004,8 +1004,14 @@ describe('hook notify terminal scope', () => {
     // The tag in a pane's start command, before tmux 3.0, read with the format the daemon reads it with.
     const prefix = /const OWNER_COMMAND_PREFIX = '([^']+)'/.exec(source)?.[1]
     expect(`${ownerCommand('0123456789abcdef', ['zsh']).slice(0, 2).join(' ')} zsh`.startsWith(`${prefix}0123456789abcdef`)).toBe(true)
-    const format = `#{?#{m:${prefix}*,#{pane_start_command}},#{=${prefix!.length + 16}:pane_start_command},#{${HARNESS_OWNER_OPTION}}}`
+    const format = `#{?#{m:${prefix}*,#{pane_start_command}},#{=${prefix!.length + 16}:pane_start_command},`
+      + `#{?#{m:${HARNESS_SESSION_PREFIX}*,#{session_name}},#{${HARNESS_OWNER_OPTION}},}}`
     expect(format).toBe(paneOwnerFormat(false))
+    // And the hook's own, read out of its source, are the daemon's: the old tmux one with the session check,
+    // and from 3.0 the pane's own option.
+    expect(source).toContain('#{?#{m:${HARNESS_SESSION_PREFIX}*,#{session_name}},#{${HARNESS_OWNER_OPTION}},}}')
+    expect(source).toContain('const PANE_OWNER_FORMAT = `#{${HARNESS_OWNER_OPTION}}`')
+    expect(paneOwnerFormat(true)).toBe(`#{${HARNESS_OWNER_OPTION}}`)
   })
 
   it('registers offline only a pane its daemon takes for an agent: never a session opened by hand or another daemon\'s', async () => {
