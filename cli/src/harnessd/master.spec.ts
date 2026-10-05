@@ -262,6 +262,36 @@ describe('runMaster', () => {
     expect(readStatusFile(statusFile, process.pid)).toMatchObject({ state: 'stopped', lastExitReason: 'stopped' })
   })
 
+  it('says in its status file when launchd or systemd runs it, so `harness stop` asks the platform', async () => {
+    const pidFile = join(dir, 'adapter.pid')
+    const statusFile = join(dir, 'harnessd-status.json')
+    const logged = join(dir, 'master.log')
+    const core = join(dir, 'core.cjs')
+    writeFileSync(core, `
+      process.send({ type: 'harnessd:bound', protocol: 2, port: 1 })
+      process.send({ type: 'harnessd:ready' })
+      setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 }), 50)
+      process.on('SIGTERM', () => process.exit(0))
+    `)
+    const exits: number[] = []
+    const signals = new Map<string, () => void>()
+    const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { writeFileSync(logged, `${line}\n`, { flag: 'a' }) })
+    try {
+      runMaster({
+        nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile, statusFile,
+        restoreUpdate: () => {}, confirmUpdate: () => {},
+        env: { ...process.env, HARNESSD_PLATFORM: 'launchd' },
+        exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
+      })
+      await until('the core to be ready', () => readStatusFile(statusFile, process.pid)?.state === 'running')
+      expect(readStatusFile(statusFile, process.pid)).toMatchObject({ platform: 'launchd' })
+      expect(readFileSync(logged, 'utf8')).toContain('[harnessd] run by launchd, which starts this master again if it dies')
+      signals.get('SIGTERM')!()
+      await until('the master to finish', () => exits.length > 0)
+    } finally { log.mockRestore() }
+    expect(exits).toEqual([0])
+  })
+
   it('runs the services it is told to beside the core, with one token for both, restarts them, and stops them with it', async () => {
     const pidFile = join(dir, 'adapter.pid')
     const seen = join(dir, 'seen')
