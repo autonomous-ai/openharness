@@ -4,7 +4,14 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
+
+
+def browser_main(argv):
+    # Chromium can replace its NUL-separated argv with one process title.
+    # Keep the raw form for identity, but recognize child flags in either form.
+    return bool(argv and argv[0]) and not any(re.search(r'(?:^|\s)--type=', arg) for arg in argv)
 
 
 def process(pid):
@@ -28,7 +35,7 @@ def snapshot():
                 agents.append(process(path.name))
             elif name == 'chromium':
                 argv = (path / 'cmdline').read_bytes().rstrip(b'\0').decode().split('\0')
-                if not any(arg.startswith('--type=') for arg in argv):
+                if browser_main(argv):
                     browsers.append(process(path.name))
         except FileNotFoundError:
             continue
