@@ -195,9 +195,12 @@ export interface ReexecDeps {
 export function createReexec(deps: ReexecDeps): {
   reexec(state: ResumeState, proceed: (outcome: ReexecOutcome) => void): void
   cancel(): void
+  /** On its way to replacing this master: from stopping its children until it carries on as itself. */
+  replacing(): boolean
 } {
   let warned = false
   let probe: { cancel(): void } | null = null
+  let replacing = false
   return {
     reexec: (state, proceed) => {
       const next = deps.current()
@@ -218,10 +221,12 @@ export function createReexec(deps: ReexecDeps): {
       const args = [...deps.execArgv, deps.scriptPath]
       // Called only once the master is known not to be stopping: its children come back, and its core.
       const carryOn = (outcome: ReexecOutcome) => {
+        replacing = false
         deps.startChildren()
         proceed(outcome)
       }
       deps.log('[harnessd] the bundle on disk is not this master\'s code — re-executing on it')
+      replacing = true
       deps.stopChildren(() => {
         if (deps.stopping()) return
         const running = deps.probe([...args, PROBE_COMMAND], env)
@@ -257,5 +262,6 @@ export function createReexec(deps: ReexecDeps): {
       })
     },
     cancel: () => { probe?.cancel(); probe = null },
+    replacing: () => replacing,
   }
 }

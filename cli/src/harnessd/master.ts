@@ -321,7 +321,12 @@ export function runMaster(config: MasterConfig): Supervisor {
   }
   supervisor.start()
   // Not waiting on the core: a service reaches it through its socket, and retries until it answers.
-  services.start()
+  // Nor while this master is replacing itself before its first core, as it does when a re-execution
+  // before it never came up and the previous bundle was put back (recoverFailedReexec): started here,
+  // the services ran through the probe and were cut off by the exec, children no one reaps, or ran
+  // twice once a refused probe started them again. Whoever goes on starts them: this master if it
+  // carries on as itself, the new one if it does not.
+  if (!reexec?.replacing()) services.start()
   return supervisor
 }
 

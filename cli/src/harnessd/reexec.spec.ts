@@ -229,6 +229,21 @@ describe('re-executing', () => {
     expect(outcomes).toEqual([])
   })
 
+  it('is replacing this master from the moment it stops its children until it carries on as itself', async () => {
+    const { reexec, replacing } = make()
+    onDisk = 'old'
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    expect(replacing()).toBe(false)
+    onDisk = 'new'
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    expect(replacing()).toBe(true)
+    stopped[0]()
+    expect(replacing()).toBe(true)
+    await settle({ ok: false, detail: 'no' })
+    expect(replacing()).toBe(false)
+    expect(outcomes).toEqual(['same', 'refused'])
+  })
+
   it('carries on as itself when the probe fails or the exec does, with its children back', async () => {
     const refused = make()
     refused.reexec(state(), (outcome) => outcomes.push(outcome))

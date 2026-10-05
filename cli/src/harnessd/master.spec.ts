@@ -572,6 +572,35 @@ describe('runMaster', () => {
       await master.stop()
     })
 
+    it('starts its services once it carries on, never while it replaces itself before its first core', async () => {
+      // A rollback found at start moves this master onto the bundle restored before it starts anything.
+      // Its services were started beside that move: they ran through the probe and were cut off by the
+      // exec, children no one reaps, and a probe that refused the bundle started them a second time.
+      const started = (lines: string[]) => lines.filter((line) => line.includes('[harnessd] service search started'))
+      const lines: string[] = []
+      const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+      const env = { ...process.env, HARNESSD_INITIAL_BACKOFF_MS: '10', HARNESSD_SERVICES: 'search' }
+      const restore = (file: string) => () => { writeFileSync(file, readFileSync(file, 'utf8') + '\n// the build before\n') }
+      try {
+        const script = bundle('')
+        writeMarker(marker(), { pid: DEAD_PID, from: 'the one before', to: fingerprint(script)!, at: 1 })
+        let atExec: string[] | null = null
+        const moving = start(script, { env, restoreUpdate: restore(script), execve: () => { atExec = started(lines) } })
+        await until('the master to re-execute on the bundle restored', () => atExec !== null)
+        expect(atExec).toEqual([])
+        await moving.stop()
+
+        // The bundle restored refuses its probe: this master carries on as itself, with each service once.
+        lines.length = 0
+        const refusing = bundle('', `console.error('Unknown command: ' + process.argv[2]); process.exit(1)`)
+        writeMarker(marker(), { pid: DEAD_PID, from: 'the one before', to: fingerprint(refusing)!, at: 1 })
+        const staying = start(refusing, { env, restoreUpdate: restore(refusing) })
+        await until('a core on the bundle restored', () => staying.supervisor.status().state === 'running')
+        expect(started(lines)).toHaveLength(1)
+        await staying.stop()
+      } finally { log.mockRestore() }
+    })
+
     it('removes its marker once its core is up, and leaves alone what it does not judge', async () => {
       const script = bundle('')
       writeMarker(marker(), { pid: process.pid, from: 'the one before', to: fingerprint(script)!, at: 1 })
