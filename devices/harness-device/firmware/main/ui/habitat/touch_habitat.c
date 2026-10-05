@@ -22,6 +22,11 @@
 #include "freertos/task.h"
 #include <stdatomic.h>
 #include <assert.h>
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(DEVICE_PRO_COMPANION)
+#include "pro_contacts.h"
+_Static_assert(CONFIG_ESP_LCD_TOUCH_MAX_POINTS >= PRO_CONTACTS_MAX,
+               "Pro must observe all GT911 contacts to reject extra fingers safely");
+#endif
 static esp_lcd_touch_handle_t controller;
 static esp_lcd_panel_io_handle_t io;
 static TaskHandle_t touch_task_handle;
@@ -85,8 +90,14 @@ static void task(void *arg)
     (void)arg;
     bool prev = false, swallow = false;
     unsigned errors = 0;
-    int64_t last_good = 0, retry_at = 0;
+    int64_t retry_at = 0;
+#if !defined(CONFIG_IDF_TARGET_ESP32P4)
+    int64_t last_good = 0;
+#endif
     uint16_t last_x = 0, last_y = 0;
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(DEVICE_PRO_COMPANION)
+    pro_contacts_t contacts = {0};
+#endif
     for (;;) {
         int64_t now = esp_timer_get_time();
         if (!controller) {
@@ -97,21 +108,42 @@ static void task(void *arg)
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
             continue;
         }
-        uint16_t x = last_x, y = last_y, strength = 0;
+        uint16_t x = last_x, y = last_y;
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(DEVICE_PRO_COMPANION)
+        pro_contact_t points[PRO_CONTACTS_MAX] = {0};
+#else
+        uint16_t strength = 0;
+#endif
         uint8_t count = 0;
         bool down = false, trusted = true, invalidate = true;
         esp_err_t rc = esp_lcd_touch_read_data(controller);
         if (rc == ESP_OK) {
             errors = 0;
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(DEVICE_PRO_COMPANION)
+            esp_lcd_touch_point_data_t data[PRO_CONTACTS_MAX] = {0};
+            trusted = esp_lcd_touch_get_data(controller, data, &count, PRO_CONTACTS_MAX) == ESP_OK &&
+                      count <= PRO_CONTACTS_MAX;
+            for (unsigned i = 0; trusted && i < count; i++) {
+                points[i] = (pro_contact_t){data[i].x, data[i].y, data[i].track_id};
+                if (data[i].x >= HT_WIDTH || data[i].y >= HT_HEIGHT) trusted = false;
+                for (unsigned j = 0; j < i; j++)
+                    if (data[i].track_id == data[j].track_id) trusted = false;
+            }
+            down = trusted && count > 0;
+            if (down) { x = points[0].x; y = points[0].y; }
+#else
             down = esp_lcd_touch_get_coordinates(controller, &x, &y, &strength, &count, 1) &&
                    count > 0;
+#endif
             // A malformed controller coordinate must never become an action or a swipe.
             if (down && (x >= HT_WIDTH || y >= HT_HEIGHT)) {
                 down = false;
                 trusted = false;
             }
             if (down) {
+#if !defined(CONFIG_IDF_TARGET_ESP32P4)
                 last_good = now;
+#endif
                 last_x = x;
                 last_y = y;
             }
@@ -149,6 +181,9 @@ static void task(void *arg)
             habitat_touch_cancel();
             display_unlock();
             swallow = swallow || prev || count > 0;
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(DEVICE_PRO_COMPANION)
+            if (swallow) pro_contacts_block(&contacts);
+#endif
         }
         if (down && !prev) {
             atomic_fetch_add(&presses, 1);
@@ -176,10 +211,30 @@ static void task(void *arg)
                 habitat_touch_cancel();
                 swallow = true;
             } else {
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(DEVICE_PRO_COMPANION)
+                pro_contact_result_t event = pro_contacts_sample(&contacts, points, count,
+                                                                 (uint32_t)(now / 1000));
+                switch (event.event) {
+                case PRO_CONTACT_PASS: habitat_touch(down, x, y, (uint32_t)(now / 1000)); break;
+                case PRO_CONTACT_CANCEL: habitat_touch_cancel(); break;
+                case PRO_CONTACT_BEGIN:
+                    if (!habitat_workspace_gesture_begin()) pro_contacts_block(&contacts);
+                    break;
+                case PRO_CONTACT_END: habitat_workspace_gesture_end(event.step); break;
+                case PRO_CONTACT_NONE: break;
+                }
+#else
                 habitat_touch(down, x, y, (uint32_t)(now / 1000));
+#endif
             }
             display_unlock();
         }
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(DEVICE_PRO_COMPANION)
+        // A wake/error/sleep quarantine belongs to the whole physical contact,
+        // even if a controller reset temporarily lost the previous count.
+        if (swallow) pro_contacts_block(&contacts);
+        if (!down && trusted) (void)pro_contacts_sample(&contacts, NULL, 0, (uint32_t)(now / 1000));
+#endif
         if (!down && trusted)
             swallow = false;
         prev = down;

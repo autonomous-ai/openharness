@@ -57,7 +57,7 @@ code = r'''
 #include <stdlib.h>
 #include <string.h>
 #define EXT_RAM_BSS_ATTR
-#define ESP_LOGI(...) ((void)0)
+#define ESP_LOGI(tag, ...) do { (void)(tag); if (false) fprintf(stderr, __VA_ARGS__); } while (0)
 #define COPY(dst, src) snprintf(dst, sizeof(dst), "%s", src)
 '''
 code += defines("CABLE_READ_TOKEN_MAX", "ID_MAX", "CABLE_NAME_MAX", "SWARM_ID_MAX", "SWARMS_MAX",
@@ -171,7 +171,7 @@ static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx
 }
 static void dispatch(action_t action);
 '''
-for name in ("copy", "find", "is_question", "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion",
+for name in ("copy", "find", "pane_memory", "pane_memory_apply", "ensure", "is_question", "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion",
              "pro_speech_caption", "pro_speech_cancel", "ui_companion_speech_begin", "ui_companion_speech_clear",
              "pro_speech_tick", "pro_surface_mood", "status_wake_ms",
              "question_view", "hit_contains", "home_footer", "pro_written_control",
@@ -179,8 +179,12 @@ for name in ("copy", "find", "is_question", "pro_speech_allowed", "pro_speech_vi
              "pro_appearance_view", "pro_appearance_open", "pro_appearance_move", "pro_appearance_use",
              "workspace_index", "tabs_open", "workspace_failed", "pro_panes_of",
              "ui_land_after_reload", "voice_status", "ui_scroll_reportable", "habitat_next_wake_ms",
-             "voice_close", "power", "ui_set_connected", "ui_focus_project"):
+             "voice_close", "power", "ui_set_connected", "ui_focus_project",
+             "ui_swarms_replace", "ui_tiles_replace", "ui_project_remove", "ui_project_apply_order",
+             "ui_project_clear_all", "ui_project_set_name", "ui_set_selected_machine") :
     code += function(name)
+agent_layout_actions = SOURCE.split("    case A_AGENTS:", 1)[1].split("    case A_AGENT:", 1)[0]
+code += "static bool agent_layout_action(action_t a) { switch(a.kind) { case A_AGENTS:" + agent_layout_actions + "default: return false; } return true; }\n"
 workspace_actions = SOURCE.split("    case A_TABS:", 1)[1].split("    case A_MACHINE:", 1)[0]
 code += "static void workspace_action(action_t a) { switch(a.kind) { case A_TABS:" + workspace_actions + "default: break; } }\n"
 language_actions = SOURCE.split("    case A_LANGUAGE:", 1)[1].split("    case A_VOICE_SAMPLES:", 1)[0]
@@ -197,7 +201,7 @@ const char *ht_character_name(ht_character_id_t id) { return pro_daemon_definiti
 static void open_question(void) { view(QUESTION); }
 static void dispatch(action_t action) {
     sent = action;
-    if (language_action(action) || sample_action(action) || metrics_action(action)) return;
+    if (language_action(action) || sample_action(action) || metrics_action(action) || agent_layout_action(action)) return;
     if (action.kind == A_DAEMONS) pro_appearance_open(DAEMONS);
     else if (action.kind == A_SCENES) pro_appearance_open(SCENES);
     else if (action.kind == A_APPEAR_PREVIOUS) pro_appearance_move(-1);
@@ -225,6 +229,7 @@ static void dispatch(action_t action) {
 }
 '''
 code += function("surface_tick") + function("habitat_touch") + function("habitat_touch_cancel")
+code += function("workspace_gesture_allowed") + function("habitat_workspace_gesture_begin") + function("habitat_workspace_gesture_end")
 code += function("color")
 code += r'''
 #define BG color(HT_THEME_CANVAS)
@@ -477,6 +482,101 @@ static void actual_home_tabs(void) {
         snprintf(s.tabs[i].name,sizeof s.tabs[i].name,"Workspace %d",i);
     }
     render_actual();
+}
+static void workspace_chord_navigation(void) {
+    actual_home_tabs(); sample(true,360,340,2000);
+    assert(habitat_workspace_gesture_begin() && s.workspace_chord && !s.touch_down);
+    assert(down_reports==1 && ups==1 && !travel && !starts);
+    habitat_workspace_gesture_end(1);
+    assert(queued==1 && queued_action.kind==A_TAB && !strcmp(queued_action.id,"tab-2"));
+    assert(workspace.phase!=HT_WORKSPACE_IDLE && s.loading && !s.workspace_chord && !starts && !switches);
+    habitat_workspace_gesture_end(-1); assert(queued==1); // At most one request.
+    actual_home_tabs(); assert(habitat_workspace_gesture_begin()); habitat_workspace_gesture_end(-1);
+    assert(queued==1 && !strcmp(queued_action.id,"tab-0"));
+    actual_home_tabs(); strcpy(s.selected_tab,"tab-0"); assert(habitat_workspace_gesture_begin());
+    habitat_workspace_gesture_end(-1); assert(!queued && !starts && !selected); // No edge wrap.
+    actual_home_tabs(); assert(habitat_workspace_gesture_begin()); habitat_workspace_gesture_end(0);
+    assert(!queued && !s.workspace_chord);
+    actual_home_tabs(); assert(habitat_workspace_gesture_begin()); congested=true;
+    habitat_workspace_gesture_end(1); assert(!queued && workspace.phase==HT_WORKSPACE_IDLE && !s.workspace_chord);
+}
+static void workspace_chord_gates(void) {
+    for (int page=HOME;page<=OTA;page++) {
+        actual_home_tabs(); s.view=(view_t)page;
+        assert(habitat_workspace_gesture_begin()==(page==HOME || page==AGENT));
+        habitat_workspace_gesture_end(0);
+    }
+    for (int reason=0;reason<18;reason++) {
+        actual_home_tabs(); sample(true,360,340,2000);
+        switch(reason) {
+        case 0:s.ready=false;break;case 1:s.connected=false;break;case 2:s.loading=true;break;
+        case 3:s.locked=true;break;case 4:asleep=true;break;case 5:s.voice_open=true;break;
+        case 6:s.voice_start_pending=true;break;case 7:s.voice_waiting=true;break;case 8:recording=true;break;
+        case 9:strcpy(form.id,"form");break;case 10:draft.page.active=true;break;
+        case 11:selection.active=true;break;case 12:carry.pending=true;break;case 13:visit.pending=true;break;
+        case 14:strcpy(s.pending_machine,"remote");break;case 15:strcpy(s.pending_focus,"b");break;
+        case 16:workspace.phase=HT_WORKSPACE_WAIT_TAB;break;case 17:s.tab_count=1;break;
+        }
+        assert(!habitat_workspace_gesture_begin() && !s.workspace_chord && !s.touch_down && !starts);
+        habitat_workspace_gesture_end(1); assert(!queued);
+    }
+}
+static void workspace_chord_context(void) {
+    actual_home_tabs(); assert(habitat_workspace_gesture_begin());
+    ui_swarms_replace(s.tabs,s.tab_count,s.selected_tab); assert(s.workspace_chord); // Identical context is stable.
+    habitat_workspace_gesture_end(1); assert(queued==1);
+    actual_home_tabs(); assert(habitat_workspace_gesture_begin());
+    cable_swarm_t tabs[4];memcpy(tabs,s.tabs,sizeof tabs);COPY(tabs[2].id,"replacement");
+    ui_swarms_replace(tabs,4,"tab-1"); assert(!s.workspace_chord);
+    habitat_workspace_gesture_end(1); assert(!queued);
+    actual_home_tabs(); assert(habitat_workspace_gesture_begin());
+    ui_set_selected_machine("remote");ui_set_selected_machine("");habitat_workspace_gesture_end(1);assert(!queued);
+    actual_home_tabs(); assert(habitat_workspace_gesture_begin());
+    ui_set_connected(false);ui_set_connected(true);habitat_workspace_gesture_end(1);assert(!queued);
+    actual_home_tabs(); assert(habitat_workspace_gesture_begin());
+    ui_project_remove("b");habitat_workspace_gesture_end(1);assert(!queued);
+    actual_home_tabs(); assert(habitat_workspace_gesture_begin());
+    const char *order[]={"b","a"};ui_project_apply_order(order,2);habitat_workspace_gesture_end(1);assert(!queued);
+    actual_home_tabs(); assert(habitat_workspace_gesture_begin());
+    view(LAUNCHER);view(HOME);habitat_workspace_gesture_end(1);assert(!queued);
+    actual_home_tabs(); assert(habitat_workspace_gesture_begin());
+    COPY(s.tabs[2].id,"replacement");habitat_workspace_gesture_end(1);assert(!queued); // Guard even if a future updater forgets cancellation.
+}
+static void map_layout_is_local(void) {
+    actual_home_tabs();dispatch((action_t){.kind=A_AGENTS});assert(s.view==AGENTS&&s.pro_agent_layout==0);
+    only_control(A_AGENT_LAYOUT);tap(100,270,75);
+    assert(s.view==AGENTS&&s.pro_agent_layout==1&&!queued&&!switches&&!starts&&!selected);
+    dispatch((action_t){.kind=A_AGENT_LAYOUT,.value=2});assert(s.pro_agent_layout==2&&!queued);
+    dispatch((action_t){.kind=A_AGENT_LAYOUT,.value=99});assert(s.pro_agent_layout==2&&!queued);
+    view(HOME);dispatch((action_t){.kind=A_AGENT_LAYOUT,.value=1});assert(s.pro_agent_layout==2&&!queued);
+    dispatch((action_t){.kind=A_AGENTS});assert(s.pro_agent_layout==0&&!queued);
+}
+static void map_contact_invalidation(void) {
+    for (int change=0;change<9;change++) {
+        actual_home_tabs();s.view=AGENTS;only_control(A_AGENT);
+        cable_tile_t tile={.x1=0,.y1=0,.x2=1000,.y2=1000};COPY(tile.agent_id,"b");
+        ui_tiles_replace(&tile,1,s.selected_tab);sample(true,100,270,2000);
+        switch(change) {
+        case 0:tile.x2=900;ui_tiles_replace(&tile,1,s.selected_tab);break;
+        case 1:ui_tiles_replace(&tile,1,"another-tab");break;
+        case 2:ui_project_remove("b");break;
+        case 3:{const char *ids[]={"b","a"};ui_project_apply_order(ids,2);break;}
+        case 4:ui_project_clear_all();break;
+        case 5:ui_swarms_replace(s.tabs,s.tab_count,"tab-2");break;
+        case 6:ui_set_selected_machine("remote");break;
+        case 7:ui_project_set_name("new-pane","New pane");break;
+        case 8:ui_project_set_name("b","New label");break;
+        }
+        sample(false,100,270,2120);assert(!switches&&!starts&&!selected);
+    }
+    actual_home_tabs();s.view=AGENTS;only_control(A_AGENT);
+    cable_tile_t tile={.x1=0,.y1=0,.x2=1000,.y2=1000};COPY(tile.agent_id,"b");
+    ui_tiles_replace(&tile,1,s.selected_tab);sample(true,100,270,2000);
+    ui_tiles_replace(&tile,1,s.selected_tab);sample(false,100,270,2120);
+    assert(switches==1 && !starts); // An identical geometry refresh does not eat a valid tap.
+    actual_home_tabs();s.view=AGENTS;only_control(A_AGENT);sample(true,100,270,2000);
+    assert(!habitat_workspace_gesture_begin());habitat_workspace_gesture_end(1);
+    assert(!switches&&!starts&&!queued&&!s.touch_down); // Two fingers cannot click the map.
 }
 static void home_header_drag_cancel(void) {
     const int delta[][2]={{-190,0},{190,0},{0,-40},{0,200}};
@@ -1037,6 +1137,8 @@ int main(int argc,char **argv) {
         {"current_tab_returns_home",current_tab_returns_home},{"changed_tab_stays_on_home",changed_tab_stays_on_home},
         {"carried_excerpt_is_readable",carried_excerpt_is_readable},
         {"docked_connection_policy",docked_connection_policy},{"home_gesture_consistency",home_gesture_consistency},
+        {"workspace_chord_navigation",workspace_chord_navigation},{"workspace_chord_gates",workspace_chord_gates},
+        {"workspace_chord_context",workspace_chord_context},{"map_contact_invalidation",map_contact_invalidation},{"map_layout_is_local",map_layout_is_local},
         {"voice_render_geometry",voice_render_geometry},{"voice_wait_discard",voice_wait_discard},
         {"lock_render_geometry",lock_render_geometry},{"lock_saved_pattern",lock_saved_pattern},
         {"lock_short_wrong_then_retry",lock_short_wrong_then_retry},

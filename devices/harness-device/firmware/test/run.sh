@@ -101,6 +101,10 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bou
 "$out/test_gestures"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
+   -o "$out/test_pro_contacts" "$here/test_pro_contacts.c"
+"$out/test_pro_contacts"
+
+cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
    -o "$out/test_workspace" "$here/test_workspace.c" "$here/../main/ui/habitat/workspace.c"
 "$out/test_workspace"
 
@@ -194,6 +198,7 @@ python3 "$here/test_pro_metrics.py"
 python3 "$here/test_touch_ui.py"
 python3 "$here/test_brightness_ui.py"
 python3 "$here/test_touch_driver.py"
+python3 "$here/test_pro_touch_driver.py"
 python3 "$here/test_render_guard.py"
 python3 "$here/test_display_power.py"
 python3 "$here/test_machine_ui.py"

@@ -29,6 +29,7 @@ from native_voice import voice_assets  # noqa: E402
 STATES = ("idle", "idle_paper", "working", "summary", "summary_paper", "mail", "needs_answer", "listening",
           "voice_preparing", "voice_sending", "offline", "done", "asleep",
           "carrying", "launcher", "companion", "daemons", "scenes", "updates", "question", "reader", "locked", "updating",
+          "panes_map", "panes_list", "panes_dense", "panes_mixed", "panes_waiting",
           "instruction", "goal", "loop", "goal_listening", "loop_listening", "goal_review", "loop_review",
           "today", "today_zero", "today_missing", "today_partial", "today_stale", "today_loading", "today_expired",
           "speech_pending", "speaking_warm",
@@ -191,6 +192,23 @@ static void fixture(const char *name) {
         COPY(draft.page.text,s.work_voice_mode==PRO_WORK_GOAL?
             "Make the new layout readable and accessible. Keep working until the contrast and touch checks pass.":
             "Every 30 minutes, check the build and tell me if a new failure needs my attention.");
+    }
+    else if(!strncmp(name,"panes_",6)){
+        s.view=AGENTS;s.pro_agent_layout=!strcmp(name,"panes_list")?1:2;
+        COPY(s.tile_tab,s.selected_tab);s.tile_count=3;
+        s.tiles[0]=(cable_tile_t){.x1=0,.y1=0,.x2=550,.y2=1000,.agent_id="design"};
+        s.tiles[1]=(cable_tile_t){.x1=550,.y1=0,.x2=1000,.y2=500,.agent_id="build"};
+        s.tiles[2]=(cable_tile_t){.x1=550,.y1=500,.x2=1000,.y2=1000,.agent_id="research"};
+        s.agents[1].busy=true;s.agents[2].recap_ready=true;
+        if(!strcmp(name,"panes_dense")){
+            s.tile_count=24;
+            for(int i=0;i<24;i++){
+                s.tiles[i]=(cable_tile_t){.x1=i%6*1000/6,.x2=(i%6+1)*1000/6,.y1=i/6*250,.y2=(i/6+1)*250};
+                COPY(s.tiles[i].agent_id,s.agents[i%3].id);
+            }
+        }
+        if(!strcmp(name,"panes_mixed")){s.tiles[1].agent_id[0]=0;COPY(s.tiles[2].agent_id,"not-in-roster");}
+        if(!strcmp(name,"panes_waiting")){COPY(s.tile_tab,"previous-tab");}
     }
     else if(!strcmp(name,"companion")){s.view=COMPANION;}
     else if(!strcmp(name,"daemons")){s.view=DAEMONS;s.preview_character.id=HT_CHARACTER_TUX;}

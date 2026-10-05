@@ -6,3 +6,6 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_400=y
 # The physical trial writes ONLY the app partition, never this bootloader.
 CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# Observe every GT911 contact; extra fingers must cancel, never be truncated.
+CONFIG_ESP_LCD_TOUCH_MAX_POINTS=5

@@ -93,7 +93,8 @@ do not establish those qualities.
 | Where | Gesture or action | Result |
 | --- | --- | --- |
 | Home | Tap the creature or central summary area | Start voice for the selected pane |
-| Home | Swipe left or right across the center | Change the selected open agent pane |
+| Home | Swipe left or right with one finger across the center | Change the selected open agent pane |
+| Home | Swipe horizontally with two fingers together, then release | Change to the adjacent workspace; no wrap at either end |
 | Home | Drag up or down across the center | Scroll the selected desktop terminal; release can continue with inertia |
 | Home, while scrolling coasts | Tap | Stop that scroll; a subsequent deliberate tap starts voice |
 | Home | Hold the creature, or tap Menu | Open Menu |
@@ -101,6 +102,8 @@ do not establish those qualities.
 | Menu | Today, on compatible hosts | Read this computer's local daily usage estimate; Refresh requests a new reading |
 | Home | Tap the workspace name | Open Tabs |
 | Home | Tap the bottom pane/activity area | Open Panes |
+| Panes | Map / List | Switch between the host's pane geometry and a readable list, without moving desktop focus |
+| Panes map | Tap a named, large enough pane | Focus that exact pane; small or unresolved rectangles stay inert |
 | Side button | Tap / hold at least 0.8 seconds | Back or stop / toggle the screen |
 | Listening | Tap the creature | Finish capture and send through the existing voice route |
 | Listening | Hold and release, or tap Review first | Read the transcript before sending, when the host supports drafts |
@@ -114,9 +117,28 @@ do not establish those qualities.
 | Daemon or Scene | Use / Back | Save the chosen appearance / cancel the preview |
 | Tabs | Swipe the workspace card, then tap the chosen card | Browse first; the tap switches and returns to that workspace's companion |
 | Updates | Swipe | Browse updates without moving desktop focus |
-| Updates | Open on desktop | Open that update's exact pane |
+| Updates with a question | Answer | Read and answer that question locally; the home recipient and desktop focus stay in place |
+| Updates with an unconfirmed answer | Review answer | Reopen the retained answer and delivery state, even if its original alert has disappeared |
+| Updates or Read | Open on desktop | Open that exact pane; compatible hosts preserve the previous reading place for Return |
+| Home after a supported visit | Return | Ask the app to restore its saved pane and reading position |
 | Reading, question or draft sheets | Drag vertically | Read the local text or advance its choices/parts, rather than scrolling the desktop |
 | A list or form | Drag vertically, then tap a choice | Browse and activate the chosen item |
+
+The two-finger gesture reads all five GT911 contacts and tracks their IDs. Both
+fingers must travel at least 96 pixels horizontally together, with bounded
+vertical movement. A second finger cancels the pending one-finger action;
+extra fingers, invalid samples, sleep and context changes consume the remaining
+contact. It is disabled in sheets, recording and composition. The pinned
+Espressif GT911 1.2.1 driver exposes these contacts, but this gesture has only
+native replay and target-compile validation until it is tried on the physical
+Pro. The driver reports invalid controller counts above five as an empty sample;
+the public API cannot distinguish those malformed reports from release.
+
+Map rectangles come from the selected workspace's normalized host layout.
+Missing, stale or overlapping geometry uses the list. Tiny panes remain an
+overview; crowded layouts default to the list, which always retains the full
+current roster. No synthetic geometry or enlarged overlapping hit targets are
+used.
 
 Rapid repeated taps are guarded across voice transitions. A swipe cannot turn
 into a send or approval when the finger lifts. Every reading sheet has a title
@@ -127,6 +149,16 @@ brief delivery reaction; restoring notification history does not replay that
 reaction. Updates become read only after their content reaches the display.
 Reading is separate from **Open on desktop**, and reading a question never
 answers it.
+
+Question choices and speech stay pinned to the reviewed question's identity and
+token. A disconnect or missing receipt leaves the answer visibly unconfirmed;
+the device does not resend it. Updates retains a local Review answer entry until
+a matching receipt, close event or replacement question settles that record.
+Opening in the app is a separate, deliberate action. Older hosts use a plain
+open without a Return promise. A closed pane, pruned reading position or timed-out
+visit reports the host's limitation instead of claiming exact restoration.
+These paths have native handler and renderer replay coverage; live app bookmark
+restoration and physical voice use remain device-trial checks.
 
 ## Connected features
 
@@ -232,7 +264,11 @@ No undocumented panel gamma or voltage registers are changed.
 ## Review on the device
 
 Start with two open agent panes in Harness. Swipe between them and watch the
-desktop focus change. Drag vertically to check scroll tracking, then tap to
+desktop focus change. Add a second workspace and swipe with two fingers together
+on Home; release before trying another gesture. Check a late second finger,
+three fingers, a lift-and-hold, sleep during contact and a roster refresh: none
+should begin voice or activate a pane. Compare Map and List, including a dense
+layout, and confirm the selected workspace matches the desktop. Drag vertically to check scroll tracking, then tap to
 brake. Compare a voice tap on the full creature with a tap over a summary; both
 must begin the same listening flow. Use Review first for a message you want to
 inspect before sending.
@@ -285,8 +321,10 @@ Current limits:
 
 - App connectivity is **USB**. No C5 Wi-Fi/Bluetooth app link or offline voice
   recording is implemented.
-- Touch processing uses one contact. Pinch, two-finger gestures, pressure,
-  hover and orientation gestures are not implemented.
+- One-finger input retains voice, pane navigation and vertical scroll. A guarded
+  two-finger horizontal gesture changes workspaces on Home; physical validation
+  remains outstanding. Pinch, pressure, hover and orientation gestures are not
+  implemented.
 - Pane switching covers controllable **agent panes**. Shell/viewer seats are
   not independently focusable through this protocol.
 - Stored lock patterns use a centered square-screen unlock layout. Update
@@ -342,8 +380,8 @@ python3 devices/harness-device/firmware/test/test_pro_power.py
 python3 devices/harness-device/firmware/test/test_pro_canvas.py
 python3 devices/harness-device/firmware/test/test_pro_language.py
 python3 devices/harness-device/firmware/test/test_pro_metrics.py
-python3 devices/harness-device/firmware/test/test_pro_controls.py
-python3 devices/harness-device/firmware/test/test_pro_touch_ui.py
+bash devices/harness-device/firmware/test/run-pro.sh
+python3 devices/harness-device/firmware/test/test_pro_touch_driver.py
 python3 devices/harness-device/firmware/test/test_pro_voice_samples.py
 python3 devices/harness-device/firmware/test/test_voice_ui.py --pro
 python3 devices/harness-device/firmware/test/test_draft_ui.py --pro

@@ -287,9 +287,125 @@ static void pro_appearance(ht_scene_t *f)
     pro_control(f, 528, 626, 160, 68, PRO_TR("Next"), A_APPEAR_NEXT, 0, true);
 }
 
+static ht_rect_t pro_map_rect(const cable_tile_t *tile)
+{
+    int x = 32 + tile->x1 * 656 / 1000, y = 144 + tile->y1 * 432 / 1000;
+    int w = (tile->x2 * 656 / 1000) - (tile->x1 * 656 / 1000);
+    int h = (tile->y2 * 432 / 1000) - (tile->y1 * 432 / 1000);
+    int ix = w >= 16 ? 4 : 0, iy = h >= 16 ? 4 : 0;
+    return (ht_rect_t){x + ix, y + iy, w - 2 * ix, h - 2 * iy};
+}
+
+static bool pro_map_ready(void)
+{
+    // Shape and roster travel separately. Never use another tab's rectangles,
+    // or make an unresolved first frame look like a set of named controls.
+    if (s.loading || !s.selected_tab[0] || strcmp(s.tile_tab, s.selected_tab) ||
+        s.tile_count <= 0 || s.tile_count > SWARM_TILES_MAX) return false;
+    int named = 0, resolved = 0;
+    for (int i = 0; i < s.tile_count; i++) {
+        const cable_tile_t *t = &s.tiles[i];
+        if (t->x1 < 0 || t->y1 < 0 || t->x2 > 1000 || t->y2 > 1000 ||
+            t->x2 <= t->x1 || t->y2 <= t->y1) return false;
+        for (int j = 0; j < i; j++) {
+            const cable_tile_t *p = &s.tiles[j];
+            if (t->x1 < p->x2 && p->x1 < t->x2 && t->y1 < p->y2 && p->y1 < t->y2)
+                return false; // Ambiguous seats cannot become overlapping hit targets.
+        }
+        if (t->agent_id[0]) { named++; if (find(t->agent_id) >= 0) resolved++; }
+    }
+    return named == 0 || resolved > 0;
+}
+
+static bool pro_map_focusable(ht_rect_t r, int agent)
+{
+    // Preserve the real geometry. Never grow a tiny pane's hit box over its
+    // neighbour; the list is the equally reachable precision alternative.
+    return agent >= 0 && r.w >= 96 && r.h >= 96;
+}
+
+static bool pro_map_prefers_list(void)
+{
+    int known = 0, usable = 0;
+    for (int i = 0; i < s.tile_count; i++) {
+        int agent = find(s.tiles[i].agent_id);
+        if (agent < 0) continue;
+        known++;
+        if (pro_map_focusable(pro_map_rect(&s.tiles[i]), agent)) usable++;
+    }
+    // Back, layout toggle, Tabs and Find retain four of the fixed hit slots.
+    return known > 0 && (usable * 2 < known || usable > 20);
+}
+
+static int pro_map_unlisted(void)
+{
+    int unlisted = 0;
+    for (int i = 0; i < s.count; i++) {
+        bool represented = false;
+        for (int j = 0; j < s.tile_count; j++)
+            if (!strcmp(s.agents[i].id, s.tiles[j].agent_id)) { represented = true; break; }
+        if (!represented) unlisted++;
+    }
+    return unlisted;
+}
+
+static void pro_agent_map(ht_scene_t *f)
+{
+    bool outlined = false;
+    for (int i = 0; i < s.tile_count; i++) {
+        const cable_tile_t *tile = &s.tiles[i];
+        ht_rect_t r = pro_map_rect(tile);
+        if (r.w <= 0 || r.h <= 0) continue;
+        int ai = find(tile->agent_id);
+        const agent_t *a = ai >= 0 ? &s.agents[ai] : NULL;
+        bool enabled = s.connected && pro_map_focusable(r, ai) &&
+                       s.hit_count < (int)(sizeof s.hits / sizeof s.hits[0]) - 2;
+        int hit = enabled ? pro_hit(r.x, r.y, r.w, r.h, A_AGENT, ai, true) : -1;
+        bool focused = a && ai == s.active;
+        uint16_t fill = !a ? color(0xe9e9e2) : hit >= 0 && hit == s.pressed ? SEL : color(0xfcfbf4);
+        bool ring = focused && !outlined && r.w > 8 && r.h > 8;
+        ht_pro_rect(f, r.x, r.y, r.w, r.h, 20, ring ? ACCENT : fill);
+        if (ring) {
+            ht_pro_rect(f, r.x + 3, r.y + 3, r.w - 6, r.h - 6, 17, fill);
+            outlined = true; // Duplicate host IDs cannot exhaust the 64-run compositor.
+        }
+        if (r.w < 80 || r.h < 60) continue;
+        const ht_pro_font_t *font = r.w >= 184 && r.h >= 116 ? &ht_pro_32 : &ht_pro_24;
+        const char *name = a ? a->name : tile->agent_id[0] ? PRO_TR("Unavailable") : PRO_TR("App pane");
+        ht_pro_text(f, r.x + 14, r.y + 12, r.w - 28, font,
+                    !enabled ? DIM : focused ? ACCENT : FG, name);
+        // At most 16 two-line seats fit the compositor budget. Denser maps
+        // stay spatial overviews; the list retains the complete identities.
+        if (a && s.tile_count <= 16 && r.h >= font->height + ht_pro_24.height + 28 && r.w >= 128) {
+            const char *status = is_question(a->id) ? "Question" : a->busy ? "Working" :
+                a->recap_ready ? "Result" : "Ready";
+            ht_pro_text(f, r.x + 14, r.y + r.h - ht_pro_24.height - 14, r.w - 28,
+                        &ht_pro_24, is_question(a->id) ? ACCENT : DIM, PRO_TR(status));
+        }
+    }
+    pro_control(f, 32, 606, 304, 68, PRO_TR("Tabs"), A_TABS, 0, s.connected);
+    if (cable_client_supports(CABLE_FEATURE_FORM))
+        pro_control(f, 384, 606, 304, 68, PRO_TR("Find"), A_FIND, 0, s.connected && !s.loading);
+}
+
 static void pro_agents(ht_scene_t *f)
 {
-    pro_heading(f, PRO_TR("Panes"), A_LAUNCHER);
+    bool ready = pro_map_ready();
+    // 0 is the automatic default; 1 explicitly chooses the list; 2 explicitly
+    // chooses the map, including a crowded but still truthful overview.
+    bool list = !ready || s.pro_agent_layout == 1 || (s.pro_agent_layout == 0 && pro_map_prefers_list());
+    pro_control(f, 28, 28, 136, 64, PRO_TR("Back"), A_HOME, 0, true);
+    const char *title = PRO_TR("Panes");
+    for (int i = 0; i < s.tab_count; i++)
+        if (!strcmp(s.tabs[i].id, s.selected_tab)) { title = s.tabs[i].name; break; }
+    const ht_pro_font_t *font = ht_pro_width(&ht_pro_42, title) <= 332 ? &ht_pro_42 : &ht_pro_32;
+    ht_pro_text(f, 188, 39, 332, font, FG, title);
+    char label[40]; int extra = ready ? pro_map_unlisted() : 0;
+    if (!list && extra) snprintf(label, sizeof label, PRO_TR("List +%d"), extra);
+    else snprintf(label, sizeof label, "%s", PRO_TR(list ? "Map" : "List"));
+    pro_control(f, 548, 28, 140, 64, label, A_AGENT_LAYOUT, list ? 2 : 1, ready);
+    ht_pro_rect(f, 32, 113, 656, 2, 0, SEL);
+    if (!list) { pro_agent_map(f); return; }
     pro_clamp_list(s.count, 4);
     if (!s.count) {
         ht_pro_center(f, 258, &ht_pro_42, FG, s.loading ? PRO_TR("Finding your panes...") : PRO_TR("A place for your next idea."));
@@ -300,13 +416,16 @@ static void pro_agents(ht_scene_t *f)
     for (int row = 0; row < 4 && s.offset + row < s.count; row++) {
         int i = s.offset + row;
         agent_t *a = &s.agents[i];
-        const char *detail = is_question(a->id) ? PRO_TR("Needs your answer") :
-            a->busy ? (a->tool[0] ? a->tool : PRO_TR("Working")) :
-            a->recap_ready ? PRO_TR("A result is ready") : PRO_TR("Ready when you are");
+        char identity[160];
+        const char *engine = !strcmp(a->engine, "claude") ? "Claude" : !strcmp(a->engine, "codex") ? "Codex" :
+            !strcmp(a->engine, "opencode") ? "OpenCode" : a->engine;
+        snprintf(identity, sizeof identity, "%s%s%s", engine, engine[0] && a->machine[0] ? "  ·  " : "", a->machine);
+        const char *detail = identity[0] ? identity : is_question(a->id) ? PRO_TR("Needs your answer") :
+            a->busy ? PRO_TR("Working") : a->recap_ready ? PRO_TR("A result is ready") : PRO_TR("Ready when you are");
         pro_row(f, 146 + row * 108, a->name, detail, A_AGENT, i, s.connected, i == s.active);
     }
     pro_pager(f, s.count, 4);
-    pro_note(f, PRO_TR("Swipe to browse. Tap a pane to focus it."));
+    if (!ready && s.count) pro_note(f, PRO_TR("The layout is updating."));
 }
 
 static void pro_tabs(ht_scene_t *f)
@@ -337,6 +456,12 @@ static void pro_inbox(ht_scene_t *f)
 {
     pro_heading(f, PRO_TR("Updates"), A_HOME);
     if (!s.notice_count) {
+        if (s.q.pending) {
+            ht_pro_text(f,48,164,624,&ht_pro_32,FG,s.q.name);
+            ht_pro_wrap(f,56,244,608,6,0,&ht_pro_32,DIM,PRO_TR(s.q.error[0] ? s.q.error : "Confirming your answer..."));
+            pro_control(f,220,606,280,68,PRO_TR("Review answer"),A_QUESTION,-1,true);
+            return;
+        }
         ht_pro_center(f, 272, &ht_pro_42, FG, PRO_TR("All caught up."));
         ht_pro_center(f, 338, &ht_pro_24, DIM, PRO_TR("I'll let you know when something arrives."));
         pro_control(f, 220, 462, 280, 76, PRO_TR("Home"), A_HOME, 0, true);
@@ -345,6 +470,8 @@ static void pro_inbox(ht_scene_t *f)
     if (s.offset >= s.notice_count) s.offset = s.notice_count - 1;
     if (s.offset < 0) s.offset = 0;
     const cable_notif_t *n = &s.notice[s.offset];
+    if (s.q.pending)
+        pro_control(f,484,28,204,64,PRO_TR("Review answer"),A_QUESTION,-1,true);
     char position[72];
     snprintf(position, sizeof position, "%s   %d / %d", n->question ? PRO_TR("Needs your answer") :
         n->failed ? PRO_TR("Needs attention") : PRO_TR("Ready for you"), s.offset + 1, s.notice_count);
@@ -352,8 +479,14 @@ static void pro_inbox(ht_scene_t *f)
     ht_pro_wrap(f, 48, 184, 624, 2, 0, &ht_pro_32, FG, n->name);
     ht_pro_wrap(f, 48, 282, 624, 7, 0, &ht_pro_32, s.connected ? FG : DIM,
                 n->summary[0] ? n->summary : PRO_TR("No preview available."));
-    // Reading the card is inert. Only the named action changes desktop focus.
-    pro_control(f, 220, 606, 280, 68, PRO_TR("Open on desktop"), A_NOTICE, s.offset, s.connected);
+    // Answering is local to this ID. Opening is the separate focus-changing action.
+    bool answer = n->question && cable_client_supports(CABLE_FEATURE_QUESTIONS);
+    bool available = s.connected && !visit.pending;
+    if (answer)
+        pro_control(f, 32, 606, 280, 68, PRO_TR("Answer"), A_QUESTION, s.offset,
+                    available && (!s.q.pending || !strcmp(s.q.agent,n->agent_id)));
+    pro_control(f, answer ? 328 : 220, 606, answer ? 360 : 280, 68,
+                PRO_TR("Open on desktop"), A_NOTICE, s.offset, available);
     s.notice_frame = n->read_on_dial ? 0 : n->display_revision;
     pro_note(f, PRO_TR("Swipe for other updates. Opening changes your pane."));
 }
@@ -453,12 +586,13 @@ static void pro_read_text(ht_scene_t *f, const char *value, int y, int rows)
 static void pro_reader(ht_scene_t *f)
 {
     pro_heading(f, PRO_TR("Latest result"), A_LAUNCHER);
-    agent_t *a = active();
+    int recipient = find(s.reader_agent);
+    agent_t *a = recipient >= 0 ? &s.agents[recipient] : !s.reader_agent[0] ? active() : NULL;
     ht_pro_text(f, 48, 134, 624, &ht_pro_24, DIM, a ? a->name : PRO_TR("No pane selected"));
     const char *value = a && a->full[0] ? a->full : PRO_TR("No result to read yet. I'll bring it here when it's ready.");
     pro_read_text(f, value, 190, 9);
     pro_control(f, 32, 606, 160, 68, PRO_TR("Earlier"), A_UP, 0, s.offset > 0);
-    pro_control(f, 216, 606, 288, 68, PRO_TR("Open on desktop"), A_DESKTOP, 0, s.connected && a);
+    pro_control(f, 216, 606, 288, 68, PRO_TR("Open on desktop"), A_DESKTOP, 2, s.connected && a && !visit.pending);
     int total = ht_pro_text_rows(value, &ht_pro_32, 608);
     pro_control(f, 528, 606, 160, 68, PRO_TR("More"), A_DOWN, 0, s.offset + 9 < total);
     pro_note(f, PRO_TR("Swipe to read this result."));
@@ -472,10 +606,15 @@ static void pro_question(ht_scene_t *f)
         ht_pro_center(f, 288, &ht_pro_32, DIM, PRO_TR("Reading the question..."));
         return;
     }
+    if (s.q.pending && !s.q.error[0]) {
+        pro_read_text(f, s.q.item[s.q.index].answer, 220, 6);
+        ht_pro_center(f, 619, &ht_pro_32, DIM, PRO_TR("Confirming your answer..."));
+        return;
+    }
     if (s.q.error[0] || !s.q.valid || !s.q.supported) {
         ht_pro_wrap(f, 56, 220, 608, 7, 0, &ht_pro_32, FG, s.q.error[0] ? PRO_TR(s.q.error) :
                     !s.q.valid ? PRO_TR("Already answered elsewhere.") : PRO_TR("This question needs the desktop."));
-        pro_control(f, 220, 606, 280, 68, PRO_TR("Open on desktop"), A_DESKTOP, 1, s.connected);
+        pro_control(f, 220, 606, 280, 68, PRO_TR("Open on desktop"), A_DESKTOP, 1, s.connected && !visit.pending);
         return;
     }
     question_item_t *q = &s.q.item[s.q.index];

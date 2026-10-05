@@ -184,7 +184,7 @@ static void inspect(const ht_scene_t *f,const char *name) {
     for(int i=0;i<s.hit_count;i++) {
         ht_rect_t b=s.hits[i].rect;
         assert(b.x>=0&&b.y>=0&&b.x+b.w<=720&&b.y+b.h<=720&&b.w>0&&b.h>=60);
-        if(s.view==LAUNCHER || s.view==LANGUAGE)
+        if(s.view==LAUNCHER || s.view==LANGUAGE || s.view==AGENTS)
             for(int j=i+1;j<s.hit_count;j++) assert(!overlap(b,s.hits[j].rect));
         if(s.hits[i].action==A_STOP_YES) assert(s.view==STOP);
         if(s.hits[i].action==A_ANSWER) assert(s.view==ANSWER_REVIEW);
@@ -207,8 +207,66 @@ static bool has_text(const ht_scene_t *f,const char *text) {
     for(unsigned i=0;i<f->count;i++) if(f->runs[i].pro_kind==1 && !strcmp(f->runs[i].text,text))return true;
     return false;
 }
+static void map_fixture(int columns,int rows,int count,bool duplicate) {
+    reset(false);s.view=AGENTS;s.pro_agent_layout=2;s.tile_count=count;
+    COPY(s.tile_tab,s.selected_tab);
+    for(int i=0;i<count;i++) {
+        s.tiles[i]=(cable_tile_t){.x1=(i%columns)*1000/columns,.x2=(i%columns+1)*1000/columns,
+            .y1=(i/columns)*1000/rows,.y2=(i/columns+1)*1000/rows};
+        COPY(s.tiles[i].agent_id,s.agents[duplicate?0:i%s.count].id);
+    }
+}
+static void map_checks(const char *dir) {
+    ht_scene_t map;
+    for(int lang=0;lang<2;lang++)for(int count=1;count<=24;count++)for(int cols=1;cols<=count;cols++)for(int duplicate=0;duplicate<2;duplicate++) {
+        map_fixture(cols,(count+cols-1)/cols,count,duplicate);COPY(s.voice_language,lang?"vi":"en");
+        if(duplicate)for(int i=0;i<s.count;i++)fill(s.agents[i].name,sizeof s.agents[i].name);
+        assert(pro_map_ready());ht_scene_clear(&map,BG);assert(pro_render_controls(&map));inspect(&map,"map geometry/budget");
+        assert(action_count(A_HOME,true)==1&&action_count(A_AGENT_LAYOUT,true)==1);
+        assert(action_count(A_TABS,true)==1&&action_count(A_FIND,true)==1&&action_count(A_AGENT,true)<=20);
+        for(int i=0;i<s.hit_count;i++)if(s.hits[i].action==A_AGENT) {
+            assert(s.hits[i].rect.w>=96&&s.hits[i].rect.h>=96);
+            bool exact=false;for(int j=0;j<count;j++) {
+                ht_rect_t r=pro_map_rect(&s.tiles[j]);
+                if(!memcmp(&r,&s.hits[i].rect,sizeof r)&&!strcmp(s.tiles[j].agent_id,s.agents[s.hits[i].value].id))exact=true;
+            }
+            assert(exact); // Hit targets preserve the host rectangle and roster identity.
+        }
+    }
+    map_fixture(2,2,3,false);ht_scene_clear(&map,BG);assert(pro_render_controls(&map));
+    assert(action_count(A_AGENT,true)==3);portrait(&map,dir,"map-three-panes");
+    map_fixture(6,4,24,true);ht_scene_clear(&map,BG);assert(pro_render_controls(&map));
+    assert(action_count(A_AGENT,true)==20);inspect(&map,"map dense duplicate IDs");portrait(&map,dir,"map-dense");
+    s.pro_agent_layout=0;s.hit_count=0;ht_scene_clear(&map,BG);assert(pro_render_controls(&map));
+    assert(action_count(A_AGENT,true)==4&&action_count(A_DOWN,true)==1); // Dense map defaults to usable list.
+    map_fixture(24,1,24,false);ht_scene_clear(&map,BG);assert(pro_render_controls(&map));
+    assert(!action_count(A_AGENT,true)&&action_count(A_AGENT_LAYOUT,true)==1);portrait(&map,dir,"map-tiny-panes");
+    map_fixture(2,2,4,false);s.connected=false;ht_scene_clear(&map,BG);assert(pro_render_controls(&map));
+    assert(!action_count(A_AGENT,true)&&!action_count(A_TABS,true)&&!action_count(A_FIND,true));
+    assert(action_count(A_AGENT_LAYOUT,true)==1); // Layout preference remains local.
+    for(int invalid=0;invalid<8;invalid++) {
+        map_fixture(2,2,4,false);
+        switch(invalid) {
+        case 0:COPY(s.tile_tab,"old-tab");break;case 1:s.loading=true;break;
+        case 2:s.tiles[0].x1=-1;break;case 3:s.tiles[0].x2=1001;break;
+        case 4:s.tiles[0].y2=s.tiles[0].y1;break;case 5:s.tiles[0]=s.tiles[1];break;
+        case 6:for(int i=0;i<s.tile_count;i++)COPY(s.tiles[i].agent_id,"missing");break;
+        case 7:s.tile_count=0;break;
+        }
+        assert(!pro_map_ready());ht_scene_clear(&map,BG);assert(pro_render_controls(&map));inspect(&map,"map fallback");
+        assert(!action_count(A_AGENT_LAYOUT,true)&&action_count(A_AGENT,true)==4&&has_text(&map,"The layout is updating."));
+    }
+    map_fixture(2,2,4,false);s.tiles[1].agent_id[0]=0;COPY(s.tiles[2].agent_id,"missing");
+    ht_scene_clear(&map,BG);assert(pro_render_controls(&map));inspect(&map,"map mixed roster");
+    assert(action_count(A_AGENT,true)==2&&has_text(&map,"App pane")&&has_text(&map,"Unavailable"));
+    portrait(&map,dir,"map-mixed-panes");
+    map_fixture(2,2,3,false);s.pro_agent_layout=1;ht_scene_clear(&map,BG);assert(pro_render_controls(&map));
+    inspect(&map,"explicit list");assert(action_count(A_AGENT,true)==4&&action_count(A_AGENT_LAYOUT,true)==1);
+    portrait(&map,dir,"map-list");
+}
 int main(int argc,char **argv) {
     const char *dir=argc>1?argv[1]:NULL;
+    map_checks(dir);
     static const struct { view_t view;const char *name; } screens[]={
         {LAUNCHER,"launcher"},{WORK_INTENT,"instruction"},{TODAY,"today-empty"},{LANGUAGE,"language"},{VOICE_SAMPLES,"voice"},{VOICE_PARAMS,"voice-params"},{AGENTS,"panes"},{TABS,"tabs"},{INBOX,"updates"},{MACHINES,"machines"},
         {MODELS,"models"},{SETTINGS,"controls"},{COMPANION,"companion"},{READER,"read"},

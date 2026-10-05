@@ -105,7 +105,7 @@ static bool cable_client_answer_reviewed(const char *id,const char *fetch,const 
 '''
 for name in ['notice_sync_view','copy','control','text','center','heading','question_view','question_rows',
              'question_text','render_question','render_choices','render_answer_review',
-             'open_question','question_answer','question_move','send_answer',
+             'read_question','open_question','question_answer','question_move','send_answer',
              'question_load','ui_question_show','ui_question_state','ui_answer_receipt','ui_question_close','ui_focus_project','ui_voice_question']:
     code += function(name)
 actions = source.split('    case A_QUESTION_CHOICES:\n',1)[1].split('    case A_INBOX:',1)[0]

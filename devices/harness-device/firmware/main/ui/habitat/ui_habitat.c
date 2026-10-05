@@ -93,7 +93,7 @@ typedef enum {
     A_FIND, A_FORM, A_FORM_MAIN, A_FORM_BACK, A_FORM_SEND, A_FORM_SAY,
     A_HOME,
 #ifdef DEVICE_PRO_COMPANION
-    A_LAUNCHER, A_WORK_INTENT, A_WORK_MODE, A_WORK_RECORD,
+    A_LAUNCHER, A_WORK_INTENT, A_WORK_MODE, A_WORK_RECORD, A_AGENT_LAYOUT,
     A_TODAY, A_TODAY_REFRESH, A_METRICS_GET,
     A_LANGUAGE, A_LANGUAGE_SET,
     A_DAEMONS, A_SCENES, A_APPEAR_PREVIOUS, A_APPEAR_NEXT, A_APPEAR_USE, A_APPEAR_SAVE,
@@ -221,7 +221,9 @@ static EXT_RAM_BSS_ATTR struct {
     bool quiet, nap, locked, lock_armed, rim_enabled, focus_face, straight_title;
 #ifdef DEVICE_PRO_COMPANION
     pro_scene_id_t scene_choice, preview_scene;
+    uint8_t pro_agent_layout;
     char work_agent[ID_MAX];
+    char reader_agent[ID_MAX];
     uint32_t work_revision;
     uint8_t work_mode, work_voice_mode;
     pro_metrics_t metrics;
@@ -293,6 +295,10 @@ static EXT_RAM_BSS_ATTR struct {
     ht_rect_t caption_arc;
     int hit_count, pressed;
     bool touch_down, touch_cancelled;
+#ifdef DEVICE_PRO_COMPANION
+    bool workspace_chord;
+    char chord_tab[ID_MAX], chord_previous[ID_MAX], chord_next[ID_MAX], chord_machine[ID_MAX];
+#endif
     bool touch_brake, coasting;
     uint32_t coast_until;
     uint32_t character_activity;
@@ -576,6 +582,7 @@ static int ensure(const char *id)
 static void input_cancel(void)
 {
 #ifdef DEVICE_PRO_COMPANION
+    s.workspace_chord = false;
     pro_speech_cancel(true);
 #endif
     ht_gesture_cancel(&gesture);
@@ -2261,6 +2268,20 @@ static action_t make_action(hit_t h)
         COPY(a.id, s.work_agent); a.revision = s.work_revision;
         return a;
     }
+    if (s.view == INBOX && (h.action == A_NOTICE || h.action == A_QUESTION) &&
+        h.value >= 0 && h.value < s.notice_count) {
+        COPY(a.id, s.notice[h.value].agent_id);
+        a.revision = s.notice[h.value].display_revision;
+        return a;
+    }
+    if (s.view == INBOX && h.action == A_QUESTION && h.value == -1 && s.q.pending) {
+        COPY(a.id,s.q.agent);
+        return a;
+    }
+    if (s.view == READER && h.action == A_DESKTOP && h.value == 2) {
+        COPY(a.id, s.reader_agent);
+        return a;
+    }
 #endif
     if (s.view == DRAFT || s.view == DRAFT_OPTIONS) {
         a.revision = draft.page.revision; a.dy = (int)draft.page.revision;
@@ -2299,15 +2320,18 @@ static action_t make_action(hit_t h)
         COPY(a.id, active()->id);
     return a;
 }
-static void open_question(void)
+static void read_question(const char *id, const char *label)
 {
-    if (!s.connected || !active()) return;
-    if (!cable_client_supports(CABLE_FEATURE_QUESTIONS)) {
-        action_t open={.kind=A_DESKTOP}; COPY(open.id,active()->id);
-        queue(open);
+    if (!s.connected || !id || !*id || !cable_client_supports(CABLE_FEATURE_QUESTIONS)) return;
+#ifdef DEVICE_PRO_COMPANION
+    // A lost receipt is not permission to send another answer or replace its
+    // correlation token. The matching receipt/close event can still settle it.
+    if (s.q.pending) {
+        if (!strcmp(id, s.q.agent)) view(QUESTION);
         return;
     }
-    char agent[ID_MAX], name[64]; COPY(agent,active()->id); copy(name,sizeof active()->name,active()->name);
+#endif
+    char agent[ID_MAX], name[64]; COPY(agent,id); COPY(name,label ? label : "");
     uint32_t revision = s.q.revision + 1;
     memset(&s.q,0,sizeof s.q); s.q.revision=revision; s.q.loading=true;
     COPY(s.q.agent,agent); COPY(s.q.name,name);
@@ -2317,6 +2341,41 @@ static void open_question(void)
     if (!queue(a)) { s.q.loading=false; COPY(s.q.error,"Could not load. Open the alert again."); }
     view(QUESTION);
 }
+static void open_question(void)
+{
+    if (!s.connected || !active()) return;
+    if (!cable_client_supports(CABLE_FEATURE_QUESTIONS)) {
+        action_t open={.kind=A_DESKTOP}; COPY(open.id,active()->id);
+        queue(open);
+        return;
+    }
+    read_question(active()->id, active()->name);
+}
+#ifdef DEVICE_PRO_COMPANION
+static void pro_open_in_app(const char *agent)
+{
+    if (!s.connected || s.voice_open || s.loading || visit.pending || !agent || !*agent) return;
+    if (!cable_client_supports(CABLE_FEATURE_VISIT)) {
+        action_t open = {.kind=A_DESKTOP}; COPY(open.id,agent);
+        if (queue(open)) {
+            // An older host can open the pane but cannot promise a saved place.
+            ht_visit_close(&visit);
+            COPY(s.opening_notice,agent);
+        } else {
+            COPY(s.title,"Device busy"); COPY(s.message,"Open the update again."); view(MESSAGE);
+        }
+        return;
+    }
+    char id[48];
+    if (visit.available) COPY(id,visit.id);
+    else snprintf(id,sizeof id,"visit-%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random());
+    if (!ht_visit_open(&visit,id,agent,ms(),visit_emit,NULL)) {
+        COPY(s.title,"Visit"); COPY(s.message,"The cable is busy. Try again."); view(MESSAGE);
+        return;
+    }
+    COPY(s.title,"On your desktop"); COPY(s.message,"Keeping your reading place..."); view(MESSAGE);
+}
+#endif
 static bool question_answer(void)
 {
     question_item_t *q=&s.q.item[s.q.index];
@@ -2535,12 +2594,24 @@ static void dispatch(action_t a)
         break;
     case A_AGENTS: {
         view(AGENTS);
+#ifdef DEVICE_PRO_COMPANION
+        s.pro_agent_layout = 0;
+#endif
         int last = s.count > TAB_ROWS ? s.count - TAB_ROWS : 0;
         s.offset = s.active - TAB_ROWS / 2;
         if (s.offset > last) s.offset = last;
         if (s.offset < 0) s.offset = 0;
         break;
     }
+#ifdef DEVICE_PRO_COMPANION
+    case A_AGENT_LAYOUT:
+        if (s.view == AGENTS && a.value >= 0 && a.value <= 2) {
+            s.pro_agent_layout = (uint8_t)a.value;
+            s.offset = 0;
+            change();
+        }
+        break;
+#endif
     case A_AGENT: {
         int i = find(a.id);
         if (i < 0)
@@ -2553,11 +2624,33 @@ static void dispatch(action_t a)
         break;
     }
     case A_READER:
+#ifdef DEVICE_PRO_COMPANION
+        if (find(a.id) < 0) break;
+        COPY(s.reader_agent,a.id);
+#endif
         view(READER);
         break;
     case A_QUESTION:
+#ifdef DEVICE_PRO_COMPANION
+        if (s.view == INBOX) {
+            if (a.value == -1) {
+                if (s.q.pending && a.revision==s.q.revision && !strcmp(a.id,s.q.agent)) view(QUESTION);
+                break;
+            }
+            for (int i=0; i<s.notice_count; i++) {
+                const cable_notif_t *n=&s.notice[i];
+                if (n->question && n->display_revision==a.revision && !strcmp(n->agent_id,a.id)) {
+                    read_question(n->agent_id,n->name);
+                    break;
+                }
+            }
+        } else if ((s.view==HOME || s.view==AGENT) && active() && !strcmp(active()->id,a.id)) {
+            open_question();
+        }
+#else
         if (find(a.id) >= 0) s.active = find(a.id);
         open_question();
+#endif
         break;
     case A_QUESTION_CHOICES:
     case A_QUESTION_REVIEW:
@@ -2588,6 +2681,15 @@ static void dispatch(action_t a)
         break;
     case A_NOTICE: {
         if (s.connected && !visit.pending && a.id[0]) {
+#ifdef DEVICE_PRO_COMPANION
+            bool current=false;
+            for (int i=0; i<s.notice_count; i++)
+                if (!strcmp(s.notice[i].agent_id,a.id) && s.notice[i].display_revision==a.revision) current=true;
+            if (!current || s.view!=INBOX) break;
+            for (int i=0; i<s.notice_count; i++)
+                if (!strcmp(s.notice[i].agent_id,a.id)) notice_mark_read(&s.notice[i]);
+            pro_open_in_app(a.id);
+#else
             for (int i = 0; i < s.notice_count; i++)
                 if (!strcmp(s.notice[i].agent_id, a.id)) notice_mark_read(&s.notice[i]);
             // The shipping bridge supports agent.open, but not the experiment's
@@ -2611,6 +2713,7 @@ static void dispatch(action_t a)
                 COPY(s.message,"Open the update again.");
                 view(MESSAGE);
             }
+#endif
         }
         break;
     }
@@ -2699,6 +2802,8 @@ static void dispatch(action_t a)
         dispatch(a); break;
     case A_VOICE:
 #ifdef DEVICE_PRO_COMPANION
+        // A question sheet can only record for its explicit reviewed question.
+        if (question_view(s.view) && a.value != 4) break;
         // Revalidate the real recipient at dispatch. Never turn an unsupported
         // Goal/Loop into an ordinary task through the host's legacy fallback.
         if (a.value == 1 || a.value == 8) {
@@ -2767,6 +2872,9 @@ static void dispatch(action_t a)
                 !strcmp(form.page.title, "New Harness") ? form.page.label : form.page.title);
             else if (a.value == 7) COPY(s.voice_target, PRO_TR("Find in output"));
             else if (a.value == 5 || a.value == 6) COPY(s.voice_target, draft.page.name);
+#ifdef DEVICE_PRO_COMPANION
+            else if (a.value == 4) COPY(s.voice_target, s.q.name);
+#endif
             else COPY(s.voice_target, target >= 0 ? s.agents[target].name : "harness");
             s.voice_started = ms();
             view(VOICE);
@@ -2955,6 +3063,18 @@ static void dispatch(action_t a)
         dismiss_result(a.id);
         break;
     case A_DESKTOP:
+#ifdef DEVICE_PRO_COMPANION
+        if (a.value==2) {
+            if (s.view==READER && a.id[0] && !strcmp(a.id,s.reader_agent) && find(a.id)>=0)
+                pro_open_in_app(a.id);
+            break;
+        }
+        if (a.value==1) {
+            if (question_view(s.view) && a.revision==s.q.revision && !strcmp(a.id,s.q.agent))
+                pro_open_in_app(a.id);
+            break;
+        }
+#endif
         if (s.connected)
             queue(a);
         break;
@@ -3529,6 +3649,45 @@ void habitat_touch_cancel(void)
     s.touch_down = false; // driver swallows the rest of this contact until a trustworthy UP
     if (visible) change();
 }
+#ifdef DEVICE_PRO_COMPANION
+static bool workspace_gesture_allowed(void)
+{
+    return s.ready && s.connected && !s.loading && !s.locked &&
+           (s.view == HOME || s.view == AGENT) && !display_is_asleep() &&
+           !s.voice_open && !s.voice_start_pending && !s.voice_waiting && !audio_client_active() &&
+           !form.id[0] && !draft.page.active && !selection.active && !carry.pending &&
+           !visit.pending && !s.pending_machine[0] && !s.pending_focus[0] &&
+           workspace.phase == HT_WORKSPACE_IDLE && s.tab_count >= 2 &&
+           workspace_index(s.selected_tab) >= 0;
+}
+bool habitat_workspace_gesture_begin(void)
+{
+    // Promotion ends any one-finger scroll with zero release travel. There is
+    // never a synthetic tap UP, including on a written control or voice portrait.
+    habitat_touch_cancel();
+    if (!workspace_gesture_allowed()) return false;
+    int i = workspace_index(s.selected_tab);
+    COPY(s.chord_tab, s.selected_tab);
+    COPY(s.chord_machine, s.selected_machine);
+    COPY(s.chord_previous, i > 0 ? s.tabs[i - 1].id : "");
+    COPY(s.chord_next, i + 1 < s.tab_count ? s.tabs[i + 1].id : "");
+    s.workspace_chord = true;
+    return true;
+}
+void habitat_workspace_gesture_end(int step)
+{
+    bool armed = s.workspace_chord;
+    s.workspace_chord = false;
+    if (!armed || (step != -1 && step != 1) || !workspace_gesture_allowed() ||
+        strcmp(s.chord_tab, s.selected_tab) || strcmp(s.chord_machine, s.selected_machine)) return;
+    int target = workspace_index(s.selected_tab) + step;
+    const char *id = step < 0 ? s.chord_previous : s.chord_next;
+    if (!id[0] || target < 0 || target >= s.tab_count || strcmp(id, s.tabs[target].id)) return;
+    action_t action = {.kind = A_TAB};
+    COPY(action.id, id);
+    dispatch(action); // Existing correlated workspace request and roster acknowledgement.
+}
+#endif
 bool habitat_is_voice_view(void) { return s.view == VOICE; }
 uint32_t habitat_next_wake_ms(void)
 {
@@ -3776,8 +3935,19 @@ void ui_set_connected(bool value)
         if (workspace.phase!=HT_WORKSPACE_IDLE) {
             ht_workspace_cancel_request(&workspace); s.loading=false; s.active=-1; view(HOME);
         }
+#ifdef DEVICE_PRO_COMPANION
+        if (s.q.pending) {
+            s.q.valid=s.q.loading=false; s.q.uncertain=true; s.q.revision++;
+            COPY(s.q.error,"No answer receipt. Check the terminal before trying again.");
+            if (question_view(s.view)) view(QUESTION);
+        } else {
+            s.q.valid=s.q.loading=false; s.q.revision++;
+            if (question_view(s.view)) view(HOME);
+        }
+#else
         s.q.valid=s.q.loading=s.q.pending=false; s.q.revision++;
         if (question_view(s.view)) view(HOME);
+#endif
         ht_visit_close(&visit);
         ht_carry_close(&carry);
     }
@@ -3814,6 +3984,11 @@ void ui_metrics_state(const cJSON *p)
 void ui_project_set_name(const char *id, const char *name)
 {
     display_lock();
+#ifdef DEVICE_PRO_COMPANION
+    int previous = find(id);
+    if ((s.view == AGENTS || s.workspace_chord) &&
+        (previous < 0 || strcmp(s.agents[previous].name, name ? name : ""))) input_cancel();
+#endif
     int i = ensure(id);
     if (i >= 0) {
         COPY(s.agents[i].name, name);
@@ -3884,7 +4059,11 @@ void ui_project_remove(const char *id)
     display_lock();
     int i = find(id);
     if (i >= 0) {
-        if (s.active == i) {
+        if (s.active == i
+#ifdef DEVICE_PRO_COMPANION
+            || s.view == AGENTS || s.workspace_chord
+#endif
+        ) {
             input_cancel();
         }
         memmove(&s.agents[i], &s.agents[i + 1], (size_t)(s.count - i - 1) * sizeof(agent_t));
@@ -3916,6 +4095,9 @@ void ui_project_apply_order(const char *const *ids, int n)
     for (int i = 0; i < n && i < s.count; i++) {
         int j = find(ids[i]);
         if (j >= 0 && j != i) {
+#ifdef DEVICE_PRO_COMPANION
+            if (s.view == AGENTS || s.workspace_chord) input_cancel();
+#endif
             swap = s.agents[i];
             s.agents[i] = s.agents[j];
             s.agents[j] = swap;
@@ -4170,8 +4352,12 @@ void ui_focus_project(const char *id)
     // A requested remote open lands only after the host has supplied that agent.
     if (opened && s.view == INBOX) view(HOME);
     else if (requested && s.view == MESSAGE && !visit.pending) {
+#ifndef DEVICE_PRO_COMPANION
         if (visit.available && !strcmp(visit.agent,id) && is_question(id)) open_question();
         else view(AGENT);
+#else
+        view(AGENT);
+#endif
     }
     if (visit.available && !visit.pending && strcmp(visit.agent, id)) ht_visit_close(&visit);
     change();
@@ -4503,7 +4689,11 @@ void ui_question_show(const char *id, const char *name, const char *machine, con
     notice_add(id,name,machine,cJSON_IsString(prompt) ? prompt->valuestring : "Needs your answer",true,false);
     s.notice_sequence++;
     // A different agent's alert cannot replace the question being read.
-    if (s.q.valid && !strcmp(s.q.agent,id) && strcmp(s.q.request,request)) {
+    if ((s.q.valid
+#ifdef DEVICE_PRO_COMPANION
+         || s.q.pending
+#endif
+        ) && !strcmp(s.q.agent,id) && strcmp(s.q.request,request)) {
         s.q.valid=false; s.q.pending=false; s.q.revision++;
         if (question_view(s.view)) { COPY(s.q.error,"The question changed. Open the alert again."); view(QUESTION); }
     }
@@ -4605,7 +4795,11 @@ void ui_swarms_replace(const cable_swarm_t *rows, int count, const char *selecte
     for (int i=0;!changed && i<bounded;i++) {
         changed=strcmp(rows[i].id,s.tabs[i].id) || strcmp(rows[i].name,s.tabs[i].name);
     }
-    if (changed && (workspace.touching || s.view == TABS)) input_cancel();
+    if (changed && (workspace.touching || s.view == TABS
+#ifdef DEVICE_PRO_COMPANION
+                    || s.workspace_chord || s.view == AGENTS
+#endif
+                    )) input_cancel();
     s.tab_count=bounded;
     if (bounded) memcpy(s.tabs,rows,(size_t)bounded*sizeof *rows);
     COPY(s.selected_tab,selected);
@@ -4632,6 +4826,9 @@ void ui_tiles_replace(const cable_tile_t *rows, int count, const char *tab)
     bool changed = bounded != s.tile_count || strcmp(s.tile_tab, tab ? tab : "");
     for (int i = 0; !changed && i < bounded; i++)
         changed = memcmp(&rows[i], &s.tiles[i], sizeof *rows) != 0;
+#ifdef DEVICE_PRO_COMPANION
+    if (changed && s.view == AGENTS) input_cancel();
+#endif
     s.tile_count = bounded;
     if (bounded) memcpy(s.tiles, rows, (size_t)bounded * sizeof *rows);
     COPY(s.tile_tab, tab);
@@ -4665,6 +4862,10 @@ void ui_machines_replace(const cable_machine_t *rows, int count, const char *sel
 {
     (void)previous;
     display_lock();
+#ifdef DEVICE_PRO_COMPANION
+    if ((s.workspace_chord || s.view == AGENTS) &&
+        strcmp(s.selected_machine, selected ? selected : "")) input_cancel();
+#endif
     s.machine_count = !rows || count < 0 ? 0 : count > CABLE_MAX_MACHINES ? CABLE_MAX_MACHINES : count;
     if (s.machine_count > 0)
         memcpy(s.machines, rows, (size_t)s.machine_count * sizeof(*rows));
@@ -4676,6 +4877,10 @@ void ui_machines_replace_one(const cable_machine_t *row, const char *selected)
 {
     if (!row) return;
     display_lock();
+#ifdef DEVICE_PRO_COMPANION
+    if ((s.workspace_chord || s.view == AGENTS) &&
+        strcmp(s.selected_machine, selected ? selected : "")) input_cancel();
+#endif
     for (int i = 0; i < s.machine_count; i++)
         if (!strcmp(s.machines[i].id, row->id)) {
             s.machines[i] = *row;
@@ -4696,6 +4901,10 @@ void ui_machines_clear(void)
 void ui_set_selected_machine(const char *id)
 {
     display_lock();
+#ifdef DEVICE_PRO_COMPANION
+    if ((s.workspace_chord || s.view == AGENTS) &&
+        strcmp(s.selected_machine, id ? id : "")) input_cancel();
+#endif
     COPY(s.selected_machine, id);
     change();
     display_unlock();
@@ -4704,6 +4913,10 @@ void ui_machine_selected_ack(const char *id)
 {
     if (!id || !*id || strlen(id) >= sizeof s.selected_machine) return;
     display_lock();
+#ifdef DEVICE_PRO_COMPANION
+    if ((s.workspace_chord || s.view == AGENTS) &&
+        strcmp(s.selected_machine, id ? id : "")) input_cancel();
+#endif
     COPY(s.selected_machine, id);
     // The host owns actual selection. Its older acknowledgement must not
     // consume a more recent request that is still waiting for its own reply.
@@ -5060,7 +5273,9 @@ void ui_visit_state(const cJSON *p)
     bool ok = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "ok"));
     if (ok && (!cJSON_IsString(agent) || !agent->valuestring[0] || strlen(agent->valuestring) >= ID_MAX)) return;
     display_lock();
+#ifndef DEVICE_PRO_COMPANION
     bool inspect=visit.op==HT_VISIT_OPEN;
+#endif
     bool latest=visit.op==HT_VISIT_LATEST;
     if (ht_visit_reply(&visit, id->valuestring, (uint32_t)serial,
             cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "active")),
@@ -5070,8 +5285,12 @@ void ui_visit_state(const cJSON *p)
             int i = find(agent->valuestring);
             if (i >= 0) {
                 input_cancel(); s.active = i;
+#ifndef DEVICE_PRO_COMPANION
                 if (inspect && visit.available && is_question(agent->valuestring)) open_question();
                 else view(HOME);
+#else
+                view(HOME);
+#endif
             } else {
                 COPY(s.pending_focus, agent->valuestring);
                 COPY(s.title, "On your desktop");

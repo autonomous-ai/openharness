@@ -12,6 +12,12 @@ bool habitat_is_voice_view(void);
 void habitat_touch(bool down, int x, int y, uint32_t now_ms);
 // The driver calls this on an untrusted sample, then swallows contact until a real release.
 void habitat_touch_cancel(void);
+#ifdef DEVICE_PRO_COMPANION
+// Called under the display lock. Begin consumes the pending one-finger action;
+// end can select only the still-current, down-pinned adjacent workspace.
+bool habitat_workspace_gesture_begin(void);
+void habitat_workspace_gesture_end(int step);
+#endif
 void habitat_render_notify(void);
 void habitat_input_stamp(int64_t now_us);
 typedef struct {
