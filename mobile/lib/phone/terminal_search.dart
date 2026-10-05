@@ -520,6 +520,7 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                         notifier: widget.notifier,
                         controller: _search,
                         showing: widget.showing,
+                        opening: widget.animation,
                         onOpen: _close,
                         onNewHarness: newAgent == null
                             ? null

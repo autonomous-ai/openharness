@@ -34,6 +34,7 @@ import '../core/project_history.dart';
 import '../core/retry.dart';
 import '../logging/app_log.dart';
 import '../logging/startup_trace.dart';
+import '../logging/typing_trace.dart';
 import '../notify/agent_announcer.dart';
 import '../notify/done_notice.dart';
 import '../notify/system_notices.dart';
@@ -1756,6 +1757,7 @@ class AppNotifier extends ChangeNotifier {
     unawaited(cliLogin.logout());
     _stopAllOfflineRetries();
     _stopAllAgentSyncTimers();
+    _relaySaid.clear();
     _forgetLaunchHold();
     // Tiles go, the saved layout stays: signing out and back in is the same
     // person at the same desk, and the file is only read once machines exist.
@@ -2234,6 +2236,7 @@ class AppNotifier extends ChangeNotifier {
       if (machine.terminalCapabilityUnanswered) {
         unawaited(_loadTerminalCapabilities(machine, connection, revision));
       }
+      final handling = kTypingTrace ? (Stopwatch()..start()) : null;
       final rawAgents = response['agents'] as List<dynamic>? ?? const [];
       final agents = rawAgents
           .map((item) => Agent.fromJson(item as Map<String, dynamic>))
@@ -2244,7 +2247,15 @@ class AppNotifier extends ChangeNotifier {
           !machine.agentsFromCache) {
         machine.agentsListedAt = DateTime.now();
       }
-      if (agentsEqual(machine.agents, agents)) return;
+      if (agentsEqual(machine.agents, agents)) {
+        if (handling != null) {
+          typingEvent(
+            'agents sync: ${agents.length} unchanged · parsed and compared on this'
+            ' thread in ${handling.elapsedMilliseconds}ms',
+          );
+        }
+        return;
+      }
       // The machine's own list for the next launch too: what changed reached this phone without a
       // push (one sent while the socket was away). A harness added or gone goes out soon, the rest
       // with the app leaving the screen — see [_saveMachineCacheSoon].
@@ -2262,6 +2273,12 @@ class AppNotifier extends ChangeNotifier {
       }
       _replaceAgents(machine, agents);
       notifyListeners();
+      if (handling != null) {
+        typingEvent(
+          'agents sync: ${agents.length} changed · parsed, replaced and redrawn on'
+          ' this thread in ${handling.elapsedMilliseconds}ms',
+        );
+      }
     } on WsRequestTimeout {
       if (!_machineWorkCurrent(machine, revision)) return;
       final missed = (_agentSyncTimeouts[machineId] ?? 0) + 1;
@@ -4430,10 +4447,12 @@ class AppNotifier extends ChangeNotifier {
     return true;
   }
 
-  void _renameAgent(MachineState machine, String agentId, String name) {
+  /// False when it changed nothing — no such agent, no name, or the name it already has.
+  bool _renameAgent(MachineState machine, String agentId, String name) {
     final index = machine.agents.indexWhere((agent) => agent.id == agentId);
-    if (index == -1 || name.trim().isEmpty) return;
+    if (index == -1 || name.trim().isEmpty) return false;
     final cleanName = name.trim();
+    if (machine.agents[index].name == cleanName) return false;
     machine.agents = [...machine.agents]
       ..[index] = machine.agents[index].copyWith(name: cleanName);
     // Written with the rest when the app leaves the screen — see [_keepMachineCache].
@@ -4442,6 +4461,7 @@ class AppNotifier extends ChangeNotifier {
       if (pane.agentId != agentId) continue;
       pane.session?.renameAgent(cleanName);
     }
+    return true;
   }
 
   Future<void> _removeAgent(MachineState machine, String agentId) async {
@@ -4669,6 +4689,7 @@ class AppNotifier extends ChangeNotifier {
     // The same guard [_canFetchPreview] uses, and for the same reason: `_conn`
     // would build one out of a null pool.
     if (_disposed || (_pool == null && connectionForTest == null)) return;
+    final reaching = kTypingTrace ? (Stopwatch()..start()) : null;
     // Somebody is looking for a session, on any machine: the launch's hold is over — see
     // [_launchMachineId]. Before the reloads below, so the held ones dial with the rest.
     _releaseHeldMachines('search opened', atOnce: true);
@@ -4676,12 +4697,19 @@ class AppNotifier extends ChangeNotifier {
     final asking = <String>[];
     var current = 0;
     var locked = 0;
+    var off = 0;
     for (final machine in machines) {
       final state = machineStates[machine.machineId];
       if (state != null && state.needsLink) {
         locked++;
       } else if (state != null && _listStillCurrent(state, now)) {
         current++;
+      } else if (_relaySaysOffline(machine.machineId, now)) {
+        // ⚠️ **Not dialled: the relay has just said it is off**, and a dial would only hear that
+        // again — a token, an end-to-end session and a socket for each, all on this thread while
+        // Find draws itself (four of them measured under a 936ms frame, 2026-10-05). Its list
+        // stays the one the phone has; once the relay says it is back, the next Find asks it.
+        off++;
       } else {
         asking.add(machine.machineId);
       }
@@ -4689,11 +4717,18 @@ class AppNotifier extends ChangeNotifier {
     appLog.info(
       'search',
       'Find asks ${asking.length} machine(s) for their lists · '
-          '$current current already, $locked waiting for a password',
+          '$current current already, $locked waiting for a password, $off offline',
     );
-    await Future.wait([
+    final reloads = Future.wait([
       for (final machineId in asking) reloadMachineData(machineId),
     ]);
+    if (reaching != null) {
+      typingEvent(
+        'find reach: ${asking.length} asked, $off offline skipped'
+        ' — ${reaching.elapsedMilliseconds}ms on this thread before the replies',
+      );
+    }
+    await reloads;
   }
 
   /// Whether [state]'s list was answered over the socket it is on now, recently enough that the
@@ -6110,12 +6145,31 @@ class AppNotifier extends ChangeNotifier {
   /// everything would change what every machine's row says on a feed nothing here was built on.
   void _wakeMachinesBackOnline(Object? statuses) {
     if (statuses is! List) return;
+    final now = DateTime.now();
     for (final status in statuses) {
-      if (status is! Map || status['online'] != true) continue;
+      if (status is! Map) continue;
       final machineId = status['machineId'];
       if (machineId is! String || machineId.isEmpty) continue;
-      _pool?[machineId]?.wake('the relay says it is online');
+      final online = status['online'] == true;
+      _relaySaid[machineId] = (online: online, at: now);
+      if (online) _pool?[machineId]?.wake('the relay says it is online');
     }
+  }
+
+  /// What `machines_status` last said of each machine, and when — read by [reachAllMachines], and
+  /// by nothing else (see [_wakeMachinesBackOnline] for why it is not the machine's status).
+  final Map<String, ({bool online, DateTime at})> _relaySaid = {};
+
+  /// How long the relay's "offline" stands for [reachAllMachines]. It says so again as it changes,
+  /// so this is only the bound on trusting a word that may have gone unrepeated.
+  static const _relayOfflineStands = Duration(minutes: 2);
+
+  /// Whether the relay said, a moment ago, that [machineId] is off — so there is nothing to dial.
+  bool _relaySaysOffline(String machineId, DateTime now) {
+    final said = _relaySaid[machineId];
+    return said != null &&
+        !said.online &&
+        now.difference(said.at) < _relayOfflineStands;
   }
 
   Future<void> _recoverPendingAgent(
@@ -6563,6 +6617,7 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed || !allPanes.contains(pane) || pane.session != null) return;
     final wantedAgentId = pane.agentId;
     if (wantedAgentId == null) return;
+    if (kTypingTrace) typingEvent('switch: attaching a session to the pane');
     final machine = machineStates[pane.machineId];
     if (machine == null) return;
     if (machine.nodeOnline == false) return;
@@ -7267,7 +7322,10 @@ class AppNotifier extends ChangeNotifier {
         final agentId = _eventAgentId(machine, event, payload);
         final name = payload['name'];
         if (agentId != null && name is String) {
-          _renameAgent(machine, agentId, name);
+          // ⚠️ **No redraw for a name it already has.** A machine coming back online re-sends
+          // `agent_renamed` for every agent it holds — eighty in one second, measured — and each
+          // one redrew every screen.
+          if (!_renameAgent(machine, agentId, name)) return;
         } else {
           unawaited(_loadMachineData(machine, force: true));
         }
@@ -7456,7 +7514,19 @@ class AppNotifier extends ChangeNotifier {
   @override
   void notifyListeners() {
     _seeWatchedAgent();
+    if (!kTypingTrace) {
+      super.notifyListeners();
+      return;
+    }
+    typingCount('app.notify');
+    // What every listener does with the tick, right here on this thread — the builds come later,
+    // in the frame (`frame SLOW`).
+    final listening = Stopwatch()..start();
     super.notifyListeners();
+    final took = listening.elapsedMicroseconds / 1000;
+    if (took >= 4) {
+      typingEvent('notify: listeners took ${took.toStringAsFixed(1)}ms');
+    }
   }
 
   /// [agent] on [machine], as a notice names it.

@@ -27,12 +27,17 @@ class LinePictureCache {
   /// Least recently drawn first.
   final _pictures = LinkedHashMap<BufferLine, _LinePicture>.identity();
 
+  /// How many lines have been recorded afresh, ever — for a trace to tell a
+  /// paint that replayed from one that drew.
+  int recorded = 0;
+
   /// Draws [line] with its top-left at [offset]: its recording while that still
   /// shows the line, else a fresh one.
   void draw(Canvas canvas, Offset offset, BufferLine line) {
     var entry = _pictures.remove(line);
     if (entry == null || entry.version != line.paintVersion) {
       entry?.picture.dispose();
+      recorded++;
       final recorder = PictureRecorder();
       _paint(Canvas(recorder), Offset.zero, line);
       entry = _LinePicture(recorder.endRecording(), line.paintVersion);

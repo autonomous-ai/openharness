@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'package:harness_mobile/core/phone_search_history.dart';
+import 'package:harness_mobile/logging/typing_trace.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/external_session.dart';
 import 'package:harness_mobile/state/search_when.dart';
@@ -44,6 +45,7 @@ class PhoneSearchController extends ChangeNotifier {
     this.commands,
     this.modes = true,
   }) {
+    final built = kTypingTrace ? (Stopwatch()..start()) : null;
     _catalog = _cache.read(notifier);
     _content = SessionContentSearch(
       machines: () => notifier.searchableMachineIds,
@@ -53,6 +55,12 @@ class PhoneSearchController extends ChangeNotifier {
     _filter();
     notifier.addListener(_rebuild);
     notifier.sessionPreviews.addListener(_previewChanged);
+    if (built != null) {
+      typingEvent(
+        'find search ready in ${built.elapsedMilliseconds}ms'
+        ' · ${_catalog.length} catalog rows, ${rows.length} shown',
+      );
+    }
   }
 
   final AppNotifier notifier;
@@ -72,7 +80,7 @@ class PhoneSearchController extends ChangeNotifier {
   /// typed. The modes were the desktop's command palette carried over.
   final bool modes;
 
-  final _cache = PhoneSearchCatalogCache();
+  PhoneSearchCatalogCache get _cache => PhoneSearchCatalogCache.of(notifier);
 
   /// What every machine's session index found for the query — see [contentHitFor].
   late final SessionContentSearch _content;
@@ -302,15 +310,24 @@ class PhoneSearchController extends ChangeNotifier {
   };
 
   void _rebuild() {
+    final took = kTypingTrace ? (Stopwatch()..start()) : null;
     final next = _cache.read(notifier);
     // Nothing about the fleet changed shape, so the rows cannot have either —
     // and re-ranking would hand the list a new set of objects to rebuild from
     // for no reason. What the rows SAY still updates: they read their machine
     // live, and the preview store has its own path in.
     if (identical(next, _catalog)) return;
+    final catalogMs = took?.elapsedMicroseconds;
     _catalog = next;
     _filter();
     _scheduleNotify();
+    if (took != null && took.elapsedMicroseconds >= 2000) {
+      typingEvent(
+        'listener find: catalog ${(catalogMs! / 1000).toStringAsFixed(1)}ms,'
+        ' filter ${((took.elapsedMicroseconds - catalogMs) / 1000).toStringAsFixed(1)}ms'
+        ' · ${_catalog.length} rows, query "${matchQuery.length} chars"',
+      );
+    }
   }
 
   /// Content landing can add or remove a match, but must never shuffle the rows

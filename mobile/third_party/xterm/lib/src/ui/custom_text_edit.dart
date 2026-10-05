@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:xterm/src/utils/input_trace.dart';
 import 'package:xterm/src/utils/unicode_v11.dart';
 
 class CustomTextEdit extends StatefulWidget {
@@ -135,6 +136,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   }
 
   void setEditingState(TextEditingValue value) {
+    inputTrace(() => 'ime set by embedder "${traceText(value.text)}"');
     _settleRewrite();
     _cancelPendingDeletes();
     _currentEditingState = value;
@@ -146,6 +148,13 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   /// It intentionally stays intact between ordinary key presses: Vietnamese
   /// Telex needs the preceding `u` available to convert it into `ư`.
   void resetEditingState() {
+    if (xtermInputTrace != null) {
+      final from = traceCaller();
+      inputTrace(
+        () =>
+            'ime RESET buffer (had "${traceText(_currentEditingState.text)}") ← $from',
+      );
+    }
     // What the keyboard was rewriting reaches the terminal before the buffer is emptied under it.
     _settleRewrite();
     _cancelPendingDeletes();
@@ -174,6 +183,10 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   KeyEventResult _onKeyEvent(FocusNode focusNode, KeyEvent event) {
     _settleRewrite();
+    inputTrace(
+      () => 'key ${event.runtimeType} ${event.logicalKey.keyLabel}'
+          ' composing=${!_currentEditingState.composing.isCollapsed}',
+    );
     if (_currentEditingState.composing.isCollapsed) {
       if (_isBufferBackspace(event)) {
         _cancelPendingDeletes();
@@ -217,6 +230,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   }
 
   void _openOrCloseInputConnectionIfNeeded() {
+    inputTrace(() => 'ime focus=${widget.focusNode.hasFocus}');
     if (widget.focusNode.hasFocus && widget.focusNode.consumeKeyboardToken()) {
       _openInputConnection();
     } else if (!widget.focusNode.hasFocus) {
@@ -285,6 +299,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       );
 
       _connection = TextInput.attach(this, config);
+      inputTrace(() => 'ime ATTACH input connection');
 
       _connection!.show();
 
@@ -296,6 +311,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   void _closeInputConnectionIfNeeded() {
     if (_connection != null && _connection!.attached) {
+      inputTrace(() => 'ime CLOSE input connection');
       _connection!.close();
       _connection = null;
     }
@@ -353,7 +369,16 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   @override
   void updateEditingValue(TextEditingValue value) {
-    if (_consumeActionEcho(value)) return;
+    inputTrace(
+      () => 'ime ← "${traceText(value.text)}" len=${value.text.length}'
+          ' comp=${value.composing.start}..${value.composing.end}'
+          ' sel=${value.selection.baseOffset}..${value.selection.extentOffset}'
+          ' mirror=${_terminalText.length}',
+    );
+    if (_consumeActionEcho(value)) {
+      inputTrace(() => 'ime   dropped: the newline echo of an action');
+      return;
+    }
     if (_holdRewrite(value)) return;
     _applyEditingValue(
       value,
@@ -365,10 +390,37 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   /// [_holdRewrite] — and fires once it has gone quiet ([_settleRewrite]).
   Timer? _rewriteSettle;
 
-  /// How long the keyboard must go quiet before a rewrite counts as done. Its
-  /// steps arrive a millisecond or two apart; a person's next key is a hundred
-  /// or more behind.
-  static const _rewriteQuiet = Duration(milliseconds: 30);
+  /// How long the keyboard must go quiet before a rewrite counts as done: three
+  /// times the longest pause seen between two steps of one ([_rewriteGap]),
+  /// within [_rewriteQuietMin]..[_rewriteQuietMax] — and the most until a few
+  /// rewrites have been timed.
+  ///
+  /// ⚠️ **Measured, not guessed, and only ever lengthened.** Every key typed
+  /// inside a word waits this long, so it should be as short as the keyboard
+  /// allows; but settling before the keyboard is done brings back the bug the
+  /// hold exists for (see [_holdRewrite]). Its steps arrive a millisecond or
+  /// two apart on a phone, and a person's next key is a hundred or more behind,
+  /// so the margin is wide either way; the longest pause seen stands for the
+  /// rest of the run.
+  static Duration get _rewriteQuiet {
+    if (_rewritesTimed < 3) return _rewriteQuietMax;
+    final quiet = _rewriteGap * 3;
+    if (quiet < _rewriteQuietMin) return _rewriteQuietMin;
+    if (quiet > _rewriteQuietMax) return _rewriteQuietMax;
+    return quiet;
+  }
+
+  static const _rewriteQuietMin = Duration(milliseconds: 16);
+  static const _rewriteQuietMax = Duration(milliseconds: 30);
+
+  /// The longest pause seen between two steps of one rewrite, over every
+  /// rewrite this run — and how many rewrites have been timed.
+  static Duration _rewriteGap = Duration.zero;
+  static int _rewritesTimed = 0;
+  static final _rewriteClock = Stopwatch()..start();
+
+  /// When the rewrite being held last moved, on [_rewriteClock].
+  Duration _rewriteStepAt = Duration.zero;
 
   /// AUTONOMOUS PATCH: holds back the steps of a word the keyboard is
   /// rewriting, so only where it ends up reaches the terminal.
@@ -396,17 +448,39 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   bool _holdRewrite(TextEditingValue value) {
     final holding = _rewriteSettle != null;
     if (!holding) {
+      // ⚠️ **Two code units or more: a Backspace is not a rewrite.** iOS deletes
+      // the same way — the character before the caret selected, then removed —
+      // and a delete held for the quiet was 16ms on every Backspace (measured
+      // on a phone, 2026-10-05). A rewrite always selects the word WITH the
+      // space before it, so never less than two.
+      final selection = value.selection;
       final startsRewrite = _composesThroughSoftwareKeyboard &&
           value.composing.isCollapsed &&
-          !value.selection.isCollapsed &&
+          selection.end - selection.start >= 2 &&
           value.text == _currentEditingState.text &&
           value.text == _terminalText;
       if (!startsRewrite) return false;
     }
     _currentEditingState = value;
+    final now = _rewriteClock.elapsed;
+    if (holding && now - _rewriteStepAt > _rewriteGap) {
+      _rewriteGap = now - _rewriteStepAt;
+    }
+    _rewriteStepAt = now;
     _rewriteSettle?.cancel();
-    _rewriteSettle = Timer(_rewriteQuiet, _settleRewrite);
+    _rewriteSettle = Timer(_rewriteQuiet, _rewriteWentQuiet);
+    inputTrace(
+      () => 'ime   held: the keyboard is rewriting'
+          ' (quiet ${_rewriteQuiet.inMilliseconds}ms,'
+          ' longest step gap ${(_rewriteGap.inMicroseconds / 1000).toStringAsFixed(1)}ms)',
+    );
     return true;
+  }
+
+  /// The keyboard went quiet: the rewrite is done, and timed.
+  void _rewriteWentQuiet() {
+    _rewritesTimed++;
+    _settleRewrite();
   }
 
   /// The rewrite [_holdRewrite] is holding, applied now: the terminal goes from
@@ -417,6 +491,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     timer.cancel();
     _rewriteSettle = null;
     final value = _currentEditingState;
+    inputTrace(() => 'ime   settled on "${traceText(value.text)}"');
     _applyEditingValue(value, hasTextMutation: value.text != _terminalText);
   }
 
@@ -470,6 +545,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
         return;
       }
 
+      inputTrace(() => 'ime   composing "${traceText(composingText)}"');
       widget.onComposing(
         composingText,
         _composingBacktrackCells(_currentEditingState.composing.start),
@@ -486,6 +562,10 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   void _syncTerminalText(String value) {
     final edit = _TextEdit.between(_terminalText, value);
+    inputTrace(
+      () => 'ime → pty del=${edit.removed.runes.length}'
+          ' ins="${traceText(edit.inserted)}"',
+    );
     if (edit.removed.isNotEmpty) {
       widget.onDelete(edit.removed.runes.length);
     }
@@ -515,6 +595,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   @override
   void performAction(TextInputAction action) {
+    inputTrace(() => 'ime action $action');
     // The line goes as the keyboard ended it, before the action acts on it.
     _settleRewrite();
     // Captured before the handler runs: it is what the pty has been sent, and
@@ -525,6 +606,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   @override
   void performSelector(String selectorName) {
+    inputTrace(() => 'ime selector $selectorName');
     _settleRewrite();
     if (!selectorName.startsWith('deleteBackward')) return;
 
@@ -624,7 +706,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   @override
   void connectionClosed() {
-    // print('connectionClosed');
+    inputTrace(() => 'ime connection CLOSED by the platform');
   }
 
   @override

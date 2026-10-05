@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/logging/startup_trace.dart';
+import 'package:harness_mobile/logging/typing_trace.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/state/app_state.dart';
@@ -200,6 +201,9 @@ class _AgentHomeState extends State<AgentHome> {
     final requested = widget.openAgent?.value;
     // Null is the shell resetting before it writes, not a request.
     if (requested == null) return;
+    if (kTypingTrace) {
+      typingEvent('switch: agent ${_shortId(requested.agentId)} asked for');
+    }
     setState(() {
       _welcome = false;
       _requestedAgent = requested;
@@ -682,6 +686,7 @@ class _AgentHomeState extends State<AgentHome> {
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: widget.notifier,
     builder: (context, _) {
+      if (kTypingTrace) typingCount('home.build');
       AppTheme.watch(context);
       // Signed in from a scanned "Add phone" QR: once its computer is here and locked, pair with
       // the QR's code — no password. See `welcome/connect_code.dart`.
@@ -803,6 +808,9 @@ class _AgentHomeState extends State<AgentHome> {
       // (see [_target]) — not the agent on screen — so assigning it every build would quietly undo
       // every swipe the pager reported, one frame after it reported it.
       if (_neighboursFor != chosen) {
+        if (kTypingTrace) {
+          typingEvent('switch: pager built for ${_shortId(chosen.agentId)}');
+        }
         _neighboursFor = chosen;
         _neighbours = AgentSwipeList(group.entries);
         _showing = chosen;
@@ -861,6 +869,9 @@ class _AgentHomeState extends State<AgentHome> {
 
   /// Bumped whenever the pager is thrown away and rebuilt, and part of its key.
   int _pagerGeneration = 0;
+
+  /// Enough of an agent id to tell agents apart in the typing trace.
+  static String _shortId(String id) => id.length > 8 ? id.substring(0, 8) : id;
 
   /// The agent on screen was deleted while the pager's OPENING agent still exists: rebuild.
   ///

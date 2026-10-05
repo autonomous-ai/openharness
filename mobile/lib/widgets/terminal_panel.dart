@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
 
 import '../clipboard/native_clipboard.dart';
+import '../logging/typing_trace.dart';
 import '../state/app_state.dart';
 
 import '../terminal/terminal_snapshot.dart';
@@ -460,6 +461,7 @@ class _TerminalPanelState extends State<TerminalPanel>
 
   void _syncTerminal(Terminal terminal) {
     if (identical(_viewTerminal, terminal)) return;
+    if (kTypingTrace) typingEvent('panel view → the new terminal');
 
     final previous = _viewTerminal.buffer;
     final next = terminal.buffer;
@@ -528,6 +530,7 @@ class _TerminalPanelState extends State<TerminalPanel>
   }
 
   void _handleFocusChange() {
+    if (kTypingTrace) typingEvent('panel focus=${_focusNode.hasFocus}');
     if (_focusNode.hasFocus) widget.session.inputTabId = widget.tabId;
     _syncCursorBlink();
   }
@@ -544,6 +547,9 @@ class _TerminalPanelState extends State<TerminalPanel>
     if (!_canClaimInput ||
         (!navigating && (!widget.focused || !widget.visible))) {
       return false;
+    }
+    if (kTypingTrace) {
+      typingEvent('panel claims the keyboard (navigating=$navigating)');
     }
     view.requestKeyboard();
     return true;
@@ -1570,6 +1576,7 @@ class _TerminalPanelState extends State<TerminalPanel>
 
   @override
   Widget build(BuildContext context) {
+    if (kTypingTrace) typingCount('panel.build');
     grid.AppTheme.watch(context);
     final session = widget.session;
     _syncTerminal(session.terminal);
@@ -1616,6 +1623,16 @@ class _TerminalPanelState extends State<TerminalPanel>
                         // (cb47ba35 → TestFlight build 11), which is why
                         // test/terminal_panel_backspace_test.dart pins it.
                         deleteDetection: true,
+                        // This view is only ever handed the next screen of its
+                        // own session — a keyframe — since another session gets
+                        // a view of its own (a fresh `_terminalViewKey`): what
+                        // the keyboard holds is still the line being typed.
+                        keepsInputAcrossTerminals: true,
+                        // What is typed shows at once, ahead of the machine's echo a
+                        // round trip away (owner's call, 2026-10-05) — only once this
+                        // terminal has been seen echoing, so a password prompt
+                        // shows nothing. See xterm's `TerminalView.predictsEcho`.
+                        predictsEcho: true,
                         theme: terminalScreenThemeFor(
                           grid.AppTheme.palette.value,
                           terminalThemeStore.value,

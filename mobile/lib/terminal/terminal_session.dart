@@ -4,9 +4,11 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:xterm/utils.dart' show traceText;
 import 'package:xterm/xterm.dart';
 
 import '../core/crash_log.dart';
+import '../logging/typing_trace.dart';
 import 'control_chord.dart';
 import 'keyframe_write.dart';
 import 'screen_snapshot.dart';
@@ -263,6 +265,27 @@ class TerminalSession extends ChangeNotifier {
   String? _openRequestId;
   int? _expectedSeq;
 
+  /// For the typing trace (`typing_trace.dart`, off unless built in): when input last went out, on
+  /// the trace clock, for an echo's latency; and the status last traced.
+  int _lastInputSentMs = -1 << 30;
+  TerminalSessionStatus? _tracedStatus;
+
+  /// For the typing trace: input sends queued and not finished, and when the last one finished.
+  int _sendsInFlight = 0;
+  int _sendsIdleSinceMs = 0;
+
+  @override
+  void notifyListeners() {
+    if (kTypingTrace && status != _tracedStatus) {
+      typingEvent(
+        'session ${_tracedStatus?.name ?? '-'} → ${status.name}'
+        '${errorCode == null ? '' : ' ($errorCode)'}',
+      );
+      _tracedStatus = status;
+    }
+    super.notifyListeners();
+  }
+
   /// Frames dropped in a row as already drawn — see [_alreadyDrawn].
   int _staleInARow = 0;
 
@@ -342,6 +365,16 @@ class TerminalSession extends ChangeNotifier {
   /// or frames accepted since would be re-sent under numbers already used.
   int? _lastRealignedTo;
   int _resizeSeq = 0;
+
+  /// The size the last `terminal_resize` asked for, and when — until a keyframe of that size
+  /// answers it. See [_answerOnItsWay].
+  ({int cols, int rows, DateTime at})? _resizeAsked;
+
+  /// Asks for the size again if the keyframe [_answerOnItsWay] waited for never came.
+  Timer? _resizeAnswerTimer;
+
+  /// How long a resize's own keyframe may take before a keyframe of another size is believed.
+  static const _resizeAnswerWait = Duration(milliseconds: 1500);
   bool _resyncRequested = false;
   int _resyncAttempts = 0;
   int _autoReopenAttempts = 0;
@@ -491,6 +524,7 @@ class TerminalSession extends ChangeNotifier {
     _inputSeq = 0;
     _lastRealignedTo = null;
     _resizeSeq = 0;
+    _resizeAsked = null;
     _utf8Tail = const [];
     _remoteCursorVisible = true;
     _cursorBlinkPhaseVisible = true;
@@ -945,6 +979,12 @@ class TerminalSession extends ChangeNotifier {
             return;
           }
           if (frame.kind == TerminalBinaryKind.keyframe) {
+            if (kTypingTrace) {
+              typingEvent(
+                'out KEYFRAME seq=${frame.seq} ${frame.cols}×${frame.rows}'
+                ' ${bytes.length}B (status=${status.name}) — replaces the terminal',
+              );
+            }
             await _applyKeyframe(frame, bytes, generation);
             return;
           }
@@ -962,12 +1002,37 @@ class TerminalSession extends ChangeNotifier {
           }
           if (frame.kind != TerminalBinaryKind.output ||
               status == TerminalSessionStatus.resyncing) {
+            if (kTypingTrace && frame.kind == TerminalBinaryKind.output) {
+              typingEvent(
+                'out seq=${frame.seq} ${bytes.length}B DROPPED — resyncing',
+              );
+            }
             return;
           }
-          if (_alreadyDrawn(frame)) return;
+          if (_alreadyDrawn(frame)) {
+            if (kTypingTrace) {
+              typingEvent(
+                'out seq=${frame.seq} ${bytes.length}B DROPPED — already drawn'
+                ' (expected $_expectedSeq)',
+              );
+            }
+            return;
+          }
           if (_expectedSeq == null || frame.seq != _expectedSeq) {
+            if (kTypingTrace) {
+              typingEvent(
+                'out seq=${frame.seq} GAP (expected $_expectedSeq) → resync',
+              );
+            }
             await _requestResync('TERMINAL_SEQUENCE_GAP');
             return;
+          }
+          if (kTypingTrace) {
+            final since = typingNowMs() - _lastInputSentMs;
+            typingNote(
+              'out seq=${frame.seq} ${bytes.length}B'
+              '${since < 5000 ? ' +${since}ms after the last send' : ''}',
+            );
           }
           if (!_writeBytes(bytes)) {
             await _requestResync('TERMINAL_OUTPUT_DECODE_FAILED');
@@ -1184,9 +1249,74 @@ class TerminalSession extends ChangeNotifier {
       _pendingCols = measured.cols;
       _pendingRows = measured.rows;
     }
+    // Asked first, and always: a keyframe that answers the resize out is what clears it.
+    if (_answerOnItsWay()) return;
     if (_pendingCols != null && _pendingRows != null) {
       unawaited(_flushResize());
     }
+  }
+
+  /// Whether the keyframe just drawn predates the resize still out — the size it asked for is still
+  /// the one wanted, and that resize's own keyframe is on its way ([_resizeStillComing]).
+  ///
+  /// ⚠️ **Not asked again, which is what this used to do.** The machine answers a resize with a
+  /// keyframe, but one it had already put on the wire at the OLD size lands first. Read as the
+  /// size having slipped, it sent the same resize again — and got a third keyframe for it. Every
+  /// keyboard raised was measured at three keyframes and two resizes (2026-10-05): three times the
+  /// emulator replaced and the screen parsed and drawn whole, the keyboard's buffer emptied each
+  /// time, right as somebody starts typing.
+  bool _answerOnItsWay() {
+    final asked = _resizeAsked;
+    if (asked == null) return false;
+    if (asked.cols == cols && asked.rows == rows) {
+      // This keyframe IS the answer.
+      _resizeAsked = null;
+      _resizeAnswerTimer?.cancel();
+      _resizeAnswerTimer = null;
+      return false;
+    }
+    final pendingCols = _pendingCols, pendingRows = _pendingRows;
+    if (pendingCols == null ||
+        pendingRows == null ||
+        !_resizeStillComing(pendingCols, pendingRows)) {
+      return false;
+    }
+    if (kTypingTrace) {
+      typingEvent(
+        'resize: keyframe ${cols}x$rows predates the ${asked.cols}x${asked.rows}'
+        ' still coming — not asked again',
+      );
+    }
+    _pendingCols = null;
+    _pendingRows = null;
+    return true;
+  }
+
+  /// Whether a resize to [nextCols]×[nextRows] is out already and its keyframe not overdue — and so
+  /// not to be asked for again ([_answerOnItsWay]; and in [_flushResize], for the emulator laid out
+  /// at a stale keyframe's size resizing itself back). Held for [_resizeAnswerWait] at most: an
+  /// answer that never comes is asked for again then.
+  bool _resizeStillComing(int nextCols, int nextRows) {
+    final asked = _resizeAsked;
+    if (asked == null || asked.cols != nextCols || asked.rows != nextRows) {
+      return false;
+    }
+    final waited = DateTime.now().difference(asked.at);
+    if (waited >= _resizeAnswerWait) return false;
+    if (_resizeAnswerTimer == null) {
+      final generation = _generation;
+      _resizeAnswerTimer = Timer(_resizeAnswerWait - waited, () {
+        _resizeAnswerTimer = null;
+        if (!_isCurrent(generation) || _resizeAsked == null) return;
+        _resizeAsked = null;
+        final measured = _measuredViewport;
+        if (measured == null) return;
+        _pendingCols = measured.cols;
+        _pendingRows = measured.rows;
+        unawaited(_flushResize());
+      });
+    }
+    return true;
   }
 
   List<int> _prepareKeyframeBytes(Uint8List bytes) {
@@ -1478,6 +1608,14 @@ class TerminalSession extends ChangeNotifier {
   }
 
   void _onTerminalOutput(String data) {
+    if (kTypingTrace && data.isNotEmpty) {
+      typingTrace(
+        acceptsInput
+            ? 'pty in "${traceText(data)}"'
+            : 'pty in DROPPED — not taking input (status=${status.name}'
+                  ' stream=${streamId != null} watching=$watching) "${traceText(data)}"',
+      );
+    }
     if (!acceptsInput || data.isEmpty) return;
     data = _spendArmedControl(data);
     final origin = _swarmInput ? inputTabId : null;
@@ -1525,6 +1663,12 @@ class TerminalSession extends ChangeNotifier {
     _inputTimer?.cancel();
     _inputTimer = null;
     if (!acceptsInput || _inputBytes.isEmpty) {
+      if (kTypingTrace && _inputBytes.isNotEmpty) {
+        typingTrace(
+          'pty flush DROPPED ${_inputBytes.length}B — not taking input'
+          ' (status=${status.name})',
+        );
+      }
       _inputBytes.clear();
       return;
     }
@@ -1533,13 +1677,35 @@ class TerminalSession extends ChangeNotifier {
     _inputBytes.clear();
     _lastInputFlushAt = DateTime.now();
     final currentStreamId = streamId;
-    if (currentStreamId == null) return;
+    if (currentStreamId == null) {
+      if (kTypingTrace) {
+        typingTrace('pty flush DROPPED ${bytes.length}B — no stream');
+      }
+      return;
+    }
     final generation = _generation;
+    final flushedAt = kTypingTrace ? typingNowMs() : 0;
+    final queuedBehind = _sendsInFlight;
+    final idleFor = typingNowMs() - _sendsIdleSinceMs;
+    if (kTypingTrace) _sendsInFlight++;
     final queued = _inputSendTail.then((_) async {
       if (!_isCurrent(generation) ||
           !acceptsInput ||
           streamId != currentStreamId) {
+        if (kTypingTrace) {
+          typingTrace(
+            'pty send DROPPED ${bytes.length}B — the stream moved on while it'
+            ' queued (status=${status.name})',
+          );
+        }
         return;
+      }
+      if (kTypingTrace && typingNowMs() - flushedAt >= 3) {
+        typingTrace(
+          'pty send waited ${typingNowMs() - flushedAt}ms — $queuedBehind send(s)'
+          ' were in flight when it was queued'
+          '${queuedBehind == 0 ? ', the line idle for ${idleFor}ms' : ''}',
+        );
       }
       // Numbered HERE, on the tail, not when the flush was asked for. A frame
       // the guard above drops — the session went `resyncing` while an earlier
@@ -1570,7 +1736,15 @@ class TerminalSession extends ChangeNotifier {
           bytes: Uint8List.fromList(bytes.sublist(offset, end)),
           compressed: false,
         );
+        final sendStarted = kTypingTrace ? typingNowMs() : 0;
         final sent = await sendBinary(frame);
+        if (kTypingTrace) {
+          _lastInputSentMs = typingNowMs();
+          typingTrace(
+            'pty sent seq=${frame.seq} ${frame.bytes.length}B ok=$sent'
+            ' in ${typingNowMs() - sendStarted}ms via=${linkMode ?? '?'}',
+          );
+        }
         if (!_isCurrent(generation)) return;
         if (!sent) {
           transportLost('Terminal input was not sent');
@@ -1578,9 +1752,17 @@ class TerminalSession extends ChangeNotifier {
         }
       }
     });
-    _inputSendTail = queued.catchError((_) {
-      if (_isCurrent(generation)) transportLost('Terminal input was not sent');
-    });
+    _inputSendTail = queued
+        .catchError((_) {
+          if (_isCurrent(generation)) {
+            transportLost('Terminal input was not sent');
+          }
+        })
+        .whenComplete(() {
+          if (!kTypingTrace) return;
+          _sendsInFlight--;
+          _sendsIdleSinceMs = typingNowMs();
+        });
     await _inputSendTail;
   }
 
@@ -1637,10 +1819,13 @@ class TerminalSession extends ChangeNotifier {
     _pendingCols = null;
     _pendingRows = null;
     if (nextCols == cols && nextRows == rows) return;
+    if (_resizeStillComing(nextCols, nextRows)) return;
     cols = nextCols;
     rows = nextRows;
     _lastResizeFlushAt = DateTime.now();
+    _resizeAsked = (cols: cols, rows: rows, at: _lastResizeFlushAt!);
     final generation = _generation;
+    if (kTypingTrace) typingEvent('resize → $cols×$rows');
     final sent = await send('terminal_resize', {
       'streamId': streamId,
       'resizeSeq': _resizeSeq++,
@@ -1731,6 +1916,12 @@ class TerminalSession extends ChangeNotifier {
   }
 
   Future<void> _requestResync(String reason) async {
+    if (kTypingTrace) {
+      typingEvent(
+        'RESYNC asked: $reason (status=${status.name}'
+        ' pending input ${_inputBytes.length}B dropped)',
+      );
+    }
     if (streamId == null) {
       _fail(reason, null);
       return;
@@ -1959,6 +2150,8 @@ class TerminalSession extends ChangeNotifier {
     _inputTimer = null;
     _resizeTimer?.cancel();
     _resizeTimer = null;
+    _resizeAnswerTimer?.cancel();
+    _resizeAnswerTimer = null;
     _resyncTimer?.cancel();
     _resyncTimer = null;
     _scrollTimer?.cancel();

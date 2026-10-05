@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:harness_mobile/daemons/daemon_face.dart';
 import 'package:harness_mobile/daemons/daemon_lines.dart';
 import 'package:harness_mobile/daemons/zoo_client.dart';
+import 'package:harness_mobile/logging/typing_trace.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
 import 'agent_index.dart';
@@ -141,6 +142,7 @@ class DaemonHostState extends State<DaemonHost> with WidgetsBindingObserver {
 
   void _sync() {
     if (!mounted) return;
+    final took = kTypingTrace ? (Stopwatch()..start()) : null;
     final seen = observeDaemon(
       app,
       onScreen: {for (final q in _onScreen.values) q.key: (who: q.who, q: q.q)},
@@ -152,6 +154,11 @@ class DaemonHostState extends State<DaemonHost> with WidgetsBindingObserver {
         if (app.stateOf(machine.machineId)?.nodeOnline == true)
           machine.machineId,
     ]);
+    if (took != null && took.elapsedMicroseconds >= 2000) {
+      typingEvent(
+        'listener daemon: ${(took.elapsedMicroseconds / 1000).toStringAsFixed(1)}ms',
+      );
+    }
   }
 
   /// A terminal page read a question dialog off its own screen, or saw it go

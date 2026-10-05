@@ -171,6 +171,9 @@ class TerminalPainter {
   void paintLineCached(Canvas canvas, Offset offset, BufferLine line) =>
       _linePictures.draw(canvas, offset, line);
 
+  /// How many lines [paintLineCached] has drawn afresh rather than replayed.
+  int get linesRecorded => _linePictures.recorded;
+
   /// AUTONOMOUS PATCH: [line]'s last recording, handed over to the caller if it
   /// still shows [version] — see [LinePictureCache.take].
   Picture? takeLinePicture(BufferLine line, int version) =>

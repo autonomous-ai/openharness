@@ -5,6 +5,7 @@ import 'debug_surface.dart';
 import 'log_file.dart';
 import 'log_stream.dart';
 import 'log_stream_sinks.dart';
+import 'typing_trace.dart';
 
 /// Base name of the per-day file under `~/.harness/logs`.
 const String kAppLogBase = 'app';
@@ -35,6 +36,8 @@ void installFileLogs() {
     onDetach: () => daily.flush(durable: true),
   );
   final file = FileAppLog(daily);
+  // The typing trace — nothing unless the build asked for it (`typing_trace.dart`).
+  installTypingTrace();
   if (!kDebugSurfaceEnabled) {
     appLog = file;
     return;

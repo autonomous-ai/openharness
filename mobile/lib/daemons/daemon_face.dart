@@ -304,6 +304,15 @@ class DaemonFace extends ChangeNotifier {
       _update();
       return;
     }
+    // ⚠️ **Nothing it watches moved: no redraw.** This is asked on every tick of the app's
+    // notifier (`DaemonHostState._sync`) — an agent synced anywhere, a pane attaching — and it
+    // redrew the chip in the terminal's header each time, under somebody typing. Only what it
+    // watches decides what it shows; the rest of its motion runs on its own timers.
+    if (setEquals(before.needs, next.needs) &&
+        setEquals(before.working, next.working) &&
+        setEquals(before.failing, next.failing)) {
+      return;
+    }
     final newNeed = next.needs.difference(before.needs).isNotEmpty;
     final newFail = next.failing.difference(before.failing).isNotEmpty;
     final finished = before.working.difference(next.working).isNotEmpty;

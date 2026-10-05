@@ -52,7 +52,12 @@ class PhoneSearchResults extends StatefulWidget {
     this.onOpen,
     this.showing,
     this.onNewHarness,
+    this.opening,
   });
+
+  /// The sheet this list slides up in, while it does: the machines are reached once it is up
+  /// rather than during the slide. Null — a page of its own — reaches after the first frame.
+  final Animation<double>? opening;
 
   /// Find's `+ New Harness` row — with a project's machine and folder when the query matched one
   /// (`+ New Harness in api`). Null leaves the row out.
@@ -143,8 +148,21 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     //
     // ⚠️ After the frame, not in it: reaching can notify synchronously, and a notify while this
     // list is being mounted marks the page above it dirty mid-build.
+    //
+    // ⚠️ **And not while the sheet is still sliding up.** Reaching releases the launch's held
+    // machines and dials every machine whose list is not current — a token, an end-to-end session
+    // and a socket each, all on this thread — and every answer redraws. Started on the first
+    // frame, that work landed in the middle of the slide, and the slide stuttered (frames of
+    // 300–900ms measured in a debug build, 2026-10-05). The rows already on screen are the lists
+    // the phone has; the reach only adds to them, a few hundred milliseconds later.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(notifier.reachAllMachines());
+      if (!mounted) return;
+      final opening = widget.opening;
+      if (opening == null || opening.status == AnimationStatus.completed) {
+        unawaited(notifier.reachAllMachines());
+        return;
+      }
+      _opening = opening..addStatusListener(_reachOnceOpen);
     });
     // ⚠️ **No `agent_recent` reads from Find, not on open and not per row (owner, 2026-10-01).**
     // Each row used to ask for its session's last words as it was built, so opening Find — or
@@ -152,6 +170,29 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     // terminal being attached. What a session said is found by the machines' own index
     // (`session_search`, [PhoneSearchController.contentHitFor]); the store still answers from
     // the live events and from whatever the agents list read. See `AppNotifier.sessionPreviews`.
+  }
+
+  /// The sheet still sliding up, waited on before the machines are reached — see [initState].
+  Animation<double>? _opening;
+
+  /// Only `completed` ends the wait: a sheet dragged by a finger passes through every other
+  /// status on its way up, and one closed again before it was up takes this list — and the
+  /// listener, in [dispose] — down with it.
+  void _reachOnceOpen(AnimationStatus status) {
+    if (status != AnimationStatus.completed) return;
+    _stopWaiting();
+    if (mounted) unawaited(widget.notifier.reachAllMachines());
+  }
+
+  void _stopWaiting() {
+    _opening?.removeStatusListener(_reachOnceOpen);
+    _opening = null;
+  }
+
+  @override
+  void dispose() {
+    _stopWaiting();
+    super.dispose();
   }
 
   @override

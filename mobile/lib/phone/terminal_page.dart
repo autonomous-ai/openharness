@@ -17,6 +17,7 @@ import 'package:flutter/semantics.dart'
 import 'package:xterm/xterm.dart' show Terminal, TerminalKey, TerminalStyle;
 
 import 'package:harness_mobile/logging/app_log.dart';
+import 'package:harness_mobile/logging/typing_trace.dart';
 import 'package:harness_mobile/core/models.dart'
     show Agent, AgentProject, ConnectionStatus;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -751,7 +752,14 @@ class _TerminalPageState extends State<TerminalPage>
   /// session for themselves.
   void _onNotifier() {
     if (!mounted) return;
+    final took = kTypingTrace ? (Stopwatch()..start()) : null;
     final facts = _readFacts();
+    if (took != null && took.elapsedMicroseconds >= 2000) {
+      typingEvent(
+        'listener page: facts read in'
+        ' ${(took.elapsedMicroseconds / 1000).toStringAsFixed(1)}ms',
+      );
+    }
     // The session has just started taking input: a question read before it
     // could has its raise decided now. See [_raiseForQuestion].
     final accepts = facts.session?.acceptsInput ?? false;
@@ -760,12 +768,14 @@ class _TerminalPageState extends State<TerminalPage>
       if (accepts) _raiseForQuestion();
     }
     if (facts == _facts) return;
+    if (kTypingTrace) typingCount('page.rebuild(facts)');
     setState(() => _facts = facts);
   }
 
   @override
   void initState() {
     super.initState();
+    if (kTypingTrace) typingEvent('switch: terminal page mounted');
     WidgetsBinding.instance.addObserver(this);
     _lifecycle =
         WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
@@ -1734,6 +1744,7 @@ class _TerminalPageState extends State<TerminalPage>
     // against is what THIS build saw — see [_onNotifier]. Not the voice
     // controller: what the mic hears repaints the floating mic and its pill,
     // which listen for themselves, and never rebuilds the terminal under them.
+    if (kTypingTrace) typingCount('page.build');
     _facts = _readFacts();
     AppTheme.watch(context);
     // Before anything is laid out: if the key bar is about to open or shut,
@@ -3492,6 +3503,7 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
   /// it is compared first.
   void _output() {
     if (!mounted || _anchor() == _drawnFor) return;
+    if (kTypingTrace) typingCount('anchor.rebuild');
     _changed();
   }
 

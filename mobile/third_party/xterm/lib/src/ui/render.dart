@@ -16,6 +16,8 @@ import 'package:xterm/src/ui/selection_mode.dart';
 import 'package:xterm/src/ui/terminal_size.dart';
 import 'package:xterm/src/ui/terminal_text_style.dart';
 import 'package:xterm/src/ui/terminal_theme.dart';
+import 'package:xterm/src/utils/input_trace.dart';
+import 'package:xterm/src/utils/unicode_v11.dart';
 
 typedef EditableRectCallback = void Function(Rect rect, Rect caretRect);
 
@@ -70,6 +72,8 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     }
     _terminal = terminal;
     _reportedViewportSize = null;
+    _predictedText = '';
+    _predictedCells = 0;
     // The recorded lines are the old emulator's: none of them is drawn again.
     _painter.clearLinePictures();
     _remoteScroll?.reset();
@@ -197,6 +201,23 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   set composingBacktrackCells(int value) {
     if (value == _composingBacktrackCells) return;
     _composingBacktrackCells = value;
+    markNeedsPaint();
+  }
+
+  /// AUTONOMOUS PATCH: what is typed and not yet echoed, drawn faint at the
+  /// cursor — `TerminalView.predictsEcho`. Set by the view directly rather than
+  /// through a rebuild: it changes with every key and every echo.
+  String _predictedText = '';
+  int _predictedCells = 0;
+  set predictedText(String value) {
+    if (value == _predictedText) return;
+    _predictedText = value;
+    var cells = 0;
+    for (final rune in value.runes) {
+      final width = unicodeV11.wcwidth(rune);
+      if (width > 0) cells += width;
+    }
+    _predictedCells = cells;
     markNeedsPaint();
   }
 
@@ -603,7 +624,22 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
   @override
   void paint(PaintingContext context, Offset offset) {
-    _paint(context, offset);
+    if (xtermInputTrace == null) {
+      _paint(context, offset);
+    } else {
+      final recordedBefore = _painter.linesRecorded;
+      final watch = Stopwatch()..start();
+      _paint(context, offset);
+      final micros = watch.elapsedMicroseconds;
+      final redrawn = _painter.linesRecorded - recordedBefore;
+      if (redrawn > 0 || micros > 4000) {
+        inputTrace(
+          () => 'paint ${(micros / 1000).toStringAsFixed(1)}ms'
+              ' redrawn=$redrawn cursor=${_terminal.buffer.cursorX},'
+              '${_terminal.buffer.absoluteCursorY}',
+        );
+      }
+    }
     context.setWillChangeHint();
   }
 
@@ -663,14 +699,23 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
           ? offset + cursorOffset.translate(0, slide.offset)
           : offset + cursorOffset;
 
+      final predicting = !_isComposingText && _predictedText.isNotEmpty;
       if (_isComposingText) {
         _paintComposingText(canvas, cursorAt);
+      } else if (predicting) {
+        _paintPredictedText(canvas, cursorAt);
       }
 
       if (_shouldShowCursor) {
         _painter.paintCursor(
           canvas,
-          cursorAt,
+          // Past what is drawn ahead of the echo, where the echo will leave it.
+          predicting
+              ? cursorAt.translate(
+                  _predictedCells * _painter.cellSize.width,
+                  0,
+                )
+              : cursorAt,
           cursorType: _cursorType,
           hasFocus: _focusNode.hasFocus,
         );
@@ -804,6 +849,30 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         maxWidth: (size.width - composingOffset.dx).clamp(0.0, size.width));
 
     textPainter.paint(canvas, composingOffset);
+    textPainter.dispose();
+  }
+
+  /// AUTONOMOUS PATCH: [_predictedText] at [offset], the cursor — in the
+  /// cursor's colour, faint, over the cells it will be echoed into.
+  void _paintPredictedText(Canvas canvas, Offset offset) {
+    final color = _painter.resolveForegroundColor(_terminal.cursor.foreground);
+    final style = _painter.textStyle.toTextStyle(
+      color: color.withAlpha((color.a * 255 * 0.55).round()),
+      backgroundColor: _painter.theme.background,
+      underline: false,
+    );
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: _predictedText,
+        style: style.copyWith(
+          decoration: TextDecoration.none,
+          decorationColor: const Color(0x00000000),
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+      textScaler: _painter.textScaler,
+    )..layout(maxWidth: (size.width - offset.dx).clamp(0.0, size.width));
+    textPainter.paint(canvas, offset);
     textPainter.dispose();
   }
 

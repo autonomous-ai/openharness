@@ -29,6 +29,18 @@ String phoneAgentId(String machineId, String agentId) =>
 /// the [MachineState] they hold, so `working` and `4m` stay current without the
 /// catalog being rebuilt — and the ranking no longer depends on them at all.
 class PhoneSearchCatalogCache {
+  /// The cache [notifier]'s search boxes share.
+  ///
+  /// ⚠️ **One per notifier, not one per box.** Find is opened and closed all day, and a cache
+  /// that lived and died with each box built the account's catalog afresh on every opening —
+  /// every agent's strings normalized, on the frame the sheet starts to slide up — for a fleet
+  /// that had not changed since the last time. Shared, an opening reads the catalog the last one
+  /// left, and rebuilds only what [read] finds changed. The rows are ranked against the live
+  /// state on every filter either way, as they always were while one box stayed open.
+  static PhoneSearchCatalogCache of(AppNotifier notifier) =>
+      _shared[notifier] ??= PhoneSearchCatalogCache();
+  static final _shared = Expando<PhoneSearchCatalogCache>();
+
   List<Object?>? _presentation;
   List<PhoneDestination> _entries = const [];
 
