@@ -147,7 +147,12 @@ describe('lifecycle requests that race', () => {
     const restarted = await client.request('agent_restart', { agentId: agent.id }, 90_000)
     expect(restarted.error, JSON.stringify(restarted)).toBeUndefined()
     await active(client, agent.id, agent.sessionId)
-    await turn(client, agent.id, 'the next message')
+    // The long message may still be on its way: it waits out the restart's hold on the terminal, and the
+    // new engine answers it. The next one's own turn is the one to wait for, not just any turn's end.
+    const started = client.next((frame) => isTurn('turn_started', agent.id)(frame) && frame.payload?.userMessage === 'the next message', 60_000, 'the next message\'s turn_started')
+    client.send('message', { agentId: agent.id, content: 'the next message' })
+    const opened = await started
+    await client.waitFor(isTurn('turn_ended', agent.id), 45_000, 'the next message\'s turn_ended', client.frames.indexOf(opened) + 1)
     const page = await client.request<{ events: Array<{ type: string; payload: Record<string, any> }> }>('session_get', { sessionId: agent.sessionId, limit: 200 }, 30_000)
     const users = page.events.filter((event) => event.type === 'user_message').map((event) => String(event.payload.content))
     expect(users.filter((content) => content === long).length).toBeLessThanOrEqual(1)

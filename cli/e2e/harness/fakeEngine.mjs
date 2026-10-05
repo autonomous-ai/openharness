@@ -19,8 +19,9 @@
 // `/compact` does (and Claude Code then announces the same session again), `!compactmid` compacts in the
 // middle of a turn as an automatic compaction does, `!exit` ends the process. Everything else is
 // echoed as the answer.
+import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 export async function run(engine, config) {
@@ -64,6 +65,21 @@ export async function run(engine, config) {
       : join(config.codexHome, 'sessions', '2026', '10', '03', `rollout-2026-10-03T00-00-00-${sessionId}.jsonl`)
   mkdirSync(dirname(transcript), { recursive: true })
   if (!existsSync(transcript)) writeFileSync(transcript, '')
+  // What each CLI leaves for whoever needs to know which conversation this process is writing, as the
+  // daemon does when the conversation's start-up hook was lost. Codex holds its rollout open for the
+  // session; Claude Code keeps a record per process, `~/.claude/sessions/<pid>.json`.
+  let held = null
+  const procStart = (() => { try { return execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)]).toString().trim() } catch { return '' } })()
+  const announceProcess = () => {
+    if (engine === 'codex') {
+      if (held !== null) closeSync(held)
+      held = openSync(transcript, 'r')
+    } else if (procStart) {
+      const sessions = join(dirname(config.claudeProjectsDir), 'sessions')
+      mkdirSync(sessions, { recursive: true })
+      writeFileSync(join(sessions, `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId, cwd: process.cwd(), procStart }))
+    }
+  }
 
   const now = () => new Date().toISOString()
   const write = (record) => appendFileSync(transcript, JSON.stringify(record) + '\n')
@@ -93,6 +109,7 @@ export async function run(engine, config) {
     if (!response.ok) process.stdout.write(`\r\n[fake ${engine}] hook ${path} failed: ${response.status}\r\n`)
   }
 
+  announceProcess()
   const draw = (line = '') => process.stdout.write(`\r\x1b[2K› ${line}`)
   process.stdout.write(`\x1b[?2004h${engine === 'claude' ? '✻ Welcome to Claude Code (fake)' : '>_ OpenAI Codex (fake)'}\r\n`)
   process.stdout.write(`  session ${sessionId}${resumed ? ' (resumed)' : ''}\r\n\r\n`)
@@ -208,12 +225,16 @@ export async function run(engine, config) {
       parent = null
       turn = 0
       if (engine === 'codex') codex('session_meta', { id: sessionId, cli_version: '0.159.0', cwd, source: 'cli' })
+      announceProcess()
       process.stdout.write('\r\n(new conversation)\r\n')
       draw()
       await hook('session-start', { hookEvent: 'SessionStart', source: 'clear' })
       return
     }
     if (open) finish('(interrupted by a new prompt)')
+    // Claude Code runs its UserPromptSubmit hook on every prompt, through the same door as SessionStart:
+    // the catch hook, which re-registers a session whose start-up announcement the daemon missed.
+    if (engine === 'claude') await hook('session-start', { hookEvent: 'UserPromptSubmit', prompt })
     turn++
     open = `turn-${turn}`
     process.stdout.write(`\r\n`)
