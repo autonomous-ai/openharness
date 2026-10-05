@@ -1,5 +1,5 @@
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
-import type { Asker } from './core/api.js'
+import type { Asker, PromptScopes } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { readSessionGitPullRequest } from './lib/sessionGitPullRequest.js'
@@ -400,7 +400,7 @@ export class BackendSocket {
   teamStateDir = join(env.ADAPTER_DATA_DIR, 'teams')
   teamCommand: string | null = null
   private teamService: TeamService | null = null
-  readonly swarmPromptScopes = new SwarmPromptScopes()
+  swarmPromptScopes: PromptScopes = new SwarmPromptScopes()
   private teamMailboxService: TeamMailbox | null = null
   readChannelDesk: (() => Promise<unknown>) | null = null
   writeChannelSettings: ((enabled: boolean) => Promise<unknown>) | null = null

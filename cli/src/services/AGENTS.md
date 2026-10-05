@@ -39,8 +39,8 @@ let several people build features at once without touching the core or each othe
 ## Running in its own process
 
 A service that can crash natively, hang or leak should run in its own process, where it costs only
-itself. Search, the viewers and workspaces do: `HARNESSD_SERVICES=search,viewers,workspaces` (any of
-them alone, too).
+itself. Search, the viewers, workspaces and the teams' prompt scopes do:
+`HARNESSD_SERVICES=search,viewers,workspaces,teams` (any of them alone, too).
 
 - `src/harnessd/services.ts` runs it (`KNOWN_SERVICES`, with its memory budget). The core routes the
   requests it declared (its `<NAME>_REQUESTS`) to its process, and the same handlers answer them there.
@@ -61,6 +61,12 @@ them alone, too).
   when to sweep. A command that destroys something is never held or replayed, and what it must know
   (the folders in use) is asked for when it starts, never sent ahead where it could go stale.
   `e2e/workspacesProcess.e2e.ts` proves it.
+- State built from every change must get every change exactly once. The teams show how
+  (`src/services/teamsProcess.ts`, `src/core/teamsLink.ts`): the core numbers each change and keeps it
+  until the process acknowledges it; on each connection the process says what it applied and gets
+  what it lacks, or starts over. A value the core reads back synchronously is answered from what the
+  process last reported, and is "unknown" (the fallback) while a change to it is on its way.
+  `e2e/teamsProcess.e2e.ts` proves it.
 
 ## Do not
 

@@ -288,8 +288,8 @@ export class ServiceSupervisor {
 
 /**
  * The services this build can run in their own processes, with their memory budgets. Which of them do
- * is `HARNESSD_SERVICES` (`search,viewers,workspaces`): off until named, while each one beds in, and the
- * core runs a service that is not out here in its own process, as before.
+ * is `HARNESSD_SERVICES` (`search,viewers,workspaces,teams`): off until named, while each one beds in,
+ * and the core runs a service that is not out here in its own process, as before.
  */
 export const KNOWN_SERVICES: Readonly<Record<string, Omit<ServiceSpec, 'name'>>> = {
   search: { heapLimitMiB: 1_024, rssLimitMiB: 2_048 },
@@ -298,6 +298,8 @@ export const KNOWN_SERVICES: Readonly<Record<string, Omit<ServiceSpec, 'name'>>>
   viewers: { heapLimitMiB: 512, rssLimitMiB: 1_024 },
   // The git work runs in git's own processes; this one only holds the agents the core sent it.
   workspaces: { heapLimitMiB: 256, rssLimitMiB: 512 },
+  // The prompt scopes hold a few drafts and fingerprints per agent: small, bounded state.
+  teams: { heapLimitMiB: 256, rssLimitMiB: 512 },
 }
 
 /** Service timings from the environment (for tests and support); anything unset or invalid keeps its default. */
