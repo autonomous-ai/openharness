@@ -34,7 +34,7 @@ STATE = '/home/me/.local/state/harness-os/updates'
 GUEST = FOLDER + '/guest.py'
 UPDATER = '/usr/lib/harness-os/live_update.py'
 BUSY = '{"harness_update_worker":1,"status":"busy"}\n'
-OWNERSHIP_SOURCE = 'f3ec23ed6e384e2f3328b505a1d7e962502cd5a8'
+OWNERSHIP_SOURCE = '0de712afa23cb10bf9ab096dec933a9828767fe3'
 INPUTS = [
     'os/live_update.py', 'os/root/usr/bin/harness', 'os/root/usr/lib/harness-os/open-updates',
     'os/root/usr/lib/systemd/user/harness-update.service',
@@ -86,9 +86,24 @@ def ui_owner(state, event):
     panes = [pane for pane in ownership['panes'] if pane['token'] == token]
     assert len(panes) == 1, panes
     pane = panes[0]
+    assert pane['launch'] == ('"exec env HARNESS_UPDATE_INSTANCE=' + token +
+                              ' /usr/bin/python3 ' + UPDATER + ' screen"'), pane
     assert re.fullmatch(r'%\d+', pane['pane']) and re.fullmatch(r'@\d+', pane['window']) and pane['dead'] == '0', pane
     assert ownership['socket'].startswith('/') and ownership['active'] == pane['pane'], ownership
-    return dict(event, socket=ownership['socket'], pane=pane['pane'], window=pane['window'], process=ui)
+    return dict(event, socket=ownership['socket'], pane=pane['pane'], window=pane['window'],
+                launch=pane['launch'], process=ui)
+
+
+def renderer_replaced(before, after):
+    assert len(before['clients']) == len(after['clients']) == 1, (before['clients'], after['clients'])
+    old, new = before['clients'][0], after['clients'][0]
+    assert old['session'] == new['session'], (old, new)
+    old, new = old['process'], new['process']
+    assert (old['pid'], old['start']) != (new['pid'], new['start']), (old, new)
+    assert old['executable'] == before['selected'] + '/harness-tui', old
+    assert new['executable'] == after['selected'] + '/harness-tui', new
+    assert old['executable'] != new['executable'], (old, new)
+    return dict(before=old, after=new)
 
 
 def pane_windows(raw, separator):
@@ -381,15 +396,39 @@ def exercise(machine, image, release, receipt, output, updates_url):
     expected = dict(before['bundled'], **{'harness-tui': release['files']['harness-tui']})
     assert completed['selected_files'] == expected and completed['selected'] != before['selected']
     assert_work(before, completed, ''.join(inputs))
-    ui_owner(completed, updating)
+    resumed = ui_owner(completed, updating)
+    assert all(resumed[key] == updating[key] for key in ['pid', 'start', 'token', 'socket', 'pane', 'window', 'launch', 'process'])
+    receipt['renderer_replacement'] = renderer_replaced(before, completed)
+    receipt['launch_persistence'] = dict(before=updating, after=resumed)
     assert [ui for ui in completed['uis'] if (ui['pid'], ui['start']) == (direct['pid'], direct['start'])] == direct_processes
     assert not any(event['pid'] == direct['pid'] and event['event'] in ['request-claimed', 'worker-start'] for event in completed['events'])
-    close_ui('shortcut', updating)
+    # A second shortcut is a separate post-activation reuse check, not help for
+    # the original intent. No additional key was needed through either race.
+    control('gate.json', dict(token='reuse', path=None))
+    machine.user('hn select-window -t ' + shlex.quote(window) + ' && hn select-pane -t ' + shlex.quote(pane))
+    machine.keys('meta_l', 'u')
+    wait_event('reuse', 'request-claimed')
+    machine.frame('05-post-activation-reuse', 'up to date', 15)
+    reused = snapshot('05-post-activation-reuse')
+    owner = ui_owner(reused, updating)
+    assert all(owner[key] == resumed[key] for key in ['pid', 'start', 'token', 'socket', 'pane', 'window', 'launch', 'process'])
+    publications = [event for event in reused['events'] if event['phase'] == 'reuse' and event['event'] == 'request-published']
+    claims = [event for event in reused['events'] if event['phase'] == 'reuse' and event['event'] == 'request-claimed']
+    assert len(publications) == len(claims) == 1 and publications[0]['request']['target'] == updating['token'], (publications, claims)
+    assert (claims[0]['pid'], claims[0]['start'], claims[0]['token']) == (updating['pid'], updating['start'], updating['token'])
+    assert claims[0]['result'] is True and claims[0]['before'] == publications[0]['request'] and claims[0]['after'] is None
+    assert not any(event['event'] == 'worker-start' and event['phase'] == 'reuse' for event in reused['events'])
+    assert len(reused['ownership']['panes']) == len(completed['ownership']['panes'])
+    assert reused['selected_files'] == expected and reused['transaction'] == completed['transaction'] and not reused['request']
+    assert_work(before, reused, ''.join(inputs))
+    receipt['post_activation_reuse'] = dict(owner=owner, publication=publications[0], claim=claims[0])
+    close_ui('reuse', updating)
     machine.user('hn select-window -t ' + shlex.quote(direct_window) + ' && hn select-pane -t ' + shlex.quote(direct_pane))
     machine.frame('05-direct-stayed-view-only', 'up to date', 15)
-    close_ui('shortcut', direct)
+    close_ui('reuse', direct)
     type_work('after-contention')
     receipt['checks'].append('One QMP Super+u is rejected by the live unregistered inspection and claimed only by its targeted UI; it survives timer staging and a real worker lock race, activates hn once, and preserves the same work and daemon.')
+    receipt['checks'].append('Actual selected-binary renderer replacement changes renderer identity while retaining the exact quoted launch and owner; a later QMP Super+u targets that same owner without another pane or activation.')
 
     begin('cancel', 'cli.mjs', 'feeds-both.json')
     machine.keys('meta_l', 'u')
@@ -415,6 +454,7 @@ def exercise(machine, image, release, receipt, output, updates_url):
     final = snapshot('08-final-work')
     assert_work(before, final, ''.join(inputs))
     assert final['selected_files'] == expected and final['ready'] and not final['request']
+    assert not any(event['event'] == 'worker-start' and event['phase'] == 'reuse' for event in final['events'])
     receipt['checks'].append('Escape cancels the owned waiting intent; later timer staging and inspection never activate the CLI. Original processes, project, input history, boot and bundled bytes remain intact.')
     machine.user('systemctl --user stop harness-update.timer harness-update.service harness-intent-feed.service')
 

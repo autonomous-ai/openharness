@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,12 @@ UPDATER = Path('/usr/lib/harness-os/live_update.py')
 BUSY = '{"harness_update_worker":1,"status":"busy"}\n'
 WORKER = ['systemd-run', '--user', '--quiet', '--pipe', '--wait', '--collect',
           '--unit=harness-apply-update', '/usr/bin/python3', str(UPDATER), 'apply', '--worker']
+
+
+def launch_token(launch):
+    match = re.fullmatch(r'"exec env HARNESS_UPDATE_INSTANCE=([0-9a-f]{32}) '
+                         r'/usr/bin/python3 /usr/lib/harness-os/live_update\.py screen"', launch)
+    return match[1] if match else None
 
 
 def write(name, data):
@@ -100,11 +107,11 @@ def snapshot():
     assert socket.startswith('/'), socket
     def hn(*args):
         return subprocess.check_output(['hn', '-S', socket, *args], text=True)
-    pane_rows = hn('list-panes', '-s', '-F', '#{pane_id}\t#{pane_dead}\t#{window_id}\t#{@harness-update-instance}')
+    pane_rows = hn('list-panes', '-s', '-F', '#{pane_id}\t#{pane_dead}\t#{window_id}\t#{pane_start_command}')
     panes = []
     for line in pane_rows.splitlines():
-        pane, dead, window, token = line.split('\t')
-        panes.append(dict(pane=pane, dead=dead, window=window, token=token))
+        pane, dead, window, launch = line.split('\t')
+        panes.append(dict(pane=pane, dead=dead, window=window, launch=launch, token=launch_token(launch)))
     records = events()
     uis = []
     seen = set()

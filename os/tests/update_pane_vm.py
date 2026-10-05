@@ -19,6 +19,14 @@ GUEST = '/home/me/update-pane-observer.py'
 STATE = '/home/me/.local/state/harness-os/updates'
 
 
+def renderer_replaced(before, after, expected_sha256):
+    assert before['pid'] != after['pid'] and before['start'] != after['start'], (before, after)
+    for key in ['executable', 'session']:
+        assert before[key] == after[key], (key, before, after)
+    assert before['executable_sha256'] == after['executable_sha256'] == expected_sha256, (before, after)
+    return dict(before=before, after=after)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--iso', type=Path, required=True)
@@ -70,11 +78,15 @@ def main():
                     time.sleep(.1)
                     continue
                 if expected:
-                    assert (owner['pid'], owner['start'], owner['pane']) == (expected['pid'], expected['start'], expected['pane']), record
+                    for key in ['pid', 'start', 'pane', 'token', 'registration', 'stdin', 'argv']:
+                        assert owner[key] == expected[key], (key, record)
                 assert owner['stdin'].startswith('/dev/pts/') and owner['group'] == owner['foreground'], owner
                 assert pane['token'] == owner['token']
+                assert pane['start_command'] == ('"exec env HARNESS_UPDATE_INSTANCE=' + owner['token'] +
+                                                  ' /usr/bin/python3 ' + UPDATER + ' screen"'), pane
                 assert owner['registration'] == dict(pid=owner['pid'], start=owner['start'],
                     token=owner['token'], boot_id=record['boot_id']), owner
+                assert record['renderer']['executable_sha256'] == manifest['harness_inputs']['files']['harness-tui']['sha256']
                 return record, owner
             time.sleep(.1)
         raise TimeoutError('One active updater did not consume the shortcut: ' + name)
@@ -243,19 +255,27 @@ def close_screen():
         vm.command('hn rename-window -t ' + shlex.quote(pane['window']) + ' Versions')
         focus_terminal()
         vm.keys('meta_l', 'u')
-        wait_active('05-renamed-updater', owner)
+        before_restart, _ = wait_active('05-renamed-updater', owner)
         receipt['checks'].append('Repeated Super+u and a renamed updater reuse its same PID/start time and pane rather than creating duplicate tabs.')
 
         vm.command('systemctl --user restart hn-screen.service; /usr/lib/harness-os/wait-runtime', timeout=90)
         focus_terminal()
         vm.keys('meta_l', 'u')
         resumed, _ = wait_active('06-renderer-reconnected', owner)
+        previous_pane = next(p for p in before_restart['panes'] if p['pane'] == owner['pane'])
         resumed_pane = next(p for p in resumed['panes'] if p['pane'] == owner['pane'])
+        old_renderer, new_renderer = before_restart['renderer'], resumed['renderer']
+        receipt['renderer_restart'] = renderer_replaced(old_renderer, new_renderer,
+            manifest['harness_inputs']['files']['harness-tui']['sha256'])
+        for key in ['pane', 'window', 'start_command', 'token']:
+            assert previous_pane[key] == resumed_pane[key], (key, previous_pane, resumed_pane)
+        receipt['renderer_restart'].update(launch_before=previous_pane['start_command'],
+                                           launch_after=resumed_pane['start_command'], owner=owner)
         receipt['socket_handover'] = dict(process_environment=owner['primary_socket'],
                                          before=pane['socket'], after=resumed_pane['socket'])
         wait_ui('06-renderer-reconnected')
         work_survives('06-work-preserved', before)
-        receipt['checks'].append('After actual renderer restart, the same token-bound updater and work processes survive without requiring HN_SOCKET or a particular socket alias name.')
+        receipt['checks'].append('A new renderer PID/start with the exact frozen executable restores the same quoted launch, pane and active updater lease; work survives without requiring HN_SOCKET or a particular socket alias name.')
 
         vm.command('kill -TERM ' + str(owner['pid']))
         wait_gone(owner)

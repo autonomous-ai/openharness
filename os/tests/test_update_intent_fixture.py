@@ -1,4 +1,5 @@
 """Portable observer contracts; no VM, worker unit or graphical acceptance."""
+import ast
 import copy
 import importlib.util
 import json
@@ -11,7 +12,7 @@ from unittest.mock import patch
 
 import update_intent_guest as guest
 import update_intent_observer as observer
-from update_intent_vm import ROOT, UPDATER, observed_source, pane_windows, ui_owner
+from update_intent_vm import ROOT, UPDATER, observed_source, pane_windows, renderer_replaced, ui_owner
 from session_vm import PROBE
 
 
@@ -52,8 +53,23 @@ class ObserverContracts(unittest.TestCase):
                   stdin='/dev/pts/7', argv=['/usr/bin/python3', UPDATER, 'screen'])
         state = dict(boot='boot', uis=[ui], ownership=dict(socket='/tmp/hn-1000/default@456.sock', active='%4',
             registrations=[dict(pid=101, start='123', token=token, boot_id='boot')],
-            panes=[dict(pane='%4', window='@2', dead='0', token=token)]))
+            panes=[dict(pane='%4', window='@2', dead='0', token=token,
+                        launch='"exec env HARNESS_UPDATE_INSTANCE=' + token + ' /usr/bin/python3 ' + UPDATER + ' screen"')]))
         return state, event
+
+    def test_observers_require_the_exact_quoted_launch_without_shell_parsing(self):
+        import update_pane_guest as x86_guest
+        state, event = self.identity()
+        launch = state['ownership']['panes'][0]['launch']
+        for parser in [guest.launch_token, x86_guest.launch_token]:
+            self.assertEqual(parser(launch), event['token'])
+            for invalid in [launch[1:-1], launch.replace('exec env ', 'env '),
+                            launch.replace(event['token'], event['token'].upper()),
+                            launch.replace(' /usr/bin/python3', ' python3'),
+                            launch.replace(' screen', ' check'), launch[:-1] + '; true"',
+                            launch + ' ', launch.replace(' screen', ' screen\\n')]:
+                with self.subTest(parser=parser.__module__, invalid=invalid):
+                    self.assertIsNone(parser(invalid))
 
     def test_token_correlates_distinct_backend_and_public_panes(self):
         state, event = self.identity()
@@ -71,6 +87,7 @@ class ObserverContracts(unittest.TestCase):
             lambda s: s['ownership']['registrations'].clear(),
             lambda s: s['ownership']['registrations'].append(copy.deepcopy(s['ownership']['registrations'][0])),
             lambda s: s['ownership']['panes'][0].update(dead='1'),
+            lambda s: s['ownership']['panes'][0].update(launch='different command'),
             lambda s: s['ownership']['panes'].append(dict(s['ownership']['panes'][0], pane='%5')),
             lambda s: s['ownership'].update(active='%5'),
         ]
@@ -80,6 +97,34 @@ class ObserverContracts(unittest.TestCase):
                 change(state)
                 with self.assertRaises(AssertionError):
                     ui_owner(state, event)
+
+    def test_renderer_replacement_requires_actual_new_identity_and_selected_executable(self):
+        before = dict(selected='/usr/lib/harness', clients=[dict(session='$0', process=dict(
+            pid=10, start='100', executable='/usr/lib/harness/harness-tui'))])
+        after = dict(selected='/home/me/.local/state/harness-os/updates/builds/new',
+                     clients=[dict(session='$0', process=dict(pid=11, start='200',
+                         executable='/home/me/.local/state/harness-os/updates/builds/new/harness-tui'))])
+        self.assertEqual(renderer_replaced(before, after)['after']['pid'], 11)
+        for change in [lambda s: s['clients'][0]['process'].update(pid=10, start='100'),
+                       lambda s: s['clients'][0]['process'].update(executable='/usr/lib/harness/harness-tui'),
+                       lambda s: s['clients'][0].update(session='$1'),
+                       lambda s: s['clients'].append(copy.deepcopy(s['clients'][0]))]:
+            with self.subTest(change=change):
+                value = copy.deepcopy(after)
+                change(value)
+                with self.assertRaises(AssertionError):
+                    renderer_replaced(before, value)
+
+    def test_x86_renderer_restart_requires_new_process_with_the_same_frozen_binary(self):
+        from update_pane_vm import renderer_replaced as x86_renderer_replaced
+        before = dict(pid=10, start='100', executable='/usr/lib/harness/harness-tui',
+                      executable_sha256='a' * 64, session='$0')
+        after = dict(before, pid=11, start='200')
+        self.assertEqual(x86_renderer_replaced(before, after, 'a' * 64)['after'], after)
+        for fields in [dict(pid=10), dict(start='100'), dict(executable='/tmp/other'),
+                       dict(executable_sha256='b' * 64), dict(session='$1')]:
+            with self.subTest(fields=fields), self.assertRaises(AssertionError):
+                x86_renderer_replaced(before, dict(after, **fields), 'a' * 64)
 
     def test_merged_event_order_ignores_pid_sort_and_partial_append(self):
         with tempfile.TemporaryDirectory() as temporary, patch.object(guest, 'FIXTURE', Path(temporary)):
@@ -138,6 +183,12 @@ class ObserverContracts(unittest.TestCase):
         source = (ROOT / 'os/live_update.py').read_text()
         compile(observed_source(source), 'private-observed-live-update.py', 'exec')
         compile(PROBE, 'private-terminal-probe.py', 'exec')
+        x86 = ast.parse((ROOT / 'os/tests/update_pane_vm.py').read_text())
+        traces = [node.value.value for node in ast.walk(x86) if isinstance(node, ast.Assign)
+                  and any(isinstance(target, ast.Name) and target.id == 'trace' for target in node.targets)
+                  and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)]
+        self.assertEqual(len(traces), 1)
+        compile(traces[0], 'private-x86-ownership-hook.py', 'exec')
         with self.assertRaisesRegex(ValueError, 'entrypoint'):
             observed_source(source.replace("if __name__ == '__main__':", ''))
 

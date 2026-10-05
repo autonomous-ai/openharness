@@ -61,7 +61,8 @@ class UpdatePaneOwnership(unittest.TestCase):
             (screens / str(pid)).unlink(missing_ok=True)
 
     def pane(self, pane='%1', dead='0', window='@1', token=TOKEN):
-        self.rows.append('\t'.join([pane, dead, window, token]))
+        launch = '"exec env HARNESS_UPDATE_INSTANCE=' + token + ' /usr/bin/python3 ' + updates.UPDATER + ' screen"' if token else ''
+        self.rows.append('\t'.join([pane, dead, window, launch]))
 
     def hn(self, *args, socket=None):
         self.commands.append(args)
@@ -79,19 +80,16 @@ class UpdatePaneOwnership(unittest.TestCase):
         if args[0] == 'new-window':
             self.assertEqual(args, ('new-window', '-P', '-F', '#{pane_id}', '-n', 'Updates',
                 'exec env HARNESS_UPDATE_INSTANCE=' + NEW_TOKEN + ' /usr/bin/python3 ' + updates.UPDATER + ' screen'))
-            self.pane('%9', window='@9', token='')
+            self.pane('%9', window='@9', token=NEW_TOKEN)
             self.process(900, token=NEW_TOKEN)
             return '%9'
-        if args[0] == 'set-option':
-            self.assertEqual(args, ('set-option', '-p', '-t', '%9', updates.OPTION, NEW_TOKEN))
-            self.rows = [line.rsplit('\t', 1)[0] + '\t' + NEW_TOKEN if line.startswith('%9\t') else line for line in self.rows]
-            return ''
         self.assertIn(args[0], ['select-window', 'select-pane'])
         return ''
 
     def assert_created_once(self):
         self.assertEqual(sum(item[0] == 'new-window' for item in self.commands), 1)
         self.assertNotIn(('select-window', '-t', 'Updates'), self.commands)
+        self.assertFalse(any(item[0] == 'set-option' for item in self.commands))
 
     def test_an_unrelated_named_shell_cannot_swallow_the_request(self):
         self.pane(token='')
@@ -137,7 +135,7 @@ class UpdatePaneOwnership(unittest.TestCase):
                 self.assert_created_once()
                 self.assertNotIn(('select-window', '-t', '@1'), self.commands)
 
-    def test_registration_must_match_process_environment_not_just_custom_option(self):
+    def test_registration_must_match_process_environment_not_just_launch(self):
         self.pane()
         self.process(100)
         (self.proc / '100/environ').write_bytes(b'TMUX_PANE=%1\0')
@@ -151,7 +149,39 @@ class UpdatePaneOwnership(unittest.TestCase):
         updates.open_updates()
         self.assert_created_once()
 
-    def test_exit_pid_reuse_pane_removal_or_marker_change_during_selection_creates_new_owner(self):
+    def test_only_the_exact_fixed_quoted_launch_is_an_owner(self):
+        valid = '"exec env HARNESS_UPDATE_INSTANCE=' + TOKEN + ' /usr/bin/python3 ' + updates.UPDATER + ' screen"'
+        for launch in [valid[1:-1], valid.replace('exec env ', 'env '),
+                       valid.replace(TOKEN, TOKEN.upper()), valid.replace(TOKEN, TOKEN[:-1]),
+                       valid.replace('/usr/bin/python3', 'python3'),
+                       valid.replace(updates.UPDATER, '/tmp/live_update.py'),
+                       valid.replace(' screen', ' check'), valid[:-1] + '; true"',
+                       valid.replace(' /usr/bin', ' EXTRA=1 /usr/bin', 1),
+                       valid.replace(' screen', ' screen\\n'), valid + ' ',
+                       valid.replace(' screen', ' screen\\"')]:
+            with self.subTest(launch=launch):
+                self.rows, self.commands = ['%1\t0\t@1\t' + launch], []
+                shutil.rmtree(self.proc, ignore_errors=True)
+                shutil.rmtree(updates.STATE, ignore_errors=True)
+                self.process(100)
+                updates.open_updates()
+                self.assert_created_once()
+                self.assertNotIn(('select-pane', '-t', '%1'), self.commands)
+
+    def test_duplicate_matching_panes_cannot_choose_an_arbitrary_live_owner(self):
+        for second in ['%1', '%2']:
+            with self.subTest(second=second):
+                self.rows, self.commands = [], []
+                shutil.rmtree(self.proc, ignore_errors=True)
+                shutil.rmtree(updates.STATE, ignore_errors=True)
+                self.pane()
+                self.pane(second)
+                self.process(100)
+                updates.open_updates()
+                self.assert_created_once()
+                self.assertNotIn(('select-window', '-t', '@1'), self.commands)
+
+    def test_exit_pid_reuse_pane_removal_or_launch_change_during_selection_creates_new_owner(self):
         for case in ['exit', 'pid-reuse', 'pane-removed', 'token-removed']:
             with self.subTest(case=case):
                 self.rows, self.commands = [], []
