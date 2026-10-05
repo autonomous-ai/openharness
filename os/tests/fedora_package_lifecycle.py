@@ -62,6 +62,22 @@ def fingerprint(path):
     return None
 
 
+def changed_paths(before, after):
+    def flatten(path, value):
+        if (value is None or isinstance(value.get('sha256'), str) or
+                isinstance(value.get('symlink'), str)):
+            return {path: value}
+        result = {path: {'directory': True}}
+        for name, child in value.items():
+            result.update(flatten(str(Path(path) / name), child))
+        return result
+
+    old = {name: value for path, state in before.items() for name, value in flatten(path, state).items()}
+    new = {name: value for path, state in after.items() for name, value in flatten(path, state).items()}
+    return [{'path': path, 'before': old.get(path), 'after': new.get(path)}
+            for path in sorted(old.keys() | new.keys()) if old.get(path) != new.get(path)]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--first', type=Path, required=True)
@@ -100,6 +116,45 @@ def main():
             raise RuntimeError(f'{command[0]} exited {completed.returncode}; see commands.log')
         return completed
 
+    def write_json(name, value):
+        (output / name).write_text(json.dumps(value, indent=2) + '\n')
+
+    def inventory(label):
+        result = run('rpm', '-qa', '--qf', '%{NAME}\t%{EPOCHNUM}\t%{VERSION}\t%{RELEASE}\t%{ARCH}\t%{SOURCERPM}\n')
+        (output / f'packages-{label}.tsv').write_text(
+            'name\tepoch\tversion\trelease\tarchitecture\tsource_rpm\n' +
+            '\n'.join(sorted(result.stdout.splitlines())) + '\n')
+
+    def preservation_snapshot(label, before, preserved):
+        after = {str(path): fingerprint(path) for path in preserved}
+        write_json(f'preservation-{label}.json', after)
+        changes = changed_paths(before, after)
+        write_json(f'preservation-{label}-changes.json', changes)
+        inventory(label)
+        paths = {entry['path'] for entry in changes}
+        for entry in changes:
+            for state in (entry['before'], entry['after']):
+                if state and isinstance(state.get('symlink'), str):
+                    target = Path(state['symlink'])
+                    if not target.is_absolute():
+                        target = Path(entry['path']).parent / target
+                    paths.add(str(target.resolve()))
+        ownership, packages = {}, set()
+        for path in sorted(paths):
+            result = run('rpm', '-qf', '--qf', '%{NAME}\n', path, check=False)
+            ownership[path] = {'returncode': result.returncode, 'output': result.stdout}
+            if result.returncode == 0:
+                packages.update(result.stdout.splitlines())
+        write_json(f'preservation-{label}-ownership.json', ownership)
+        provenance = {}
+        for package in sorted(packages):
+            provenance[package] = {}
+            for option in ('--scripts', '--triggers'):
+                result = run('rpm', '-q', option, package, check=False)
+                provenance[package][option] = {'returncode': result.returncode, 'output': result.stdout}
+        write_json(f'preservation-{label}-package-scriptlets.json', provenance)
+        return after
+
     try:
         record = args.runtime / 'source.json'
         assert record.is_file() and not record.is_symlink()
@@ -118,9 +173,10 @@ def main():
         assert old['symlinks'] == repeated['symlinks'] == new['symlinks']
         assert old['package']['version'] == new['package']['version']
         assert str(old['package']['release']) == '1' and str(new['package']['release']) == '2'
-        for rpm in (first, upgrade):
+        for label, rpm in (('first', first), ('upgrade', upgrade)):
             assert not run('rpm', '-qp', '--scripts', rpm).stdout.strip(), 'Package contains service/account scriptlets'
             assert not run('rpm', '-qp', '--triggers', rpm).stdout.strip(), 'Package contains transaction triggers'
+            (output / f'package-requires-{label}.txt').write_text(run('rpm', '-qp', '--requires', rpm).stdout)
         receipt['packages'] = {'first': old, 'upgrade': new}
         receipt['checks'].append('Independent same-input builds produce identical RPM bytes; upgrade changes only RPM release')
 
@@ -141,6 +197,8 @@ def main():
                      Path('/etc/systemd/user/default.target.wants'), Path('/etc/hostname'), Path('/etc/hosts'),
                      Path('/etc/sudoers.d/99-harness-update-test')]
         before = {str(path): fingerprint(path) for path in preserved}
+        write_json('preservation-before.json', before)
+        inventory('before')
         account = run('getent', 'passwd', 'harness-rpm-probe').stdout
         manager = shutil.which('dnf5') or shutil.which('microdnf')
         assert manager, 'The locked Fedora image must provide a package manager'
@@ -166,7 +224,8 @@ def main():
                 assert os.readlink(Path('/') / relative) == target
             owners = run('rpm', '-q', '--qf', '[%{FILEUSERNAME}\t%{FILEGROUPNAME}\n]', 'harness-os-session').stdout
             assert all(line == 'root\troot' for line in owners.splitlines())
-            assert {str(path): fingerprint(path) for path in preserved} == before, 'Existing user/login/network policy changed'
+            after = preservation_snapshot('after-' + label, before, preserved)
+            assert after == before, 'Existing user/login/network policy changed'
             assert run('getent', 'passwd', 'harness-rpm-probe').stdout == account
             assert run('getent', 'passwd', 'me', check=False).returncode != 0, 'Package created a default OS account'
             receipt['checks'].append(f'Native {label}: declared payload owned/verified, existing user and host configuration unchanged')
@@ -177,7 +236,8 @@ def main():
         for relative in [*new['files'], *new['symlinks']]:
             path = Path('/') / relative
             assert not path.exists() and not path.is_symlink(), 'RPM left an owned file: ' + relative
-        assert {str(path): fingerprint(path) for path in preserved} == before
+        after = preservation_snapshot('after-removal', before, preserved)
+        assert after == before
         assert run('getent', 'passwd', 'harness-rpm-probe').stdout == account
         receipt['checks'].append('Removal cleans all package-owned files and preserves the existing account, project and configuration')
         receipt['status'] = 'passed'
