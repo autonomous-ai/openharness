@@ -1,0 +1,65 @@
+name: Harness OS ARM graphical session
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['os-polish/arm-graphical']
+    paths:
+      - 'os/tests/arm_session*'
+      - 'os/tests/test_arm_session.py'
+      - 'os/tests/arm-session.lock.json'
+      - '.github/workflows/os-arm-session.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-arm-session-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  session:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tui
+          shared-key: tui-aarch64-unknown-linux-musl
+          cache-bin: false
+      - name: Boot tools and portable OS checks
+        run: |
+          df -h . "$RUNNER_TEMP"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools qemu-system-arm \
+            e2fsprogs rpm libarchive-tools zstd gnupg python3-pil tesseract-ocr
+          if [ -c /dev/kvm ]; then sudo chown "$USER" /dev/kvm; fi
+          make -C os check
+      - name: Build the exact native Harness runtime
+        run: bash os/tools/build-runtime.sh
+      - name: Fresh Fedora session with signed Asahi kernel
+        run: |
+          python3 os/tests/arm_session.py --runtime os/work/runtime \
+            --output os/test-results/arm-session
+      - name: Retain graphical session evidence only
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-arm-graphical-session
+          path: |
+            os/work/runtime/source.json
+            os/test-results/arm-session/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 6

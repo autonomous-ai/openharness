@@ -531,6 +531,44 @@ test or hardware installation. It does not test Apple firmware, storage, GPU,
 audio, Wi-Fi or Raspberry Pi boot. Keep ARM payloads out of the PC installer and
 update feed until each platform has its own packaging and installation path.
 
+### Reproducible ARM graphical session
+
+The **Harness OS ARM graphical session** workflow assembles a fresh Fedora Minimal
+userspace and boots the shared labwc/foot/Harness session under the signed 16 KiB
+Asahi kernel. This extends the console-only kernel check above; it is a private
+VM prototype, not an Apple Silicon installer or a supported hardware image.
+
+`tests/arm-session.lock.json` pins the Fedora container and extra graphical kernel
+modules. The builder verifies kernel package signatures and hashes, checks the
+exact clean ARM runtime, installs signed Fedora packages without weak dependencies,
+and records their versions and the upstream-default OpenCode lockfile. Fedora
+repositories remain mutable; this is not a claim of an immutable package snapshot.
+
+The tracked fixture accounts for Fedora's browser executable and labwc action
+name. It selects shared session files explicitly and excludes the PC installer,
+update timer, pacman configuration and x86 driver hooks. Its empty-password account
+and root console exist only on the private regular-file disk and local QEMU socket;
+no host block device, SSH service or public listener is exposed. These test settings
+must never enter a hardware image.
+
+The acceptance path starts offline, opens a terminal with actual Super+t input,
+then connects and waits for the default agent and two terminal panes. It asks
+OpenCode to create a Python program and HTML counter, independently executes the
+program, clicks the counter in sandboxed native Chromium, and returns to the same
+agent with Super+b. A second cold boot must accept keyboard input and preserve
+the project's exact bytes. Receipts, framebuffer captures and logs survive failures;
+the private disk/container are removed. A passing run establishes this VM sequence
+only, not hardware installation, GPU acceleration, suspend or Fedora recovery.
+
+```sh
+python3 os/tests/arm_session.py --runtime os/work/runtime \
+  --output os/test-results/arm-session
+```
+
+Use a native ARM Linux runner with the tools listed in `os-arm-session.yml`.
+Apple firmware provisioning, physical drivers, platform installation and Fedora
+update/recovery integration remain separate work before releasing this port.
+
 ## Mac support targets
 
 Intel Macs and Apple Silicon are both intended OS targets. They share the Harness
