@@ -1278,6 +1278,15 @@ async function fallbackRegister(input, engine, tmuxPane) {
       // When an app last opened this agent (RegisteredSession.lastOpenedAt): a fact about the person,
       // not the process, and the daemon's own rebuild carries it the same way.
       ...(Number.isSafeInteger(existing?.lastOpenedAt) && existing.lastOpenedAt > 0 ? { lastOpenedAt: existing.lastOpenedAt } : {}),
+      // …and the rest of what `register()` carries: the harness (DSH) and its runtime, the agent file,
+      // the permission mode, the subscription model, the default name, the web search a grid launch
+      // decided, and a close planned for after the task (#812). Dropped here, a hook in the seconds an
+      // update leaves the daemon down relaunched a harness as a plain engine and never closed an agent
+      // its person had asked to close. As there, a resume-only row's launch is over once a hook comes.
+      ...Object.fromEntries(['gridWebSearch', 'subscriptionModel', 'defaultName', 'dsh', 'dshRuntime', 'agent', 'permissionMode', 'closePlan']
+        .filter((key) => existing?.[key] !== undefined && existing?.[key] !== null).map((key) => [key, existing[key]])),
+      ...(existing?.resumeOnly === true ? { resumeOnly: true, launch: { state: 'ready' } } : {}),
+      ...(existing?.terminalHost === true ? { terminalHost: true } : {}),
     }
     const entry = {
       schemaVersion: 2,

@@ -832,6 +832,14 @@ describe('hook notify terminal scope', () => {
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toEqual([{ sessionId: 'maybe-alive' }])
   })
 
+  /** What the daemon chose for an agent and keeps on its row, beyond what the process shows (registry.ts
+   *  `register()` carries every one): a hook while the daemon is down must not be the write that drops it. */
+  const CHOSEN = {
+    dsh: 'cad-designer', dshRuntime: '/tmp/dsh/cad-designer/1.2.0', agent: 'reviewer', permissionMode: 'plan',
+    subscriptionModel: 'opus', defaultName: 'Claude Code 3', gridWebSearch: true,
+    closePlan: { id: 'plan-1', requestedAt: 1_790_000_000_001, identity: 'claude\u0000agent-created', state: 'waiting' },
+  }
+
   it('carries what the daemon chose at launch through an offline re-register', async () => {
     // A hook arriving while the daemon is down rebuilds the row. The grid launch (key included), the
     // Codex profile, the bypass flag and the observed grid are not on the process or in the hook body
@@ -878,6 +886,7 @@ describe('hook notify terminal scope', () => {
       // When an app last opened it — every app's "last used" order reads this, so a hook that lands
       // while the daemon is down must not be the write that forgets it.
       lastOpenedAt: 1_790_000_000_000,
+      ...CHOSEN,
     }]))
 
     await runHook({
@@ -898,8 +907,19 @@ describe('hook notify terminal scope', () => {
       gridLaunch,
       bypassPermission: true,
       lastOpenedAt: 1_790_000_000_000,
+      ...CHOSEN,
     })
     expect(registry[0]).not.toHaveProperty('launch')
+
+    // A row whose launch was a resume only: as the daemon has it, a hook ends that launch.
+    const rows = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))
+    rows[0] = { ...rows[0], resumeOnly: true, launch: { state: 'starting' } }
+    writeLegacyStateFile(join(dataDir, 'registry.json'), JSON.stringify(rows))
+    await runHook({
+      port: 9, tmuxPane: '%7', processEngine: 'claude', dataDir, claudeProjectsDir,
+      input: { hook_event_name: 'UserPromptSubmit', session_id: 'session-1', transcript_path: transcriptPath, cwd: '/tmp/demo', prompt: 'next' },
+    })
+    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))[0]).toMatchObject({ resumeOnly: true, launch: { state: 'ready' }, ...CHOSEN })
   })
 
   it('an offline re-register of the session a row already holds keeps the row\'s folder', async () => {
