@@ -1,5 +1,6 @@
 """Reject plausible false passes in the private changed-kernel acceptance gate."""
 import copy
+import gzip
 import hashlib
 import io
 import json
@@ -9,7 +10,7 @@ import tempfile
 import unittest
 
 from hardware_update_guest import (EARLY, NVIDIA, database, expected_versions,
-    initramfs_identity, validate_lock, validate_probe, validate_recovery, validate_transition)
+    initramfs_identity, payload_identity, validate_lock, validate_probe, validate_recovery, validate_transition)
 from hardware_update_vm import verify_image
 
 LOCK = json.loads(Path(__file__).with_name('hardware-update.lock.json').read_text())
@@ -137,6 +138,39 @@ class AutomaticHooksTests(unittest.TestCase):
         new['boot']['vmlinuz-linux-lts'] = old['boot']['vmlinuz-linux-lts']
         with self.assertRaises(AssertionError):
             validate_transition(old, new)
+
+    def test_correct_initramfs_names_with_stale_module_or_gsp_bytes_fail(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            installed, extracted = root / 'installed', root / 'initrd'
+            firmware = 'nvidia/615.71.09/gsp_tu10x.bin'
+            identity = {'early_modules': {}, 'firmware': [firmware]}
+            modules = {}
+            for name in EARLY:
+                relative = 'usr/lib/modules/new/kernel/' + name + '.ko'
+                archived = extracted / relative
+                archived.parent.mkdir(parents=True, exist_ok=True)
+                archived.write_bytes(('module payload ' + name).encode())
+                source = installed / (name + '.ko.gz')
+                source.parent.mkdir(parents=True, exist_ok=True)
+                with gzip.open(source, 'wb') as handle:
+                    handle.write(archived.read_bytes())
+                modules[name] = {'path': str(source)}
+                identity['early_modules'][name] = relative
+            original = installed / 'firmware' / firmware
+            original.parent.mkdir(parents=True)
+            original.write_bytes(b'signed GSP payload')
+            archived = extracted / 'usr/lib/firmware' / firmware
+            archived.parent.mkdir(parents=True)
+            archived.write_bytes(original.read_bytes())
+            result = payload_identity(extracted, identity, modules, installed / 'firmware')
+            self.assertEqual(set(result), set(EARLY) | {firmware})
+            for bad in (extracted / identity['early_modules']['nvidia'], archived):
+                good = bad.read_bytes()
+                bad.write_bytes(b'stale or corrupt payload under the correct filename')
+                with self.assertRaisesRegex(AssertionError, 'different payload bytes'):
+                    payload_identity(extracted, identity, modules, installed / 'firmware')
+                bad.write_bytes(good)
 
     def test_runtime_must_stay_frozen_while_distro_packages_may_change(self):
         old, new = probe(), probe(True)

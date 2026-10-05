@@ -3,14 +3,17 @@
 import argparse
 import base64
 from datetime import datetime
+import gzip
 import hashlib
 import importlib.util
 import json
+import lzma
 import os
 from pathlib import Path
 import re
 import subprocess
 import tarfile
+import tempfile
 import time
 from urllib.request import urlopen
 
@@ -112,6 +115,44 @@ def initramfs_identity(listing, kernel, firmware):
     return {'kernel_namespaces': namespaces, 'early_modules': modules, 'firmware': firmware}
 
 
+def content_digest(path):
+    """Compare payload bytes even when mkinitcpio changes their compression."""
+    with Path(path).open('rb') as handle:
+        magic = handle.read(6)
+    if magic.startswith(b'\x28\xb5\x2f\xfd'):
+        # Spool decompressed data to the guest disk, not the 2 GiB guest's RAM.
+        with tempfile.TemporaryFile(dir='/var/tmp') as decoded:
+            subprocess.run(['zstd', '--decompress', '--stdout', str(path)],
+                           stdout=decoded, check=True, timeout=30)
+            decoded.seek(0)
+            return hashlib.file_digest(decoded, 'sha256').hexdigest()
+    opener = gzip.open if magic.startswith(b'\x1f\x8b') else lzma.open if magic == b'\xfd7zXZ\x00' else open
+    with opener(path, 'rb') as handle:
+        return hashlib.file_digest(handle, 'sha256').hexdigest()
+
+
+def payload_identity(extracted, identity, modules, firmware_root=Path('/usr/lib/firmware')):
+    pairs = [(name, path, Path(modules[name]['path'])) for name, path in identity['early_modules'].items()]
+    for name in identity['firmware']:
+        installed = [firmware_root / (name + suffix) for suffix in ('', '.zst', '.xz', '.gz')]
+        present = [path for path in installed if path.is_file()]
+        assert len(present) == 1, ('Ambiguous installed GSP payload', name, present)
+        archived = [extracted / 'usr/lib/firmware' / (name + suffix) for suffix in ('', '.zst', '.xz', '.gz')]
+        archived = [path for path in archived if path.is_file()]
+        assert len(archived) == 1, ('Missing or ambiguous archived GSP payload', name, archived)
+        pairs.append((name, str(archived[0].relative_to(extracted)), present[0]))
+    result = {}
+    for name, relative, installed in pairs:
+        archived = extracted / relative
+        assert archived.resolve().is_relative_to(extracted.resolve()), 'Initramfs link escapes its extracted payload'
+        expected, actual = content_digest(installed), content_digest(archived)
+        assert expected == actual, ('Initramfs contains different payload bytes', name)
+        result[name] = {'archive_path': relative, 'installed_path': str(installed),
+                        'installed_file_sha256': digest(installed), 'archive_file_sha256': digest(archived),
+                        'decompressed_sha256': actual}
+    return result
+
+
 def validate_probe(result, lock, candidate, running_kernel):
     expected = lock['candidate' if candidate else 'baseline']['kernel']
     assert result['running_kernel'] == running_kernel
@@ -155,6 +196,13 @@ def probe(lock, candidate, running_kernel, output):
     Path(output).with_suffix('.initramfs.txt').write_text(listing + '\n')
     firmware = run('modinfo', '-k', kernel, '-F', 'firmware', 'nvidia').splitlines()
     result['initramfs'] = initramfs_identity(listing, kernel, firmware)
+    # Filenames cannot prove that early boot contains the same driver. Inspect
+    # the actual generated main CPIO without running any build/repair command.
+    # lsinitcpio(1): --extract --cpio extracts that image into the current folder.
+    with tempfile.TemporaryDirectory(prefix='kernel-update-initrd-', dir='/var/tmp') as directory:
+        subprocess.run(['lsinitcpio', '--extract', '--cpio', '/boot/initramfs-linux-lts.img'],
+                       cwd=directory, check=True, timeout=60, stdout=subprocess.DEVNULL)
+        result['initramfs']['payloads'] = payload_identity(Path(directory), result['initramfs'], result['modules'])
     validate_probe(result, lock, candidate, running_kernel)
     snapshot = lock['candidate' if candidate else 'baseline']['snapshot']
     assert set(re.findall(r'archive.archlinux.org/repos/(\d{4}/\d{2}/\d{2})/', result['pacman_config'])) == {snapshot}
@@ -331,6 +379,35 @@ def process(pid):
             'exe_inode': info.st_ino, 'exe_device': info.st_dev, 'exe_sha256': digest(executable)}
 
 
+def start_agent(window, directory):
+    directory.mkdir(parents=True, exist_ok=True)
+    pid_file = Path('/tmp') / (window + '.pid')
+    assert not pid_file.exists()
+    run('hn', 'new-window', '-d', '-n', window,
+        'echo $$ > ' + str(pid_file) + '; cd ' + str(directory) + '; exec opencode')
+    deadline = time.monotonic() + 45
+    pane = ''
+    while time.monotonic() < deadline:
+        if pid_file.exists():
+            value = pid_file.read_text().strip()
+            if not value.isdigit():
+                time.sleep(.1)
+                continue
+            pid = int(value)
+            comm = Path(f'/proc/{pid}/comm')
+            pane = run('hn', 'capture-pane', '-p', '-t', window)
+            # These ready controls are present in the retained preview14 pane;
+            # a live process or healthy neighboring shell alone is insufficient.
+            if comm.exists() and comm.read_text().strip() == 'opencode' and 'Ask anything' in pane and 'ctrl+p commands' in pane:
+                before = process(pid)
+                time.sleep(.5)
+                assert process(pid) == before
+                return {'process': before, 'pane': pane, 'window': window,
+                        'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text(), 'kernel': run('uname', '-r')}
+        time.sleep(.25)
+    raise AssertionError('Fresh OpenCode pane did not reach its ready screen: ' + pane)
+
+
 def live_start():
     assert os.getuid() == 1000 and Path.home() == Path('/home/me')
     PROJECT.mkdir(parents=True, exist_ok=False)
@@ -344,20 +421,8 @@ def live_start():
         assert time.monotonic() < deadline, 'Survivor pane did not start'
         time.sleep(.1)
     pids = {'heartbeat': int((PROJECT / 'pid').read_text())}
-    (PROJECT / 'agent').mkdir()
-    run('hn', 'new-window', '-d', '-n', 'kernel-update-agent',
-        'echo $$ > /tmp/kernel-update-agent.pid; cd ' + str(PROJECT / 'agent') + '; exec opencode')
-    deadline = time.monotonic() + 20
-    while True:
-        pid_file = Path('/tmp/kernel-update-agent.pid')
-        if pid_file.exists():
-            agent_pid = int(pid_file.read_text())
-            comm = Path(f'/proc/{agent_pid}/comm')
-            if comm.exists() and comm.read_text().strip() == 'opencode':
-                pids['opencode'] = agent_pid
-                break
-        assert time.monotonic() < deadline, 'The actual OpenCode pane did not start'
-        time.sleep(.25)
+    agent = start_agent('kernel-update-agent', PROJECT / 'agent')
+    pids['opencode'] = agent['process']['pid']
     for name in ('hn-screen', 'harness-daemon'):
         pids[name] = int(run('systemctl', '--user', 'show', '-p', 'MainPID', '--value', name))
         assert pids[name] > 0
@@ -370,7 +435,7 @@ def live_start():
     assert any(line.endswith('/hn-screen.service') for line in (client / 'cgroup').read_text().splitlines())
     return {'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text(),
             'processes': {name: process(pid) for name, pid in pids.items()},
-            'client': clients[0],
+            'client': clients[0], 'agent_pane': agent['pane'],
             'heartbeat_bytes': (PROJECT / 'heartbeat').stat().st_size}
 
 
@@ -415,7 +480,7 @@ def validate_recovery(baseline, restored, transaction, project_before, project_a
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('phase', choices=['install', 'baseline', 'update', 'candidate', 'recovered', 'live-start', 'live-check', 'project-edit', 'project-state'])
+    parser.add_argument('phase', choices=['install', 'baseline', 'update', 'candidate', 'recovered', 'live-start', 'live-check', 'project-edit', 'project-state', 'fresh-agent'])
     parser.add_argument('--lock', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--candidate-system', type=Path)
@@ -424,7 +489,7 @@ def main():
     assert run('lsblk', '-ndo', 'SERIAL', '/dev/vda') == 'HN_OS_TEST'
     lock = json.loads(args.lock.read_text())
     validate_lock(lock)
-    if args.phase.startswith('live-') or args.phase.startswith('project-'):
+    if args.phase.startswith('live-') or args.phase.startswith('project-') or args.phase == 'fresh-agent':
         assert os.getuid() == 1000 and not Path('/etc/harness-live').exists()
     else:
         assert os.geteuid() == 0
@@ -441,6 +506,9 @@ def main():
         result = project_edit(json.loads(args.before.read_text()))
     elif args.phase == 'project-state':
         result = project_state()
+    elif args.phase == 'fresh-agent':
+        identity = Path('/proc/sys/kernel/random/boot_id').read_text().strip()[:8]
+        result = start_agent('kernel-update-fresh-' + identity, PROJECT / ('agent-' + identity))
     else:
         candidate = args.phase == 'candidate'
         result = probe(lock, candidate, lock['candidate' if candidate else 'baseline']['kernel'], args.output)

@@ -94,7 +94,7 @@ def main():
     def guest(phase, before=None, live=False, extra=(), seconds=90):
         prefix = '/run' if live else '/tmp'
         destination = prefix + '/hardware-update/' + phase + '.json'
-        command = ([] if live or phase.startswith(('live-', 'project-')) else ['sudo', '-n'])
+        command = ([] if live or phase.startswith(('live-', 'project-')) or phase == 'fresh-agent' else ['sudo', '-n'])
         command += ['python3', prefix + '/hardware-update-guest.py', phase,
                     '--lock', prefix + '/hardware-update-lock.json', '--output', destination]
         if before is not None:
@@ -163,6 +163,7 @@ def main():
         validate_transition(baseline, updated)
         assert updated['boot'] == before_reboot['boot'] and updated['modules'] == before_reboot['modules']
         assert guest('project-state') == project
+        receipt['candidate_agent'] = guest('fresh-agent')
         (folder / 'candidate-project.json').write_text(json.dumps(project, indent=2) + '\n')
         receipt['candidate_kernel'] = updated['running_kernel']
         # Explicit cold boot boundary: old PIDs are not compared after this point.
@@ -192,6 +193,7 @@ def main():
 
         installed_boot('recovered')
         restored = guest('recovered')
+        receipt['recovered_agent'] = guest('fresh-agent')
         # project-state is recorded separately on each boot; no old process IDs
         # are treated as evidence of functionality after a real reboot.
         post = guest('project-state')
