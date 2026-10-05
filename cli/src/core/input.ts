@@ -20,6 +20,7 @@ import type { LiveEvent } from '../lib/normalize.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { SessionInputController, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
 import { terminalActionNotStarted } from '../lib/terminalTypes.js'
+import { Id } from '../teams/model.js'
 import { teamWriteHold } from '../teams/preflight.js'
 import type { TerminalControl } from './terminals/control.js'
 
@@ -156,7 +157,28 @@ export function createInput(deps: InputDeps) {
     console.log(`[msg] ${sid(sessionId)} recv · engine=${engine} · bytes=${Buffer.byteLength(adapted, 'utf8')}`)
     input.submit(record?.agentId ?? sessionId, adapted, deliveryId, tabId)
   }
-  return { input, deviceInput, acquireTerminalControl, submitAgent }
+  const messageRequest = createMessageRequest(submitAgent)
+  return { input, deviceInput, acquireTerminalControl, submitAgent, messageRequest }
+}
+
+/**
+ * Takes a `message` frame: text a person typed for an agent, into its pane, in the tab's scope when the
+ * frame names one. Nothing is answered: the transcript lines the text produces drive the turn back to
+ * every window (mirror-all), with no synthetic events here.
+ *
+ * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md).
+ */
+export function createMessageRequest(submit: (id: string, content: string, deliveryId?: string, tabId?: string) => void) {
+  return (payload: Record<string, unknown>): void => {
+    const content = payload.content as string | undefined
+    const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
+    if (!content || !target) return
+    // From the relay this is only reached sealed: text typed into an agent is never taken from the relay
+    // in the clear.
+    const tabId = Id.safeParse(payload.tabId)
+    if (tabId.success) submit(target, content, undefined, tabId.data)
+    else submit(target, content)
+  }
 }
 
 export type Input = ReturnType<typeof createInput>

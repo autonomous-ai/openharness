@@ -168,7 +168,7 @@ export class FleetRouter implements FleetRouting {
     // the carousel cannot walk to is a pane the dial cannot explain either. A terminal that has
     // adopted an engine is that engine here, as everywhere.
     //
-    // ⚠️ NOT the same question as `deviceAgentRow` in backendSocket.ts, which keeps shells out of the
+    // ⚠️ NOT the same question as `deviceAgentRow` in core/agents/list.ts, which keeps shells out of the
     // `agents_list` RPC a CLOUD device asks over the backend. This is the cable's own list, pulled by
     // `listAgents()` on the session's tick; the two surfaces answer separately and always did.
     const sessions = this.local.sessions()

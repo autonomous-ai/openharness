@@ -5,7 +5,7 @@ import { deviceErrorText } from '../lib/deviceErrors.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import type { TerminalActionResult } from '../lib/terminalTypes.js'
-import { createInput, deviceInputDeps, sessionInputDeps, type InputDeps } from './input.js'
+import { createInput, createMessageRequest, deviceInputDeps, sessionInputDeps, type InputDeps } from './input.js'
 
 const ok: TerminalActionResult = { state: 'succeeded', dispatch: 'executed' }
 /** A Claude Code composer that is empty and idle: ready for a team write. */
@@ -235,5 +235,29 @@ describe('createInput', () => {
       ['nobody', 'hi', undefined, undefined],
     ])
     expect(log.mock.calls.flat().filter((line) => String(line).includes('slash-command adapted'))).toHaveLength(1)
+  })
+})
+
+describe('message', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('writes what a person typed into the agent the frame names, in the tab it names', () => {
+    const inputs = createInput(deps().deps)
+    const submit = vi.spyOn(inputs.input, 'submit').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    inputs.messageRequest({ content: 'hello', agentId: 's1', tabId: 'swarm-a' })
+    expect(submit.mock.calls).toEqual([['a1', 'hello', undefined, 'swarm-a']])
+  })
+
+  it('names the agent by agent id or session id, takes a tab only in a tab id\'s shape, and drops a frame with no text or no agent', () => {
+    const submit = vi.fn()
+    const message = createMessageRequest(submit)
+    message({ content: 'hi', agentId: 'a1', sessionId: 's1' })
+    message({ content: 'hi', sessionId: 's1' })
+    message({ content: 'in a tab', agentId: 'a1', tabId: 'swarm-a' })
+    message({ content: 'not a tab', agentId: 'a1', tabId: '../../etc' })
+    message({ content: '', agentId: 'a1' })
+    message({ content: 'nobody to type into' })
+    expect(submit.mock.calls).toEqual([['a1', 'hi'], ['s1', 'hi'], ['a1', 'in a tab', undefined, 'swarm-a'], ['a1', 'not a tab']])
   })
 })

@@ -3,7 +3,7 @@ import type { Asker, PromptScopes } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { readSessionGitPullRequest } from './lib/sessionGitPullRequest.js'
-import { MonitorCompletions, type MonitorActivity } from './lib/harnessMonitor.js'
+import { MonitorCompletions } from './lib/harnessMonitor.js'
 import type { HarnessShareOwner } from './sharing/owner.js'
 import { SHARE_REQUEST_TYPES } from './sharing/protocol.js'
 import { AutonomousDeviceRelay } from './lib/autonomous-device/relay.js'
@@ -26,18 +26,16 @@ import type { AutonomousDeviceService, AutonomousDeviceFrame } from './lib/auton
 
 import { WebSocket } from 'ws'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } from './lib/wsLiveness.js'
-import { readdir } from 'fs/promises'
 import { existsSync } from 'node:fs'
-import { dirname, isAbsolute, join } from 'path'
+import { join } from 'path'
 import { hostname, homedir } from 'os'
 import { env } from './config/env.js'
 import { AuthSessionManager, AuthSessionError } from './lib/authSession.js'
 import { VERSION } from './version.js'
 import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
-import { AgentStopError } from './lib/stopAgentService.js'
-import type { CloseAgentService, CloseMode } from './lib/closeAgentService.js'
+import type { CloseAgentService } from './lib/closeAgentService.js'
 import { isHiddenBuiltin } from './dsh/builtins.js'
-import { ENGINES, PROCESS_ENGINES, isTerminalEngine, type AgentEngine, type ProcessEngine } from './engines/types.js'
+import { ENGINES, type AgentEngine } from './engines/types.js'
 import { listDir } from './lib/fsBrowse.js'
 import { linkCodexProfile, listCodexProfiles } from './lib/codexProfiles.js'
 import { gridCliPresence } from './lib/gridExec.js'
@@ -49,25 +47,20 @@ import { listAllGridModels, onGridModelsChanged, retargetPrewarm } from './lib/g
 import { gridModelsPayload } from './lib/gridModelsPayload.js'
 import { resolveGridTarget } from './lib/gridTarget.js'
 import type { GridAttachResult } from './lib/gridAttach.js'
-import { parseNewAgentModel, resolveNewAgentModel } from './lib/newAgentModel.js'
 import { deriveHarnessGridName } from './lib/gridDerive.js'
-import { AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from './lib/engineLaunch.js'
-import { opencodeMajorVersion } from './engines/opencode/version.js'
+import { supportsFirstPrompt } from './lib/engineLaunch.js'
 import { readAccountUsage, type AccountUsageReading } from './lib/accountUsage.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { readMachineResources } from './lib/machineResources.js'
 import { harnessDevicesRequest, type HarnessDevicesService } from './lib/harnessDevices.js'
 import { createHarnessResourcesReader } from './lib/harnessResources.js'
 import { createHarnessStorageReader } from './lib/harnessTelemetry.js'
-import { AgentCreationReceipts, AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationStatus } from './lib/agentCreationReceipt.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
-import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError } from './lib/projectFolder.js'
-import { claudeTrusts, codexTrusts, preTrustClaudeProject, preTrustCodexProject } from './lib/claudeTrust.js'
 import { projectPreview } from './lib/projectPreview.js'
 import { readGitProject } from './lib/gitProject.js'
-import { agentFrame, lastActivityAt, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
+import { agentFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
-import { installedDsh, listInstalledDsh } from './dsh/installed.js'
+import { listInstalledDsh } from './dsh/installed.js'
 import { OrchestratorService } from './orchestrator/service.js'
 import { OrchestratorError } from './orchestrator/model.js'
 import { orchestratorRequest } from './orchestrator/wire.js'
@@ -80,19 +73,13 @@ import { teamRpc } from './teams/client.js'
 import { Address, Id, OperationId, Receipt, TeamError, type MemberRuntime } from './teams/model.js'
 import { shellQuote } from './orchestrator/prompts.js'
 import type { SessionInputDelivery } from './lib/sessionInput.js'
-import type { QuestionAnswerResult } from './lib/askQuestion.js'
-import { engineLabel } from './lib/agentNames.js'
-import { DSH_ID_RE, dshSupportedEngines } from './dsh/manifest.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
 import { routeVoiceTask } from './lib/voiceRouter.js'
-import { stoppedAgents } from './lib/stoppedAgents.js'
-import { TranscriptPager } from './lib/transcriptPages.js'
 import { MediaPreviewError, readMediaPreviewChunk } from './lib/mediaPreview.js'
 import { ViewerForwarder } from './lib/viewerForwarder.js'
 import { InteractiveViewers } from './lib/interactiveViewer.js'
 import { OwnerCommands, OWNER_COMMAND_TYPES } from './lib/ownerCommands.js'
 import { VIEWER_DOWN_TYPES } from './lib/viewerWire.js'
-import { parseHostTheme, type HostTheme } from './lib/hostTheme.js'
 import { E2eeManager, type LinkedPeer, type PairResult } from './lib/e2ee/manager.js'
 import { MachinePeerStore } from './lib/e2ee/machinePeers.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
@@ -105,11 +92,9 @@ import {
 } from './lib/terminalBinary.js'
 import { b64d, fingerprint, isWrapped } from './lib/e2ee/core.js'
 import { encryptRpcResult, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType } from './lib/e2ee/applicationFrames.js'
-import { tmuxPaneInfo } from './lib/tmux.js'
 import { DEVICE_RECENT_SAFE_FRAME_BYTES, fitRecentReplyPayloadForDevice } from './lib/deviceRecentTrim.js'
 import { shouldReplayCommander } from './lib/commanderReplay.js'
-import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from './lib/runtimeProfileController.js'
-import { sid, preview, logFrame } from './lib/log.js'
+import { sid, logFrame } from './lib/log.js'
 import {
   TerminalP2pResponderPool,
   TERMINAL_P2P_DOWN_TYPES,
@@ -134,20 +119,12 @@ const APP_PRESENCE_UP_MS = 60_000
 // `this.ws` set, every later connect() returning early, and the daemon reporting "cloud
 // reconnecting…" until someone restarted it.
 const HANDSHAKE_TIMEOUT_MS = 15_000
-/** An `agent_update {opened: true}` for an agent opened less than this long ago is answered but not
- *  stamped or broadcast: a person flicking between two tabs, or two apps opening the same agent at
- *  once, would otherwise push a frame to every client for each flick. Exported for the spec. */
-export const AGENT_OPENED_THROTTLE_MS = 3_000
 const BASE_DELAY_MS = 1_000
 const MAX_DELAY_MS = 30_000
 const QUEUE_MAX = 2_000
 /** Requests one local connection may queue before the daemon is ready (see `openRequests`). The app
  *  sends a handful on connect; hundreds is a client looping, not a person. */
 const MAX_REQUESTS_BEFORE_READY = 256
-const DEVICE_AGENT_LIST_LIMIT = 100
-const DEVICE_AGENT_NAME_MAX_CODEPOINTS = 15
-const DEVICE_AGENT_NAME_MAX_BYTES = 39 // device project_t.name[40], including trailing NUL on-device.
-const DEVICE_ELLIPSIS = '…'
 
 export type Frame = Record<string, unknown>
 type OutboundEnvelope = Record<string, unknown>
@@ -210,47 +187,6 @@ interface DownEnvelope {
   t: 'down'
   connId?: string
   frame?: Frame
-}
-
-function byteLen(s: string): number {
-  return Buffer.byteLength(s, 'utf8')
-}
-
-function clipDeviceAgentName(input: string): string {
-  const chars = [...input]
-  if (chars.length <= DEVICE_AGENT_NAME_MAX_CODEPOINTS && byteLen(input) <= DEVICE_AGENT_NAME_MAX_BYTES) return input
-  const ellipsisBytes = byteLen(DEVICE_ELLIPSIS)
-  let out = ''
-  for (const ch of chars.slice(0, DEVICE_AGENT_NAME_MAX_CODEPOINTS)) {
-    if (byteLen(out) + byteLen(ch) + ellipsisBytes > DEVICE_AGENT_NAME_MAX_BYTES) break
-    out += ch
-  }
-  return `${out}${DEVICE_ELLIPSIS}`
-}
-
-export function deviceAgentListItem(
-  raw: unknown,
-): { id: unknown; name?: string; engine?: ProcessEngine; selectedModel?: string | null } {
-  const o = (raw ?? {}) as Record<string, unknown>
-  const item: { id: unknown; name?: string; engine?: ProcessEngine; selectedModel?: string | null } = { id: o.id }
-  if (typeof o.name === 'string') item.name = clipDeviceAgentName(o.name)
-  // The dial only ever meets process engines — a terminal never reaches it (see `deviceAgentRow`),
-  // and the union here says so rather than repeating fourteen string literals.
-  if (typeof o.engine === 'string' && (PROCESS_ENGINES as readonly string[]).includes(o.engine)) item.engine = o.engine as ProcessEngine
-  // Runtime model/effort profile (opaque runtime-v1:...) — lets the device render + change model/effort.
-  if (typeof o.selectedModel === 'string' || o.selectedModel === null) item.selectedModel = o.selectedModel
-  return item
-}
-
-/**
- * Whether an agent row belongs on a device at all. The dial drives agents — a terminal with nobody
- * running in it has no turn to watch, no question to answer and no model to switch, so it is not
- * listed there; the same row becomes listable the moment an engine is started inside it and its
- * `engine` flips (registry `adoptEngine`).
- */
-export function deviceAgentRow(raw: unknown): boolean {
-  const o = (raw ?? {}) as Record<string, unknown>
-  return !isTerminalEngine(typeof o.engine === 'string' ? o.engine : undefined)
 }
 
 export class BackendSocket {
@@ -321,14 +257,26 @@ export class BackendSocket {
   onCommanderJoin: (() => void) | null = null
   /** Called only when commander presence crosses zero; drives the disposable recap-worker grace. */
   onCommanderPresenceChanged: ((connected: boolean) => void) | null = null
-  /** Called when the web cancels a turn (C-c) — cli.ts stops that session's turn heartbeat. */
+  /** Cancels an agent's turn, for the teams and the orchestrator (cli.ts binds core/turns/cancel.ts). */
   onCancel: ((sessionId: string) => void) | null = null
-  /** Called when the web deletes an agent (`agent_delete`) — cli.ts signals only the validated engine
-   *  process and forgets the session. Keeps recap + agent name. */
-  onDeleteAgent: ((sessionId: string) => void | Promise<void>) | null = null
+  /** Takes a `cancel` frame, a turn interrupted with C-c (cli.ts binds core/turns/cancel.ts). */
+  cancelProvider: ((payload: Record<string, unknown>) => void) | null = null
+  /** Answers `agent_delete`, Stop Harness: the validated engine process signalled and the session
+   *  forgotten, its recap and name kept (cli.ts binds core/agents/lifecycle.ts). Null answers UNSUPPORTED. */
+  stopProvider: ((payload: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null
+  /** The purge service: an agent being deleted takes no other lifecycle request meanwhile. */
   purgeAgentService: PurgeAgentService | null = null
+  /** Answers `agent_purge` and `agent_worktree_delete` through its last argument, for the owner alone
+   *  (cli.ts binds core/agents/lifecycle.ts). Null answers UNSUPPORTED. */
+  purgeProvider: ((type: string, payload: Record<string, unknown>, asker: { local: boolean; owner: boolean },
+    reply: (result: Record<string, unknown>) => void) => void) | null = null
   closeAgentService: CloseAgentService | null = null
-  cleanupPreview: (() => Promise<Record<string, unknown>>) | null = null
+  /** Answers `agent_close` through its last argument, once the agent is saved and closed or the close is
+   *  refused (cli.ts binds core/agents/close.ts). Null answers UNSUPPORTED. */
+  closeProvider: ((payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => void) | null = null
+  /** Answers `agents_cleanup_preview` through its argument, once every hidden agent was looked at (cli.ts
+   *  binds core/agents/close.ts). Null answers UNSUPPORTED. */
+  cleanupPreviewProvider: ((reply: (result: Record<string, unknown>) => void) => void) | null = null
   /** Called on `agent_create` — cli.ts spawns a fresh tmux session running the requested engine in the
    *  requested folder and returns its process-agent. Session metadata may bind later through hooks. */
   onCreateAgent: ((input: {
@@ -385,7 +333,6 @@ export class BackendSocket {
       return true
     },
   })
-  private readonly agentCreations = new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations'))
   /** Injectable for queue-isolation tests; production uses the machine-local probe. */
   engineProbeProvider: typeof probeEngines = probeEngines
   /** Entrypoint override for isolated integration fixtures; never a wire option. */
@@ -525,26 +472,22 @@ export class BackendSocket {
    * scrollback survive, and only the process is replaced. A running process's environment cannot be
    * edited, so there is no gentler way to move an agent that is already up.
    *
-   * Separate from `onRestartAgent` because that one puts the agent back exactly as it was; this one
-   * puts it back somewhere else. They share the swap underneath and differ in what they hand it.
+   * Separate from a restart (core/agents/launches.ts) because that one puts the agent back exactly as it
+   * was; this one puts it back somewhere else. They share the swap underneath and differ in what they
+   * hand it.
    */
   onRetargetAgent: ((input: { agentId: string; grid: GridLaunchOverride | null }) =>
     Promise<{ ok: true } | { ok: false; error: string; detail?: string }>) | null = null
-  /** Called on `agent_restart` — cli.ts stops the agent's live engine process and relaunches it in the
-   *  SAME tmux pane, keeping the SAME agentId and (best-effort) resuming the same engine session.
-   *  `resumed` tells the caller whether the relaunch actually resumed the prior conversation or had to
-   *  fall back to a fresh one under the same agent/pane. */
-  onRestartAgent: ((agentId: string) =>
-    Promise<
-      { ok: true; session: RegisteredSession; resumed: boolean }
-      | { ok: false; error: string; detail?: string }
-    >) | null = null
-  /** Resume stopped work directly, or attach if it is already running. Never replaces a live
-   * process and never falls back to a fresh conversation. */
-  onResumeAgent: ((agentId: string, permissionMode?: string) => ReturnType<NonNullable<BackendSocket['onRestartAgent']>>) | null = null
-  /** Called on `agent_fork` — cli.ts opens a NEW agent that starts with `agentId`'s whole history
-   *  (lib/forkAgent.ts) and returns its process-agent, exactly as `agent_create` does. `level` says
-   *  what the new agent actually got: the engine's own fork, or a handoff message. */
+  /** The requests that start an agent's process, answered through their last argument: `agent_create`,
+   *  `agent_create_status`, `agent_resume` and `agent_restart`, and `agent_fork` (cli.ts binds
+   *  core/agents/launches.ts). Null answers UNSUPPORTED_ON_REMOTE, or UNSUPPORTED for a status. */
+  createProvider: ((payload: Record<string, unknown>, asker: { local: boolean; owner: boolean }, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
+  createStatusProvider: ((payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
+  restartProvider: ((type: string, payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
+  forkProvider: ((payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
+  /** Opens a NEW agent that starts with `agentId`'s whole history (lib/forkAgent.ts), exactly as
+   *  `agent_create` does, for the fork requests and the cable. `level` says what the new agent actually
+   *  got: the engine's own fork, or a handoff message. */
   onForkAgent: ((input: { agentId: string; name: string | null; prompt: string | null }) =>
     Promise<
       { ok: true; session: RegisteredSession; level: 'native' | 'handoff' }
@@ -552,12 +495,16 @@ export class BackendSocket {
     >) | null = null
   /** Called when the web/device sends chat input to an agent terminal. */
   onMessage: ((sessionId: string, content: string, deliveryId?: string, tabId?: string) => void) | null = null
-  /** Best-effort terminal-native title sync after a user renames an agent. */
-  onAgentRename: ((session: RegisteredSession, name: string) => void) | null = null
-  /** Called when a device answers an AskUserQuestion (`question_response`) — cli.ts drives the CLI's own
-   *  terminal dialog (option digit / free text), since a remote machine has no
-   *  programmatic answer channel the way the hosted runtime’s brain does. */
-  onQuestionAnswer: ((payload: { requestId?: string; sessionId?: string; agentId?: string; answers?: Record<string, string> }) => Promise<QuestionAnswerResult> | void) | null = null
+  /** Takes a `message` frame: text a person typed for an agent, into its pane (cli.ts binds core/input.ts).
+   *  The teams and the orchestrator deliver through `onMessage` above. */
+  messageProvider: ((payload: Record<string, unknown>) => void) | null = null
+  /** Answers `agent_update` through its last argument, before the windows hear of the change: a rename, a
+   *  model and effort, or an app opening the agent (cli.ts binds core/agents/update.ts). */
+  agentUpdateProvider: ((payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
+  /** Answers `question_response` through its last argument: a person's answer to an agent's question,
+   *  keyed into the CLI's own dialog, since a remote machine has no programmatic answer channel the way
+   *  the hosted runtime’s brain does (cli.ts binds core/questions.ts). Null answers nothing. */
+  questionProvider: ((payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => void) | null = null
   /** Called when this machine was deleted/revoked (a `machine_revoked` down-frame, or a 401/403 on the
    *  upgrade) — CLI clears the saved SSO session and shuts down instead of retrying forever. */
   onRevoked: (() => void) | null = null
@@ -567,25 +514,30 @@ export class BackendSocket {
   /** Called when this machine is already connected from ANOTHER computer (HTTP 409 on the upgrade) — the
    *  SSO session is valid, so CLI keeps it and stops without a retry loop. */
   onBusy: (() => void) | null = null
-  /** Answers the device `project_recent` RPC (cli.ts wires this to CommanderMirror.recent). */
+  /** An agent's last turn summaries, which `voice_route` routes by (cli.ts wires this to the recaps). */
   recentProvider: RecentProvider | null = null
-  /** The person's own last questions for an agent, newest first. See the `agent_recent` case. */
-  recentAsksProvider: ((agentId: string, n: number) => string[]) | null = null
+  /** Answers `agent_recent` with the whole reply: an agent's last turn summaries and the person's last
+   *  questions, for a device's tiles (cli.ts binds core/turns/recaps.ts). Null answers UNSUPPORTED. */
+  agentRecentProvider: ((payload: Record<string, unknown>) => Record<string, unknown>) | null = null
+  /** Answers `agents_list` through its last argument: every agent's frame, and its monitor readings when
+   *  asked for (cli.ts binds core/agents/list.ts). The second argument reads the asker's paired role.
+   *  Null answers UNSUPPORTED. */
+  agentsProvider: ((payload: Record<string, unknown>, sessionRole: () => string | null,
+    reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
   /** Answers `session_get` with the whole reply: a conversation's history, a page at a time (cli.ts binds
    *  core/transcripts/history.ts). Null answers UNSUPPORTED. */
   historyProvider: ((payload: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null
-  /** History pages and line counts for the threads clients read (lib/transcriptPages.ts). `sessions_list`
-   *  counts lines with it here, and cli.ts hands it to the core's history for `session_get`'s pages, so a
-   *  transcript's line index is built once for both. */
-  readonly transcriptPages = new TranscriptPager()
-  /** Writes the structured handoff file for an agent whose engine is about to change (the
-   *  `agent_handoff_prepare` case; cli.ts wires lib/agentHandoff.ts). It resolves with where the file is,
-   *  never with text for the next engine (the desktop words that prompt itself). A `HandoffError`'s `code`
-   *  is the error reply; any other failure replies `INTERNAL`. */
-  handoffProvider: ((req: { agentId: string; changeId: string; targetEngine: string }) =>
-    Promise<{ file: string | null; gitRepo: boolean; cwd: string; degraded: string[] }>) | null = null
-  monitorActivityProvider: ((sessionId: string) => MonitorActivity) | null = null
-  private readonly monitorCompletions = new MonitorCompletions()
+  /** Answers `sessions_list` with the whole reply: the conversation an agent holds and how many lines it
+   *  has (cli.ts binds core/transcripts/history.ts). Null answers UNSUPPORTED. */
+  sessionsProvider: ((payload: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null
+  /** Answers `agent_handoff_prepare` through its last argument, for the owner alone: the structured handoff
+   *  file for an agent whose engine is about to change, written where it says, never text for the next
+   *  engine (cli.ts binds core/agents/handoff.ts over lib/agentHandoff.ts). Null answers UNSUPPORTED. */
+  handoffRequestProvider: ((payload: Record<string, unknown>, asker: { local: boolean; owner: boolean },
+    reply: (result: Record<string, unknown>) => void) => void) | null = null
+  /** How each agent's last turn ended, from the turn frames this socket sends: the monitor's activity
+   *  once a turn is over (`agents_list`, core/agents/list.ts). */
+  readonly monitorCompletions = new MonitorCompletions()
   /** Answers `usage_read` — this machine's own agent-account usage (lib/accountUsage.ts). A field
    *  rather than a direct call so a spec answers it without a real home, Keychain or network. */
   accountUsageReader: () => Promise<AccountUsageReading[]> = readAccountUsage
@@ -595,9 +547,12 @@ export class BackendSocket {
    *  are pushed labels as `unavailable` rather than in the node text. Kept here, by connection: the
    *  models service answers the list, and a request reaches it without its connection. */
   private readonly rowStateWindows = new Set<string>()
-  /** Receives `theme_set` — the desktop's pane colours, to become this machine's tmux
-   *  `window-style` (lib/hostTheme.ts). Wired by cli.ts; null answers with UNSUPPORTED. */
-  hostThemeSink: ((theme: HostTheme) => void) | null = null
+  /** Answers `terminal_info` through its last argument, once tmux has: what a harness's pane runs and
+   *  where (cli.ts binds core/terminals/requests.ts). Null answers UNSUPPORTED. */
+  terminalInfoProvider: ((payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => void) | null = null
+  /** Answers `theme_set` with the whole reply: the desktop's pane colours, to become this machine's tmux
+   *  `window-style` (cli.ts binds core/terminals/requests.ts). Null answers UNSUPPORTED. */
+  themeProvider: ((payload: Record<string, unknown>) => Record<string, unknown>) | null = null
   /** The account's device key log grew (lib/e2ee/deviceLogSyncer.ts): re-read it from this machine's head. */
   onDeviceKeysChanged: (() => void) | null = null
   /** This machine's key was taken out of the account's device key log (`machine_revoked` says so). */
@@ -610,7 +565,6 @@ export class BackendSocket {
   /** Appends to the device key log waiting for the backend's answer, by requestId. */
   private readonly devlogAppends = new Map<string, (payload: Record<string, unknown> | null) => void>()
   runtimeProfileProvider: ((session: RegisteredSession) => string | null) | null = null
-  onRuntimeProfileUpdate: ((sessionId: string, selectedModel: string) => Promise<void>) | null = null
   /** Web↔adapter E2EE: group-encrypts user events, runs the CPace pairing, holds per-conn sessions. */
   readonly e2ee: E2eeManager
   /** Backend-resolved machine id, persisted by the SSO login preflight. */
@@ -1769,6 +1723,7 @@ export class BackendSocket {
 
     const payload = (frame.payload ?? {}) as Record<string, unknown>
     const requestId = payload.requestId
+    const answer = (result: Record<string, unknown>): void => reply(type, requestId, result)
 
     if (TEAM_REQUEST_TYPES.has(type)) {
       // Observers were handled above; only the owner or a paired owner client reaches this route.
@@ -1941,80 +1896,16 @@ export class BackendSocket {
           this.e2ee.revokeAllFromTrustedWeb(connId, requestId)
           return
 
-        case 'agents_list': {
-          const sessions = registry.advertised()
-          const projects = await Promise.all(sessions.map((s) => this.toProject(s)))
-          // Older clients/devices keep their live-only contract. The desktop picker
-          // explicitly asks for stopped work and receives no stale terminal routes.
-          const savedSessions = payload.includeStopped === true && this.e2ee.sessionRole(connId) !== 'device' ? stoppedAgents.available(sessions) : []
-          projects.push(...await Promise.all(savedSessions.map(s => this.toStoppedProject(s))))
-          // Ordered by creation time, oldest → newest — a stable tab order that doesn't reshuffle as
-          // sessions become active (createdAt = the session's registeredAt). The id breaks a tie so the
-          // order is TOTAL: without it two agents registered in the same millisecond fall through to array
-          // position, which is Map insertion order and differs between daemon runs — the web, the app and
-          // the dial would each show a different order for the same registry. `cableHost.listAgents`
-          // sorts by the same rule; the two must stay identical.
-          projects.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id))
-          if (this.e2ee.sessionRole(connId) === 'device') {
-            reply(type, requestId, { agents: projects.filter(deviceAgentRow).slice(0, DEVICE_AGENT_LIST_LIMIT).map(deviceAgentListItem) })
-            return
-          }
-          if (payload.monitor === true) {
-            // Optional telemetry must never hold the ordered terminal-input queue.
-            void (async () => {
-              const [snapshot, storage] = await Promise.all([
-                this.harnessResourcesReader().catch(() => ({ agents: [], sampledAt: null, shared: [] })),
-                this.harnessStorageReader([...sessions, ...savedSessions]).catch(() => new Map()),
-              ])
-              const resources = new Map(snapshot.agents.map(row => [row.agentId, row]))
-              const byId = new Map(sessions.map(s => [s.agentId, s]))
-              reply(type, requestId, { agents: projects.map(agent => {
-                const session = byId.get(agent.id)
-                const activity = session ? this.monitorActivityProvider?.(session.sessionId) : null
-                const reading = resources.get(agent.id)
-                return { ...agent, monitor: {
-                  activity: activity && activity !== 'idle' ? activity : session ? this.monitorCompletions.state(session) : 'idle',
-                  activityKnown: this.monitorActivityProvider !== null,
-                  rssBytes: agent.status === 'stopped' ? 0 : reading?.memoryBytes ?? null,
-                  cpu: agent.status === 'stopped' ? 0 : reading?.cpuPercent ?? null,
-                  pid: reading?.processCount != null ? session?.processIdentity?.pid ?? null : null,
-                  sampledAt: snapshot.sampledAt,
-                  processCount: reading?.processCount ?? null,
-                  gpuMemoryBytes: reading?.gpuMemoryBytes ?? null,
-                  gpuPercent: reading?.gpuPercent ?? null,
-                  diskReadBytesPerSecond: reading?.diskReadBytesPerSecond ?? null,
-                  diskWriteBytesPerSecond: reading?.diskWriteBytesPerSecond ?? null,
-                  processes: reading?.processes ?? [],
-                  ...(storage.get(agent.id) ?? {}),
-                } }
-              }), sharedResources: snapshot.shared ?? [], sampledAt: snapshot.sampledAt })
-            })().catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
-          } else reply(type, requestId, { agents: projects })
+        // The agents on this machine, live and, when asked, stopped (core/agents/list.ts, bound by cli.ts).
+        case 'agents_list':
+          if (this.agentsProvider) await this.agentsProvider(payload, () => this.e2ee.sessionRole(connId), answer)
+          else reply(type, requestId, { error: 'UNSUPPORTED' })
           return
-        }
 
-        case 'sessions_list': {
-          const projectId = payload.agentId as string | undefined
-          if (!projectId) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
-          const s = registry.resolve(projectId)
-          // An agent whose engine has not reported a session yet has no transcript to list. Saying so
-          // plainly beats inventing one: the web then shows the tab with an empty thread until the bind
-          // lands, instead of pinning `currentSessionId` to an id no event will ever carry.
-          if (!s || !s.sessionId) { reply(type, requestId, { sessions: [] }); return }
-          // Counted from an index kept as the file grows (lib/transcriptPages.ts), not by reading it whole.
-          const messageCount = s.transcriptPath ? await this.transcriptPages.lineCount(s.transcriptPath) : 0
-          reply(type, requestId, {
-            sessions: [{
-              id: s.sessionId,
-              title: projectDisplayName(s),
-              timestamp: new Date(s.registeredAt).toISOString(),
-              messageCount,
-              lastActivity: new Date(await lastActivityAt(s)).toISOString(),
-              participants: [],
-            }],
-          })
+        // The conversation an agent holds, and how long it is (core/transcripts/history.ts, bound by cli.ts).
+        case 'sessions_list':
+          reply(type, requestId, this.sessionsProvider ? await this.sessionsProvider(payload) : { error: 'UNSUPPORTED' })
           return
-        }
 
         // A conversation's history, a page at a time (core/transcripts/history.ts, bound by cli.ts).
         case 'session_get':
@@ -2075,57 +1966,16 @@ export class BackendSocket {
           return
         }
 
-        case 'agent_recent': {
-          // Device tile restore at boot: the session's persisted LLM turn-summary (recap + body),
-          // mirroring the hosted runtime’s SessionService.getRecentEvents. Empty until a turn was summarized
-          // (device-gated) — never a resurrected full-text card.
-          const projectId = payload.agentId as string | undefined
-          if (!projectId) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
-          const n = Math.max(1, Math.min(5, Number(payload.n) || 2))
-          const events = this.recentProvider ? this.recentProvider(projectId, n) : []
-          // ASKS TRAVEL AS THEIR OWN LIST, beside the events rather than inside them. A question exists
-          // the moment it is asked; a recap exists once the turn has been answered and summarised. They
-          // are different lengths on any machine where a turn ended without one, so a reply that folds
-          // the questions into the event rows loses exactly the newest ones — and a REMOTE agent then
-          // reaches the router with nothing but its name.
-          const asks = this.recentAsksProvider ? this.recentAsksProvider(projectId, n) : []
-          reply(type, requestId, { agentId: projectId, events, asks })
+        // An agent's last turn summaries and questions, for a device's tiles (core/turns/recaps.ts, bound by cli.ts).
+        case 'agent_recent':
+          reply(type, requestId, this.agentRecentProvider ? this.agentRecentProvider(payload) : { error: 'UNSUPPORTED' })
           return
-        }
 
-        case 'agent_handoff_prepare': {
-          // "Change agent": before the engine is swapped, write what the old one did into the project
-          // (`.harness/handoff/`) so the new one can read it. It writes into the user's folder and runs
-          // git there, so only the owner may ask: the loopback window, or a sealed `web` session. A
-          // `device` (the dial) and a shared viewer never do.
-          if (!local && this.e2ee.sessionRole(connId) !== 'web') { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
-          const agentId = payload.agentId
-          if (typeof agentId !== 'string' || agentId.length === 0 || agentId.length > 200) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
-          const changeId = payload.changeId
-          if (typeof changeId !== 'string' || !/^[0-9a-f]{32}$/.test(changeId)) { reply(type, requestId, { error: 'BAD_CHANGE_ID' }); return }
-          const targetEngine = payload.targetEngine
-          if (typeof targetEngine !== 'string' || !(ENGINES as readonly string[]).includes(targetEngine)) { reply(type, requestId, { error: 'BAD_ENGINE' }); return }
-          const provider = this.handoffProvider
-          if (!provider) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
-          // DETACHED from this connection's ordered RPC chain, like `engines_probe`: it reads a whole
-          // session and runs git, and a window's next request must not queue behind it. The reply names
-          // fixed fields only; whatever else the provider returned stays here.
-          // Called inside the executor so a provider that throws before returning its promise lands in
-          // the same catch (and the same message-free log) as one that rejects.
-          void new Promise<Awaited<ReturnType<typeof provider>>>((resolve) => resolve(provider({ agentId, changeId, targetEngine })))
-            .then((r) => reply(type, requestId, { agentId, file: r.file, gitRepo: r.gitRepo, cwd: r.cwd, degraded: r.degraded }))
-            .catch((e: unknown) => {
-              // Only a HandoffError's code goes on the wire, and only code-shaped: the reply never carries
-              // a message or anything else the provider put in it.
-              const code = typeof e === 'object' && e !== null ? (e as { code?: unknown }).code : undefined
-              const known = (e as { name?: unknown } | null)?.name === 'HandoffError' && typeof code === 'string' && /^[A-Z][A-Z_]{0,39}$/.test(code)
-              // Name and errno code only: a message can quote the project path or, from a parser, a
-              // slice of the transcript it choked on.
-              if (!known) console.error(`[handoff] prepare failed: ${e instanceof Error ? e.name : typeof e}${typeof code === 'string' && /^[A-Z0-9_]{1,40}$/.test(code) ? ` ${code}` : ''}`)
-              reply(type, requestId, { error: known ? code : 'INTERNAL' })
-            })
+        // "Change agent": what the old engine did, written for the new one (core/agents/handoff.ts, bound by cli.ts).
+        case 'agent_handoff_prepare':
+          if (this.handoffRequestProvider) this.handoffRequestProvider(payload, asker, answer)
+          else answer({ error: 'UNSUPPORTED' })
           return
-        }
 
         case 'voice_route': {
           // Voice router (REMOTE machine): pick the best-fit agent for a transcribed Overview voice task,
@@ -2155,313 +2005,23 @@ export class BackendSocket {
           return
         }
 
-        case 'agent_update': {
-          const projectId = payload.agentId as string | undefined
-          if (!projectId) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
-          const hasName = Object.prototype.hasOwnProperty.call(payload, 'name')
-          const hasProfile = Object.prototype.hasOwnProperty.call(payload, 'selectedModel')
-          // An app OPENED this agent — see RegisteredSession.lastOpenedAt. Only a literal `true`: a
-          // client that means "opened" says so, and anything else is not an update at all. A client
-          // reaching this handler is already one that may change the agent — a shared harness's
-          // observer never gets here (sharing/owner.ts answers everything but terminal frames with
-          // VIEW_ONLY) — so an open is taken from the local window, a paired web/phone session and a
-          // remote desktop relayed through its own daemon alike.
-          const hasOpened = payload.opened === true
-          // An older client, and a request carrying none of the three, still get MISSING_UPDATE — which
-          // is also what a client learns from a daemon that predates `opened`.
-          if (!hasName && !hasProfile && !hasOpened) { reply(type, requestId, { error: 'MISSING_UPDATE' }); return }
-          const name = typeof payload.name === 'string' ? payload.name.trim() : ''
-          if (hasName && !name) { reply(type, requestId, { error: 'MISSING_NAME' }); return }
-          let s = registry.resolve(projectId)
-          if (!s) { reply(type, requestId, { error: 'AGENT_NOT_FOUND' }); return }
-          if (hasProfile) {
-            if (typeof payload.selectedModel !== 'string' || !this.onRuntimeProfileUpdate) {
-              reply(type, requestId, { error: 'INVALID_RUNTIME_PROFILE' })
-              return
-            }
-            try {
-              await this.onRuntimeProfileUpdate(projectId, payload.selectedModel)
-            } catch (error) {
-              const code: RuntimeProfileErrorCode | 'INTERNAL' = error instanceof RuntimeProfileControlError ? error.code : 'INTERNAL'
-              reply(type, requestId, { error: code })
-              return
-            }
-          }
-          if (hasName) {
-            s = registry.rename(projectId, name) ?? s
-            this.onAgentRename?.(s, name)
-          }
-          // Throttled on the stamp the row already carries, so a repeat inside the window is answered
-          // with the current frame but moves nothing and tells no one. A stamp from the future (the
-          // clock was set back) never throttles: the next open corrects it.
-          let opened = false
-          if (hasOpened) {
-            this.closeAgentService?.cancel(s.agentId)
-            const since = Date.now() - (s.lastOpenedAt ?? 0)
-            if (!s.lastOpenedAt || since < 0 || since >= AGENT_OPENED_THROTTLE_MS) {
-              s = registry.markOpened(s.agentId) ?? s
-              opened = true
-            }
-          }
-          const agent = await this.toProject(s)
-          reply(type, requestId, { agent })
-          // Every app sorts by the same stamp, so every app hears it: the web audience — the phone,
-          // other desktops, and this computer's own windows — through `send`. Not the device: the dial
-          // lists agents in creation order and has nothing to reorder. Not for an agent whose terminal
-          // this daemon cannot see either, the rule `syncSession` (cli.ts) keeps: that row is not in
-          // `agents_list`, and a push would put it back on every screen.
-          if (opened && registry.terminalAvailable(s.agentId)) {
-            this.send({ type: 'agent_synced', payload: { agent } })
-          }
-          if (hasName) {
-            const renamed = { type: 'agent_renamed', payload: { agentId: s.agentId, name, engine: s.engine } }
-            this.send(renamed)          // every OTHER web client on this machine (group-encrypted)
-            this.sendCommander(renamed) // and the device
-            // The whole rename path was silent end to end, which is why "web1 renamed it, web2 never saw
-            // it" had no evidence to work from: nothing said whether the request even arrived. One line
-            // here splits the question in two — no line means it never reached the adapter, a line means
-            // the fan-out is downstream.
-            console.log(`[rename] ${sid(projectId)} → "${preview(name, 40)}" · broadcast to web + device`)
-          }
+        // A rename, a model and effort, or an app opening the agent (core/agents/update.ts, bound by cli.ts).
+        case 'agent_update':
+          if (this.agentUpdateProvider) await this.agentUpdateProvider(payload, answer)
+          else answer({ error: 'UNSUPPORTED' })
           return
-        }
 
-        case 'agent_create_status': {
-          const creationId = payload.creationId
-          if (!validCreationId(creationId)) { reply(type, requestId, { error: 'INVALID_CREATION_ID' }); return }
-          try {
-            reply(type, requestId, { creationId, ...await this.creationStatusPayload(this.agentCreations.status(creationId)) })
-          } catch (error) {
-            reply(type, requestId, { error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
-          }
+        // What became of a launch a creationId names (core/agents/launches.ts, bound by cli.ts).
+        case 'agent_create_status':
+          if (this.createStatusProvider) await this.createStatusProvider(payload, answer)
+          else answer({ error: 'UNSUPPORTED' })
           return
-        }
 
-        case 'agent_create': {
-          const engine = payload.engine as AgentEngine | undefined
-          const cwd = payload.cwd
-          if (typeof engine !== 'string' || !ENGINES.includes(engine)) { reply(type, requestId, { error: 'INVALID_ENGINE' }); return }
-          let projectFolder
-          try { projectFolder = parseProjectFolder(payload) }
-          catch (error) {
-            reply(type, requestId, error instanceof ProjectFolderError
-              ? { error: error.code, detail: error.message }
-              : { error: 'INVALID_PROJECT_SOURCE' }); return
-          }
-          // A terminal opens where a terminal app would — the home directory — when the client names
-          // no folder; every other engine works IN a folder and must be told which.
-          const terminal = isTerminalEngine(engine)
-          if (terminal && projectFolder) { reply(type, requestId, { error: 'INVALID_PROJECT_SOURCE', detail: 'a terminal opens in a folder, it does not prepare one' }); return }
-          if (!projectFolder && !(terminal && cwd === undefined) && (typeof cwd !== 'string' || !isAbsolute(cwd))) { reply(type, requestId, { error: 'INVALID_CWD' }); return }
-          if (!this.onCreateAgent) { reply(type, requestId, { error: 'UNSUPPORTED_ON_REMOTE' }); return }
-          const creationId = payload.creationId
-          if (creationId !== undefined && !validCreationId(creationId)) {
-            reply(type, requestId, { error: 'INVALID_CREATION_ID' }); return
-          }
-          if (projectFolder && (!validCreationId(creationId) || cwd !== undefined)) {
-            reply(type, requestId, { error: 'INVALID_PROJECT_SOURCE' }); return
-          }
-          // Absent is the ordinary case and stays indistinguishable from a client that predates grids;
-          // present-but-malformed is refused here rather than half-applied at launch, because an agent
-          // that quietly ran on the engine's own login would look like it worked.
-          const model = parseNewAgentModel(engine, payload)
-          if (model.state === 'invalid') { reply(type, requestId, { error: 'INVALID_GRID', detail: model.detail }); return }
-          const grid = parseGridLaunchOverride(payload.grid)
-          if (grid.state === 'invalid') { reply(type, requestId, { error: 'INVALID_GRID', detail: grid.reason }); return }
-          if (terminal && grid.state === 'ok') { reply(type, requestId, { error: 'INVALID_GRID', detail: 'a terminal has no engine to point at a grid' }); return }
-          // Same validation the desktop app already applies client-side (`Agent._safeCodexHome`) —
-          // repeated here because a client's own check is not a guarantee about what actually
-          // arrives on the wire.
-          const rawCodexHome = typeof payload.codexHome === 'string' ? payload.codexHome : null
-          const codexHome = rawCodexHome && rawCodexHome.startsWith('/') && rawCodexHome.length <= 4096
-            && !/[\x00-\x1f\x7f]/.test(rawCodexHome)
-            ? rawCodexHome
-            : null
-          if (codexHome && (engine !== 'codex' || grid.state === 'ok')) {
-            reply(type, requestId, { error: 'INVALID_CODEX_HOME', detail: 'codexHome is only valid for codex, without a grid' })
-            return
-          }
-          // A DSH is refused, never approximated: an agent created as its plain base engine would look
-          // like it worked and have none of the skills the user picked the tile for.
-          let dsh: string | null = null
-          if (payload.dsh !== undefined && payload.dsh !== null) {
-            if (typeof payload.dsh !== 'string' || !DSH_ID_RE.test(payload.dsh)) {
-              reply(type, requestId, { error: 'INVALID_DSH', detail: 'dsh must be an owner/name id' }); return
-            }
-            const installed = installedDsh(payload.dsh)
-            if (!installed) {
-              reply(type, requestId, { error: 'INVALID_DSH', detail: `${payload.dsh} is not installed on this machine` }); return
-            }
-            if (installed.manifest.kind === 'viewer') {
-              reply(type, requestId, { error: 'INVALID_DSH', detail: `${payload.dsh} is a viewer package, not an agent` }); return
-            }
-            if (!dshSupportedEngines(installed.manifest).includes(engine)) {
-              reply(type, requestId, { error: 'INVALID_DSH', detail: `${payload.dsh} supports ${dshSupportedEngines(installed.manifest).join(', ')}; ${engine} is not compatible` }); return
-            }
-            dsh = installed.id
-          }
-          // A first prompt is refused BEFORE any pane exists: an engine with no way to take one would
-          // otherwise open on an empty input and look like the person's request had been heard. The
-          // length bound is a first message's, not a document's. The text itself is never logged.
-          let prompt: string | null = null
-          if (payload.prompt !== undefined && payload.prompt !== null) {
-            if (typeof payload.prompt !== 'string') { reply(type, requestId, { error: 'INVALID_PROMPT', detail: 'prompt must be a string' }); return }
-            const trimmed = payload.prompt.trim()
-            if (trimmed.length > MAX_FIRST_PROMPT_CHARS) {
-              reply(type, requestId, { error: 'PROMPT_TOO_LONG', detail: `prompt is longer than ${MAX_FIRST_PROMPT_CHARS} characters` }); return
-            }
-            if (trimmed && !supportsFirstPrompt(engine)) {
-              reply(type, requestId, { error: 'PROMPT_UNSUPPORTED', detail: new FirstPromptUnsupportedError(engine).message }); return
-            }
-            prompt = trimmed || null
-          }
-          // Blank is "number it", the same as absent — a client that sends an empty field is not
-          // asking for an agent with no name.
-          const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : null
-          // The engine's named agent is refused BEFORE any pane exists, like the prompt: an engine with
-          // no way to open as one would otherwise come up as a general session under that agent's
-          // name. The shape is an identifier the engine looks a file up by — never a path.
-          let agent: string | null = null
-          if (payload.agent !== undefined && payload.agent !== null) {
-            if (typeof payload.agent !== 'string' || !AGENT_NAME_RE.test(payload.agent)) {
-              reply(type, requestId, { error: 'INVALID_AGENT', detail: 'agent must be 1-64 letters, digits, `-` or `_`' }); return
-            }
-            // OpenCode v2 counts as no way: its TUI exits 1 on `--agent` (engineLaunch.ts).
-            if (!supportsNamedAgent(engine, engine === 'opencode' ? opencodeMajorVersion() : null)) {
-              reply(type, requestId, { error: 'AGENT_UNSUPPORTED', detail: new NamedAgentUnsupportedError(engine).message }); return
-            }
-            agent = payload.agent
-          }
-          // A permission mode picked in New Harness. A client that predates the choice sends only
-          // `bypassPermission`; one that sends a mode this engine does not have is refused rather than
-          // quietly launched in some other mode.
-          let permissionMode: string | null = null
-          if (payload.permissionMode !== undefined && payload.permissionMode !== null) {
-            if (typeof payload.permissionMode !== 'string' || !permissionModeFlags(engine, payload.permissionMode)) {
-              reply(type, requestId, { error: 'INVALID_PERMISSION_MODE', detail: `${engine} has no permission mode ${JSON.stringify(payload.permissionMode)}` }); return
-            }
-            permissionMode = payload.permissionMode
-          }
-          // Opening a conversation Harness did not start: the engine resumes it, as it was. Nothing a new
-          // conversation is created with applies to it.
-          let resumeSessionId: string | null = null
-          if (payload.resumeSessionId !== undefined && payload.resumeSessionId !== null) {
-            // Engines' ids: uuids, `ses_…` (OpenCode, Kilo), `20260927_101500_ab12cd` (Hermes), slugs
-            // (Devin), Pi's custom ids with dots. One word, never a path.
-            if (typeof payload.resumeSessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$/.test(payload.resumeSessionId)) {
-              reply(type, requestId, { error: 'INVALID_SESSION', detail: 'resumeSessionId must be a session id' }); return
-            }
-            if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || dsh || prompt || agent) {
-              reply(type, requestId, { error: 'INVALID_SESSION', detail: 'a resumed conversation takes no new folder, grid, harness, prompt or agent' }); return
-            }
-            resumeSessionId = payload.resumeSessionId
-          }
-          let takeOver: 'idle' | 'now' | 'wait' | null = null
-          if (payload.takeOver !== undefined && payload.takeOver !== null) {
-            if (!resumeSessionId || (payload.takeOver !== 'idle' && payload.takeOver !== 'now' && payload.takeOver !== 'wait')) {
-              reply(type, requestId, { error: 'INVALID_SESSION', detail: 'takeOver is idle, now or wait, with a resumeSessionId' }); return
-            }
-            takeOver = payload.takeOver
-          }
-          const input = {
-            engine,
-            cwd: typeof cwd === 'string' ? cwd : terminal ? homedir() : '',
-            // On unless a client says otherwise: a harness works without stopping to ask for each command.
-            bypassPermission: permissionMode ? permissionModeApproves(permissionMode) : payload.bypassPermission !== false,
-            permissionMode,
-            grid: grid.state === 'ok' ? grid.override : null,
-            codexHome,
-            dsh,
-            prompt,
-            name,
-            agent,
-            resumeSessionId,
-            takeOver,
-          }
-          const fingerprintInput = model.state === 'ok' ? { ...input, modelSelection: model.selection } : input
-          if (creationId !== undefined) {
-            // Reserve before spawning. A transport retry carries the SAME creationId; a deliberate
-            // New agent action carries a new one. Detach so a status check can pass a slow create
-            // on this connection, just as engines_probe is detached above.
-            const create = this.onCreateAgent
-            try {
-              void this.agentCreations.run(creationId, creationFingerprint(projectFolder ? { ...fingerprintInput, projectFolder } : fingerprintInput), async () => {
-                if (model.state === 'ok') {
-                  const target = await resolveNewAgentModel(model.selection).catch(() => null)
-                  if (!target) return { state: 'failed', error: 'GRID_UNAVAILABLE', detail: 'The selected model is unavailable. Choose another model or refresh the list.' }
-                  input.grid = target
-                }
-                let preparedFolder: string | undefined
-                if (projectFolder) {
-                  try { preparedFolder = await prepareProjectFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine) }) }
-                  catch (error) {
-                    return { state: 'failed', error: error instanceof ProjectFolderError ? error.code : 'PROJECT_PREPARATION_FAILED',
-                      detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.' }
-                  }
-                  // Only a folder this daemon just made EMPTY is one the engine need not ask about. A clone or
-                  // the person's own repo is theirs to answer for (lib/claudeTrust.ts); a worktree gets only
-                  // the answer its source repo already has. `branch` IS the source folder: nothing to record.
-                  try {
-                    const engineTrust = input.engine === 'claude' ? { trusts: claudeTrusts, record: preTrustClaudeProject }
-                      : input.engine === 'codex' ? { trusts: codexTrusts, record: preTrustCodexProject } : null
-                    if (engineTrust && (projectFolder.source === 'new'
-                      || (projectFolder.source === 'worktree' && engineTrust.trusts(projectFolder.gitSource)))) {
-                      engineTrust.record(preparedFolder)
-                    }
-                  } catch (error) { console.warn(`[agent] pre-trust ${preparedFolder} · ${error instanceof Error ? error.message : error}`) }
-                } else if (!dsh && local && dirname(input.cwd) === projectsRoot()) {
-                  // On the LOCAL machine the desktop makes a new workspace ITSELF and sends the path as a plain
-                  // cwd, so `projectFolder` above never sees it. Such a folder is empty and is trusted the way a
-                  // `new` project is — but only on evidence, and only where those workspaces live:
-                  //
-                  //   · directly inside the projects root, which is the one folder the app and this daemon
-                  //     create workspaces in. Trust INHERITS downward (claudeTrusts), so recording it for a
-                  //     folder the person merely browsed to — an empty `~/code`, or a home with nothing in it —
-                  //     would silently cover every repo cloned under it later: OH-14 again by another door.
-                  //   · empty as read from disk, never on the client's word. A clone, a worktree or the
-                  //     person's own repo has content, so it stays the engine's question (lib/claudeTrust.ts).
-                  //   · from a LOCAL frame. agent_create is not backend-only, so a relayed peer would otherwise
-                  //     name an empty path on this host and have it trusted.
-                  //
-                  // DSH trust is decided in cli.ts, where the template count is known; leave that to it.
-                  try {
-                    const empty = await readdir(input.cwd).then((names) => names.length === 0, () => false)
-                    if (empty) {
-                      if (input.engine === 'claude') preTrustClaudeProject(input.cwd)
-                      if (input.engine === 'codex') preTrustCodexProject(input.cwd)
-                    }
-                  } catch (error) { console.warn(`[agent] pre-trust ${input.cwd} · ${error instanceof Error ? error.message : error}`) }
-                }
-                const result = await create(preparedFolder ? { ...input, cwd: preparedFolder } : input)
-                if (result.ok) return { state: 'created', agentId: result.session.agentId }
-                // tmux may have executed before a timeout; registration cleanup is best-effort.
-                // Neither can prove that no process started, so never encourage another launch.
-                if (result.error === 'SPAWN_FAILED' || result.error === 'REGISTRATION_FAILED') return { state: 'unconfirmed' }
-                return { state: 'failed', error: result.error, ...(preparedFolder ? { preparedFolder } : {}), ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
-              }).then(async (status) => {
-                reply(type, requestId, { creationId, ...await this.creationStatusPayload(status) })
-              }).catch(() => reply(type, requestId, { error: 'INTERNAL' }))
-            } catch (error) {
-              reply(type, requestId, { error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
-            }
-            return
-          }
-          // Clients predating receipts retain their existing response shape.
-          if (model.state === 'ok') {
-            const target = await resolveNewAgentModel(model.selection).catch(() => null)
-            if (!target) { reply(type, requestId, { error: 'GRID_UNAVAILABLE', detail: 'The selected model is unavailable. Choose another model or refresh the list.' }); return }
-            input.grid = target
-          }
-          const result = await this.onCreateAgent(input)
-          // `detail` carries the underlying cause (tmux's own message) so the person who clicked
-          // Create can read it, rather than having to open a log on the machine that failed.
-          if (!result.ok) {
-            reply(type, requestId, result.detail ? { error: result.error, detail: result.detail } : { error: result.error })
-            return
-          }
-          reply(type, requestId, { agent: await this.toProject(result.session) })
+        // A new agent (core/agents/launches.ts, bound by cli.ts).
+        case 'agent_create':
+          if (this.createProvider) await this.createProvider(payload, asker, answer)
+          else answer({ error: 'UNSUPPORTED_ON_REMOTE' })
           return
-        }
 
         // Move a RUNNING agent onto a grid. The pane survives; its process is re-exec'd with the
         // engine's grid environment and, when one is bound, `--resume <session>` so the conversation
@@ -2546,174 +2106,45 @@ export class BackendSocket {
           return
         }
 
-        // Delete an agent: signal its validated engine process and drop it from the list. Idempotent — an already
-        // gone target still acks + re-emits agent_deleted so the web/device converge. E2EE-gated (the
-        // frame arrived decrypted). Keeps the persisted recap + agent name for a later resume.
-        case 'agents_cleanup_preview': {
-          if (!this.cleanupPreview) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
-          void this.cleanupPreview().then(result => reply(type, requestId, result), error => reply(type, requestId, {
-            error: error?.code ?? 'TABS_UNAVAILABLE', detail: error instanceof Error ? error.message : 'Could not check open tabs.',
-          }))
+        // The agents no window shows, for a person to review before closing them (core/agents/close.ts).
+        case 'agents_cleanup_preview':
+          if (this.cleanupPreviewProvider) this.cleanupPreviewProvider(answer)
+          else answer({ error: 'UNSUPPORTED' })
           return
-        }
-        case 'agent_close': {
-          if (!this.closeAgentService) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
-          const { agentId, sessionId, createdAt, mode } = payload
-          if (typeof agentId !== 'string' || typeof sessionId !== 'string' || typeof createdAt !== 'string'
-            || typeof mode !== 'string' || !['inspect', 'idle', 'now', 'after_task', 'cancel'].includes(mode)) {
-            reply(type, requestId, { error: 'INVALID_CLOSE_REQUEST' }); return
-          }
-          // Saving/exit may take seconds; terminal input and unrelated agents keep flowing.
-          void this.closeAgentService.request({ agentId, sessionId, createdAt, mode: mode as CloseMode,
-            ...(payload.onlyIfHidden === true ? { onlyIfHidden: true } : {}) })
-            .then(result => reply(type, requestId, result), () => reply(type, requestId, { error: 'CLOSE_FAILED' }))
+        // A close now, once idle or after the task (core/agents/close.ts, bound by cli.ts).
+        case 'agent_close':
+          if (this.closeProvider) this.closeProvider(payload, answer)
+          else answer({ error: 'UNSUPPORTED' })
           return
-        }
+        // Permanent deletion, reviewed first (core/agents/lifecycle.ts, bound by cli.ts).
         case 'agent_worktree_delete':
-        case 'agent_purge': {
-          if (!local && this.e2ee.sessionRole(connId) !== 'web') { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
-          if (!this.purgeAgentService) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
-          const { agentId, sessionId, createdAt, mode, reviewId, path, discardChanges, choices, includeWorktree } = payload
-          const selected = choices && typeof choices === 'object' ? choices as Record<string, unknown> : null
-          if (typeof agentId !== 'string' || !(sessionId === null || typeof sessionId === 'string')
-            || typeof createdAt !== 'number' || !Number.isFinite(createdAt)
-            || (mode !== 'inspect' && mode !== 'delete' && !(type === 'agent_worktree_delete' && mode === 'describe'))
-            || (mode === 'delete' && typeof reviewId !== 'string')
-            || (choices !== undefined && (!selected
-              || typeof selected.sessionData !== 'boolean' || typeof selected.worktreeData !== 'boolean'))) {
-            reply(type, requestId, { error: 'INVALID_DELETE_REQUEST' }); return
-          }
-          const deletion = { agentId, sessionId, createdAt, mode: mode as 'inspect' | 'delete',
-            ...(typeof reviewId === 'string' ? { reviewId } : {}),
-            ...(typeof path === 'string' ? { path } : {}), discardChanges: discardChanges === true,
-            includeWorktree: includeWorktree === true,
-            ...(selected ? { choices: { sessionData: selected.sessionData as boolean, worktreeData: selected.worktreeData as boolean } } : {}) }
-          const operation = type === 'agent_worktree_delete'
-            ? this.purgeAgentService.worktreeRequest({ ...deletion, mode: mode as 'describe' | 'inspect' | 'delete' })
-            : this.purgeAgentService.request(deletion)
-          void operation
-            .then(result => {
-              if (result.deleted === true || result.worktreeDeleted === true) void this.harnessStorageReader([], true)
-              reply(type, requestId, result)
-            }, () => reply(type, requestId, { error: 'DELETE_FAILED' }))
+        case 'agent_purge':
+          if (this.purgeProvider) this.purgeProvider(type, payload, asker, answer)
+          else answer({ error: 'UNSUPPORTED' })
           return
-        }
-        case 'agent_delete': {
-          const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
-          if (!target) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
-          if (!this.onDeleteAgent) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
-          if (Object.hasOwn(payload, 'expectedSessionId')) {
-            const current = registry.byAgent(target)
-            if (!current || (current.sessionId || null) !== payload.expectedSessionId) {
-              reply(type, requestId, { error: 'SESSION_CHANGED', detail: 'This conversation changed. Refresh and review it before stopping.' })
-              return
-            }
-          }
-          try { await this.onDeleteAgent(target) }
-          catch (error) {
-            if (!(error instanceof AgentStopError)) throw error
-            reply(type, requestId, { error: error.code, detail: error.message })
-            return
-          }
-          reply(type, requestId, { deleted: true })
+        // Stop Harness (core/agents/lifecycle.ts, bound by cli.ts).
+        case 'agent_delete':
+          answer(this.stopProvider ? await this.stopProvider(payload) : { error: 'UNSUPPORTED' })
           return
-        }
 
-        // Resume attaches or restores a saved conversation; restart replaces a live process in its
-        // existing pane. Both keep the agentId and use the same durable operation receipt protocol.
+        // A saved conversation resumed, or a live process relaunched in its pane (core/agents/launches.ts).
         case 'agent_resume':
-        case 'agent_restart': {
-          const target = payload.agentId as string | undefined
-          if (!target) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
-          const operation = type === 'agent_resume' ? 'resume' : 'restart'
-          const restart = operation === 'resume' ? this.onResumeAgent : this.onRestartAgent
-          if (!restart) { reply(type, requestId, { error: 'UNSUPPORTED_ON_REMOTE' }); return }
-          const permissionMode = payload.permissionMode
-          if (permissionMode !== undefined && (operation !== 'resume' || typeof permissionMode !== 'string'
-            || !['ask', 'auto', 'plan', 'full'].includes(permissionMode))) {
-            reply(type, requestId, { error: 'INVALID_PERMISSION_MODE' }); return
-          }
-          const invoke = () => permissionMode === undefined ? restart(target) : this.onResumeAgent!(target, permissionMode)
-          const creationId = payload.creationId
-          if (creationId !== undefined) {
-            if (!validCreationId(creationId)) { reply(type, requestId, { error: 'INVALID_CREATION_ID' }); return }
-            try {
-              void this.agentCreations.run(creationId, creationFingerprint({ operation, agentId: target,
-                ...(permissionMode === undefined ? {} : { permissionMode }) }), async () => {
-                const result = await invoke()
-                if (result.ok) return { state: 'created', agentId: result.session.agentId, resumed: result.resumed }
-                // RESTART_FAILED can follow an unobserved relaunch. Never silently
-                // replace that process again when a caller checks this intent.
-                if (result.error === 'RESTART_FAILED' || result.error === 'RESUME_UNCONFIRMED') return { state: 'unconfirmed' }
-                return { state: 'failed', error: result.error, ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
-              }).then(async (status) => {
-                reply(type, requestId, { creationId, ...await this.creationStatusPayload(status) })
-              }).catch(() => reply(type, requestId, { error: 'INTERNAL' }))
-            } catch (error) {
-              reply(type, requestId, { error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
-            }
-            return
-          }
-          const result = await invoke()
-          if (!result.ok) {
-            reply(type, requestId, result.detail ? { error: result.error, detail: result.detail } : { error: result.error })
-            return
-          }
-          reply(type, requestId, { agent: await this.toProject(result.session), resumed: result.resumed })
+        case 'agent_restart':
+          if (this.restartProvider) await this.restartProvider(type, payload, answer)
+          else answer({ error: 'UNSUPPORTED_ON_REMOTE' })
           return
-        }
 
-        // Fork an agent: a second one with the first one's history — see lib/forkAgent.ts. The reply
-        // is agent_create's shape plus `level`, so a client opens the pane the same way.
-        case 'agent_fork': {
-          const target = payload.agentId as string | undefined
-          if (!target) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
-          if (!this.onForkAgent) { reply(type, requestId, { error: 'UNSUPPORTED_ON_REMOTE' }); return }
-          const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim().slice(0, 120) : null
-          const rawPrompt = payload.prompt
-          if (rawPrompt !== undefined && rawPrompt !== null && typeof rawPrompt !== 'string') { reply(type, requestId, { error: 'INVALID_PROMPT' }); return }
-          const prompt = typeof rawPrompt === 'string' && rawPrompt.trim() ? rawPrompt : null
-          if (prompt && prompt.length > MAX_FIRST_PROMPT_CHARS) { reply(type, requestId, { error: 'PROMPT_TOO_LONG' }); return }
-          const creationId = payload.creationId
-          if (creationId !== undefined) {
-            if (!validCreationId(creationId)) { reply(type, requestId, { error: 'INVALID_CREATION_ID' }); return }
-            // Forking starts a new process too. Reserve the same durable intent used
-            // by agent_create so a lost receipt can be checked without another fork.
-            const fork = this.onForkAgent
-            try {
-              void this.agentCreations.run(creationId, creationFingerprint({ operation: 'fork', agentId: target, name, prompt }), async () => {
-                const result = await fork({ agentId: target, name, prompt })
-                if (result.ok) return { state: 'created', agentId: result.session.agentId, level: result.level }
-                if (result.error === 'SPAWN_FAILED' || result.error === 'REGISTRATION_FAILED') return { state: 'unconfirmed' }
-                return { state: 'failed', error: result.error, ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
-              }).then(async (status) => {
-                reply(type, requestId, { creationId, ...await this.creationStatusPayload(status) })
-              }).catch(() => reply(type, requestId, { error: 'INTERNAL' }))
-            } catch (error) {
-              reply(type, requestId, { error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
-            }
-            return
-          }
-          const result = await this.onForkAgent({ agentId: target, name, prompt })
-          if (!result.ok) {
-            reply(type, requestId, result.detail ? { error: result.error, detail: result.detail } : { error: result.error })
-            return
-          }
-          reply(type, requestId, { agent: await this.toProject(result.session), level: result.level })
+        // A second agent with the first one's history (core/agents/launches.ts, bound by cli.ts).
+        case 'agent_fork':
+          if (this.forkProvider) await this.forkProvider(payload, answer)
+          else answer({ error: 'UNSUPPORTED_ON_REMOTE' })
           return
-        }
 
-        case 'terminal_info': {
-          // What a harness's pane runs now and where — tmux's #{pane_current_command} and
-          // #{pane_current_path}, for a terminal client's formats. Read-only. Not in the e2ee
-          // sets (core.ts is hash-pinned with the other implementations), so it answers the local
-          // client; over the relay a peer is not asked, and the client keeps its fallback.
-          const id = payload.agentId
-          const agent = typeof id === 'string' ? registry.resolve(id) : undefined
-          if (!agent?.tmuxPane) { reply(type, requestId, { error: 'AGENT_NOT_FOUND' }); return }
-          void tmuxPaneInfo(agent.tmuxPane).then(info => reply(type, requestId, info ? { ...info } : { error: 'PANE_NOT_FOUND' }))
+        // What a harness's pane runs and where (core/terminals/requests.ts, bound by cli.ts).
+        case 'terminal_info':
+          if (this.terminalInfoProvider) this.terminalInfoProvider(payload, answer)
+          else reply(type, requestId, { error: 'UNSUPPORTED' })
           return
-        }
 
         case 'git_pull_request': {
           const id = payload.agentId
@@ -2812,28 +2243,14 @@ export class BackendSocket {
           }
           return
 
-        case 'message': {
-          const content = payload.content as string | undefined
-          const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
-          if (!content || !target) return
-          // Inject into the pane; the resulting JSONL user/assistant lines drive the turn lifecycle back
-          // to the web (mirror-all) — no synthetic events here. Prefer cli.ts's handler (inject + Enter
-          // retry); fall back to a direct inject when unwired (isolation/tests). From the relay this is
-          // only reached sealed: text typed into an agent is never taken from the relay in the clear.
-          const tabId = Id.safeParse(payload.tabId)
-          if (this.onMessage) {
-            if (tabId.success) this.onMessage(target, content, undefined, tabId.data)
-            else this.onMessage(target, content)
-          }
+        // Text typed for an agent, into its pane (core/input.ts, bound by cli.ts).
+        case 'message':
+          if (this.messageProvider) this.messageProvider(payload)
           else console.warn('[backend] message handler is not wired; terminal input was not dispatched')
           return
-        }
 
-        case 'cancel': {
-          const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
-          if (target) this.onCancel?.(target)
-          return
-        }
+        // A person interrupting an agent's turn (core/turns/cancel.ts, bound by cli.ts).
+        case 'cancel': this.cancelProvider?.(payload); return
 
         case 'speaking': {
           // A device is capturing a voice instruction. Mirror the hosted runtime: re-broadcast the presence
@@ -2851,21 +2268,10 @@ export class BackendSocket {
           return
         }
 
-        case 'question_response': {
-          // A device answered an AskUserQuestion. There's no control channel into an interactive CLI, so
-          // cli.ts keys the answer straight into that session's tmux dialog.
-          const p = payload as { requestId?: string; sessionId?: string; agentId?: string; answers?: Record<string, string> }
-          const answered = this.onQuestionAnswer?.(p)
-          // Detached: driving a dialog takes seconds of keystrokes and repaints. The outcome goes back
-          // under the QUESTION's requestId, so the client that answered can say why nothing happened —
-          // STALE_QUESTION when the dialog changed before the answer arrived and nothing was typed.
-          if (answered) {
-            void answered
-              .then((result) => reply(type, requestId, result.ok ? { ok: true } : { error: result.error, detail: result.detail }))
-              .catch(() => reply(type, requestId, { error: 'ANSWER_FAILED', detail: 'The answer could not be entered.' }))
-          }
+        // A person's answer to an agent's question, keyed into its dialog (core/questions.ts, bound by cli.ts).
+        case 'question_response':
+          this.questionProvider?.(payload, answer)
           return
-        }
 
         // This machine's Claude/Codex rate limits, read with ITS OWN credentials. The desktop reads the
         // account on the computer it runs on directly; this is how it reads one on a machine it does
@@ -2892,16 +2298,10 @@ export class BackendSocket {
           return
         }
 
-        // The colours the desktop paints its panes with, so tmux answers a TUI's OSC 10/11 with
-        // them instead of with whatever terminal happened to attach first (lib/hostTheme.ts).
-        case 'theme_set': {
-          if (!this.hostThemeSink) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
-          const theme = parseHostTheme(payload)
-          if (!theme) { reply(type, requestId, { error: 'BAD_THEME' }); return }
-          this.hostThemeSink(theme)
-          reply(type, requestId, { applied: true })
+        // The colours the desktop paints its panes with (core/terminals/requests.ts, bound by cli.ts).
+        case 'theme_set':
+          reply(type, requestId, this.themeProvider ? this.themeProvider(payload) : { error: 'UNSUPPORTED' })
           return
-        }
 
         default:
           // Unknown RPC with a requestId: reject fast so the web promise doesn't wait out its 20s.
@@ -2921,28 +2321,13 @@ export class BackendSocket {
     }
   }
 
-  /** Recover by stable runtime identity; a deleted agent must never become a fresh launch. */
-  private async creationStatusPayload(status: AgentCreationStatus): Promise<Record<string, unknown>> {
-    if (status.state === 'created') {
-      const session = registry.byAgent(status.agentId)
-      return session
-        ? { state: 'created', agent: await this.toProject(session), ...(status.level ? { level: status.level } : {}), ...(status.resumed !== undefined ? { resumed: status.resumed } : {}) }
-        : { state: 'unavailable' }
-    }
-    // A recorded refusal is a completed outcome. Keep it separate from transport/dispatch errors
-    // so clients can distinguish "safe to correct the choices" from "outcome still unknown".
-    if (status.state === 'failed') {
-      return { state: 'failed', ...(status.preparedFolder ? { preparedFolder: status.preparedFolder } : {}), failure: { code: status.error, ...(status.detail ? { detail: status.detail } : {}) } }
-    }
-    return status
-  }
-
   async publishStoppedAgent(s: RegisteredSession): Promise<void> {
     this.send({ type: 'agent_synced', payload: { agent: await this.toStoppedProject(s) } })
     this.sendCommander({ type: 'agent_deleted', payload: { agentId: s.agentId } })
   }
 
-  private async toStoppedProject(s: RegisteredSession): Promise<AgentFrame> {
+  /** A stopped agent's frame: no pane, no terminal, nothing to fork. */
+  async toStoppedProject(s: RegisteredSession): Promise<AgentFrame> {
     const frame = await agentFrame(s, { selectedModel: s.model, terminalAvailable: false, dsh: this.dshFrameProvider?.(s) ?? null,
       tokenUsage: agentTokenUsage.get(s) })
     return {
@@ -2956,7 +2341,7 @@ export class BackendSocket {
   }
 
   /** Map a registered tmux session onto the web's Project shape (tabs in ProjectTabs). */
-  private toProject(s: RegisteredSession): Promise<AgentFrame> {
+  toProject(s: RegisteredSession): Promise<AgentFrame> {
     return agentFrame(s, {
       tokenUsage: agentTokenUsage.get(s),
       selectedModel: this.runtimeProfileProvider?.(s) ?? null,

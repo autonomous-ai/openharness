@@ -7,7 +7,7 @@ import { messagesToEvents, subagentStatsFromRawLines, windowRawLines } from './l
 import { registry } from './lib/registry.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
 import { tailFile } from './lib/transcriptTail.js'
-import { bindHistory } from './testing/socketHistory.js'
+import { bindHistory } from './testing/socketCore.js'
 import { cl, claude, claudeScenario, codexScenario } from './testing/transcriptScenarios.js'
 
 // Transcripts are only served from the engines' own folders. Those default to this computer's real
