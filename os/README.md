@@ -51,18 +51,29 @@ These changes concern the live USB; existing installations do not need updating 
 reflashing for them. The installed system update feed remains independent from
 ISO packaging.
 
-Each published image includes its matching installation guide and exact validation
-evidence. Preview 6 passed BIOS/plain and UEFI/encrypted USB installation, boot,
-update retry and recovery at 1 GiB and 4 GiB RAM. First-use model conversations,
-four programmer projects and three harness/viewer exercises passed the checks
-described below. Selected Broadcom packages are available offline for experimental
-Intel Mac testing; generic installations do not retain that optional toolchain.
+The [preview 14 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.14)
+includes its installation guide, package inventory and exact validation evidence.
+Native x86 VM checks passed BIOS/plain and UEFI/encrypted installation, first-use
+agent conversations, graphical keyboard input, browser switching, update retry
+and checkpoint recovery. The matching OS update bundle also passed runtime
+activation with running work preserved, rollback and an encrypted system reboot.
+The four programmer projects and three harness/viewer exercises described below
+are earlier preview 6 evidence, not a claim that each was repeated on preview 14.
 
 The user confirmed preview 2 installation and boot from a physical ThinkPad's
 internal disk with the USB removed. Its first-use feedback informed this revision.
 The user also confirmed preview 4 installation, boot and use on a ThinkPad.
-Physical Wi-Fi, suspend and NVIDIA validation remain outstanding. A working older
-installation does not need reinstalling solely for the USB payload-location fix.
+Broader physical Wi-Fi, suspend and NVIDIA workload validation remain outstanding.
+A working older installation does not need reinstalling solely for the USB
+payload-location fix.
+
+**Mac support:** suitable older Intel Macs without T2 can test this x86-64 preview,
+but no Mac model family has completed physical validation. Selected Broadcom
+drivers are available offline, and supported SPI keyboard controllers are included
+for encrypted unlock; VM checks do not prove physical Wi-Fi or keyboard support.
+T2 Macs need separate integration. Apple Silicon and Raspberry Pi do not have
+installable Harness images yet. See the [hardware targets](DEVELOPMENT.md#mac-support-targets)
+for requirements and remaining work.
 
 ## Design
 
