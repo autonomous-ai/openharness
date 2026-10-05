@@ -11,13 +11,17 @@
  *
  * So the name is read again on every title sweep and whenever the daemon has tmux make a pane, both a
  * syscall, and every name read is kept: a pane made under the old name still carries it after the
- * machine has moved on. Kept to the last MACHINE_NAMES_KEPT names seen, so a machine that roams many
+ * machine has moved on. A daemon started since knows none of the old names, so a host name is also
+ * the machine's when its first part is: the same laptop, on another network. Kept to the last MACHINE_NAMES_KEPT names seen, so a machine that roams many
  * networks over weeks holds a few dozen strings, not one per network forever.
  */
 import { readFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 
 export const MACHINE_NAMES_KEPT = 16
+
+/** A host name with a domain: `macbook-pro.lan`, `studio.local`, `box.example.com`. */
+const HOST_NAME = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/
 
 export interface MachineNames {
   /** Reads the machine's name now and keeps it among the names it has had. */
@@ -50,7 +54,16 @@ export function createMachineNames(read: () => string, kept = MACHINE_NAMES_KEPT
     forms = new Set([...names].flatMap((full) => [full, full.split('.')[0]!]).filter(Boolean))
   }
   observe()
-  return { observe, owns: (title) => forms.has(title.toLowerCase()) }
+  return {
+    observe,
+    owns: (title) => {
+      const name = title.toLowerCase()
+      // The same machine on another network than any this daemon has seen it on: `MacBook-Pro.lan`, a
+      // pane made before a restart on `MacBook-Pro.local`. Only a title shaped as a host name, so one
+      // that is a sentence is never refused for starting with the machine's name.
+      return forms.has(name) || (HOST_NAME.test(name) && forms.has(name.split('.')[0]!))
+    },
+  }
 }
 
 /**
