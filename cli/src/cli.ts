@@ -164,6 +164,9 @@ import { createCursorTaskHooks } from './core/engines/cursorTasks.js'
 import { databaseHistory } from './core/transcripts/databaseHistory.js'
 import { createCoreApi, emptyPorts, MODELS_FALLBACKS, SEARCH_FALLBACKS, TEAMS_FALLBACKS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type TeamsPort } from './core/api.js'
 import { createServiceHost, testFaults } from './core/serviceHost.js'
+import { createServiceLinks } from './core/serviceLinks.js'
+import { KNOWN_SERVICES, SERVICE_REQUESTS, serviceSpecs } from './harnessd/services.js'
+import { runSearchService } from './services/searchProcess.js'
 import { startSearch } from './services/search.js'
 import { startViewers } from './services/viewers.js'
 import { startModels } from './services/models.js'
@@ -2147,11 +2150,40 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   backend.handoffProvider = (req) => prepareAgentHandoff(handoffDeps, req)
 
-  // Session search (services/search.ts).
-  serviceHost.start('search', startSearch, coreApi, SEARCH_FALLBACKS)
+  // The services harnessd's master runs in their own processes (harnessd/services.ts, `HARNESSD_SERVICES`):
+  // only under a master, which is what gives this core the token they connect with. Their requests are
+  // routed to them, and answered SERVICE_UNAVAILABLE while they are down (core/serviceLinks.ts).
+  const serviceToken = process.env.HARNESSD_SUPERVISED === '1' ? process.env.HARNESSD_SERVICE_TOKEN : undefined
+  const outOfProcess = new Set(serviceToken ? serviceSpecs(process.env, KNOWN_SERVICES).map((spec) => spec.name) : [])
+  const serviceLinks = createServiceLinks({
+    token: serviceToken,
+    owned: Object.fromEntries([...outOfProcess].map((name) => [name, SERVICE_REQUESTS[name] ?? []])),
+    // Every agent, live then stopped, with the name the apps show for it: what search indexes.
+    answer: (_service, query) => query === 'agents'
+      ? { agents: coreApi.agents.all().map((session) => ({ ...session, displayName: coreApi.agents.displayName(session) })) }
+      : { error: 'UNKNOWN_QUERY' },
+  })
+  backend.serviceRouter = (type, payload, reply) => serviceLinks.route(type, payload, reply)
+
+  // Session search (services/search.ts): in this process, or in its own (services/searchProcess.ts),
+  // where the core tells it what changed. A purge's forgetting waits for it if it is down.
+  if (outOfProcess.has('search')) {
+    ports.search = {
+      touch: (sessionId) => { serviceLinks.notify('search', { type: 'service_event', payload: { kind: 'touch', sessionId } }) },
+      deleteHistory: (sessionId) => { serviceLinks.notify('search', { type: 'service_event', payload: { kind: 'deleteHistory', sessionId } }, { untilDelivered: true }) },
+      session: () => undefined,
+      // Never asked: its requests are routed to its process before they reach a handler here.
+      search: () => { throw new Error('search runs in its own process') },
+      tail: () => Promise.reject(new Error('search runs in its own process')),
+      stop: () => {},
+    }
+  } else {
+    serviceHost.start('search', startSearch, coreApi, SEARCH_FALLBACKS)
+  }
   const sessionSearch = ports.search
-  backend.sessionSearchProvider = sessionSearch ? (query, options) => sessionSearch.search(query, options) : null
-  backend.sessionTailProvider = sessionSearch ? (sessionId, options) => sessionSearch.tail(sessionId, options) : null
+  const searchHere = sessionSearch && !outOfProcess.has('search') ? sessionSearch : null
+  backend.sessionSearchProvider = searchHere ? (query, options) => searchHere.search(query, options) : null
+  backend.sessionTailProvider = searchHere ? (sessionId, options) => searchHere.tail(sessionId, options) : null
   // Search switched off: both requests say search is unavailable, as on a Node without an index.
   serviceHost.onOff('search', () => { backend.sessionSearchProvider = null; backend.sessionTailProvider = null })
 
@@ -2908,6 +2940,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const localWsServer = attachLocalWsServer(hookServer, {
     localSocketServer: localSocket?.server ?? null,
     shareRelay,
+    services: serviceLinks,
     onSelectionReply: (connId, machineId, payload) => devices('window', () => windowSelection.reply(connId, machineId, payload)),
     onVisitReply: (connId, machineId, payload) => devices('window', () => windowVisit.reply(connId, machineId, payload)),
     onFormReply: (connId, machineId, payload) => devices('window', () => windowForm.reply(connId, machineId, payload)),
@@ -5511,6 +5544,16 @@ switch (cmd) {
       confirmUpdate: () => confirmUpdate(env.ADAPTER_CLI_DIR),
     })
     break
+  case '__service': { // internal: a service harnessd's master runs in its own process (services/process.ts)
+    const socketPath = localSocketPath(env.ADAPTER_DATA_DIR, env.PORT)
+    if (rest[0] !== 'search' || !socketPath) {
+      console.error(`[service] ${rest[0] ?? '(none)'}: ${socketPath ? 'no such service in this build' : 'the core has no local socket to reach'}`)
+      process.exit(2)
+    }
+    process.title = `harnessd ${rest[0]}`
+    runSearchService({ dataDir: env.ADAPTER_DATA_DIR, socketPath, machineId: computerId(), token: process.env.HARNESSD_SERVICE_TOKEN ?? '' })
+    break
+  }
   case '__run': // internal: the detached daemon child reads the durable SSO session — or runs without one
     // NOT `onError`: a daemon that dies here can never be updated. See `enterSafeMode`.
     runForeground(readAuthSession()).catch(enterSafeMode)

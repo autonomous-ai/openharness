@@ -1436,6 +1436,9 @@ export class BackendSocket {
   localClientIds(): string[] { return [...this.localClients.keys()].filter((connId) => !this.toolClients.has(connId)) }
 
   /** A window (or `hn`) on this computer attached or went away — the pair brain thinks only while one is here. */
+  /** Routes a request to the out-of-process service that answers it (core/serviceLinks.ts `route`):
+   *  false when none does and the socket answers it itself. */
+  serviceRouter: ((type: string, payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => boolean) | null = null
   onLocalClient: ((connId: string, attached: boolean) => void) | null = null
 
   /** Release all connection-scoped state when the loopback WebSocket closes. */
@@ -2063,6 +2066,10 @@ export class BackendSocket {
       if (this.terminalStreams) await this.terminalStreams.handleFrame(connId, type, payload)
       return
     }
+
+    // A request a service answers in its own process (core/serviceLinks.ts): routed to it, or answered
+    // SERVICE_UNAVAILABLE while it is down. Never waited on in line: the next frame is not held for it.
+    if (this.serviceRouter?.(type, payload, (result) => reply(type, requestId, result))) return
 
     try {
       switch (type) {
