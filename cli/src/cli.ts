@@ -167,9 +167,11 @@ import { createCoreApi, emptyPorts, MODELS_FALLBACKS, SEARCH_FALLBACKS, TEAMS_FA
 import { createServiceHost, testFaults } from './core/serviceHost.js'
 import { createServiceLinks } from './core/serviceLinks.js'
 import { createViewersLink } from './core/viewersLink.js'
+import { createWorkspacesLink } from './core/workspacesLink.js'
 import { KNOWN_SERVICES, serviceSpecs } from './harnessd/services.js'
 import { runSearchService } from './services/searchProcess.js'
 import { runViewersService } from './services/viewersProcess.js'
+import { runWorkspacesService } from './services/workspacesProcess.js'
 import { SEARCH_REQUESTS, startSearch } from './services/search.js'
 import { STORE_REQUESTS, startStore } from './services/store.js'
 import { startViewers } from './services/viewers.js'
@@ -220,6 +222,7 @@ import { loadCursorPendingTasks } from './engines/cursor/pendingTasks.js'
 import { opencodeMajorVersion } from './engines/opencode/version.js'
 import { hermesDbForSession } from './lib/hermesHome.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from './lib/agentFrame.js'
+import { forgetAgentProject } from './lib/agentProject.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { DeviceResultJournal } from './lib/autonomous-device/resultJournal.js'
 import { adaptSlashCommand } from './lib/goalCommand.js'
@@ -1838,8 +1841,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const attachDsh = (s: RegisteredSession): void => ports.viewers?.attach(s)
   const detachDsh = (agentId: string): void => ports.viewers?.detach(agentId)
 
-  // The folders agents work in: branch names and unused worktrees (services/workspaces.ts).
-  serviceHost.start('workspaces', startWorkspaces, coreApi, WORKSPACES_FALLBACKS)
+  // The folders agents work in: branch names and unused worktrees (services/workspaces.ts), started below.
   const syncTerminalTitles = async (): Promise<void> => {
     ports.workspaces?.nameBranches()
     const titles = await terminals.titles()
@@ -2209,11 +2211,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const requestsOf: Record<string, readonly string[]> = { search: SEARCH_REQUESTS }
   // What the core keeps of the viewers in their own process, for the frames it builds (core/viewersLink.ts).
   const viewersLink = createViewersLink(coreApi, (frame, opts) => serviceLinks.notify('viewers', frame, opts))
+  // How the core tells workspaces in their own process what to do, and answers them (core/workspacesLink.ts).
+  const workspacesLink = createWorkspacesLink(coreApi, (frame) => serviceLinks.notify('workspaces', frame), forgetAgentProject)
   const serviceLinks = createServiceLinks({
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
     // Search asks for every agent, live then stopped, with the name the apps show for it: what it indexes.
-    answer: (service, query, payload) => service === 'viewers' ? viewersLink.answer(query, payload) : query === 'agents'
+    answer: (service, query, payload) => service === 'viewers' ? viewersLink.answer(query, payload)
+      : service === 'workspaces' ? workspacesLink.answer(query, payload) : query === 'agents'
       ? { agents: coreApi.agents.all().map((session) => ({ ...session, displayName: coreApi.agents.displayName(session) })) }
       : { error: 'UNKNOWN_QUERY' },
   })
@@ -2238,6 +2243,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The DSH viewers: in this process, or in its own (services/viewersProcess.ts), told of each agent.
   if (outOfProcess.has('viewers')) ports.viewers = viewersLink.port
   else serviceHost.start('viewers', startViewers, coreApi, VIEWERS_FALLBACKS)
+  // Workspaces: in this process, or in its own (services/workspacesProcess.ts), told what to do and when.
+  if (outOfProcess.has('workspaces')) ports.workspaces = workspacesLink.port
+  else serviceHost.start('workspaces', startWorkspaces, coreApi, WORKSPACES_FALLBACKS)
   // The harnesses installed here, and installing, updating and removing one (services/store.ts).
   serviceHost.serve('store', startStore, coreApi, STORE_REQUESTS)
 
@@ -4163,8 +4171,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Worktrees Harness made that no live or stopped harness uses and nothing would miss
   // (services/workspaces.ts): a few minutes after start, once restored agents are back in the
-  // registry, then twice a day.
-  setTimeout(() => ports.workspaces?.sweepUnused(), 5 * 60_000).unref()
+  // registry, then twice a day. Only the end-to-end harness shortens the first wait.
+  setTimeout(() => ports.workspaces?.sweepUnused(), Number(process.env.HARNESSD_TEST_SWEEP_AFTER_MS) || 5 * 60_000).unref()
   setInterval(() => ports.workspaces?.sweepUnused(), 12 * 3600_000).unref()
 
 
@@ -5617,7 +5625,8 @@ switch (cmd) {
     break
   case '__service': { // internal: a service harnessd's master runs in its own process (services/process.ts)
     const socketPath = localSocketPath(env.ADAPTER_DATA_DIR, env.PORT)
-    const runService = rest[0] === 'search' ? runSearchService : rest[0] === 'viewers' ? runViewersService : null
+    const runService = rest[0] === 'search' ? runSearchService : rest[0] === 'viewers' ? runViewersService
+      : rest[0] === 'workspaces' ? runWorkspacesService : null
     if (!runService || !socketPath) {
       console.error(`[service] ${rest[0] ?? '(none)'}: ${socketPath ? 'no such service in this build' : 'the core has no local socket to reach'}`)
       process.exit(2)
