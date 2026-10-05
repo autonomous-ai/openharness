@@ -856,7 +856,7 @@ describe('BackendSocket outbound queue', () => {
     // as a reply that carries nothing is.
     role.mockReturnValue('web')
     ask('nobody_answers', { requestId: 'n-1' })
-    await vi.waitFor(() => expect(parseSent(ws)).toContainEqual({ t: 'up', frame: { type: 'nobody_answers_result', payload: { requestId: 'n-1', error: 'UNSUPPORTED' } } }))
+    await vi.waitFor(() => expect(parseSent(ws)).toContainEqual({ t: 'up', targetConnId: 'web-1', frame: { type: 'nobody_answers_result', payload: { requestId: 'n-1', error: 'UNSUPPORTED' } } }))
     expect(routed.at(-1)?.type).toBe('nobody_answers')
 
     // A process on this machine asks as itself, and as the owner.
@@ -945,7 +945,29 @@ describe('BackendSocket outbound queue', () => {
     ws.message({ t: 'down', connId: 'web-1', frame: { type: 'terminal_info', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } } })
     await vi.waitFor(() => expect(answers.has('relay-info')).toBe(true))
     answers.get('relay-info')!({ error: 'AGENT_NOT_FOUND' })
-    expect(parseSent(ws)).toContainEqual({ t: 'up', frame: { type: 'terminal_info_result', payload: { requestId: 'relay-info', error: 'AGENT_NOT_FOUND' } } })
+    expect(parseSent(ws)).toContainEqual({ t: 'up', targetConnId: 'web-1', frame: { type: 'terminal_info_result', payload: { requestId: 'relay-info', error: 'AGENT_NOT_FOUND' } } })
+    await socket.stop()
+  })
+
+  it('answers a request from the relay to the requester alone: no other web client and no window gets a copy', async () => {
+    // Each app takes a reply by its own request id; a broadcast handed every web client of the machine
+    // and every window on it an answer only one of them had asked for.
+    const socket = new BackendSocket('token')
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    const window: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:window', { sendFrame: (frame) => { window.push(frame as Record<string, unknown>); return true }, sendBinary: () => true })
+    // A paired client's request, sealed, of a type whose answer carries nothing: answered in the clear.
+    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValueOnce({ type: 'nobody_answers', payload: { requestId: 'r-1' } })
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'nobody_answers', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } } })
+    const answers = () => parseSent(ws).filter((item) => (item.frame as { type?: string })?.type === 'nobody_answers_result')
+    await vi.waitFor(() => expect(answers()).toHaveLength(1))
+    expect(answers()).toEqual([{ t: 'up', targetConnId: 'web-1', frame: { type: 'nobody_answers_result', payload: { requestId: 'r-1', error: 'UNSUPPORTED' } } }])
+    expect(window.filter((frame) => frame.type === 'nobody_answers_result')).toEqual([])
+    // The backend's own request has no connection to be answered on: it still hears its answer on the bus.
+    ws.message({ t: 'down', connId: '', frame: { type: 'voice_route', payload: { requestId: 'b-1', transcript: 'route this' } } })
+    await vi.waitFor(() => expect(parseSent(ws)).toContainEqual({ t: 'up', frame: { type: 'voice_route_result', payload: { requestId: 'b-1', error: 'E2EE_REQUIRED' } } }))
     await socket.stop()
   })
 
