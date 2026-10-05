@@ -893,10 +893,11 @@ pub fn preview(buf: &mut Buffer, r: Rect, look: &Look, c: &Chrome) {
         for y in p.y..p.bottom() { for x in p.x..p.right() { if let Some(cell) = buf.cell_mut((x, y)) { cell.reset(); cell.set_style(Style::default().bg(pbg)); } } }
         let mut content = *p;
         // ── status bar ──
-        // A box: the focused pane's frame in the status bar's background colour, the next one's as
-        // a harness waiting on you draws it, the rest quiet; the title in the frame's top or bottom line.
+        // A box: the focused pane's frame in the status bar's background colour (the theme's
+        // foreground, as the real bar draws it), the next one's as a harness waiting on you draws
+        // it, the rest quiet; the title in the frame's top or bottom line.
         if boxed && p.width >= 3 && p.height >= 3 {
-            let frame = Style::default().fg(if here { pal.status } else if i == 1 { theme::paint(theme::ATTENTION) } else { pal.border }).bg(pbg);
+            let frame = Style::default().fg(if here { fg } else if i == 1 { theme::paint(theme::ATTENTION) } else { pal.border }).bg(pbg);
             let (x1, y1) = (p.right() - 1, p.bottom() - 1);
             for x in p.x + 1..x1 { buf.set_string(x, p.y, joint(&look.lines, false, false, true, true), frame); buf.set_string(x, y1, joint(&look.lines, false, false, true, true), frame) }
             for y in p.y + 1..y1 { buf.set_string(p.x, y, joint(&look.lines, true, true, false, false), frame); buf.set_string(x1, y, joint(&look.lines, true, true, false, false), frame) }
@@ -940,9 +941,10 @@ pub fn preview(buf: &mut Buffer, r: Rect, look: &Look, c: &Chrome) {
         }
     }
 
-    // The status line, as hn's own sits under the panes (or over them).
+    // The status line, as hn's own sits under the panes (or over them) — its background the theme's
+    // foreground, its lettering the theme's background, exactly as the real bar swaps them.
     if let Some(status_row) = status_row {
-        let sstyle = Style::default().fg(pal.status_foreground).bg(pal.status);
+        let sstyle = Style::default().fg(pal.background).bg(pal.foreground);
         for x in screen.x..screen.right() { buf.set_string(x, status_row, " ", sstyle) }
         let mut x = screen.x + 1;
         for (i, n) in names.iter().take(panes.len()).enumerate() {
@@ -1205,13 +1207,13 @@ mod tests {
         assert_eq!(left[(16, 2)].symbol(), "┌", "{s}");
         let right = draw(&look.clone().with(Some("status_bar:right")));
         assert_eq!(right[(64 - 16, 5)].symbol(), "│");
-        // Boxes: each pane its own frame; the focused one's in the status bar's background colour, the next the attention colour.
+        // Boxes: each pane its own frame; the focused one's in the status bar's background colour (the theme's foreground), the next the attention colour.
         let panes = tiles(Rect::new(0, 2, 64, 17), &look.layout, &look.split);
         assert_eq!(bottom[(panes[0].x, panes[0].y)].symbol(), "┌");
         assert_eq!(bottom[(panes[1].x, panes[1].y)].symbol(), "┌");
-        let status_bg = theme::native_pane_palette().status;
-        assert_eq!(bottom[(panes[0].x, panes[0].y)].fg, status_bg);
-        assert_ne!(status_bg, bottom[(panes[1].x, panes[1].y)].fg);
+        let foreground = theme::native_pane_palette().foreground;
+        assert_eq!(bottom[(panes[0].x, panes[0].y)].fg, foreground);
+        assert_ne!(foreground, bottom[(panes[1].x, panes[1].y)].fg);
         assert_eq!(bottom[(panes[1].x, panes[1].y)].fg, theme::paint(theme::ATTENTION));
         let line = draw(&look.clone().with(Some("border_style:line")));
         assert_ne!(line[(panes[1].x, panes[1].y)].symbol(), "┌", "tmux's shared lines");
