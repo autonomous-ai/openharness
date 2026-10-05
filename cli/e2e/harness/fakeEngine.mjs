@@ -20,7 +20,8 @@
 // middle of a turn as an automatic compaction does, `!version` answers with the version this
 // process is, `!goal` and `!goal done` (Codex) start and achieve a goal the way Codex 0.160 shows one
 // under its composer, `!browse` (Codex) leaves Codex browsing its transcript in its default fullscreen
-// mode, and `!browse scrollback` in its scrollback mode, `!exit` ends the process.
+// mode, and `!browse scrollback` in its scrollback mode, `!transcript` (Claude Code) leaves it in its
+// transcript view, as ctrl+o does, `!exit` ends the process.
 // Everything else is echoed as the answer.
 //
 // Which release is installed is the config's business, so a test can update an engine in place by
@@ -177,6 +178,10 @@ export async function run(engine, config) {
   const browsingBottom = { composer: '\x1b[2m› Ask Codex to do anything\x1b[0m', footer: browsingFooter, browsing: true }
   const pagerBottom = (prompt, answer) => ({ browsing: true, pager: `\x1b[?1049h\x1b[H\x1b[2J\x1b[2m/ T R A N S C R I P T ${'/ '.repeat(30)}\x1b[0m`
     + `\r\n\x1b[7m› ${prompt}\x1b[0m\r\n\r\n\x1b[2m•\x1b[0m ${answer}\x1b[999;1H${browsingFooter}` })
+  // Claude Code's transcript view (ctrl+o, 2.1.289): the conversation over the whole pane, its prompt
+  // hidden, and its footer row under a dim rule.
+  const transcriptBottom = (prompt, answer) => ({ transcript: true, pager: `\x1b[?1049h\x1b[H\x1b[2J\x1b[48;5;237m❯ ${prompt}\x1b[49m`
+    + `\r\n\r\n⏺ ${answer}\x1b[998;1H\x1b[2m${'─'.repeat(60)}\x1b[0m\x1b[999;1H  \x1b[2mShowing detailed transcript · ctrl+o to toggle · ctrl+e to show all\x1b[0m` })
   const draw = (line = '') => {
     if (bottom?.pager) { process.stdout.write(bottom.pager); return }
     if (bottom && !line) {
@@ -207,6 +212,8 @@ export async function run(engine, config) {
   // src/lib/__fixtures__/question-single.txt and question-codex.txt). Claude takes a digit as the
   // choice; Codex moves its cursor on a digit and takes Enter; Esc cancels either.
   let dialog = null
+  // What a person pasted as notes on the option Codex then submitted, for the answer to say.
+  let notes = ''
   const QUESTION = 'Which drink would you like?'
   const CHOICES = [['Tea', 'Lighter, steeped leaves.'], ['Coffee', 'Stronger, roasted beans.']]
   const drawDialog = () => {
@@ -238,22 +245,33 @@ export async function run(engine, config) {
     if (dialog?.drawn) process.stdout.write(`\x1b[${dialog.drawn}A\r\x1b[0J`)
     if (dialog) dialog.drawn = 0
   }
+  // Keys and pastes as the real CLIs take them while a dialog is up. A bracketed paste is one event, never
+  // keys, in both (Claude Code's Ink input parser; Codex's crossterm): neither engine's permission prompt
+  // takes a paste (Claude Code's Select has no paste handler, Codex's ApprovalOverlay leaves
+  // `handle_paste` to its default), so it is dropped, and Enter then confirms the focused row, which is
+  // the first: approve (Codex's own test, approval_overlay.rs `enter_sets_last_selected_index…`, expects
+  // Accept). In a question, Claude Code drops the paste the same way and Enter picks the focused option;
+  // Codex takes a paste as notes on the focused option (request_user_input `handle_paste`) and Enter
+  // submits it. Digits pick a row; Codex's `y` approves; arrows move; Esc declines or cancels.
   const dialogKeys = (chunk) => {
-    for (const key of chunk.match(/\x1b\[[AB]|\x1b|\r|\n|./gs) ?? []) {
+    for (const key of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[AB]|\x1b|\r|\n|./gs) ?? []) {
       if (!dialog) return
-      const settle = (choice) => { eraseDialog(); const asked = dialog; dialog = null; asked.resolve(choice) }
+      const settle = (choice) => { eraseDialog(); const asked = dialog; dialog = null; notes = asked.notes ?? ''; asked.resolve(choice) }
       const rows = dialog.kind === 'permit' ? 3 : engine === 'claude' ? CHOICES.length : CHOICES.length + 1
+      if (key.startsWith('\x1b[200~')) {
+        if (dialog.kind !== 'permit' && engine === 'codex') dialog.notes = key.slice(6).replace(/\x1b\[201~$/, '')
+        continue
+      }
+      if (key === '\x1b[B') { dialog.cursor = Math.min(dialog.cursor + 1, rows - 1); drawDialog(); continue }
+      if (key === '\x1b[A') { dialog.cursor = Math.max(dialog.cursor - 1, 0); drawDialog(); continue }
       if (dialog.kind === 'permit') {
-        // Both CLIs take a row's digit (and Codex its letter) as the decision; Esc declines.
         if (key === '\x1b') settle(null)
         else if (key === 'y' && engine === 'codex') settle(0)
         else if (key === '\r' || key === '\n') settle(dialog.cursor)
         else if (/^[1-3]$/.test(key)) settle(Number(key) - 1)
         continue
       }
-      if (key === '\x1b[B') { dialog.cursor = Math.min(dialog.cursor + 1, rows - 1); drawDialog() }
-      else if (key === '\x1b[A') { dialog.cursor = Math.max(dialog.cursor - 1, 0); drawDialog() }
-      else if (key === '\x1b') settle(null)
+      if (key === '\x1b') settle(null)
       else if (key === '\r' || key === '\n') settle(CHOICES[dialog.cursor]?.[0] ?? 'None of the above')
       else if (/^[1-9]$/.test(key) && Number(key) <= rows) {
         dialog.cursor = Number(key) - 1
@@ -417,12 +435,17 @@ export async function run(engine, config) {
         codex('response_item', { type: 'function_call_output', call_id: id, output: JSON.stringify({ answers: { [QUESTION]: choice } }) })
         process.stdout.write(`\r\n• ${QUESTION} → ${choice}\r\n`)
       }
-      finish(`you chose ${choice}`)
+      finish(`you chose ${choice}${notes ? ` (notes: ${notes})` : ''}`)
       return
     }
     if (directive?.[1] === 'version') { finish(versionLine); return }
     if (engine === 'codex' && directive?.[1] === 'goal') {
       bottom = goalBottom(directive[2] === 'done' ? 'Goal achieved (1m)' : 'Pursuing goal (1m)')
+      finish(`answer ${turn}: ${prompt}`)
+      return
+    }
+    if (engine === 'claude' && directive?.[1] === 'transcript') {
+      bottom = transcriptBottom(prompt, `answer ${turn}: ${prompt}`)
       finish(`answer ${turn}: ${prompt}`)
       return
     }
@@ -446,6 +469,18 @@ export async function run(engine, config) {
   process.stdin.on('data', (input) => {
     if (dialog) { dialogKeys(input); return }
     let chunk = input
+    if (bottom?.transcript) {
+      // As Claude Code takes input in its transcript view: its Transcript keys only, where Esc, q and ctrl+c
+      // close it; it has no Enter and no paste, so a message is lost there. Keys after the one that closes
+      // it reach the prompt.
+      let rest = ''
+      for (const token of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[0-9;]*[A-Za-z~]|\x1b|[\s\S]/g) ?? []) {
+        if (!bottom?.transcript) rest += token
+        else if (token === '\x1b' || token === 'q' || token === '\x03') { process.stdout.write('\x1b[?1049l'); bottom = null; draw() }
+      }
+      if (!rest) return
+      chunk = rest
+    }
     if (bottom?.browsing) {
       // As Codex 0.160 takes input while browsing (app.rs, app_backtrack): Esc goes back to the composer
       // and Enter reverts the conversation to the prompt in view, in both modes; arrows and hjkl move

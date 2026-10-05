@@ -330,19 +330,19 @@ function currentPaneUi(rawLines: string[], promptIndex: number): string {
   return stripAnsi((promptIndex >= 0 ? rawLines.slice(promptIndex) : rawLines).join('\n')).replace(/\u00a0/g, ' ')
 }
 
-/** The engines that have one, so a caller can leave every other pane unread. */
-export const REWIND_PICKER_ENGINES: ReadonlySet<string> = new Set(['claude', 'codex'])
-
 /**
- * Whether the pane shows a picker for a point in the conversation to go back to, over its composer:
- * Codex browsing its transcript, or Claude Code's Rewind menu. Nothing typed there is a message, and
- * Enter there picks a point to go back to, so nothing is typed into one: not a team delivery (read
- * as a dialog, through [inspectRuntimePane]) and not a person's own message either.
+ * The modal over a Claude Code or Codex pane, read for a message about to be typed into it
+ * (messageHold.ts): a picker for a point in the conversation to go back to (Codex browsing its
+ * transcript, Claude Code's Rewind menu), an approval prompt, or another menu. Every one of them is a
+ * dialog to [inspectRuntimePane], except the MCP boot notice: Claude Code takes typing while it shows,
+ * so a message sent the moment an agent starts still goes in.
  */
-export function rewindPickerOpen(engine: RegisteredSession['engine'], capture: string | null): boolean {
-  if (!capture || !REWIND_PICKER_ENGINES.has(engine)) return false
+export function paneModal(engine: RegisteredSession['engine'], capture: string): 'rewind' | 'permission' | 'menu' | null {
   const rawLines = capture.split('\n')
-  return rewindPickerIn(engine, capture, currentPaneUi(rawLines, latestPromptLine(rawLines, promptMarker(engine))))
+  const currentUi = currentPaneUi(rawLines, latestPromptLine(rawLines, promptMarker(engine)))
+  if (rewindPickerIn(engine, capture, currentUi)) return 'rewind'
+  if (PERMISSION_UI.test(currentUi)) return 'permission'
+  return DIALOG_UI.test(currentUi.replace(/Starting MCP servers?/gi, '')) ? 'menu' : null
 }
 
 function rewindPickerIn(engine: RegisteredSession['engine'], capture: string, currentUi: string): boolean {
@@ -359,6 +359,9 @@ function rewindPickerIn(engine: RegisteredSession['engine'], capture: string, cu
  * No `g` flag, so `test` carries no `lastIndex` between callers.
  */
 const DIALOG_UI = /Select Model(?: and Effort)?|Select Reasoning Level|Advanced Reasoning|Available models|Models matching|Edit Parameters|Type to filter.*Tab to edit|Esc to go back|Press enter to confirm|Do you want to proceed|Allow this action|permission required|Starting MCP servers?/i
+
+/** The approval prompts among them. */
+const PERMISSION_UI = /Do you want to proceed|Allow this action|permission required/i
 
 /**
  * Codex browsing its own transcript: Esc twice on an empty composer, and its footer row reads

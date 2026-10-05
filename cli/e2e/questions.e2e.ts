@@ -2,7 +2,8 @@
  * An agent's question, end to end, for Claude Code and Codex: the dialog the engine draws reaches the
  * window as a question, the answer chosen there is typed into the dialog and is the one the agent gets,
  * and an answer to a question that is no longer the one on screen types nothing. A permission prompt
- * is a question too: Yes in the window runs the command, No leaves it unrun.
+ * is a question too: Yes in the window runs the command, No leaves it unrun. A message a person sends
+ * meanwhile is not typed into either: the prompt drops a paste and takes its Enter as the focused row.
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -111,6 +112,61 @@ describe('an agent asks a question', () => {
     expect((await answer(client, agent.id, question.payload.requestId, { [shaped.q]: 'Tea' })).error).toBeUndefined()
     await ended
     expect(await d.capture(agent.tmuxPane)).toContain('you chose Tea')
+    client.close()
+  })
+
+  it.each(engines)('%s: a message sent while a permission prompt is open approves nothing: refused with the reason, and the prompt still answers', async (engine) => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, engine, `permit-message-${engine}`)
+    const asked = client.next((frame) => frame.type === 'commander_question' && frame.agentId === agent.id, 30_000, 'commander_question')
+    client.send('message', { agentId: agent.id, content: '!permit printf hi' })
+    const question = await asked
+    const shaped = question.payload?.questions?.[0]
+    const from = client.frames.length
+    client.send('message', { agentId: agent.id, content: 'what will that command do?' })
+    // Either the refusal arrives, or the message's Enter took the focused row, Yes, and the command ran.
+    const outcome = await until('the refusal, or the command run by the message', async () => {
+      if ((await d.capture(agent.tmuxPane)).includes('ran printf hi')) return 'the message approved the command'
+      const refused = client.frames.slice(from).find((frame) => frame.type === 'error' && frame.agentId === agent.id)
+      return refused ? String(refused.payload?.message) : null
+    }, 20_000, 250)
+    expect(outcome).toBe(engine === 'claude'
+      ? 'Claude Code is asking for permission. Answer it first, in the app or in its terminal, then send the message again.'
+      : 'Codex is asking for approval. Answer it first, in the app or in its terminal, then send the message again.')
+    // Still asking: the answer goes through its own path, and No leaves the command unrun.
+    const ended = client.next(isTurn('turn_ended', agent.id), 45_000, 'turn_ended')
+    expect((await answer(client, agent.id, String(question.payload?.requestId), { [shaped.q]: shaped.options[2] })).error).toBeUndefined()
+    await ended
+    expect(await d.capture(agent.tmuxPane)).toContain('did not run printf hi')
+    // The prompt answered, the same message goes through.
+    await turn(client, agent.id, 'what will that command do?')
+    client.close()
+  })
+
+  it.each(engines)('%s: a message sent while a question is open answers nothing: refused with the reason, and the question still answers', async (engine) => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, engine, `ask-message-${engine}`)
+    const asked = client.next((frame) => frame.type === 'commander_question' && frame.agentId === agent.id, 30_000, 'commander_question')
+    client.send('message', { agentId: agent.id, content: '!ask' })
+    const question = await asked
+    const shaped = question.payload?.questions?.[0]
+    const from = client.frames.length
+    client.send('message', { agentId: agent.id, content: 'something stronger' })
+    // Claude Code drops the paste and its Enter picks the focused option; Codex takes the paste as notes
+    // on it and its Enter submits that.
+    const outcome = await until('the refusal, or the question answered by the message', async () => {
+      if ((await d.capture(agent.tmuxPane)).includes('you chose')) return 'the message answered the question'
+      const refused = client.frames.slice(from).find((frame) => frame.type === 'error' && frame.agentId === agent.id)
+      return refused ? String(refused.payload?.message) : null
+    }, 20_000, 250)
+    expect(outcome).toBe(`${engine === 'claude' ? 'Claude Code' : 'Codex'} is asking you a question. Answer it first, in the app or in its terminal, then send the message again.`)
+    const ended = client.next(isTurn('turn_ended', agent.id), 45_000, 'turn_ended')
+    expect((await answer(client, agent.id, String(question.payload?.requestId), { [shaped.q]: 'Coffee' })).error).toBeUndefined()
+    await ended
+    expect(await d.capture(agent.tmuxPane)).toContain('you chose Coffee')
+    expect(await d.capture(agent.tmuxPane)).not.toContain('notes:')
     client.close()
   })
 })

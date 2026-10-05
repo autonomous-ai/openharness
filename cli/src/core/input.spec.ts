@@ -1,14 +1,20 @@
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CommandCodeNormalizer } from '../engines/commandcode/normalizer.js'
 import type { AutonomousDeviceInput } from '../lib/autonomous-device/input.js'
 import { deviceErrorText } from '../lib/deviceErrors.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
-import { REWIND_PICKER_OPEN, type TerminalActionResult } from '../lib/terminalTypes.js'
+import type { TerminalActionResult } from '../lib/terminalTypes.js'
 import { CLAUDE_REWIND_LIST, CODEX_BROWSING_SCROLLBACK } from '../lib/__fixtures__/rewindPickers.js'
-import { createInput, createMessageRequest, deviceInputDeps, sessionInputDeps, type InputDeps } from './input.js'
+import { createInput, createMessageRequest, deviceInputDeps, messageWriter, sessionInputDeps, type InputDeps } from './input.js'
 
 const ok: TerminalActionResult = { state: 'succeeded', dispatch: 'executed' }
+const fixture = (name: string) => readFileSync(new URL(`../lib/__fixtures__/${name}`, import.meta.url), 'utf8')
+/** Claude Code asking to run a command, and Command Code the same: the Enter behind a paste approves. */
+const CLAUDE_PERMISSION = fixture('permission-claude.txt')
+const COMMANDCODE_PERMISSION = fixture('permission-commandcode.txt')
 /** A Claude Code composer that is empty and idle: ready for a team write. */
 const READY_PANE = '────────────\n❯\n────────────\n  ? for shortcuts'
 
@@ -97,26 +103,27 @@ describe('the session input controller\'s dependencies', () => {
     expect(calls).toEqual(['lock a1', 'submit a1 hello', 'lock a1', 'key a1 enter'])
   })
 
-  it('never types a person\'s message into a picker for a point to rewind to, and reads no other engine\'s pane for one', async () => {
+  it('types a message only into a pane it has read in the pane\'s lock and found ready for one', async () => {
     const run = deps()
     const wired = sessionInputDeps(run.deps, () => lock(run.calls))
-    const refused = { state: 'failed', dispatch: 'not_started', reason: REWIND_PICKER_OPEN }
+    run.setPane(CLAUDE_PERMISSION)
+    expect(await wired.inject('a1', 'hello')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'permission_open' })
     run.setPane(CLAUDE_REWIND_LIST)
-    expect(await wired.inject('a1', 'hello')).toEqual(refused)
+    expect(await wired.inject('a1', 'hello')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'rewind_picker_open' })
     run.setPane(CODEX_BROWSING_SCROLLBACK)
-    expect(await wired.inject('cx', 'hello')).toEqual(refused)
-    // Read inside the pane lock, and nothing written.
-    expect(run.calls).toEqual(['lock a1', 'lock cx'])
-    // A pane that cannot be read is written as before; so is one with no picker, and an engine without one.
+    expect(await wired.inject('cx', 'hello')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'rewind_picker_open' })
+    run.setPane(COMMANDCODE_PERMISSION)
+    expect(await wired.inject('cc', 'hello')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'permission_open' })
+    // Nothing written, each read inside the lock.
+    expect(run.calls).toEqual(['lock a1', 'lock a1', 'lock cx', 'lock cc'])
+    // A pane that cannot be read is written as before, and so is a ready one; an agent that is not there is
+    // not written to at all.
     run.setPane(null)
     expect(await wired.inject('cx', 'hi')).toBe(ok)
     run.setPane(READY_PANE)
     expect(await wired.inject('a1', 'hi')).toBe(ok)
-    vi.mocked(run.deps.terminal.captureTerminal).mockClear()
-    expect(await wired.inject('cc', 'hi')).toBe(ok)
-    expect(await wired.inject('nobody', 'hi')).toBe(ok)
-    expect(run.deps.terminal.captureTerminal).not.toHaveBeenCalled()
-    expect(run.calls.filter((call) => call.startsWith('submit'))).toEqual(['submit cx hi', 'submit a1 hi', 'submit cc hi', 'submit nobody hi'])
+    expect(await wired.inject('nobody', 'hi')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'terminal agent is unavailable' })
+    expect(run.calls.filter((call) => call.startsWith('submit'))).toEqual(['submit cx hi', 'submit a1 hi'])
   })
 
   it('writes a team turn only into a ready pane whose delivery still holds control', async () => {
@@ -154,14 +161,16 @@ describe('the session input controller\'s dependencies', () => {
 })
 
 describe('the device input\'s dependencies', () => {
-  it('reaches the terminal directly', async () => {
+  it('reaches the terminal directly, its messages through the one writer', async () => {
     const { deps: given } = deps()
     const wired = deviceInputDeps(given, () => ({ acquireControl: vi.fn(), submit: vi.fn(), cancelDelivery: vi.fn() }))
     expect(wired.getSession('a1')?.sessionId).toBe('s1')
     expect(wired.validateRuntime).toBe(given.terminal.validateTerminal)
-    expect(wired.inject).toBe(given.terminal.submitTerminalAction)
     expect(wired.sendKey).toBe(given.terminal.keyTerminalAction)
     expect(wired.capture).toBe(given.terminal.captureTerminal)
+    // Its writes are read first, as every message's is.
+    expect(await wired.inject('a1', 'hello')).toBe(ok)
+    expect(given.terminal.captureTerminal).toHaveBeenCalledWith('a1')
   })
 
   it('waits for the person when the pane cannot be read or asks a question', async () => {
@@ -173,9 +182,11 @@ describe('the device input\'s dependencies', () => {
     expect(await wired.isAwaitingUser!(agents.get('a1')!)).toBe(false)
   })
 
-  it('waits for the person while a picker for a point to rewind to is open', async () => {
+  it('waits for the person while anything a message is not typed into is open', async () => {
     const run = deps()
     const wired = deviceInputDeps(run.deps, () => ({ acquireControl: vi.fn(), submit: vi.fn(), cancelDelivery: vi.fn() }))
+    run.setPane(CLAUDE_PERMISSION)
+    expect(await wired.isAwaitingUser!(agents.get('a1')!)).toBe(true)
     run.setPane(CLAUDE_REWIND_LIST)
     expect(await wired.isAwaitingUser!(agents.get('a1')!)).toBe(true)
     run.setPane(CODEX_BROWSING_SCROLLBACK)
@@ -292,5 +303,59 @@ describe('message', () => {
     message({ content: '', agentId: 'a1' })
     message({ content: 'nobody to type into' })
     expect(submit.mock.calls).toEqual([['a1', 'hi'], ['s1', 'hi'], ['a1', 'in a tab', undefined, 'swarm-a'], ['a1', 'not a tab']])
+  })
+})
+
+describe('every route a message takes to a pane', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  /** Each way a message reaches an agent's pane, and what it is told when the pane holds it back. */
+  const asking = 'Claude Code is asking for permission. Answer it first, in the app or in its terminal, then send the message again.'
+  const refused = (deliveryId: string, reason: string) => expect.objectContaining({ deliveryId, state: 'rejected', reason })
+  const routes: Array<[string, string, (inputs: ReturnType<typeof createInput>) => void, (run: ReturnType<typeof deps>) => void]> = [
+    ['the app', 'a1', (inputs) => inputs.messageRequest({ agentId: 'a1', content: 'from the app' }),
+      (run) => expect(run.deps.clients.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'error', agentId: 'a1', payload: { message: asking } }))],
+    ['the phone, through the relay\'s message frame', 'a1', (inputs) => inputs.messageRequest({ sessionId: 's1', content: 'from the phone', tabId: 'tab-1' }),
+      (run) => expect(run.deps.clients.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'error', agentId: 'a1', payload: { message: asking } }))],
+    ['the orchestrator', 'a1', (inputs) => inputs.submitAgent('a1', 'from the orchestrator', 'orchestrator-1'),
+      (run) => expect(run.deps.teams.delivery).toHaveBeenCalledWith(refused('orchestrator-1', 'permission_open'))],
+    ['a team', 'a1', (inputs) => inputs.submitAgent('a1', 'from a team', 'team:1'),
+      (run) => expect(run.deps.teams.delivery).toHaveBeenCalledWith(refused('team:1', 'team_waiting_user'))],
+    ['the Device, to Claude Code', 'a1', (inputs) => inputs.deviceInput.submit('a1', 'from the device', 'device-1'),
+      (run) => expect(run.device.inputStatus).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'device-1', phase: 'waiting_for_user' }))],
+    ['the Device, to an engine it queues for', 'cc', (inputs) => inputs.deviceInput.submit('cc', 'from the device', 'device-2'),
+      (run) => expect(run.device.delivery).toHaveBeenCalledWith(refused('device-2', 'permission_open'))],
+  ]
+
+  it.each(routes)('%s: types nothing into a permission prompt, and says why', async (_route, agent, send, told) => {
+    const run = deps()
+    run.setPane(agent === 'cc' ? COMMANDCODE_PERMISSION : CLAUDE_PERMISSION)
+    const inputs = createInput(run.deps)
+    send(inputs)
+    await vi.waitFor(() => told(run))
+    expect(run.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
+    inputs.deviceInput.forget(agent)
+    inputs.input.forget(agent)
+  })
+
+  it.each(routes)('%s: reaches the pane when it is ready', async (_route, agent, send) => {
+    const run = deps()
+    const inputs = createInput(run.deps)
+    send(inputs)
+    await vi.waitFor(() => expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledTimes(1))
+    inputs.deviceInput.forget(agent)
+    inputs.input.forget(agent)
+  })
+
+  it('has one writer: nothing in the daemon submits text to a pane but it', () => {
+    // A route added later that called the terminal directly would type into a permission prompt.
+    const root = new URL('../', import.meta.url).pathname
+    const sources = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => entry.isDirectory()
+      ? sources(join(dir, entry.name))
+      : entry.name.endsWith('.ts') && !entry.name.endsWith('.spec.ts') ? [join(dir, entry.name)] : [])
+    const using = sources(root).filter((file) => readFileSync(file, 'utf8').includes('submitTerminalAction')).map((file) => file.slice(root.length))
+    expect(using.sort()).toEqual(['core/input.ts', 'core/terminals/control.ts'])
+    expect(readFileSync(join(root, 'core/input.ts'), 'utf8').match(/submitTerminalAction\(/g)).toHaveLength(1)
+    expect(messageWriter).toBeTypeOf('function')
   })
 })

@@ -3,6 +3,7 @@ import type { RegisteredSession } from '../registry.js'
 import type { SessionInputDelivery } from '../sessionInput.js'
 import type { TerminalActionResult } from '../terminalTypes.js'
 import type { LiveEvent } from '../normalize.js'
+import { isMessageHold } from '../messageHold.js'
 
 const NATIVE = new Set(['claude', 'codex'])
 const VERIFY_MS = 1500
@@ -194,7 +195,9 @@ export class AutonomousDeviceInput {
       if (item.started) { this.finishWrite(id, state, item); return }
       if (rejected(result)) {
         state.pending = state.pending.filter(next => next !== item)
-        this.delivery(id, item, 'rejected', 'paste_failed'); this.finishWrite(id, state, item); return
+        // A dialog that opened between the look for one and the write: refused unwritten, and why.
+        const reason = typeof result !== 'boolean' && result.state === 'failed' && isMessageHold(result.reason) ? result.reason : 'paste_failed'
+        this.delivery(id, item, 'rejected', reason); this.finishWrite(id, state, item); return
       }
       item.retry = executed(result)
       this.status(id, item, 'submitted')

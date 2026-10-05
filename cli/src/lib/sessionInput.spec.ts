@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionInputController } from './sessionInput.js'
 import type { RegisteredSession } from './registry.js'
-import { REWIND_PICKER_OPEN, TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
+import { TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
 
 function session(engine: 'claude' | 'codex' | 'cursor' | 'commandcode' = 'codex'): RegisteredSession {
   return {
@@ -17,15 +17,17 @@ function session(engine: 'claude' | 'codex' | 'cursor' | 'commandcode' = 'codex'
 describe('SessionInputController', () => {
   afterEach(() => vi.useRealTimers())
 
-  describe('a message not typed because a picker for a point to rewind to is open', () => {
-    const refused: TerminalActionResult = { state: 'failed', dispatch: 'not_started', reason: REWIND_PICKER_OPEN }
+  describe('a message not typed because of what its pane shows', () => {
+    const held = (reason: string): TerminalActionResult => ({ state: 'failed', dispatch: 'not_started', reason })
 
     it.each([
-      ['codex', 'Codex is browsing its transcript, where Enter would rewind the conversation. Close it with Esc in its terminal, then send the message again.'],
-      ['claude', 'Claude Code has its Rewind menu open, where Enter would pick a point to rewind to. Close it with Esc in its terminal, then send the message again.'],
-    ] as const)('%s: tells the person why and how to get the next one through, asks no lease again, and awaits nothing', async (engine, text) => {
+      ['codex', 'rewind_picker_open', 'Codex is browsing its transcript, where Enter would rewind the conversation. Close it with Esc in its terminal, then send the message again.'],
+      ['claude', 'rewind_picker_open', 'Claude Code has its Rewind menu open, where Enter would pick a point to rewind to. Close it with Esc in its terminal, then send the message again.'],
+      ['claude', 'permission_open', 'Claude Code is asking for permission. Answer it first, in the app or in its terminal, then send the message again.'],
+      ['codex', 'question_open', 'Codex is asking you a question. Answer it first, in the app or in its terminal, then send the message again.'],
+    ] as const)('%s, %s: tells the person why and what to do, asks no lease again, and awaits nothing', async (engine, reason, text) => {
       const onError = vi.fn(), onSubmitted = vi.fn(), sleep = vi.fn(async () => {})
-      const inject = vi.fn(async () => refused)
+      const inject = vi.fn(async () => held(reason))
       const controller = new SessionInputController({ getSession: () => session(engine), validateRuntime: async () => true,
         inject, sendKey: async () => true, onError, onSubmitted, sleep })
       controller.submit('s1', 'a message from the app')
@@ -39,10 +41,20 @@ describe('SessionInputController', () => {
     it('rejects a message that wants a receipt with the reason, and says why', async () => {
       const onError = vi.fn(), onDelivery = vi.fn()
       const controller = new SessionInputController({ getSession: () => session('codex'), validateRuntime: async () => true,
-        inject: async () => refused, sendKey: async () => true, onError, onDelivery })
+        inject: async () => held('permission_open'), sendKey: async () => true, onError, onDelivery })
       controller.submit('s1', 'a message from the device', 'd1')
-      await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith({ sessionId: 's1', deliveryId: 'd1', state: 'rejected', reason: REWIND_PICKER_OPEN }))
-      expect(onError).toHaveBeenCalledWith('s1', expect.stringMatching(/^Codex is browsing its transcript/))
+      await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith({ sessionId: 's1', deliveryId: 'd1', state: 'rejected', reason: 'permission_open' }))
+      expect(onError).toHaveBeenCalledWith('s1', 'Codex is asking for approval. Answer it first, in the app or in its terminal, then send the message again.')
+      controller.forget('s1')
+    })
+
+    it('rejects a team\'s turn with the reason, and tells no person: its team hears of it', async () => {
+      const onError = vi.fn(), onDelivery = vi.fn()
+      const controller = new SessionInputController({ getSession: () => session('claude'), validateRuntime: async () => true,
+        beforeTeamWrite: async () => null, inject: vi.fn(), injectTeam: async () => held('menu_open'), sendKey: async () => true, onError, onDelivery })
+      controller.submit('s1', 'a team turn', 'team:1')
+      await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith({ sessionId: 's1', deliveryId: 'team:1', state: 'rejected', reason: 'menu_open' }))
+      expect(onError).not.toHaveBeenCalled()
       controller.forget('s1')
     })
   })
