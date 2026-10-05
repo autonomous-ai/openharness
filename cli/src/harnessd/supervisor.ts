@@ -49,6 +49,46 @@ export interface SupervisorDeps {
   writeStatus(status: SupervisorStatus): void
   log(line: string): void
   exit(code: number): void
+  /**
+   * Replace this master with the bundle on disk before a core is started on it, carrying `state`
+   * (./reexec.ts): asked in the gap before every core start, when no core is running, so the swap
+   * orphans nothing. `proceed` is called when it did not replace itself, and why. Left out, never.
+   */
+  reexec?(state: ResumeState, proceed: (outcome: ReexecOutcome) => void): void
+  /** A core is up: ready, or bound for a protocol 1 core. A re-executed master has proved itself. */
+  coreUp?(): void
+}
+
+/**
+ * What a master hands the one that replaces it in its own process (./reexec.ts). The crash times and
+ * the backoff are left behind: they are on the old process's monotonic clock, which a new one restarts.
+ */
+export interface ResumeState {
+  restarts: number
+  lastExit: string | null
+  lastExitReason: ExitReason | null
+  /** `pending`: the core about to start runs an update, on probation once it is ready. */
+  update: 'pending' | null
+  /** The pid file is this process's already. */
+  claimed: boolean
+  /** How many times this process has re-executed. */
+  reexecs: number
+  /** Of those, how many since a core last came up: a master that keeps re-executing without one is
+   *  in a loop, and stops (./reexec.ts `REEXEC_LIMIT`). */
+  unproven: number
+}
+
+/**
+ * Why a master did not replace itself: the bundle on disk is its own code (`same`); it could not or
+ * would not, for a reason that is not the bundle's (`kept`); or the bundle's master did not answer its
+ * probe (`refused`), which fails an update to it.
+ */
+export type ReexecOutcome = 'same' | 'kept' | 'refused'
+
+/** Who this master is: its code's version, and what the master it replaced handed on. */
+export interface SupervisorIdentity {
+  version?: string
+  resume?: ResumeState | null
 }
 
 export interface SupervisorOptions {
@@ -112,6 +152,10 @@ export interface SupervisorStatus {
   protocol: number
   /** When the state last changed, wall clock ms. */
   since: number
+  /** The version of the code this master runs, when it knows it. */
+  masterVersion: string | null
+  /** How many times this master's process has replaced itself with a newer or restored bundle. */
+  reexecs: number
 }
 
 type TimerName = 'bindTimer' | 'readyTimer' | 'heartbeatTimer' | 'killTimer' | 'restartTimer' | 'probationTimer'
@@ -151,10 +195,30 @@ export class Supervisor {
   private heartbeatTimer: unknown = null
   private killTimer: unknown = null
   private restartTimer: unknown = null
+  private readonly masterVersion: string | null
+  private reexecs = 0
+  private unproven = 0
 
-  constructor(private readonly deps: SupervisorDeps, private readonly options: SupervisorOptions = DEFAULT_SUPERVISOR_OPTIONS) {
+  constructor(
+    private readonly deps: SupervisorDeps,
+    private readonly options: SupervisorOptions = DEFAULT_SUPERVISOR_OPTIONS,
+    identity: SupervisorIdentity = {},
+  ) {
     this.backoff = options.initialBackoffMs
     this.since = deps.wallClock()
+    this.masterVersion = identity.version ?? null
+    const resume = identity.resume
+    if (resume) {
+      // The master this process was a moment ago, carried on: its core exited for an update (or was
+      // rolled back), and the one about to start is judged as it would have judged it.
+      this.restarts = resume.restarts
+      this.lastExit = resume.lastExit
+      this.lastExitReason = resume.lastExitReason
+      this.update = resume.update
+      this.claimed = resume.claimed
+      this.reexecs = resume.reexecs
+      this.unproven = resume.unproven
+    }
   }
 
   status(): SupervisorStatus {
@@ -167,12 +231,45 @@ export class Supervisor {
       safeMode: this.coreSafeMode ?? this.safeMode,
       protocol: HARNESSD_PROTOCOL,
       since: this.since,
+      masterVersion: this.masterVersion,
+      reexecs: this.reexecs,
     }
   }
 
   start(): void {
     if (this.state !== 'idle') return
-    this.spawn()
+    this.next()
+  }
+
+  /** What this master hands on if it replaces itself now. */
+  private resumeState(): ResumeState {
+    return {
+      restarts: this.restarts, lastExit: this.lastExit, lastExitReason: this.lastExitReason,
+      update: this.update === 'pending' ? 'pending' : null, claimed: this.claimed, reexecs: this.reexecs, unproven: this.unproven,
+    }
+  }
+
+  /**
+   * Start the next core, in the one moment no core is running: first, if the bundle on disk is not
+   * this master's code (an update the core staged, a rollback that put the previous one back, a bundle
+   * replaced by hand), the master replaces itself with it and the new master starts the core. A master
+   * left running old code supervised every core after it with that code until something restarted it.
+   */
+  private next(): void {
+    if (!this.deps.reexec) { this.spawn(); return }
+    this.deps.reexec(this.resumeState(), (outcome) => {
+      // Stopped while it was deciding: the stop has finished this master already.
+      if (this.state === 'stopping' || this.state === 'stopped') return
+      if (outcome === 'refused' && this.update === 'pending') {
+        // A bundle whose master cannot start is an update that failed, as one whose core cannot is.
+        this.update = null
+        this.deps.restoreUpdate()
+        this.deps.log('[harnessd] the new bundle\'s master would not start — rolled back to the previous bundle; restarting')
+        this.next()
+        return
+      }
+      this.spawn()
+    })
   }
 
   /** Stop the core and the master. A second call while stopping kills the core outright. */
@@ -241,7 +338,7 @@ export class Supervisor {
           this.armTimer('readyTimer', () => this.kill(core, 'not-ready', `bound but not ready within ${this.options.readyTimeoutMs} ms`), this.options.readyTimeoutMs)
         }
         if (this.state !== 'stopping') this.setState(readiness ? 'listening' : 'running')
-        if (!readiness) this.beginProbation()
+        if (!readiness) this.up()
         return
       }
       case 'harnessd:ready':
@@ -256,7 +353,7 @@ export class Supervisor {
         this.coreSafeMode = message.safeMode ?? null
         this.deps.log(`[harnessd] core ready (pid ${core.pid ?? '?'})${message.safeMode === undefined ? '' : ` · in safe mode: ${message.safeMode}`}`)
         this.setState('running')
-        this.beginProbation()
+        this.up()
         return
       case 'harnessd:heartbeat': {
         if (!this.bound) return
@@ -271,6 +368,13 @@ export class Supervisor {
         return
       }
     }
+  }
+
+  /** A core is up: its update goes on probation, and a re-executed master has proved itself. */
+  private up(): void {
+    this.beginProbation()
+    this.unproven = 0
+    this.deps.coreUp?.()
   }
 
   private restartForMemory(why: string): void {
@@ -358,7 +462,7 @@ export class Supervisor {
 
   private scheduleSpawn(delay: number): void {
     this.setState('restarting')
-    this.armTimer('restartTimer', () => { this.restartTimer = null; this.spawn() }, delay)
+    this.armTimer('restartTimer', () => { this.restartTimer = null; this.next() }, delay)
   }
 
   /** Kill a core that broke a promise — to bind, to be ready, to beat — and remember which. */
