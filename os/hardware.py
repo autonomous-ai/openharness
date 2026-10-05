@@ -242,7 +242,7 @@ def activate(address, sysfs=Path('/sys'), bundle=BUNDLE):
         raise
 
 
-def configure_install(target, devices=None):
+def configure_install(target, devices=None, bundle=BUNDLE):
     target = target.resolve()
     # Only the offline installer's mounted, still-marked image may use this path.
     # It must never install a compiler into the running live overlay by mistake.
@@ -253,7 +253,13 @@ def configure_install(target, devices=None):
     folder = target / BUNDLE.relative_to('/')
     result = {'drivers': [], 'devices': [d['id'] for d in selected]}
     if selected:
-        manifest = bundle_manifest(folder, all_files=True)
+        manifest = bundle_manifest(folder)
+        cache = folder
+        if not (folder / 'packages').exists():
+            if bundle_manifest(bundle) != manifest:
+                raise ValueError('Live Wi-Fi cache and installation image differ.')
+            cache = bundle
+        manifest = bundle_manifest(cache, all_files=True)
         lock = json.loads((target / 'usr/share/harness-os/lock.json').read_text())
         if manifest['arch_snapshot'] != lock['arch_snapshot']:
             raise ValueError('Wi-Fi bundle and installed package snapshot differ.')
@@ -270,11 +276,19 @@ def configure_install(target, devices=None):
         # No repositories: this operation either succeeds from signed local
         # packages or fails. It cannot quietly turn into an online installation.
         with tempfile.TemporaryDirectory(prefix='harness-driver-', dir=target / 'var/tmp') as temporary:
+            packages = Path(temporary) / 'packages'
+            packages.mkdir()
             config = Path(temporary) / 'pacman.conf'
             config.write_text('[options]\nArchitecture = auto\nCheckSpace\nSigLevel = Required\nLocalFileSigLevel = Required\n')
             config.chmod(0o600)
-            run('arch-chroot', target, 'pacman', '--config', '/' + str(config.relative_to(target)),
-                '-U', '--needed', '--noconfirm', *[str(BUNDLE / 'packages' / name) for name in names], timeout=600)
+            run('mount', '--bind', cache / 'packages', packages)
+            try:
+                run('mount', '-o', 'remount,bind,ro', packages)
+                prefix = '/' + str(packages.relative_to(target))
+                run('arch-chroot', target, 'pacman', '--config', '/' + str(config.relative_to(target)),
+                    '-U', '--needed', '--noconfirm', *[prefix + '/' + name for name in names], timeout=600)
+            finally:
+                run('umount', packages)
         run('arch-chroot', target, 'modinfo', '-k', manifest['kernel'], 'wl', capture=True)
         result.update(drivers=['broadcom-wl-dkms'], kernel=manifest['kernel'], packages=manifest['packages'])
     # The USB keeps the offline cache; the installed computer does not. Unrelated
