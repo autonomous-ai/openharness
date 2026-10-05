@@ -1,7 +1,8 @@
 import { createHash } from 'crypto'
 import type { RegisteredSession } from './registry.js'
 import { sid } from './log.js'
-import { REWIND_PICKER_OPEN, TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
+import { isMessageHold, messageHoldText, type MessageHold } from './messageHold.js'
+import { TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
 
 const MAX_QUEUE_ITEMS = 8
 const MAX_QUEUE_BYTES = 24 * 1024
@@ -129,17 +130,10 @@ export interface SessionInputDeps {
   sleep?: (ms: number) => Promise<void>
 }
 
-/** A message not typed because the pane shows a picker for a point to rewind to: nothing was written. */
-function refusedForRewindPicker(delivery: boolean | TerminalActionResult): boolean {
+/** A message not typed because of what the pane showed (messageHold.ts): nothing was written. */
+function heldBack(delivery: boolean | TerminalActionResult): MessageHold | null {
   return typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started'
-    && delivery.reason === REWIND_PICKER_OPEN
-}
-
-/** What the person is told: why their message was not typed, and what lets the next one through. */
-function rewindPickerRefusal(engine: string): string {
-  return engine === 'codex'
-    ? 'Codex is browsing its transcript, where Enter would rewind the conversation. Close it with Esc in its terminal, then send the message again.'
-    : 'Claude Code has its Rewind menu open, where Enter would pick a point to rewind to. Close it with Esc in its terminal, then send the message again.'
+    && isMessageHold(delivery.reason) ? delivery.reason : null
 }
 
 /** A write the pane's control lease refused before a byte of it was written. */
@@ -466,9 +460,10 @@ export class SessionInputController {
       : delivery.state === 'succeeded' || delivery.dispatch === 'possibly_executed'
     if (!accepted) {
       forgetScope?.()
-      if (refusedForRewindPicker(delivery)) {
-        console.warn(`[inject] ${sid(sessionId)} not typed · engine=${session.engine} · a rewind picker is open`)
-        this.deps.onError(sessionId, rewindPickerRefusal(session.engine))
+      const held = heldBack(delivery)
+      if (held) {
+        console.warn(`[inject] ${sid(sessionId)} not typed · engine=${session.engine} · ${held}`)
+        this.deps.onError(sessionId, messageHoldText(session.engine, held))
         return
       }
       console.warn(`[inject] ${sid(sessionId)} paste failed · engine=${session.engine} · target=${session.agentId}`)
@@ -540,10 +535,12 @@ export class SessionInputController {
         this.finishDelivery(sessionId, state, 'rejected', delivery.reason)
         return
       }
-      if (refusedForRewindPicker(delivery)) {
-        console.warn(`[inject] ${sid(sessionId)} not typed · engine=${session.engine} · a rewind picker is open`)
-        this.finishDelivery(sessionId, state, 'rejected', REWIND_PICKER_OPEN)
-        this.deps.onError(sessionId, rewindPickerRefusal(session.engine))
+      const held = heldBack(delivery)
+      if (held) {
+        console.warn(`[inject] ${sid(sessionId)} not typed · engine=${session.engine} · ${held}`)
+        this.finishDelivery(sessionId, state, 'rejected', held)
+        // A team's turn is automatic, and its team hears of the refusal; anyone else's is a person's to see.
+        if (!deliveryId.startsWith('team:')) this.deps.onError(sessionId, messageHoldText(session.engine, held))
         return
       }
       const accepted = typeof delivery === 'boolean'

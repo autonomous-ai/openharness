@@ -1,7 +1,8 @@
 /**
  * What a message must never do, for Claude Code and Codex: reach the shell an exited engine leaves in
- * its pane, where it would run as a command, or a picker for a point to rewind the conversation to,
- * where its Enter would pick one. And what a client must never cost the others: one that
+ * its pane, where it would run as a command, a picker for a point to rewind the conversation to, where
+ * its Enter would pick one, or a view where it is lost. (A permission prompt or a question is in
+ * questions.e2e.ts.) And what a client must never cost the others: one that
  * stops reading is cut off, alone, and the daemon's memory stays bounded while it is.
  */
 import { existsSync, mkdirSync } from 'node:fs'
@@ -95,6 +96,24 @@ describe('what a message must never do', () => {
     await until('the composer to be back', async () => !(await d.capture(agent.tmuxPane)).includes('Browsing transcript') || null, 15_000, 250)
     await turn(client, agent.id, 'what changed since then?')
     expect(await d.capture(agent.tmuxPane)).not.toContain('rewound')
+    client.close()
+  })
+
+  it('claude: a message is not lost in its transcript view (ctrl+o): refused with the reason, it goes through once the view is closed', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'claude', 'transcript-view')
+    await turn(client, agent.id, '!transcript')
+    await until('the view to be drawn', async () => (await d.capture(agent.tmuxPane)).includes('Showing detailed transcript') || null, 15_000, 250)
+    const from = client.frames.length
+    const refused = client.next((frame) => frame.type === 'error' && frame.agentId === agent.id, 15_000, 'the refusal')
+    client.send('message', { agentId: agent.id, content: 'and the logout bug?' })
+    expect(String((await refused).payload?.message)).toBe('Claude Code is showing its transcript (ctrl+o), where a message is not typed. Close it with Esc in its terminal, then send the message again.')
+    expect(client.frames.slice(from).some(isTurn('turn_started', agent.id))).toBe(false)
+    // Closed with Esc, as the refusal says, the same message goes through.
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, 'Escape')
+    await until('the prompt to be back', async () => !(await d.capture(agent.tmuxPane)).includes('Showing detailed transcript') || null, 15_000, 250)
+    await turn(client, agent.id, 'and the logout bug?')
     client.close()
   })
 

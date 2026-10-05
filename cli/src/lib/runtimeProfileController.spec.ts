@@ -9,8 +9,8 @@ import {
   parseCodexModelRows,
   parseCursorModelPicker,
   parseCursorParameterRows,
+  paneModal,
   RuntimeProfileController,
-  rewindPickerOpen,
 } from './runtimeProfileController.js'
 import {
   CLAUDE_PROMPT, CLAUDE_REWIND_CONFIRM, CLAUDE_REWIND_EMPTY, CLAUDE_REWIND_LIST, CLAUDE_REWIND_LIST_MESSAGE_FOCUSED,
@@ -69,26 +69,34 @@ describe('runtime pane parsing', () => {
     // menu and drops what was pasted, and, on a message, takes it a step from restoring the conversation.
     for (const [view, screen] of Object.entries({ CLAUDE_REWIND_LIST, CLAUDE_REWIND_LIST_MESSAGE_FOCUSED, CLAUDE_REWIND_CONFIRM, CLAUDE_REWIND_EMPTY })) {
       expect(inspectRuntimePane('claude', screen), view).toMatchObject({ idle: false, dialog: true })
-      expect(rewindPickerOpen('claude', screen), view).toBe(true)
+      expect(paneModal('claude', screen), view).toBe('rewind')
     }
     // Its prompt back between its rules under any leftover of it, it is closed.
     expect(inspectRuntimePane('claude', `${CLAUDE_REWIND_LIST}\n${CLAUDE_PROMPT}`)).toMatchObject({ idle: true, dialog: false })
-    expect(rewindPickerOpen('claude', `${CLAUDE_REWIND_LIST}\n${CLAUDE_PROMPT}`)).toBe(false)
+    expect(paneModal('claude', `${CLAUDE_REWIND_LIST}\n${CLAUDE_PROMPT}`)).toBeNull()
     // A message that reads `Rewind`, in the transcript or the list, is not the menu's title.
-    expect(rewindPickerOpen('claude', `\u001b[38;5;239m\u001b[48;5;237m❯ \u001b[38;5;231mRewind\u001b[39m\u001b[49m\n\n${CLAUDE_PROMPT}`)).toBe(false)
-    expect(rewindPickerOpen('claude', CLAUDE_REWIND_LIST.replace('   fix the login bug', '   Rewind'))).toBe(true)
+    expect(paneModal('claude', `\u001b[38;5;239m\u001b[48;5;237m❯ \u001b[38;5;231mRewind\u001b[39m\u001b[49m\n\n${CLAUDE_PROMPT}`)).toBeNull()
+    expect(paneModal('claude', CLAUDE_REWIND_LIST.replace('   fix the login bug', '   Rewind'))).toBe('rewind')
     // Another engine's pane is not read for it.
-    expect(rewindPickerOpen('cursor', CLAUDE_REWIND_LIST)).toBe(false)
+    expect(paneModal('cursor', CLAUDE_REWIND_LIST)).toBeNull()
   })
 
-  it('finds Codex browsing its transcript in both its screen modes, and nothing in an unreadable pane', () => {
+  it('finds Codex browsing its transcript in both its screen modes', () => {
     for (const [mode, screen] of Object.entries({ CODEX_BROWSING_FULLSCREEN, CODEX_BROWSING_SCROLLBACK })) {
       expect(inspectRuntimePane('codex', screen), mode).toMatchObject({ idle: false, dialog: true })
-      expect(rewindPickerOpen('codex', screen), mode).toBe(true)
+      expect(paneModal('codex', screen), mode).toBe('rewind')
     }
-    expect(rewindPickerOpen('codex', CODEX_PROMPT)).toBe(false)
-    expect(rewindPickerOpen('codex', null)).toBe(false)
-    expect(rewindPickerOpen('claude', '')).toBe(false)
+    expect(paneModal('codex', CODEX_PROMPT)).toBeNull()
+    expect(paneModal('claude', '')).toBeNull()
+  })
+
+  it('tells an approval prompt and a menu from the MCP boot notice, which takes typing and is no modal for a message', () => {
+    expect(paneModal('claude', ' Bash command\n   printf hi\n Do you want to proceed?\n ❯ 1. Yes\n   2. No')).toBe('permission')
+    expect(paneModal('codex', 'Select Model and Effort\n› 1. gpt-5.6-sol (current)')).toBe('menu')
+    const booting = `${CLAUDE_PROMPT}\n  Starting MCP servers (1/3)…`
+    expect(paneModal('claude', booting)).toBeNull()
+    // Still a dialog to every reader that holds work back from a booting pane.
+    expect(inspectRuntimePane('claude', booting)).toMatchObject({ dialog: true })
   })
 
   it('reads hermes, which italicises its placeholder instead of dimming it', () => {

@@ -391,3 +391,20 @@ it('excludes legacy writes only during Device ownership of the same pane', async
   expect(writes).toEqual(['local-before', 'device', 'other-pane', 'local-after'])
   controller.forget('agent')
 })
+
+it('says why a write the pane refused was not typed, when a dialog opened after the look for one', async () => {
+  // The look before the write found the composer; the engine opened a permission prompt in between, and the
+  // write refused it unwritten (core/input.ts, messageHold.ts). The refusal carries that reason, not a paste
+  // that failed.
+  const onDelivery = vi.fn()
+  const results: TerminalActionResult[] = [
+    { state: 'failed', dispatch: 'not_started', reason: 'permission_open' },
+    { state: 'failed', dispatch: 'not_started', reason: 'terminal agent is unavailable' },
+  ]
+  const device = makeDevice({ inject: async () => results.shift()!, isAwaitingUser: async () => false, onDelivery })
+  device.submit('agent', 'A', 'delivery-A')
+  await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'delivery-A', state: 'rejected', reason: 'permission_open' })))
+  device.submit('agent', 'B', 'delivery-B')
+  await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'delivery-B', state: 'rejected', reason: 'paste_failed' })))
+  device.forget('agent')
+})

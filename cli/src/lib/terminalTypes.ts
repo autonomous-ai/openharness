@@ -186,10 +186,6 @@ export const TERMINAL_ACTION_SUCCEEDED: TerminalActionResult = {
  *  not the one the registry holds (just relaunched, not yet confirmed) or another writer holds it. */
 export const TERMINAL_LEASE_REFUSED = 'terminal control lease is unavailable or changed'
 
-/** The reason a person's message is not typed: the pane shows a picker for a point to rewind the
- *  conversation to, where its Enter would pick one (runtimeProfileController's `rewindPickerOpen`). */
-export const REWIND_PICKER_OPEN = 'rewind_picker_open'
-
 export function terminalActionNotStarted(reason: string): {
   state: 'failed'; dispatch: 'not_started'; reason: string
 } {
