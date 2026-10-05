@@ -600,10 +600,15 @@ are checked before fixture installation. This is not a product update channel.
 The **Harness OS private Fedora package** workflow takes a successful private
 runtime run and its full producer SHA. It builds release 1 twice and release 2
 once, compares repeated RPM bytes, and installs, upgrades and removes the package
-in a fresh native Fedora container. It checks the original runtime artifact,
-exact installed versions, owned files and existing account/project/configuration
-preservation. Only these private local RPMs bypass package-signature checks;
-repository dependencies still require Fedora signatures.
+in a fresh native Fedora container. First it provisions the RPM's declared signed
+Fedora dependencies with their normal presets, retaining package inventories and
+the full `/etc` configuration delta. It then creates an existing account, project,
+personal configuration and explicit user-unit mask before the Harness transactions.
+Those transactions check the original runtime artifact, exact installed versions,
+owned files and strict account/project/configuration preservation. This proves
+preservation on an existing Fedora base; installing missing platform dependencies
+can change Fedora defaults. Only the private local Harness RPMs bypass signature
+checks; repository dependencies still require Fedora signatures.
 
 Use its `first/` and `upgrade/` artifacts with the immutable graphical fixture
 to check the packaged session across an actual VM reboot and user runtime update:

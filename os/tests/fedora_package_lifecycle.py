@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Exercise the session RPM only inside a disposable native Fedora container.
 
-This verifies packaging and existing-user preservation, not an installed ARM OS,
-graphical session, Apple hardware, system updates or boot recovery.
+First provision signed Fedora dependencies with their normal presets, then verify
+packaging and existing-user preservation on that base. This does not verify an
+installed ARM OS, graphical session, Apple hardware, system updates or boot recovery.
 """
 import argparse
 import hashlib
@@ -101,7 +102,7 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     receipt = {'status': 'running', 'started_at': time.time(), 'test_source_commit': args.source,
                'runtime_source_commit': args.runtime_source, 'root_image': args.root_image,
-               'scope': 'Native RPM reproducibility, dependency installation, upgrade and removal',
+               'scope': 'Native RPM reproducibility, Fedora dependency provisioning, then existing-base install/upgrade/removal',
                'checks': [], 'limitations': ['Container; no graphical, kernel, hardware, boot or system recovery proof']}
     log = (output / 'commands.log').open('w')
 
@@ -173,12 +174,36 @@ def main():
         assert old['symlinks'] == repeated['symlinks'] == new['symlinks']
         assert old['package']['version'] == new['package']['version']
         assert str(old['package']['release']) == '1' and str(new['package']['release']) == '2'
+        requirements = {}
         for label, rpm in (('first', first), ('upgrade', upgrade)):
             assert not run('rpm', '-qp', '--scripts', rpm).stdout.strip(), 'Package contains service/account scriptlets'
             assert not run('rpm', '-qp', '--triggers', rpm).stdout.strip(), 'Package contains transaction triggers'
-            (output / f'package-requires-{label}.txt').write_text(run('rpm', '-qp', '--requires', rpm).stdout)
+            required = run('rpm', '-qp', '--requires', rpm).stdout
+            (output / f'package-requires-{label}.txt').write_text(required)
+            requirements[label] = [line for line in required.splitlines() if not line.startswith('rpmlib(')]
+        assert requirements['first'] == requirements['upgrade'], 'Upgrade changes platform requirements'
         receipt['packages'] = {'first': old, 'upgrade': new}
         receipt['checks'].append('Independent same-input builds produce identical RPM bytes; upgrade changes only RPM release')
+
+        # Fedora dependencies apply their own normal presets. Retain that full
+        # configuration delta separately from the Harness lifecycle baseline.
+        manager = shutil.which('dnf5') or shutil.which('microdnf')
+        assert manager, 'The locked Fedora image must provide a package manager'
+        manager_options = [manager, '-y', '--setopt=install_weak_deps=False',
+                           '--setopt=gpgcheck=True', '--nodocs']
+        assert run('rpm', '-q', 'harness-os-session', check=False).returncode == 1
+        dependency_before = {'/etc': fingerprint(Path('/etc'))}
+        write_json('preservation-before-dependencies.json', dependency_before)
+        inventory('before-dependencies')
+        try:
+            run(*manager_options, 'install', *requirements['first'], timeout=600)
+        finally:
+            dependency_after = {'/etc': fingerprint(Path('/etc'))}
+            write_json('preservation-after-dependencies.json', dependency_after)
+            write_json('preservation-dependency-changes.json', changed_paths(dependency_before, dependency_after))
+            inventory('after-dependencies')
+        assert run('rpm', '-q', 'harness-os-session', check=False).returncode == 1
+        receipt['checks'].append('Signed Fedora requirements provisioned with normal presets; configuration delta retained and Harness absent')
 
         # This existing user's data must survive every package operation. The
         # package must not create the OS image's default account or login policy.
@@ -191,7 +216,10 @@ def main():
             target = home / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text)
-        run('chown', '-R', 'harness-rpm-probe:harness-rpm-probe', home)
+        mask = home / '.config/systemd/user/pipewire.service'
+        mask.parent.mkdir(parents=True, exist_ok=True)
+        mask.symlink_to('/dev/null')  # Preserve this user's explicit service choice.
+        run('chown', '-h', '-R', 'harness-rpm-probe:harness-rpm-probe', home)
         preserved = [home, Path('/etc/profile.d/harness-os.sh'), Path('/etc/NetworkManager/conf.d/10-dns.conf'),
                      Path('/etc/systemd/system/getty@tty1.service.d'), Path('/etc/systemd/system/default.target'),
                      Path('/etc/systemd/user/default.target.wants'), Path('/etc/hostname'), Path('/etc/hosts'),
@@ -200,10 +228,7 @@ def main():
         write_json('preservation-before.json', before)
         inventory('before')
         account = run('getent', 'passwd', 'harness-rpm-probe').stdout
-        manager = shutil.which('dnf5') or shutil.which('microdnf')
-        assert manager, 'The locked Fedora image must provide a package manager'
-        transaction = [manager, '-y', '--setopt=install_weak_deps=False', '--setopt=gpgcheck=True',
-                       '--setopt=localpkg_gpgcheck=False', '--nodocs', 'install']
+        transaction = [*manager_options, '--setopt=localpkg_gpgcheck=False', 'install']
         for label, rpm, metadata in [('install', first, old), ('upgrade', upgrade, new)]:
             run(*transaction, rpm, timeout=600)
             assert run('rpm', '-q', '--qf', '%{NAME}\t%{VERSION}\t%{RELEASE}\t%{ARCH}',
