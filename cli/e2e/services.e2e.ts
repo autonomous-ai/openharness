@@ -38,17 +38,21 @@ describe('a failing service never takes the core down', () => {
   let daemon: IsolatedDaemon | undefined
   afterEach(async () => { await daemon?.close(); daemon = undefined })
 
-  it('with every service failing to start, the core starts, runs an agent through turns and a restart, and says search is off', async () => {
-    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'search,viewers,models,workspaces' } })
+  it('with every service failing to start, the core starts, runs an agent through turns and a restart, and says each service is off', async () => {
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'search,viewers,models,workspaces,store' } })
     onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
     await daemon.start()
-    for (const service of ['search', 'viewers', 'models', 'workspaces']) {
+    for (const service of ['search', 'viewers', 'models', 'workspaces', 'store']) {
       expect(daemon.log()).toContain(`[services] ${service} did not start · injected fault: ${service} · the core runs without it`)
     }
     const client = await LocalClient.connect(daemon)
     const agentId = await boundAgent(daemon, client, 'no-services')
     await turn(client, agentId, 'first, with no services')
-    expect((await client.request('session_search', { query: 'first' })).error).toBe('SEARCH_UNAVAILABLE')
+    // Off, never UNSUPPORTED: the apps read that as "update the CLI".
+    expect(await client.request('session_search', { query: 'first' })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: false })
+    for (const type of ['dsh_list', 'dsh_install', 'dsh_update', 'dsh_remove']) {
+      expect(await client.request(type, { id: 'acme/thing' }), type).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'store', retryable: false })
+    }
 
     await daemon.restart()
     const again = await LocalClient.connect(daemon)
@@ -63,7 +67,7 @@ describe('a failing service never takes the core down', () => {
 
   it('with services failing on every call, they are switched off and every turn still reaches the client', async () => {
     daemon = await IsolatedDaemon.create({
-      env: { HARNESSD_TEST_FAULTS: 'search.touch,search.search,viewers.frameContext,viewers.attach,workspaces.nameBranches' },
+      env: { HARNESSD_TEST_FAULTS: 'search.touch,search.session_search,viewers.frameContext,viewers.attach,workspaces.nameBranches' },
     })
     onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-120).join('\n')}`) })
     await daemon.start()
@@ -79,7 +83,7 @@ describe('a failing service never takes the core down', () => {
     expect(daemon.log()).toContain('[services] viewers.frameContext failed · injected fault: viewers.frameContext')
 
     // Off, search says so; the agent's row still carries everything the core owns.
-    expect((await client.request('session_search', { query: 'turn' })).error).toBe('SEARCH_UNAVAILABLE')
+    expect(await client.request('session_search', { query: 'turn' })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'search' })
     const agent = await row(client, agentId)
     expect(agent?.sessionId).toBeTruthy()
     expect(agent?.status).not.toBe('stopped')
@@ -108,18 +112,43 @@ describe('a failing service never takes the core down', () => {
   })
 
   it('a search request that fails before search is switched off answers that request, and the next one too', async () => {
-    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'search.search' } })
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'search.session_search' } })
     onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
     await daemon.start()
     const client = await LocalClient.connect(daemon)
-    const first = await client.request('session_search', { query: 'anything' })
-    expect(first).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
     const answers = []
-    for (let i = 0; i < 5; i++) answers.push((await client.request('session_search', { query: `again ${i}` })).error)
-    // The fifth failure switched search off: from then on the request says search is off.
-    expect(answers.slice(0, 3)).toEqual(['SERVICE_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'SERVICE_UNAVAILABLE'])
-    expect(answers.at(-1)).toBe('SEARCH_UNAVAILABLE')
+    for (let i = 0; i < 6; i++) answers.push(await client.request('session_search', { query: `ask ${i}` }))
+    // Each failure answers its own request; the fifth switches search off, and from then on the
+    // request says search is off. Its other request, and the core's, go on.
+    expect(answers.slice(0, 5)).toEqual(Array(5).fill(expect.objectContaining({ error: 'SERVICE_FAILED', service: 'search' })))
+    expect(answers[5]).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: false })
+    expect(daemon.log()).toContain('[services] search.session_search failed · injected fault: search.session_search')
     expect((await client.request('agents_list', {})).agents).toEqual([])
+    client.close()
+  })
+
+  it('the store answers from its own service; one of its requests failing leaves its others and the core alone', async () => {
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'store.dsh_list' } })
+    onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
+    await daemon.start()
+    const client = await LocalClient.connect(daemon)
+    expect(await client.request('dsh_list', {})).toMatchObject({ error: 'SERVICE_FAILED', service: 'store' })
+    // Its other requests are still the store's own answers, refusals included.
+    expect(await client.request('dsh_remove', { id: '../../etc' })).toMatchObject({ error: 'INVALID_DSH', detail: 'dsh_remove needs an id' })
+    expect(await client.request('dsh_install', { url: 'https://example.com/\n' })).toMatchObject({ error: 'INVALID_DSH' })
+    const agentId = await boundAgent(daemon, client, 'store-failing')
+    await turn(client, agentId, 'with the store failing')
+    expect(daemon.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  it('the store lists what is installed here and what the registry offers', async () => {
+    daemon = await IsolatedDaemon.create()
+    await daemon.start()
+    const client = await LocalClient.connect(daemon)
+    const listed = await client.request('dsh_list', {}, 60_000)
+    expect(listed.error, JSON.stringify(listed).slice(0, 400)).toBeUndefined()
+    expect(Array.isArray(listed.dsh)).toBe(true)
     client.close()
   })
 })
