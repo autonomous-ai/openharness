@@ -229,7 +229,18 @@ export class IsolatedDaemon {
   }
 
   async close(): Promise<void> {
+    const core = this.options.noMaster ? null : this.corePid()
     await this.stop().catch(() => {})
+    // A core whose master died during the test must not outlive it: 20 such cores, left by a run
+    // whose masters crashed, spun on their closed output pipes for the rest of a parallel suite. Only
+    // this test's core is killed — its pid, still running this daemon's entry, orphaned or ours.
+    if (core && IsolatedDaemon.alive(core)) {
+      const { stdout } = await exec('ps', ['-o', 'ppid=,command=', '-p', String(core)]).catch(() => ({ stdout: '' }))
+      const [ppid, ...command] = stdout.trim().split(/\s+/)
+      if (command.join(' ').includes('__run') && (ppid === '1' || Number(ppid) === this.pid)) {
+        try { process.kill(core, 'SIGKILL') } catch { /* gone */ }
+      }
+    }
     await this.tmux.close()
   }
 }
