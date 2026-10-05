@@ -5,11 +5,14 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import select
 import shlex
 import shutil
 import signal
 import subprocess
 import time
+import uuid
 
 from footprint_vm import copy_file
 from hardware_install_vm import candidate_record
@@ -34,11 +37,67 @@ def verify_image(iso, lock):
     return manifest
 
 
-def graceful_stop(vm, privileged):
-    vm.command(('sudo -n ' if privileged else '') + 'systemctl --no-block poweroff')
-    vm.process.wait(timeout=45)
-    assert vm.process.returncode == 0, 'Guest did not shut down cleanly'
+def graceful_stop(vm, privileged, timeout=45):
+    # Poweroff may terminate the requesting shell before it prints a command
+    # status. Require this guest's new kernel shutdown message and the owned
+    # QEMU process's real exit status; never use forced cleanup as evidence.
+    process = vm.process
+    started = time.monotonic()
+    deadline = started + timeout
+    event = {'boot': vm.boot_count, 'qemu_pid': process.pid, 'started_at': time.time(),
+             'status': 'failed', 'command_status': None, 'serial_eof': False}
+    output = bytearray()
+
+    def remaining():
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise TimeoutError('Guest shutdown exceeded its bounded deadline')
+        return value
+
+    try:
+        assert process.poll() is None, 'QEMU had already exited before shutdown request'
+        # Old buffered bytes and earlier boots' log entries cannot prove this
+        # shutdown. Drain pending console output before sending the request.
+        while select.select([vm.serial], [], [], 0)[0]:
+            remaining()
+            chunk = vm.serial.recv(65536)
+            assert chunk, 'Serial was disconnected before shutdown request'
+            vm.log.write(chunk)
+        event['serial_offset'] = vm.log.tell()
+        marker = 'HN_POWEROFF_' + uuid.uuid4().hex
+        command = ('sudo -n ' if privileged else '') + 'systemctl --no-block poweroff'
+        event['command'] = command
+        vm.send('(' + command + f"); hn_poweroff_status=$?; printf '\\n{marker}:%s\\n' \"$hn_poweroff_status\"\n")
+        while not event['serial_eof']:
+            if select.select([vm.serial], [], [], min(1, remaining()))[0]:
+                chunk = vm.serial.recv(65536)
+                if not chunk:
+                    event['serial_eof'] = True
+                    break
+                vm.log.write(chunk)
+                output.extend(chunk)
+                match = re.search(rb'\r?\n' + marker.encode() + rb':(\d+)\r?\n', output)
+                if match:
+                    event['command_status'] = int(match.group(1))
+                    assert event['command_status'] == 0, 'Guest poweroff command failed'
+        # Reading through EOF also retains buffered shutdown output when QEMU
+        # exits before the host next polls it.
+        event['qemu_exit_status'] = process.wait(timeout=remaining())
+        assert event['qemu_exit_status'] == 0, 'QEMU did not exit cleanly'
+        event['guest_power_down'] = bool(re.search(rb'\[\s*[0-9.]+\]\s+reboot: Power down(?:\r?\n|$)', output))
+        assert event['guest_power_down'], 'No fresh guest kernel shutdown evidence'
+        event['status'] = 'passed'
+    except BaseException as error:
+        event['error'] = repr(error)
+        raise
+    finally:
+        event['qemu_exit_status'] = process.poll()
+        event['seconds'] = round(time.monotonic() - started, 3)
+        event['serial_tail'] = output[-2000:].decode(errors='replace')
+        with (vm.folder / 'shutdown-events.jsonl').open('a') as log:
+            log.write(json.dumps(event) + '\n')
     vm.stop()
+    return event
 
 
 def main():

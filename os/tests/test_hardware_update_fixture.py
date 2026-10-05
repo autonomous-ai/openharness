@@ -5,13 +5,18 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import select
+import socket
+import subprocess
+import sys
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 from hardware_update_guest import (EARLY, NVIDIA, database, expected_versions,
     initramfs_identity, module_identity, payload_identity, validate_lock, validate_probe, validate_recovery, validate_transition)
-from hardware_update_vm import verify_image
+from hardware_update_vm import graceful_stop, verify_image
 
 LOCK = json.loads(Path(__file__).with_name('hardware-update.lock.json').read_text())
 
@@ -98,6 +103,94 @@ class ArtifactTests(unittest.TestCase):
             parsed = database(path)['nvidia-open-lts']
             self.assertEqual(parsed['VERSION'], ['1:615.71.09-7'])
             self.assertEqual(parsed['PGPSIG'], ['YWN0dWFsLXNpZ25hdHVyZQ=='])
+
+
+class ShutdownTests(unittest.TestCase):
+    # A real owned subprocess/socket reproduces EOF before a shell status,
+    # buffered bytes after process exit, and failure to exit. This does not boot
+    # a VM or turn simulated transport evidence into native kernel acceptance.
+    CHILD = r'''
+import os, re, signal, socket, sys
+channel = socket.socket(fileno=int(sys.argv[1]))
+mode = sys.argv[2]
+powerdown = b'[ 12.34] reboot: Power down\r\n'
+if mode == 'stale-buffer':
+    channel.sendall(powerdown)
+request = b''
+while b'\n' not in request:
+    request += channel.recv(65536)
+marker = re.search(rb'HN_POWEROFF_[0-9a-f]+', request).group()
+if mode == 'unrelated-exception' or mode == 'serial-timeout':
+    signal.pause()
+if mode in ('ack', 'command-failure'):
+    status = b'7' if mode == 'command-failure' else b'0'
+    channel.sendall(b'\r\n' + marker + b':' + status + b'\r\n')
+if mode not in ('no-proof', 'stale-log', 'stale-buffer'):
+    channel.sendall(powerdown)
+channel.close()
+if mode == 'exit-timeout':
+    signal.pause()
+sys.exit(9 if mode == 'nonzero' else 0)
+'''
+
+    def exercise(self, mode, expected=None):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            host, guest = socket.socketpair()
+            process = subprocess.Popen([sys.executable, '-c', self.CHILD, str(guest.fileno()), mode],
+                                       pass_fds=(guest.fileno(),), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            guest.close()
+            log = (folder / 'serial.log').open('ab', buffering=0)
+            if mode == 'stale-log':
+                log.write(b'[ 1.0] reboot: Power down\n')
+            if mode == 'stale-buffer':
+                self.assertTrue(select.select([host], [], [], 5)[0], 'Child did not prepare stale bytes')
+            stopped = []
+
+            def send(command):
+                if mode == 'unrelated-exception':
+                    raise ValueError('unrelated transport error')
+                host.sendall(command.encode())
+
+            vm = SimpleNamespace(folder=folder, boot_count=2, process=process, serial=host, log=log,
+                                 send=send, stop=lambda: stopped.append(process.poll()))
+            try:
+                if expected:
+                    with self.assertRaises(expected):
+                        graceful_stop(vm, True, timeout=.5)
+                else:
+                    event = graceful_stop(vm, True, timeout=5)
+                    self.assertEqual(event['status'], 'passed')
+                    self.assertTrue(event['serial_eof'] and event['guest_power_down'])
+                    self.assertEqual(event['qemu_exit_status'], 0)
+                    self.assertEqual(event['command_status'], 0 if mode == 'ack' else None)
+                recorded = json.loads((folder / 'shutdown-events.jsonl').read_text())
+                self.assertEqual(recorded['qemu_pid'], process.pid)
+                self.assertEqual(recorded['status'], 'failed' if expected else 'passed')
+                self.assertEqual(stopped, [] if expected else [0], 'Forced cleanup must not establish graceful shutdown')
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                process.wait(timeout=5)
+                process.stderr.close()
+                host.close()
+                log.close()
+
+    def test_real_exit_after_ack_or_early_serial_disconnect(self):
+        for mode in ('ack', 'early-disconnect'):
+            with self.subTest(mode=mode):
+                self.exercise(mode)
+
+    def test_missing_fresh_guest_proof_or_nonzero_exit_fails(self):
+        for mode in ('no-proof', 'stale-log', 'stale-buffer', 'nonzero', 'command-failure'):
+            with self.subTest(mode=mode):
+                self.exercise(mode, AssertionError)
+
+    def test_unrelated_errors_and_both_shutdown_timeouts_fail(self):
+        for mode, error in [('unrelated-exception', ValueError), ('serial-timeout', TimeoutError),
+                            ('exit-timeout', subprocess.TimeoutExpired)]:
+            with self.subTest(mode=mode):
+                self.exercise(mode, error)
 
 
 class AutomaticHooksTests(unittest.TestCase):
