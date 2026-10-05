@@ -120,7 +120,15 @@ class PortableFixture(unittest.TestCase):
             fixture_identity(self.folder, 'a' * 40)
 
 
-class VisibleBrowser(unittest.TestCase):
+class VisibleFrames(unittest.TestCase):
+    def test_agent_name_in_status_bar_is_not_ready_input(self):
+        # Actual failed frame: the status bar appeared before the composer,
+        # so the earlier name-only assertion sent the prompt into startup.
+        starting = 'Terminal harness 10-5 6:42\n[me@harness ~]$\n0: opencode*\nharness 06:42'
+        expected = ['OpenCode', 'Ask anything']
+        self.assertFalse(frame_contains(starting, expected))
+        self.assertTrue(frame_contains(starting + '\nOpenCode\nAsk anything...\nBuild OpenCode Zen', expected))
+
     def test_agent_transcript_is_not_a_loaded_browser_page(self):
         # The retained failure frame showed the generated HTML in OpenCode
         # while Chromium was still starting in the background.

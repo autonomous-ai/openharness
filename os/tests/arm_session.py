@@ -274,7 +274,9 @@ def exercise(vm, result):
     vm.monitor('set_link', name='hnnet', up=True)
     vm.wait_user('test -f ~/.local/state/harness-os/onboarded && pgrep -u 1000 -x opencode >/dev/null', 150)
     vm.wait_user('test "$(hn list-panes -F "#{pane_id}" | wc -l)" -eq 3')
-    vm.frame('02-agent', 'OpenCode')
+    # The status bar names OpenCode before its input is ready. Require the
+    # actual composer, then observe the prompt before submitting it once.
+    vm.frame('02-agent', ['OpenCode', 'Ask anything'])
     output, _ = vm.command('pgrep -u 1000 -x opencode | head -1')
     pid = re.search(r'(?m)^\d+\r?$', output)[0].strip()
     output, _ = vm.command('readlink /proc/' + pid + '/cwd')
@@ -287,7 +289,10 @@ def exercise(vm, result):
     prompt = ('Create hello.py that prints exactly harness arm ready and exits. Also create index.html with title Harness ARM Demo, '
               'visible text Harness ARM Demo, and exactly one button named Increment. The page displays Count: 0 initially and '
               'Count: 1 after clicking the button once. Use plain HTML and JavaScript only, no dependencies. Save both files now.')
-    vm.user('hn send-keys -l ' + shlex.quote(prompt) + '; hn send-keys Enter')
+    vm.user('hn send-keys -l ' + shlex.quote(prompt))
+    vm.wait_user('hn capture-pane -p | grep -F ' + shlex.quote('Create hello.py'), 15)
+    vm.frame('02-prompt', 'Create hello.py', 15)
+    vm.keys('ret')
     files = 'test -s ' + shlex.quote(project + '/hello.py') + ' && test -s ' + shlex.quote(project + '/index.html')
     vm.wait_user(files, 240)
     vm.wait_user('test "$(python3 ' + shlex.quote(project + '/hello.py') + ')" = "harness arm ready"', 30)
