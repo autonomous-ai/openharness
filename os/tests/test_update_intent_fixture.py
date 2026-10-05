@@ -4,17 +4,47 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import update_intent_guest as guest
 import update_intent_observer as observer
-from update_intent_vm import ROOT, UPDATER, observed_source, ui_owner
+from update_intent_vm import ROOT, UPDATER, observed_source, pane_windows, ui_owner
 from session_vm import PROBE
 
 
 class ObserverContracts(unittest.TestCase):
+    def test_serial_and_direct_formats_keep_exact_unique_pane_window_pairs(self):
+        self.assertEqual(pane_windows('%0|@0\n%3|@1\n', '|'),
+                         pane_windows('%0\t@0\n%3\t@1\n', '\t'))
+        for raw in ['', '%0@0\n', '%0|@0|extra\n', '%0|window\n',
+                    'pane|@0\n', '%0|@0\n%0|@1\n']:
+            with self.subTest(raw=raw), self.assertRaises(AssertionError):
+                pane_windows(raw, '|')
+
+    def test_archive_keeps_evidence_bytes_without_assets_or_symlink_dereference(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folder = root / 'fixture'
+            folder.mkdir()
+            (folder / 'assets').mkdir()
+            (folder / 'assets/payload').write_bytes(b'not evidence')
+            evidence = b'raw\tbytes\0\xff\n'
+            (folder / 'events.jsonl').write_bytes(evidence)
+            (folder / 'payload-link').symlink_to('assets/payload')
+            saved = root / 'evidence.tar'
+            with patch.object(guest, 'FIXTURE', folder):
+                guest.archive(saved)
+            with tarfile.open(saved) as archive:
+                self.assertEqual(archive.getnames(), ['events.jsonl', 'payload-link'])
+                self.assertEqual(archive.extractfile('events.jsonl').read(), evidence)
+                self.assertTrue(archive.getmember('payload-link').issym())
+                self.assertEqual(archive.getmember('payload-link').linkname, 'assets/payload')
+            self.assertEqual((folder / 'events.jsonl').read_bytes(), evidence)
+            self.assertEqual((folder / 'assets/payload').read_bytes(), b'not evidence')
+
     def identity(self):
         token = 'a' * 32
         event = dict(pid=101, start='123', token=token, backend_pane='%999')

@@ -91,6 +91,14 @@ def ui_owner(state, event):
     return dict(event, socket=ownership['socket'], pane=pane['pane'], window=pane['window'], process=ui)
 
 
+def pane_windows(raw, separator):
+    rows = [line.split(separator) for line in raw.splitlines()]
+    assert rows and all(len(row) == 2 and re.fullmatch(r'%\d+', row[0]) and
+                        re.fullmatch(r'@\d+', row[1]) for row in rows), rows
+    assert len({row[0] for row in rows}) == len(rows), rows
+    return dict(rows)
+
+
 def captured_text(path, timeout):
     from PIL import Image, ImageOps
     readable = path.with_name(path.stem + '-ocr.png')
@@ -137,11 +145,22 @@ def exercise(machine, image, release, receipt, output, updates_url):
                  ' -n intent-work ' + shlex.quote('python3 ' + FOLDER + '/probe.py') +
                  ' > ' + FOLDER + '/terminal-pane')
     pane = machine.read_file(FOLDER + '/terminal-pane').decode().strip()
-    machine.user('hn list-panes -s -F ' + shlex.quote('#{pane_id}\t#{window_id}') + ' > ' + FOLDER + '/terminal-rows')
-    rows = [row.split('\t') for row in machine.read_file(FOLDER + '/terminal-rows').decode().splitlines()]
-    windows = [row[1] for row in rows if len(row) == 2 and row[0] == pane]
-    assert len(windows) == 1, rows
-    window = windows[0]
+    machine.user('python3 ' + GUEST + ' format-probe')
+    probe_bytes = machine.read_file(FOLDER + '/format-probe.json')
+    (output / 'pre-overlay-direct-format.json').write_bytes(probe_bytes)
+    probe = json.loads(probe_bytes)
+    # A literal Tab sent through the interactive serial shell can be consumed
+    # by readline before hn sees argv. These numeric IDs cannot contain '|'.
+    serial_format = '#{pane_id}|#{window_id}'
+    machine.user('hn -S ' + shlex.quote(probe['socket']) + ' list-panes -s -F ' +
+                 shlex.quote(serial_format) + ' > ' + FOLDER + '/terminal-rows')
+    serial_bytes = machine.read_file(FOLDER + '/terminal-rows')
+    (output / 'pre-overlay-serial-format.txt').write_bytes(serial_bytes)
+    receipt['pre_overlay_formats'] = dict(direct=probe, serial_format=serial_format,
+                                         serial_raw=serial_bytes.decode())
+    windows = pane_windows(serial_bytes.decode(), '|')
+    assert windows == pane_windows(probe['raw'], '\t'), receipt['pre_overlay_formats']
+    window = windows[pane]
     assert re.fullmatch(r'%\d+', pane) and re.fullmatch(r'@\d+', window), (pane, window)
     machine.wait_user('test -s ~/projects/session-probe/pid && test -s ~/projects/session-probe/heartbeat')
     machine.user('printf %s intent-project-preserved > ~/projects/session-probe/proof.txt')
@@ -448,8 +467,8 @@ def main():
             if machine.accelerator not in ['hvf', 'kvm']:
                 raise ValueError('This proposed native acceptance requires HVF or KVM')
             exercise(machine, image, release, receipt, output, f'http://10.0.2.2:{server.server_port}')
-            machine.command('tar -C ' + FOLDER + ' --exclude=assets -czf /tmp/update-intent-evidence.tgz .')
-            (output / 'guest-evidence.tgz').write_bytes(machine.read_file('/tmp/update-intent-evidence.tgz'))
+            machine.user('python3 ' + GUEST + ' archive /tmp/update-intent-evidence.tar')
+            (output / 'guest-evidence.tar').write_bytes(machine.read_file('/tmp/update-intent-evidence.tar'))
             receipt['shutdown'] = machine.poweroff()
             receipt['status'] = 'passed'
         except BaseException as error:
@@ -462,8 +481,8 @@ def main():
                     receipt['barrier_failures'] = failures
                     if failures['expired'] or failures['events']:
                         receipt['failure_kind'] = 'observer-barrier'
-                    machine.command('tar -C ' + FOLDER + ' --exclude=assets -czf /tmp/update-intent-failure.tgz .', timeout=15)
-                    (output / 'guest-failure.tgz').write_bytes(machine.read_file('/tmp/update-intent-failure.tgz', timeout=15))
+                    machine.user('python3 ' + GUEST + ' archive /tmp/update-intent-failure.tar', timeout=15)
+                    (output / 'guest-failure.tar').write_bytes(machine.read_file('/tmp/update-intent-failure.tar', timeout=15))
                 except (OSError, RuntimeError, TimeoutError, ValueError) as collection_error:
                     receipt['collection_error'] = str(collection_error)
             failure_evidence(machine)

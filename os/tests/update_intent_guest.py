@@ -12,6 +12,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
@@ -234,9 +235,27 @@ def checker_complete(name):
     return all(state.get(key) == value for key, value in expected.items())
 
 
+def format_probe():
+    socket = subprocess.check_output(['hn', 'display-message', '-p', '#{socket_path}'], text=True).strip()
+    assert socket.startswith('/'), socket
+    argv = ['hn', '-S', socket, 'list-panes', '-s', '-F', '#{pane_id}\t#{window_id}']
+    # Direct argv bypasses the interactive serial shell's Tab handling.
+    write('format-probe.json', dict(socket=socket, argv=argv,
+                                    raw=subprocess.check_output(argv, text=True)))
+
+
+def archive(destination):
+    # The immutable Fedora fixture has Python but no external tar command.
+    # Keep exact evidence bytes and symlinks, without copying the release assets.
+    with tarfile.open(destination, 'w', dereference=False) as saved:
+        for path in sorted(FIXTURE.iterdir()):
+            if path.name != 'assets':
+                saved.add(path, arcname=path.name)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['serve', 'hold', 'snapshot', 'transport', 'event', 'reset-staged', 'barrier-failures', 'checker-complete'])
+    parser.add_argument('action', choices=['serve', 'hold', 'snapshot', 'transport', 'event', 'reset-staged', 'barrier-failures', 'checker-complete', 'format-probe', 'archive'])
     parser.add_argument('name', nargs='?')
     parser.add_argument('kind', nargs='?')
     parser.add_argument('--pending', choices=['true', 'false'])
@@ -249,6 +268,10 @@ def main():
         hold(args.name)
     elif args.action == 'transport':
         transport()
+    elif args.action == 'format-probe':
+        format_probe()
+    elif args.action == 'archive':
+        archive(args.name)
     elif args.action == 'checker-complete':
         raise SystemExit(0 if checker_complete(args.name) else 1)
     elif args.action == 'snapshot':
