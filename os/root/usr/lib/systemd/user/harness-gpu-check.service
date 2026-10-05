@@ -1,0 +1,16 @@
+[Unit]
+Description=Verify GPU readiness without interrupting work
+ConditionPathExists=!/etc/harness-live
+PartOf=harness-os.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/lib/harness-os/gpu_health.py --notify
+TimeoutStartSec=150
+TimeoutStopSec=3
+Nice=10
+LimitCORE=0
+# This is the active user's GPU access, not a privileged diagnostic. Keep normal
+# device permissions and avoid any reset, module unloading or session restart.
+# Leave the driver's standard nvidia-modprobe helper usable, just as it is for
+# an ordinary user process; this check adds no privileged helper of its own.
