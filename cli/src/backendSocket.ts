@@ -1414,6 +1414,7 @@ export class BackendSocket {
       .then(async () => {
         const clear = this.e2ee.unwrapTerminalBinary(connId, raw)
         if (clear) await this.terminalStreams?.handleBinary(connId, clear)
+        else { const gone = this.e2ee.terminalSessionGone(connId, raw); if (gone) this.sendTo(connId, gone) }
       })
       .catch((err) => {
         console.error('[backend] binary terminal dispatch failed:', err instanceof Error ? err.message : err)

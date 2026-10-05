@@ -434,6 +434,19 @@ export class E2eeManager {
    * relay already sees; nothing sealed is echoed. At most once a second per connection.
    */
   sessionGone(connId: string, frame: Frame): Frame | null {
+    const counter = (frame.payload as { __e2e?: { n?: unknown } } | undefined)?.__e2e?.n
+    return this.tellSessionGone(connId, { type: frame.type, ...(typeof counter === 'number' ? { n: counter } : {}) })
+  }
+
+  /** The same, for binary terminal bytes (keystrokes, a paste) sealed for a session this process never
+   *  had: those vanished silently too. Named by the frame's clear header, its kind and counter, which
+   *  the relay already reads; the same once-a-second allowance per connection as a sealed frame. */
+  terminalSessionGone(connId: string, raw: Uint8Array): Frame | null {
+    const envelope = parseTerminalBinaryEnvelope(raw)
+    return this.tellSessionGone(connId, { type: 'terminal_binary', ...(envelope ? { kind: envelope.kind, n: envelope.counter } : {}) })
+  }
+
+  private tellSessionGone(connId: string, refused: Record<string, unknown>): Frame | null {
     if (this.sessions.has(connId)) return null
     const now = this.now()
     const last = this.sessionGoneTold.get(connId)
@@ -441,8 +454,7 @@ export class E2eeManager {
     this.sessionGoneTold.delete(connId)
     this.sessionGoneTold.set(connId, now)
     if (this.sessionGoneTold.size > SESSION_GONE_REMEMBERED) this.sessionGoneTold.delete(this.sessionGoneTold.keys().next().value!)
-    const counter = (frame.payload as { __e2e?: { n?: unknown } } | undefined)?.__e2e?.n
-    return { type: 'e2e_session_unknown', payload: { refused: { type: frame.type, ...(typeof counter === 'number' ? { n: counter } : {}) } } }
+    return { type: 'e2e_session_unknown', payload: { refused } }
   }
 
   // ── e2e_* frame handling (returns true if consumed) ──────────────────────────────────────────────
