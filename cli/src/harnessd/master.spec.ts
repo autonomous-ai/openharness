@@ -562,6 +562,30 @@ describe('runMaster', () => {
       } finally { log.mockRestore() }
     })
 
+    it('asks whether the bundle on disk after a recovery is unjudged, not the bundle it started from', async () => {
+      // A re-execution that never came up is rolled back at start; with no room to remember the build,
+      // its pending note stays and names the bundle this master started from. That is not the bundle its
+      // first core runs: the build before, put back, is no update to judge.
+      const lines: string[] = []
+      const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+      try {
+        const script = bundle('')
+        const startedFrom = fingerprint(script)!
+        writeMarker(marker(), { pid: DEAD_PID, from: 'the one before', to: startedFrom, at: 1 })
+        const asked: Array<string | null> = []
+        const master = start(script, {
+          restoreUpdate: () => { writeFileSync(script, readFileSync(script, 'utf8') + '\n// the build before\n') },
+          unjudgedUpdate: (onDisk: string | null) => { asked.push(onDisk); return onDisk === startedFrom ? '2.0.0' : null },
+        })
+        await until('the master to re-execute on the bundle restored', () => master.execs.length > 0)
+        expect(asked).toEqual([fingerprint(script)])
+        expect(asked[0]).not.toBe(startedFrom)
+        expect(lines.some((line) => line.includes('an update no master kept or rolled back'))).toBe(false)
+        expect(decodeResume(master.execs[0].env[RESUME_ENV])?.update).toBeNull()
+        await master.stop()
+      } finally { log.mockRestore() }
+    })
+
     it('judges the newer build a core on probation staged, instead of rolling it back as a failure', async () => {
       // Its first core stages a build and exits for the update; the next, on probation, stages another before it is kept.
       const script = bundle(`if (process.env.HARNESSD_RESTARTS !== '2') setTimeout(() => { fs.appendFileSync(__filename, '\\n// a newer build\\n'); process.exit(75) }, process.env.HARNESSD_RESTARTS === '0' ? 100 : 20)`)

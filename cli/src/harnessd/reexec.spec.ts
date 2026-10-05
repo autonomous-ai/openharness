@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChildProcess } from 'node:child_process'
@@ -70,6 +70,17 @@ describe('the marker', () => {
       writeFileSync(file, JSON.stringify(wrong))
       expect(readMarker(file), JSON.stringify(wrong)).toBeNull()
     }
+  })
+
+  it('leaves no temporary file behind when it cannot be written', () => {
+    // Something that is not a marker where it would go: the rename fails, as a write on a full disk does.
+    const file = join(dir, 'harnessd-reexec.json')
+    mkdirSync(join(file, 'in-the-way'), { recursive: true })
+    expect(() => writeMarker(file, { pid: 42, from: 'a', to: 'b', at: 1 })).toThrow()
+    expect(readdirSync(dir)).toEqual(['harnessd-reexec.json'])
+    // Nor does it fail over a temporary file it cannot clear.
+    mkdirSync(join(dir, 'harnessd-reexec.json.43.tmp', 'in-the-way'), { recursive: true })
+    expect(() => writeMarker(file, { pid: 43, from: 'a', to: 'b', at: 1 })).toThrow()
   })
 
   it('is removed even when something odd sits where it was, without throwing', () => {

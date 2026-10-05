@@ -249,8 +249,12 @@ export function runMaster(config: MasterConfig): Supervisor {
     })
   }
   // Started fresh on an update the master judging it never finished with (it died: a crash, a kill, a
-  // power cut): this master judges it. A re-executed master was handed its own.
-  const unjudged = resume ? null : config.unjudgedUpdate?.(own) ?? null
+  // power cut): this master judges it. A re-executed master was handed its own. Asked of the bundle on
+  // disk now, which the first core runs, not of this master's own: a recovery just above may have put
+  // the build before back, and when its rollback could not write the rejected list the pending note
+  // still names this master's bundle. Asked of that, the restored build's first core was put on trial,
+  // and keeping it would have dropped the note that remembers the failed one (selfUpdate.settleRolledBack).
+  const unjudged = resume ? null : config.unjudgedUpdate?.(bundle()) ?? null
   if (unjudged) log(`[harnessd] the bundle on disk is ${unjudged}, an update no master kept or rolled back — its first core is on probation`)
   let stopping = false
   // A new one every boot, given to the core and to each service: how the core knows a service

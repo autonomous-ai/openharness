@@ -82,8 +82,15 @@ export interface ReexecMarker {
 
 export function writeMarker(file: string, marker: ReexecMarker): void {
   const temp = `${file}.${marker.pid}.tmp`
-  writeFileSync(temp, `${JSON.stringify(marker)}\n`)
-  renameSync(temp, file)
+  try {
+    writeFileSync(temp, `${JSON.stringify(marker)}\n`)
+    renameSync(temp, file)
+  } catch (error) {
+    // A write cut short (a full disk) is the caller's to handle (`createReexec` keeps its master); what
+    // it left in the data folder is this function's to clear.
+    try { rmSync(temp, { force: true }) } catch { /* not a file this call wrote */ }
+    throw error
+  }
 }
 
 export function readMarker(file: string): ReexecMarker | null {
