@@ -33,11 +33,16 @@ async function turn(client: LocalClient, agentId: string, content: string): Prom
   client.send('message', { agentId, content })
   await ended
 }
-/** The search service's own process, from the process table: it is `harnessd search`. */
-function searchPids(): number[] {
+/**
+ * This daemon's search service processes: titled `harnessd search` AND started by its own master, by
+ * the pid the master logged. The title alone matched every daemon's search on the machine — another
+ * file's in a parallel run, another checkout's — and the tests below stop and kill what it returns.
+ */
+function searchPids(d: IsolatedDaemon): number[] {
+  const ours = new Set([...d.log().matchAll(/\[harnessd\] service search started \(pid (\d+)\)/g)].map((match) => Number(match[1])))
   const table = execFileSync('ps', ['-A', '-o', 'pid=,command=']).toString().trim().split('\n')
   return table.map((line) => line.trim().match(/^(\d+)\s+(.*)$/)).filter((match): match is RegExpMatchArray => !!match)
-    .filter(([, , command]) => command.trim() === 'harnessd search').map(([, pid]) => Number(pid))
+    .filter(([, pid, command]) => command.trim() === 'harnessd search' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
 }
 const finds = async (client: LocalClient, word: string, sessionId: string): Promise<boolean> =>
   JSON.stringify(await client.request('session_search', { query: word }, 30_000)).includes(sessionId)
@@ -63,7 +68,7 @@ describe('services in their own processes', () => {
     const d = await fresh()
     const client = await LocalClient.connect(d)
     await until('search to connect to the core', () => d.log().includes('[services] search connected') || null, 30_000, 200)
-    expect(searchPids().length).toBeGreaterThanOrEqual(1)
+    expect(searchPids(d).length).toBeGreaterThanOrEqual(1)
     for (const engine of ['claude', 'codex'] as const) {
       const agent = await create(d, client, engine, `search-out-${engine}`)
       const word = `axolotl${engine}`
@@ -80,7 +85,7 @@ describe('services in their own processes', () => {
     const agent = await create(d, client, 'claude', 'search-killed')
     await turn(client, agent.id, 'remember the pangolin')
     await until('search to find it', () => finds(client, 'pangolin', agent.sessionId) || null, 60_000, 1_000)
-    const before = searchPids()
+    const before = searchPids(d)
     expect(before.length).toBeGreaterThanOrEqual(1)
     for (const pid of before) process.kill(pid, 'SIGKILL')
     // Asked while it is down: an answer, not a hang.
@@ -90,7 +95,7 @@ describe('services in their own processes', () => {
     await turn(client, agent.id, 'while search was gone')
     await until('the master to restart search', () => restarts(d) >= 1 || null, 30_000, 200)
     await until('search to answer again', () => finds(client, 'pangolin', agent.sessionId) || null, 60_000, 1_000)
-    expect(searchPids().some((pid) => !before.includes(pid))).toBe(true)
+    expect(searchPids(d).some((pid) => !before.includes(pid))).toBe(true)
     expect(d.coresStarted()).toBe(1)
     client.close()
   })
@@ -101,7 +106,7 @@ describe('services in their own processes', () => {
     const agent = await create(d, client, 'codex', 'search-hung')
     await until('search to connect', () => d.log().includes('[services] search connected') || null, 30_000, 200)
     // Hung: a stopped process neither beats nor answers, as one stuck in a loop would not.
-    for (const pid of searchPids()) process.kill(pid, 'SIGSTOP')
+    for (const pid of searchPids(d)) process.kill(pid, 'SIGSTOP')
     await until('the master to find search hung', () => d.log().includes('[harnessd] service search sent no heartbeat') || null, 30_000, 200)
     await until('search to be started again', () => restarts(d) >= 1 || null, 30_000, 200)
     await turn(client, agent.id, 'the core never waited on search')
@@ -140,10 +145,10 @@ describe('services in their own processes', () => {
     await turn(client, agent.id, 'remember the quokka')
     await until('search to find it', () => finds(client, 'quokka', agent.sessionId) || null, 60_000, 1_000)
     // Down: killed, and the purge happens before the master has it back.
-    for (const pid of searchPids()) process.kill(pid, 'SIGSTOP')
+    for (const pid of searchPids(d)) process.kill(pid, 'SIGSTOP')
     const createdAt = Date.parse(agent.createdAt)
     const review = await client.request('agent_purge', { agentId: agent.id, sessionId: agent.sessionId, createdAt, mode: 'inspect' }, 60_000)
-    for (const pid of searchPids()) process.kill(pid, 'SIGKILL')
+    for (const pid of searchPids(d)) process.kill(pid, 'SIGKILL')
     const deleted = await client.request('agent_purge', { agentId: agent.id, sessionId: agent.sessionId, createdAt, mode: 'delete', reviewId: review.reviewId }, 90_000)
     expect(deleted, JSON.stringify(deleted)).toMatchObject({ deleted: true })
     await until('search to be back', () => restarts(d) >= 1 && d.log().split('[services] search connected').length >= 3 || null, 60_000, 250)

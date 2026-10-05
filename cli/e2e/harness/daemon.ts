@@ -152,7 +152,9 @@ export class IsolatedDaemon {
     const entry = this.options.noMaster ? '__run' : '__harnessd'
     // Readiness is judged from what this start prints, never from an earlier boot's lines.
     const from = this.output.length
-    const script = this.options.scriptPath ? [this.options.scriptPath] : ['--import', 'tsx', 'src/cli.ts']
+    // A test's own bundle (an old release), the run's bundle (`E2E_BUNDLE`, see bundle.ts), or the sources.
+    const bundle = this.options.scriptPath ?? process.env.E2E_BUNDLE_PATH
+    const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
     const child = spawn(process.execPath, [...heap, ...script, entry], {
       cwd: CLI_ROOT, env: this.env, stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -229,7 +231,18 @@ export class IsolatedDaemon {
   }
 
   async close(): Promise<void> {
+    const core = this.options.noMaster ? null : this.corePid()
     await this.stop().catch(() => {})
+    // A core whose master died during the test must not outlive it: 20 such cores, left by a run
+    // whose masters crashed, spun on their closed output pipes for the rest of a parallel suite. Only
+    // this test's core is killed — its pid, still running this daemon's entry, orphaned or ours.
+    if (core && IsolatedDaemon.alive(core)) {
+      const { stdout } = await exec('ps', ['-o', 'ppid=,command=', '-p', String(core)]).catch(() => ({ stdout: '' }))
+      const [ppid, ...command] = stdout.trim().split(/\s+/)
+      if (command.join(' ').includes('__run') && (ppid === '1' || Number(ppid) === this.pid)) {
+        try { process.kill(core, 'SIGKILL') } catch { /* gone */ }
+      }
+    }
     await this.tmux.close()
   }
 }

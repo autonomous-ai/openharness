@@ -14,6 +14,7 @@ import {
   CORE_EXIT_STOP,
   CORE_EXIT_UPDATE,
   HARNESSD_PROTOCOL,
+  heartbeatGraceMs,
   isCoreMessage,
   type CoreMessage,
   type MasterMessage,
@@ -380,9 +381,22 @@ export class Supervisor {
     }, this.options.stopGraceMs)
   }
 
+  /**
+   * ⚠️ A silence the master slept through is not a hang. Ctrl-Z on a daemon run in a terminal, a
+   * paused virtual machine or a swap storm stops the master with its core, and on resume every timer
+   * that fell due fires at once, before the master reads the beat the resumed core sends a moment
+   * later. Measured end to end (`e2e/paused.e2e.ts`): paused for 40 s, the core was killed as hung the
+   * instant it resumed, and the message an app had sent into its socket was lost with it. So a silence
+   * that runs out gets one beat's time more, counted from now, while this master is running.
+   */
   private watchHeartbeat(): void {
     const core = this.core!
-    this.armTimer('heartbeatTimer', () => this.kill(core, 'hung', `sent no heartbeat for ${this.options.heartbeatTimeoutMs} ms — it is hung;`), this.options.heartbeatTimeoutMs)
+    const timeout = this.options.heartbeatTimeoutMs
+    const grace = heartbeatGraceMs(timeout)
+    this.armTimer('heartbeatTimer', () => {
+      this.deps.log(`[harnessd] core sent no heartbeat for ${timeout} ms — giving it ${grace} ms more, in case this master was paused too`)
+      this.armTimer('heartbeatTimer', () => this.kill(core, 'hung', `sent no heartbeat for ${timeout + grace} ms — it is hung;`), grace)
+    }, timeout)
   }
 
   private finish(code: number): void {
