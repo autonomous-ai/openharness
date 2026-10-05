@@ -152,7 +152,9 @@ export class IsolatedDaemon {
     const entry = this.options.noMaster ? '__run' : '__harnessd'
     // Readiness is judged from what this start prints, never from an earlier boot's lines.
     const from = this.output.length
-    const script = this.options.scriptPath ? [this.options.scriptPath] : ['--import', 'tsx', 'src/cli.ts']
+    // A test's own bundle (an old release), the run's bundle (`E2E_BUNDLE`, see bundle.ts), or the sources.
+    const bundle = this.options.scriptPath ?? process.env.E2E_BUNDLE_PATH
+    const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
     const child = spawn(process.execPath, [...heap, ...script, entry], {
       cwd: CLI_ROOT, env: this.env, stdio: ['ignore', 'pipe', 'pipe'],
     })
