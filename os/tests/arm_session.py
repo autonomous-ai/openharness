@@ -126,6 +126,7 @@ class SessionVM(VM):
         self.started = time.monotonic()
         self.boot_count += 1
         accelerator = 'kvm' if os.access('/dev/kvm', os.R_OK | os.W_OK) else 'tcg'
+        self.accelerator = accelerator
         cpu = 'host' if accelerator == 'kvm' else 'cortex-a76'
         args = ['qemu-system-aarch64', '-machine', 'virt,gic-version=3', '-accel', accelerator,
                 '-cpu', cpu, '-smp', '2', '-m', '3072', '-nodefaults', '-display', 'none', '-no-reboot',
@@ -193,8 +194,14 @@ class SessionVM(VM):
 
 def exercise(vm, result):
     vm.start(offline=True)
-    vm.wait_user('systemctl --user is-active --quiet hn-screen && hn capture-pane -p | grep -q "Connect to Wi-Fi"', 90)
+    # Hosted ARM runners may lack KVM. On the first TCG boot the recorded
+    # readiness command completed successfully just after the old 100s host
+    # deadline. Keep the same condition and visual assertion, with a bounded
+    # cold-start allowance; this emulated run is not a boot-speed benchmark.
+    vm.wait_user('systemctl --user is-active --quiet hn-screen && hn capture-pane -p | grep -q "Connect to Wi-Fi"', 180)
     vm.frame('01-wifi', 'Connect to Wi-Fi')
+    result['first_visible_wifi'] = {'accelerator': vm.accelerator,
+                                  'seconds_since_boot': round(time.monotonic() - vm.started, 3)}
     vm.keyboard('offline')
     result['checks'].append('Fresh offline boot shows Wi-Fi; Super+t opens a real shell and accepts graphical keyboard input')
     vm.monitor('set_link', name='hnnet', up=True)
