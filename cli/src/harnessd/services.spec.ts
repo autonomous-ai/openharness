@@ -105,8 +105,10 @@ describe('ServiceSupervisor', () => {
   it('kills a service that stops beating, from its start too, and restarts it as hung', () => {
     const supervisor = make()
     supervisor.start()
-    // Never beat at all: hung from the start.
+    // Never beat at all: hung from the start, once one beat's time more has passed.
     vi.advanceTimersByTime(6_000)
+    expect(latest().kills).toEqual([])
+    vi.advanceTimersByTime(2_000)
     expect(latest().kills).toEqual(['SIGKILL'])
     latest().exit(null, 'SIGKILL')
     expect(supervisor.status()[0]).toMatchObject({ lastExitReason: 'hung', state: 'restarting' })
@@ -114,9 +116,23 @@ describe('ServiceSupervisor', () => {
     const second = latest()
     for (let i = 0; i < 3; i++) { vi.advanceTimersByTime(5_000); second.beat() }
     expect(second.kills).toEqual([])
-    vi.advanceTimersByTime(6_000)
+    vi.advanceTimersByTime(8_000)
     expect(second.kills).toEqual(['SIGKILL'])
-    expect(lines.some((line) => line.includes('sent no heartbeat for 6000 ms — it is hung'))).toBe(true)
+    expect(lines.some((line) => line.includes('sent no heartbeat for 8000 ms — it is hung'))).toBe(true)
+  })
+
+  it('takes no silence it was paused through for a hang: the beat a resumed service sends keeps it', () => {
+    const supervisor = make()
+    supervisor.start()
+    const child = latest()
+    child.beat()
+    // Paused with the master: on resume the silence runs out at once and the overdue beat follows.
+    vi.advanceTimersByTime(6_000)
+    vi.advanceTimersByTime(10)
+    child.beat()
+    for (let i = 0; i < 6; i++) { vi.advanceTimersByTime(5_000); child.beat() }
+    expect(child.kills).toEqual([])
+    expect(supervisor.status()[0]).toMatchObject({ restarts: 0 })
   })
 
   it('restarts a service that outgrows its heap share or its resident budget, and counts it like a crash', () => {

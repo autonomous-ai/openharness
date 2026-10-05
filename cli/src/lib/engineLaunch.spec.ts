@@ -1,8 +1,9 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { env } from '../config/env.js'
 import {
   AGENT_NAME_RE,
   BYPASS_PERMISSION_FLAGS,
@@ -16,6 +17,9 @@ import {
   terminalHintLines,
   buildEngineCommandArgv,
   buildEngineLaunchArgv,
+  buildTerminalLaunchArgv,
+  interactiveEngineShell,
+  isPosixShell,
   commandAvailableInInteractiveShell,
   commandSupportsFlagInInteractiveShell,
   dropPermissionFlagIfUnsupported,
@@ -493,6 +497,57 @@ describe('buildEngineLaunchArgv', () => {
   })
 })
 
+describe('a login shell that is not POSIX', () => {
+  let dataDir = ''
+  let savedDataDir = ''
+  beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'launch-shell-')); savedDataDir = env.ADAPTER_DATA_DIR; env.ADAPTER_DATA_DIR = dataDir })
+  afterEach(() => { env.ADAPTER_DATA_DIR = savedDataDir; rmSync(dataDir, { recursive: true, force: true }) })
+
+  it('tells the POSIX shells from the rest by name', () => {
+    for (const shell of ['/bin/sh', '/bin/bash', '/bin/zsh', '/usr/bin/dash', '/bin/ksh', '/usr/local/bin/mksh', '/bin/ash', '/usr/bin/yash']) expect(isPosixShell(shell), shell).toBe(true)
+    for (const shell of ['/usr/local/bin/fish', '/bin/tcsh', '/bin/csh', '/opt/homebrew/bin/nu', '/usr/bin/xonsh', '/usr/bin/elvish']) expect(isPosixShell(shell), shell).toBe(false)
+  })
+
+  it('asks each its own way for the person\'s interactive startup files', () => {
+    expect(interactiveEngineShell('/bin/zsh')?.args).toEqual(['-lic'])
+    expect(interactiveEngineShell('/bin/bash')?.args).toEqual(['-ic'])
+    expect(interactiveEngineShell('/usr/bin/dash')?.args).toEqual(['-ic'])
+    expect(interactiveEngineShell('/usr/local/bin/fish')).toMatchObject({ args: ['-i', '-c'], label: 'fish shell' })
+    expect(interactiveEngineShell('/bin/tcsh')?.args).toEqual(['-i', '-c'])
+    expect(interactiveEngineShell('/opt/homebrew/bin/nu')?.args).toEqual(['-c'])
+  })
+
+  it('launches an engine through the shell, which hands a one-time POSIX script to /bin/sh', () => {
+    const argv = buildEngineLaunchArgv('claude', { cwd: "/work/it's here" }, '/usr/local/bin/fish', '/opt/node/bin/node', '/opt/grid/bin/grid', '/usr/bin/tmux')
+    expect(argv.slice(0, 3)).toEqual(['/usr/local/bin/fish', '-i', '-c'])
+    expect(argv).toHaveLength(4)
+    const file = /^exec \/bin\/sh '(.+)'$/.exec(argv[3])?.[1]
+    expect(file && file.startsWith(join(dataDir, 'launch'))).toBe(true)
+    const script = readFileSync(file!, 'utf8')
+    // It removes itself first, then takes the arguments a POSIX shell would have been given.
+    expect(script.startsWith(`rm -f -- "$0"\nset -- '/work/it'"'"'s here' '${engineBin('claude')}'`)).toBe(true)
+    expect(script).toContain('harness_engine "$@"')
+    // The same launch for zsh is unchanged: no file, the script straight to zsh.
+    const zsh = buildEngineLaunchArgv('claude', { cwd: '/work' }, '/bin/zsh', '/opt/node/bin/node', '/opt/grid/bin/grid', '/usr/bin/tmux')
+    expect(zsh.slice(0, 4)).toEqual(['/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', '/bin/zsh', '-lic'])
+  })
+
+  it.skipIf(!existsSync('/bin/tcsh'))('runs that script for real under tcsh, with its arguments intact and the file gone', () => {
+    const argv = buildEngineLaunchArgv('claude', { cwd: dataDir, installFirst: undefined }, '/bin/tcsh', '/opt/node/bin/node', '/opt/grid/bin/grid', null)
+    const file = /^exec \/bin\/sh '(.+)'$/.exec(argv[argv.length - 1])![1]
+    // Run the file the way tcsh would hand it over, with the engine replaced by printf.
+    writeFileSync(file, readFileSync(file, 'utf8').replace(/harness_engine "\$@"\s*$/, 'printf "%s|" "$PWD" "$@"'))
+    const out = execFileSync('/bin/tcsh', ['-i', '-c', argv[argv.length - 1]], { encoding: 'utf8', env: { ...process.env, HOME: dataDir }, stdio: ['ignore', 'pipe', 'ignore'] })
+    expect(out).toContain(`${dataDir}|${engineBin('claude')}|`)
+    expect(existsSync(file)).toBe(false)
+  })
+
+  it('opens a terminal tile with /bin/sh entering the folder, then the person\'s own shell', () => {
+    expect(buildTerminalLaunchArgv({ cwd: '/work' }, '/usr/local/bin/fish')).toEqual(['/bin/sh', '-c', expect.stringContaining('exec "$@"'), 'harness-terminal', '/work', '/usr/local/bin/fish'])
+    expect(buildTerminalLaunchArgv({ cwd: '/work' }, '/bin/zsh').slice(0, 2)).toEqual(['/bin/zsh', '-c'])
+  })
+})
+
 describe('a first prompt on launch', () => {
   const PROMPT = 'Start a local model on this machine'
 
@@ -828,7 +883,8 @@ describe('commandSupportsFlagInInteractiveShell', () => {
 
     fakeEngine(binDir, 'opencode', '--auto')
     await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
-    // Downgraded underneath us; the cached yes stands until the cache is reset.
+    // Downgraded underneath us where the daemon cannot see the file (only the probe shell's PATH has
+    // it): remembered by name alone, the yes stands until the cache is reset.
     fakeEngine(binDir, 'opencode', '--auto-update')
     await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
     resetCommandFlagSupportCache()
@@ -836,6 +892,52 @@ describe('commandSupportsFlagInInteractiveShell', () => {
     // A refusal is never remembered, so the upgrade is seen at once.
     fakeEngine(binDir, 'opencode', '--auto')
     await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
+  })
+
+  // e2e/updates.e2e.ts: remembered by name alone, a yes outlived the update that dropped the flag,
+  // and the engine was launched with a flag it refused at once. A yes is kept for the file it was read from.
+  it('answers an unchanged engine from memory, and asks again once an update has changed its file', async () => {
+    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-update-'))
+    dirs.push(binDir)
+    process.env.HARNESS_ENGINE_TEST_PATH = binDir
+    const savedPath = process.env.PATH
+    process.env.PATH = `${binDir}:${savedPath ?? ''}`
+    try {
+      const shell = bashProbeShell()
+      const runs = join(binDir, 'runs')
+      const build = (path: string, help: string) => {
+        writeFileSync(path, `#!/bin/sh\necho run >> '${runs}'\nif [ "$1" = "--help" ]; then printf "%s\\n" '${help}'; exit 0; fi\nexit 2\n`)
+        chmodSync(path, 0o700)
+      }
+      const asked = () => existsSync(runs) ? readFileSync(runs, 'utf8').split('\n').filter(Boolean).length : 0
+      const opencode = join(binDir, 'opencode')
+
+      build(opencode, '--auto')
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
+      expect(asked()).toBe(1)
+      // Rewritten in place by an update that dropped the flag: asked again, and refused.
+      build(opencode, '--auto-update')
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('unsupported')
+      expect(asked()).toBe(2)
+
+      // Installed as versions and linked, the way Homebrew and native installs update: the same size,
+      // and only the link moves.
+      mkdirSync(join(binDir, 'v1')); mkdirSync(join(binDir, 'v2'))
+      build(join(binDir, 'v1', 'opencode'), '--auto')
+      build(join(binDir, 'v2', 'opencode'), '--nope')
+      rmSync(opencode)
+      symlinkSync(join(binDir, 'v1', 'opencode'), opencode)
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
+      expect(asked()).toBe(3)
+      rmSync(opencode)
+      symlinkSync(join(binDir, 'v2', 'opencode'), opencode)
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('unsupported')
+      expect(asked()).toBe(4)
+    } finally {
+      process.env.PATH = savedPath
+    }
   })
 
   // A shell's own failure exits 1 — as zsh's read-only `status` did — and must not read as a missing

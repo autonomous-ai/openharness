@@ -11,7 +11,7 @@
  * bind and no update to prove; it beats, or it is restarted. Everything that touches the operating
  * system is injected, so every decision here is tested without one.
  */
-import { isCoreMessage } from './protocol.js'
+import { heartbeatGraceMs, isCoreMessage } from './protocol.js'
 import type { CoreHandle } from './supervisor.js'
 
 export interface ServiceSpec {
@@ -225,12 +225,18 @@ class Service {
     }, this.options.stopGraceMs)
   }
 
+  /** A silence that runs out gets one beat's time more, in case the master was paused too: see
+   *  `Supervisor.watchHeartbeat`, where a 40 s pause cost the core and an app's message. */
   private watchHeartbeat(child: CoreHandle): void {
+    const timeout = this.options.heartbeatTimeoutMs
+    const grace = heartbeatGraceMs(timeout)
     this.armTimer('heartbeatTimer', () => {
-      this.deps.log(`[harnessd] service ${this.spec.name} sent no heartbeat for ${this.options.heartbeatTimeoutMs} ms — it is hung; killing it`)
-      this.killReason = 'hung'
-      child.kill('SIGKILL')
-    }, this.options.heartbeatTimeoutMs)
+      this.armTimer('heartbeatTimer', () => {
+        this.deps.log(`[harnessd] service ${this.spec.name} sent no heartbeat for ${timeout + grace} ms — it is hung; killing it`)
+        this.killReason = 'hung'
+        child.kill('SIGKILL')
+      }, grace)
+    }, timeout)
   }
 
   private setState(state: ServiceState): void {
