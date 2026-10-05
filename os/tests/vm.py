@@ -374,8 +374,33 @@ def check_graphical_keyboard(vm, name):
     """Prove the installed graphical surface accepts input and renders output."""
     started = time.monotonic()
     vm.command('pgrep -x labwc >/dev/null && pgrep -x foot >/dev/null')
+    # A running renderer or the daemon's discovery endpoint can precede the
+    # first graphical frame. The saved workspace must actually be visible
+    # before sending its shortcut; otherwise early keystrokes can be lost.
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        vm.screenshot(name + '-ready')
+        visible = subprocess.check_output(
+            ['tesseract', str(vm.folder / (name + '-ready.png')), 'stdout', '--psm', '11'],
+            text=True, stderr=subprocess.DEVNULL, timeout=10)
+        if 'me@harness' in re.sub(r'\s+', '', visible):
+            break
+        time.sleep(.25)
+    else:
+        raise RuntimeError('The graphical workspace did not render before keyboard input.')
+    previous, _ = vm.command('hn display-message -p "HN_PREVIOUS_PANE=#{pane_id}"')
+    previous_pane = re.search(r'HN_PREVIOUS_PANE=(%\d+)', previous)
+    if not previous_pane:
+        raise RuntimeError('Keyboard probe could not identify the original pane.')
     vm.keys('ctrl', 'b')
     vm.keys('shift', 't')
+    # New terminal is asynchronous. Require both a newly focused pane and its
+    # empty shell prompt before typing, rather than sleeping for a guessed time.
+    vm.command('for n in $(seq 1 60); do '
+               'current=$(hn display-message -p "#{pane_id}"); '
+               'if test "$current" != ' + shlex.quote(previous_pane[1]) +
+               ' && hn capture-pane -p | grep -Eq ' + shlex.quote(r'^\[me@harness [^]]*\]\$$') +
+               '; then exit 0; fi; sleep .25; done; exit 1', timeout=25)
     marker = 'keyboard-' + name + '-ready'
     vm.type_probe('echo ' + marker)
     vm.keys('ret')

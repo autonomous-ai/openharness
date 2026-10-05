@@ -47,11 +47,16 @@ on:
         default: false
         type: boolean
       checks:
-        description: 'Image journey, browser focus, lock/suspend, Wi-Fi/audio, or offline hardware installation; image_run_id reuses an image'
+        description: 'Image journey, browser focus, lock/suspend, recovery, Wi-Fi/audio, hardware, private zram, or changed-kernel recovery acceptance'
         required: false
         default: image
         type: choice
-        options: [image, browser, session, essentials, hardware]
+        options: [image, browser, browser-suspend, session, recovery, essentials, hardware, zram, hardware-update]
+      browser_memory:
+        description: 'With checks=browser, diagnose memory in the UEFI VM only; retain ordinary workload and deadlines'
+        required: false
+        default: false
+        type: boolean
   push:
     branches: ['os/**']
     paths: ['os/**', 'tui/**', 'cli/**', '.github/workflows/os.yml']
@@ -61,14 +66,16 @@ permissions:
   actions: read
 
 concurrency:
-  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'browser' && 'browser' || inputs.checks == 'session' && 'session' || inputs.checks == 'essentials' && 'essentials' || inputs.checks == 'hardware' && 'hardware' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
+  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'browser-suspend' && 'browser-suspend' || inputs.checks == 'browser' && 'browser' || inputs.checks == 'session' && 'session' || inputs.checks == 'recovery' && 'recovery' || inputs.checks == 'essentials' && 'essentials' || inputs.checks == 'hardware' && 'hardware' || inputs.checks == 'hardware-update' && 'hardware-update' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
   cancel-in-progress: false
 
 jobs:
   image:
-    if: ${{ !inputs.image_run_id && !inputs.publish_run_id && !inputs.development_update }}
+    if: ${{ !inputs.image_run_id && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'browser-suspend' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 50
+    env:
+      CARGO_INCREMENTAL: '0'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -89,16 +96,56 @@ jobs:
           cache-dependency-path: cli/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: '1.99.0'
           targets: x86_64-unknown-linux-musl
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-        with:
-          workspaces: tui
-          shared-key: tui-x86_64-unknown-linux-musl
-          cache-bin: false
       - name: Prepare native build tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y musl-tools tmux cryptsetup-bin btrfs-progs
+          sudo apt-get install -y musl=1.2.4-2 musl-dev=1.2.4-2 musl-tools=1.2.4-2 tmux cryptsetup-bin btrfs-progs
+      - name: Verify frozen runtime sources and record the native toolchain
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, shutil, subprocess
+          def out(*args):
+              return subprocess.check_output(args, text=True).strip()
+          source = out('git', 'rev-parse', 'HEAD')
+          frozen = {'tui': '1ec2af97a8695bdcc8429ddc498747bd86eada08',
+                    'cli': '27f50e77fa9bdc8de75a64c9e9166c932c559a8b',
+                    'store': 'ea5589e2d8db518a85453fa3c9efc60d29a16085'}
+          for name, tree in frozen.items():
+              assert out('git', 'rev-parse', source + ':' + name) == tree, name
+          subprocess.run(['git', 'merge-base', '--is-ancestor',
+                          'b6cbaf3e3090f43106ad1ee47606349bd1a0ae89', source], check=True)
+          assert not out('git', 'rev-list', '--merges', 'b6cbaf3e3090f43106ad1ee47606349bd1a0ae89..' + source)
+          baselines = json.loads(out('python3', 'os/tools/runtime-baseline.py'))
+          assert baselines == {
+              'hn': {'version': '0.1.12', 'commit': '6cdda1b55eddc773bb0e9c9faa88e6ba66aa6233'},
+              'cli': {'version': '0.3.58', 'commit': '3c86a75ce4b854d9551b901c6f0d6f9bfbbe6051'}}
+          assert out('node', '--version') == 'v22.23.2'
+          assert out('npm', '--version') == '10.9.8'
+          assert out('rustc', '--version') == 'rustc 1.99.0 (b940084d7 2026-09-28)'
+          musl = {name: out('dpkg-query', '-W', '-f=${Version}', name)
+                  for name in ('musl', 'musl-dev', 'musl-tools')}
+          assert set(musl.values()) == {'1.2.4-2'}, musl
+          for name in ('ADAPTER_VERSION', 'HARNESS_PROCESS_IMAGES_ARTIFACT', 'HARNESS_REQUIRE_PROCESS_IMAGES',
+                       'BUNDLE_OUT_DIR', 'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTC_WRAPPER', 'CARGO_TARGET_DIR'):
+              assert not os.environ.get(name), 'Unexpected build override: ' + name
+          assert not pathlib.Path('tui/target').exists(), 'Use a fresh compiled target directory'
+          commands = {'node': ['node', '--version'], 'npm': ['npm', '--version'],
+                      'rustc': ['rustc', '-vV'], 'cc': ['cc', '--version'],
+                      'musl-gcc': ['musl-gcc', '--version'], 'ld': ['ld', '--version']}
+          tools = {}
+          for name, args in commands.items():
+              path = pathlib.Path(out('rustup', 'which', 'rustc') if name == 'rustc' else shutil.which(args[0])).resolve()
+              tools[name] = {'version': out(*args), 'path': str(path),
+                             'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+          record = {'source_commit': source, 'os_source': 'fae0843dffb3b3c518d801bf90a4a55967caa13b',
+                    'runtime_input_source': 'b6cbaf3e3090f43106ad1ee47606349bd1a0ae89',
+                    'runtime_trees': frozen, 'release_baselines': baselines, 'tools': tools, 'musl': musl,
+                    'runner': {key: os.environ.get(key) for key in ('ImageOS', 'ImageVersion', 'RUNNER_OS', 'RUNNER_ARCH')}}
+          pathlib.Path('os/work').mkdir(exist_ok=True)
+          pathlib.Path('os/work/toolchain.json').write_text(json.dumps(record, indent=2) + '\n')
+          PY
       - name: Check encrypted cleanup with real device readers and stalled udev
         run: |
           # Fail early on real cleanup semantics, before compressing an ISO.
@@ -122,8 +169,8 @@ jobs:
             -e SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
             -e HARNESS_OS_SOURCE_SHA="$(git rev-parse HEAD)" \
             -e HARNESS_OS_RUNTIME_DIR=/src/os/work/runtime \
-            archlinux:base-devel \
-            bash -c 'set -euo pipefail; pacman -Syu --noconfirm archiso python git; bash build.sh'
+            archlinux:base-devel@sha256:51dd3d24f7fba779e7c471caeee7804c50e8c134ad948e19685a1c83a42facc3 \
+            bash -c 'set -euo pipefail; pacman -Syu --noconfirm archiso python git; pacman -Q archiso python git gcc binutils > /src/os/work/arch-builder-tools.txt; bash build.sh'
       - name: Inspect image artifact
         run: |
           cd os/dist
@@ -135,6 +182,18 @@ jobs:
         with:
           name: programmer-os-x86_64
           path: os/dist/
+          retention-days: 14
+          compression-level: 0
+      - name: Retain the exact runtime and update package used by the image
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-candidate-inputs
+          path: |
+            os/work/runtime/
+            os/work/repo/
+            os/work/toolchain.json
+            os/work/arch-builder-tools.txt
+          if-no-files-found: error
           retention-days: 14
           compression-level: 0
       - name: Retain build diagnostics
@@ -154,23 +213,20 @@ jobs:
 
   machine:
     needs: image
-    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}
+    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && (needs.image.result == 'success' || inputs.image_run_id != '' || inputs.checks == 'browser-suspend') && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - firmware: bios
-            encryption: ''
-            agents: '--agents'
-            cpu: '--cpu Nehalem'
-          - firmware: uefi
-            encryption: '--encrypt'
-            agents: ''
-            cpu: ''
+        include: ${{ (inputs.checks == 'browser-suspend' || inputs.checks == 'browser' && inputs.browser_memory) && fromJSON('[{"firmware":"uefi","encryption":"--encrypt","agents":"","cpu":""}]') || fromJSON('[{"firmware":"bios","encryption":"","agents":"--agents","cpu":"--cpu Nehalem"},{"firmware":"uefi","encryption":"--encrypt","agents":"","cpu":""}]') }}
     steps:
       - uses: actions/checkout@v7
+      - name: Require the selected image for browser suspend acceptance
+        if: ${{ inputs.checks == 'browser-suspend' }}
+        env:
+          IMAGE_RUN_ID: ${{ inputs.image_run_id }}
+        run: '[[ "$IMAGE_RUN_ID" =~ ^[0-9]+$ ]]'
       - uses: actions/download-artifact@v6
         with:
           name: programmer-os-x86_64
@@ -183,10 +239,15 @@ jobs:
           sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
           if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
       - name: Install the disposable browser observer
-        if: ${{ inputs.checks == 'browser' }}
+        if: ${{ inputs.checks == 'browser' || inputs.checks == 'browser-suspend' }}
         run: sudo apt-get install -y wlrctl
+      - name: Check the focused browser suspend observer and workflow
+        if: ${{ inputs.checks == 'browser-suspend' }}
+        run: |
+          python3 -m py_compile os/tests/browser_vm.py os/tests/browser_suspend_guest.py
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
       - name: Check the focused session test and workflow
-        if: ${{ inputs.checks == 'session' || inputs.checks == 'browser' }}
+        if: ${{ inputs.checks == 'session' || inputs.checks == 'recovery' || inputs.checks == 'browser' }}
         run: |
           make -C os check
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
@@ -199,7 +260,7 @@ jobs:
           run-id: ${{ inputs.workload_seed_run_id }}
           github-token: ${{ github.token }}
       - name: Boot, operate, install and reboot the real image
-        if: ${{ inputs.checks != 'session' && inputs.checks != 'browser' }}
+        if: ${{ inputs.checks != 'session' && inputs.checks != 'recovery' && inputs.checks != 'browser' && inputs.checks != 'browser-suspend' }}
         env:
           OS_WORKLOAD_SOURCE_RUN: ${{ inputs.workload_seed_run_id }}
           OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
@@ -216,11 +277,17 @@ jobs:
       - name: Exercise password lock and actual suspend/resume
         if: ${{ inputs.checks == 'session' }}
         run: python3 os/tests/session_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --session-file os/root/usr/lib/harness-os/session --theme-directory os/root/usr/share/plymouth/themes/harness
+      - name: Exercise installed compositor crash and recovery
+        if: ${{ inputs.checks == 'recovery' }}
+        run: python3 os/tests/session_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --check recovery
       - name: Exercise installed browser focus and physical keyboard routing
         if: ${{ inputs.checks == 'browser' }}
         env:
           OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
-        run: python3 os/tests/browser_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --memory-mib "$OS_MEMORY_MIB" --wlrctl /usr/bin/wlrctl --browser-script os/root/usr/bin/hn-browser --compositor-config os/root/usr/share/harness-os/labwc/rc.xml
+        run: python3 os/tests/browser_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --memory-mib "$OS_MEMORY_MIB" --wlrctl /usr/bin/wlrctl --browser-script os/root/usr/bin/hn-browser --compositor-config os/root/usr/share/harness-os/labwc/rc.xml ${{ inputs.browser_memory && '--memory-profile --zram-config os/root/etc/systemd/zram-generator.conf' || '' }}
+      - name: Exercise browser-active suspend, unlock and input recovery
+        if: ${{ inputs.checks == 'browser-suspend' }}
+        run: timeout 12m python3 os/tests/browser_vm.py --iso os/dist/*.iso --firmware uefi --memory-mib 2048 --check suspend --wlrctl /usr/bin/wlrctl --browser-script os/root/usr/bin/hn-browser --compositor-config os/root/usr/share/harness-os/labwc/rc.xml
       - name: Show machine failure diagnostics
         if: failure()
         run: |
@@ -240,6 +307,110 @@ jobs:
             os/test-results/**/dsh/**
           retention-days: 14
 
+  zram:
+    if: ${{ inputs.checks == 'zram' && !inputs.publish_run_id && !inputs.development_update }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - name: Require a selected source image
+        env:
+          IMAGE_RUN_ID: ${{ inputs.image_run_id }}
+        run: '[[ "$IMAGE_RUN_ID" =~ ^[0-9]+$ ]]'
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id }}
+          github-token: ${{ github.token }}
+      - name: Install private fixture and VM tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends squashfs-tools xorriso time qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr wlrctl
+          test -e /dev/kvm
+          sudo chmod a+rw /dev/kvm
+      - name: Check one-file fixture and exact capacity contracts
+        run: |
+          python3 os/tools/check.py
+          sudo python3 -m unittest discover -s os/tests -p test_zram.py -v
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
+      - name: Cold live boot, interactive install and ordinary browser acceptance
+        run: |
+          expected_sha="$(python3 -c 'import json; print(json.load(open("os/dist/manifest.json"))["iso"]["sha256"])')"
+          sudo python3 os/tests/zram_fixture.py --iso os/dist/*.iso --sha256 "$expected_sha" --config os/root/etc/systemd/zram-generator.conf
+      - name: Retain evidence without the private image or disks
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-zram-acceptance
+          path: |
+            os/test-results/zram/*.json
+            os/test-results/zram/*.json.gz
+            os/test-results/zram/*.log
+            os/test-results/zram/*.time
+            os/test-results/zram/*/*.json
+            os/test-results/zram/*/*.jsonl
+            os/test-results/zram/*/*.png
+            os/test-results/zram/*/*.txt
+            os/test-results/zram/*/*.log
+          retention-days: 14
+
+  hardware-update:
+    if: ${{ inputs.checks == 'hardware-update' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check the pinned private fixture inputs
+        env:
+          OS_IMAGE_RUN: ${{ inputs.image_run_id }}
+          OS_PUBLISH_RUN: ${{ inputs.publish_run_id }}
+          OS_DEVELOPMENT_UPDATE: ${{ inputs.development_update }}
+          OS_WORKLOADS: ${{ inputs.workloads }}
+          OS_DSH: ${{ inputs.dsh }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os
+          lock = json.load(open('os/tests/hardware-update.lock.json'))
+          assert os.environ['OS_IMAGE_RUN'] == str(lock['baseline']['image_run_id']), 'Use the exact locked preview14 image run'
+          assert not os.environ['OS_PUBLISH_RUN'], 'This private gate never publishes'
+          assert all(os.environ[key] == 'false' for key in ['OS_DEVELOPMENT_UPDATE', 'OS_WORKLOADS', 'OS_DSH'])
+          PYTHON
+          python3 -m unittest discover -s os/tests -p test_hardware_update_fixture.py
+          python3 -m py_compile os/tests/hardware_update_guest.py os/tests/hardware_update_vm.py
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
+      - name: Reuse the original preview14 ISO and runtime
+        uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id }}
+          github-token: ${{ github.token }}
+      - name: Prepare native VM tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+          df -h .
+      - name: Upgrade the full signed snapshot and recover the original kernel offline
+        run: >-
+          python3 os/tests/hardware_update_vm.py
+          --iso os/dist/harness-0.1.0-preview.14-x86_64.iso
+          --snapshot-lock os/tests/hardware-update.lock.json
+          --candidate-system os/system.py
+          --output os/test-results/hardware-update
+      - name: Retain every completed stage and failure
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-hardware-update
+          path: |
+            os/test-results/hardware-update/
+            !os/test-results/hardware-update/*.qcow2
+            !os/test-results/hardware-update/OVMF_VARS.fd
+          retention-days: 14
+          compression-level: 0
+
   hardware:
     needs: image
     if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && (needs.image.result == 'success' || inputs.checks == 'hardware' && inputs.image_run_id != '') && !cancelled() }}
@@ -255,13 +426,21 @@ jobs:
           github-token: ${{ github.token }}
       - name: Check the fixture and install VM tools
         run: |
+          python3 -m unittest discover -s os/tests -p 'test_hardware*.py'
           python3 -m py_compile os/tests/hardware_install_guest.py os/tests/hardware_install_vm.py
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
           sudo chmod a+rw /dev/kvm
       - name: Install the selected driver offline and reboot with 1 GiB
-        run: python3 os/tests/hardware_install_vm.py --iso os/dist/*.iso
+        env:
+          REUSED_IMAGE: ${{ inputs.image_run_id }}
+        run: |
+          args=(--iso os/dist/*.iso)
+          if [[ -n "$REUSED_IMAGE" ]]; then
+            args+=(--candidate-hardware os/hardware.py --candidate-installer os/installer.py)
+          fi
+          python3 os/tests/hardware_install_vm.py "${args[@]}"
       - name: Retain hardware installation and rebuild evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -330,7 +509,7 @@ jobs:
           sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
           if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
       - name: Exercise Wi-Fi and audio in the real image
-        run: python3 os/tests/essentials_vm.py --iso os/dist/*.iso
+        run: python3 os/tests/essentials_vm.py --iso os/dist/*.iso --network-script os/network.py
       - name: Retain hardware plumbing evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -345,7 +524,7 @@ jobs:
           retention-days: 14
 
   development-update:
-    if: ${{ inputs.development_update && !inputs.publish_run_id }}
+    if: ${{ inputs.development_update && !inputs.publish_run_id && inputs.checks != 'hardware-update' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -410,7 +589,7 @@ jobs:
           compression-level: 0
 
   publish:
-    if: ${{ inputs.publish_run_id != '' }}
+    if: ${{ inputs.publish_run_id != '' && inputs.checks != 'hardware-update' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     concurrency:
