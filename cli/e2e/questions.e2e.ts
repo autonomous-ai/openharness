@@ -61,6 +61,7 @@ describe('an agent asks a question', () => {
     const question = await asked
     const shaped = question.payload?.questions?.[0]
     expect(shaped?.q).toBe('Which drink would you like?')
+    expect(question.payload).not.toHaveProperty('permission')
     expect(shaped?.options).toEqual(expect.arrayContaining(['Tea', 'Coffee']))
     expect((await row(client, agent.id))?.status).toBe('active')
 
@@ -83,6 +84,7 @@ describe('an agent asks a question', () => {
       const question = await asked
       const shaped = question.payload?.questions?.[0]
       expect(shaped?.q).toContain('printf hi')
+      expect(question.payload.permission).toEqual({ dialog: expect.stringContaining('printf hi'), resolution: 'desktop' })
       expect(shaped?.options).toHaveLength(3)
       const ended = client.next(isTurn('turn_ended', agent.id), 45_000, 'turn_ended')
       const result = await answer(client, agent.id, question.payload.requestId, { [shaped.q]: shaped.options[choice] })

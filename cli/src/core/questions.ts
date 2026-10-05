@@ -83,7 +83,10 @@ export function createQuestions({
         type: 'commander_question',
         agentId: agentIdFor(sessionId),
         dbSessionId: sessionId,
-        payload: { requestId, questions: shaped, notification: agentNotifications.asked(sessionId, requestId) },
+        payload: { requestId, questions: shaped, notification: agentNotifications.asked(sessionId, requestId),
+          // Robot clients need to distinguish a permission notice from an answerable question.
+          ...(detail?.permission ? { permission: { dialog: detail.dialog, resolution: 'desktop' } } : {}),
+        },
       }
       clients.sendCommander(asked)
       // ...and to the window on this computer. `sendCommander` is `webEligible: false`, so until this
