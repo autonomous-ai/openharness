@@ -57,11 +57,12 @@ function runForegroundLines(): number {
 }
 
 /**
- * The most each may grow to. Today's size and a little room for wiring. Raising a budget needs a reason
- * a reviewer agrees with; the usual one is wrong, and the code belongs in a module or a service.
+ * The most each may grow to: its size when it last shrank, and a little room for wiring. Lower a budget
+ * when you move code out; raising one needs a reason a reviewer agrees with, and the usual one is wrong:
+ * the code belongs in a module or a service.
  */
-const RUN_FOREGROUND_BUDGET = 2_700
-const BACKEND_SOCKET_BUDGET = 3_600
+const RUN_FOREGROUND_BUDGET = 2_690
+const BACKEND_SOCKET_BUDGET = 3_500
 
 /** Exceptions, each with its reason. Keep this short. */
 const SERVICE_MAY_IMPORT: Record<string, string> = {

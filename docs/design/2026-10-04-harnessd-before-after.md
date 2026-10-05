@@ -15,10 +15,10 @@ its plan are in [2026-10-03-harnessd.md](2026-10-03-harnessd.md). Paths are unde
 │  cli.ts  runForeground()   one function, 5,306 lines, shared variables      │
 │  backendSocket.ts          ~70 request types, 53 callbacks wired by hand    │
 │                                                                             │
-│   agents · tmux · discovery · hooks · transcripts · turns · input · questions│
+│  agents · tmux · discovery · hooks · transcripts · turns · input · questions│
 │   relay · E2EE · sharing · dial · Wi-Fi device · search · viewers · grid    │
 │   workspaces · teams · recap model pool · …                                 │
-│        everything inside one function: every part can touch every other    │
+│        everything inside one function: every part can touch every other     │
 │                                                                             │
 │  ✗ one bug anywhere (exception, hang, memory) takes the whole daemon down   │
 │  ✗ no supervisor: back only when the desktop app respawned it (up to ~70 s) │
@@ -45,7 +45,7 @@ and it crash-looped: every agent on the machine lost its daemon at once.
 ┌──────────────────────────────────────┴──────────────────────────────────────┐
 │ ② CORE: must never go down        src/core/          harness __run          │
 │                                                                             │
-│  core/agents/       create · fork · restart · stop · resume · close ·      │
+│  core/agents/       create · fork · restart · stop · resume · close ·       │
 │                     discovery · bind                              15 files  │
 │  core/transcripts/  attach · live tail · relaunch marks · normalizers  6    │
 │  core/turns/        working/idle · event funnel · cancel · recaps      7    │
@@ -54,7 +54,7 @@ and it crash-looped: every agent on the machine lost its daemon at once.
 │  core/input.ts      typed messages into the pane, in order                  │
 │  core/questions.ts  an agent's question to you, and your answer back        │
 │                                                                             │
-│  cli.ts runForeground() only wires these together: 5,306 → 2,636 lines      │
+│  cli.ts runForeground() only wires these together: 5,306 → 2,663 lines      │
 │  each module: one factory, explicit dependencies, 100% test coverage        │
 │                                                                             │
 │  core/api.ts          the contract between core and services:               │
@@ -67,10 +67,12 @@ and it crash-looped: every agent on the machine lost its daemon at once.
                                        │ only through CoreApi / CorePorts
 ┌──────────────────────────────────────┴──────────────────────────────────────┐
 │ ③ SERVICES: the extendable part    src/services/                            │
-│    in the core's process behind the host, or each in its own process       │
+│    in the core's process behind the host, or each in its own process        │
 │    (HARNESSD_SERVICES=search: harnessd/services.ts runs it, the core routes │
 │    to it through core/serviceLinks.ts) — search is the first                │
+│    each answers its own requests from the apps: declared, routed to it      │
 │                                                                             │
+│  services/store.ts       the Harness Store         uses dsh/                │
 │  services/search.ts      session search            uses lib/sessionSearch/  │
 │  services/viewers.ts     harness viewers (DSH)     uses dsh/                │
 │  services/models.ts      Grid and local models     uses lib/grid*           │
@@ -100,12 +102,20 @@ and it crash-looped: every agent on the machine lost its daemon at once.
 
 1. Put it in `services/<name>.ts` as `start<Name>(core: CoreApi, ports: CorePorts)`. It may only
    ask the core what `CoreApi` offers.
-2. If the core must call it, add a port to `CorePorts` in `core/api.ts`, with fallbacks beside it:
-   what the core does while the service is off or failing.
-3. Start it in `cli.ts` through `serviceHost.start(...)`, never directly. The host guards its start
-   and every call, and switches it off when it keeps failing.
-4. Hold the file to 100% (`npm run test:core` covers `src/services/`). For the end-to-end suite,
-   `HARNESSD_TEST_FAULTS=<name>` makes its start fail, and `<name>.<member>` makes one call fail.
+2. If the apps call it, declare its requests (`<NAME>_REQUESTS`) and return their handlers from its
+   start. The core routes each request to it, with who asked. Nothing changes in `backendSocket.ts`
+   or `cli.ts` but the one line that starts the service. While it is off, its requests are answered
+   `SERVICE_UNAVAILABLE`.
+3. If the core must call it, add a port to `CorePorts` in `core/api.ts`, with fallbacks beside it:
+   what the core does while the service is off or failing. Most features need no port.
+4. Start it in `cli.ts` through `serviceHost.serve(...)`, or `serviceHost.start(...)` when it has a
+   port; never directly. The host guards its start, every call and every request, and switches it off
+   when it keeps failing.
+5. Hold the file to 100% (`npm run test:core` covers `src/services/`). For the end-to-end suite,
+   `HARNESSD_TEST_FAULTS=<name>` makes its start fail, and `<name>.<member>` or `<name>.<request>`
+   makes one call or one request fail.
+
+`services/store.ts`, the Harness Store, is the example: no port, four requests, about 60 lines.
 
 The same rules are written for coding agents in `AGENTS.md` files, one per layer: `cli/`, `src/core/`,
 `src/services/` and `src/harnessd/`. Codex reads them directly. Claude Code reads them through a

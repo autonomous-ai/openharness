@@ -23,6 +23,7 @@ together. `src/backendSocket.ts` is the transport: it receives frames and dispat
 | You are adding | Put it in | Not in |
 |---|---|---|
 | A new feature (anything a session can run without) | a new service, `src/services/<name>.ts` | the core, `cli.ts`, `backendSocket.ts` |
+| A request the apps send to a feature | the service's start returns its handler ([src/services/AGENTS.md](src/services/AGENTS.md)) | a case in `backendSocket.ts`, a slot on `BackendSocket` |
 | Behaviour of agents, terminals, transcripts, turns, input or questions | the module under `src/core/` that owns it | `cli.ts` |
 | Support for an engine (Claude Code, Codex, …) | `src/engines/<engine>/` | the core |
 | A pure helper with no daemon state | `src/lib/` | the core |
