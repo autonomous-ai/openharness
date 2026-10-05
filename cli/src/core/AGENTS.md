@@ -30,4 +30,5 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
 - `engines/`: the engines' hooks.
 - `input.ts`, `questions.ts`: messages into a pane; an agent's question and its answer.
 - `api.ts`: the contract with services. `serviceHost.ts`: services in this process.
-  `serviceLinks.ts`: services in their own processes.
+  `serviceLinks.ts`: services in their own processes. `viewersLink.ts`: what the core keeps of the
+  viewers when they run in theirs.
