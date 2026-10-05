@@ -602,3 +602,26 @@ describe('Hermes hook allowlist', () => {
     expect(new Set(ours.map((a) => a.event)).size).toBe(ours.length)
   })
 })
+
+// lib/engineHomes.ts: a Claude Code home the person moved (CLAUDE_CONFIG_DIR) reads its own settings,
+// so the daemon's hooks must be written there too, beside whatever the person keeps in it.
+describe('Claude Code hooks in a moved home', () => {
+  let home = ''
+  beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'adapter-claude-moved-')) })
+  afterEach(() => { rmSync(home, { recursive: true, force: true }) })
+
+  it('writes the hooks into the settings file it is given, keeping what is there, once', async () => {
+    const file = join(home, 'work', 'settings.json')
+    mkdirSync(join(home, 'work'), { recursive: true })
+    writeFileSync(file, JSON.stringify({ model: 'opus', hooks: { Stop: [{ hooks: [{ type: 'command', command: 'say done' }] }] } }))
+    const { installSessionHooks } = await loadHooks()
+    installSessionHooks(19473, file)
+    const first = readFileSync(file, 'utf-8')
+    const settings = JSON.parse(first)
+    expect(settings.model).toBe('opus')
+    expect(settings.hooks.SessionStart[0].hooks[0].command).toContain('notify.mjs')
+    expect(settings.hooks.Stop.map((block: { hooks: Array<{ command: string }> }) => block.hooks[0].command)).toEqual(['say done', expect.stringContaining('notify.mjs')])
+    installSessionHooks(19473, file)
+    expect(readFileSync(file, 'utf-8')).toBe(first)
+  })
+})

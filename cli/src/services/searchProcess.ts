@@ -48,15 +48,21 @@ export function searchCoreApi(
       advertised: () => [],
       terminalAvailable: () => false,
       sync: () => {},
+      runtimeModels: async () => [],
     },
     transcripts: { databaseHistory },
     external: {
       sessions: new ExternalSessions({ providers, excluded: [dataDir], log: console.warn }),
       open: new OpenSessions({ providers, log: console.warn }),
     },
-    // Search holds no credential and talks to no window: these are never asked of it.
-    account: { mintGridName: async () => null, accessToken: () => Promise.reject(new Error('search holds no credential')) },
-    clients: { viewerChanged: () => {}, gridNamed: () => {}, dshInstallStatus: () => {} },
+    // Search holds no credential, runs no model and talks to no window: these are never asked of it.
+    account: {
+      mintGridName: async () => null,
+      accessToken: () => Promise.reject(new Error('search holds no credential')),
+      privateGridName: async () => null,
+      machineName: () => null,
+    },
+    clients: { viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {} },
   }
 }
 

@@ -40,6 +40,7 @@ import { join, basename, dirname, relative, isAbsolute } from 'path'
 import { hostname, uptime } from 'os'
 import { cursorDataDir } from '../engines/cursor/home.js'
 import { env } from '../config/env.js'
+import { claudeProjectsRoots, codexHomeRoots } from './engineHomes.js'
 import { readCodexRolloutMeta, resolveCodexRollout } from '../engines/codex/rollout.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import type { GridAssignment } from './gridAssignment.js'
@@ -767,15 +768,26 @@ export function engineKeepsTranscriptFile(engine: AgentEngine): boolean {
   return TRANSCRIPT_ROOT[engine] !== null
 }
 
+/**
+ * The folders an engine's transcripts may be in: its own, and for Claude Code and Codex each home the
+ * person moved in their shell profile (lib/engineHomes.ts). An agent's own CODEX_HOME profile is its
+ * only one.
+ */
+function transcriptRoots(engine: AgentEngine, rootFor: (codexHome?: string) => string, codexHome?: string): string[] {
+  if (engine === 'claude') return claudeProjectsRoots(rootFor())
+  if (engine === 'codex' && !codexHome) return codexHomeRoots(env.CODEX_HOME).map((home) => join(home, 'sessions'))
+  return [rootFor(codexHome)]
+}
+
 export function validTranscriptPath(engine: AgentEngine, filePath: string, codexHome?: string, allowMissing = false): boolean {
   const rootFor = TRANSCRIPT_ROOT[engine]
   if (!rootFor) return false
   try {
     const missing = allowMissing && !existsSync(filePath)
     const actual = missing ? join(realpathSync(dirname(filePath)), basename(filePath)) : realpathSync(filePath)
-    const root = realpathSync(rootFor(codexHome))
+    const within = (root: string): boolean => { try { return isWithin(realpathSync(root), actual) } catch { return false } }
     const st = statSync(missing ? dirname(actual) : actual)
-    if (!(missing ? st.isDirectory() : st.isFile()) || !isWithin(root, actual)) return false
+    if (!(missing ? st.isDirectory() : st.isFile()) || !transcriptRoots(engine, rootFor, codexHome).some(within)) return false
     if (engine === 'cursor') {
       const id = basename(actual).replace(/\.jsonl$/, '')
       if (!id || basename(dirname(actual)) !== id || basename(dirname(dirname(actual))) !== 'agent-transcripts') return false

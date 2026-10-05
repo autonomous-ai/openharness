@@ -1275,6 +1275,30 @@ describe('agent identity: the process owns the agent, the session is bound to it
     })
   })
 
+  // lib/engineHomes.ts: CLAUDE_CONFIG_DIR or CODEX_HOME in the person's profile put the engine's
+  // transcripts where no root reached, and no agent bound there.
+  it('takes a transcript beneath a home the person moved as the engine\'s own, and nothing beside it', async () => {
+    const { validTranscriptPath } = await loadRegistryModule()
+    const { adoptEngineHomes } = await import('./engineHomes.js')
+    const moved = mkdtempSync(join(tmpdir(), 'adapter-moved-homes-'))
+    try {
+      const claudeFile = join(moved, 'claude-work', 'projects', '-work', 's1.jsonl')
+      const codexFile = join(moved, 'codex-work', 'sessions', '2026', 'rollout-x.jsonl')
+      const beside = join(moved, 'claude-work', 'elsewhere.jsonl')
+      for (const file of [claudeFile, codexFile, beside]) { mkdirSync(join(file, '..'), { recursive: true }); writeFileSync(file, '{}\n') }
+      expect(validTranscriptPath('claude', claudeFile)).toBe(false)
+      expect(validTranscriptPath('codex', codexFile)).toBe(false)
+      adoptEngineHomes({ CLAUDE_CONFIG_DIR: join(moved, 'claude-work'), CODEX_HOME: join(moved, 'codex-work') }, { claudeHome: dataDir, codexHome: dataDir })
+      expect(validTranscriptPath('claude', claudeFile)).toBe(true)
+      expect(validTranscriptPath('codex', codexFile)).toBe(true)
+      // Beneath the moved home but outside its transcripts, and an agent's own profile still rules alone.
+      expect(validTranscriptPath('claude', beside)).toBe(false)
+      expect(validTranscriptPath('codex', codexFile, dataDir)).toBe(false)
+    } finally {
+      rmSync(moved, { recursive: true, force: true })
+    }
+  })
+
   it('validates a Codex transcript against the agent\'s own profile, not the daemon default', async () => {
     const { validTranscriptPath } = await loadRegistryModule()
     const profile = mkdtempSync(join(tmpdir(), 'adapter-codex-profile-'))
