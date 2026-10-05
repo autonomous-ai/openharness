@@ -47,11 +47,16 @@ on:
         default: false
         type: boolean
       checks:
-        description: 'Image journey, browser focus, lock/suspend, compositor recovery, Wi-Fi/audio, or hardware; image_run_id reuses an image'
+        description: 'Image journey, browser focus, lock/suspend, recovery, Wi-Fi/audio, hardware, or private zram acceptance'
         required: false
         default: image
         type: choice
-        options: [image, browser, session, recovery, essentials, hardware]
+        options: [image, browser, session, recovery, essentials, hardware, zram]
+      browser_memory:
+        description: 'With checks=browser, diagnose memory in the UEFI VM only; retain ordinary workload and deadlines'
+        required: false
+        default: false
+        type: boolean
   push:
     branches: ['os/**']
     paths: ['os/**', 'tui/**', 'cli/**', '.github/workflows/os.yml']
@@ -66,7 +71,7 @@ concurrency:
 
 jobs:
   image:
-    if: ${{ !inputs.image_run_id && !inputs.publish_run_id && !inputs.development_update }}
+    if: ${{ !inputs.image_run_id && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'zram' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     steps:
@@ -154,21 +159,13 @@ jobs:
 
   machine:
     needs: image
-    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}
+    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && inputs.checks != 'zram' && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - firmware: bios
-            encryption: ''
-            agents: '--agents'
-            cpu: '--cpu Nehalem'
-          - firmware: uefi
-            encryption: '--encrypt'
-            agents: ''
-            cpu: ''
+        include: ${{ inputs.checks == 'browser' && inputs.browser_memory && fromJSON('[{"firmware":"uefi","encryption":"--encrypt","agents":"","cpu":""}]') || fromJSON('[{"firmware":"bios","encryption":"","agents":"--agents","cpu":"--cpu Nehalem"},{"firmware":"uefi","encryption":"--encrypt","agents":"","cpu":""}]') }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v6
@@ -223,7 +220,7 @@ jobs:
         if: ${{ inputs.checks == 'browser' }}
         env:
           OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
-        run: python3 os/tests/browser_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --memory-mib "$OS_MEMORY_MIB" --wlrctl /usr/bin/wlrctl --browser-script os/root/usr/bin/hn-browser --compositor-config os/root/usr/share/harness-os/labwc/rc.xml
+        run: python3 os/tests/browser_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --memory-mib "$OS_MEMORY_MIB" --wlrctl /usr/bin/wlrctl --browser-script os/root/usr/bin/hn-browser --compositor-config os/root/usr/share/harness-os/labwc/rc.xml ${{ inputs.browser_memory && '--memory-profile --zram-config os/root/etc/systemd/zram-generator.conf' || '' }}
       - name: Show machine failure diagnostics
         if: failure()
         run: |
@@ -241,6 +238,54 @@ jobs:
             os/test-results/**/*.jsonl
             os/test-results/**/workloads/**
             os/test-results/**/dsh/**
+          retention-days: 14
+
+  zram:
+    if: ${{ inputs.checks == 'zram' && !inputs.publish_run_id && !inputs.development_update }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - name: Require a selected source image
+        env:
+          IMAGE_RUN_ID: ${{ inputs.image_run_id }}
+        run: '[[ "$IMAGE_RUN_ID" =~ ^[0-9]+$ ]]'
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id }}
+          github-token: ${{ github.token }}
+      - name: Install private fixture and VM tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends squashfs-tools xorriso time qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr wlrctl
+          test -e /dev/kvm
+          sudo chmod a+rw /dev/kvm
+      - name: Check one-file fixture and exact capacity contracts
+        run: |
+          python3 os/tools/check.py
+          sudo python3 -m unittest discover -s os/tests -p test_zram.py -v
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
+      - name: Cold live boot, interactive install and ordinary browser acceptance
+        run: |
+          expected_sha="$(python3 -c 'import json; print(json.load(open("os/dist/manifest.json"))["iso"]["sha256"])')"
+          sudo python3 os/tests/zram_fixture.py --iso os/dist/*.iso --sha256 "$expected_sha" --config os/root/etc/systemd/zram-generator.conf
+      - name: Retain evidence without the private image or disks
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-zram-acceptance
+          path: |
+            os/test-results/zram/*.json
+            os/test-results/zram/*.json.gz
+            os/test-results/zram/*.log
+            os/test-results/zram/*.time
+            os/test-results/zram/*/*.json
+            os/test-results/zram/*/*.jsonl
+            os/test-results/zram/*/*.png
+            os/test-results/zram/*/*.txt
+            os/test-results/zram/*/*.log
           retention-days: 14
 
   hardware:
