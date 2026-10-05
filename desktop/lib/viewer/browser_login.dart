@@ -9,6 +9,7 @@ import '../core/browser_label.dart';
 import 'direct_auth.dart';
 import 'qr_sign_in.dart';
 import 'direct_auth_api.dart';
+import 'sign_in_attribution.dart';
 import '../sharing/shared_agent_location.dart';
 import 'viewer_location.dart';
 
@@ -95,6 +96,7 @@ class BrowserLogin implements SignInClient, PhoneSignInClient {
           code: code,
           state: saved['state'] as String,
           tx: saved['tx'] as String,
+          attribution: signInAttribution(uri),
         );
         _requireCurrent(revision);
         await auth.signIn(tokens, stillCurrent: () => revision == _revision);
