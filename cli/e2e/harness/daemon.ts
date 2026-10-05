@@ -129,9 +129,18 @@ export function assertHooksContained(root: string, env: NodeJS.ProcessEnv): void
   } catch { /* none remembered yet */ }
 }
 
-/** The settings files a daemon's log says it installed hooks into, or found them already in. */
+/**
+ * The files a daemon's log says it installed hooks or plugins into, found them already in, or left alone.
+ * The update line names the hook script first and the file it rewrote after ` in `.
+ */
 export function hookFilesNamed(log: string): string[] {
-  return [...log.matchAll(/\[hooks\][^\n]*?(\/[^\s'"]*(?:settings|hooks)\.json)/g)].map((match) => match[1])
+  const files: string[] = []
+  for (const line of log.split('\n')) {
+    if (!line.includes('[hooks]')) continue
+    const named = line.includes('updated (path/port changed)') ? / in (\/\S+)\s*$/.exec(line) : /(?:→|unchanged:) (\/\S+)/.exec(line)
+    if (named) files.push(named[1])
+  }
+  return files
 }
 
 export const until = async <T>(what: string, probe: () => Promise<T | null | undefined | false> | T | null | undefined | false, ms = 30_000, every = 100): Promise<T> => {
