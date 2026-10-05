@@ -21,8 +21,11 @@ import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import type { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
+import type { RouteAnswer } from '../localWsServer.js'
 import type { SwarmPromptScopes } from '../teams/promptScope.js'
 import { FAIL, later, type PortFallbacks } from './serviceHost.js'
+
+export type { RouteAnswer }
 
 export interface CoreApi {
   /** The daemon's data folder; a service keeps its own files in it. */
@@ -209,6 +212,25 @@ export type TeamsEvent = { seq: number; core: string; at: number; agentId: strin
   | { kind: 'replied'; teamId: string; questionId: string }
 )
 
+/** The core's calls into the fleet: ⌘K's two requests — which agent a typed task belongs to, on any of
+ *  the owner's machines, and delivering it to that agent's own machine — and stopping the lane to the
+ *  other machines for a shutdown. */
+export interface FleetPort {
+  routeTask(text: string): Promise<RouteAnswer>
+  sendTurn(agentId: string, text: string): { ok: true } | { ok: false; machine: string; reason: string }
+  stop(): void
+}
+
+const FLEET_UNAVAILABLE = 'the fleet service is unavailable'
+
+/** What the core gets when the fleet fails: ⌘K says so, picking no agent and sending nothing, and a
+ *  shutdown goes on. */
+export const FLEET_FALLBACKS: PortFallbacks<FleetPort> = {
+  routeTask: later({ agentId: '', machineId: '', name: '', confidence: 0, reason: FLEET_UNAVAILABLE, candidates: [], weighed: 0, machines: 0, via: '' }),
+  sendTurn: { ok: false, machine: '', reason: FLEET_UNAVAILABLE },
+  stop: undefined,
+}
+
 /** Each port is filled by the service that owns it when that service starts, and is null while the
  *  service is off: the core never waits on one. */
 export interface CorePorts {
@@ -217,10 +239,11 @@ export interface CorePorts {
   models: ModelsPort | null
   workspaces: WorkspacesPort | null
   teams: TeamsPort | null
+  fleet: FleetPort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { search: null, viewers: null, models: null, workspaces: null, teams: null }
+  return { search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null }
 }
 
 export interface CoreApiDeps {

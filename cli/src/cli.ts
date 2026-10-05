@@ -46,8 +46,6 @@ import { DaemonCableHost, cableEventFor, cableQuestionFor, cableQuestionCloseFor
 import { terminalActivity } from './cable/terminalActivity.js'
 
 import { MachineListCache, machineListCachePath, withStaleMarker } from './device/machineList.js'
-import { DeviceLink } from './device/deviceLink.js'
-import { DeviceFleet } from './device/deviceFleet.js'
 import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from './lib/registry.js'
 import { engineSessionTitle } from './lib/sessionTitle.js'
 import { installCodexHooks } from './lib/hooks.js'
@@ -164,7 +162,7 @@ import { createAgentClosing } from './core/agents/close.js'
 import { createEngineHooks, installEngineHooks } from './core/engines/hooks.js'
 import { createCursorTaskHooks } from './core/engines/cursorTasks.js'
 import { databaseHistory } from './core/transcripts/databaseHistory.js'
-import { createCoreApi, emptyPorts, MODELS_FALLBACKS, SEARCH_FALLBACKS, TEAMS_FALLBACKS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type TeamsPort } from './core/api.js'
+import { createCoreApi, emptyPorts, FLEET_FALLBACKS, MODELS_FALLBACKS, SEARCH_FALLBACKS, TEAMS_FALLBACKS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type TeamsPort } from './core/api.js'
 import { createServiceHost, testFaults } from './core/serviceHost.js'
 import { createServiceLinks } from './core/serviceLinks.js'
 import { createViewersLink } from './core/viewersLink.js'
@@ -180,6 +178,8 @@ import { STORE_REQUESTS, startStore } from './services/store.js'
 import { startViewers } from './services/viewers.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { startWorkspaces } from './services/workspaces.js'
+import { startFleet } from './services/fleet.js'
+import type { FleetRouter } from './services/fleetRouter.js'
 import { describeMasterStatus, probeMaster, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, refuseServedDataFolder, type LocalSocketServer } from './lib/localSocket.js'
@@ -197,7 +197,7 @@ import { WindowForm } from './cable/windowForm.js'
 import { RemoteRelayPool } from './lib/remoteRelay.js'
 import { TERMINAL_BINARY_VERSION } from './lib/terminalBinary.js'
 import { TeamError } from './teams/model.js'
-import { routeVoiceTask, setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter, type RouterAgent } from './lib/voiceRouter.js'
+import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from './lib/voiceRouter.js'
 import { E2eeStore, identitySpent, peekIdentityPub } from './lib/e2ee/store.js'
 import { confirmsRemoval, deviceRegistration, deviceStatusValue, formatDeviceDetail, formatDeviceHistory, formatDeviceList, logOrder, removeConfirmation } from './lib/e2ee/deviceDisplay.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
@@ -265,6 +265,10 @@ const GENERIC_PAIR_LABELS: ReadonlySet<string> = new Set(['harness link', 'brows
 function terminalHintMachineName(): string {
   try { return readFileSync(MACHINE_NAME_FILE, 'utf-8').trim() || hostname() } catch { return hostname() }
 }
+/** The name the dial's wheel and the fleet give this computer: its display name, else "This machine". */
+function dialMachineName(): string {
+  try { return readFileSync(MACHINE_NAME_FILE, 'utf8').trim() || 'This machine' } catch { return 'This machine' }
+}
 
 // The dial's session, held at module scope for the same reason `backendRef` is: shutdown() is defined
 // before the wiring that creates it, and the port has to be released on the way out.
@@ -272,16 +276,6 @@ let cableRef: CableFleet | null = null
 /** The same object the session holds — module scope so the recap gates can ask which machine is selected
  *  without threading it through every constructor between here and there. */
 let cableHostRef: DaemonCableHost | null = null
-/**
- * How many agents ⌘K weighs at once.
- *
- * A classifier budget, not a UI one: each candidate spends its name, its machine and three recaps inside
- * one prompt, and past a point the window that decides the pick is more crowded than it is informed.
- * Fifteen is the owner's number; the ordering that decides WHICH fifteen is in onRouteTask.
- */
-const ROUTE_MAX_CANDIDATES = 15
-/** What ⌘K gives the classifier before the name matcher answers instead. */
-const ROUTE_CLASSIFY_APP_MS = 20_000
 /**
  * The window's tiles, in tile order, as last reported.
  *
@@ -301,8 +295,6 @@ let appPaneAgents: string[] = []
  * or voice until the window happened to send its tabs again (measured 2026-10-01: 80 s).
  */
 let appSwarmsLatest: Parameters<DaemonCableHost['setSwarms']>[0] = null
-/** Module scope for the same reason cableRef is: shutdown() has to release the socket. */
-let deviceLinkRef: DeviceLink | null = null
 
 // OpenCode's SQLite store — polled per session by OpencodeReader (no per-session transcript file).
 const OPENCODE_DB = join(env.OPENCODE_DATA_DIR, 'opencode.db')
@@ -3121,142 +3113,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // Ordered, not set-wise: two tiles swapping places is the same set and a different ring.
       if (deskChanged) devices('dial', () => { void cableRef?.syncAgents() })
     },
-    // ⌘K in the window: a typed task, and which agent it belongs to.
-    //
-    // THE SAME ROUTER THE DIAL USES, given a second caller. routeVoiceTask has never cared that its input
-    // arrived as speech — the transcript is just text by the time it sees it — so this is not a port. What
-    // is new is the answer coming back to something that can SHOW it: the dial had to act on the pick,
-    // the window can ask.
-    //
-    // EVERY AGENT, EVERY MACHINE. The candidate list is the dial's own — this computer first, then each
-    // machine in wheel order — because the agent that fits the words is not always the one on the desk in
-    // front of you, and a router that cannot see the others cannot say so.
-    //
-    // CAPPED AT FIFTEEN, and the cap is about the CLASSIFIER, not about us: every candidate spends its
-    // name and three recaps in one prompt, and a list long enough to crowd that window makes the pick
-    // worse, not slower.
-    //
-    // WHICH fifteen is the rail's own order — this computer's agents, then each other machine's — because
-    // that is the list the person is looking at while they type, and "the first fifteen" has to mean the
-    // first fifteen they can SEE. An earlier cut put open tiles first, on the theory that working on
-    // something is a statement about relevance; it is, but it also made the fifteen unpredictable from
-    // the screen, and predictable beat clever here (owner's call).
-    onRouteTask: backend.ownerCommands.onRouteTask = async (text) => {
-      const host = cableHostRef
-      if (!host) return { agentId: '', machineId: '', name: '', confidence: 0, reason: 'no agent list yet', candidates: [], weighed: 0, machines: 0, via: '' }
-      // Whatever the daemon knows right now. This also kicks a refresh of the remote machines, so a list
-      // that is short because a machine has not been asked yet fills in for the NEXT question rather than
-      // holding this one open.
-      // FLAT, not the dial's ring: listAgents() re-cuts the same snapshot around the window's open
-      // tiles, which is the right answer for a carousel and the wrong one for a list the person reads
-      // top to bottom.
-      const all = await host.listAgentsFlat()
-      const ranked = all.slice(0, ROUTE_MAX_CANDIDATES)
-      if (ranked.length < all.length) {
-        // Never a silent truncation: a route that could not have picked the right agent must not read
-        // like a route that considered it and said no.
-        console.log(`[route] ${all.length} agents · weighing the first ${ranked.length} (open tiles first)`)
-      }
-      // Recaps AFTER the cap, and in parallel: a remote agent's recap is an RPC to its machine, so
-      // fetching for agents that were never going to be weighed is latency spent on nothing. They are
-      // cached per agent on the fleet side, so a second ⌘K costs no round trip at all.
-      const candidates: RouterAgent[] = await Promise.all(ranked.map(async (agent) => ({
-        id: agent.id,
-        name: agent.name,
-        engine: agent.engine,
-        machine: agent.machine,
-        // THE PERSON'S OWN QUESTIONS, AND NOTHING ELSE.
-        //
-        // This used to be `turn.ask || turn.recap || turn.text`, cut to sixty characters and joined
-        // into one blob — under a prompt heading that told the model every word of it was something
-        // the person had asked. For any agent with no recorded question that was false: it was a
-        // summary of what the AGENT REPLIED. Measured on this desk, "which year did the second world
-        // war end" summarised to "1945." — an answer, labelled as a question, handed to a model asked
-        // to recognise a topic. An agent with nothing on record now sends an empty list and is
-        // described honestly in the prompt.
-        //
-        // UNCUT, too. Sixty characters was chosen when fifteen agents each carried three recaps at
-        // full length and the prompt timed out; a real machine has four to eight agents, and cutting
-        // a Vietnamese sentence at sixty takes the object with it — which is the topic. The bound that
-        // matters now lives at the two ends: ASK_MAX_CHARS where the question is recorded, and the
-        // endpoint's own per-prompt ceiling.
-        prompts: await host.recentAsks(agent.id),
-      })))
-      // 20s, not the shared 12s: this path answers a person watching a spinner in their own window, and
-      // it is under nobody else's deadline — the app's rpc waits longer still. The dial and the web keep
-      // the default; overshooting a deadline they DO have would turn a late answer into no answer.
-      // …and WHO THIS PERSON WAS JUST TALKING TO. Nothing else in the prompt can supply it: a follow-up
-      // question names no agent and often shares no words with the first one, and the recap of the turn
-      // it follows may not even exist yet — the answer is still being written while the next question
-      // is being asked.
-      const decision = await routeVoiceTask(text, candidates, undefined, ROUTE_CLASSIFY_APP_MS, host.lastRouted?.())
-      const named = (id: string) => candidates.find((agent) => agent.id === id)
-      // The runners-up in the ROUTER's order when it gave one, and the list's own order when it did not.
-      // A picker that has to ask "which agent" is showing a ranking either way; this decides whose.
-      const ranking = (decision.scores ?? []).filter((score) => score.agentId !== decision.agentId)
-      // EVERY AGENT THAT WAS WEIGHED, not the best two.
-      //
-      // The picker used to offer three rows — the pick and two runners-up — on the theory that a person
-      // who has to be asked wants the shortlist. They do not: when the router is unsure the right agent
-      // is often the one it ranked fourth, and a shortlist that cannot show it turns a question into a
-      // dead end, with no way out but Esc and typing the task again somewhere else.
-      //
-      // Ranked first where the router said something, then everything else it looked at in rail order,
-      // so the list stays the one the person is reading on screen. Nothing is dropped: the cap that
-      // matters is ROUTE_MAX_CANDIDATES above, and `weighed` already says what it did.
-      const rankedOthers = ranking
-        .map((score) => named(score.agentId))
-        .filter((agent): agent is RouterAgent => !!agent)
-      const listed = new Set([decision.agentId, ...rankedOthers.map((agent) => agent.id)])
-      const others = [...rankedOthers, ...candidates.filter((agent) => !listed.has(agent.id))]
-      const fitOf = (id: string) => id === decision.agentId
-        ? decision.confidence
-        : ranking.find((score) => score.agentId === id)?.confidence ?? 0
-      return {
-        agentId: decision.agentId,
-        machineId: all.find((entry) => entry.id === decision.agentId)?.machineId ?? '',
-        name: named(decision.agentId)?.name ?? '',
-        confidence: decision.confidence,
-        reason: decision.reason,
-        // How many agents were actually WEIGHED, and across how many computers. The window says this
-        // while it waits, because the question a person has during those seconds is not "how long" —
-        // it is "did it even look at the agent I mean". The cap above can hide agents, and until now
-        // the only place that was said was this process's log.
-        weighed: ranked.length,
-        machines: new Set(ranked.map((agent) => agent.machine).filter(Boolean)).size,
-        // 'model' or 'heuristic', coarsened from the router's own label. The two arrive at the same low
-        // confidence BY DESIGN — an unsure model and a router that could not run must both stop and ask
-        // — and that is exactly why the window has to be able to tell them apart when it explains itself.
-        via: (decision.via ?? '').startsWith('heuristic') ? 'heuristic' : 'model',
-        candidates: [decision.agentId ? named(decision.agentId) : null, ...others]
-          .filter((agent): agent is RouterAgent => !!agent)
-          .map((agent) => {
-            const listed = all.find((entry) => entry.id === agent.id)
-            return {
-              agentId: agent.id,
-              name: agent.name,
-              // The machine travels twice, and both are needed: the NAME because two agents called "api"
-              // on two computers are otherwise one row twice, and the ID because the window has to open
-              // the pane on the machine the agent actually lives on.
-              machineId: listed?.machineId ?? '',
-              machine: agent.machine ?? '',
-              engine: agent.engine ?? '',
-              recent: (agent.recentSummary ?? '').slice(0, 120),
-              // Drawn as a bar in the picker, never dispatched on. 0 = the router said nothing about
-              // this one, which the window renders as no bar rather than as a zero-length one.
-              confidence: fitOf(agent.id),
-            }
-          }),
-      }
-    },
-    // Committed. Sent through cableHost.sendTurn — the dial's own dispatch — and NOT straight into
-    // backend.onMessage.
-    //
-    // That distinction is the whole of remote support: onMessage resolves the id against THIS computer's
-    // registry, so a remote agent lands as "This harness is no longer available" — an error about an agent
-    // that is alive and answering on another machine. sendTurn is the fork that already knows the
-    // difference (local → the same door the web and the hooks use, remote → the fleet), and it is the
-    // one the dial has been using for every voice turn.
+    // ⌘K in the window: a typed task, and which agent it belongs to, on any of the owner's machines. The
+    // fleet's to answer (services/fleet.ts routeTask), so it answers with the dial absent or off.
+    onRouteTask: backend.ownerCommands.onRouteTask = async (text) => ports.fleet
+      ? ports.fleet.routeTask(text)
+      : { agentId: '', machineId: '', name: '', confidence: 0, reason: 'no agent list yet', candidates: [], weighed: 0, machines: 0, via: '' },
     // A window that connects after the dial did has missed the `dial_status` that announced it.
     dialStatus: () => {
       let status: ReturnType<DaemonCableHost['currentDialStatus']> | undefined
@@ -3278,8 +3139,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         })
     }),
     openQuestions: () => [...openQuestions.values()],
+    // Committed. Sent through the fleet's router — the dial's own dispatch — and NOT straight into
+    // backend.onMessage.
+    //
+    // That distinction is the whole of remote support: onMessage resolves the id against THIS computer's
+    // registry, so a remote agent lands as "This harness is no longer available" — an error about an agent
+    // that is alive and answering on another machine. sendTurn is the fork that already knows the
+    // difference (local → the same door the web and the hooks use, remote → the fleet), and it is the
+    // one the dial uses for every voice turn.
     onRouteSend: backend.ownerCommands.onRouteSend = (agentId, text) => {
-      const sent = cableHostRef?.sendTurn(agentId, text) ?? { ok: false as const, machine: '', reason: 'no agent list yet' }
+      const sent = ports.fleet?.sendTurn(agentId, text) ?? { ok: false as const, machine: '', reason: 'no agent list yet' }
       console.log(`[route] ⌘K → ${sid(agentId)} · bytes=${Buffer.byteLength(text, 'utf8')}`
         + (sent.ok ? '' : ` · REFUSED: ${sent.reason}${sent.machine ? ` (${sent.machine})` : ''}`))
       return sent
@@ -3949,7 +3818,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Release the serial port first. It is exclusive, and a daemon that exits still holding it makes
     // esptool fail in a way that reads exactly like dead hardware.
     void cableRef?.stop()
-    deviceLinkRef?.stop()
+    ports.fleet?.stop()
     daemonBoot.updater?.stop()
     daemonBoot.tuiUpdater?.stop()
     agentReconciler.stop()
@@ -4009,6 +3878,21 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     void shutdown('busy')
   }
 
+  // ── the owner's OTHER machines (services/fleet.ts) ──────────────────────────────────────────────────
+  //
+  // The machine list kept fresh, the lane to the other machines, and the router ⌘K, the window's voice
+  // route and the dial send every turn through. The list is the same cache the local `/api/machines`
+  // handler answers from (built up near `proxyBackend`), so the dial's wheel and the desktop's list
+  // cannot disagree — and neither can go stale while the other is fresh.
+  const fleetService: { router?: FleetRouter } = {}
+  serviceHost.start('fleet', (core, started) => {
+    fleetService.router = startFleet(core, started, {
+      machines: machineListCache, guestMachines: guestMachinesBody, computerId, machineId: () => backend.machineId,
+      machineName: dialMachineName, desk: () => appPaneAgents, auth,
+      autonomousEnv: readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV, identity: relayIdentityStore.getIdentity(),
+    })
+  }, coreApi, FLEET_FALLBACKS)
+
   // ── the dial on the USB cable ────────────────────────────────────────────────────────────────────
   //
   // A second device surface, served entirely over a wire the user physically owns: no backend, no
@@ -4017,54 +3901,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // of any of those is a second set of bugs.
   //
   // Deliberately not fatal and not blocking: an unplugged cable is this daemon's ordinary state.
-  // ── the lane to the owner's OTHER machines ───────────────────────────────────────────────────────
-  //
-  // Three independent things, on purpose. The LIST is a REST read that works while the backend socket is
-  // down; `local` is derived from the computer id and needs no network at all; and the LANE is a device
-  // socket that only exists while the dial is actually looking at another machine.
-  // The same cache the local `/api/machines` handler answers from (built up near `proxyBackend`), so the
-  // dial's wheel and the desktop's list cannot disagree — and neither can go stale while the other is fresh.
-  const machineList = machineListCache
-  // Signed out there is nothing to fetch and a fetch would only earn a 401 that empties the wheel, so
-  // the one row this daemon can speak for is fed in directly — the same body the local handler answers.
-  const refreshMachineList = (): void => {
-    const guest = guestMachinesBody()
-    if (guest) { machineList.adopt(guest); return }
-    void machineList.refresh()
-  }
-  refreshMachineList()
-  const machineListTimer = setInterval(refreshMachineList, 60_000)
-  machineListTimer.unref?.()
-
-  const machinePeers = new MachinePeerStore()
-  const deviceLink = new DeviceLink({
-    auth,
-    backendWsBase: env.BACKEND_WS_URL,
-    computerId: computerId(),
-    autonomousEnv: readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV,
-    // The SAME identity `harness remote-password set` publishes and `harness link connect` proves
-    // knowledge against, so one link ceremony covers the desktop app's relay and the dial's lane alike.
-    identity: relayIdentityStore.getIdentity(),
-    // Read FRESH on every attach: `harness link connect` runs as a separate process, so a value captured
-    // at daemon start would keep answering "not linked" until the next restart.
-    peer: (machineId) => machinePeers.get(machineId),
-    // Read fresh for the same reason `machineId` above is a thunk: it is '' until the daemon has resolved
-    // this computer's machine, and the echo guard must start working the moment it is not.
-    localMachineId: () => backend.machineId,
-    log: (line) => console.log(`[device] ${line}`),
-  })
-
-  deviceLinkRef = deviceLink
-
-  const fleet = new DeviceFleet({
-    list: machineList,
-    link: deviceLink,
-    // Read FRESH on every call, never cached: `harness link connect` runs as a separate process, so a
-    // cached answer would keep saying "not linked" for as long as this daemon lives.
-    hasPeerLink: (machineId) => machinePeers.get(machineId) !== null,
-    log: (line) => console.log(`[device] ${line}`),
-  })
-
   let devicesStatusRevision = 0
   const cableHost = new DaemonCableHost({
     activityText: async (agentId) => {
@@ -4073,11 +3909,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const screen = await terminals.capture(session, { mode: 'visible', ansi: false })
       return terminalActivity(session.engine, screen.state === 'succeeded' ? screen.value : null)
     },
-    machineName: () => { try { return readFileSync(MACHINE_NAME_FILE, 'utf8').trim() || 'This machine' } catch { return 'This machine' } },
+    machineName: dialMachineName,
     machineId: () => backend.machineId,
     computerId: () => computerId(),
     signedIn: () => readAuthSession() !== null,
-    // The core's own doors for a local agent (core/api.ts): the same handlers the backend socket drives.
+    // The core's own doors for a local agent (core/api.ts). The fleet's router reaches them the same way;
+    // the dial uses these only when it routes by itself, with the fleet service off.
     sendTurn: coreApi.turns.send,
     stopTurn: coreApi.turns.stop,
     answer: coreApi.questions.answer,
@@ -4123,7 +3960,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     form: command => windowForm.command(command),
     clearForm: () => windowForm.clear(),
     log: (line) => console.log(`[cable] ${line}`),
-  }, fleet)
+  }, fleetService.router)
   cableHostRef = cableHost
   backend.harnessDevices = {
     status: () => cableHost.currentDialStatus(),
@@ -4241,14 +4078,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // A remote machine's cards reach the dial through the SAME four calls the local tee uses, so a new
   // event kind lands on both surfaces the day it lands on either.
-  fleet.onEvent((event) => {
+  // The fleet has already noted which machine the agent is on (services/fleet.ts), so a question from it
+  // can be named and, tapped, opened.
+  fleetService.router?.fleet?.onEvent((event) => {
     // A `state` event is about the WHEEL, not about a turn — live machine presence, which matters
     // whichever machine is selected. Filtering it with the guard below would freeze the dots the moment
     // the dial came back to this computer, which is where it sits most of the time.
     if (event.kind === 'state') { void cable.syncMachines(); return }
-    // Which machine this agent is on, before its list is necessarily read — what lets a question from it
-    // be named and, tapped, opened. See DaemonCableHost.noteAgent.
-    cableHost.noteAgent(event.machineId, event.agentId)
     // No selection guard. Every machine's agents are on the carousel at once, so a card from a machine
     // the wheel is not pointed at still belongs to a tile the user can see — and dropping it is what a
     // tile that never leaves "Working…" looks like from the outside.

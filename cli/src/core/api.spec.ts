@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { createCoreApi, emptyPorts, TEAMS_FALLBACKS, type CoreApiDeps } from './api.js'
+import { createCoreApi, emptyPorts, FLEET_FALLBACKS, TEAMS_FALLBACKS, type CoreApiDeps } from './api.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
@@ -64,13 +64,18 @@ describe('the core API services stand on', () => {
     expect(core.questions).toBe(deps.questions)
   })
 
+  it('answers ⌘K, when the fleet fails, with no agent picked and nothing sent, saying why', () => {
+    expect(FLEET_FALLBACKS.sendTurn).toEqual({ ok: false, machine: '', reason: 'the fleet service is unavailable' })
+    expect(FLEET_FALLBACKS.stop).toBeUndefined()
+  })
+
   it('falls back, when the teams fail, to an undo that has nothing to undo', () => {
     const undo = TEAMS_FALLBACKS.prepare as () => void
     expect(undo()).toBeUndefined()
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ search: null, viewers: null, models: null, workspaces: null, teams: null })
+    expect(emptyPorts()).toEqual({ search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
   })
 })
