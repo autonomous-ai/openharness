@@ -19,7 +19,7 @@ import { probeGridAssignment, type GridAssignment } from './gridAssignment.js'
 import { probeCodexHome } from './codexHomeProbe.js'
 import { env } from '../config/env.js'
 import {
-  buildHarnessSessionLabel, HARNESS_OWNER_OPTION, harnessPaneOwner, isHarnessSession, isLegacyHarnessSession, ownedHere,
+  buildHarnessSessionLabel, HARNESS_OWNER_OPTION, harnessPaneOwner, isLegacyHarnessSession, ownedHere,
 } from './harnessSessionLabel.js'
 import { psEnv } from './childLocale.js'
 import type { ProcessIdentity, RegisteredSession } from './registry.js'
@@ -138,11 +138,12 @@ export type TmuxPaneInventory =
 /**
  * One bounded tmux inventory read, shared by discovery and the neutral backend adapter.
  *
- * Only panes from sessions this daemon itself named via `agent_create` are returned — a session
- * the user opened by hand, or one an agent spawned itself with a nested `tmux new-session`, is
- * invisible to every discovery path (autonomous-harness-desktop#6). So is a pane another daemon on
- * this tmux server created (`HARNESS_OWNER_OPTION`): a dev daemon beside the release one opened an
- * agent for every one of the release daemon's panes, and could stop them (e2e/twodaemons.e2e.ts).
+ * Only this daemon's panes are returned (`ownedHere`): the ones it tagged, in whatever session the
+ * person has since renamed or moved them into, and untagged ones only in sessions Harness named. A
+ * session the user opened by hand, or one an agent spawned itself with a nested `tmux new-session`, is
+ * invisible to every discovery path (autonomous-harness-desktop#6); so is a pane another daemon on this
+ * tmux server created (`HARNESS_OWNER_OPTION`): a dev daemon beside the release one opened an agent for
+ * every one of the release daemon's panes, and could stop them (e2e/twodaemons.e2e.ts).
  */
 export async function listTmuxPanes(owner: string = harnessPaneOwner(env.ADAPTER_DATA_DIR)): Promise<TmuxPaneInventory> {
   // Printable delimiters survive tmux's POSIX-locale output sanitiser (see PANE_FORMAT).
@@ -160,7 +161,7 @@ export async function listTmuxPanes(owner: string = harnessPaneOwner(env.ADAPTER
   }
   return {
     ok: true,
-    panes: parsePanes(result.stdout).filter((pane) => isHarnessSession(pane.tmuxSessionName) && ownedHere(pane.owner ?? '', owner)),
+    panes: parsePanes(result.stdout).filter((pane) => ownedHere(pane.owner ?? '', pane.tmuxSessionName, owner)),
   }
 }
 

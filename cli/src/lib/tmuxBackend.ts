@@ -139,8 +139,9 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     const style = windowStyleOf(this.hostTheme())
     args.push(';', 'set-option', '-w', 'window-style', style)
     // Whose pane it is, from its first instant: another daemon on this tmux server scanning a moment
-    // later must already see it is not its own (see HARNESS_OWNER_OPTION).
-    args.push(';', 'set-option', '-w', HARNESS_OWNER_OPTION, this.owner())
+    // later must already see it is not its own. On the pane, which keeps it wherever the person moves
+    // it (see HARNESS_OWNER_OPTION).
+    args.push(';', 'set-option', '-p', HARNESS_OWNER_OPTION, this.owner())
     // `killed`/`signal` come from execFile's own error shape, which ErrnoException alone does not declare.
     type ExecError = NodeJS.ErrnoException & { killed?: boolean; signal?: NodeJS.Signals | null }
     const result = await new Promise<{ error: ExecError | null; stdout: string; stderr: string }>((resolve) => {

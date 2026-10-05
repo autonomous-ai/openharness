@@ -16,13 +16,18 @@ import { basename, dirname, join, resolve } from 'node:path'
 export const HARNESS_SESSION_PREFIX = 'harness-'
 
 /**
- * The tmux window option every pane a daemon creates is tagged with: which daemon on this computer it
- * belongs to. Two daemons can share one tmux server — a dev daemon beside the release one, each with its
- * own data folder — and both name their sessions `harness-…`. Each opened an agent for the other's panes
- * and bound the other's conversations, and an agent stopped in the dev app killed the pane the release
- * daemon was running it in (e2e/twodaemons.e2e.ts, the 2026-10-03 incident). A window option, set in the
- * very tmux call that creates the session, so no scan ever sees the pane untagged: tmux has had window
- * user options far longer than pane ones, and a Harness session is one window with one pane.
+ * The tmux pane option every pane a daemon creates is tagged with: which daemon on this computer it
+ * belongs to. Set in the very tmux call that creates the session, so no scan ever sees the pane untagged.
+ *
+ * Two daemons can share one tmux server — a dev daemon beside the release one, each with its own data
+ * folder — and both name their sessions `harness-…`. Each opened an agent for the other's panes and bound
+ * the other's conversations, and an agent stopped in the dev app killed the pane the release daemon was
+ * running it in (e2e/twodaemons.e2e.ts, the 2026-10-03 incident).
+ *
+ * And a pane moves. The person renames its session or joins it into a window of their own (hn's people
+ * live in tmux), and a session name stops saying whose it is; a pane option goes with the pane, where a
+ * window option stays behind with the window (e2e/tmuxmoves.e2e.ts). Read through the window too, which
+ * is how a format resolves a pane option nobody set: a tag a build set on the window still counts.
  */
 export const HARNESS_OWNER_OPTION = '@harness_daemon'
 
@@ -44,10 +49,15 @@ export function harnessPaneOwner(dataDir: string): string {
   return createHash('sha256').update(canonicalPath(dataDir)).digest('hex').slice(0, 16)
 }
 
-/** Whether a pane tagged `owner` is this daemon's (`self`) to see. A pane with no tag was created by a
- *  build from before the tag, and is anyone's, as every pane used to be. */
-export function ownedHere(owner: string, self: string): boolean {
-  return !owner || owner === self
+/**
+ * Whether a pane is this daemon's (`self`): one it tagged, in any session, wherever the person moved it;
+ * one nobody tagged only in a session Harness named, as before the tag (a build from before it made the
+ * pane, and a session the person opened by hand is never taken for an agent: autonomous-harness-desktop#6);
+ * one another daemon tagged, never. Never the pane id alone: a new tmux server reuses `%N`, and a stale id
+ * can name someone's shell.
+ */
+export function ownedHere(owner: string, sessionName: string, self: string): boolean {
+  return owner ? owner === self : isHarnessSession(sessionName)
 }
 
 export function buildHarnessSessionLabel(engine: string, now: number = Date.now()): string {

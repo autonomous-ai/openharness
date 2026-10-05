@@ -36,10 +36,16 @@ describe('which daemon a pane belongs to', () => {
     expect(harnessPaneOwner(join(link, 'data', 'not-yet'))).toBe(harnessPaneOwner(join(data, 'not-yet')))
   })
 
-  it('lets a daemon see its own panes and untagged ones, never another daemon\'s', () => {
-    expect(ownedHere('aaaa', 'aaaa')).toBe(true)
-    // Created by a build from before the tag: anyone's, as every pane used to be.
-    expect(ownedHere('', 'aaaa')).toBe(true)
-    expect(ownedHere('bbbb', 'aaaa')).toBe(false)
+  it('lets a daemon see the panes it tagged wherever they moved, untagged ones only in its sessions, never another daemon\'s', () => {
+    expect(ownedHere('aaaa', 'harness-claude-1', 'aaaa')).toBe(true)
+    // The person renamed its session, or joined the pane into a window of their own: still its pane.
+    expect(ownedHere('aaaa', 'my-claude-work', 'aaaa')).toBe(true)
+    // Created by a build from before the tag: in a session Harness named, as every pane used to be; never
+    // in a session the person opened by hand (autonomous-harness-desktop#6).
+    expect(ownedHere('', 'harness-codex-2', 'aaaa')).toBe(true)
+    expect(ownedHere('', 'my-shell', 'aaaa')).toBe(false)
+    // Another daemon's, in whatever session.
+    expect(ownedHere('bbbb', 'harness-claude-1', 'aaaa')).toBe(false)
+    expect(ownedHere('bbbb', 'my-claude-work', 'aaaa')).toBe(false)
   })
 })

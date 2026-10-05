@@ -234,9 +234,12 @@ describe('processes', () => {
     ])
   })
 
-  it("knows Harness's own panes by their tmux session names", async () => {
-    const out = '/dev/ttys001\tharness-claude-1\n/dev/ttys002\tmy-own\n\n/dev/ttys003\n'
-    expect(await harnessTtys(async () => ({ stdout: out, failed: false, stderr: '' }))).toEqual(new Set(['/dev/ttys001']))
+  it("knows Harness's own panes by their tmux session names, and by a daemon's tag wherever they moved", async () => {
+    const out = '/dev/ttys001\tharness-claude-1\t\n/dev/ttys002\tmy-own\t\n\n/dev/ttys003\n'
+      // A daemon's pane the person moved into a session of their own, and one another daemon tagged:
+      // either way an agent, never a process a take-over stops.
+      + '/dev/ttys004\tmy-claude-work\t0123456789abcdef\n/dev/ttys005\ttheirs\tfedcba9876543210\n'
+    expect(await harnessTtys(async () => ({ stdout: out, failed: false, stderr: '' }))).toEqual(new Set(['/dev/ttys001', '/dev/ttys004', '/dev/ttys005']))
     // No server running: no panes of Harness's. Could not ask: nobody can say.
     expect(await harnessTtys(async () => ({ stdout: '', failed: true, stderr: 'no server running on /tmp/tmux-501/default' }))).toEqual(new Set())
     expect(await harnessTtys(async () => ({ stdout: '', failed: true, stderr: 'error connecting to /tmp/x (No such file or directory)' }))).toEqual(new Set())
