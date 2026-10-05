@@ -35,6 +35,7 @@ class _Api extends DirectAuthApi {
   final authorization = Completer<({String authorizeUrl, String tx})>();
   final exchanged = Completer<IssuedTokens>();
   final requests = <({String code, String state, String tx})>[];
+  final attributions = <Map<String, String>>[];
   String? origin;
   String? nativeRedirect;
   SignInProvider? provider;
@@ -63,8 +64,10 @@ class _Api extends DirectAuthApi {
     required String code,
     required String state,
     required String tx,
+    Map<String, String> attribution = const {},
   }) {
     requests.add((code: code, state: state, tx: tx));
+    attributions.add(attribution);
     return exchanged.future;
   }
 }
@@ -331,6 +334,36 @@ void main() {
       },
     );
   }
+
+  test('forwards the callback\'s utm tags and rid with the exchange, and nothing else', () async {
+    callback();
+    browser.uri = browser.uri.replace(
+      queryParameters: {
+        ...browser.uri.queryParameters,
+        'utm_source': 'app',
+        'utm_campaign': 'launch',
+        'rid': 'r-123',
+        'utm_medium': '  ',
+        'ref': 'other',
+      },
+    );
+    final status = login.checkStatus();
+    expect(api.attributions.single, {
+      'utm_source': 'app',
+      'utm_campaign': 'launch',
+      'rid': 'r-123',
+    });
+    api.exchanged.complete(const IssuedTokens(token: 'fixture-token'));
+    expect((await status).loggedIn, isTrue);
+  });
+
+  test('an untagged callback exchanges with no attribution', () async {
+    callback();
+    final status = login.checkStatus();
+    expect(api.attributions.single, isEmpty);
+    api.exchanged.complete(const IssuedTokens(token: 'fixture-token'));
+    await status;
+  });
 
   test(
     'rejects unsolicited, expired and mismatched callbacks without an exchange',

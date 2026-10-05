@@ -39,11 +39,26 @@ model User {
   // Null on rows that predate it or when the request did not come through Cloudflare.
   lastCountryCode String?
   lastCountryAt   DateTime?
+  // The `utm_*` and `rid` a sign-in arrived with (lib/signInAttribution.ts), recorded by /api/auth/exchange.
+  // `firstAttribution` is the first tagged sign-in and is never rewritten — how the account was
+  // acquired; `lastAttribution` is the latest tagged one. Unset when no sign-in ever carried any.
+  firstAttribution SignInAttribution?
+  lastAttribution  SignInAttribution?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
   @@index([stagExternalId])
   @@map("users")
+}
+
+type SignInAttribution {
+  source     String?
+  medium     String?
+  campaign   String?
+  term       String?
+  content    String?
+  rid        String? // Autonomous referral id
+  recordedAt DateTime
 }
 
 /// A machine: the unit that groups N agents and the thing a user creates, names, pays for and
