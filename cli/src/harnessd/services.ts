@@ -288,11 +288,14 @@ export class ServiceSupervisor {
 
 /**
  * The services this build can run in their own processes, with their memory budgets. Which of them do
- * is `HARNESSD_SERVICES` (`search`): off until named, while each one beds in, and the core runs a
+ * is `HARNESSD_SERVICES` (`search,viewers`): off until named, while each one beds in, and the core runs a
  * service that is not out here in its own process, as before.
  */
 export const KNOWN_SERVICES: Readonly<Record<string, Omit<ServiceSpec, 'name'>>> = {
   search: { heapLimitMiB: 1_024, rssLimitMiB: 2_048 },
+  // Its file watches on every harness's workspace; the viewer servers it starts are processes of their
+  // own, outside this budget.
+  viewers: { heapLimitMiB: 512, rssLimitMiB: 1_024 },
 }
 
 /** Service timings from the environment (for tests and support); anything unset or invalid keeps its default. */

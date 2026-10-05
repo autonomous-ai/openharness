@@ -19,12 +19,12 @@ class HardwarePolicy(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.sysfs = self.root / 'sys'
 
-    def device(self, address='0000:03:00.0', device='43a0', driver=None, wireless=False, kind='028000'):
+    def device(self, address='0000:03:00.0', device='43a0', driver=None, wireless=False, kind='028000', override='(null)'):
         path = self.sysfs / 'bus/pci/devices' / address
         path.mkdir(parents=True)
         for name, value in [('vendor', '14e4'), ('device', device), ('class', kind)]:
             (path / name).write_text('0x' + value)
-        (path / 'driver_override').write_text('(null)\n')
+        (path / 'driver_override').write_text(override + '\n')
         if driver:
             bound = self.sysfs / 'bus/pci/drivers' / driver
             bound.mkdir(parents=True, exist_ok=True)
@@ -67,6 +67,29 @@ class HardwarePolicy(unittest.TestCase):
         self.device(address='0000:06:00.0', device='43a0', kind='020000')
         self.assertEqual([d['address'] for d in hardware.pci_devices(self.sysfs) if hardware.needs_broadcom(d)],
                          ['0000:03:00.0', '0000:04:00.0'])
+
+    def test_explicit_assignment_is_preserved_before_loading_or_unbinding(self):
+        for index, (driver, override) in enumerate([
+                ('vfio-pci', '(null)'), ('pci-stub', '(null)'),
+                ('another-driver', '(null)'), (None, 'vfio-pci'),
+                (None, 'none'), ('bcma-pci-bridge', 'bcma-pci-bridge'),
+                ('wl', 'pci-stub')]):
+            path = self.device(address=f'0000:{index + 3:02x}:00.0', driver=driver, override=override)
+            with self.subTest(driver=driver, override=override), patch.object(hardware, 'run') as run:
+                device = next(d for d in hardware.pci_devices(self.sysfs) if d['address'] == path.name)
+                self.assertFalse(hardware.needs_broadcom(device))
+                self.assertEqual(hardware.activate(path.name, self.sysfs)['status'], 'unchanged')
+                run.assert_not_called()
+                self.assertEqual((path / 'driver_override').read_text(), override + '\n')
+                if driver:
+                    self.assertEqual((path / 'driver/unbind').read_text(), '')
+
+    def test_ordinary_and_wl_overrides_retain_offline_driver_selection(self):
+        for index, override in enumerate(['(null)', '', 'wl']):
+            self.device(address=f'0000:{index + 3:02x}:00.0', override=override)
+        devices = hardware.pci_devices(self.sysfs)
+        self.assertTrue(all(hardware.needs_broadcom(device) for device in devices))
+        self.assertEqual([device['driver_override'] for device in devices], [None, None, 'wl'])
 
     def test_damaged_module_is_rejected_before_unbinding(self):
         device = self.device(driver='bcma-pci-bridge')
@@ -125,6 +148,21 @@ class HardwarePolicy(unittest.TestCase):
         self.assertFalse(folder.exists())
         self.assertTrue(keep.is_file())
         self.assertTrue((target / 'etc/harness-live').exists())
+
+    def test_assigned_radio_does_not_install_optional_driver_or_compiler(self):
+        self.device(driver='vfio-pci')
+        self.device(address='0000:04:00.0', override='none')
+        target = self.root / 'target'
+        (target / 'etc').mkdir(parents=True)
+        (target / 'etc/harness-live').touch()
+        folder = self.bundle(target / hardware.BUNDLE.relative_to('/'))
+        with patch.object(hardware.Path, 'is_mount', return_value=True), \
+                patch.object(hardware, 'run') as run, patch.object(hardware, 'bundle_manifest') as manifest:
+            result = hardware.configure_install(target, hardware.pci_devices(self.sysfs))
+        self.assertEqual(result, {'drivers': [], 'devices': []})
+        run.assert_not_called()
+        manifest.assert_not_called()
+        self.assertFalse(folder.exists())
 
     def test_dependency_mismatch_stops_before_package_transaction(self):
         self.device()
