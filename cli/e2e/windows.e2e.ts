@@ -362,9 +362,10 @@ describe('many windows at once', () => {
       await active(tui, codex.id, codex.sessionId)
       expect((await row(tui, codex.id))?.name).toBe(`renamed by a window that left ${rounds - 1}`)
 
-      // None of the windows that stayed heard an answer meant for one that left. Soft, so that whatever
-      // else a window that left can cost the others is checked below as well.
-      for (const [name, window] of Object.entries({ desk, phone, tui })) expect.soft(strays(window, 'leaver-'), name).toEqual([])
+      // None of the windows that stayed heard an answer meant for one that left. A reply to a window that
+      // had gone fell through to the broadcast: `terminal_info_result`, which is not sealed, reached every
+      // other window and, unsealed, the relay's queue.
+      for (const [name, window] of Object.entries({ desk, phone, tui })) expect(strays(window, 'leaver-'), name).toEqual([])
       // The desk still holds its terminal: nobody took it, and what it types is a turn.
       expect(desk.frames.filter((frame) => frame.type === 'terminal_closed').map((frame) => frame.payload)).toEqual([])
       const from = desk.frames.length
