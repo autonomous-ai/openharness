@@ -1444,3 +1444,121 @@ describe('models other apps downloaded, started in their own app', () => {
     expect(ops.start).not.toHaveBeenCalled()
   })
 })
+
+describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves them', () => {
+  const GiB = 1024 ** 3
+  const LAYA = 'jev:ggml-org/Laya-GGUF', LAYA_SIZE = 449_397_600
+  const gemma: AppModel = { id: 'app:lm-studio:google/gemma-4-e2b', name: 'gemma-4-e2b', app: 'lm-studio', engine: 'lm-studio',
+    ref: 'google/gemma-4-e2b', binary: '/home/me/.lmstudio/bin/lms', sizeBytes: 4 * GiB, contextLength: 131072 }
+  let up: Set<string>, joined: Set<string>, installBuild: string, decisions: string[]
+  let ops: { [K in keyof AppEngineOps]: Mock<AppEngineOps[K]> }
+  const engine = async (build: string) => {
+    await mkdir(join(home, 'bin'), { recursive: true })
+    await writeFile(join(home, 'bin', 'llama-server'), `#!/bin/sh\necho "version: ${build}"\n`, { mode: 0o755 })
+  }
+  const jevService = (env: NodeJS.ProcessEnv = {}) => {
+    const base = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => {
+      if (args[0] === 'pull' && args[1] === 'ggml-org/Laya-GGUF:Laya-Q8_0.gguf') {
+        calls.push(args); output?.('100%')
+        const file = join(home, 'models', 'Laya-Q8_0.gguf')
+        await writeFile(file, ''); await (await import('node:fs/promises')).truncate(file, LAYA_SIZE)
+        return ok()
+      }
+      if (args[0] === 'engine' && args[1] === 'install') { calls.push(args); await engine(installBuild); return ok() }
+      if (args.includes('join') && args.includes('--at')) { calls.push(args); joined.add(args[args.indexOf('--advertise-as') + 1]!); return ok() }
+      if (args.includes('leave') && joined.has(args[args.indexOf('--engine') + 1]!)) { calls.push(args); joined.delete(args[args.indexOf('--engine') + 1]!); return ok() }
+      return base(args, output)
+    })
+    inventory.mockImplementation(async () => ({ state: 'awake', status: 'running',
+      nodes: [...joined].map(alias => ({ node_id: 'local-node', online: true, models: [alias] })) }))
+    request.mockImplementation(async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/systemone')) {
+        decisions.push(JSON.parse(String(init?.body)).model)
+        return response({ model: 'laya-english', answers: { refund: { type: 'noul', noul: 0.91 } }, usage: { input_tokens: 41, output_tokens: 0 } })
+      }
+      return response({ choices: [{ message: { content: 'ok' } }] })
+    })
+    return new LocalModels({ stateDir, processEnv: { GRID_HOME: home, ...env }, run, request: request as typeof fetch, inventory,
+      appModels: async () => [gemma], appEngines: ops as unknown as AppEngineOps })
+  }
+  const laya = async (models: LocalModels) => (await models.list('home', true)).models.find(m => m.id === LAYA)!
+  beforeEach(() => {
+    up = new Set(); joined = new Set(); installBuild = '0.5.0-dev (build 11378, commit edd6e2bbd)'; decisions = []
+    ops = {
+      start: vi.fn(async (model: AppModel) => {
+        up.add(model.id)
+        return { engine: model.engine as AppEngineRecord['engine'], served: model.name, alias: model.name, port: 41001, binary: model.binary!, pid: 4343 }
+      }),
+      alive: vi.fn(async (record: AppEngineRecord) => up.has(record.modelId)),
+      loadedContext: vi.fn(async () => 131072),
+      stop: vi.fn(async (record: AppEngineRecord) => { up.delete(record.modelId) }),
+    }
+  })
+
+  it('is listed as a decision model, to get, and a download alone touches no engine', async () => {
+    const models = jevService()
+    expect(await laya(models)).toMatchObject({ name: 'laya-english', kind: 'decision', state: 'available', sizeBytes: LAYA_SIZE, canStart: true, canStop: false })
+    await models.act('home', LAYA, 'download'); await models.settled()
+    expect(await laya(models)).toMatchObject({ state: 'downloaded', app: 'Grid', operation: { phase: 'done' } })
+    expect(calls.some(args => args[0] === 'engine')).toBe(false)
+    expect(ops.start).not.toHaveBeenCalled()
+  })
+
+  it('updates an engine too old for it, runs it beside a chat model, checks it with a decision, and stops it', async () => {
+    await engine('10369 (6e62ba538)')
+    const models = jevService()
+    // A chat model already running in its own app does not stand in the way, as it would for another chat model.
+    await models.act('home', gemma.id, 'start'); await models.settled()
+    // Every stage the operation passes through, as the app is told of it.
+    const stages: string[] = []
+    const save = (models as any).save.bind(models)
+    vi.spyOn(models as any, 'save').mockImplementation(async (grid: unknown, operation: any) => { stages.push(operation.stage); return save(grid, operation) })
+    await models.act('home', LAYA, 'start'); await models.settled()
+    const order = calls.map(args => args.join(' '))
+    const pulled = order.indexOf('pull ggml-org/Laya-GGUF:Laya-Q8_0.gguf'), installed = order.indexOf('engine install llama.cpp')
+    expect(pulled).toBeGreaterThanOrEqual(0)
+    expect(installed).toBeGreaterThan(pulled)
+    expect(stages).toContain('updating')
+    expect(ops.start).toHaveBeenLastCalledWith(expect.objectContaining({ id: LAYA, engine: 'llama.cpp', binary: join(home, 'bin', 'llama-server'),
+      ref: join(home, 'models', 'Laya-Q8_0.gguf') }), 8192, join(stateDir, 'logs'))
+    expect(calls.find(args => args.includes('--at') && args.includes('laya-english'))).toEqual(['--remote', 'join', 'home', '--at',
+      'http://127.0.0.1:41001/v1', '-m', 'laya-english', '--advertise-as', 'laya-english', '--max-concurrency', '1'])
+    expect(decisions).toEqual(['laya-english'])
+    expect(await laya(models)).toMatchObject({ kind: 'decision', state: 'running', canStop: true, operation: { phase: 'done' } })
+    // And a running Jev model blocks no chat model either.
+    const list = await models.list('home', true)
+    expect(list.models.find(m => m.id === gemma.id)).toMatchObject({ state: 'running' })
+
+    await models.act('home', LAYA, 'stop'); await models.settled()
+    expect(calls.some(args => args.join(' ') === '--remote leave home --engine laya-english')).toBe(true)
+    expect(ops.stop).toHaveBeenCalledWith(expect.objectContaining({ modelId: LAYA, pid: 4343 }))
+    expect(await laya(models)).toMatchObject({ state: 'downloaded', canStart: true, canStop: false })
+  })
+
+  it('leaves an engine new enough alone', async () => {
+    await engine('0.5.0-dev (build 11378, commit edd6e2bbd)')
+    const models = jevService()
+    await models.act('home', LAYA, 'start'); await models.settled()
+    expect(calls.some(args => args[0] === 'engine')).toBe(false)
+    expect(await laya(models)).toMatchObject({ state: 'running' })
+  })
+
+  it('says so when the update still leaves the engine too old, and starts nothing', async () => {
+    await engine('10369 (6e62ba538)')
+    installBuild = '10369 (6e62ba538)'
+    const models = jevService()
+    await models.act('home', LAYA, 'start'); await models.settled()
+    expect((await laya(models)).operation).toMatchObject({ phase: 'failed', error: expect.stringContaining('still too old for Jev models (build 10369') })
+    expect(ops.start).not.toHaveBeenCalled()
+  })
+
+  it('never replaces an engine named by LLAMA_SERVER: one too old is refused by name', async () => {
+    const custom = join(root, 'custom-llama-server')
+    await writeFile(custom, '#!/bin/sh\necho "version: 0.5.0 (build 11146, commit 7fe450e19)"\n', { mode: 0o755 })
+    const models = jevService({ LLAMA_SERVER: custom })
+    await models.act('home', LAYA, 'start'); await models.settled()
+    expect((await laya(models)).operation).toMatchObject({ phase: 'failed', error: 'LLAMA_SERVER is llama.cpp build 11146; Jev models need build 11361 or newer.' })
+    expect(calls.some(args => args[0] === 'engine')).toBe(false)
+  })
+})
