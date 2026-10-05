@@ -100,8 +100,19 @@ def locked():
                 system_lock.close()
 
 
+def system_channel():
+    # Fedora supplies its own base-system lifecycle. A stale user cache must not
+    # offer the PC updater, and an absent PC helper is not a failed runtime check.
+    if read(BASE_ID, {}).get('system_profile', 'arch') != 'arch':
+        return {'supported': False, 'available': False}
+    return read(STATE / 'system.json', {})
+
+
 def check_system(force=False):
-    cached = read(STATE / 'system.json', {})
+    cached = system_channel()
+    if cached.get('supported') is False:
+        write(STATE / 'system.json', dict(cached, checked_at=time.time()))
+        return cached
     if not force and time.time() - cached.get('checked_at', 0) < 86400:
         return cached
     try:
@@ -569,7 +580,7 @@ def update_all():
     """One user decision; root still verifies its own official release assets."""
     if RESTART_REQUIRED.exists():
         raise ValueError('Restart when ready to finish the update.')
-    if read(STATE / 'system.json', {}).get('available'):
+    if system_channel().get('available'):
         # Do not reconnect an old session using a new OS package. Its included
         # runtime takes effect on reboot; finish any independent public release
         # against that new base afterward, under this same explicit approval.
@@ -610,10 +621,10 @@ def screen(window, message='', refresh=False):
         window.erase()
         height, width = window.getmaxyx()
         ready = prepared()
-        available = (ready is not None and ready != selected()) or read(STATE / 'system.json', {}).get('available')
+        available = (ready is not None and ready != selected()) or system_channel().get('available')
         checked = read(STATE / 'check.json', {})
         system_state = read(RESTART_REQUIRED, {}).get('status')
-        errors = checked.get('errors') or read(STATE / 'system.json', {}).get('error') or read(STATE / 'approved.json', {}).get('status') == 'failed'
+        errors = checked.get('errors') or system_channel().get('error') or read(STATE / 'approved.json', {}).get('status') == 'failed'
         if system_state == 'failed':
             title, choices = 'The update needs recovery.', [('Restore', 'restore-system'), ('Back', None)]
         elif system_state == 'ready':
@@ -714,7 +725,7 @@ def main(argv=None):
         message = ''
         # A prepared release can be applied immediately. Otherwise check now
         # instead of exposing another command or making the user wait for a timer.
-        refresh = not (prepared() or read(STATE / 'system.json', {}).get('available'))
+        refresh = not (prepared() or system_channel().get('available'))
         while True:
             action = curses.wrapper(screen, message, refresh)
             if action is None:
@@ -744,7 +755,7 @@ def main(argv=None):
         print(json.dumps({'runtime': str(selected()), 'versions': versions(selected()),
                           'ready': str(prepared()) if prepared() else None,
                           'restart_required': RESTART_REQUIRED.exists(),
-                          'system': read(STATE / 'system.json'), 'check': read(STATE / 'check.json')}, indent=2))
+                          'system': system_channel(), 'check': read(STATE / 'check.json')}, indent=2))
 
 
 if __name__ == '__main__':
