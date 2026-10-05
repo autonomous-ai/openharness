@@ -79,6 +79,7 @@ beforeEach(() => {
     retainExitedSession: vi.fn((row, alive) => { store.save(row); if (alive) registry.releaseEngine(row.agentId, true); else registry.removeAgent(row.agentId) }),
     announceSession: vi.fn(), relaunchOverrides: vi.fn(async () => ({ ok: true as const, overrides: { env: {}, extraArgs: [], clearEnv: [] } })),
     prepareSessionResume: vi.fn(), refreshGridWebSearch: vi.fn(), clearDeleted: vi.fn(), attachDsh: vi.fn(),
+    attachSession: vi.fn(async () => true),
   }
 })
 afterEach(() => { vi.useRealTimers(); for (const row of registry.list()) registry.removeAgent(row.agentId); rmSync(dir, { recursive: true, force: true }) })
@@ -193,6 +194,34 @@ describe('production resume handler', () => {
     expect(deps.announceSession).toHaveBeenLastCalledWith(expect.objectContaining({ processIdentity: identity }))
     registry.load()
     expect(registry.byAgent(saved.agentId)?.processIdentity).toEqual(identity)
+  })
+
+  it('attaches a resume its own process confirmed when no hook registered it, and says so if that fails', async () => {
+    // Round 23: the SessionStart was refused, and discovery, finding the row ready already, did not
+    // attach it either, so the resumed agent never showed a turn.
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity)
+    expect(await start()).toMatchObject({ ok: true, session: { launch: { state: 'ready' } } })
+    expect(deps.attachSession).toHaveBeenCalledTimes(1)
+    expect(deps.attachSession).toHaveBeenCalledWith(expect.objectContaining({ agentId: saved.agentId, sessionId: saved.sessionId, processIdentity: identity }))
+
+    for (const row of registry.list()) registry.removeAgent(row.agentId)
+    deps.stoppedAgents.finishResume(saved.agentId)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(deps.attachSession).mockRejectedValueOnce(new Error('transcript unreadable'))
+    expect(await start()).toMatchObject({ ok: true })
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith(`[resume] ${saved.agentId.slice(0, 8)} attach failed:`, 'transcript unreadable'))
+    vi.mocked(deps.attachSession).mockRejectedValueOnce('gone')
+    for (const row of registry.list()) registry.removeAgent(row.agentId)
+    deps.stoppedAgents.finishResume(saved.agentId)
+    expect(await start()).toMatchObject({ ok: true })
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith(`[resume] ${saved.agentId.slice(0, 8)} attach failed:`, 'gone'))
+    error.mockRestore()
+  })
+
+  it('leaves the attach to the hook that registered the resume first', async () => {
+    // The fixture's probe imitates a hook that already landed (`lastHookAt`): its registration attached it.
+    expect(await start()).toMatchObject({ ok: true, session: { launch: { state: 'ready' } } })
+    expect(deps.attachSession).not.toHaveBeenCalled()
   })
 
   it('opens a retained terminal as a new shell without a vendor resume argument', async () => {

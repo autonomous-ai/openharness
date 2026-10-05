@@ -46,6 +46,7 @@ function setup(over: Partial<LifecycleDeps> = {}) {
     prepareSessionResume: vi.fn(),
     refreshGridWebSearch: vi.fn(),
     attachDsh: vi.fn(),
+    attachSession: vi.fn(async () => true),
     ...over,
   }
   const lifecycle = createAgentLifecycle(deps)
@@ -69,6 +70,7 @@ describe('stopping, purging and resuming an agent', () => {
       stopJobs: lifecycle.stopJobs, pinnedControls: deps.pinnedControls, retainExitedSession: deps.retainExitedSession,
       announceSession: deps.announceSession, relaunchOverrides: deps.relaunchOverrides, prepareSessionResume: deps.prepareSessionResume,
       refreshGridWebSearch: deps.refreshGridWebSearch, clearDeleted: deps.clearDeleted, attachDsh: deps.attachDsh,
+      attachSession: deps.attachSession,
     })
   })
 

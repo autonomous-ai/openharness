@@ -3698,6 +3698,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     prepareSessionResume,
     refreshGridWebSearch,
     attachDsh,
+    attachSession: (session) => attachSession(session),
     relaunchMarks,
   })
   const stopJobs = lifecycle.stopJobs

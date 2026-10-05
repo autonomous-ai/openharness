@@ -32,6 +32,8 @@ export interface ResumeAgentServiceDeps {
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
   clearDeleted(agentId: string): void
   attachDsh(session: RegisteredSession): void
+  /** Follows a session: its history read, then its tail (core/transcripts/attach.ts). */
+  attachSession(session: RegisteredSession): Promise<boolean>
   /** Where the relaunched engine's own writing begins, for the attach that follows (core/transcripts/relaunch.ts). */
   relaunchMarks?: Pick<RelaunchMarks, 'note'>
 }
@@ -39,7 +41,7 @@ export interface ResumeAgentServiceDeps {
 export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
   const { registry, stoppedAgents, tmuxBackend, restartJobs, stopJobs, pinnedControls,
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume,
-    refreshGridWebSearch, clearDeleted, attachDsh, relaunchMarks } = deps
+    refreshGridWebSearch, clearDeleted, attachDsh, attachSession, relaunchMarks } = deps
   const resumeConversations = new Set<string>()
   /** Same short form every other `[…]` line in the daemon logs uses. */
   const sid = (id: string) => id.slice(0, 8)
@@ -103,9 +105,20 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       const ready = confirmed?.launch?.state === 'ready'
         ? confirmed
         : registry.setLaunch(saved.agentId, { state: 'ready' }) ?? result.session
+      const hooked = (confirmed?.lastHookAt ?? 0) > 0
       console.log(`[resume] ${sid(saved.agentId)} confirmed · engine=${saved.engine}`
-        + ` · hook=${(confirmed?.lastHookAt ?? 0) > 0 ? 'yes' : 'no'} · ${result.resumed ? 'same conversation' : 'fresh'}`)
+        + ` · hook=${hooked ? 'yes' : 'no'} · ${result.resumed ? 'same conversation' : 'fresh'}`)
       announceSession(ready)
+      // Confirmed by its own process, the conversation is followed whether or not a hook ever comes.
+      // Only the hook's registration attached it: discovery attaches a row it finds still launching,
+      // and this one is ready already. With its SessionStart refused (round 23: the hook beat the
+      // process being recorded) or never sent, nothing attached it, and the resumed agent never showed
+      // a turn. A hook that registers later attaches it again, as one does a created agent.
+      if (!hooked) {
+        void attachSession(ready).catch((error) => {
+          console.error(`[resume] ${sid(saved.agentId)} attach failed:`, error instanceof Error ? error.message : error)
+        })
+      }
       return { ...result, session: ready }
     } else if (result.error !== 'AGENT_CHANGED') {
       const row = registry.byAgent(saved.agentId)!
