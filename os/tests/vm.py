@@ -474,7 +474,8 @@ def check_first_use(vm, user, folder, installed=False):
         # Networking must never trap the owner. Use the compositor shortcut,
         # then prove real keyboard input reaches a shell while still offline.
         vm.keys('meta_l', 't')
-        vm.command("for n in $(seq 1 30); do hn capture-pane -p | grep -Eq '\\[me@harness [^]]*\\]\\$ ' && exit 0; sleep .25; done; exit 1", timeout=15)
+        # capture-pane trims trailing cells, including the prompt's last space.
+        vm.command("for n in $(seq 1 30); do hn capture-pane -p | grep -Eq '^\\[me@harness [^]]*\\]\\$$' && exit 0; sleep .25; done; exit 1", timeout=15)
         vm.type_probe('echo offline-terminal-ready')
         vm.keys('ret')
         vm.command('for n in $(seq 1 30); do hn capture-pane -p | grep -qx offline-terminal-ready && exit 0; sleep .5; done; exit 1', timeout=20)
