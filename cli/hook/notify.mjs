@@ -16,7 +16,7 @@
 
 import http from 'node:http'
 import { execFile, execFileSync } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   accessSync,
   closeSync,
@@ -439,6 +439,39 @@ function repairMangledRows(rows) {
 
 function readProcField(pid, field) {
   try { return readFileSync(`/proc/${pid}/${field}`, 'utf8') } catch { return null }
+}
+
+// The tag a daemon puts on every pane it creates, and the name it gives their sessions (both in
+// src/lib/harnessSessionLabel.ts, which hookNotify.spec.ts keeps these equal to).
+const HARNESS_OWNER_OPTION = '@harness_daemon'
+const HARNESS_SESSION_PREFIX = 'harness-'
+
+/** A daemon's tag: its data folder, symlinks resolved, hashed — `harnessPaneOwner` in the daemon. */
+function daemonPaneOwner(dataDir) {
+  let canonical = resolve(dataDir)
+  try { canonical = realpathSync(dataDir) } catch { /* not there: as given */ }
+  return createHash('sha256').update(canonical).digest('hex').slice(0, 16)
+}
+
+/**
+ * Whether the daemon this hook writes for takes this pane for one of its agents at all, by the rule its
+ * discovery reads panes with (`ownedHere`): one it tagged, wherever the person moved it; an untagged one
+ * only in a session Harness named, or one an older build named (`<engine>-<ms>`) that its registry
+ * already holds; another daemon's, never. A session the person opened by hand is not an agent: with the
+ * daemon up, its hook is turned away. The offline fallback wrote a row for one all the same, and the daemon
+ * came back with an agent it would never have made and could not drive, "offline" for good
+ * (e2e/hookclient.e2e.ts). An answer tmux could not give is no.
+ */
+async function paneTakenBy(pane, dataDir) {
+  const stdout = await execFileText('tmux', ['display-message', '-p', '-t', pane, `#{session_name}|#{${HARNESS_OWNER_OPTION}}`], 2000)
+  const line = typeof stdout === 'string' ? stdout.trim() : ''
+  const cut = line.lastIndexOf('|')
+  if (cut <= 0) return 'no'
+  const session = line.slice(0, cut)
+  const owner = line.slice(cut + 1)
+  if (owner) return owner === daemonPaneOwner(dataDir) ? 'yes' : 'no'
+  if (session.startsWith(HARNESS_SESSION_PREFIX)) return 'yes'
+  return /^[a-z][a-z0-9]*-\d{13}$/.test(session) ? 'if-held' : 'no'
 }
 
 async function panePid(pane) {
@@ -1221,6 +1254,8 @@ async function fallbackRegister(input, engine, tmuxPane) {
   if (!transcriptOptional && !transcriptPath) return
   if (transcriptPath && !validTranscriptPath(engine, transcriptPath, p)) return
   const observations = []
+  const taken = /^%\d+$/.test(tmuxPane || '') ? await paneTakenBy(tmuxPane, p.dataDir) : 'no'
+  if (taken === 'no') return
   if (/^%\d+$/.test(tmuxPane || '')) {
     const tmux = await paneEngineProcess(tmuxPane, engine)
     if (tmux.state === 'alive' && tmux.identity && await callerOwns(tmux.identity)) {
@@ -1252,6 +1287,8 @@ async function fallbackRegister(input, engine, tmuxPane) {
     const onRoute = (s) => !!s && !!(Array.isArray(s.runtimes)
       ? s.runtimes.some((runtime) => routeKeys.has(runtimeRouteKey(runtime)))
       : s.tmuxPane && routeKeys.has(runtimeRouteKey({ backend: 'tmux', paneId: s.tmuxPane })))
+    // A session an older build named is the daemon's only while its registry holds an agent there.
+    if (taken === 'if-held' && !sessions.some(onRoute)) return
     writeBoot(p.bootFile)
     const now = Date.now()
     const sameRuntime = (s) => s && s.engine === engine

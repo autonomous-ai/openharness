@@ -73,11 +73,13 @@ async function type(d: IsolatedDaemon, pane: string, text: string): Promise<void
  * registry; the hook writes it on every fallback, just before the row (notify.mjs `fallbackRegister`). So
  * a boot mark replaced while the daemon runs is a hook that wrote the registry behind its back.
  */
-function onDisk(d: IsolatedDaemon): { registry: string; boot: { bytes: string; inode: number } } {
+function onDisk(d: IsolatedDaemon): { registry: string | null; boot: { bytes: string; inode: number } | null } {
+  const read = (file: string) => { try { return readFileSync(file, 'utf8') } catch { return null } }
   const boot = join(d.dataDir, 'registry-boot')
+  const bytes = read(boot)
   return {
-    registry: readFileSync(join(d.dataDir, 'registry.json'), 'utf8'),
-    boot: { bytes: readFileSync(boot, 'utf8'), inode: statSync(boot).ino },
+    registry: read(join(d.dataDir, 'registry.json')),
+    boot: bytes === null ? null : { bytes, inode: statSync(boot).ino },
   }
 }
 const rowOnDisk = (d: IsolatedDaemon, agentId: string): Row | undefined =>
@@ -275,6 +277,31 @@ describe('the hook client', () => {
       const kept = all.find((one) => one.id === tile.id)
       return shell && kept?.status === 'stopped' && kept.sessionId === sessionId ? shell : null
     }, 60_000, 500)
+    client.close()
+  })
+
+  it.each(engines)('%s in a tmux session the person opened by hand is no agent, whether the daemon is down or up', async (engine) => {
+    const d = await fresh()
+    await d.stop()
+    const before = onDisk(d)
+    const cwd = join(d.projectsDir, `own-session-${engine}`)
+    mkdirSync(cwd, { recursive: true })
+    // Not a session Harness made: the daemon never takes one for an agent (harnessSessionLabel.ts).
+    const from = d.hookLog().length
+    const pane = await d.tmux.run('new-session', '-d', '-P', '-F', '#{pane_id}', '-s', `own-${engine}`, '-c', cwd,
+      ...['HOME', 'ZDOTDIR', 'PATH', 'CODEX_HOME', 'CLAUDE_PATH', 'CODEX_PATH'].flatMap((name) => ['-e', `${name}=${d.env[name]}`]),
+      engine === 'claude' ? d.env.CLAUDE_PATH! : d.env.CODEX_PATH!)
+    await until('the engine to run its start-up hook', () => ran(hooksSince(d, from), / SessionStart\(startup\) /), 30_000, 100)
+    // With nothing listening, the hook wrote nothing for it either.
+    expect(onDisk(d)).toEqual(before)
+
+    // Back, the daemon lists no agent for it, and a prompt typed there, its hook now answered, makes none.
+    await d.start()
+    const client = await LocalClient.connect(d)
+    await type(d, pane, 'typed in a session of my own')
+    await until('the engine to take the prompt', () => ran(hooksSince(d, from), / UserPromptSubmit /), 30_000, 100)
+    await new Promise((done) => setTimeout(done, 6_000))
+    expect((await rows(client)).filter((one) => one.tmuxPane === pane)).toEqual([])
     client.close()
   })
 
