@@ -312,6 +312,30 @@ describe('hook notify terminal scope', () => {
     expect(() => readFileSync(join(dataDir, 'cursor-pending-tasks.json'), 'utf8')).toThrow()
   })
 
+  it('keeps a Cursor session\'s tasks when its end was not answered in time', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-cursor-late-'))
+    tmpDirs.push(dir)
+    const dataDir = join(dir, 'data')
+    const cursorHome = join(dir, 'cursor')
+    let slow = false
+    const server = createServer((req, res) => {
+      if (slow) { setTimeout(() => { try { res.end('{}') } catch { /* the hook has gone */ } }, 2_000).unref(); return }
+      req.resume()
+      req.on('end', () => res.end('{}'))
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('test server did not bind a TCP port')
+    const hook = (input: Record<string, unknown>) => runHook({ port: address.port, tmuxPane: '%21', engine: 'cursor', dataDir, cursorHome, input })
+    await hook({ hook_event_name: 'preToolUse', session_id: 'cursor-session', tool_name: 'Task', tool_use_id: 'call-1', tool_input: { description: 'Inspect', prompt: 'Read code' } })
+    const tasks = () => JSON.parse(readFileSync(join(dataDir, 'cursor-pending-tasks.json'), 'utf8')) as unknown[]
+    expect(tasks()).toHaveLength(1)
+    slow = true
+    await hook({ hook_event_name: 'sessionEnd', session_id: 'cursor-session', reason: 'logout' })
+    expect(tasks()).toHaveLength(1)
+  })
+
   it('ignores Cursor background agents without leaking them into the registry', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-cursor-background-'))
     tmpDirs.push(dir)

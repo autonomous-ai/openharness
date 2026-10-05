@@ -1512,7 +1512,9 @@ async function main() {
       ...mutationFields,
     })
     if (ok === false) await fallbackSessionEnd(input.session_id || input.conversation_id, input.reason, engine, tmuxPane)
-    if (engine === 'cursor' && ok) await clearCursorTasks(input.session_id || input.conversation_id)
+    // Only once the daemon has taken the end in: a reply that did not come in time ('late') is no answer,
+    // and the tasks it would have settled are still the daemon's to settle.
+    if (engine === 'cursor' && ok === true) await clearCursorTasks(input.session_id || input.conversation_id)
     return
   }
 
