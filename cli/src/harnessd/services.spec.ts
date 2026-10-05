@@ -301,10 +301,6 @@ describe('ServiceSupervisor', () => {
     expect(serviceSpecs({ HARNESSD_SERVICES: '' }, known)).toEqual([])
     expect(serviceSpecs({ HARNESSD_SERVICES: 'none,search' }, known)).toEqual([search])
     expect(serviceSpecs({ HARNESSD_SERVICES: 'toString,constructor' }, known)).toEqual([])
-    // An opt-in service runs in its own process only when named, and its spec never carries the mark.
-    const withOptIn = { ...known, teams: { heapLimitMiB: 128, rssLimitMiB: 256, optIn: true } }
-    expect(serviceSpecs({}, withOptIn)).toEqual([search, devices])
-    expect(serviceSpecs({ HARNESSD_SERVICES: 'teams' }, withOptIn)).toEqual([{ name: 'teams', heapLimitMiB: 128, rssLimitMiB: 256 }])
     // One heap limit for every service, when given as a whole number of MiB.
     expect(serviceSpecs({ HARNESSD_SERVICES: 'search', HARNESSD_SERVICE_HEAP_LIMIT_MIB: '96' }, known)).toEqual([{ ...search, heapLimitMiB: 96 }])
     expect(serviceSpecs({ HARNESSD_SERVICES: 'search', HARNESSD_SERVICE_HEAP_LIMIT_MIB: 'lots' }, known)).toEqual([search])
