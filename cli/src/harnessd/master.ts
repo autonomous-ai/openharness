@@ -1,7 +1,7 @@
 /**
  * `harness __harnessd`: the master process `harness start` launches (see ./supervisor.ts for what it
  * does). This file is only its wiring to the operating system: the core child, the pid file, the status
- * file, the log's size, signals.
+ * file, the log's size, signals, and re-executing on a new bundle (./reexec.ts).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -10,8 +10,13 @@ import { performance } from 'node:perf_hooks'
 import { trimLogFile } from '../lib/log.js'
 import { platformFromEnv, type PlatformName } from './platform.js'
 import type { MasterMessage } from './protocol.js'
+import {
+  PROBE_ANSWER, RESUME_ENV, createReexec, decodeResume, fingerprint, readMarker, recoverFailedReexec, removeMarker, runProbe, writeMarker,
+} from './reexec.js'
 import { KNOWN_SERVICES, ServiceSupervisor, serviceOptions, serviceSpecs } from './services.js'
-import { DEFAULT_SUPERVISOR_OPTIONS, Supervisor, type CoreHandle, type SupervisorOptions, type SupervisorStatus } from './supervisor.js'
+import {
+  DEFAULT_SUPERVISOR_OPTIONS, Supervisor, type CoreHandle, type SupervisorDeps, type SupervisorOptions, type SupervisorStatus,
+} from './supervisor.js'
 
 /** How often the master keeps the daemon's log under its cap. */
 export const LOG_TRIM_INTERVAL_MS = 60_000
@@ -34,15 +39,32 @@ export interface MasterConfig {
   exit?: (code: number) => void
   /** Where SIGTERM, SIGINT and SIGHUP are listened for; defaults to this process. */
   onSignal?: (signal: NodeJS.Signals, listener: () => void) => void
+  /** This bundle's version, for the status (`harness status`, `/api/status`). */
+  version?: string
+  /** Where a master about to re-execute on the bundle on disk leaves its marker (./reexec.ts). Left
+   *  out, the master never re-executes, as before. */
+  reexecMarkerFile?: string
+  /** Replace this process (`process.execve`); defaults to this Node's, null where it has none. */
+  execve?: Execve | null
 }
+
+export type Execve = (file: string, args: string[], env: NodeJS.ProcessEnv) => void
 
 /** The defaults `runMaster` acts on this process with. */
 export const processExit = (code: number): void => { process.exit(code) }
 export const onProcessSignal = (signal: NodeJS.Signals, listener: () => void): void => { process.on(signal, listener) }
+/** `process.execve` (Node 22.15 and 23.11 on, and not yet in the typings this builds with); null without it. */
+export function processExecve(proc: object = process): Execve | null {
+  const execve = (proc as { execve?: unknown }).execve
+  return typeof execve === 'function' ? (file, args, env) => { execve.call(proc, file, args, env) } : null
+}
 
 /** What a config leaves out, taken from this process. Pure: choosing a default does not act on one. */
-export function masterDefaults(config: MasterConfig): Required<Pick<MasterConfig, 'env' | 'exit' | 'onSignal'>> {
-  return { env: config.env ?? process.env, exit: config.exit ?? processExit, onSignal: config.onSignal ?? onProcessSignal }
+export function masterDefaults(config: MasterConfig): Required<Pick<MasterConfig, 'env' | 'exit' | 'onSignal'>> & { execve: Execve | null } {
+  return {
+    env: config.env ?? process.env, exit: config.exit ?? processExit, onSignal: config.onSignal ?? onProcessSignal,
+    execve: config.execve === undefined ? processExecve() : config.execve,
+  }
 }
 
 /** The heap limit `--max-old-space-size` sets in these flags, MiB; null when none does. */
@@ -165,9 +187,37 @@ export function coreHandle(child: ChildProcess): CoreHandle {
   }
 }
 
+/**
+ * `harness __harnessd-probe`: what a master about to re-execute on this bundle asks it first
+ * (./reexec.ts). Everything a master does before it starts its children, with the state it would be
+ * handed, and nothing after: the whole bundle loads, the state reads, a master is built. Exit 0 and
+ * the answer, or 1 and why.
+ */
+export function probeMaster(config: { env: NodeJS.ProcessEnv; execArgv: string[]; version: string }, say: (line: string) => void = console.log): number {
+  try {
+    const handed = config.env[RESUME_ENV]
+    const resume = decodeResume(handed)
+    if (handed !== undefined && !resume) throw new Error('the state it would be handed is not one this master can read')
+    serviceSpecs(config.env, KNOWN_SERVICES)
+    const inert = { wallClock: () => Date.now() } as unknown as SupervisorDeps
+    const status = new Supervisor(inert, supervisorOptions(config.env, config.execArgv), { version: config.version, resume }).status()
+    say(`${PROBE_ANSWER} · protocol ${status.protocol} · v${status.masterVersion}`)
+    return 0
+  } catch (error) {
+    say(`harnessd-probe failed: ${error instanceof Error ? error.message : String(error)}`)
+    return 1
+  }
+}
+
 export function runMaster(config: MasterConfig): Supervisor {
-  const { env, exit, onSignal } = masterDefaults(config)
+  const { env: given, exit, onSignal, execve } = masterDefaults(config)
   process.title = 'harnessd'
+  // What the master this process was a moment ago handed on, if it was one (./reexec.ts). Taken out of
+  // the environment every child is given: a core or service has no use for it, and a later re-exec
+  // writes its own.
+  const resume = decodeResume(given[RESUME_ENV])
+  const env: NodeJS.ProcessEnv = { ...given }
+  delete env[RESUME_ENV]
   const readPid = (): number | null => {
     try { return Number.parseInt(readFileSync(config.pidFile, 'utf8').trim(), 10) || null } catch { return null }
   }
@@ -180,6 +230,22 @@ export function runMaster(config: MasterConfig): Supervisor {
   // Set by the launchd agent or systemd unit `harness service install` writes (./platform.ts).
   const platform = platformFromEnv(env)
   if (platform) log(`[harnessd] run by ${platform}, which starts this master again if it dies`)
+  if (resume) log(`[harnessd] master re-executed (pid ${process.pid})${config.version ? ` · now v${config.version}` : ''}`)
+  // The bundle this master's code came from, read once, as it starts; the bundle on disk is read
+  // again before every core starts.
+  const own = fingerprint(config.scriptPath)
+  const bundle = () => fingerprint(config.scriptPath)
+  const markerFile = config.reexecMarkerFile
+  const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true } catch { return false } }
+  if (markerFile) {
+    // A re-execution before this start that never brought a core up: back to the previous bundle,
+    // which the supervisor then re-executes this master on before it starts anything.
+    recoverFailedReexec({
+      marker: readMarker(markerFile), pid: process.pid, alive, current: bundle,
+      restoreUpdate: config.restoreUpdate, removeMarker: () => removeMarker(markerFile), log,
+    })
+  }
+  let stopping = false
   // A new one every boot, given to the core and to each service: how the core knows a service
   // connection is one this master started, and no other local process.
   const token = randomBytes(24).toString('hex')
@@ -194,6 +260,18 @@ export function runMaster(config: MasterConfig): Supervisor {
     clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
     log,
   }, serviceOptions(env), { HARNESSD_SERVICE_TOKEN: token })
+  const reexec = markerFile ? createReexec({
+    own, current: bundle, nodePath: config.nodePath, execArgv: config.execArgv, scriptPath: config.scriptPath, env, pid: process.pid,
+    execve,
+    probe: (args, probeEnv) => runProbe(config.nodePath, args, probeEnv),
+    stopChildren: (done) => services.stop(done),
+    startChildren: () => services.start(),
+    writeMarker: (marker) => writeMarker(markerFile, marker),
+    removeMarker: () => removeMarker(markerFile),
+    stopping: () => stopping,
+    now: () => Date.now(),
+    log,
+  }) : null
   const supervisor = new Supervisor({
     spawnCore: (extra) => coreHandle(spawn(config.nodePath, [...execArgv, config.scriptPath, '__run'], {
       env: { ...env, ...extra, HARNESSD_SERVICE_TOKEN: token },
@@ -210,13 +288,29 @@ export function runMaster(config: MasterConfig): Supervisor {
     confirmUpdate: config.confirmUpdate,
     log,
     // The services go with the master, after the core: none is left holding the core's socket.
-    exit: (code) => services.stop(() => {
-      stopTrimming()
-      exit(code)
-    }),
-  }, options)
+    exit: (code) => {
+      stopping = true
+      reexec?.cancel()
+      services.stop(() => {
+        stopTrimming()
+        exit(code)
+      })
+    },
+    ...(reexec && markerFile ? {
+      reexec: reexec.reexec,
+      // The re-executed master has brought a core up: its marker has served.
+      coreUp: () => removeMarker(markerFile),
+    } : {}),
+  }, options, { version: config.version, resume })
   // Services stop beside the core, inside the same grace `harness stop` gives the whole daemon.
-  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) onSignal(signal, () => { services.stop(() => {}); supervisor.stop(signal) })
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+    onSignal(signal, () => {
+      stopping = true
+      reexec?.cancel()
+      services.stop(() => {})
+      supervisor.stop(signal)
+    })
+  }
   supervisor.start()
   // Not waiting on the core: a service reaches it through its socket, and retries until it answers.
   services.start()

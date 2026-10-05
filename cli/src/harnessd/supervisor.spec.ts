@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, HARNESSD_PROTOCOL, type MasterMessage } from './protocol.js'
-import { DEFAULT_SUPERVISOR_OPTIONS, Supervisor, type CoreHandle, type SupervisorOptions, type SupervisorStatus } from './supervisor.js'
+import {
+  DEFAULT_SUPERVISOR_OPTIONS, Supervisor, type CoreHandle, type ReexecOutcome, type ResumeState, type SupervisorDeps, type SupervisorOptions,
+  type SupervisorStatus,
+} from './supervisor.js'
 
 const MIB = 1024 * 1024
 
@@ -49,7 +52,7 @@ describe('Supervisor', () => {
   let pidOf: (index: number) => number | undefined
   const core = () => cores[cores.length - 1]
 
-  const make = (overrides: Partial<SupervisorOptions> = {}) => new Supervisor({
+  const make = (overrides: Partial<SupervisorOptions> = {}, more: Partial<SupervisorDeps> = {}, identity: ConstructorParameters<typeof Supervisor>[2] = {}) => new Supervisor({
     spawnCore: (env) => {
       const next = new FakeCore(pidOf(cores.length), env)
       cores.push(next)
@@ -66,7 +69,8 @@ describe('Supervisor', () => {
     writeStatus: (status) => statuses.push(status),
     log: (line) => lines.push(line),
     exit: (code) => exited.push(code),
-  }, { ...options, ...overrides })
+    ...more,
+  }, { ...options, ...overrides }, identity)
 
   /** Let time pass for a running core, beating as a healthy one does. */
   const live = (ms: number) => { for (let left = ms; left > 0; left -= 1_000) { vi.advanceTimersByTime(Math.min(1_000, left)); core().beat() } }
@@ -87,7 +91,7 @@ describe('Supervisor', () => {
   it('starts one core, claims the pid file once it is bound, and runs it once it is ready', () => {
     const supervisor = make()
     expect(new Supervisor({ wallClock: () => 7 } as never).status())
-      .toEqual({ state: 'idle', corePid: null, restarts: 0, lastExit: null, lastExitReason: null, safeMode: null, protocol: HARNESSD_PROTOCOL, since: 7 })
+      .toEqual({ state: 'idle', corePid: null, restarts: 0, lastExit: null, lastExitReason: null, safeMode: null, protocol: HARNESSD_PROTOCOL, since: 7, masterVersion: null, reexecs: 0 })
     supervisor.start()
     supervisor.start()
     expect(cores).toHaveLength(1)
@@ -102,7 +106,7 @@ describe('Supervisor', () => {
     core().ready()
     expect(supervisor.status()).toEqual({
       state: 'running', corePid: 1000, restarts: 0, lastExit: null, lastExitReason: null, safeMode: null,
-      protocol: HARNESSD_PROTOCOL, since: Date.now(),
+      protocol: HARNESSD_PROTOCOL, since: Date.now(), masterVersion: null, reexecs: 0,
     })
     expect(lines.at(-1)).toBe('[harnessd] core ready (pid 1000)')
     // Every change is written for `harness status`, and told to the bound core.
@@ -488,6 +492,120 @@ describe('Supervisor', () => {
       core().exit(0)
       vi.runAllTimers()
       expect(calls).toEqual(['claim', 'release'])
+    })
+  })
+
+  describe('re-executing on the bundle on disk', () => {
+    /** A `reexec` that records what it was asked, and answers when the test says. */
+    const reexecs = () => {
+      const asked: Array<{ state: ResumeState; proceed: (outcome: ReexecOutcome) => void }> = []
+      return { asked, deps: { reexec: (state: ResumeState, proceed: (outcome: ReexecOutcome) => void) => { asked.push({ state, proceed }) }, coreUp: () => calls.push('up') } }
+    }
+
+    it('asks before every core it starts, and starts it when the master stays as it is', () => {
+      const { asked, deps } = reexecs()
+      const supervisor = make({}, deps)
+      supervisor.start()
+      expect(cores).toHaveLength(0)
+      expect(asked[0].state).toEqual({ restarts: 0, lastExit: null, lastExitReason: null, update: null, claimed: false, reexecs: 0, unproven: 0 })
+      asked[0].proceed('same')
+      expect(cores).toHaveLength(1)
+      core().up()
+      expect(calls).toEqual(['claim', 'up'])
+      crash()
+      expect(asked).toHaveLength(2)
+      asked[1].proceed('kept')
+      expect(cores).toHaveLength(2)
+      expect(supervisor.status().state).toBe('restarting')
+    })
+
+    it('hands an update on probation, and the pid file, to the master it becomes; and starts no core itself', () => {
+      const { asked, deps } = reexecs()
+      const supervisor = make({}, deps)
+      supervisor.start()
+      asked[0].proceed('same')
+      core().up()
+      core().exit(CORE_EXIT_UPDATE)
+      vi.advanceTimersByTime(0)
+      expect(asked[1].state).toEqual({ restarts: 1, lastExit: `code ${CORE_EXIT_UPDATE}`, lastExitReason: 'update', update: 'pending', claimed: true, reexecs: 0, unproven: 0 })
+      // The process is replaced from here: nothing more of this master runs.
+      expect(cores).toHaveLength(1)
+      expect(supervisor.status()).toMatchObject({ state: 'restarting', corePid: null })
+    })
+
+    it('rolls an update back when the new bundle\'s master would not start, and starts the core on the bundle restored', () => {
+      const { asked, deps } = reexecs()
+      const supervisor = make({}, deps)
+      supervisor.start()
+      asked[0].proceed('same')
+      core().up()
+      core().exit(CORE_EXIT_UPDATE)
+      vi.advanceTimersByTime(0)
+      asked[1].proceed('refused')
+      expect(calls).toEqual(['claim', 'up', 'restore'])
+      expect(lines.at(-1)).toBe('[harnessd] the new bundle\'s master would not start — rolled back to the previous bundle; restarting')
+      expect(asked[2].state.update).toBeNull()
+      asked[2].proceed('same')
+      core().up()
+      vi.runOnlyPendingTimers()
+      expect(calls).toEqual(['claim', 'up', 'restore', 'up'])
+      // A bundle replaced by hand has no update to fail: its core starts under this master all the same.
+      crash()
+      asked[3].proceed('refused')
+      expect(cores).toHaveLength(3)
+    })
+
+    it('rolls a failed update back and asks again, so the master moves back to the bundle restored', () => {
+      const { asked, deps } = reexecs()
+      const supervisor = make({}, deps)
+      supervisor.start()
+      asked[0].proceed('same')
+      core().up()
+      core().exit(CORE_EXIT_UPDATE)
+      vi.advanceTimersByTime(0)
+      asked[1].proceed('same')
+      core().exit(3)
+      expect(calls).toEqual(['claim', 'up', 'restore'])
+      vi.advanceTimersByTime(0)
+      expect(asked[2].state).toMatchObject({ update: null, restarts: 2, lastExit: 'code 3', lastExitReason: 'crashed' })
+      expect(supervisor.status().restarts).toBe(2)
+    })
+
+    it('starts nothing when it was stopped while deciding', () => {
+      const { asked, deps } = reexecs()
+      const supervisor = make({}, deps)
+      supervisor.start()
+      supervisor.stop('SIGTERM')
+      expect(exited).toEqual([0])
+      asked[0].proceed('same')
+      asked[0].proceed('refused')
+      expect(cores).toHaveLength(0)
+    })
+
+    it('carries on as the master it was, once re-executed: its counts, its claim, its update on probation', () => {
+      const { asked, deps } = reexecs()
+      const resume: ResumeState = { restarts: 4, lastExit: 'code 75', lastExitReason: 'update', update: 'pending', claimed: true, reexecs: 2, unproven: 1 }
+      const supervisor = make({}, deps, { version: '9.9.9', resume })
+      expect(supervisor.status()).toMatchObject({ restarts: 4, lastExit: 'code 75', lastExitReason: 'update', masterVersion: '9.9.9', reexecs: 2 })
+      supervisor.start()
+      asked[0].proceed('same')
+      expect(core().env.HARNESSD_RESTARTS).toBe('4')
+      core().up()
+      // Its pid file was claimed by the master it was: the same process.
+      expect(calls).toEqual(['up'])
+      vi.advanceTimersByTime(options.updateProbationMs)
+      expect(calls).toEqual(['up', 'confirm'])
+      crash()
+      // A core came up: the re-executions so far are proven, and no longer count towards a loop.
+      expect(asked[1].state).toMatchObject({ reexecs: 2, unproven: 0 })
+    })
+
+    it('counts a protocol 1 core as up once it is bound', () => {
+      const { asked, deps } = reexecs()
+      make({}, deps).start()
+      asked[0].proceed('same')
+      core().bind(1)
+      expect(calls).toEqual(['claim', 'up'])
     })
   })
 })

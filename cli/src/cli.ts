@@ -177,7 +177,7 @@ import { STORE_REQUESTS, startStore } from './services/store.js'
 import { startViewers } from './services/viewers.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { startWorkspaces } from './services/workspaces.js'
-import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
+import { describeMasterStatus, probeMaster, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, refuseServedDataFolder, type LocalSocketServer } from './lib/localSocket.js'
 import { legacyDaemonStatus, localDaemonStatus, saveDaemonPort } from './lib/daemonEndpoint.js'
@@ -242,6 +242,8 @@ import {
 
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
 const LOG_FILE = DAEMON_LOG_FILE
+/** Where a master re-executing on a new bundle leaves word of it, until that master's core is up. */
+const HARNESSD_REEXEC_FILE = join(env.ADAPTER_DATA_DIR, 'harnessd-reexec.json')
 // Pre-rename name. Adopted (renamed, keeping the inode) the first time a daemon opens the log, so a
 // machine that updates mid-run keeps its history instead of stranding it in a file nobody tails.
 // The log has had three names; this slot holds the OLDEST. The middle one (`machine.log`) is adopted
@@ -5628,7 +5630,12 @@ switch (cmd) {
       logFile: LOG_FILE,
       restoreUpdate: () => restoreUpdate(env.ADAPTER_CLI_DIR),
       confirmUpdate: () => confirmUpdate(env.ADAPTER_CLI_DIR),
+      version: VERSION,
+      reexecMarkerFile: HARNESSD_REEXEC_FILE,
     })
+    break
+  case '__harnessd-probe': // internal: a master about to re-execute on this bundle asks it first (harnessd/reexec.ts)
+    process.exitCode = probeMaster({ env: process.env, execArgv: process.execArgv, version: VERSION })
     break
   case '__service': { // internal: a service harnessd's master runs in its own process (services/process.ts)
     const socketPath = localSocketPath(env.ADAPTER_DATA_DIR, env.PORT)
