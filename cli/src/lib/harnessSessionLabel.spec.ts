@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { harnessPaneOwner, ownedHere, ownerCommand, paneOwnerFormat, paneOwnerOf } from './harnessSessionLabel.js'
+import { isolatedTmux } from '../testing/isolatedTmux.js'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -63,7 +64,26 @@ describe('the tag on a tmux before 3.0', () => {
     // tmux 2.x cannot cut a substring out of a format: the start command comes back cut to the prefix
     // and a tag's length, never whole (it can hold the `|` and newlines a listing is split on).
     expect(paneOwnerFormat(false))
-      .toBe('#{?#{m:/usr/bin/env HARNESS_DAEMON=*,#{pane_start_command}},#{=44:pane_start_command},#{@harness_daemon}}')
+      .toBe('#{?#{m:/usr/bin/env HARNESS_DAEMON=*,#{pane_start_command}},#{=44:pane_start_command},#{?#{m:harness-*,#{session_name}},#{@harness_daemon},}}')
+  })
+
+  it('reads the window\'s tag only in a session Harness named, on a real tmux', async () => {
+    // A pane the person split into an agent's window, once they had moved that window into their own
+    // session, carries no tag of its own: the window's was taken for it, and it was styled as an agent.
+    const tmux = await isolatedTmux()
+    try {
+      const tag = '0123456789abcdef'
+      await tmux.run('new-session', '-d', '-s', 'harness-claude-1', '-x', '80', '-y', '24')
+      await tmux.run('set-option', '-w', '-t', 'harness-claude-1', '@harness_daemon', tag)
+      await tmux.run('new-session', '-d', '-s', 'mine', '-x', '80', '-y', '24')
+      await tmux.run('move-window', '-s', 'harness-claude-1:0', '-t', 'mine:5')
+      await tmux.run('new-session', '-d', '-s', 'harness-codex-2', '-x', '80', '-y', '24')
+      await tmux.run('set-option', '-w', '-t', 'harness-codex-2', '@harness_daemon', tag)
+      const owners = (await tmux.run('list-panes', '-a', '-F', `#{session_name}|${paneOwnerFormat(false)}`)).split('\n')
+      expect(owners.sort()).toEqual(['harness-codex-2|0123456789abcdef', 'mine|', 'mine|'])
+    } finally {
+      await tmux.close()
+    }
   })
 
   it('takes the tag out of a start command, and any other field as the tag itself', () => {

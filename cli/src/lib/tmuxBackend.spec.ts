@@ -552,7 +552,7 @@ describe('TmuxBackend on a tmux before 3.0', () => {
     )
     const inventory = await new TmuxBackend(undefined, () => 'daemon-a').inventory()
     expect(inventory.state === 'available' && inventory.roots.map((root) => root.runtime.paneId)).toEqual(['%1', '%3'])
-    expect(calls()[0]).toContain('#{?#{m:/usr/bin/env HARNESS_DAEMON=*,#{pane_start_command}},#{=44:pane_start_command},#{@harness_daemon}}')
+    expect(calls()[0]).toContain('#{?#{m:/usr/bin/env HARNESS_DAEMON=*,#{pane_start_command}},#{=44:pane_start_command},#{?#{m:harness-*,#{session_name}},#{@harness_daemon},}}')
   })
 })
 
