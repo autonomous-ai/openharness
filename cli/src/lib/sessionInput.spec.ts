@@ -41,6 +41,33 @@ describe('SessionInputController', () => {
       controller.forget('s1')
     })
 
+    it('waits for an engine to draw its composer, as for the lease, and types once it is there', async () => {
+      // A message sent while the engine starts: its pane holds nothing yet.
+      const time = { at: 0, now: () => time.at, sleep: vi.fn(async (ms: number) => { time.at += ms }) }
+      const onError = vi.fn(), onSubmitted = vi.fn()
+      const inject = vi.fn<() => Promise<TerminalActionResult>>().mockResolvedValueOnce(held('prompt_hidden'))
+        .mockResolvedValueOnce(held('screen_unreadable')).mockResolvedValue({ state: 'succeeded', dispatch: 'executed' })
+      const controller = new SessionInputController({ getSession: () => session('codex'), validateRuntime: async () => true,
+        inject, sendKey: async () => true, onError, onSubmitted, now: time.now, sleep: time.sleep })
+      controller.submit('s1', 'sent while it starts')
+      await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalledWith('s1', 'sent while it starts'))
+      expect(inject).toHaveBeenCalledTimes(3)
+      expect(onError).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
+    it('refuses with the reason once the wait is over and the composer never came', async () => {
+      const time = { at: 0, now: () => time.at, sleep: vi.fn(async (ms: number) => { time.at += ms }) }
+      const onError = vi.fn()
+      const inject = vi.fn(async () => held('prompt_hidden'))
+      const controller = new SessionInputController({ getSession: () => session('claude'), validateRuntime: async () => true,
+        inject, sendKey: async () => true, onError, now: time.now, sleep: time.sleep })
+      controller.submit('s1', 'into a screen never seen')
+      await vi.waitFor(() => expect(onError).toHaveBeenCalledWith('s1', 'Claude Code isn\'t showing its prompt; finish what\'s on its screen in its terminal, then send the message again.'))
+      expect(time.at).toBeGreaterThanOrEqual(15_000)
+      controller.forget('s1')
+    })
+
     it('rejects a message that wants a receipt with the reason, and says why', async () => {
       const onError = vi.fn(), onDelivery = vi.fn()
       const controller = new SessionInputController({ getSession: () => session('codex'), validateRuntime: async () => true,

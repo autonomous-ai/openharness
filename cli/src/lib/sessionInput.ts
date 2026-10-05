@@ -1,7 +1,7 @@
 import { createHash } from 'crypto'
 import type { RegisteredSession } from './registry.js'
 import { sid } from './log.js'
-import { isMessageHold, messageHold, messageHoldText, type MessageHold } from './messageHold.js'
+import { isMessageHold, messageHold, messageHoldText, passingHold, type MessageHold } from './messageHold.js'
 import { TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
 
 const MAX_QUEUE_ITEMS = 8
@@ -136,10 +136,13 @@ function heldBack(delivery: boolean | TerminalActionResult): MessageHold | null 
     && isMessageHold(delivery.reason) ? delivery.reason : null
 }
 
-/** A write the pane's control lease refused before a byte of it was written. */
+/**
+ * A write refused before a byte of it was written for a reason that passes: the pane's control lease, or
+ * a screen with no composer on it yet, an engine starting or redrawing (messageHold.ts `passingHold`).
+ */
 function leaseRefused(delivery: boolean | TerminalActionResult): boolean {
   return typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started'
-    && delivery.reason === TERMINAL_LEASE_REFUSED
+    && (delivery.reason === TERMINAL_LEASE_REFUSED || passingHold(delivery.reason))
 }
 
 function fingerprint(content: string): string {

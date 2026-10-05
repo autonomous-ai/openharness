@@ -116,14 +116,17 @@ describe('the session input controller\'s dependencies', () => {
     expect(await wired.inject('cc', 'hello')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'permission_open' })
     // Nothing written, each read inside the lock.
     expect(run.calls).toEqual(['lock a1', 'lock a1', 'lock cx', 'lock cc'])
-    // A pane that cannot be read is written as before, and so is a ready one; an agent that is not there is
-    // not written to at all.
+    // Claude Code's and Codex's panes are typed into only when read and their composer is on screen; another
+    // engine's pane that cannot be read is written as before; an agent that is not there, not at all.
     run.setPane(null)
-    expect(await wired.inject('cx', 'hi')).toBe(ok)
+    expect(await wired.inject('cx', 'hi')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'screen_unreadable' })
+    expect(await wired.inject('cc', 'hi')).toBe(ok)
+    run.setPane('✻ Welcome to Claude Code')
+    expect(await wired.inject('a1', 'hi')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'prompt_hidden' })
     run.setPane(READY_PANE)
     expect(await wired.inject('a1', 'hi')).toBe(ok)
     expect(await wired.inject('nobody', 'hi')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'terminal agent is unavailable' })
-    expect(run.calls.filter((call) => call.startsWith('submit'))).toEqual(['submit cx hi', 'submit a1 hi'])
+    expect(run.calls.filter((call) => call.startsWith('submit'))).toEqual(['submit cc hi', 'submit a1 hi'])
   })
 
   it('reads the pane after its engine has answered, so a dialog opened during the wait is seen', async () => {

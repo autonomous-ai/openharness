@@ -25,7 +25,9 @@
 // under its composer, `!browse` (Codex) leaves Codex browsing its transcript in its default fullscreen
 // mode, and `!browse scrollback` in its scrollback mode, `!transcript` (Claude Code) leaves it in its
 // transcript view, as ctrl+o does, `!overlay` (Codex) in its transcript overlay, as ctrl+t does in its
-// scrollback mode, `!search` searching its prompt history, as ctrl+r does, `!exit` ends the process.
+// scrollback mode, `!search` searching its prompt history, as ctrl+r does, `!config` (Claude Code) in its
+// settings and `!center` (Codex) in its agent command center, screens the daemon has no name for,
+// `!exit` ends the process.
 // Everything else is echoed as the answer.
 //
 // Which release is installed is the config's business, so a test can update an engine in place by
@@ -305,18 +307,29 @@ export async function run(engine, config) {
   // above it, and it is drawn again below. The fake used to leave a submitted prompt on its composer line
   // until the answer came, which the daemon reads as a draft never sent: it pressed Enter again for it
   // (sessionInput.ts) whenever the turn was slow to start, as one is behind its UserPromptSubmit hook.
+  //
+  // Drawn as each engine draws its own, as the daemon reads it to know a message can be typed there
+  // (lib/composerScreen.ts): Claude Code 2.1.289's box ruled above and below (its `borderStyle: "round"`
+  // with no sides), `❯` and the prompt or a dim example in it, and its footer row under the box
+  // (`? for shortcuts` while the prompt is empty); Codex 0.160's blank row, bold `›` and the draft or its
+  // dim placeholder, a blank row, and its status line (tui/src/bottom_pane, snapshot `empty`). A draft's
+  // further lines are indented under the first.
   let buffer = ''
   let composerRows = 0
-  // What Codex 0.160 draws under its empty composer in the two states the daemon must read off the pane
-  // (tui/src/bottom_pane): a goal it is pursuing, on the right of its status line, and the footer of
-  // its transcript browser, with the composer dimmed whole. Null draws the composer alone, as before.
-  // Browsing in its scrollback mode is a transcript pager over the whole pane instead, on the alternate
-  // screen, with the same footer on its last row (pager_overlay/transcript.rs).
+  // What else is drawn there (`bottom`): Codex's footer pursuing a goal (on the right of its status line),
+  // the footer of its transcript browser with the composer dimmed whole, a search through the prompt
+  // history (the match in the composer, the search under it), a screen of the engine's own in the
+  // composer's place (`screen`), and the screens drawn over the whole pane instead (`pager`, on the
+  // alternate screen): Codex's transcript browser and overlay in its scrollback mode, Claude Code's
+  // transcript view.
   let bottom = null
-  const placeholder = '\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m'
-  const goalBottom = (goal) => ({ composer: placeholder, footer: `  gpt-6 high · ${cwd}   \x1b[35m${goal}\x1b[0m` })
+  let dialog = null
+  const columns = () => Math.max(20, process.stdout.columns || 80)
+  // Cut to the pane's width, as Codex fits its status line to one row.
+  const statusLine = () => `  \x1b[2m${`gpt-6 high · ${cwd}`.slice(0, columns() - 3)}\x1b[0m`
+  const goalBottom = (goal) => ({ footer: `  gpt-6 high · ${cwd}   \x1b[35m${goal}\x1b[0m` })
   const browsingFooter = '\x1b[36mBrowsing transcript\x1b[0m\x1b[2m · \x1b[0m↑↓/jk\x1b[2m scroll · \x1b[0m←→/hl\x1b[2m prompts · \x1b[0m↵\x1b[2m rewind · \x1b[0mesc\x1b[2m back\x1b[0m'
-  const browsingBottom = { composer: '\x1b[2m› Ask Codex to do anything\x1b[0m', footer: browsingFooter, browsing: true }
+  const browsingBottom = { dim: true, footer: browsingFooter, browsing: true }
   const pagerBottom = (prompt, answer) => ({ browsing: true, pager: `\x1b[?1049h\x1b[H\x1b[2J\x1b[2m/ T R A N S C R I P T ${'/ '.repeat(30)}\x1b[0m`
     + `\r\n\x1b[7m› ${prompt}\x1b[0m\r\n\r\n\x1b[2m•\x1b[0m ${answer}\x1b[999;1H${browsingFooter}` })
   // Claude Code's transcript view (ctrl+o, 2.1.289): the conversation over the whole pane, its prompt
@@ -328,20 +341,96 @@ export async function run(engine, config) {
   const overlayBottom = (prompt, answer) => ({ overlay: true, prompt, answer, pager: `\x1b[?1049h\x1b[H\x1b[2J\x1b[2m/ T R A N S C R I P T ${'/ '.repeat(30)}\x1b[0m`
     + `\r\n\r\n\x1b[1m›\x1b[0m ${prompt}\r\n\r\n\x1b[2m•\x1b[0m ${answer}\x1b[997;1H\x1b[2mCtrl+Space select\x1b[0m`
     + '\x1b[998;1H\x1b[2m ↑/↓ to scroll · pgup/pgdn to page · home/end to jump\x1b[0m\x1b[999;1H\x1b[2m q close · f3 find · esc browse prompts\x1b[0m' })
+  // Screens of the engines' own, drawn in the composer's place, that the daemon has no name for: Claude
+  // Code's settings (/config, 2.1.289: its Settings tabs, `Search settings…`, and its rows, where Enter
+  // and Space change the highlighted setting) and Codex's agent command center (0.160, snapshot
+  // `agents_overview_recent_sessions`, where Enter opens the highlighted task). Esc closes either.
+  const SETTINGS = [['Auto-compact', 'true'], ['Show tips', 'true'], ['Thinking mode', 'true']]
+  const configScreen = () => {
+    const state = { query: '', config: true }
+    state.screen = () => {
+      const rows = SETTINGS.filter(([name]) => name.toLowerCase().includes(state.query.toLowerCase()))
+      return [`\x1b[38;5;153m${'─'.repeat(columns())}\x1b[39m`,
+        ' \x1b[1m\x1b[38;5;153mSettings:\x1b[0m  \x1b[7m Status \x1b[0m  Config   Usage   \x1b[2m(←/→ or tab to cycle)\x1b[0m', '',
+        ` ⌕ ${state.query || '\x1b[2mSearch settings…\x1b[0m'}`, '',
+        ...rows.map(([name, value], index) => `${index === 0 ? ' \x1b[38;5;153m❯\x1b[39m' : '  '} ${name.padEnd(40)}${value}`),
+        '', ' \x1b[2m\x1b[3mEnter/Space to change · Esc to close\x1b[0m']
+    }
+    return state
+  }
+  const centerScreen = () => ({ center: true, screen: () => [
+    '  Agent command center  Group: Project  g',
+    '   All 2   Needs you 0   Working 0   Ready 0   Inactive 2',
+    `  ${'─'.repeat(Math.max(10, columns() - 4))}`,
+    '      Tasks                                            Status         Updated',
+    '  /  2',
+    '  › ○ Task 2                                           Inactive 1m',
+    '    ○ Task 1                                           Inactive 2m',
+    '', '  ? help  esc back  ↑/↓ move  enter open  n new'] })
   // The prompts sent so far, newest last, which a search through the prompt history (ctrl+r) looks in.
   const history = []
-  // Searching them, as each engine draws it under its composer: the match in the composer, and Claude
-  // Code's `search prompts: …` (or `no matching prompt: …`) or Codex's `reverse-i-search: …` footer.
+  // Searching them, as each engine draws it: the match in the composer, and Claude Code's
+  // `search prompts: …` (or `no matching prompt: …`) or Codex's `reverse-i-search: …` under it.
   const searchBottom = (query) => {
     const match = query ? history.findLast((sent) => sent.toLowerCase().includes(query.toLowerCase())) ?? null : null
     const footer = engine === 'claude'
       ? `  \x1b[2m${query && !match ? 'no matching prompt:' : 'search prompts:'}\x1b[0m ${query}`
       : `  \x1b[2mreverse-i-search: \x1b[0m${query}  \x1b[2menter accept · esc cancel\x1b[0m`
-    return { search: true, query, match, composer: `› ${match ?? ''}`, footer }
+    return { search: true, query, match, text: match ?? '', footer }
   }
-  /** Rows the composer takes now: a long or multi-line draft wraps. */
-  const rowsOf = (text) => text.split('\n')
-    .reduce((rows, line) => rows + Math.max(1, Math.ceil([...line].length / Math.max(20, process.stdout.columns || 80))), 0)
+  // The suggestions each engine opens while a `/command` or an `@mention` is typed at the end of the
+  // draft, until Esc puts them away: Claude Code's under its box, in its footer's place, padded to six rows
+  // and the highlighted one coloured (2.1.289, `Kge`); Codex's above its composer, the `/command` list
+  // (snapshot `slash_popup_footer_wide`) or the mention menu (`default_unified_mention_popup`).
+  const COMMANDS = [['/model', 'Set the AI model'], ['/memory', 'Edit memory files'], ['/mcp', 'Manage MCP servers'], ['/compact', 'Compact the conversation']]
+  const FILES = ['README.md', 'src/index.ts', 'src/login.ts']
+  let dismissed = null
+  const suggestions = (text) => {
+    const token = text.split(/\s/).at(-1) ?? ''
+    if (bottom || token === dismissed || !/^[/@]/.test(token)) return null
+    const found = token.startsWith('/')
+      ? COMMANDS.filter(([name]) => name.startsWith(token))
+      : FILES.filter((file) => file.startsWith(token.slice(1))).map((file) => [file, ''])
+    return found.length ? { token, found } : null
+  }
+  const popupRows = (popup) => {
+    if (engine === 'claude') {
+      const rows = popup.found.map(([name, description], index) => `  ${index === 0 ? '\x1b[38;5;153m' : ''}${name.padEnd(16)}${description}${index === 0 ? '\x1b[39m' : ''}`)
+      return [...Array(Math.max(0, 6 - rows.length)).fill(''), ...rows]
+    }
+    if (popup.token.startsWith('/')) {
+      return [...popup.found.map(([name, description], index) => index === 0
+        ? `\x1b[1;7m› ${name.padEnd(9)}\x1b[22m ${description}\x1b[0m`
+        : `  \x1b[1m${name.padEnd(9)}\x1b[0m \x1b[2m${description}\x1b[0m`), '']
+    }
+    return ['  Mentions', '   All Results   Filesystem Only   Plugins', `  ${popup.token.slice(1)}`,
+      ...popup.found.map(([file], index) => `${index === 0 ? '›' : ' '} ${file}`),
+      '  enter/tab insert · esc close · ↑/↓ select · ←/→ filter', '']
+  }
+  /** The rows of the pane a row of text takes, wide (CJK, emoji) characters taking two columns. */
+  const WIDE = /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{1f300}-\u{1faff}\u{20000}-\u{3fffd}]/u
+  const rowsOf = (row) => {
+    let width = 0
+    for (const char of row.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')) width += WIDE.test(char) ? 2 : 1
+    return Math.max(1, Math.ceil(width / columns()))
+  }
+  /** What the composer draws, row by row. */
+  const composerLines = () => {
+    if (bottom?.screen) return bottom.screen()
+    const text = bottom?.text ?? buffer
+    const [first = '', ...more] = text.split('\n')
+    const rest = more.map((row) => `  ${row}`)
+    if (engine === 'claude') {
+      const rule = `\x1b[38;5;244m${'─'.repeat(columns())}\x1b[39m`
+      const input = text ? `\x1b[39m❯ ${first}` : '\x1b[39m❯ \x1b[2mTry "fix lint errors"\x1b[0m'
+      const popup = suggestions(text)
+      return [rule, input, ...rest, rule, ...(popup ? popupRows(popup) : [bottom?.footer ?? (text ? '' : '  \x1b[2m? for shortcuts\x1b[0m')])]
+    }
+    const input = bottom?.dim ? '\x1b[2m› Ask Codex to do anything\x1b[0m'
+      : text ? `\x1b[1m›\x1b[0m ${first}` : '\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m'
+    const popup = suggestions(text)
+    return [...(popup ? popupRows(popup) : ['']), input, ...rest, '', bottom?.footer ?? statusLine()]
+  }
   /** Clears the composer and what is drawn under it, leaving the cursor where it began. */
   const eraseComposer = () => {
     process.stdout.write(`${composerRows > 1 ? `\x1b[${composerRows - 1}A` : ''}\r\x1b[0J`)
@@ -349,27 +438,30 @@ export async function run(engine, config) {
   }
   const drawComposer = () => {
     if (bottom?.pager) { process.stdout.write(bottom.pager); composerRows = 0; return }
-    if (bottom && !buffer) {
-      // The footer on the row under the composer, then the cursor back to the composer, after its glyph.
-      process.stdout.write(`${bottom.composer}\r\n\x1b[2K${bottom.footer}\x1b[1A\r\x1b[2C`)
-      composerRows = 1
-      return
-    }
-    process.stdout.write(`› ${buffer}`)
-    composerRows = rowsOf(`› ${buffer}`)
+    // A dialog takes the composer's place, as the CLIs draw theirs, until it is answered.
+    if (dialog) return
+    const rows = composerLines()
+    process.stdout.write(rows.join('\r\n'))
+    composerRows = rows.reduce((sum, row) => sum + rowsOf(row), 0)
   }
   const draw = () => { eraseComposer(); drawComposer() }
   /** The conversation, written above the composer. `text` ends at the start of a line. */
   const say = (text) => { eraseComposer(); process.stdout.write(text); drawComposer() }
-  // Out of the browser, back to the composer: the pager's alternate screen left, or the dimmed composer
-  // and its footer cleared. Enter rewinds on the way out.
-  const leaveBrowsing = (rewound) => {
-    if (bottom.pager) process.stdout.write('\x1b[?1049l')
-    else eraseComposer()
-    bottom = null
+  // A resize redraws the whole frame, as the TUIs do: the composer measured at the old width cannot be
+  // taken back row by row.
+  process.stdout.on?.('resize', () => {
+    if (bottom?.pager || dialog) return
+    process.stdout.write('\x1b[H\x1b[2J')
     composerRows = 0
-    if (rewound) process.stdout.write('\r\x1b[2K(rewound to an earlier prompt)\r\n')
     drawComposer()
+  })
+  // Out of the browser, back to the composer: the pager's alternate screen left, or the dimmed composer
+  // and its footer redrawn. Enter rewinds on the way out.
+  const leaveBrowsing = (rewound) => {
+    if (bottom.pager) { process.stdout.write('\x1b[?1049l'); bottom = null }
+    else { eraseComposer(); bottom = null; composerRows = 0 }
+    if (rewound) say('(rewound to an earlier prompt)\r\n')
+    else draw()
   }
   process.stdout.write(`\x1b[?2004h${engine === 'claude' ? '✻ Welcome to Claude Code (fake)' : '>_ OpenAI Codex (fake)'}\r\n`)
   process.stdout.write(`  session ${sessionId}${resumed ? ' (resumed)' : ''}\r\n\r\n`)
@@ -382,7 +474,6 @@ export async function run(engine, config) {
   // The question dialog `!ask` draws, as the real CLIs draw theirs (the parser's fixtures,
   // src/lib/__fixtures__/question-single.txt and question-codex.txt). Claude takes a digit as the
   // choice; Codex moves its cursor on a digit and takes Enter; Esc cancels either.
-  let dialog = null
   // What a person pasted as notes on the option Codex then submitted, for the answer to say.
   let notes = ''
   const QUESTION = 'Which drink would you like?'
@@ -635,6 +726,16 @@ export async function run(engine, config) {
       await finish(`answer ${turn}: ${prompt}`)
       return
     }
+    if (engine === 'claude' && directive?.[1] === 'config') {
+      bottom = configScreen()
+      await finish(`answer ${turn}: ${prompt}`)
+      return
+    }
+    if (engine === 'codex' && directive?.[1] === 'center') {
+      bottom = centerScreen()
+      await finish(`answer ${turn}: ${prompt}`)
+      return
+    }
     if (engine === 'codex' && directive?.[1] === 'overlay') {
       bottom = overlayBottom(prompt, `answer ${turn}: ${prompt}`)
       finish(`answer ${turn}: ${prompt}`)
@@ -688,6 +789,22 @@ export async function run(engine, config) {
       if (!rest) return
       chunk = rest
     }
+    if (bottom?.screen) {
+      // Claude Code's settings take a paste as what to search for, and Enter or Space change the highlighted
+      // setting; Codex's command center opens the highlighted task on Enter. Esc closes either.
+      let rest = ''
+      for (const token of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[0-9;]*[A-Za-z~]|\x1b|[\s\S]/g) ?? []) {
+        if (!bottom?.screen) { rest += token; continue }
+        if (token === '\x1b') { eraseComposer(); bottom = null; drawComposer() }
+        else if (bottom.config && token.startsWith('\x1b[200~')) { bottom.query += token.slice(6).replace(/\x1b\[201~$/, ''); draw() }
+        else if (bottom.config && (token === '\r' || token === ' ')) {
+          const [name] = SETTINGS.find(([setting]) => setting.toLowerCase().includes(bottom.query.toLowerCase())) ?? []
+          if (name) say(`(${name} changed)\r\n`)
+        } else if (bottom.center && token === '\r') { eraseComposer(); bottom = null; say('(opened Task 2)\r\n') }
+      }
+      if (!rest) return
+      chunk = rest
+    }
     if (bottom?.search) {
       // As each engine takes input while searching its prompt history. A paste and typing extend the
       // search. Claude Code's Enter SENDS the earlier prompt found (2.1.289, historySearch:execute), its Esc
@@ -730,10 +847,24 @@ export async function run(engine, config) {
       if (!rest) return
       chunk = rest
     }
-    for (const part of chunk.split(/(\x1b\[20[01]~|\r|\n|\x03)/)) {
+    for (const part of chunk.split(/(\x1b\[20[01]~|\x1b\[[0-9;]*[A-Za-z~]|\x1b|\x7f|\r|\n|\x03)/)) {
       if (part === '\x1b[200~') { pasting = true; continue }
       if (part === '\x1b[201~') { pasting = false; continue }
       if (pasting && (part === '\r' || part === '\n')) { buffer += '\n'; continue }
+      if (!pasting && part.startsWith('\x1b')) {
+        // Esc puts the suggestions away, the draft kept; other keys move nothing here.
+        const popup = suggestions(buffer)
+        if (part === '\x1b' && popup) { dismissed = popup.token; draw() }
+        continue
+      }
+      if (!pasting && part === '\x7f') { buffer = buffer.slice(0, -1); draw(); continue }
+      if (!pasting && (part === '\r' || part === '\n') && suggestions(buffer)) {
+        // Enter with suggestions open takes the highlighted one into the draft, and sends nothing.
+        const popup = suggestions(buffer)
+        buffer = `${buffer.slice(0, buffer.length - popup.token.length)}${popup.token.startsWith('@') ? '@' : ''}${popup.found[0][0]} `
+        draw()
+        continue
+      }
       if (part === '\x03') {
         // Ctrl-C ends a running turn, and empties the composer either way.
         buffer = ''

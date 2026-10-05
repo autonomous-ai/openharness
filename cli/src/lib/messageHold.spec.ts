@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { isMessageHold, messageHold, messageHoldText, type MessageHold } from './messageHold.js'
+import { isMessageHold, messageHold, messageHoldText, passingHold, type MessageHold } from './messageHold.js'
 import {
   CLAUDE_PROMPT, CLAUDE_REWIND_CONFIRM, CLAUDE_REWIND_LIST, CODEX_BROWSING_FULLSCREEN, CODEX_BROWSING_SCROLLBACK, CODEX_PROMPT,
 } from './__fixtures__/rewindPickers.js'
@@ -122,7 +122,6 @@ describe('what a message is not typed into', () => {
     expect(messageHold('claude', CLAUDE_PROMPT)).toBeNull()
     expect(messageHold('codex', CODEX_PROMPT)).toBeNull()
     expect(messageHold('claude', `✶ Thinking… (esc to interrupt)\n${CLAUDE_PROMPT}`)).toBeNull()
-    expect(messageHold('claude', null)).toBeNull()
     expect(messageHold('claude', `${CLAUDE_PROMPT}\n  Starting MCP servers (1/3)…`)).toBeNull()
     // The conversation's own words are not the view's footer, nor a menu.
     expect(messageHold('claude', `⏺ Showing detailed transcript is what ctrl+o does.\n${CLAUDE_PROMPT}`)).toBeNull()
@@ -186,9 +185,30 @@ describe('the engines\' own screens that take the composer\'s place', () => {
   })
 })
 
+describe('anything but the engine\'s own composer, for Claude Code and Codex', () => {
+  it('is refused: a screen never seen, a popup over the composer, a pane not drawn yet or not read', () => {
+    // Claude Code's settings (/config), which the daemon has no name for.
+    expect(messageHold('claude', `${'─'.repeat(80)}\n Settings:  Status  Config  Usage\n\n ⌕ Search settings…\n\n ❯ Auto-compact   true\n\n Enter/Space to change · Esc to close`)).toBe('prompt_hidden')
+    // Codex's agent command center.
+    expect(messageHold('codex', '  Agent command center\n  › ○ Task 12      Inactive\n    ○ Task 11      Inactive\n\n  ? help  esc back  ↑/↓ move  enter open')).toBe('prompt_hidden')
+    expect(messageHold('codex', ['  /model     choose what model', '\u001b[1;7m› /memories  configure memory\u001b[0m', '', '\u001b[1m›\u001b[0m /m', '', '  ? for shortcuts'].join('\n'))).toBe('popup_open')
+    expect(messageHold('claude', '')).toBe('prompt_hidden')
+    expect(messageHold('claude', null)).toBe('screen_unreadable')
+    expect(messageHold('codex', null)).toBe('screen_unreadable')
+    // Another engine is read for its prompts only: an unknown screen or an unread pane is typed into as before.
+    expect(messageHold('cursor', '')).toBeNull()
+    expect(messageHold('cursor', null)).toBeNull()
+  })
+
+  it('waits a little for the passing ones, an engine starting or a pane read once in vain, before refusing', () => {
+    expect(['prompt_hidden', 'screen_unreadable'].every(passingHold)).toBe(true)
+    expect(['permission_open', 'popup_open', 'menu_open', 'team_waiting_user'].some(passingHold)).toBe(false)
+  })
+})
+
 describe('what the person is told', () => {
   const holds: MessageHold[] = ['permission_open', 'question_open', 'menu_open', 'rewind_picker_open', 'transcript_open',
-    'search_open', 'trust_open', 'update_prompt_open', 'model_prompt_open', 'sign_in_open']
+    'search_open', 'trust_open', 'update_prompt_open', 'model_prompt_open', 'sign_in_open', 'popup_open', 'prompt_hidden', 'screen_unreadable']
 
   it('names the engine, what is open, and exactly what lets the message through', () => {
     expect(holds.map((hold) => messageHoldText('claude', hold))).toEqual([
@@ -202,7 +222,11 @@ describe('what the person is told', () => {
       'Claude Code is asking whether to update. Answer it in its terminal, then send the message again.',
       'Claude Code is asking whether to switch to a new model. Answer it in its terminal, then send the message again.',
       'Claude Code is asking how to sign in. Sign in in its terminal, then send the message again.',
+      'Claude Code has a list of suggestions open in its prompt, where Enter would pick one. Close it with Esc in its terminal, then send the message again.',
+      'Claude Code isn\'t showing its prompt; finish what\'s on its screen in its terminal, then send the message again.',
+      'Claude Code\'s screen could not be read, so the message was not typed. Send it again in a moment.',
     ])
+    expect(messageHoldText('codex', 'prompt_hidden')).toBe('Codex isn\'t showing its prompt; finish what\'s on its screen in its terminal, then send the message again.')
     expect(messageHoldText('codex', 'transcript_open')).toBe('Codex is showing its transcript (ctrl+t), where a message is not typed. Close it with q in its terminal, then send the message again.')
     expect(messageHoldText('codex', 'search_open')).toBe('Codex has a search open, where a message would become what it searches for. Close it with Esc in its terminal, then send the message again.')
     expect(messageHoldText('codex', 'update_prompt_open')).toBe('Codex is asking whether to update. Answer it in its terminal, then send the message again.')
