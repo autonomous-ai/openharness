@@ -279,6 +279,10 @@ export class RemoteRelayPool {
   /** Warm background pools per machine, each holding one lingering session nobody is attached to —
    *  see acquireIsolated(). A pool is either here (idle) or in a client's hands, never both. */
   private readonly idleIsolated = new Map<string, RemoteRelayPool[]>()
+  /** Per machine, the group counters this pool's sessions opened, carried to its next session so a
+   *  relay cannot replay an old broadcast into it (relayClient.ts `groupSeen`). This pool's alone: the
+   *  background pools are clients of their own, sent every broadcast as this one is. */
+  private readonly groupSeen = new Map<string, Map<string, number>>()
 
   constructor(
     private readonly auth: AuthSessionManager,
@@ -458,7 +462,9 @@ export class RemoteRelayPool {
     // this sink turns every later emit — including the one terminate() raises while CONNECTING — into a
     // plain 'close', which is what the owners actually clean up on.
     ws.on('error', () => { /* handled via 'close' */ })
-    const crypto = new RelaySessionCrypto({ machineId, selfIdentity: this.selfIdentity, peerPub: b64d(peer.pub) })
+    let groupSeen = this.groupSeen.get(machineId)
+    if (!groupSeen) { groupSeen = new Map(); this.groupSeen.set(machineId, groupSeen) }
+    const crypto = new RelaySessionCrypto({ machineId, selfIdentity: this.selfIdentity, peerPub: b64d(peer.pub), groupSeen })
     const entry: Entry = {
       ws,
       crypto,
