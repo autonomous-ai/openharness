@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from arm_boot import digest
-from arm_session import runtime_identity, stage
+from arm_session import fixture_identity, runtime_identity, stage
 
 
 class ARMFixture(unittest.TestCase):
@@ -62,6 +62,58 @@ class ARMFixture(unittest.TestCase):
         self.assertEqual(receipt['runtime']['architecture'], 'aarch64')
         self.assertIn('chromium-browser', (destination / 'usr/bin/hn-browser').read_text())
         self.assertNotIn('--no-sandbox', (destination / 'usr/bin/hn-browser').read_text())
+
+
+class PortableFixture(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.folder = Path(self.temp.name)
+        kernel = bytearray(64)
+        kernel[24:32] = (4).to_bytes(8, 'little')
+        kernel[56:60] = b'ARM\x64'
+        (self.folder / 'Image').write_bytes(kernel)
+        (self.folder / 'guest.raw.zst').write_bytes(b'checksum fixture; never booted')
+        self.info = {'schema': 1, 'status': 'prepared', 'source_commit': 'a' * 40,
+                     'raw_disk': {'bytes': 6 * 1024 ** 3, 'sha256': 'b' * 64},
+                     'artifacts': {p.name: {'bytes': p.stat().st_size, 'sha256': digest(p)}
+                                   for p in self.folder.iterdir()}}
+        self.save()
+
+    def save(self):
+        (self.folder / 'manifest.json').write_text(json.dumps(self.info))
+
+    def test_requires_prepared_exact_source(self):
+        fixture_identity(self.folder, 'a' * 40)
+        with self.assertRaisesRegex(ValueError, 'exact clean source'):
+            fixture_identity(self.folder, 'c' * 40)
+        self.info['status'] = 'passed'
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'prepared fixture'):
+            fixture_identity(self.folder, 'a' * 40)
+
+    def test_rejects_corruption_and_symlinks_before_boot(self):
+        disk = self.folder / 'guest.raw.zst'
+        original = disk.read_bytes()
+        disk.write_bytes(b'changed')
+        with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+            fixture_identity(self.folder, 'a' * 40)
+        other = self.folder / 'other'
+        other.write_bytes(original)
+        disk.unlink()
+        disk.symlink_to(other)
+        with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+            fixture_identity(self.folder, 'a' * 40)
+
+    def test_rejects_unbounded_disk_and_other_artifact_names(self):
+        self.info['raw_disk']['bytes'] = 1024 ** 4
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'private disk identity'):
+            fixture_identity(self.folder, 'a' * 40)
+        self.info['artifacts']['../other'] = self.info['artifacts'].pop('Image')
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'kernel and compressed private disk'):
+            fixture_identity(self.folder, 'a' * 40)
 
 
 if __name__ == '__main__':

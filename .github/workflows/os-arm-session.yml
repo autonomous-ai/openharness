@@ -2,6 +2,11 @@ name: Harness OS ARM graphical session
 
 on:
   workflow_dispatch:
+    inputs:
+      prepare_only:
+        description: 'Prepare a private fixture for accelerated local acceptance; does not claim a passing VM test'
+        type: boolean
+        default: true
   push:
     branches: ['os-polish/arm-graphical']
     paths:
@@ -48,10 +53,14 @@ jobs:
           make -C os check
       - name: Build the exact native Harness runtime
         run: bash os/tools/build-runtime.sh
-      - name: Fresh Fedora session with signed Asahi kernel
+      - name: Prepare the fresh fixture or exercise the full graphical session
+        env:
+          PREPARE_ONLY: ${{ github.event_name == 'push' || inputs.prepare_only }}
         run: |
+          args=()
+          if [[ "$PREPARE_ONLY" == true ]]; then args+=(--prepare-only); fi
           python3 os/tests/arm_session.py --runtime os/work/runtime \
-            --output os/test-results/arm-session
+            --output os/test-results/arm-session "${args[@]}"
       - name: Retain graphical session evidence only
         if: always()
         uses: actions/upload-artifact@v6
@@ -59,7 +68,21 @@ jobs:
           name: harness-arm-graphical-session
           path: |
             os/work/runtime/source.json
-            os/test-results/arm-session/
+            os/test-results/arm-session/receipt.json
+            os/test-results/arm-session/host.log
+            os/test-results/arm-session/packages.tsv
+            os/test-results/arm-session/agent-lock.json
+            os/test-results/arm-session/first-boot/
+            os/test-results/arm-session/second-boot/
           if-no-files-found: error
           retention-days: 14
           compression-level: 6
+      - name: Retain the private fixture for accelerated acceptance
+        if: success() && (github.event_name == 'push' || inputs.prepare_only)
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-arm-session-fixture
+          path: os/test-results/arm-session/fixture/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0

@@ -125,9 +125,10 @@ class SessionVM(VM):
     def start(self, offline=False):
         self.started = time.monotonic()
         self.boot_count += 1
-        accelerator = 'kvm' if os.access('/dev/kvm', os.R_OK | os.W_OK) else 'tcg'
+        accelerator = ('hvf' if platform.system() == 'Darwin' and platform.machine() == 'arm64'
+                       else 'kvm' if os.access('/dev/kvm', os.R_OK | os.W_OK) else 'tcg')
         self.accelerator = accelerator
-        cpu = 'host' if accelerator == 'kvm' else 'cortex-a76'
+        cpu = 'host' if accelerator in ['kvm', 'hvf'] else 'cortex-a76'
         args = ['qemu-system-aarch64', '-machine', 'virt,gic-version=3', '-accel', accelerator,
                 '-cpu', cpu, '-smp', '2', '-m', '3072', '-nodefaults', '-display', 'none', '-no-reboot',
                 '-kernel', str(self.kernel), '-append', 'root=/dev/vda rw console=tty0 console=ttyAMA0 loglevel=3 panic=1',
@@ -254,24 +255,147 @@ def exercise(vm, result):
         raise RuntimeError('Guest did not shut down cleanly')
 
 
+def exercise_reboot(machine, receipt, output):
+    machine.start()
+    machine.wait_user('systemctl --user is-active --quiet hn-screen && hn list-panes >/dev/null', 120)
+    machine.frame('08-restored', 'harness', 90)
+    machine.keyboard('reboot')
+    for name, expected in receipt['projects'].items():
+        data = machine.read_file(receipt['project'] + '/' + name)
+        target = output / 'second-boot' / name
+        target.write_bytes(data)
+        if digest(target) != expected:
+            raise ValueError('Project changed across cold boot: ' + name)
+    machine.user('test "$(python3 ' + shlex.quote(receipt['project'] + '/hello.py') + ')" = "harness arm ready"')
+    machine.command('sync; systemctl poweroff --no-block')
+    machine.process.wait(timeout=60)
+    if machine.process.returncode != 0:
+        raise RuntimeError('Second boot did not shut down cleanly')
+    receipt['checks'].append('Second cold boot reaches Harness, accepts graphical typing and preserves byte-identical working projects')
+
+
+def failure_evidence(machine):
+    if not machine:
+        return
+    try:
+        machine.screenshot('failure')
+        machine.command('ps -eo pid,ppid,stat,pcpu,pmem,wchan:32,comm; '
+                        'journalctl -b --no-pager -n 250; '
+                        'cat /home/me/.local/state/harness-os/display.log; '
+                        'tail -n 80 /home/me/.local/share/opencode/log/*.log', check=False, timeout=30)
+    except (OSError, RuntimeError, TimeoutError):
+        pass
+
+
+def fixture_identity(folder, source):
+    """A portable fixture is a fresh test disk, never a hardware installer."""
+    manifest = folder / 'manifest.json'
+    if manifest.is_symlink() or not manifest.is_file():
+        raise ValueError('Missing regular fixture manifest.')
+    info = json.loads(manifest.read_text())
+    if info.get('schema') != 1 or info.get('status') != 'prepared' or info.get('source_commit') != source:
+        raise ValueError('Use a prepared fixture from this exact clean source commit.')
+    if set(info.get('artifacts', {})) != {'Image', 'guest.raw.zst'}:
+        raise ValueError('The fixture must contain its kernel and compressed private disk.')
+    for name, item in info['artifacts'].items():
+        path = folder / name
+        if (path.is_symlink() or not path.is_file() or path.stat().st_size != item['bytes'] or
+                digest(path) != item['sha256']):
+            raise ValueError('Fixture checksum mismatch: ' + name)
+    disk = info.get('raw_disk', {})
+    if disk.get('bytes') != 6 * 1024 ** 3 or not re.fullmatch(r'[a-f0-9]{64}', disk.get('sha256', '')):
+        raise ValueError('Unexpected private disk identity.')
+    with (folder / 'Image').open('rb') as handle:
+        check_arm_image(handle.read(64))
+    return info
+
+
+def prepare_fixture(disk, image, output, receipt, run):
+    folder = output / 'fixture'
+    folder.mkdir()
+    shutil.copy2(image, folder / 'Image')
+    run(['zstd', '-T2', '-3', disk, '-o', folder / 'guest.raw.zst'], timeout=180)
+    info = {**receipt, 'schema': 1, 'status': 'prepared',
+            'raw_disk': {'bytes': disk.stat().st_size, 'sha256': digest(disk)},
+            'artifacts': {name: {'bytes': (folder / name).stat().st_size, 'sha256': digest(folder / name)}
+                          for name in ['Image', 'guest.raw.zst']}}
+    (folder / 'manifest.json').write_text(json.dumps(info, indent=2) + '\n')
+    fixture_identity(folder, receipt['source_commit'])
+    receipt['status'] = 'prepared'
+    receipt['fixture'] = info['artifacts']
+    print('Fresh private fixture prepared; graphical acceptance has not run', flush=True)
+
+
+def run_fixture(folder, output, source):
+    info = fixture_identity(folder, source)
+    receipt = {**info, 'status': 'running', 'checks': [], 'started_at_unix': time.time(),
+               'fixture_manifest_sha256': digest(folder / 'manifest.json')}
+    machine = None
+    with tempfile.TemporaryDirectory(prefix='harness-arm-acceptance-') as temporary:
+        disk = Path(temporary) / 'guest.raw'
+        try:
+            subprocess.run(['zstd', '-d', '--sparse', str(folder / 'guest.raw.zst'), '-o', str(disk)],
+                           check=True, timeout=180)
+            if disk.stat().st_size != info['raw_disk']['bytes'] or digest(disk) != info['raw_disk']['sha256']:
+                raise ValueError('Decompressed disk identity mismatch.')
+            machine = SessionVM(output / 'first-boot', disk, folder / 'Image')
+            exercise(machine, receipt)
+            machine.close()
+            machine = SessionVM(output / 'second-boot', disk, folder / 'Image')
+            exercise_reboot(machine, receipt, output)
+            receipt['status'] = 'passed'
+            print('Fresh Fedora/Asahi graphical session and reboot passed', flush=True)
+        except BaseException as error:
+            receipt.update(status='failed', error=str(error))
+            failure_evidence(machine)
+            raise
+        finally:
+            try:
+                if machine:
+                    machine.close()
+            except (OSError, RuntimeError) as error:
+                receipt.update(status='failed', cleanup_errors=[str(error)])
+                raise
+            finally:
+                receipt['finished_at_unix'] = time.time()
+                (output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--runtime', type=Path, required=True)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument('--runtime', type=Path, help='Build a fresh fixture on native ARM Linux.')
+    inputs.add_argument('--fixture', type=Path, help='Exercise an exact-source prepared fixture on ARM Linux or macOS.')
+    parser.add_argument('--prepare-only', action='store_true', help='Prepare a private fixture without claiming acceptance.')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    if platform.system() != 'Linux' or platform.machine() != 'aarch64' or os.geteuid() == 0:
-        parser.error('Use an ordinary user on a native ARM Linux runner.')
-    for name in ['docker', 'rpm', 'rpmkeys', 'gpg', 'bsdtar', 'zstd', 'mkfs.ext4', 'qemu-system-aarch64', 'sudo', 'tesseract']:
+    if os.geteuid() == 0:
+        parser.error('Use an ordinary user.')
+    if args.fixture and args.prepare_only:
+        parser.error('--prepare-only requires --runtime.')
+    if args.runtime and (platform.system(), platform.machine()) != ('Linux', 'aarch64'):
+        parser.error('Build the fixture on a native ARM Linux runner.')
+    if args.fixture and (platform.system(), platform.machine()) not in [('Linux', 'aarch64'), ('Darwin', 'arm64')]:
+        parser.error('Exercise the fixture on ARM Linux or Apple Silicon macOS.')
+    required = ['zstd']
+    if args.runtime:
+        required += ['docker', 'rpm', 'rpmkeys', 'gpg', 'bsdtar', 'mkfs.ext4', 'sudo']
+    if not args.prepare_only:
+        required += ['qemu-system-aarch64', 'tesseract']
+        from PIL import Image  # noqa: F401 — fail before preparing a disk if unavailable.
+    for name in required:
         if not shutil.which(name):
             parser.error('Missing tool: ' + name)
-    from PIL import Image  # noqa: F401 — fail before preparing a disk if unavailable.
     source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     if subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip():
         parser.error('Commit the exact source before building a traceable VM.')
-    runtime = args.runtime.resolve()
-    runtime_identity(runtime, source)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
+    if args.fixture:
+        run_fixture(args.fixture.resolve(), output, source)
+        return
+    runtime = args.runtime.resolve()
+    runtime_identity(runtime, source)
     work = Path(tempfile.mkdtemp(prefix='harness-arm-session-', dir=os.environ.get('RUNNER_TEMP')))
     container = work.name
     lock = json.loads(Path(__file__).with_name('arm-boot.lock.json').read_text())
@@ -348,37 +472,20 @@ def main():
             handle.truncate(6 * 1024 ** 3)
         run(['sudo', 'mkfs.ext4', '-F', '-q', '-L', 'HARNESS_ARM_TEST', '-d', root, disk], timeout=180)
         receipt['disk'] = {'virtual_bytes': disk.stat().st_size, 'allocated_bytes': disk.stat().st_blocks * 512}
+        if args.prepare_only:
+            prepare_fixture(disk, image, output, receipt, run)
+            return
         print('Boot into Wi-Fi, use an agent, open its page, and return to Harness', flush=True)
         machine = SessionVM(output / 'first-boot', disk, image)
         exercise(machine, receipt)
         machine.close()
         machine = SessionVM(output / 'second-boot', disk, image)
-        machine.start()
-        machine.wait_user('systemctl --user is-active --quiet hn-screen && hn list-panes >/dev/null', 120)
-        machine.frame('08-restored', 'harness', 90)
-        machine.keyboard('reboot')
-        for name, expected in receipt['projects'].items():
-            data = machine.read_file(receipt['project'] + '/' + name)
-            target = output / 'second-boot' / name
-            target.write_bytes(data)
-            if digest(target) != expected:
-                raise ValueError('Project changed across cold boot: ' + name)
-        machine.user('test "$(python3 ' + shlex.quote(receipt['project'] + '/hello.py') + ')" = "harness arm ready"')
-        machine.command('sync; systemctl poweroff --no-block')
-        machine.process.wait(timeout=60)
-        if machine.process.returncode != 0:
-            raise RuntimeError('Second boot did not shut down cleanly')
-        receipt['checks'].append('Second cold boot reaches Harness, accepts graphical typing and preserves byte-identical working projects')
+        exercise_reboot(machine, receipt, output)
         receipt['status'] = 'passed'
         print('Fresh Fedora/Asahi graphical session and reboot passed', flush=True)
     except BaseException as error:
         receipt.update(status='failed', error=str(error))
-        if machine:
-            try:
-                machine.screenshot('failure')
-                machine.command('journalctl -b --no-pager -n 250; cat /home/me/.local/state/harness-os/display.log', check=False, timeout=20)
-            except (OSError, RuntimeError, TimeoutError):
-                pass
+        failure_evidence(machine)
         raise
     finally:
         cleanup = []

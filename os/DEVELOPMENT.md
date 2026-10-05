@@ -557,7 +557,7 @@ OpenCode to create a Python program and HTML counter, independently executes the
 program, clicks the counter in sandboxed native Chromium, and returns to the same
 agent with Super+b. A second cold boot must accept keyboard input and preserve
 the project's exact bytes. Receipts, framebuffer captures and logs survive failures;
-the private disk/container are removed. A passing run establishes this VM sequence
+the writable private disk/container are removed. A passing run establishes this VM sequence
 only, not hardware installation, GPU acceleration, suspend or Fedora recovery.
 
 ```sh
@@ -566,6 +566,28 @@ python3 os/tests/arm_session.py --runtime os/work/runtime \
 ```
 
 Use a native ARM Linux runner with the tools listed in `os-arm-session.yml`.
+The two recorded hosted ARM runs lacked KVM; the second TCG run reached Wi-Fi and
+accepted real keyboard input, but failed with a blank OpenCode pane. That failure
+is retained and is not graphical acceptance.
+
+The workflow defaults to `prepare_only=true`, which uploads an unbooted, compressed
+private test disk and kernel with their hashes and exact source identity. Its
+receipt says **prepared**, never **passed**. Download `harness-arm-session-fixture`
+from that run, check out its exact source commit, and run the unchanged acceptance
+on a native ARM Linux machine with KVM or an Apple Silicon Mac with HVF:
+
+```sh
+python3 os/tests/arm_session.py --fixture /path/to/harness-arm-session-fixture \
+  --output os/test-results/arm-session-local
+```
+
+This needs QEMU, zstd, Tesseract and Python with Pillow. The runner verifies both
+compressed and decompressed disk hashes, then boots a disposable writable copy.
+It records the accelerator, real agent/browser interaction and the second boot.
+The prepared fixture has an empty test password and must never be installed on
+hardware or published as an OS release. Preparation and acceptance have separate
+receipts. Set `prepare_only=false` to exercise the full sequence on the CI runner.
+
 Apple firmware provisioning, physical drivers, platform installation and Fedora
 update/recovery integration remain separate work before releasing this port.
 
