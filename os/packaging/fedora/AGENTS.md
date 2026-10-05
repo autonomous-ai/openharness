@@ -22,12 +22,19 @@ and running agents. Read `guide.md` and the shipped TUI reference before advisin
   later session; they must not kill the running agents or enable a second updater.
 - `harness-session` starts the session explicitly from a logged-in local console.
   Installing the package does not create users, change passwords or enable
-  autologin. The full image's provisioning is a separate responsibility.
+  autologin. The private `harness-session-setup enable --user USER --autologin`
+  path explicitly selects an existing local account and Fedora's greetd/PAM
+  login stack for the next boot. Read the setup section in `guide.md` first.
+  Preserve its recovery receipt, existing account authentication and SELinux
+  policy. `harness-session-setup disable` restores the previous login policy;
+  disable before removing the session RPM. Never overwrite conflicting settings.
 
 ## Network, tools and diagnosis
 
 - Fedora's NetworkManager owns networking. `hn-os wifi` opens the root-owned
-  network form through sudo; passwords stay in its masked input.
+  network form through sudo; passwords stay in its masked input. Explicit login
+  setup grants only that form's two exact commands to the selected user. Do not
+  add a global wheel grant or arbitrary sudo/polkit permission.
 - PipeWire owns audio. Clipboard tools are `wl-copy` and `wl-paste`.
 - Chromium is optional and remains sandboxed. Install ordinary task dependencies
   through Fedora's package manager; keep existing security policy enabled.

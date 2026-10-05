@@ -665,6 +665,68 @@ tests that older image, not product changes in the newer test checkout.
 Apple firmware provisioning, physical drivers, platform installation and Fedora
 update/recovery integration remain separate work before releasing this port.
 
+### Explicit Fedora login setup
+
+The private session RPM includes `harness-session-setup`, implemented separately
+in `fedora_session.py`. Installing the RPM remains passive. On an existing Fedora
+Asahi Minimal system, an administrator may install Fedora's `greetd` package and
+explicitly select an existing account with `enable --user USER --autologin`.
+The account must already have a usable recovery password and sudo permission to
+disable setup. The helper never creates accounts or edits their homes/profiles.
+
+Fedora's greetd package supplies PAM session setup, logind integration and its
+conditional SELinux policy. Its standard display-manager alias and graphical
+target handle tty1 ordering/conflicts. Harness adds one configuration, one service
+drop-in and one selected-user sudoers rule for the two exact Wi-Fi form commands.
+`visudo` validates that rule before activation. A durable receipt precedes changes;
+failure rolls them back, `disable` restores the exact previous target, and edited
+managed files are preserved for explicit conflict resolution. Enable and disable
+never start, stop or restart the current session; they affect the next boot.
+Other ttys and vendor login configuration remain intact.
+
+The Fedora 44 aarch64 `greetd-0.10.3-6.fc44` RPM has 1,355,071 bytes of regular-file
+payload (443,637 bytes downloaded); its matching SELinux package adds 10,359 bytes
+of payload (20,682 bytes downloaded). This is a PAM login daemon and text greeter,
+without another desktop environment. These measurements exclude already-shared
+Fedora dependencies and filesystem allocation; record the actual dependency
+transaction in native validation. The upstream source RPM and artifact hashes
+belong in the ignored validation receipt. Fedora's normal policy supplies the
+session's authenticated fallback and runtime directory instead of copying the
+VM fixture's empty-password/profile autostart into an existing installation.
+
+Run the focused portable contracts with:
+
+```sh
+python3 -m unittest discover -s os/tests -p 'test_fedora_session.py'
+python3 -m unittest discover -s os/tests -p 'test_fedora_package.py'
+```
+
+These exercise temporary-root transactions, account prerequisites, conflicting
+and edited configuration, interruption recovery and the passive RPM payload.
+They do not establish actual PAM authentication, SELinux enforcement or graphical
+boot. Those require the separate native Fedora VM sequence and ultimately real
+Apple hardware. With an exact-source immutable fixture, the private login driver
+normalizes only its disposable clone, installs signed Fedora login/SELinux
+packages, and requires enforcing policy after a cold boot:
+
+```sh
+python3 os/tests/fedora_session_vm.py \
+  --fixture /path/to/harness-arm-session-fixture \
+  --fixture-source FULL_IMAGE_PRODUCER_SHA \
+  --output os/test-results/fedora-session-login
+```
+
+It records the setup source separately from the image/runtime, tests QMP virtual
+keyboard password login and sudo, next-boot autologin, the two exact Wi-Fi forms,
+authenticated recovery and disable back to the prior console. It does not relax
+SELinux enforcement to pass. The candidate helper is overlaid onto the existing
+RPM fixture; the portable payload check separately covers its package exposure.
+
+The setup does not touch Apple partitioning, ESP/m1n1/U-Boot/GRUB,
+firmware, kernels or Asahi's speaker-safety configuration. Fedora/Asahi remains
+responsible for base-system updates and recovery; Super+u remains the verified
+per-user runtime update path described above.
+
 ### Native runtime updates in the ARM fixture
 
 The **Harness OS private runtime update fixtures** workflow builds native x86 and
