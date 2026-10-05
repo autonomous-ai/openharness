@@ -1774,7 +1774,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const typeTerminal = terminalControl.typeTerminal
   const keyTerminal = terminalControl.keyTerminal
   const validateTerminal = terminalControl.validateTerminal
-  const terminalGone = terminalControl.terminalGone
   // Persisted records are not trusted blindly. The process reconciler below adopts a matching live
   // runtime, replaces it immediately when PID/start-marker changed, and requires two successful misses
   // before removing it. Probe errors leave the registry untouched.
@@ -2073,7 +2072,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Following a session: its history read into its engine's normalizer, then its tail
   // (core/transcripts/attach.ts).
   const attach = createAttach({
-    terminalGone,
+    terminalGone: terminalControl.terminalGone,
     normalizers,
     watcher,
     cursorDiscovery,
