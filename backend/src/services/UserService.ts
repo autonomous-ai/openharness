@@ -38,6 +38,8 @@ interface SsoUserInput {
   autonomousEnv: AutonomousEnvironment
   name?: string
   roles?: string[]
+  /** The tags this sign-in arrived with; stored only if it creates the account (or claims a provisional row). */
+  signUpAttribution?: SignInAttribution
 }
 
 async function mergeProdProvisionalUser(provisional: User, user: User): Promise<void> {
@@ -76,6 +78,9 @@ export const userService = {
     const externalId = input.externalId.trim()
     const em = normalizeUserEmail(input.email)
     if (!externalId || !em) throw new Error('SSO profile is missing its subject or email')
+    const signUpAttribution = input.signUpAttribution
+      ? { signUpAttribution: { ...input.signUpAttribution, recordedAt: new Date() } }
+      : {}
     const wantAdmin = input.roles?.includes('admin') || ADMIN_EMAILS.has(em)
     let existing = await prisma.user.findUnique({ where: { email: em } })
 
@@ -92,7 +97,10 @@ export const userService = {
         }
       }
       const role = existing.role === 'admin' || wantAdmin ? 'admin' : 'user'
+      // Claiming a device's provisional row is this owner's first sign-in: the account starts here.
+      const claimsProvisional = isProvisionalUserEmail(existing.email)
       const data = {
+        ...(claimsProvisional ? signUpAttribution : {}),
         ...(existing.email !== em ? { email: em } : {}),
         ...(input.name && existing.name !== input.name ? { name: input.name } : {}),
         ...(existing.role !== role ? { role } : {}),
@@ -117,6 +125,7 @@ export const userService = {
       name: input.name,
       role: wantAdmin ? 'admin' : 'user',
       autonomousEnv: input.autonomousEnv,
+      ...signUpAttribution,
     }
     try {
       return await prisma.user.create({ data })
@@ -172,13 +181,14 @@ export const userService = {
     }
   },
 
-  /** Stamp a tagged sign-in: always the latest, and the first only while the user has none. */
+  /**
+   * Stamp a tagged sign-in as the latest. The acquisition (`signUpAttribution`) is written by
+   * `upsertFromSso` when the sign-in creates the account, never here.
+   */
   async recordSignInAttribution(userId: string, attribution: SignInAttribution): Promise<void> {
-    const recorded = { ...attribution, recordedAt: new Date() }
-    await prisma.user.update({ where: { id: userId }, data: { lastAttribution: recorded } })
-    await prisma.user.updateMany({
-      where: { id: userId, firstAttribution: { isSet: false } },
-      data: { firstAttribution: recorded },
+    await prisma.user.update({
+      where: { id: userId },
+      data: { lastAttribution: { ...attribution, recordedAt: new Date() } },
     })
   },
 

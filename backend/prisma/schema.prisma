@@ -40,10 +40,12 @@ model User {
   lastCountryCode String?
   lastCountryAt   DateTime?
   // The `utm_*` and `rid` a sign-in arrived with (lib/signInAttribution.ts), recorded by /api/auth/exchange.
-  // `firstAttribution` is the first tagged sign-in and is never rewritten — how the account was
-  // acquired; `lastAttribution` is the latest tagged one. Unset when no sign-in ever carried any.
-  firstAttribution SignInAttribution?
-  lastAttribution  SignInAttribution?
+  // `signUpAttribution` is the tags the account was created with — how it was acquired — written once,
+  // by the sign-in that created the row (or claimed a device's provisional row). Unset for an account
+  // created untagged or elsewhere, so a later tagged sign-in never claims the acquisition.
+  // `lastAttribution` is the latest tagged sign-in.
+  signUpAttribution SignInAttribution?
+  lastAttribution   SignInAttribution?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

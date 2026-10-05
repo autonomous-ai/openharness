@@ -1,7 +1,8 @@
 /**
  * Where a sign-in came from, as the marketing site tagged it. auth.autonomous.ai carries the
  * `utm_*` and `rid` it was reached with back onto our redirect_uri; the web callback page lifts
- * them off the URL and sends them with `/api/auth/exchange`, which records them on the user.
+ * them off the URL and sends them with `/api/auth/exchange`, which records them on the user: as
+ * `signUpAttribution` when that sign-in creates the account, and as `lastAttribution` every time.
  *
  * `/api/auth/exchange` is reachable by anyone holding a fresh code, so only the keys below are
  * read, each trimmed and capped — whatever passes here becomes a stored, reported value.

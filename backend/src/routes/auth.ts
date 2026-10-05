@@ -85,7 +85,12 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         const tokens = await exchangeCode(code, tx.verifier, tx.redirectUri, tx.autonomousEnv, tx.clientId)
         const token = tokens.access_token
         if (!token) throw new Error('sso response had no access_token')
-        const user = await authenticateAccessToken(token, tx.autonomousEnv)
+        // A sign-in that creates the account keeps its tags as the acquisition (`signUpAttribution`).
+        const user = await authenticateAccessToken(
+          token,
+          tx.autonomousEnv,
+          attribution ? { signUpAttribution: attribution } : {},
+        )
         logger.info('sso login', {
           userId: user.sub,
           email: user.email || '(empty)',
