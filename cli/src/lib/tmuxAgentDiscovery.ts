@@ -7,6 +7,7 @@
  */
 
 import { execFile } from 'node:child_process'
+import { patientExec } from './patientExec.js'
 import {
   agentAliasOwner,
   agentCommandOwnershipSnapshot,
@@ -88,6 +89,9 @@ const MISS_LIMIT = 2
 // The rule for "no server is running", shared with every other tmux read (lib/tmux.ts).
 export { isNoTmuxServerError } from './tmux.js'
 
+// A held event loop must not turn a timeout into an empty answer (patientExec.ts).
+const run = patientExec(execFile)
+
 function execText(
   command: string,
   args: string[],
@@ -95,7 +99,7 @@ function execText(
   env?: NodeJS.ProcessEnv,
 ): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
   return new Promise((resolve) => {
-    execFile(command, args, { timeout, ...(env && { env }) }, (err, stdout) => {
+    run(command, args, { timeout, ...(env && { env }) }, (err, stdout) => {
       if (err) { resolve({ ok: false, error: err.message }); return }
       resolve({ ok: true, stdout })
     })
@@ -159,6 +163,9 @@ export async function listTmuxPanes(owner: string = harnessPaneOwner(env.ADAPTER
     if (isNoTmuxServerError(result.error)) return { ok: true, panes: [] }
     return result
   }
+  // A running server has a pane at the least (it exits with its last session): a listing with no bytes
+  // in it is one that was lost, and read as an answer it says every agent's pane is gone.
+  if (!result.stdout) return { ok: false, error: 'tmux listed no panes' }
   return {
     ok: true,
     panes: parsePanes(result.stdout).filter((pane) => ownedHere(pane.owner ?? '', pane.tmuxSessionName, owner)),

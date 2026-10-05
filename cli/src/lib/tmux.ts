@@ -18,7 +18,12 @@ import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } fro
 import { psEnv } from './childLocale.js'
 import { nativeProcessImages } from './nativeProcessImages.js'
 import { neutralizePasteControls } from './pasteText.js'
+import { patientExec } from './patientExec.js'
 export { captureTmuxPane, tmuxCaptureArgs } from './tmuxCapture.js'
+
+// Every tmux and `ps` call here: a held event loop must not turn a timeout into an empty answer
+// (patientExec.ts).
+const run = patientExec(execFile)
 
 function cleanPaneTitle(title: string): string | null {
   const cleaned = title
@@ -32,7 +37,7 @@ function cleanPaneTitle(title: string): string | null {
 /** Current tmux pane titles keyed by pane id. AI CLIs update this with their live session title. */
 export function listPaneTitles(): Promise<Map<string, string>> {
   return new Promise((resolve) => {
-    execFile('tmux', ['list-panes', '-a', '-F', '#{pane_id}|#{pane_title}'], { timeout: 2000 }, (err, stdout) => {
+    run('tmux', ['list-panes', '-a', '-F', '#{pane_id}|#{pane_title}'], { timeout: 2000 }, (err, stdout) => {
       const titles = new Map<string, string>()
       if (err) { resolve(titles); return }
       for (const line of stdout.split('\n')) {
@@ -297,14 +302,16 @@ export function processRows(): Promise<ProcessRow[] | null> {
 
 async function readProcessRows(): Promise<ProcessRow[] | null> {
   const rows = await new Promise<ProcessRow[] | null>((resolve) => {
-    execFile('ps', ['-axo', 'pid=,ppid=,comm=,lstart=,args='], { timeout: 3000, env: psEnv() }, (err, stdout) => {
+    run('ps', ['-axo', 'pid=,ppid=,comm=,lstart=,args='], { timeout: 3000, env: psEnv() }, (err, stdout) => {
       if (err) { resolve(null); return }
       const rows: ProcessRow[] = []
       for (const line of stdout.split('\n')) {
         const row = parseProcessRow(line)
         if (row) rows.push(row)
       }
-      resolve(rows)
+      // `ps` lists itself at the least: a table with nobody in it is a read that failed, and taken for
+      // an answer it says every engine on the machine has exited.
+      resolve(rows.length ? rows : null)
     })
   })
   return rows ? liveProcessRows(repairMangledRows(rows)) : null
@@ -313,8 +320,11 @@ async function readProcessRows(): Promise<ProcessRow[] | null> {
 function execText(command: string, args: string[], timeout: number): Promise<string | null> {
   return new Promise((resolve) => {
     // `lsof -p pid1,pid2` exits 1 when even one process disappears or is inaccessible, while still
-    // returning complete records for the surviving PIDs. Keep that usable partial snapshot.
-    execFile(command, args, { timeout }, (err, stdout) => resolve(err && !stdout ? null : stdout))
+    // returning complete records for the surviving PIDs. Keep that usable partial snapshot. Node's own
+    // timeout, for a deadline shared across calls: `killed` without an error is that timeout throwing
+    // away an answer that had arrived (patientExec.ts), so it is no answer, not an empty one.
+    let child: { killed?: boolean } | undefined
+    child = execFile(command, args, { timeout }, (err, stdout) => resolve((err && !stdout) || child?.killed ? null : stdout))
   })
 }
 
@@ -482,7 +492,7 @@ let knownServer: number | null = null
 function isTmuxProcess(pid: number): Promise<boolean> {
   try { process.kill(pid, 0) } catch { return Promise.resolve(false) }
   return new Promise((resolve) => {
-    execFile('ps', ['-o', 'comm=', '-p', String(pid)], { timeout: 2_000, env: psEnv() }, (err, stdout) => {
+    run('ps', ['-o', 'comm=', '-p', String(pid)], { timeout: 2_000, env: psEnv() }, (err, stdout) => {
       resolve(!err && basename(String(stdout ?? '').trim()) === 'tmux')
     })
   })
@@ -497,7 +507,7 @@ export async function rememberTmuxServer(): Promise<void> {
     try { process.kill(knownServer, 0); return } catch { knownServer = null }
   }
   await new Promise<void>((resolve) => {
-    execFile('tmux', ['display-message', '-p', '#{pid}'], { timeout: 2_000 }, (err, stdout) => {
+    run('tmux', ['display-message', '-p', '#{pid}'], { timeout: 2_000 }, (err, stdout) => {
       const pid = Number(String(stdout ?? '').trim())
       if (!err && Number.isSafeInteger(pid) && pid > 0) knownServer = pid
       resolve()
@@ -534,11 +544,13 @@ export function forgetTmuxServer(): void { knownServer = null }
  */
 function panePidLookup(pane: string, revived = false): Promise<number | 'missing' | null> {
   return new Promise((resolve) => {
-    execFile('tmux', ['display-message', '-p', '-t', pane, '#{pane_pid}'], { timeout: 2000 }, (err, stdout, stderr) => {
+    run('tmux', ['display-message', '-p', '-t', pane, '#{pane_pid}'], { timeout: 2000 }, (err, stdout, stderr) => {
       const text = String(stdout ?? '').trim()
       const pid = Number(text)
       if (!err && Number.isSafeInteger(pid) && pid > 0) resolve(pid)
-      else if (!err && text === '') resolve('missing')
+      // A pane tmux does not know is an empty LINE: tmux always ends its answer with a newline, and no
+      // bytes at all is an answer that was lost (patientExec.ts), never "no such pane".
+      else if (!err && text === '' && String(stdout ?? '') !== '') resolve('missing')
       else if (err && /can't find pane/.test(String(stderr ?? ''))) resolve('missing')
       else if (err && isNoTmuxServerError(String(stderr ?? ''))) {
         // A server whose socket was removed is still running this pane: ask it back, then read again.
@@ -1086,7 +1098,7 @@ function sleep(ms: number): Promise<void> {
 
 function tmuxEnter(pane: string): Promise<boolean> {
   return new Promise((resolve) => {
-    execFile('tmux', ['send-keys', '-t', pane, 'Enter'], { timeout: 2000 }, (err) => {
+    run('tmux', ['send-keys', '-t', pane, 'Enter'], { timeout: 2000 }, (err) => {
       if (err) console.error(`[tmux] Enter to ${pane} failed:`, err.message)
       resolve(!err)
     })
@@ -1114,7 +1126,7 @@ function tmuxLoadBuffer(name: string, content: string): Promise<boolean> {
  */
 export function setPaneMouseOn(pane: string): Promise<void> {
   return new Promise((resolve) => {
-    execFile('tmux', ['set-option', '-t', pane, 'mouse', 'on'], { timeout: 2_000 }, () => resolve())
+    run('tmux', ['set-option', '-t', pane, 'mouse', 'on'], { timeout: 2_000 }, () => resolve())
   })
 }
 
@@ -1126,7 +1138,7 @@ export function setPaneMouseOn(pane: string): Promise<void> {
  */
 export function setPaneWindowStyle(pane: string, style: string): Promise<boolean> {
   return new Promise((resolve) => {
-    execFile('tmux', ['set-option', '-w', '-t', pane, 'window-style', style], { timeout: 2_000 }, (error) => resolve(!error))
+    run('tmux', ['set-option', '-w', '-t', pane, 'window-style', style], { timeout: 2_000 }, (error) => resolve(!error))
   })
 }
 
@@ -1157,7 +1169,7 @@ export interface TmuxPaneState {
 export function tmuxPaneState(pane: string): Promise<TmuxPaneState | null> {
   return new Promise((resolve) => {
     const format = `#{pane_dead}|#{pane_dead_status}|#{${ENGINE_EXIT_PANE_OPTION}}|#{pane_current_command}`
-    execFile('tmux', ['display-message', '-p', '-t', pane, format], { timeout: 2_000 }, (err, stdout) => {
+    run('tmux', ['display-message', '-p', '-t', pane, format], { timeout: 2_000 }, (err, stdout) => {
       if (err) { resolve(null); return }
       const fields = stdout.trim().split('|')
       if (fields.length < 4) { resolve(null); return }
@@ -1189,7 +1201,7 @@ export function tmuxPaneInfo(pane: string, socket?: string): Promise<TmuxPaneInf
     const format = '#{pane_current_command}\n#{pane_pid}\n#{pane_tty}\n#{pane_current_path}'
     // `socket` names a server outright (tests pass their own); without it, the daemon's server.
     const args = [...(socket ? ['-S', socket] : []), 'display-message', '-p', '-t', pane, format]
-    execFile('tmux', args, { timeout: 2_000 }, (err, stdout) => {
+    run('tmux', args, { timeout: 2_000 }, (err, stdout) => {
       if (err) { resolve(null); return }
       const [command = '', pid = '', tty = '', ...path] = stdout.replace(/\n$/, '').split('\n')
       const n = Number(pid)
@@ -1208,13 +1220,13 @@ export function tmuxPaneInfo(pane: string, socket?: string): Promise<TmuxPaneInf
  */
 export function clearPaneRemainOnExit(pane: string): Promise<void> {
   return new Promise((resolve) => {
-    execFile('tmux', ['set-option', '-w', '-t', pane, 'remain-on-exit', 'off'], { timeout: 2_000 }, () => resolve())
+    run('tmux', ['set-option', '-w', '-t', pane, 'remain-on-exit', 'off'], { timeout: 2_000 }, () => resolve())
   })
 }
 
 function tmuxDeleteBuffer(name: string): Promise<void> {
   return new Promise((resolve) => {
-    execFile('tmux', ['delete-buffer', '-b', name], { timeout: 2_000 }, () => resolve())
+    run('tmux', ['delete-buffer', '-b', name], { timeout: 2_000 }, () => resolve())
   })
 }
 
@@ -1232,7 +1244,7 @@ async function tmuxPasteText(pane: string, content: string, bracketed: boolean):
   if (bracketed) args.push('-p')
   args.push('-d')
   const pasted = await new Promise<boolean>((resolve) => {
-    execFile('tmux', args, { timeout: 2_000 }, (err) => {
+    run('tmux', args, { timeout: 2_000 }, (err) => {
       if (err) console.error(`[tmux] paste-buffer to ${pane} failed:`, err.message)
       resolve(!err)
     })
@@ -1289,6 +1301,6 @@ export function pasteRawIntoTmux(pane: string, text: string): Promise<boolean> {
 
 export function sendKeyToTmux(pane: string, key: string): Promise<boolean> {
   return new Promise((resolve) => {
-    execFile('tmux', ['send-keys', '-t', pane, key], { timeout: 2000 }, (err) => resolve(!err))
+    run('tmux', ['send-keys', '-t', pane, key], { timeout: 2000 }, (err) => resolve(!err))
   })
 }

@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { patientExec } from './patientExec.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import {
   TERMINAL_ACTION_SUCCEEDED,
@@ -37,6 +38,10 @@ import { HARNESS_OWNER_OPTION, harnessPaneOwner } from './harnessSessionLabel.js
 import { DEFAULT_HOST_THEME, windowStyleOf, type HostTheme } from './hostTheme.js'
 import { isNoTmuxServerError, listTmuxPanes } from './tmuxAgentDiscovery.js'
 import { terminalRouteKey } from './terminalRuntime.js'
+
+// Every tmux call here: a held event loop must not turn a timeout into a failure, or into an empty
+// answer that reads as a pane that was never made (patientExec.ts).
+const run = patientExec(execFile)
 
 const TMUX_KEYS: Record<TerminalLogicalKey, string> = {
   enter: 'Enter',
@@ -145,7 +150,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // `killed`/`signal` come from execFile's own error shape, which ErrnoException alone does not declare.
     type ExecError = NodeJS.ErrnoException & { killed?: boolean; signal?: NodeJS.Signals | null }
     const result = await new Promise<{ error: ExecError | null; stdout: string; stderr: string }>((resolve) => {
-      execFile('tmux', args, { timeout: 5_000 }, (error, stdout, stderr) => resolve({
+      run('tmux', args, { timeout: 5_000 }, (error, stdout, stderr) => resolve({
         error: error as ExecError | null,
         stdout,
         stderr,
@@ -192,7 +197,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     for (const [key, value] of Object.entries(request.env ?? {})) args.push('-e', `${key}=${value}`)
     args.push('-t', runtime.paneId, ...request.command)
     const result = await new Promise<{ error: NodeJS.ErrnoException | null; stderr: string }>((resolve) => {
-      execFile('tmux', args, { timeout: 5_000 }, (error, _stdout, stderr) => resolve({
+      run('tmux', args, { timeout: 5_000 }, (error, _stdout, stderr) => resolve({
         error: error as NodeJS.ErrnoException | null,
         stderr,
       }))
@@ -210,7 +215,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // Discovered harnesses can share a tmux session with unrelated work. The
     // canonical pane id is the entire target; never widen this to kill-session.
     const ok = await new Promise<boolean>((resolve) => {
-      execFile('tmux', ['kill-pane', '-t', runtime.paneId], { timeout: 5_000 }, (error) => resolve(!error))
+      run('tmux', ['kill-pane', '-t', runtime.paneId], { timeout: 5_000 }, (error) => resolve(!error))
     })
     if (ok) return TERMINAL_ACTION_SUCCEEDED
     // The engine may have exited and removed its pane before the parallel PID
@@ -218,10 +223,11 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // Use all panes here: discovery deliberately hides sessions that were renamed
     // or created elsewhere, and their absence from discovery is not proof of exit.
     const absent = await new Promise<boolean>(resolve => {
-      execFile('tmux', ['list-panes', '-a', '-F', '#{pane_id}'], { timeout: 2_000 }, (error, stdout) => {
+      run('tmux', ['list-panes', '-a', '-F', '#{pane_id}'], { timeout: 2_000 }, (error, stdout) => {
         if (error) { resolve(isNoTmuxServerError(error.message)); return }
         const ids = stdout.trim().split('\n').filter(Boolean)
-        resolve(ids.every(id => /^%\d+$/.test(id)) && !ids.includes(runtime.paneId))
+        // A running server lists a pane at the least: an empty listing is a read that was lost, not proof.
+        resolve(ids.length > 0 && ids.every(id => /^%\d+$/.test(id)) && !ids.includes(runtime.paneId))
       })
     })
     if (absent) return TERMINAL_ACTION_SUCCEEDED
@@ -240,7 +246,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     const sessionId = await this.resolveSessionId(runtime.paneId)
     if (!sessionId) return terminalActionNotStarted('tmux session could not be resolved from pane')
     const ok = await new Promise<boolean>((resolve) => {
-      execFile('tmux', clearEnvArgs(sessionId, names), { timeout: 5_000 }, (error) => resolve(!error))
+      run('tmux', clearEnvArgs(sessionId, names), { timeout: 5_000 }, (error) => resolve(!error))
     })
     return legacyActionResult(ok, 'tmux clear environment')
   }
@@ -248,7 +254,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
   /** The id of the session that owns [paneId], or null when tmux will not say. */
   private resolveSessionId(paneId: string): Promise<string | null> {
     return new Promise((resolve) => {
-      execFile('tmux', ['display-message', '-p', '-t', paneId, '#{session_id}'], { timeout: 2_000 }, (error, stdout) => {
+      run('tmux', ['display-message', '-p', '-t', paneId, '#{session_id}'], { timeout: 2_000 }, (error, stdout) => {
         const value = stdout.trim()
         resolve(!error && /^\$\d+$/.test(value) ? value : null)
       })
@@ -265,7 +271,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
    */
   async holdOpen(runtime: TmuxRuntimeRef): Promise<TerminalActionResult> {
     const ok = await new Promise<boolean>((resolve) => {
-      execFile('tmux', ['set-option', '-w', '-t', runtime.paneId, 'remain-on-exit', 'on'], { timeout: 2_000 }, (error) => {
+      run('tmux', ['set-option', '-w', '-t', runtime.paneId, 'remain-on-exit', 'on'], { timeout: 2_000 }, (error) => {
         resolve(!error)
       })
     })
@@ -379,7 +385,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
 
   async setTitle(runtime: TmuxRuntimeRef, title: string): Promise<TerminalActionResult> {
     const ok = await new Promise<boolean>((resolve) => {
-      execFile('tmux', ['select-pane', '-t', runtime.paneId, '-T', title.slice(0, 200)], { timeout: 2_000 }, (error) => {
+      run('tmux', ['select-pane', '-t', runtime.paneId, '-T', title.slice(0, 200)], { timeout: 2_000 }, (error) => {
         resolve(!error)
       })
     })
@@ -389,7 +395,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
   async notify(runtime: TmuxRuntimeRef, title: string, body: string): Promise<TerminalActionResult> {
     const message = `${title.slice(0, 200)}: ${body.slice(0, 1_000)}`
     const ok = await new Promise<boolean>((resolve) => {
-      execFile('tmux', ['display-message', '-t', runtime.paneId, '--', message], { timeout: 2_000 }, (error) => {
+      run('tmux', ['display-message', '-t', runtime.paneId, '--', message], { timeout: 2_000 }, (error) => {
         resolve(!error)
       })
     })

@@ -61,10 +61,12 @@ esac
     ])
   })
 
-  it.each(['gone', 'present', 'unknown', 'malformed', 'no server', 'no socket'] as const)('verifies %s inventory after a failed pane-close reply', async mode => {
+  it.each(['gone', 'present', 'unknown', 'malformed', 'no server', 'no socket', 'empty'] as const)('verifies %s inventory after a failed pane-close reply', async mode => {
     const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-close-'))
     dirs.push(dir)
+    // `empty`: a listing with nothing in it, which a running server never gives: an answer that was lost.
     const inventory = mode === 'gone' ? "printf '%%43\\n'" : mode === 'present' ? "printf '%%42\\n'"
+      : mode === 'empty' ? 'exit 0'
       : mode === 'malformed' ? "printf 'not a pane\\n'" : mode === 'no server'
         ? "printf 'no server running on /tmp/fixture\\n' >&2; exit 1"
         : mode === 'no socket' ? `printf 'error connecting to ${join(dir, 'gone')} (No such file or directory)\\n' >&2; exit 1` : 'exit 1'
@@ -76,6 +78,16 @@ esac
     const discovery = vi.spyOn(backend, 'inventory').mockResolvedValue({ state: 'available', roots: [] })
     expect((await backend.kill({ backend: 'tmux', paneId: '%42' })).state).toBe(mode === 'gone' || mode === 'no server' || mode === 'no socket' ? 'succeeded' : 'unknown')
     expect(discovery).not.toHaveBeenCalled()
+  })
+
+  it('takes a pane listing with nothing in it for a read that was lost, never for no panes', async () => {
+    // What Node hands back when its timeout fires on an answer a held event loop had not read yet:
+    // success, and nothing. Read as an answer, it said every agent's pane was gone (e2e/stall.e2e.ts).
+    const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-empty-'))
+    dirs.push(dir)
+    writeFileSync(join(dir, 'tmux'), '#!/bin/sh\nexit 0\n', { mode: 0o700 })
+    process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
+    expect(await new TmuxBackend(undefined, () => 'daemon-a').inventory()).toEqual({ state: 'unavailable', reason: 'tmux listed no panes' })
   })
 
   it('sees the panes it tagged wherever they moved, untagged ones only in its sessions, never another daemon\'s', async () => {

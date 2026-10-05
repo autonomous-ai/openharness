@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { patientExec } from './patientExec.js'
 
 type CaptureOptions = { visible?: boolean; ansi?: boolean }
 type CaptureExecutor = (args: string[], options: { timeout: number; maxBuffer: number },
@@ -24,8 +25,9 @@ export function tmuxCaptureArgs(pane: string, historyLines = 100, options: Captu
 export class TmuxCaptureBatcher {
   private pending: PendingCapture[] = []
 
+  // A held event loop must not turn a timeout into an empty screen (patientExec.ts).
   constructor(private readonly execute: CaptureExecutor = (args, options, done) => {
-    execFile('tmux', args, options, done)
+    patientExec(execFile)('tmux', args, options, done)
   }) {}
 
   capture(pane: string, historyLines = 100, options: CaptureOptions = {}): Promise<string | null> {
