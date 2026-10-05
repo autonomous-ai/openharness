@@ -49,7 +49,13 @@ export function searchCoreApi(
       terminalAvailable: () => false,
       sync: () => {},
       runtimeModels: async () => [],
+      runtimeProfile: () => null,
+      setRuntime: () => {},
+      fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
     },
+    // Search drives no agent: these are never asked of it.
+    turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [] },
+    questions: { answer: () => {}, answerReviewed: async () => false },
     transcripts: { databaseHistory },
     external: {
       sessions: new ExternalSessions({ providers, excluded: [dataDir], log: console.warn }),

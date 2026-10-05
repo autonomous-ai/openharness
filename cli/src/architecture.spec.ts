@@ -61,7 +61,7 @@ function runForegroundLines(): number {
  * when you move code out; raising one needs a reason a reviewer agrees with, and the usual one is wrong:
  * the code belongs in a module or a service.
  */
-const RUN_FOREGROUND_BUDGET = 2_695
+const RUN_FOREGROUND_BUDGET = 2_572
 const BACKEND_SOCKET_BUDGET = 2_975
 
 /** Exceptions, each with its reason. Keep this short. */

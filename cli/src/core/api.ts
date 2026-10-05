@@ -10,6 +10,8 @@
  * The apps reach a service through the requests it answers (`ServiceRequests`), which its start
  * returns. The core routes them to it; a port is only for what the core itself must ask.
  */
+import type { RecentTurn } from '../cable/cableHost.js'
+import type { ReviewedAnswer } from '../cable/questionInbox.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
 import type { AgentGridTarget } from '../lib/gridModels.js'
@@ -19,8 +21,11 @@ import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import type { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
+import type { RouteAnswer } from '../localWsServer.js'
 import type { SwarmPromptScopes } from '../teams/promptScope.js'
 import { FAIL, later, type PortFallbacks } from './serviceHost.js'
+
+export type { RouteAnswer }
 
 export interface CoreApi {
   /** The daemon's data folder; a service keeps its own files in it. */
@@ -43,6 +48,29 @@ export interface CoreApi {
     /** The Model/Effort choices an agent's engine offers (opaque `runtime-v1` ids): one agent's, or
      *  every live agent's when none is named. */
     runtimeModels(agentId?: string): Promise<RuntimeModelOption[]>
+    /** The opaque runtime-v1 profile an agent runs with: its model and effort, for a picker's chips. */
+    runtimeProfile(session: RegisteredSession): string | null
+    /** Switch a live agent's model and effort; nothing without a model. */
+    setRuntime(agentId: string, model?: string, effort?: string): void
+    /** Fork a live agent, as the window's `agent_fork` does: the new agent's id, or the refusal. */
+    fork(agentId: string): Promise<{ ok: true; agentId: string } | { ok: false; error: string; detail?: string }>
+  }
+  /** A device's or another machine's turns for an agent on this one: the doors the web and the hooks use. */
+  turns: {
+    /** Deliver text into a live agent. */
+    send(agentId: string, text: string): void
+    /** Stop a live agent's turn. */
+    stop(agentId: string): void
+    /** A live agent's last `n` completed turns, newest first. */
+    recent(agentId: string, n: number): RecentTurn[]
+    /** The person's own last questions to a live agent, newest first. */
+    asks(agentId: string): string[]
+  }
+  questions: {
+    /** Answer a live agent's question, keyed by the question keys it asked with. */
+    answer(agentId: string, requestId: string, answers: Record<string, string>): void
+    /** Answer it with the selections a device reviewed; resolves whether the terminal confirmed it. */
+    answerReviewed(answer: ReviewedAnswer): Promise<boolean>
   }
   transcripts: {
     /** How to read a conversation its engine keeps in a database instead of a transcript file;
@@ -184,6 +212,25 @@ export type TeamsEvent = { seq: number; core: string; at: number; agentId: strin
   | { kind: 'replied'; teamId: string; questionId: string }
 )
 
+/** The core's calls into the fleet: ⌘K's two requests — which agent a typed task belongs to, on any of
+ *  the owner's machines, and delivering it to that agent's own machine — and stopping the lane to the
+ *  other machines for a shutdown. */
+export interface FleetPort {
+  routeTask(text: string): Promise<RouteAnswer>
+  sendTurn(agentId: string, text: string): { ok: true } | { ok: false; machine: string; reason: string }
+  stop(): void
+}
+
+const FLEET_UNAVAILABLE = 'the fleet service is unavailable'
+
+/** What the core gets when the fleet fails: ⌘K says so, picking no agent and sending nothing, and a
+ *  shutdown goes on. */
+export const FLEET_FALLBACKS: PortFallbacks<FleetPort> = {
+  routeTask: later({ agentId: '', machineId: '', name: '', confidence: 0, reason: FLEET_UNAVAILABLE, candidates: [], weighed: 0, machines: 0, via: '' }),
+  sendTurn: { ok: false, machine: '', reason: FLEET_UNAVAILABLE },
+  stop: undefined,
+}
+
 /** Each port is filled by the service that owns it when that service starts, and is null while the
  *  service is off: the core never waits on one. */
 export interface CorePorts {
@@ -192,10 +239,11 @@ export interface CorePorts {
   models: ModelsPort | null
   workspaces: WorkspacesPort | null
   teams: TeamsPort | null
+  fleet: FleetPort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { search: null, viewers: null, models: null, workspaces: null, teams: null }
+  return { search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null }
 }
 
 export interface CoreApiDeps {
@@ -215,11 +263,17 @@ export interface CoreApiDeps {
   accessToken: CoreApi['account']['accessToken']
   privateGridName: CoreApi['account']['privateGridName']
   machineName: CoreApi['account']['machineName']
+  runtimeProfile: CoreApi['agents']['runtimeProfile']
+  setRuntime: CoreApi['agents']['setRuntime']
+  fork: CoreApi['agents']['fork']
+  turns: CoreApi['turns']
+  questions: CoreApi['questions']
 }
 
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, privateGridName, machineName,
+  runtimeProfile, setRuntime, fork, turns, questions,
 }: CoreApiDeps): CoreApi {
   return {
     dataDir,
@@ -232,7 +286,12 @@ export function createCoreApi({
       terminalAvailable: (agentId) => registry.terminalAvailable(agentId),
       sync: syncSession,
       runtimeModels,
+      runtimeProfile,
+      setRuntime,
+      fork,
     },
+    turns,
+    questions,
     transcripts: { databaseHistory },
     external: { sessions: externalSessions, open: openSessions },
     account: { mintGridName, accessToken, privateGridName, machineName },
