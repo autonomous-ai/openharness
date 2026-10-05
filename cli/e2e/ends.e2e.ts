@@ -205,6 +205,36 @@ describe('how an agent\'s life ends', () => {
     client.close()
   })
 
+  it('codex: an agent between the turns of its goal is not closed after its task until the goal is done', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'codex', 'close-goal')
+    // Codex 0.160 between the turns of a goal: its composer empty, `Pursuing goal` on its status line.
+    await turn(client, agent.id, '!goal')
+    expect(await close(client, agent, 'inspect')).toMatchObject({ activity: 'working' })
+    expect(await close(client, agent, 'after_task')).toMatchObject({ deferred: true })
+    // Two idle looks five seconds apart would have closed it by now.
+    await new Promise((resolve) => setTimeout(resolve, 13_000))
+    expect((await row(client, agent.id))?.status).toBe('active')
+    await turn(client, agent.id, '!goal done')
+    await stopped(client, agent.id, 60_000)
+    client.close()
+  })
+
+  it('codex: browsing its transcript is someone at the pane, so a close only when idle waits', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'codex', 'close-browsing')
+    await turn(client, agent.id, '!browse')
+    expect(await close(client, agent, 'inspect')).toMatchObject({ activity: 'needs_input' })
+    expect(await close(client, agent, 'idle')).toMatchObject({ error: 'SESSION_NOT_IDLE', activity: 'needs_input' })
+    // Esc leaves it, as in Codex, and the agent reads idle again.
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, 'Escape')
+    await until('the agent to read idle again', async () => (await close(client, agent, 'inspect')).activity === 'idle' || null, 15_000, 500)
+    expect((await row(client, agent.id))?.status).toBe('active')
+    client.close()
+  })
+
   it('a close for an agent that is not the one asked about changes nothing', async () => {
     const d = await fresh()
     const client = await LocalClient.connect(d)

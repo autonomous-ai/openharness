@@ -18,7 +18,9 @@
 // same pane as Claude Code's `/clear` and Codex's `/new` do, `!compact` compacts the conversation as
 // `/compact` does (and Claude Code then announces the same session again), `!compactmid` compacts in the
 // middle of a turn as an automatic compaction does, `!version` answers with the version this
-// process is, `!exit` ends the process. Everything else is echoed as the answer.
+// process is, `!goal` and `!goal done` (Codex) start and achieve a goal the way Codex 0.160 shows one
+// under its composer, `!browse` (Codex) leaves Codex browsing its transcript, `!exit` ends the process.
+// Everything else is echoed as the answer.
 //
 // Which release is installed is the config's business, so a test can update an engine in place by
 // rewriting its wrapper: `version` is what it reports and writes, `without` lists the flags and
@@ -160,7 +162,25 @@ export async function run(engine, config) {
   }
 
   announceProcess()
-  const draw = (line = '') => process.stdout.write(`\r\x1b[2K› ${line}`)
+  // What Codex 0.160 draws under its empty composer in the two states the daemon must read off the pane
+  // (tui/src/bottom_pane): a goal it is pursuing, on the right of its status line, and the footer of
+  // its transcript browser, with the composer dimmed whole. Null draws the composer alone, as before.
+  let bottom = null
+  const placeholder = '\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m'
+  const goalBottom = (goal) => ({ composer: placeholder, footer: `  gpt-6 high · ${cwd}   \x1b[35m${goal}\x1b[0m` })
+  const browsingBottom = {
+    composer: '\x1b[2m› Ask Codex to do anything\x1b[0m',
+    footer: '\x1b[36mBrowsing transcript\x1b[0m\x1b[2m · \x1b[0m↑↓/jk\x1b[2m scroll · \x1b[0m←→/hl\x1b[2m prompts · \x1b[0m↵\x1b[2m rewind · \x1b[0mesc\x1b[2m back\x1b[0m',
+    browsing: true,
+  }
+  const draw = (line = '') => {
+    if (bottom && !line) {
+      // The footer on the row under the composer, then the cursor back to the composer, after its glyph.
+      process.stdout.write(`\r\x1b[2K${bottom.composer}\r\n\x1b[2K${bottom.footer}\x1b[1A\r\x1b[2C`)
+      return
+    }
+    process.stdout.write(`\r\x1b[2K› ${line}`)
+  }
   process.stdout.write(`\x1b[?2004h${engine === 'claude' ? '✻ Welcome to Claude Code (fake)' : '>_ OpenAI Codex (fake)'}\r\n`)
   process.stdout.write(`  session ${sessionId}${resumed ? ' (resumed)' : ''}\r\n\r\n`)
   draw()
@@ -287,7 +307,9 @@ export async function run(engine, config) {
     if (engine === 'claude') await hook('session-start', { hookEvent: 'UserPromptSubmit', prompt })
     turn++
     open = `turn-${turn}`
-    process.stdout.write(`\r\n`)
+    // Onto the row under the composer, which holds a footer while one is drawn: cleared, as Codex redraws
+    // its whole bottom pane rather than leave the old one in the history above.
+    process.stdout.write(`\r\n\x1b[2K`)
     if (engine === 'claude') {
       claude({ type: 'user', message: { role: 'user', content: prompt } })
       claude({ type: 'assistant', message: { id: `msg_${turn}_t`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'thinking', thinking: `considering: ${prompt}` }], stop_reason: null } })
@@ -384,6 +406,17 @@ export async function run(engine, config) {
       return
     }
     if (directive?.[1] === 'version') { finish(versionLine); return }
+    if (engine === 'codex' && directive?.[1] === 'goal') {
+      bottom = goalBottom(directive[2] === 'done' ? 'Goal achieved (1m)' : 'Pursuing goal (1m)')
+      finish(`answer ${turn}: ${prompt}`)
+      return
+    }
+    if (engine === 'codex' && directive?.[1] === 'browse') {
+      // Reached in Codex by Esc twice on an empty composer; the directive goes straight there.
+      bottom = browsingBottom
+      finish(`answer ${turn}: ${prompt}`)
+      return
+    }
     if (directive?.[1] === 'slow') await new Promise((resolve) => setTimeout(resolve, Number(directive[2]) || 1000))
     finish(`answer ${turn}: ${prompt}`)
   }
@@ -397,6 +430,14 @@ export async function run(engine, config) {
   let pasting = false
   process.stdin.on('data', (chunk) => {
     if (dialog) { dialogKeys(chunk); return }
+    if (bottom?.browsing) {
+      // Keys move through the transcript there. Esc goes back to the composer; Enter rewinds the
+      // conversation to the prompt in view, which is what a message typed into it would do.
+      if (chunk.includes('\r') || chunk.includes('\n')) process.stdout.write('\r\n\x1b[2K(rewound to an earlier prompt)\r\n')
+      else if (chunk.includes('\x1b')) process.stdout.write('\r\n\x1b[2K\x1b[1A')
+      if (chunk.includes('\x1b') || chunk.includes('\r') || chunk.includes('\n')) { bottom = null; draw() }
+      return
+    }
     for (const part of chunk.split(/(\x1b\[20[01]~|\r|\n|\x03)/)) {
       if (part === '\x1b[200~') { pasting = true; continue }
       if (part === '\x1b[201~') { pasting = false; continue }

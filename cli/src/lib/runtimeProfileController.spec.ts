@@ -38,6 +38,27 @@ describe('runtime pane parsing', () => {
     )).toMatchObject({ idle: true, draft: false })
   })
 
+  it('reads Codex browsing its transcript as a modal, at every width, with or without a draft dimmed under it', () => {
+    // As 0.160 draws it (tui/src/app_backtrack/prompt_navigation.rs): the composer dimmed whole, and the
+    // footer row naming the mode, its keys and their actions, cut down as the pane narrows.
+    const composer = '\u001b[2m\u001b[1m›\u001b[0m\u001b[2m \u001b[2mAsk Codex to do anything\u001b[0m'
+    const dot = '\u001b[2m · \u001b[0m'
+    const footers = [
+      `\u001b[36mBrowsing transcript\u001b[0m${dot}↑↓/jk\u001b[2m scroll\u001b[0m${dot}←→/hl\u001b[2m prompts\u001b[0m${dot}ctrl + t\u001b[2m details\u001b[0m${dot}↵\u001b[2m rewind\u001b[0m${dot}esc\u001b[2m back\u001b[0m`,
+      `\u001b[36mBrowsing\u001b[0m${dot}↵\u001b[2m rewind\u001b[0m${dot}esc\u001b[2m back\u001b[0m`,
+      `\u001b[36mBrowsing\u001b[0m${dot}esc`,
+      '\u001b[36mBrowsing\u001b[0m',
+    ]
+    for (const footer of footers) {
+      expect(inspectRuntimePane('codex', `${composer}\n\n${footer}`), footer).toMatchObject({ idle: false, dialog: true })
+    }
+    // A draft is dimmed with everything else in the composer while browsing: still not a pane to type into.
+    expect(inspectRuntimePane('codex', `\u001b[2m› keep this draft\u001b[0m\n\n${footers[0]}`)).toMatchObject({ idle: false, dialog: true })
+    // Other engines, and Codex's own transcript text, are not read for it.
+    expect(inspectRuntimePane('claude', `\u001b[39m❯\u00a0\u001b[2mAsk about the codebase\u001b[0m\n  Browsing · esc`)).toMatchObject({ idle: true, dialog: false })
+    expect(inspectRuntimePane('codex', `  Browsing transcript · as before\n${composer}\n\n  gpt-5.6-sol default · /tmp/project`)).toMatchObject({ dialog: false })
+  })
+
   it('reads hermes, which italicises its placeholder instead of dimming it', () => {
     // Copied byte-for-byte off a live pane. Hermes carries no SGR 2 at all: the placeholder is
     // italic (3) over a 256-colour gold, so a dim-only rule read every hermes pane as holding a

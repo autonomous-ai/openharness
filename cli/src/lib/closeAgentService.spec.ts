@@ -224,6 +224,24 @@ it('uses a known empty composer, not inactivity, to establish idle', () => {
   expect(inspectCloseActivity({ ...row, engine: 'claude' }, '❯\n  2 background tasks', false, false)).toBe('working')
 })
 
+it('reads Codex 0.160\'s goal indicator: pursuing one is working, every other state is not', () => {
+  // As 0.160 draws it with its status line on: the composer empty with its dim placeholder, and the
+  // goal in magenta at the right of the status line (tui/src/bottom_pane/footer.rs).
+  const screen = (goal: string) => '\u001b[1m›\u001b[0m \u001b[2mAsk Codex to do anything\u001b[0m\n\n'
+    + `  gpt-5.6-sol default · /tmp/project                      \u001b[35m${goal}\u001b[0m`
+  expect(inspectCloseActivity(row, screen('Pursuing goal (41m)'), false, false)).toBe('working')
+  expect(inspectCloseActivity(row, screen('Pursuing goal'), false, false)).toBe('working')
+  for (const state of ['Goal paused (/goal resume)', 'Goal stalled (/goal resume)', 'Goal hit usage limits (/goal resume)',
+    'Goal unmet (41m)', 'Goal abandoned', 'Goal achieved (41m)', 'Goal achieved']) {
+    expect(inspectCloseActivity(row, screen(state), false, false), state).toBe('idle')
+  }
+})
+
+it('reads Codex browsing its transcript as someone at the pane, not as idle', () => {
+  const browsing = '\u001b[2m› Ask Codex to do anything\u001b[0m\n\n\u001b[36mBrowsing\u001b[0m · ↵ rewind · esc back'
+  expect(inspectCloseActivity(row, browsing, false, false)).toBe('needs_input')
+})
+
 const unusedScreens = {
   // Prompt/footer styling observed in the unused Companions terminal; path redacted.
   codex: '\u001b[1m\u001b[38;5;215m›\u001b[0m\u001b[48;5;234m \u001b[2mAsk Codex to do anything\u001b[0m\n\n  GPT-6-Astra max · /tmp/companions\n  ? for shortcuts · 1 warning · f2 to view',
