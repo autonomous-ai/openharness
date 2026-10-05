@@ -19,3 +19,8 @@ it('recognizes the native Codex placeholder above its configurable model and tas
   expect(teamWriteHold('codex', `›\n  a human draft\n${footer}`)).toBe('team_waiting_draft')
   expect(teamWriteHold('codex', `› Keep this draft\n${footer}`)).toBe('team_waiting_draft')
 })
+
+it('holds a delivery while Codex browses its transcript, where its Enter would rewind the conversation', () => {
+  const browsing = '\u001b[2m› Ask Codex to do anything\u001b[0m\n\n\u001b[36mBrowsing transcript\u001b[0m · ↑↓/jk scroll · ←→/hl prompts · ↵ rewind · esc back'
+  expect(teamWriteHold('codex', browsing)).toBe('team_waiting_user')
+})

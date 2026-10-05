@@ -237,6 +237,11 @@ it('reads Codex 0.160\'s goal indicator: pursuing one is working, every other st
   }
 })
 
+it('reads Codex browsing its transcript as someone at the pane, not as idle', () => {
+  const browsing = '\u001b[2m› Ask Codex to do anything\u001b[0m\n\n\u001b[36mBrowsing\u001b[0m · ↵ rewind · esc back'
+  expect(inspectCloseActivity(row, browsing, false, false)).toBe('needs_input')
+})
+
 const unusedScreens = {
   // Prompt/footer styling observed in the unused Companions terminal; path redacted.
   codex: '\u001b[1m\u001b[38;5;215m›\u001b[0m\u001b[48;5;234m \u001b[2mAsk Codex to do anything\u001b[0m\n\n  GPT-6-Astra max · /tmp/companions\n  ? for shortcuts · 1 warning · f2 to view',

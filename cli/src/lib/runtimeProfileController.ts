@@ -307,7 +307,7 @@ export function inspectRuntimePane(engine: RegisteredSession['engine'], capture:
   // Old picker/plan text can remain in tmux history. Only UI below the latest prompt belongs to the
   // current interaction; if no prompt is visible, inspect the whole capture as a conservative fallback.
   const currentUi = stripAnsi((promptIndex >= 0 ? rawLines.slice(promptIndex) : rawLines).join('\n')).replace(/\u00a0/g, ' ')
-  const dialog = DIALOG_UI.test(currentUi)
+  const dialog = DIALOG_UI.test(currentUi) || (engine === 'codex' && CODEX_TRANSCRIPT_BROWSING.test(currentUi))
   const plan = engine === 'codex' ? /\bplan mode\b/i.test(currentUi) : /\bplan mode on\b/i.test(currentUi)
   const marker = stripAnsi(prompt).search(marks)
   let visible = marker >= 0 ? stripAnsi(prompt).slice(marker + 1).replace(/\u00a0/g, ' ').trim() : ''
@@ -327,6 +327,15 @@ export function inspectRuntimePane(engine: RegisteredSession['engine'], capture:
  * No `g` flag, so `test` carries no `lastIndex` between callers.
  */
 const DIALOG_UI = /Select Model(?: and Effort)?|Select Reasoning Level|Advanced Reasoning|Available models|Models matching|Edit Parameters|Type to filter.*Tab to edit|Esc to go back|Press enter to confirm|Do you want to proceed|Allow this action|permission required|Starting MCP servers?/i
+
+/**
+ * Codex browsing its own transcript: Esc twice on an empty composer, and its footer row reads
+ * `Browsing transcript · ↑↓/jk scroll · ←→/hl prompts · … · ↵ rewind · esc back`, down to a bare
+ * `Browsing` as the pane narrows (0.160, tui/src/app_backtrack/prompt_navigation.rs). The composer is
+ * dimmed meanwhile, its placeholder and any draft in it alike, so it read as empty and idle: a delivery
+ * typed into it lands as keys that scroll, and its Enter rewinds the conversation. A modal, then.
+ */
+const CODEX_TRANSCRIPT_BROWSING = /^\s*Browsing(?: transcript)?(?:\s+·|\s*$)/m
 
 /** The rule a gutter-box composer is closed with: `╹▀▀▀▀…`. */
 const GUTTER_BOX_RULE = /[─▀▁▔]{8,}/u
