@@ -61,7 +61,7 @@ import { readGitProject } from './lib/gitProject.js'
 import { agentFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { listInstalledDsh } from './dsh/installed.js'
-import { OrchestratorService } from './orchestrator/service.js'
+import { OrchestratorService, hasSavedProjects } from './orchestrator/service.js'
 import { OrchestratorError } from './orchestrator/model.js'
 import { orchestratorRequest } from './orchestrator/wire.js'
 import { TeamService } from './teams/service.js'
@@ -428,10 +428,13 @@ export class BackendSocket {
     try { this.teamMailbox().start(); this.teams().start() }
     catch { console.warn('[teams] preserved unreadable team state; inspect Team for recovery') }
   }
-  /** The commander asks this for every turn that ends — see OrchestratorService.roleOf. */
+  /** The commander asks this for every turn that ends — see OrchestratorService.roleOf. "No role",
+   *  without building the service, on a machine with no saved project (see hasSavedProjects). */
   orchestratorRoleOf(agentId: string): ReturnType<OrchestratorService['roleOf']> {
+    if (!this.orchestratorService && !(this.orchestratorSaved ??= hasSavedProjects(join(env.ADAPTER_DATA_DIR, 'orchestrator')))) return null
     return this.orchestration().roleOf(agentId)
   }
+  private orchestratorSaved: boolean | null = null
   private orchestration(): OrchestratorService {
     return this.orchestratorService ??= new OrchestratorService({
       stateDir: join(env.ADAPTER_DATA_DIR, 'orchestrator'),

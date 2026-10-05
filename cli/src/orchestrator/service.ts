@@ -29,6 +29,28 @@ export interface OrchestratorDependencies {
   changed?(id: string, revision: number): void
 }
 
+/** A saved project's file: `<run id>.json`. */
+const RUN_FILE = /^[a-f0-9]{32}\.json$/
+
+/**
+ * Whether [stateDir] holds a saved project, asked WITHOUT building the service.
+ *
+ * The daemon asks a project's role of every turn that ends, and building the service to answer makes
+ * its folder and reads and parses every saved run, synchronously, on the core's event loop — after
+ * which every frame the daemon sends is handed to it as well. Asked that way, all of it happened at
+ * the first turn end of every daemon, nearly all of which never use the orchestrator. A project is
+ * only ever made through the service, so a folder found without one stays without one until
+ * something builds it. A folder that cannot be listed counts as one: the service reports it, as it
+ * always did.
+ */
+export function hasSavedProjects(stateDir: string): boolean {
+  try {
+    return readdirSync(stateDir).some(name => RUN_FILE.test(name))
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT'
+  }
+}
+
 /** Owns tasks, not terminals. A tab closing has no effect on this service. */
 export class OrchestratorService {
   private readonly runs = new Map<string, Run>()
@@ -44,7 +66,7 @@ export class OrchestratorService {
   private load(): void {
     if (this.loaded) return
     secureStateDirectory(this.deps.stateDir)
-    for (const name of readdirSync(this.deps.stateDir).filter(n => /^[a-f0-9]{32}\.json$/.test(n))) {
+    for (const name of readdirSync(this.deps.stateDir).filter(n => RUN_FILE.test(n))) {
       try {
         const run = Run.parse(JSON.parse(readPrivateStateFile(join(this.deps.stateDir, name), 8 * 1024 * 1024)))
         requireThat(name === `${run.id}.json`, 'CORRUPT_STATE', 'Project identity does not match its file.')
