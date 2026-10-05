@@ -198,7 +198,9 @@ class SessionVM(VM):
         self.keys('meta_l', 't')
         self.wait_user('test "$(hn display-message -p "#{pane_id}")" != ' + shlex.quote(old[0]) +
                        ' && hn capture-pane -p | grep -Eq ' + shlex.quote(r'^\[me@harness [^]]*\]\$'))
-        marker = 'arm-' + name + '-ready'
+        # Separate words stay legible to OCR in narrow restored panes; the
+        # shell capture still requires the exact independently typed line.
+        marker = 'arm ' + name.replace('-', ' ') + ' ready'
         self.type_probe('echo ' + marker)
         self.keys('ret')
         self.wait_user('hn capture-pane -p | grep -Fx ' + shlex.quote(marker))
