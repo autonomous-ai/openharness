@@ -16,7 +16,9 @@ afterEach(() => {
   resetTmuxVersionCache()
   process.env.PATH = originalPath
   delete process.env.TMUX_BACKEND_CALLS
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  // Retried: listing panes also remembers the tmux server in the background (lib/tmux.ts), and that
+  // fake tmux can still be writing its call into the folder as the test ends (ENOTEMPTY on CI's Linux).
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
 })
 
 describe('TmuxBackend lifecycle', () => {
