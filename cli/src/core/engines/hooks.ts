@@ -32,8 +32,9 @@ export interface EngineHookDeps {
  * The longest a hook waits for the agent on its pane to record the process it came from. Every relaunch
  * starts its engine before it records it: a resume looks for the process every 250ms, a create or a
  * fork backs off to 750ms, and a restart finds it the same way and then probes it, twice over when it
- * falls back to a new conversation (two 8s discovery budgets, swap.ts). Bounded all the same: the engine
- * kills its own hook command at 5s, and an answer later than that only keeps the daemon's record.
+ * falls back to a new conversation (two 8s discovery budgets, swap.ts). The hook itself is answered
+ * before the wait (`onWait`): its client gives up on a reply after 500ms and then writes the registry
+ * itself (hook/notify.mjs), so only the daemon's record waits.
  */
 export const PROCESS_RECORD_WAIT_MS = 20_000
 /** How often a waiting hook reads the rows on its panes again: memory, not a process table. */
@@ -108,7 +109,7 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
     }
   }
 
-  const resolveHookAgent: ResolveHookAgent = async ({ engine, runtimeHints, callerPid }) => {
+  const resolveHookAgent: ResolveHookAgent = async ({ engine, runtimeHints, callerPid, onWait }) => {
     if (!callerPid) return null
     const resolved: TerminalRuntimeRef[] = []
     for (const hint of runtimeHints ?? []) {
@@ -126,6 +127,7 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
     // hook's pane has no live process recorded, the hook now waits for it to record one, and is matched
     // again against that: one rule for every relaunch, with nothing for any of them to remember to do.
     if (!choice.agent && choice.reason === 'none' && found.unrecorded.length) {
+      onWait?.()
       await recordChanged(resolved, engine)
       found = await matchCaller(resolved, engine, callerPid)
       if (!found) return null
