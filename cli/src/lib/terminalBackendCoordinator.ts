@@ -195,7 +195,10 @@ export class TerminalBackendCoordinator {
     if (!this.leaseIsCurrent(lease, session)) return false
     const backend = this.backendFor(lease.runtime)
     if (!backend) return false
-    return (await this.validateRuntime(backend, lease.runtime, session)).state === 'alive'
+    // Asked again after the check: it waits while a restart records its new engine, and then answers
+    // `alive` for THAT engine, which this lease was not taken for. Kept, a question's answer went on
+    // being keyed through it into the new engine's composer.
+    return (await this.validateRuntime(backend, lease.runtime, session)).state === 'alive' && this.leaseIsCurrent(lease, session)
   }
 
   async capture(session: RegisteredSession, options?: TerminalCaptureOptions): Promise<TerminalReadResult<string>> {
