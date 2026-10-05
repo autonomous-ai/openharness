@@ -82,6 +82,18 @@ function engineName(engine: string): string {
   return engine === 'claude' ? 'Claude Code' : engineLabel(engine)
 }
 
+/**
+ * What the person is told when their message was typed but its Enter not pressed: the engine opened
+ * something between the two, which the Enter would have answered. The text waits in the composer.
+ */
+export function messageWithheldText(engine: string, hold: string): string {
+  const name = engineName(engine)
+  const [what, then] = hold === 'permission_open' ? ['asked for permission', 'Answer the request in the app or in its terminal']
+    : hold === 'question_open' ? ['asked you a question', 'Answer the question in the app or in its terminal']
+      : ['opened another screen', 'Finish what\'s on its screen in its terminal']
+  return `${name} ${what} just as your message was typed, so it was not sent; it waits in ${name}'s prompt. ${then}, then press Enter in its terminal to send the message, or clear it there.`
+}
+
 /** What the person is told: why their message was not typed, and what lets it through. */
 export function messageHoldText(engine: string, hold: MessageHold): string {
   const name = engineName(engine)

@@ -68,6 +68,32 @@ describe('SessionInputController', () => {
       controller.forget('s1')
     })
 
+    it('typed but its Enter withheld, as something opened: never pressed later, and the person told where the text is', async () => {
+      const withheld: TerminalActionResult = { state: 'unknown', dispatch: 'possibly_executed', reason: 'enter_withheld:permission_open' }
+      const onError = vi.fn(), onSubmitted = vi.fn(), sendKey = vi.fn(async () => true), forget = vi.fn(), onDelivery = vi.fn()
+      vi.useFakeTimers()
+      const controller = new SessionInputController({ getSession: () => session('claude'), validateRuntime: async () => true,
+        inject: async () => withheld, sendKey, onError, onSubmitted, onDelivery, beforeSubmit: () => forget, beforeTeamWrite: async () => null })
+      controller.submit('s1', 'a message from the app')
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(onError).toHaveBeenCalledWith('s1', 'Claude Code asked for permission just as your message was typed, so it was not sent; it waits in Claude Code\'s prompt. Answer the request in the app or in its terminal, then press Enter in its terminal to send the message, or clear it there.')
+      expect(forget).toHaveBeenCalled()
+      expect(onSubmitted).not.toHaveBeenCalled()
+      expect(sendKey).not.toHaveBeenCalled()
+      // With a receipt: refused with the reason; a team's, without telling a person.
+      onError.mockClear()
+      controller.submit('s1', 'from the device', 'd1')
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(onDelivery).toHaveBeenCalledWith({ sessionId: 's1', deliveryId: 'd1', state: 'rejected', reason: 'enter_withheld' })
+      expect(onError).toHaveBeenCalledTimes(1)
+      controller.submit('s1', 'a team turn', 'team:1')
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(onDelivery).toHaveBeenCalledWith({ sessionId: 's1', deliveryId: 'team:1', state: 'rejected', reason: 'enter_withheld' })
+      expect(onError).toHaveBeenCalledTimes(1)
+      expect(sendKey).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
     it('rejects a message that wants a receipt with the reason, and says why', async () => {
       const onError = vi.fn(), onDelivery = vi.fn()
       const controller = new SessionInputController({ getSession: () => session('codex'), validateRuntime: async () => true,

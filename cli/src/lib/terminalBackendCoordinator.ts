@@ -4,6 +4,7 @@ import { processIdentityKey, terminalInstanceId, terminalPlacementKey, terminalR
 import {
   terminalActionNotStarted,
   type RuntimeValidation,
+  type SubmitOptions,
   type TerminalActionResult,
   type TerminalCaptureOptions,
   type TerminalLogicalKey,
@@ -258,10 +259,10 @@ export class TerminalBackendCoordinator {
       : Promise.resolve(terminalActionNotStarted('leased terminal backend is disabled'))
   }
 
-  submitTextLease(lease: TerminalControlLease, text: string): Promise<TerminalActionResult> {
+  submitTextLease(lease: TerminalControlLease, text: string, options?: SubmitOptions): Promise<TerminalActionResult> {
     const backend = this.backendFor(lease.runtime)
     return backend
-      ? backend.submitText(lease.runtime, text)
+      ? backend.submitText(lease.runtime, text, options)
       : Promise.resolve(terminalActionNotStarted('leased terminal backend is disabled'))
   }
 
@@ -270,6 +271,7 @@ export class TerminalBackendCoordinator {
     session: RegisteredSession,
     lease: TerminalControlLease,
     text: string,
+    options?: SubmitOptions,
   ): Promise<TerminalActionResult> {
     if (!this.leaseIsCurrent(lease, session)) return terminalActionNotStarted('terminal control lease changed')
     const ordered = this.orderedRuntimes(session)
@@ -283,7 +285,7 @@ export class TerminalBackendCoordinator {
       if (!backend) continue
       const validation = await this.validateRuntime(backend, runtime, session)
       if (validation.state !== 'alive') continue
-      const result = await backend.submitText(runtime, text)
+      const result = await backend.submitText(runtime, text, options)
       if (result.state === 'succeeded') {
         lease.runtime = runtime
         lease.placementKey = terminalPlacementKey(runtime)
@@ -325,8 +327,8 @@ export class TerminalBackendCoordinator {
     return last
   }
 
-  submitText(session: RegisteredSession, text: string): Promise<TerminalActionResult> {
-    return this.sideEffect(session, (backend, runtime) => backend.submitText(runtime, text))
+  submitText(session: RegisteredSession, text: string, options?: SubmitOptions): Promise<TerminalActionResult> {
+    return this.sideEffect(session, (backend, runtime) => backend.submitText(runtime, text, options))
   }
 
   typeLiteral(session: RegisteredSession, text: string): Promise<TerminalActionResult> {

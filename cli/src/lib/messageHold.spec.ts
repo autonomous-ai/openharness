@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { isMessageHold, messageHold, messageHoldText, passingHold, type MessageHold } from './messageHold.js'
+import { isMessageHold, messageHold, messageHoldText, messageWithheldText, passingHold, type MessageHold } from './messageHold.js'
 import {
   CLAUDE_PROMPT, CLAUDE_REWIND_CONFIRM, CLAUDE_REWIND_LIST, CODEX_BROWSING_FULLSCREEN, CODEX_BROWSING_SCROLLBACK, CODEX_PROMPT,
 } from './__fixtures__/rewindPickers.js'
@@ -239,5 +239,12 @@ describe('what the person is told', () => {
     for (const hold of holds) expect(isMessageHold(hold)).toBe(true)
     expect(isMessageHold('team_waiting_user')).toBe(false)
     expect(isMessageHold('terminal agent is unavailable')).toBe(false)
+  })
+})
+
+describe('what the person is told when their message was typed and its Enter withheld', () => {
+  it('says what opened, that the message waits unsent in the prompt, and what sends or clears it', () => {
+    expect(messageWithheldText('codex', 'question_open')).toBe('Codex asked you a question just as your message was typed, so it was not sent; it waits in Codex\'s prompt. Answer the question in the app or in its terminal, then press Enter in its terminal to send the message, or clear it there.')
+    expect(messageWithheldText('claude', 'prompt_hidden')).toBe('Claude Code opened another screen just as your message was typed, so it was not sent; it waits in Claude Code\'s prompt. Finish what\'s on its screen in its terminal, then press Enter in its terminal to send the message, or clear it there.')
   })
 })

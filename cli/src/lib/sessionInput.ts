@@ -1,8 +1,8 @@
 import { createHash } from 'crypto'
 import type { RegisteredSession } from './registry.js'
 import { sid } from './log.js'
-import { isMessageHold, messageHold, messageHoldText, passingHold, type MessageHold } from './messageHold.js'
-import { TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
+import { isMessageHold, messageHold, messageHoldText, messageWithheldText, passingHold, type MessageHold } from './messageHold.js'
+import { enterWithheldReason, TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
 
 const MAX_QUEUE_ITEMS = 8
 const MAX_QUEUE_BYTES = 24 * 1024
@@ -461,6 +461,14 @@ export class SessionInputController {
     const accepted = typeof delivery === 'boolean'
       ? delivery
       : delivery.state === 'succeeded' || delivery.dispatch === 'possibly_executed'
+    const withheld = enterWithheldReason(delivery)
+    if (withheld) {
+      // Typed, its Enter not pressed: never pressed later either, which would send it into whatever is open.
+      forgetScope?.()
+      console.warn(`[inject] ${sid(sessionId)} typed, not sent · engine=${session.engine} · ${withheld} opened before Enter`)
+      this.deps.onError(sessionId, messageWithheldText(session.engine, withheld))
+      return
+    }
     if (!accepted) {
       forgetScope?.()
       const held = heldBack(delivery)
@@ -536,6 +544,15 @@ export class SessionInputController {
       if (state.cancelled || this.states.get(sessionId) !== state) return
       if (typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started' && delivery.reason.startsWith('team_waiting_')) {
         this.finishDelivery(sessionId, state, 'rejected', delivery.reason)
+        return
+      }
+      const withheld = enterWithheldReason(delivery)
+      if (withheld) {
+        // Typed, its Enter not pressed: never pressed later either, which would send it into whatever is open.
+        forgetScope?.()
+        console.warn(`[inject] ${sid(sessionId)} typed, not sent · engine=${session.engine} · ${withheld} opened before Enter`)
+        this.finishDelivery(sessionId, state, 'rejected', 'enter_withheld')
+        if (!deliveryId.startsWith('team:')) this.deps.onError(sessionId, messageWithheldText(session.engine, withheld))
         return
       }
       const held = heldBack(delivery)

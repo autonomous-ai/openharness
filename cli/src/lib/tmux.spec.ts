@@ -597,6 +597,19 @@ if [ "$1" = "paste-buffer" ] && [ "$TMUX_SUBMIT_FAIL" = "1" ]; then exit 2; fi
         'load-buffer -b buffer -', 'paste-buffer -t %7 -b buffer -d',
       ])
 
+      // Asked right before the Enter, after the paste: a reason keeps the Enter from being pressed, and an
+      // engine that opened a dialog in between gets the text and no Enter.
+      for (const message of ['short', 'first\nsecond']) {
+        writeFileSync(argsFile, '')
+        const asked: string[] = []
+        expect(await sendToTmux('%7', message, async () => { asked.push(commands().at(-1)!); return 'permission_open' })).toEqual({ withheld: 'permission_open' })
+        expect(asked).toEqual(['paste-buffer -t %7 -b buffer -p -d'])
+        expect(commands()).toEqual(['load-buffer -b buffer -', 'paste-buffer -t %7 -b buffer -p -d'])
+      }
+      writeFileSync(argsFile, '')
+      expect(await sendToTmux('%7', 'clear to send', async () => null)).toBe(true)
+      expect(commands().at(-1)).toBe('send-keys -t %7 Enter')
+
       writeFileSync(argsFile, '')
       process.env.TMUX_SUBMIT_FAIL = '1'
       expect(await sendToTmux('%7', 'must not send')).toBe(false)

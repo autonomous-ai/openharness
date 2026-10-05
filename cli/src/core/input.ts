@@ -55,8 +55,12 @@ export interface InputDeps {
  * The pane is read right before the paste, by the caller that holds the pane's write lock, and nothing
  * is typed into a dialog, a menu or a view a message does not belong in (messageHold.ts): the reason
  * comes back instead, with nothing written. `hold` adds a caller's own check of the same reading (a
- * team's, which waits for a draft too). `submitTerminalAction` is called here and nowhere else in this
- * file, and input.spec.ts keeps it so.
+ * team's, which waits for a draft too). The pane is read again once the text is in, right before its
+ * Enter: a dialog opened in between (a long or multi-line paste waits up to 1.5 s for the engine to take
+ * it, mid-turn) keeps the Enter from being pressed, which would answer it, and the text waits in the
+ * composer, unsent (sessionInput.ts says so). A list of suggestions opened by the message itself is no
+ * reason. `submitTerminalAction` is called here and nowhere else in this file, and input.spec.ts keeps
+ * it so.
  */
 export function messageWriter({ resolve, terminal: { captureTerminal, validateTerminal, submitTerminalAction } }: Pick<InputDeps, 'resolve' | 'terminal'>) {
   return async (id: string, text: string, hold?: (session: RegisteredSession, capture: string | null) => string | null): Promise<TerminalActionResult> => {
@@ -70,7 +74,13 @@ export function messageWriter({ resolve, terminal: { captureTerminal, validateTe
     if (!await validateTerminal(session)) return terminalActionNotStarted(TERMINAL_LEASE_REFUSED)
     const capture = await captureTerminal(id)
     const reason = hold?.(session, capture) ?? messageHold(session.engine, capture)
-    return reason ? terminalActionNotStarted(reason) : submitTerminalAction(id, text)
+    if (reason) return terminalActionNotStarted(reason)
+    return submitTerminalAction(id, text, {
+      beforeEnter: async () => {
+        const before = messageHold(session.engine, await captureTerminal(id))
+        return before === 'popup_open' ? null : before
+      },
+    })
   }
 }
 

@@ -147,6 +147,25 @@ describe('the session input controller\'s dependencies', () => {
     expect(run.calls.filter((call) => call.startsWith('submit'))).toEqual([])
   })
 
+  it('reads the pane again right before the Enter, and gives the reason not to press it, a popup of the message\'s own aside', async () => {
+    const screens = [READY_PANE, CLAUDE_PERMISSION, READY_PANE, null, READY_PANE, `────────────\n❯ /mo\n────────────\n  /model   Set the AI model`]
+    const answers: Array<string | null> = []
+    const write = messageWriter({
+      resolve: (id) => agents.get(id),
+      terminal: {
+        validateTerminal: vi.fn(async () => true),
+        captureTerminal: vi.fn(async () => screens.shift() ?? null),
+        submitTerminalAction: vi.fn(async (_id: string, _text: string, options?: { beforeEnter?: () => Promise<string | null> }) => {
+          answers.push(await options!.beforeEnter!())
+          return ok
+        }),
+      } as unknown as InputDeps['terminal'],
+    })
+    for (let i = 0; i < 3; i++) await write('a1', 'hello')
+    // A permission prompt opened between the paste and the Enter; the pane unread; the message's own `/mo`.
+    expect(answers).toEqual(['permission_open', 'screen_unreadable', null])
+  })
+
   it('writes a team turn only into a ready pane whose delivery still holds control', async () => {
     const run = deps()
     const wired = sessionInputDeps(run.deps, () => lock(run.calls))

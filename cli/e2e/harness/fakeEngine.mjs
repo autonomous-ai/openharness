@@ -27,7 +27,8 @@
 // transcript view, as ctrl+o does, `!overlay` (Codex) in its transcript overlay, as ctrl+t does in its
 // scrollback mode, `!search` searching its prompt history, as ctrl+r does, `!config` (Claude Code) in its
 // settings and `!center` (Codex) in its agent command center, screens the daemon has no name for,
-// `!exit` ends the process.
+// `!permitnext <command>` keeps its turn open and asks permission to run the command the moment a
+// message is pasted, before its Enter (a request arriving mid-turn), `!exit` ends the process.
 // Everything else is echoed as the answer.
 //
 // Which release is installed is the config's business, so a test can update an engine in place by
@@ -564,6 +565,33 @@ export async function run(engine, config) {
     await runHooks('Stop', { stop_hook_active: false })
   }
 
+  // A permission asked for in a turn, answered: the command run (and written as the engine writes it)
+  // or not, and the turn over. `turnOf` is the turn that asked.
+  const permitted = (command, row, turnOf = turn) => {
+    const allowed = row === 0 || row === 1
+    const id = `call_${turnOf}_p`
+    if (allowed) {
+      if (engine === 'claude') {
+        claude({ type: 'assistant', message: { id: `msg_${turnOf}_p`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }], stop_reason: 'tool_use' } })
+        claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `ran ${command}` }] } })
+      } else {
+        codex('response_item', { type: 'function_call', call_id: id, name: 'exec_command', arguments: JSON.stringify({ cmd: command }) })
+        codex('response_item', { type: 'function_call_output', call_id: id, output: `ran ${command}` })
+      }
+    }
+    return finish(allowed ? `ran ${command}` : `did not run ${command}`)
+  }
+  // `!permitnext`: the request waiting for the next paste.
+  let armed = null
+  const askOnPaste = () => {
+    if (!armed) return
+    const { command, turn: turnOf } = armed
+    armed = null
+    eraseComposer()
+    dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve: (row) => { void permitted(command, row, turnOf) } }
+    drawDialog()
+  }
+
   const handle = async (raw) => {
     const prompt = raw.trim()
     // Enter on an empty composer takes nothing.
@@ -670,23 +698,17 @@ export async function run(engine, config) {
       await new Promise((resolve) => setTimeout(resolve, 300))
     }
     if (directive?.[1] === 'hold') return
+    if (directive?.[1] === 'permitnext') {
+      // The turn goes on; its request arrives with the next paste, between it and its Enter.
+      armed = { command: directive[2] || 'printf hi', turn }
+      return
+    }
     if (directive?.[1] === 'permit') {
       const command = directive[2] || 'printf hi'
       await new Promise((resolve) => setTimeout(resolve, 2_000))
       // The dialog takes the composer's place, as the CLIs draw theirs, until it is answered.
       const row = await new Promise((resolve) => { eraseComposer(); dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve }; drawDialog() })
-      const allowed = row === 0 || row === 1
-      const id = `call_${turn}_p`
-      if (allowed) {
-        if (engine === 'claude') {
-          claude({ type: 'assistant', message: { id: `msg_${turn}_p`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }], stop_reason: 'tool_use' } })
-          claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `ran ${command}` }] } })
-        } else {
-          codex('response_item', { type: 'function_call', call_id: id, name: 'exec_command', arguments: JSON.stringify({ cmd: command }) })
-          codex('response_item', { type: 'function_call_output', call_id: id, output: `ran ${command}` })
-        }
-      }
-      await finish(allowed ? `ran ${command}` : `did not run ${command}`)
+      await permitted(command, row)
       return
     }
     if (directive?.[1] === 'ask') {
@@ -847,9 +869,17 @@ export async function run(engine, config) {
       if (!rest) return
       chunk = rest
     }
-    for (const part of chunk.split(/(\x1b\[20[01]~|\x1b\[[0-9;]*[A-Za-z~]|\x1b|\x7f|\r|\n|\x03)/)) {
+    const parts = chunk.split(/(\x1b\[20[01]~|\x1b\[[0-9;]*[A-Za-z~]|\x1b|\x7f|\r|\n|\x03)/)
+    for (const [index, part] of parts.entries()) {
       if (part === '\x1b[200~') { pasting = true; continue }
-      if (part === '\x1b[201~') { pasting = false; continue }
+      if (part === '\x1b[201~') {
+        pasting = false
+        draw()
+        askOnPaste()
+        // What follows the paste goes to the request, once it is up.
+        if (dialog) { dialogKeys(parts.slice(index + 1).join('')); return }
+        continue
+      }
       if (pasting && (part === '\r' || part === '\n')) { buffer += '\n'; continue }
       if (!pasting && part.startsWith('\x1b')) {
         // Esc puts the suggestions away, the draft kept; other keys move nothing here.
