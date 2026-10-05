@@ -2,9 +2,52 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ExecFileException } from 'node:child_process'
 import { TmuxBackend, clearEnvArgs } from './tmuxBackend.js'
-import { clearPaneRemainOnExit } from './tmux.js'
+import { clearPaneRemainOnExit, forgetTmuxServer } from './tmux.js'
 import { assumeTmuxVersion, resetTmuxVersionCache } from './tmuxVersion.js'
+
+/**
+ * The fake tmux in these specs is a real `/bin/sh` script, and on a loaded machine one takes seconds to
+ * start. The daemon's 2 s deadline (patientExec.ts) then killed it, and the backend answered, rightly,
+ * as for a tmux it could not ask: a pane with no server read as `unknown`, not `gone`, and a listing
+ * as `unavailable` (CI, and 1 run in 4 locally under load). Here every call runs to its answer
+ * however long it takes; what a deadline does is patientExec.spec.ts's to test. And each call is
+ * counted while it runs, so a test can wait for the ones a scan leaves going behind it: the restyle
+ * after an inventory wrote into the test's folder as `afterEach` removed it (ENOTEMPTY on #826).
+ */
+const running = vi.hoisted(() => new Set<Promise<void>>())
+vi.mock('./patientExec.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./patientExec.js')>()
+  const patientExec: typeof actual.patientExec = (execFile) => (file, args, options, done) => {
+    const { timeout: _timeout, killSignal: _killSignal, ...rest } = options
+    let finished = (): void => {}
+    const call = new Promise<void>((resolve) => { finished = resolve })
+    running.add(call)
+    execFile(file, [...args], { ...rest, encoding: 'utf8' }, (error: ExecFileException | null, stdout: string, stderr: string) => {
+      // Whatever the answer starts (the next restyle of a pane) is counted before this one ends.
+      try { done(error, stdout ?? '', stderr ?? '') } finally {
+        running.delete(call)
+        finished()
+      }
+    })
+  }
+  return { ...actual, patientExec }
+})
+
+/** Until no tmux or `ps` call is running, the ones a scan left going in the background included. */
+async function settled(): Promise<void> {
+  for (let quiet = 0; quiet < 3;) {
+    await new Promise((resolve) => setImmediate(resolve))
+    if (running.size) {
+      quiet = 0
+      await Promise.all(running)
+    } else quiet++
+  }
+}
+
+// No deadline above, so a slow machine makes a test slow, never wrong: room for it.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const originalPath = process.env.PATH
 const dirs: string[] = []
@@ -12,7 +55,10 @@ const dirs: string[] = []
 // A tmux that answers `-V` with no number reads as the newest; the specs that need an older one say so.
 beforeEach(() => assumeTmuxVersion(null))
 
-afterEach(() => {
+afterEach(async () => {
+  await settled()
+  // The server an inventory remembered is this test's fake, never the next one's (`rememberTmuxServer`).
+  forgetTmuxServer()
   resetTmuxVersionCache()
   process.env.PATH = originalPath
   delete process.env.TMUX_BACKEND_CALLS
@@ -166,17 +212,21 @@ esac
     theme = { background: '#300a24', foreground: '#ffffff' }
     await backend.inventory()
     const styleCalls = () => readFileSync(calls, 'utf8').trim().split('\n').filter((line) => line.includes('window-style'))
-    await vi.waitFor(() => expect(styleCalls()).toEqual([
-      'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-codex-1 ; set-option -p remain-on-exit on ; set-option destroy-unattached off ; set-option -p window-style bg=#171b29,fg=#f5f5f5 ; set-option -p @harness_daemon daemon-a',
+    await settled()
+    const [created, ...restyled] = styleCalls()
+    expect(created).toBe('new-session -d -P -F #{pane_id} -c /tmp/work -s harness-codex-1 ; set-option -p remain-on-exit on ; set-option destroy-unattached off ; set-option -p window-style bg=#171b29,fg=#f5f5f5 ; set-option -p @harness_daemon daemon-a')
+    // Sorted: the restyles run beside each other, and which writes its line first is the machine's choice.
+    expect(restyled.sort()).toEqual([
       // The pane this daemon did not create is styled on the first scan; %7 already was. Each pane on
       // its own, never its window: the person may have moved it into one of theirs.
       'set-option -p -t %9 window-style bg=#171b29,fg=#f5f5f5',
       // The app changed its palette: every live pane, once.
       'set-option -p -t %7 window-style bg=#300a24,fg=#ffffff',
       'set-option -p -t %9 window-style bg=#300a24,fg=#ffffff',
-    ]))
+    ].sort())
+    // A scan with nothing changed restyles nothing.
     await backend.inventory()
-    await new Promise((resolve) => setTimeout(resolve, 80))
+    await settled()
     expect(styleCalls()).toHaveLength(4)
   })
 
@@ -488,7 +538,8 @@ describe('TmuxBackend on a tmux before 3.0', () => {
   it('styles each pane with select-pane -P, never its window', async () => {
     const calls = recordingTmux('%9|100|harness-claude-1|/work|daemon-a\\n')
     await new TmuxBackend(undefined, () => 'daemon-a').inventory()
-    await vi.waitFor(() => expect(calls()).toContain('select-pane -t %9 -P bg=#181818,fg=#f5f5f5'))
+    await settled()
+    expect(calls()).toContain('select-pane -t %9 -P bg=#181818,fg=#f5f5f5')
     expect(calls().join('\n')).not.toContain('window-style')
   })
 
