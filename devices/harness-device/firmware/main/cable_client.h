@@ -27,6 +27,9 @@
 #include "cable_features.h"
 
 bool cable_client_supports(uint32_t features);
+#ifdef DEVICE_PRO_COMPANION
+bool cable_client_metrics_get(const char *request_id);
+#endif
 
 // ── the shapes the UI's tile list is built from ─────────────────────────────────────────────────────
 // These lived in http_api.h, which existed for the REST calls this firmware no longer makes. They are

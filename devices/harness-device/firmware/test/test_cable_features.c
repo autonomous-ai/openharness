@@ -31,11 +31,13 @@ int main(void)
     check("{\"features\":[\"form\",{}]}", 0);
     check("{\"features\":[\"form\",[\"visit\"]]}", 0);
     check("{\"features\":[\"agents.refresh\"]}", CABLE_FEATURE_AGENTS_REFRESH);
-    static const char *names[] = {"form", "selection", "visit", "voice.draft", "question.review", "agents.refresh"};
-    for (unsigned mask=0; mask<64; mask++) {
+    check("{\"features\":[\"metrics.read.v1\"]}", CABLE_FEATURE_METRICS);
+    check("{\"features\":[\"metrics.read.v2\"]}", 0);
+    static const char *names[] = {"form", "selection", "visit", "voice.draft", "question.review", "agents.refresh", "metrics.read.v1"};
+    for (unsigned mask=0; mask<128; mask++) {
         cJSON *root=cJSON_CreateObject(), *array=cJSON_AddArrayToObject(root,"features");
         assert(root && array);
-        for (unsigned i=0;i<6;i++) if (mask & (1u<<i))
+        for (unsigned i=0;i<7;i++) if (mask & (1u<<i))
             assert(cJSON_AddItemToArray(array,cJSON_CreateString(names[i])));
         assert(cable_features_parse(root)==mask);
         cJSON_Delete(root);
@@ -47,5 +49,5 @@ int main(void)
     assert(cJSON_AddItemToArray(array,cJSON_CreateString("form")));
     assert(cable_features_parse(root)==0);
     cJSON_Delete(root);
-    puts("host features: PASS (legacy default, 64 combinations, unknown/type/size bounds, no allocations)");
+    puts("host features: PASS (legacy default, 128 combinations, unknown/type/size bounds, no allocations)");
 }

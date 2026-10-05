@@ -315,6 +315,10 @@ void ui_voice_route_abort(void);
 void ui_cable_toast(const char *msg);
 void ui_selection_state(const struct cJSON *payload);
 void ui_draft_state(const struct cJSON *p);
+#ifdef DEVICE_PRO_COMPANION
+void ui_metrics_source(const char *machine, bool supported);
+void ui_metrics_state(const struct cJSON *p);
+#endif
 void ui_voice_draft(const struct cJSON *p);
 void ui_voice_question(const struct cJSON *p);
 void ui_voice_form(const struct cJSON *p);

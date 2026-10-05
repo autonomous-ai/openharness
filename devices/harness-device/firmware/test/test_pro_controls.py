@@ -28,6 +28,7 @@ def function(name):
 code = r'''
 #include "runtime.h"
 #include "pro_canvas.h"
+#include "pro_metrics.h"
 #include "../../pro_voice_samples.h"
 #include "pro_visual.h"
 #include "../../cable_features.h"
@@ -202,10 +203,14 @@ static void portrait(const ht_scene_t *f,const char *dir,const char *name) {
     }
     fclose(out);
 }
+static bool has_text(const ht_scene_t *f,const char *text) {
+    for(unsigned i=0;i<f->count;i++) if(f->runs[i].pro_kind==1 && !strcmp(f->runs[i].text,text))return true;
+    return false;
+}
 int main(int argc,char **argv) {
     const char *dir=argc>1?argv[1]:NULL;
     static const struct { view_t view;const char *name; } screens[]={
-        {LAUNCHER,"launcher"},{WORK_INTENT,"instruction"},{LANGUAGE,"language"},{VOICE_SAMPLES,"voice"},{VOICE_PARAMS,"voice-params"},{AGENTS,"panes"},{TABS,"tabs"},{INBOX,"updates"},{MACHINES,"machines"},
+        {LAUNCHER,"launcher"},{WORK_INTENT,"instruction"},{TODAY,"today-empty"},{LANGUAGE,"language"},{VOICE_SAMPLES,"voice"},{VOICE_PARAMS,"voice-params"},{AGENTS,"panes"},{TABS,"tabs"},{INBOX,"updates"},{MACHINES,"machines"},
         {MODELS,"models"},{SETTINGS,"controls"},{COMPANION,"companion"},{READER,"read"},
         {QUESTION,"question"},{CHOICE,"choices"},{ANSWER_REVIEW,"answer"},{SELECTION,"selection"},
         {FORM,"form"},{DRAFT,"draft"},{DRAFT_OPTIONS,"draft-options"},{STOP,"stop"},{MESSAGE,"message"},
@@ -220,6 +225,36 @@ int main(int argc,char **argv) {
         reset(false);COPY(s.voice_language,lang ? "vi" : "en");s.voice_sample=sample;s.view=VOICE_SAMPLES;ht_scene_t voice;ht_scene_clear(&voice,BG);
         assert(pro_render_controls(&voice));inspect(&voice,"voice sample");
         s.view=VOICE_PARAMS;ht_scene_clear(&voice,BG);assert(pro_render_controls(&voice));inspect(&voice,"voice params");
+    }
+    for(int support=0;support<2;support++) {
+        reset(false);features=support?~0u:0;s.metrics.supported=true;s.view=LAUNCHER;
+        ht_scene_t menu;ht_scene_clear(&menu,BG);assert(pro_render_controls(&menu));inspect(&menu,"today entry");
+        assert(action_count(A_TODAY,true)==(unsigned)support);
+    }
+    features=~0u;
+    for(int lang=0;lang<2;lang++)for(int state=0;state<9;state++) {
+        reset(false);COPY(s.voice_language,lang?"vi":"en");s.view=TODAY;s.metrics.supported=true;
+        s.metrics.phase=PRO_METRICS_READY;s.metrics.received=1000;
+        pro_metrics_usage_t *u=&s.metrics.usage;
+        COPY(u->machine_name,"Studio Mac");COPY(u->day,"2026-10-06");
+        u->start=1000000;u->end=87400000;u->generated=4600000;u->as_of=4570000;u->has_cost=true;u->cost=12.34;
+        u->providers[0]=(pro_metrics_provider_t){.enabled=true,.priced=true,.state=PRO_SOURCE_OK};
+        if(state==0)u->cost=0;
+        if(state==1){u->has_cost=false;u->coverage=PRO_METRICS_UNAVAILABLE;u->providers[0]=(pro_metrics_provider_t){0};}
+        if(state==2){u->coverage=PRO_METRICS_PARTIAL;u->providers[1]=(pro_metrics_provider_t){.enabled=true,.state=PRO_SOURCE_FAILED};}
+        if(state==3){u->stale=true;u->as_of-=600000;}
+        if(state==4)s.metrics.phase=PRO_METRICS_WAIT;
+        if(state==5)s.metrics.phase=PRO_METRICS_EXPIRED;
+        if(state==6)s.metrics.phase=PRO_METRICS_ERROR;
+        if(state==7)u->cost=1e9;
+        if(state==8)u->cost=0.001;
+        ht_scene_t today;ht_scene_clear(&today,BG);assert(pro_render_controls(&today));inspect(&today,"today states");
+        if(state==0)assert(has_text(&today,"$0.00"));
+        if(state==1)assert(has_text(&today,PRO_TR("Unavailable")) && !has_text(&today,"$0.00"));
+        if(state==2)assert(has_text(&today,PRO_TR("Partial coverage")));
+        if(state==8)assert(has_text(&today,"<$0.01"));
+        assert(action_count(A_TODAY_REFRESH,true)==(unsigned)(state!=4));
+        char name[48];snprintf(name,sizeof name,"today-%d-%s",state,lang?"vi":"en");portrait(&today,dir,name);
     }
     const char *engines[]={"claude","codex","opencode","","CLAUDE","claude-extra"};
     for(unsigned engine=0;engine<sizeof engines/sizeof *engines;engine++) for(int review=0;review<2;review++) {

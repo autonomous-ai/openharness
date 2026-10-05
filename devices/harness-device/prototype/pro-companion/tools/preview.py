@@ -30,6 +30,7 @@ STATES = ("idle", "working", "summary", "mail", "needs_answer", "listening",
           "voice_preparing", "voice_sending", "offline", "done", "asleep",
           "carrying", "launcher", "companion", "daemons", "scenes", "updates", "question", "reader", "locked", "updating",
           "instruction", "goal", "loop", "goal_listening", "loop_listening", "goal_review", "loop_review",
+          "today", "today_zero", "today_missing", "today_partial", "today_stale", "today_loading", "today_expired",
           "speech_pending", "speaking_warm",
           "speaking_happy", "speaking_excited", "speaking_gentle", "speaking_sad",
           "speaking_thoughtful", "speaking_curious", "speaking_angry")
@@ -57,6 +58,7 @@ def native_source():
 #include "draft.h"
 #include "character.h"
 #include "pro_canvas.h"
+#include "pro_metrics.h"
 #include "../../pro_voice_samples.h"
 #include "../../audio_speech.h"
 #include "pro_visual.h"
@@ -124,6 +126,7 @@ static void reset(void) {
     s.ready=s.connected=true;s.view=HOME;s.count=3;s.active=0;s.pressed=-1;s.brightness=86;
     COPY(s.agents[0].id,"design");COPY(s.agents[0].name,"Design");
     COPY(s.agents[0].engine,"claude");COPY(s.work_agent,"design");
+    s.metrics.supported=true;COPY(s.metrics.machine,"local");
     COPY(s.agents[1].id,"build");COPY(s.agents[1].name,"Build");
     COPY(s.agents[2].id,"research");COPY(s.agents[2].name,"Research");
     s.tab_count=1;COPY(s.selected_tab,"studio");COPY(s.tabs[0].id,"studio");
@@ -160,6 +163,19 @@ static void fixture(const char *name) {
     else if(!strcmp(name,"asleep")){s.nap=true;}
     else if(!strcmp(name,"carrying")){carry.active=true;carry.rows=4;COPY(carry.source,"Research");COPY(carry.excerpt,"Keep the landscape quiet. Give the creature room to breathe, and let clear words lead whenever there is something to read.");}
     else if(!strcmp(name,"launcher")){s.view=LAUNCHER;}
+    else if(!strncmp(name,"today",5)){
+        s.view=TODAY;s.metrics.phase=PRO_METRICS_READY;s.metrics.received=now;
+        pro_metrics_usage_t *u=&s.metrics.usage;
+        COPY(u->machine_name,"Studio Mac");COPY(u->day,"2026-10-06");
+        u->start=1000000;u->end=87400000;u->generated=4600000;u->as_of=4570000;u->has_cost=true;u->cost=12.34;
+        u->providers[0]=(pro_metrics_provider_t){.enabled=true,.priced=true,.state=PRO_SOURCE_OK};
+        if(!strcmp(name,"today_zero"))u->cost=0;
+        if(!strcmp(name,"today_missing")){u->has_cost=false;u->coverage=PRO_METRICS_UNAVAILABLE;u->providers[0]=(pro_metrics_provider_t){0};}
+        if(!strcmp(name,"today_partial")){u->coverage=PRO_METRICS_PARTIAL;u->providers[1]=(pro_metrics_provider_t){.enabled=true,.state=PRO_SOURCE_FAILED};}
+        if(!strcmp(name,"today_stale")){u->stale=true;u->as_of-=600000;}
+        if(!strcmp(name,"today_loading"))s.metrics.phase=PRO_METRICS_WAIT;
+        if(!strcmp(name,"today_expired"))s.metrics.phase=PRO_METRICS_EXPIRED;
+    }
     else if(!strcmp(name,"instruction") || !strcmp(name,"goal") || !strcmp(name,"loop")){
         s.view=WORK_INTENT;s.work_mode=!strcmp(name,"goal")?PRO_WORK_GOAL:!strcmp(name,"loop")?PRO_WORK_LOOP:PRO_WORK_TASK;
     }
@@ -299,7 +315,7 @@ def main():
         sheet.paste(Image.open(OUT/(state+".png")).resize((360,360),Image.Resampling.LANCZOS),(x,y))
         draw.text((x+12,y+368),state.replace("_"," "),font=font,fill="#263b34")
     sheet.save(OUT/"contact-sheet.png")
-    inputs=[NATIVE/name for name in ("ui_habitat.c","pro_home.inc","pro_controls.inc","pro_work_intent.h","pro_canvas.c","pro_visual.c","terminal.c")]
+    inputs=[NATIVE/name for name in ("ui_habitat.c","pro_home.inc","pro_controls.inc","pro_work_intent.h","pro_metrics.h","pro_metrics.c","pro_canvas.c","pro_visual.c","terminal.c")]
     inputs += [GENERATED/"pro_fonts.c",GENERATED/"pro_art.pack"]
     manifest={"description":"Actual production firmware renderer with illustrative state fixtures; RGB565 expanded to PNG.","states":list(states),
               "source_sha256":{str(path.relative_to(DEVICE)):hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}}

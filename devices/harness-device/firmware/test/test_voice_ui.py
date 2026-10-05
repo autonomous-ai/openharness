@@ -39,7 +39,8 @@ static bool cable_client_supports(uint32_t features) { return (host_features & f
 #include "draft.h"
 #include "workspace.h"
 #include "pro_work_intent.h"
-enum { HOME, AGENTS, AGENT, COMPANION, VOICE, MESSAGE, SELECTION, FORM, QUESTION, CHOICE, ANSWER_REVIEW, DRAFT, DRAFT_OPTIONS, INBOX, LAUNCHER, WORK_INTENT, VOICE_SAMPLES, VOICE_PARAMS };
+#include "pro_metrics.h"
+enum { HOME, AGENTS, AGENT, COMPANION, VOICE, MESSAGE, SELECTION, FORM, QUESTION, CHOICE, ANSWER_REVIEW, DRAFT, DRAFT_OPTIONS, INBOX, LAUNCHER, WORK_INTENT, TODAY, VOICE_SAMPLES, VOICE_PARAMS };
 enum { A_VOICE, A_VOICE_STOP, A_VOICE_ABORT, A_WORK_INTENT, A_WORK_MODE, A_WORK_RECORD,
     A_DRAFT_EDIT, A_DRAFT_APPEND, A_DRAFT_UNDO, A_DRAFT_SEND, A_DRAFT_DISCARD, A_DRAFT_STATE, A_DRAFT_OPTIONS, A_DRAFT_BACK };
 enum { VOICE_CMD_NONE, VOICE_CMD_GOAL, VOICE_CMD_LOOP };
@@ -60,6 +61,7 @@ static struct {
     int voice_question_index;
     char title[80], message[256], voice_target[64], pending_focus[64], pending_machine[64], opening_notice[48];
     char work_agent[64]; uint32_t work_revision; uint8_t work_mode, work_voice_mode;
+    pro_metrics_t metrics;
     struct { bool valid, supported, loading, pending, uncertain; uint32_t revision, deadline; int index; char error[120],speech_error[96],agent[64],token[48]; struct { bool can_text; } item[4]; } q;
     agent_t agents[1];
     struct { bool live_summary; } memory[PANE_MEMORY_MAX];

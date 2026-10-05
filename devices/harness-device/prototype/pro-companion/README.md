@@ -94,6 +94,7 @@ do not establish those qualities.
 | Home, while scrolling coasts | Tap | Stop that scroll; a subsequent deliberate tap starts voice |
 | Home | Hold the creature, or tap Menu | Open Menu |
 | Menu | Instruct | Choose Task, Goal or Loop for the selected pane, then Speak |
+| Menu | Today, on compatible hosts | Read this computer's local daily usage estimate; Refresh requests a new reading |
 | Home | Tap the workspace name | Open Tabs |
 | Home | Tap the bottom pane/activity area | Open Panes |
 | Side button | Tap / hold at least 0.8 seconds | Back or stop / toggle the screen |
@@ -157,6 +158,30 @@ generation precondition on Send, or goal/loop lifecycle and schedule receipt.
 The device cannot prove a loop was scheduled or show its next run. Atomic host
 validation is still needed to reject an engine change after the device's final
 check; older host fallback must not be presented as successful scheduling.
+
+### Local daily estimate
+
+Hosts advertising `metrics.read.v1` add **Today** to the Menu header. This
+temporary sheet shows the cable host's name and local day, a USD estimate,
+coverage, the three supported local transcript sources and scan age. A missing
+amount says Unavailable; a supplied zero says `$0.00`. A positive amount below
+one cent says `<$0.01`. Partial readings remain labeled. All enabled sources
+being priced means complete coverage of those opted-in sources, not an account
+bill or fleet total. Focusing a remote machine does not change this scope.
+
+Open or Refresh sends one bounded `metrics.get`; the device neither enables
+sources nor polls in the background. Replies require schema 1, the exact pending
+request ID and the full `welcome.machine.id`. A 20-second timeout, disconnect,
+source/capability change or leaving the sheet clears the pending reading.
+Reopening creates a new random request ID. Invalid data and host errors never
+produce a zero estimate or display raw diagnostic text.
+
+The host validates its projection against its clock. The Pro has no trusted
+wall clock, so scan age advances with monotonic time plus a conservative
+20-second projection allowance. At the supplied local-day boundary the amount
+is hidden until Refresh succeeds. This feature does not report elapsed work,
+goal progress or loop schedules. Production-renderer previews use illustrative
+amounts; physical USB/app integration still needs a matching host trial.
 
 Unavailable host features stay out of Controls. The larger screen does not
 invent arbitrary desktop commands: sharing, branch/PR management, window
@@ -312,6 +337,7 @@ Run the focused checks and the shared regression gates:
 python3 devices/harness-device/firmware/test/test_pro_power.py
 python3 devices/harness-device/firmware/test/test_pro_canvas.py
 python3 devices/harness-device/firmware/test/test_pro_language.py
+python3 devices/harness-device/firmware/test/test_pro_metrics.py
 python3 devices/harness-device/firmware/test/test_pro_controls.py
 python3 devices/harness-device/firmware/test/test_pro_touch_ui.py
 python3 devices/harness-device/firmware/test/test_pro_voice_samples.py

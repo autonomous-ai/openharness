@@ -43,6 +43,7 @@ code = r'''
 #include "character.h"
 #include "pro_canvas.h"
 #include "pro_work_intent.h"
+#include "pro_metrics.h"
 #include "../../pro_voice_samples.h"
 #include "pro_visual.h"
 #include "pro_art.h"
@@ -108,6 +109,7 @@ bool audio_speech_push(uint32_t id,uint32_t offset,const void *pcm,size_t bytes)
 bool audio_speech_end(uint32_t id,uint32_t bytes) { (void)id;(void)bytes;return true; }
 bool audio_speech_set_volume(uint32_t id,uint8_t volume) { (void)id;(void)volume;return true; }
 static uint32_t ms(void) { return now; }
+static uint32_t esp_random(void) { return 0x12345678; }
 static void change(void) { changes++; }
 static void display_lock(void) {}
 static void display_unlock(void) {}
@@ -187,13 +189,15 @@ language_save = function("worker").split("        case A_LANGUAGE_SET: {", 1)[1]
 code += "static void language_worker(action_t a) { switch(a.kind) { case A_LANGUAGE_SET: {" + language_save + "default: break; } }\n"
 sample_actions = SOURCE.split("    case A_VOICE_SAMPLES:", 1)[1].split("    case A_DAEMONS:", 1)[0]
 code += "static bool sample_action(action_t a) { switch(a.kind) { case A_VOICE_SAMPLES:" + sample_actions + "default: return false; } return true; }\n"
+metrics_actions = SOURCE.split("    case A_TODAY:", 1)[1].split("    case A_WORK_INTENT:", 1)[0]
+code += "static bool metrics_action(action_t a) { switch(a.kind) { case A_TODAY:" + metrics_actions + "default: return false; } return true; }\n"
 code += function("ht_character_select", (NATIVE / "character.c").read_text())
 code += r'''
 const char *ht_character_name(ht_character_id_t id) { return pro_daemon_definition(id)->name; }
 static void open_question(void) { view(QUESTION); }
 static void dispatch(action_t action) {
     sent = action;
-    if (language_action(action) || sample_action(action)) return;
+    if (language_action(action) || sample_action(action) || metrics_action(action)) return;
     if (action.kind == A_DAEMONS) pro_appearance_open(DAEMONS);
     else if (action.kind == A_SCENES) pro_appearance_open(SCENES);
     else if (action.kind == A_APPEAR_PREVIOUS) pro_appearance_move(-1);
@@ -247,6 +251,7 @@ void pro_visual_character(ht_scene_t *f, const ht_character_t *c, ht_character_m
 controls = (NATIVE / "pro_controls.inc").read_text()
 code += function("pro_hit", controls) + function("pro_control", controls) + function("pro_heading", controls) + function("pro_appearance", controls)
 code += function("pro_voice_samples", controls) + function("pro_voice_params", controls) + function("pro_launcher", controls) + function("pro_row", controls) + function("pro_language", controls)
+code += function("pro_note", controls) + function("pro_today", controls)
 code += (NATIVE / "pro_home.inc").read_text()
 code += function("render_lock") + function("render_brand")
 code += r'''
@@ -425,6 +430,7 @@ static void render_actual(void) {
     if (s.locked) render_lock(&scene);
     else if (s.view==OTA) render_brand(&scene);
     else if (pro_appearance_view()) pro_appearance(&scene);
+    else if (s.view==TODAY) pro_today(&scene);
     else if (s.view==VOICE) pro_render_voice(&scene); else pro_render_home(&scene);
     check_scene();
 }
@@ -954,8 +960,40 @@ static void voice_sample_controls(void) {
     native_voice_available=true;
 }
 
+static void today_read_only(void) {
+    reset();pro_metrics_source(&s.metrics,"local",true);view(LAUNCHER);
+    s.hit_count=0;ht_scene_clear(&scene,BG);pro_launcher(&scene);
+    const hit_t *entry=action_hit(A_TODAY);assert(entry&&entry->enabled);
+    tap(entry->rect.x+40,entry->rect.y+30,75);
+    assert(s.view==TODAY&&s.metrics.phase==PRO_METRICS_WAIT&&queued==1);
+    assert(queued_action.kind==A_METRICS_GET);
+    render_actual();const hit_t *refresh=action_hit(A_TODAY_REFRESH);
+    assert(refresh&&!refresh->enabled&&habitat_next_wake_ms()<=1000);
+    tap(360,340,75);swipe(360,480,366,220);
+    assert(s.view==TODAY&&queued==1&&!starts&&!switches&&!travel&&!down_reports);
+    swipe(230,340,550,337);
+    assert(s.view==HOME&&s.metrics.phase==PRO_METRICS_EMPTY&&!s.metrics.request[0]);
+    assert(queued==1&&!starts&&!switches&&!travel&&!down_reports);
+}
+
+static void today_refresh_contact(void) {
+    reset();pro_metrics_source(&s.metrics,"local",true);view(TODAY);
+    s.metrics.phase=PRO_METRICS_ERROR;render_actual();
+    const hit_t *refresh=action_hit(A_TODAY_REFRESH);assert(refresh&&refresh->enabled);
+    int x=refresh->rect.x+40,y=refresh->rect.y+30;
+    sample(true,x,y,2000);sample(true,x,y-80,2070);sample(true,x,y,2140);sample(false,x,y,2200);
+    assert(!queued&&!starts&&!switches&&!travel);
+    view(TODAY);render_actual();tap(x,y,75);
+    assert(queued==1&&s.metrics.phase==PRO_METRICS_WAIT);
+    render_actual();tap(x,y,75);assert(queued==1);
+    ui_set_connected(false);
+    assert(!s.metrics.supported&&!s.metrics.request[0]&&!s.metrics.usage.has_cost);
+    assert(!starts&&!switches&&!travel&&!down_reports);
+}
+
 int main(int argc,char **argv) {
     const struct { const char *name; test_fn run; } tests[]={
+        {"today_read_only",today_read_only},{"today_refresh_contact",today_refresh_contact},
         {"language_controls",language_controls},{"voice_sample_controls",voice_sample_controls},{"center_voice",center_voice},{"summary_voice",summary_voice},{"deliberate_tap",deliberate_tap},
         {"thumb_drift",thumb_drift},{"panes",panes},{"pane_after_diagonal_start",pane_after_diagonal_start},
         {"scroll_output",scroll_output},

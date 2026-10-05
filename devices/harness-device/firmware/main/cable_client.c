@@ -131,6 +131,18 @@ static bool msg_bool(cJSON **root, const char *key, bool value)
 {
     return *root && msg_check(root, cJSON_AddBoolToObject(*root, key, value) != NULL);
 }
+#ifdef DEVICE_PRO_COMPANION
+bool cable_client_metrics_get(const char *request_id)
+{
+    if (!s_session || !cable_client_supports(CABLE_FEATURE_METRICS) || !request_id ||
+        !request_id[0] || strlen(request_id) > 47) return false;
+    for (const char *c=request_id;*c;c++)
+        if (!((*c>='a' && *c<='z') || (*c>='A' && *c<='Z') || (*c>='0' && *c<='9') || *c=='-')) return false;
+    cJSON *root=msg("metrics.get");
+    msg_string(&root,"requestId",request_id);
+    return send_json(root);
+}
+#endif
 static cJSON *msg_array(cJSON **root, const char *key)
 {
     if (!*root) return NULL;
@@ -780,6 +792,10 @@ static void session_up(const cJSON *p)
     const bool was = s_session;
     s_session = true;
     ui_set_connected(true);
+#ifdef DEVICE_PRO_COMPANION
+    // Use the complete identity, never the legacy truncated machine buffer.
+    ui_metrics_source(mid, cable_client_supports(CABLE_FEATURE_METRICS));
+#endif
     if (!was) {
         // Route the log through the link only once a peer is listening. Unplugged — or plugged into a
         // machine with no daemon — the port stays an ordinary console and `idf.py monitor` behaves as it
@@ -1152,6 +1168,9 @@ static void handle_message(const cJSON *root)
     }
 
     if (strcmp(t,"draft.state")==0) { ui_draft_state(p);return; }
+#ifdef DEVICE_PRO_COMPANION
+    if (strcmp(t,"metrics.state")==0) { ui_metrics_state(p);return; }
+#endif
     if (strcmp(t,"voice.draft")==0) {
         const char *upload_id=str_of(p,"uploadId");
         if (!upload_id || !audio_client_upload_matches(upload_id)) return;

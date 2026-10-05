@@ -19,6 +19,7 @@
 #include "pro_canvas.h"
 #include "pro_visual.h"
 #include "pro_work_intent.h"
+#include "pro_metrics.h"
 #include "audio_speech.h"
 #include "../companion_speech.h"
 #endif
@@ -63,7 +64,7 @@ static ht_gallery_t gallery;
 typedef enum {
     HOME,
 #ifdef DEVICE_PRO_COMPANION
-    LAUNCHER, WORK_INTENT,
+    LAUNCHER, WORK_INTENT, TODAY,
     DAEMONS, SCENES, VOICE_SAMPLES, VOICE_PARAMS, LANGUAGE,
 #endif
     AGENTS,
@@ -93,6 +94,7 @@ typedef enum {
     A_HOME,
 #ifdef DEVICE_PRO_COMPANION
     A_LAUNCHER, A_WORK_INTENT, A_WORK_MODE, A_WORK_RECORD,
+    A_TODAY, A_TODAY_REFRESH, A_METRICS_GET,
     A_LANGUAGE, A_LANGUAGE_SET,
     A_DAEMONS, A_SCENES, A_APPEAR_PREVIOUS, A_APPEAR_NEXT, A_APPEAR_USE, A_APPEAR_SAVE,
     A_VOICE_SAMPLES, A_SAMPLE_PREVIOUS, A_SAMPLE_NEXT, A_SAMPLE_PLAY,
@@ -222,6 +224,7 @@ static EXT_RAM_BSS_ATTR struct {
     char work_agent[ID_MAX];
     uint32_t work_revision;
     uint8_t work_mode, work_voice_mode;
+    pro_metrics_t metrics;
     ht_character_t preview_character;
     struct {
         uint32_t id, poll_due;
@@ -596,6 +599,7 @@ static void view(view_t v)
         return;
 #ifdef DEVICE_PRO_COMPANION
     if (v != VOICE_SAMPLES && v != VOICE_PARAMS) pro_voice_sample_stop();
+    if (v != TODAY) pro_metrics_close(&s.metrics);
 #endif
     if (carry.pending && v != SELECTION) ht_carry_close(&carry);
     if (selection.active && v != SELECTION && v != VOICE) ht_selection_close(&selection);
@@ -1067,6 +1071,7 @@ static uint32_t status_wake_ms(uint32_t now)
 static void surface_tick(uint32_t now)
 {
 #ifdef DEVICE_PRO_COMPANION
+    if (s.view == TODAY && pro_metrics_tick(&s.metrics,now)) change();
     if (s.view == VOICE_SAMPLES || s.view == VOICE_PARAMS) {
         if (s.locked || display_is_asleep()) pro_voice_sample_stop();
         if ((int32_t)(now - s.sample_poll_due) >= 0) {
@@ -2382,6 +2387,19 @@ static void dispatch(action_t a)
     case A_LAUNCHER:
         view(LAUNCHER);
         break;
+    case A_TODAY:
+    case A_TODAY_REFRESH: {
+        if (!s.connected || !s.metrics.supported || !cable_client_supports(CABLE_FEATURE_METRICS) ||
+            (a.kind==A_TODAY_REFRESH && s.view!=TODAY)) break;
+        view(TODAY);
+        if (s.view!=TODAY || !pro_metrics_begin(&s.metrics,ms(),esp_random(),esp_random())) break;
+        action_t request={.kind=A_METRICS_GET,.revision=s.metrics.serial};
+        COPY(request.id,s.metrics.request); COPY(request.text,s.metrics.machine);
+        if (!queue(request)) { s.metrics.phase=PRO_METRICS_ERROR; s.metrics.request[0]=0; }
+        change(); break;
+    }
+    case A_METRICS_GET:
+        break; // Worker-only, never a touch target.
     case A_WORK_INTENT:
         if (!s.connected || s.loading || !active() || s.voice_open || carry.active || carry.error[0]) break;
         COPY(s.work_agent, active()->id);
@@ -2981,6 +2999,23 @@ static void worker(void *unused)
     static EXT_RAM_BSS_ATTR question_submit_t packet;
     while (xQueueReceive(actions, &a, portMAX_DELAY) == pdTRUE) {
         switch (a.kind) {
+#ifdef DEVICE_PRO_COMPANION
+        case A_METRICS_GET: {
+            display_lock();
+            bool current=s.connected && s.view==TODAY && s.metrics.phase==PRO_METRICS_WAIT &&
+                (int32_t)(ms()-s.metrics.deadline)<0 &&
+                a.revision==s.metrics.serial && !strcmp(a.id,s.metrics.request) && !strcmp(a.text,s.metrics.machine);
+            display_unlock();
+            if (current && !cable_client_metrics_get(a.id)) {
+                display_lock();
+                if (s.metrics.phase==PRO_METRICS_WAIT && a.revision==s.metrics.serial && !strcmp(a.id,s.metrics.request)) {
+                    s.metrics.phase=PRO_METRICS_ERROR; s.metrics.request[0]=0; change();
+                }
+                display_unlock();
+            }
+            break;
+        }
+#endif
         case A_DRAFT_COMMAND: {
             static const char *ops[] = {"state", "move", "undo", "discard", "send"};
             if (a.value >= 0 && a.value <= HT_DRAFT_SEND)
@@ -3728,6 +3763,9 @@ void ui_set_connected(bool value)
 {
     display_lock();
     if (!value) {
+#ifdef DEVICE_PRO_COMPANION
+        pro_metrics_source(&s.metrics,NULL,false);
+#endif
         input_cancel();
         s.voice_retry_until = 0;
         s.pending_machine[0] = 0;
@@ -3752,6 +3790,25 @@ void ui_set_connected(bool value)
     change();
     display_unlock();
 }
+#ifdef DEVICE_PRO_COMPANION
+void ui_metrics_source(const char *machine, bool supported)
+{
+    display_lock();
+    bool was=s.metrics.supported; char previous[48]; COPY(previous,s.metrics.machine);
+    pro_metrics_source(&s.metrics,machine,supported && s.connected);
+    if (was!=s.metrics.supported || strcmp(previous,s.metrics.machine)) {
+        if (s.view==TODAY) input_cancel();
+        change();
+    }
+    display_unlock();
+}
+void ui_metrics_state(const cJSON *p)
+{
+    display_lock();
+    if (s.connected && s.view==TODAY && s.metrics.supported && pro_metrics_reply(&s.metrics,p,ms())) change();
+    display_unlock();
+}
+#endif
 void ui_project_set_name(const char *id, const char *name)
 {
     display_lock();

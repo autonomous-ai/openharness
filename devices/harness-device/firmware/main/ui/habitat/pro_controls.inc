@@ -1,4 +1,5 @@
 #include "pro_work_intent.h"
+#include "pro_metrics.h"
 /* Harness Pro sheets. Included by ui_habitat.c after the shared view helpers.
  * Controls retain recipient, revision and explicit review guards. Instruction
  * choices use the existing voice command and draft protocols. */
@@ -81,6 +82,8 @@ static void pro_row(ht_scene_t *f, int y, const char *name, const char *detail,
 static void pro_launcher(ht_scene_t *f)
 {
     pro_heading(f, PRO_TR("Menu"), A_HOME);
+    if (s.connected && s.metrics.supported && cable_client_supports(CABLE_FEATURE_METRICS))
+        pro_control(f,534,28,154,64,PRO_TR("Today"),A_TODAY,0,true);
     pro_control(f, 32, 132, 208, 70, PRO_TR("Instruct"), A_WORK_INTENT, 0,
                 s.connected && !s.loading && active() && !carry.active && !carry.error[0]);
     pro_control(f, 256, 132, 208, 70, PRO_TR("Voice"), A_VOICE_SAMPLES, 0, true);
@@ -127,6 +130,57 @@ static void pro_work_intent(ht_scene_t *f)
     pro_control(f, 216, 606, 288, 68, PRO_TR("Speak"), A_WORK_RECORD, 0, supported);
     pro_note(f, !supported ? PRO_TR("Choose the pane and instruction again.") :
                 s.work_mode == PRO_WORK_TASK ? PRO_TR("Speak to this pane.") : PRO_TR("Review before sending."));
+}
+
+static void pro_today(ht_scene_t *f)
+{
+    pro_heading(f,PRO_TR("Today"),A_LAUNCHER);
+    const pro_metrics_t *m=&s.metrics;
+    const pro_metrics_usage_t *u=&m->usage;
+    bool ready=m->phase==PRO_METRICS_READY && !pro_metrics_expired(m,ms());
+    ht_pro_text(f,48,136,624,&ht_pro_32,FG,u->machine_name[0]?u->machine_name:PRO_TR("This computer"));
+    if (u->day[0]) ht_pro_text(f,48,184,624,&ht_pro_24,DIM,u->day);
+    if (ready) {
+        char amount[40];
+        if (!u->has_cost) snprintf(amount,sizeof amount,"%s",PRO_TR("Unavailable"));
+        else if (u->cost>0 && u->cost<0.01) snprintf(amount,sizeof amount,"<$0.01");
+        else {
+            uint64_t cents=(uint64_t)(u->cost*100+0.5);
+            snprintf(amount,sizeof amount,"$%llu.%02u",(unsigned long long)(cents/100),(unsigned)(cents%100));
+        }
+        const ht_pro_font_t *font=ht_pro_width(&ht_pro_56,amount)<=624?&ht_pro_56:&ht_pro_42;
+        ht_pro_text(f,48,224,624,font,u->has_cost?FG:DIM,amount);
+        ht_pro_text(f,48,309,624,&ht_pro_24,DIM,PRO_TR("USD estimate"));
+        ht_pro_text(f,48,360,624,&ht_pro_24,FG,PRO_TR(u->coverage==PRO_METRICS_PARTIAL?"Partial coverage":"Opted-in sources"));
+        static const char *names[]={"Claude","Codex","OpenCode"};
+        for (unsigned i=0;i<3;i++) {
+            const pro_metrics_provider_t *p=&u->providers[i];
+            const char *label=!p->enabled?"Off":p->state==PRO_SOURCE_SCANNING?"Reading...":
+                p->state==PRO_SOURCE_OK?(p->priced?"Included":"Unpriced"):
+                p->state==PRO_SOURCE_PARTIAL?"Partial":"Unavailable";
+            ht_pro_text(f,48,410+(int)i*45,268,&ht_pro_24,DIM,names[i]);
+            ht_pro_text(f,340,410+(int)i*45,332,&ht_pro_24,DIM,PRO_TR(label));
+        }
+        char age[96];
+        if (!u->has_cost) snprintf(age,sizeof age,"%s",PRO_TR("Choose sources in Harness."));
+        else {
+            uint64_t age_ms=pro_metrics_age(m,ms()); unsigned minute=(unsigned)(age_ms/60000);
+            if (!minute) snprintf(age,sizeof age,"%s",PRO_TR("Scan: less than 1 min ago"));
+            else snprintf(age,sizeof age,PRO_TR(u->stale || age_ms>300000?"Older scan: about %u min ago":"Scan: about %u min ago"),minute);
+        }
+        ht_pro_text(f,48,555,624,&ht_pro_24,DIM,age);
+    } else {
+        const char *title=m->phase==PRO_METRICS_WAIT?"Reading local usage...":"Unavailable";
+        ht_pro_text(f,48,260,624,&ht_pro_42,DIM,PRO_TR(title));
+        const char *detail=!s.connected?"Connect to Harness":
+            !m->supported?"Update Harness to read usage.":
+            m->phase==PRO_METRICS_WAIT?"Opted-in sources only.":
+            m->phase==PRO_METRICS_EXPIRED || (m->phase==PRO_METRICS_READY && !ready)?"Refresh for the new day.":"Try again in Harness.";
+        ht_pro_wrap(f,48,334,624,2,0,&ht_pro_24,DIM,PRO_TR(detail));
+    }
+    pro_control(f,216,606,288,68,PRO_TR("Refresh"),A_TODAY_REFRESH,0,
+                s.connected && m->supported && m->phase!=PRO_METRICS_WAIT);
+    pro_note(f,PRO_TR("This computer only."));
 }
 
 static void pro_language(ht_scene_t *f)
@@ -596,6 +650,7 @@ static bool pro_render_controls(ht_scene_t *f)
     switch (s.view) {
     case LAUNCHER: pro_launcher(f); return true;
     case WORK_INTENT: pro_work_intent(f); return true;
+    case TODAY: pro_today(f); return true;
     case LANGUAGE: pro_language(f); return true;
     case VOICE_SAMPLES: pro_voice_samples(f); return true;
     case VOICE_PARAMS: pro_voice_params(f); return true;

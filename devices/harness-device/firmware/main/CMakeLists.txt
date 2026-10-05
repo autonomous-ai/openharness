@@ -238,7 +238,7 @@ if(DEVICE_PRO_COMPANION)
     endif()
     target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_PRO_COMPANION=1)
     target_sources(${COMPONENT_LIB} PRIVATE "cable_speech.c" "pro_voice_samples.c" "ui/habitat/pro_canvas.c" "ui/habitat/pro_visual.c" "ui/habitat/pro_daemon.c"
-        "${PRO_ART_DIR}/pro_fonts.c")
+        "ui/habitat/pro_metrics.c" "${PRO_ART_DIR}/pro_fonts.c")
     target_include_directories(${COMPONENT_LIB} PRIVATE "ui/habitat" "${PRO_ART_DIR}")
     target_add_binary_data(${COMPONENT_LIB} "${PRO_ART_DIR}/pro_art.pack" BINARY RENAME_TO pro_art_pack)
     set(PRO_VOICE_DIR "${CMAKE_CURRENT_LIST_DIR}/../../prototype/pro-companion/voice-samples")

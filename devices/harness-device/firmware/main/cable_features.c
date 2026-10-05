@@ -11,6 +11,7 @@ uint32_t cable_features_parse(const cJSON *welcome)
         {"visit", CABLE_FEATURE_VISIT}, {"voice.draft", CABLE_FEATURE_DRAFT},
         {"question.review", CABLE_FEATURE_QUESTIONS},
         {"agents.refresh", CABLE_FEATURE_AGENTS_REFRESH},
+        {"metrics.read.v1", CABLE_FEATURE_METRICS},
     };
     uint32_t result = 0;
     const cJSON *item;
