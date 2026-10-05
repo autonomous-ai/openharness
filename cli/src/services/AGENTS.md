@@ -39,8 +39,10 @@ let several people build features at once without touching the core or each othe
 ## Running in its own process
 
 A service that can crash natively, hang or leak should run in its own process, where it costs only
-itself. Search, the viewers, workspaces and the teams' prompt scopes do:
-`HARNESSD_SERVICES=search,viewers,workspaces,teams` (any of them alone, too).
+itself. Search, the viewers, workspaces and the teams' prompt scopes do, by default: every service in
+`KNOWN_SERVICES` runs in its own process unless `HARNESSD_SERVICES` names a subset
+(`search,viewers`), and `HARNESSD_SERVICES=none` runs them all inside the core's process (for debugging
+or a quick way back).
 
 - `src/harnessd/services.ts` runs it (`KNOWN_SERVICES`, with its memory budget). The core routes the
   requests it declared (its `<NAME>_REQUESTS`) to its process, and the same handlers answer them there.

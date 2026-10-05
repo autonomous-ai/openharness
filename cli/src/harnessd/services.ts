@@ -287,9 +287,9 @@ export class ServiceSupervisor {
 }
 
 /**
- * The services this build can run in their own processes, with their memory budgets. Which of them do
- * is `HARNESSD_SERVICES` (`search,viewers,workspaces,teams`): off until named, while each one beds in,
- * and the core runs a service that is not out here in its own process, as before.
+ * The services this build runs in their own processes, with their memory budgets: every one, unless
+ * `HARNESSD_SERVICES` names a subset (`search,viewers`) or `none` (see `serviceSpecs`). A service that
+ * is not out here runs inside the core's process, behind the service host's guard, as before.
  */
 export const KNOWN_SERVICES: Readonly<Record<string, Omit<ServiceSpec, 'name'>>> = {
   search: { heapLimitMiB: 1_024, rssLimitMiB: 2_048 },
@@ -351,10 +351,17 @@ export function servicesTheMasterRuns(env: NodeJS.ProcessEnv, known: Readonly<Re
   return new Set(said.split(',').map((name) => name.trim()).filter((name) => name && Object.hasOwn(known, name)))
 }
 
-/** The services to run, from `HARNESSD_SERVICES` (`search,devices`): only names this build knows.
- *  `HARNESSD_SERVICE_HEAP_LIMIT_MIB` gives every one the same heap limit instead (tests, support). */
+/**
+ * The services to run in their own processes: every one this build knows, unless `HARNESSD_SERVICES`
+ * names a subset; `none` (or empty) runs them all inside the core's process, for debugging or a quick
+ * way back. Isolation is the point of the split (one service failing costs only itself), so it is the
+ * default, not an opt-in. Only names this build knows. `HARNESSD_SERVICE_HEAP_LIMIT_MIB` gives every
+ * one the same heap limit instead (tests, support).
+ */
 export function serviceSpecs(env: NodeJS.ProcessEnv, known: Readonly<Record<string, Omit<ServiceSpec, 'name'>>>): ServiceSpec[] {
-  const names = (env.HARNESSD_SERVICES ?? '').split(',').map((name) => name.trim()).filter(Boolean)
+  const names = env.HARNESSD_SERVICES === undefined
+    ? Object.keys(known)
+    : env.HARNESSD_SERVICES.split(',').map((name) => name.trim()).filter((name) => name && name !== 'none')
   const heap = Number(env.HARNESSD_SERVICE_HEAP_LIMIT_MIB)
   return [...new Set(names)].filter((name) => Object.hasOwn(known, name)).map((name) => ({
     name, ...known[name], ...(Number.isInteger(heap) && heap > 0 ? { heapLimitMiB: heap } : {}),

@@ -256,7 +256,7 @@ describe('runMaster', () => {
       pidFile,
       restoreUpdate: () => updates.push('restore'),
       confirmUpdate: () => updates.push('confirm'),
-      env: { ...process.env, HARNESSD_INITIAL_BACKOFF_MS: '10' },
+      env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_INITIAL_BACKOFF_MS: '10' },
       exit: (code) => exits.push(code),
       onSignal: (signal, listener) => signals.set(signal, listener),
     })
@@ -289,7 +289,7 @@ describe('runMaster', () => {
     runMaster({
       nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile, statusFile, logFile: join(dir, 'harness.log'),
       restoreUpdate: () => {}, confirmUpdate: () => {},
-      env: { ...process.env, HARNESSD_HEAP_LIMIT_MIB: '300' },
+      env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_HEAP_LIMIT_MIB: '300' },
       exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
     })
     await until('the core to be ready', () => readStatusFile(statusFile, process.pid)?.state === 'running')
@@ -317,7 +317,7 @@ describe('runMaster', () => {
       runMaster({
         nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile, statusFile,
         restoreUpdate: () => {}, confirmUpdate: () => {},
-        env: { ...process.env, HARNESSD_PLATFORM: 'launchd' },
+        env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_PLATFORM: 'launchd' },
         exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
       })
       await until('the core to be ready', () => readStatusFile(statusFile, process.pid)?.state === 'running')
@@ -411,7 +411,7 @@ describe('runMaster', () => {
       runMaster({
         nodePath: '/nonexistent/node', execArgv: [], scriptPath: '/nonexistent/core.js',
         pidFile: ${JSON.stringify(join(dir, 'adapter.pid'))}, restoreUpdate: () => {}, confirmUpdate: () => {},
-        env: { ...process.env, HARNESSD_INITIAL_BACKOFF_MS: '20' },
+        env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_INITIAL_BACKOFF_MS: '20' },
       })
       console.log('READY')
     `)
@@ -452,7 +452,7 @@ describe('runMaster', () => {
       const supervisor = runMaster({
         nodePath: process.execPath, execArgv: [], scriptPath, pidFile: join(dir, 'adapter.pid'), statusFile: join(dir, 'harnessd-status.json'),
         restoreUpdate: () => calls.push('restore'), confirmUpdate: () => calls.push('confirm'),
-        env: { ...process.env, HARNESSD_INITIAL_BACKOFF_MS: '10', HARNESSD_UPDATE_PROBATION_MS: '100' },
+        env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_INITIAL_BACKOFF_MS: '10', HARNESSD_UPDATE_PROBATION_MS: '100' },
         exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
         version: '1.0.0', reexecMarkerFile: join(dir, 'harnessd-reexec.json'),
         execve: (file: string, args: string[], env: NodeJS.ProcessEnv) => { execs.push({ file, args, env }) },
@@ -515,14 +515,14 @@ describe('runMaster', () => {
       const lines: string[] = []
       const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
       try {
-        const master = start(script, { env: { ...process.env, HARNESSD_UPDATE_PROBATION_MS: '100', [RESUME_ENV]: encodeResume(resume) } })
+        const master = start(script, { env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_UPDATE_PROBATION_MS: '100', [RESUME_ENV]: encodeResume(resume) } })
         await until('the update to be kept', () => master.calls.includes('confirm'))
         expect(JSON.parse(readFileSync(seen, 'utf8').trim().split('\n')[0])).toEqual({ restarts: '3', resume: null })
         expect(readStatusFile(join(dir, 'harnessd-status.json'), process.pid)).toMatchObject({ masterVersion: '1.0.0', reexecs: 1, restarts: 3 })
         expect(lines.some((line) => line.endsWith(`[harnessd] master re-executed (pid ${process.pid}) · now v1.0.0`))).toBe(true)
         await master.stop()
         // Without a version it says so without one.
-        const plain = start(script, { version: undefined, env: { ...process.env, [RESUME_ENV]: encodeResume(resume) } })
+        const plain = start(script, { version: undefined, env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(resume) } })
         await until('its core', () => plain.supervisor.status().state === 'running')
         expect(lines.some((line) => line.endsWith(`[harnessd] master re-executed (pid ${process.pid})`))).toBe(true)
         await plain.stop()
