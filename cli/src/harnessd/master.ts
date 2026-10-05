@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto'
 import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { performance } from 'node:perf_hooks'
 import { trimLogFile } from '../lib/log.js'
+import { platformFromEnv, type PlatformName } from './platform.js'
 import type { MasterMessage } from './protocol.js'
 import { KNOWN_SERVICES, ServiceSupervisor, serviceOptions, serviceSpecs } from './services.js'
 import { DEFAULT_SUPERVISOR_OPTIONS, Supervisor, type CoreHandle, type SupervisorOptions, type SupervisorStatus } from './supervisor.js'
@@ -94,7 +95,7 @@ export function coreExecArgv(execArgv: readonly string[], heapLimitMiB: number):
  * is crash-looping, restarting, or in safe mode. Written whole and renamed into place, so a reader
  * never sees half of it.
  */
-export function writeStatusFile(file: string, status: SupervisorStatus & { masterPid: number }): void {
+export function writeStatusFile(file: string, status: MasterStatusFile): void {
   const temp = `${file}.${status.masterPid}.tmp`
   try {
     writeFileSync(temp, `${JSON.stringify(status)}\n`)
@@ -105,7 +106,9 @@ export function writeStatusFile(file: string, status: SupervisorStatus & { maste
   }
 }
 
-export type MasterStatusFile = SupervisorStatus & { masterPid: number }
+/** `platform`: launchd or systemd runs this master (`harness service install`); absent when
+ *  `harness start` or the desktop app started it. How `harness stop` knows to ask the platform. */
+export type MasterStatusFile = SupervisorStatus & { masterPid: number; platform?: PlatformName }
 
 /** Keep `file` under its cap from now on; returns what stops it. Nothing to trim, nothing to stop. */
 export function trimLogEvery(file: string | undefined, ms = LOG_TRIM_INTERVAL_MS, trim: (file: string) => boolean = trimLogFile): () => void {
@@ -174,6 +177,9 @@ export function runMaster(config: MasterConfig): Supervisor {
   // one file in place would race.
   const stopTrimming = trimLogEvery(config.logFile)
   const log = (line: string) => console.log(`${new Date().toISOString().replace('T', ' ').slice(0, 23)} ${line}`)
+  // Set by the launchd agent or systemd unit `harness service install` writes (./platform.ts).
+  const platform = platformFromEnv(env)
+  if (platform) log(`[harnessd] run by ${platform}, which starts this master again if it dies`)
   // A new one every boot, given to the core and to each service: how the core knows a service
   // connection is one this master started, and no other local process.
   const token = randomBytes(24).toString('hex')
@@ -195,7 +201,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     })),
     now: () => performance.now(),
     wallClock: () => Date.now(),
-    writeStatus: (status) => { if (config.statusFile) writeStatusFile(config.statusFile, { ...status, masterPid: process.pid }) },
+    writeStatus: (status) => { if (config.statusFile) writeStatusFile(config.statusFile, { ...status, masterPid: process.pid, ...(platform ? { platform } : {}) }) },
     setTimer: (run, ms) => setTimeout(run, ms),
     clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
     claimPidFile: () => writeFileSync(config.pidFile, `${process.pid}\n`),
