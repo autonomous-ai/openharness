@@ -280,27 +280,21 @@ describe('many windows at once', () => {
     const asked = Promise.all(asking)
     asked.catch(() => {})
     await pause(500)
-    const stop = () => how === 'agent_close'
-      ? closer.request('agent_close', { agentId: agent.id, sessionId: agent.sessionId, createdAt: agent.createdAt, mode: 'now' }, 90_000)
-      : closer.request('agent_delete', { agentId: agent.id }, 90_000)
-    const stopped = await stop()
+    const stopped = how === 'agent_close'
+      ? await closer.request('agent_close', { agentId: agent.id, sessionId: agent.sessionId, createdAt: agent.createdAt, mode: 'now' }, 90_000)
+      : await closer.request('agent_delete', { agentId: agent.id }, 90_000)
     stoppedAt = Date.now()
     // Every request got an answer, a result or a refusal; none waited past its timeout (that rejects).
     const answers = (await asked).flat()
     expect(answers.length).toBeGreaterThan(0)
 
-    // The stop was a stop: never answered with somebody else's question about the agent. A close asked
-    // for while another window's inspect of the same agent was still running has been answered with that
-    // inspect's `{ activity }`, and the agent left running (measured: still active 10 s later).
-    const expected = how === 'agent_close' ? { closed: true } : { deleted: true }
-    expect.soft(stopped, `${how} answered ${JSON.stringify(stopped)} while other windows asked about the agent`).toMatchObject(expected)
-    // Soft, so that what follows is still checked: a stop that was not carried out is asked for again,
-    // now that nobody else is asking, and there it is carried out.
-    if (!(how === 'agent_close' ? stopped.closed === true : stopped.deleted === true)) {
-      expect(await stop(), 'the same stop asked for again on its own').toMatchObject(expected)
-    }
-    // Each answer is the one its question asks for. An inspect that ran beside the close has come back
-    // as the close's own `{ closed: true }`: the same mix-up the other way round, so soft as well.
+    // The stop was a stop, and every answer is the one its question asks for. A close asked for while
+    // another window's inspect of the same agent was still running was answered with that inspect's
+    // `{ activity }` and the agent left running (measured: still active 10 s later), and an inspect that
+    // ran beside a close came back as the close's `{ closed: true }`: the close service answered any
+    // request for an agent with whatever job was running for it.
+    expect(stopped, `${how} answered ${JSON.stringify(stopped)} while other windows asked about the agent`)
+      .toMatchObject(how === 'agent_close' ? { closed: true } : { deleted: true })
     const shaped: Record<string, (answer: Row) => boolean> = {
       session_get: (answer) => Array.isArray(answer.events),
       sessions_list: (answer) => Array.isArray(answer.sessions),
@@ -311,7 +305,7 @@ describe('many windows at once', () => {
     }
     const misshapen = answers.filter(({ type, answer }) => typeof answer.error !== 'string' && !shaped[type](answer))
       .map(({ type, answer }) => `${type}: ${JSON.stringify(answer).slice(0, 200)}`)
-    expect.soft(misshapen, 'answers that are not what their question asks for').toEqual([])
+    expect(misshapen, 'answers that are not what their question asks for').toEqual([])
 
     // It reads as stopped, once, and the questions that came after did not bring it back.
     await until('the agent to read as stopped', async () => (await row(watcher, agent.id))?.status === 'stopped' || null, 45_000, 500)
