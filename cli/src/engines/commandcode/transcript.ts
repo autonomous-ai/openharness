@@ -1,6 +1,9 @@
 import { join } from 'path'
 import slugify from '@sindresorhus/slugify'
 import { env } from '../../config/env.js'
+import type { EngineTranscript } from '../facets/transcript.js'
+import { lastTurnFromTail } from '../kit/lastTurn.js'
+import { lastCommandCodeTurnText } from './normalizer.js'
 
 /**
  * Command Code lays its transcripts out deterministically:
@@ -29,4 +32,9 @@ export function commandcodeTranscriptPath(cwd: string | null | undefined, sessio
   const slug = commandcodeProjectSlug(cwd)
   if (!slug) return null
   return join(env.COMMANDCODE_HOME, 'projects', slug, `${sessionId}.jsonl`)
+}
+
+/** Command Code's transcript facet (docs/design/2026-10-05-engine-interface.md, section 4.3). */
+export const transcript: EngineTranscript = {
+  lastTurnText: (session) => lastTurnFromTail(session, lastCommandCodeTurnText),
 }

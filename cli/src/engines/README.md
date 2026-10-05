@@ -14,9 +14,13 @@ agent already writes* and turns it into a live event stream: turns, tool calls, 
 sub-agents, questions, completion. An engine is the translator between your agent's transcript and
 that stream.
 
-**Set expectations before you start.** This is not a plugin API. There is no registry to append to
-and no interface to implement in one file. The codebase branches on `session.engine` in about twenty
-shared files, and a new engine touches most of them. That is a real cost and we are not going to
+**Set expectations before you start.** This is not a plugin API yet. The engines are moving behind one
+`Engine` interface and a registry (`engine.ts`, `registry.ts`; the plan is
+[docs/design/2026-10-05-engine-interface.md](../../../docs/design/2026-10-05-engine-interface.md)), one
+group of decisions at a time, and `transcript.ts` in each folder is the first facet to have moved: it is
+where the recap's last turn and a database engine's stored conversation are read. Until the migration
+ends, the codebase still branches on `session.engine` in about twenty shared files, and a new engine
+touches most of them. That is a real cost and we are not going to
 pretend otherwise — but it is a *known* list, not a search, and this page is that list in dependency
 order. Two engines were each added in a single commit — Muse Code (`b6c58e6`) and Amp (`f15924f`) —
 and reading either alongside this page shows every item below in context. Read Amp's if your agent

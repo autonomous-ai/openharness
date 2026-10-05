@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
+import { engineFor } from '../../engines/registry.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLastTurnReader } from './lastTurn.js'
 
@@ -69,12 +70,7 @@ const sessions = Object.entries(TRANSCRIPTS).map(([engine, text]) => {
   return { agentId: `${engine}-agent`, sessionId: `${engine}-session`, engine, transcriptPath } as RegisteredSession
 })
 const bySession = new Map(sessions.map((s) => [s.sessionId, s]))
-const read = createLastTurnReader({
-  bySession: (sessionId) => bySession.get(sessionId),
-  // No file engine reads a store; these are never opened.
-  dbs: { opencode: join(dir, 'none.db'), kilo: join(dir, 'none.db'), devin: join(dir, 'none.db') },
-  hermesDb: async () => join(dir, 'none.db'),
-})
+const read = createLastTurnReader({ bySession: (sessionId) => bySession.get(sessionId), engineFor })
 
 describe('the last turn of every file engine, from a recorded session', () => {
   it('has an answer on file for every engine it reads', () => {

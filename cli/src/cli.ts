@@ -141,6 +141,7 @@ import { createInput } from './core/input.js'
 import { createQuestions } from './core/questions.js'
 import { createTurnActivity } from './core/turns/activity.js'
 import { createLastTurnReader } from './core/transcripts/lastTurn.js'
+import { engineFor } from './engines/registry.js'
 import { createRecaps } from './core/turns/recaps.js'
 import { createUpdateHandoff, type HandoffChild } from './core/updateHandoff.js'
 import { createHeartbeats } from './core/turns/heartbeats.js'
@@ -2262,8 +2263,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The turn's last text, for its recap, whatever the engine (core/transcripts/lastTurn.ts).
   const readLastTurn = createLastTurnReader({
     bySession: (sessionId) => registry.bySession(sessionId),
-    dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
-    hermesDb: (s) => hermesDbForSession(s),
+    engineFor,
   })
   // Recaps: turn cards on the dial and the window, notifications on the phone (core/turns/recaps.ts).
   const recaps = createRecaps({
