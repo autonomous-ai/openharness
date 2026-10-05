@@ -51,7 +51,8 @@ def main():
               'packages': {'first': initial, 'upgrade': final}, 'update_fixture': update,
               'scope': 'RPM install/upgrade, native 16 KiB session and per-user runtime updates',
               'checks': [], 'limitations': ['Private VM test login; never publish this disk',
-                  'No Apple firmware, hardware installer, Fedora base update or boot recovery proof']}
+                  'No Apple firmware, hardware installer, Fedora base update or boot recovery proof',
+                  'Saved terminals return after cold boot; automatic agent/conversation restoration is not tested']}
     machine = server = None
     with tempfile.TemporaryDirectory(prefix='harness-fedora-package-') as temporary:
         work = Path(temporary)
@@ -116,10 +117,22 @@ print(json.dumps({key:identity(value) for key,value in pids.items()},sort_keys=T
             machine.close()
             machine = SessionVM(output / 'packaged-session', disk, fixture / 'Image')
             machine.start()
-            machine.wait_user('systemctl --user is-active --quiet hn-screen && pgrep -u 1000 -x opencode >/dev/null', 150)
+            machine.wait_user('systemctl --user is-active --quiet hn-screen harness-daemon', 150)
             machine.user('test "$(cat ~/projects/package-preservation/proof.txt)" = keep-my-project')
-            machine.frame('01-packaged-workspace', ['OpenCode', 'Ask anything'], 90)
+            machine.frame('01-packaged-workspace', 'me@harness', 60)
             machine.keyboard('packaged-fedora')
+            # Saved terminal panes return after cold boot. The existing fixture
+            # does not promise automatic agent/conversation restoration. Start
+            # the agent through actual keyboard input and require its UI.
+            machine.type_probe('cd /home/me/projects/package-preservation')
+            machine.keys('ret')
+            machine.type_probe('pwd')
+            machine.keys('ret')
+            machine.wait_user('hn capture-pane -p | grep -Fx /home/me/projects/package-preservation', 30)
+            machine.type_probe('opencode')
+            machine.keys('ret')
+            machine.wait_user('pgrep -u 1000 -x opencode >/dev/null', 60)
+            machine.frame('02-packaged-agent', ['OpenCode', 'Ask anything'], 90)
             machine.command('rpm -V harness-os-session')
             runtime = json.loads(machine.read_file('/usr/share/harness-os/runtime.json'))
             assert runtime == final['runtime'], 'Boot did not use the RPM runtime identity'
@@ -132,7 +145,7 @@ print(json.dumps({key:identity(value) for key,value in pids.items()},sort_keys=T
                 assert exit_status != 0 and 'fedora' in text.casefold() and 'Traceback' not in text, \
                     'Unavailable platform action did not fail clearly: ' + command
                 (output / (command.replace(' ', '-') + '.txt')).write_text(text)
-            result['checks'].append('After a real reboot the packaged session renders, accepts QMP virtual keyboard input and reports Fedora without invoking absent PC helpers')
+            result['checks'].append('After a real reboot the packaged session renders, accepts QMP virtual keyboard input, explicitly starts OpenCode and reports Fedora without invoking absent PC helpers')
             # Only the test may grant unrestricted sudo for fault injection.
             # The RPM lifecycle separately requires all package files under /usr.
             put(machine, '/etc/sudoers.d/99-harness-update-test', 'me ALL=(ALL) NOPASSWD: ALL\n')
