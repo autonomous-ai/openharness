@@ -1911,8 +1911,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Nothing is answered until start-up is done (see the end of this function).
   backend.holdRequests()
   daemonBoot.openRequests = () => backend.openRequests()
-  // The team prompt scopes (started below): a fault there can no longer cost a message its write, a hook
-  // its answer or an event its turn.
   const teams: TeamsPort = {
     prepare: (...args) => ports.teams?.prepare(...args) ?? (() => {}),
     started: (...args) => ports.teams?.started(...args),
@@ -2256,8 +2254,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Workspaces: in this process, or in its own (services/workspacesProcess.ts), told what to do and when.
   if (outOfProcess.has('workspaces')) ports.workspaces = workspacesLink.port
   else serviceHost.start('workspaces', startWorkspaces, coreApi, WORKSPACES_FALLBACKS)
-  // The prompt scopes: the socket's own, reached through the service host's guard, or in their own process
-  // (services/teamsProcess.ts), where the socket's team features read them through the core's link.
+  // The prompt scopes, behind the service host's guard (a fault there costs no message its write) or in their own process.
   if (outOfProcess.has('teams')) ports.teams = backend.swarmPromptScopes = teamsLink.scopes
   else serviceHost.start('teams', (_core, started) => { started.teams = backend.swarmPromptScopes }, coreApi, TEAMS_FALLBACKS)
   // The harnesses installed here, and installing, updating and removing one (services/store.ts).
