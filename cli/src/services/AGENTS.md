@@ -47,6 +47,11 @@ or a quick way back).
 
 - `src/harnessd/services.ts` runs it (`KNOWN_SERVICES`, with its memory budget). The core routes the
   requests it declared (its `<NAME>_REQUESTS`) to its process, and the same handlers answer them there.
+- `src/serviceProcess.ts` starts it (`SERVICE_RUNNERS`, which must name every service in
+  `KNOWN_SERVICES`): a process imports only the runner it is named. From a release, it runs on the lean
+  bundle cli.js carries for the master and the services (`src/lib/leanBundle.ts`), so a service parses
+  its own code and not the whole CLI's: about 75 MiB resident at idle, against 115 to 160 when each
+  started on cli.js. A service's code is what its runner imports; nothing else is in its process.
 - `src/services/process.ts` is the process's side: heartbeats to the master, the connection to the
   core with the master's token, reconnecting after core restarts.
 - `src/core/serviceLinks.ts` is the core's side: it routes those requests to the process, answers

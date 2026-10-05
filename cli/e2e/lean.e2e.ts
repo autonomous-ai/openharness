@@ -1,0 +1,115 @@
+/**
+ * harnessd's master and its services lean, on a real release bundle: Node parses all of the file a
+ * process starts on, and started on the whole 4.4 MB cli.js each paid about 45 MiB for that alone. So
+ * the master re-executes, same pid, on the lean bundle cli.js carries, and starts every service from it
+ * (src/lib/leanBundle.ts); the core runs from cli.js as always. Every service still runs in its own
+ * process and does its work, for Claude Code and Codex agents alike. A lean bundle that cannot start a
+ * master is never handed the daemon, and `HARNESSD_LEAN=off` runs everything from cli.js as before.
+ *
+ * The bundle is built from this checkout (the run's own with `E2E_BUNDLE=1`).
+ */
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
+import { LocalClient, type Frame } from './harness/client.js'
+import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { withLean } from './harness/release.js'
+
+type Engine = 'claude' | 'codex'
+const SERVICES = ['search', 'viewers', 'workspaces', 'teams']
+
+const commandOf = (pid: number): string => execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).trim()
+const rssMiB = (pid: number): number => Number(execFileSync('ps', ['-o', 'rss=', '-p', String(pid)], { encoding: 'utf8' }).trim()) / 1024
+const servicePids = (d: IsolatedDaemon): Map<string, number> => new Map(SERVICES.map((name) => {
+  const started = [...d.log().matchAll(new RegExp(`\\[harnessd\\] service ${name} started \\(pid (\\d+)\\)`, 'g'))]
+  return [name, Number(started.at(-1)?.[1] ?? 0)]
+}))
+const isTurn = (type: string, agentId: string) => (frame: Frame) => frame.type === type && frame.agentId === agentId
+
+describe('harnessd\'s master and services lean', () => {
+  let scratch = ''
+  let bundle = ''
+  let daemon: IsolatedDaemon | undefined
+  beforeAll(() => {
+    scratch = mkdtempSync(join(tmpdir(), 'harnessd-lean-'))
+    bundle = process.env.E2E_BUNDLE_PATH ?? join(scratch, 'build', 'cli.js')
+    if (!process.env.E2E_BUNDLE_PATH) {
+      execFileSync(process.execPath, ['build-bundle.mjs'], { cwd: CLI_ROOT, env: { ...process.env, BUNDLE_OUT_DIR: join(scratch, 'build') }, stdio: 'pipe' })
+    }
+  }, 120_000)
+  afterAll(() => { if (scratch) rmSync(scratch, { recursive: true, force: true }) })
+  afterEach(async () => { await daemon?.close(); daemon = undefined })
+  const fresh = async (env: Record<string, string> = {}, scriptPath = bundle) => {
+    const d = await IsolatedDaemon.create({ scriptPath, env })
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-120).join('\n')}`) })
+    await d.start()
+    await until('every service', () => SERVICES.every((name) => new RegExp(`service ${name} started`).test(d.log())) || null, 60_000, 200)
+    return d
+  }
+  async function agentWorks(d: IsolatedDaemon, engine: Engine): Promise<void> {
+    const client = await LocalClient.connect(d)
+    try {
+      const cwd = join(d.projectsDir, `lean-${engine}`)
+      mkdirSync(cwd, { recursive: true })
+      const created = await client.request('agent_create', { engine, cwd, bypassPermission: true }, 90_000)
+      expect(created.error, JSON.stringify(created)).toBeUndefined()
+      const agent = await until(`the ${engine} agent to bind`, async () => {
+        const rows = (await client.request<{ agents: Array<Record<string, any>> }>('agents_list', {}, 30_000)).agents
+        const row = rows.find((one) => one.id === created.agent.id)
+        return row?.sessionId && row.status === 'active' ? row : null
+      }, 60_000, 500)
+      const word = `lean${engine}${Date.now().toString(36)}`
+      const ended = client.next(isTurn('turn_ended', agent.id), 45_000, 'turn_ended')
+      client.send('message', { agentId: agent.id, content: `remember ${word}` })
+      await ended
+      // Search, in its own process from the lean bundle, indexes the turn and finds it.
+      await until('search to find the turn', async () =>
+        JSON.stringify(await client.request('session_search', { query: word }, 30_000)).includes(agent.sessionId) || null, 30_000, 500)
+    } finally { client.close() }
+  }
+
+  it('re-executes the master, same pid, on the lean bundle, and runs every service from it; the core from cli.js', async () => {
+    const d = await fresh()
+    // The master titles itself `harnessd`, so its log says what it runs on: the lean bundle, written
+    // into the data folder, which only a master running on it says it shares with the services.
+    const lean = /\[harnessd\] services run from (\S+), as this master does/.exec(d.log())?.[1]
+    expect(lean, 'the master re-executed on the lean bundle').toMatch(/[\\/]lean[\\/]harnessd-[0-9a-f]{16}\.mjs$/)
+    expect(lean!.startsWith(join(d.dataDir, 'lean'))).toBe(true)
+    expect(existsSync(lean!)).toBe(true)
+    // The same process `harness start` started: re-executed in place.
+    const master = d.pid!
+    expect(commandOf(master)).toBe('harnessd')
+    expect(commandOf(d.corePid()!)).toContain(`${bundle} __run`)
+    for (const [name, pid] of servicePids(d)) expect(commandOf(pid), name).toBe(`harnessd ${name}`)
+    // Lean: under the cost of parsing the whole CLI, which every one of them paid before (at idle,
+    // 115 to 160 MiB each), and a long way under it at that (about 70).
+    for (const [name, pid] of [['master', master], ...servicePids(d)] as Array<[string, number]>) {
+      expect(rssMiB(pid), `${name} resident MiB`).toBeLessThan(100)
+    }
+    await agentWorks(d, 'claude')
+    await agentWorks(d, 'codex')
+    expect(d.coresStarted()).toBe(1)
+    expect(d.log()).not.toMatch(/service \w+ (exited|ended)/)
+  })
+
+  it('runs everything from cli.js, as before, with HARNESSD_LEAN=off', async () => {
+    const d = await fresh({ HARNESSD_LEAN: 'off' })
+    expect(existsSync(join(d.dataDir, 'lean'))).toBe(false)
+    expect(d.log()).not.toMatch(/\[harnessd\] services run from/)
+    await agentWorks(d, 'codex')
+  })
+
+  it('never hands the daemon a lean bundle that cannot start a master: everything runs from cli.js', async () => {
+    const broken = join(scratch, 'broken', 'cli.js')
+    mkdirSync(join(scratch, 'broken'), { recursive: true })
+    writeFileSync(broken, withLean(readFileSync(bundle, 'utf8'), 'process.exit(5)\n'), { mode: 0o755 })
+    const d = await fresh({}, broken)
+    expect(d.log()).toMatch(/\[harnessd\] the lean bundle \S+ did not answer its probe \(exit 5\): the master and the services run from /)
+    expect(d.log()).not.toMatch(/\[harnessd\] services run from/)
+    await agentWorks(d, 'claude')
+    expect(d.coresStarted()).toBe(1)
+  })
+})

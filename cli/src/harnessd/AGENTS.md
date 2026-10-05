@@ -22,4 +22,6 @@ It keeps the core and the services running, and nothing else.
    job ends every agent. `stop()` signals the master instead. The desktop app does not use it yet.
 6. **The master replaces itself only in the gap before a core starts** (`reexec.ts`): no core running,
    services stopped and reaped first, in place so the pid stays. Never exec with a child running: it
-   would lose its channel, and become an orphan or a zombie no one reaps.
+   would lose its channel, and become an orphan or a zombie no one reaps. A master started on cli.js
+   does it once more, before it has started anything: onto the lean bundle cli.js carries, so the
+   master parses its own code and not the whole CLI's (`../masterProcess.ts`).

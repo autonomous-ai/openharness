@@ -11,10 +11,11 @@
  * `require` via the banner so ws's try/catch fallback works without them.
  */
 import * as esbuild from 'esbuild'
-import { readFileSync, copyFileSync, rmSync } from 'fs'
+import { appendFileSync, readFileSync, copyFileSync, rmSync } from 'fs'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
 import { readBuiltinBundle, readHarnessMonitorBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
 import { readProcessImageBundle } from './scripts/lib/processImageBundle.mjs'
+import { leanBlock } from './scripts/lib/leanBlock.mjs'
 import { fileURLToPath } from 'node:url'
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
 const devicesBundle = JSON.stringify(readBuiltinBundle(fileURLToPath(new URL('../store/agents/devices', import.meta.url)), ['harness.json', 'AGENTS.md', 'LICENSE', 'template']))
@@ -65,14 +66,19 @@ const options = {
   logLevel: 'info',
 }
 
+// harnessd's master and its services, bundled on their own (src/leanEntry.ts): Node parses all of the
+// file a process starts on, and the whole CLI's cost each of them about 45 MiB at idle. Carried inside
+// cli.js, at its end, as a comment Node only skims (scripts/lib/leanBlock.mjs).
+const lean = await esbuild.build({ ...options, entryPoints: ['src/leanEntry.ts'], write: false, logLevel: 'warning' })
+
 await esbuild.build({
   ...options,
   // Still one file, which the self-updater downloads, verifies and swaps whole. Its entry decides what a
-  // process loads: harnessd's master and each service in its own process evaluate only their own
-  // modules, the CLI and the core everything (src/entry.ts).
+  // process loads (src/entry.ts), and the master starts itself and the services from the lean bundle.
   entryPoints: ['src/entry.ts'],
   outfile: `${outDir}/cli.js`,
 })
+appendFileSync(`${outDir}/cli.js`, leanBlock(lean.outputFiles[0].contents))
 
 copyFileSync('hook/notify.mjs', `${outDir}/notify.mjs`)
 

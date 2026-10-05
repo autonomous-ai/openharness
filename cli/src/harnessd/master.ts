@@ -25,8 +25,16 @@ export interface MasterConfig {
   /** The node binary and flags the core runs with. */
   nodePath: string
   execArgv: string[]
-  /** The CLI entry (`cli.js`, or `src/cli.ts` under tsx). */
+  /** The CLI entry (`cli.js`, or `src/cli.ts` under tsx): what the core runs, and what an update
+   *  replaces on disk. */
   scriptPath: string
+  /** What the services run instead, when it is not the CLI entry: the lean bundle the entry carries
+   *  (lib/leanBundle.ts), so each service parses its own code and not the whole CLI's. */
+  serviceScriptPath?: string
+  /** The sha256 of the bundle this master's code came from, when the master was not started on
+   *  `scriptPath` itself but on the lean bundle read from it: the bundle it runs is the one it was read
+   *  from, whatever is on disk by the time this master starts. */
+  bundleFingerprint?: string
   pidFile: string
   /** Where the master records its status for `harness status` (see `writeStatusFile`). */
   statusFile?: string
@@ -236,9 +244,12 @@ export function runMaster(config: MasterConfig): Supervisor {
   const platform = platformFromEnv(env)
   if (platform) log(`[harnessd] run by ${platform}, which starts this master again if it dies`)
   if (resume) log(`[harnessd] master re-executed (pid ${process.pid})${config.version ? ` · now v${config.version}` : ''}`)
+  if (config.serviceScriptPath && config.serviceScriptPath !== config.scriptPath) {
+    log(`[harnessd] services run from ${config.serviceScriptPath}${config.bundleFingerprint ? ', as this master does' : ''}`)
+  }
   // The bundle this master's code came from, read once, as it starts; the bundle on disk is read
   // again before every core starts.
-  const own = fingerprint(config.scriptPath)
+  const own = config.bundleFingerprint ?? fingerprint(config.scriptPath)
   const bundle = () => fingerprint(config.scriptPath)
   const markerFile = config.reexecMarkerFile
   const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true } catch { return false } }
@@ -264,7 +275,7 @@ export function runMaster(config: MasterConfig): Supervisor {
   const token = randomBytes(24).toString('hex')
   const specs = serviceSpecs(env, KNOWN_SERVICES)
   const services = new ServiceSupervisor(specs, {
-    spawnService: (spec, extra) => coreHandle(spawn(config.nodePath, [...coreExecArgv(config.execArgv, spec.heapLimitMiB), config.scriptPath, '__service', spec.name], {
+    spawnService: (spec, extra) => coreHandle(spawn(config.nodePath, [...coreExecArgv(config.execArgv, spec.heapLimitMiB), config.serviceScriptPath ?? config.scriptPath, '__service', spec.name], {
       env: { ...env, ...extra },
       stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
     })),

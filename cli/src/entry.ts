@@ -17,9 +17,9 @@ import { fileURLToPath } from 'node:url'
 
 const [, , command, name] = process.argv
 if (command === '__harnessd') {
-  // This file is the bundle: the master starts the core and the services from it, as cli.ts's own
-  // `SCRIPT_PATH` names it for a master started from the sources.
-  (await import('./masterProcess.js')).startMaster({ scriptPath: fileURLToPath(import.meta.url) })
+  // This file is the bundle: the master starts the core from it, as cli.ts's own `SCRIPT_PATH` names it
+  // for a master started from the sources, and itself and the services from the lean bundle it carries.
+  (await import('./masterProcess.js')).startMasterFromBundle(fileURLToPath(import.meta.url))
 } else if (command === '__harnessd-probe') {
   process.exitCode = (await import('./masterProcess.js')).probeThisMaster()
 } else if (command === '__service') {

@@ -366,6 +366,42 @@ describe('runMaster', () => {
     expect(exits).toEqual([0])
   })
 
+  it('starts the services from the lean bundle when given one, and the core from the CLI entry', async () => {
+    // The lean bundle cli.js carries (lib/leanBundle.ts): each service parses its own code, not the CLI's.
+    const pidFile = join(dir, 'adapter.pid')
+    const seen = join(dir, 'seen')
+    const body = (who: string) => `
+      const { appendFileSync } = require('node:fs')
+      const role = process.argv[2] === '__service' ? 'service:' + process.argv[3] : process.argv[2]
+      appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ role, from: ${JSON.stringify(who)} }) + '\\n')
+      if (role === '__run') { process.send({ type: 'harnessd:bound', protocol: 2, port: 1 }); process.send({ type: 'harnessd:ready' }) }
+      setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 }), 50)
+      process.on('SIGTERM', () => process.exit(0))
+    `
+    const cli = join(dir, 'cli.cjs')
+    const lean = join(dir, 'lean.cjs')
+    writeFileSync(cli, body('cli'))
+    writeFileSync(lean, body('lean'))
+    const lines: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+    const exits: number[] = []
+    const signals = new Map<string, () => void>()
+    try {
+      runMaster({
+        nodePath: process.execPath, execArgv: [], scriptPath: cli, serviceScriptPath: lean, pidFile,
+        restoreUpdate: () => {}, confirmUpdate: () => {},
+        env: { ...process.env, HARNESSD_SERVICES: 'search' },
+        exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
+      })
+      const roles = (): Array<Record<string, string>> => existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : []
+      await until('the core and the service', () => roles().length >= 2)
+      expect(roles().sort((a, b) => a.role.localeCompare(b.role))).toEqual([{ role: '__run', from: 'cli' }, { role: 'service:search', from: 'lean' }])
+      expect(lines.some((line) => line.endsWith(`[harnessd] services run from ${lean}`))).toBe(true)
+      signals.get('SIGTERM')!()
+      await until('the master to finish', () => exits.length > 0)
+    } finally { log.mockRestore() }
+  })
+
   it.each([
     ['is gone', (pidFile: string) => rmSync(pidFile, { force: true })],
     ['holds no number', (pidFile: string) => writeFileSync(pidFile, 'garbage\n')],
@@ -526,6 +562,25 @@ describe('runMaster', () => {
         await until('its core', () => plain.supervisor.status().state === 'running')
         expect(lines.some((line) => line.endsWith(`[harnessd] master re-executed (pid ${process.pid})`))).toBe(true)
         await plain.stop()
+      } finally { log.mockRestore() }
+    })
+
+    it('judges the bundle on disk against the one its lean bundle was read from, when it runs on one', async () => {
+      // A master re-executed on the lean bundle is handed the sha256 of the cli.js it was read from: the
+      // code it runs is that bundle's, whatever is on disk by the time it starts.
+      const script = bundle('')
+      const lines: string[] = []
+      const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+      try {
+        const same = start(script, { serviceScriptPath: join(dir, 'lean.mjs'), bundleFingerprint: fingerprint(script) })
+        await until('its core', () => same.supervisor.status().state === 'running')
+        expect(same.execs).toEqual([])
+        expect(lines.some((line) => line.endsWith(`[harnessd] services run from ${join(dir, 'lean.mjs')}, as this master does`))).toBe(true)
+        await same.stop()
+        const older = start(script, { bundleFingerprint: 'the bundle before' })
+        await until('the master to re-execute on the bundle on disk', () => older.execs.length > 0)
+        expect(older.execs[0].args).toEqual([process.execPath, script, '__harnessd'])
+        await older.stop()
       } finally { log.mockRestore() }
     })
 
