@@ -265,13 +265,14 @@ describe('agent_handoff_prepare through the relay', () => {
 })
 
 describe('agent_handoff_prepare after the client went away', () => {
-  it('never broadcasts the late reply in the clear', async () => {
+  it('drops the late reply: never broadcast in the clear, and never queued for the relay', async () => {
     const socket = new BackendSocket('token')
     const asker: Frame[] = [], other: Frame[] = []
     socket.registerLocalClient('local:w', { sendFrame: (f) => { asker.push(f as Frame); return true }, sendBinary: () => true })
     socket.registerLocalClient('local:other', { sendFrame: (f) => { other.push(f as Frame); return true }, sendBinary: () => true })
     const queued: unknown[] = []
     vi.spyOn(socket as any, 'enqueue').mockImplementation((msg: unknown) => { queued.push(msg) })
+    const replied = vi.spyOn(socket as any, 'emitReply')
     const held = deferred<Result>()
     const provider = vi.fn(() => held.promise)
     socket.handoffProvider = provider
@@ -281,10 +282,11 @@ describe('agent_handoff_prepare after the client went away', () => {
       await vi.waitFor(() => expect(provider).toHaveBeenCalledTimes(1))
       await socket.unregisterLocalClient('local:w')
       held.resolve({ ...OK, file: '.harness/handoff/SECRETFILE.md' })
-      // ...and the late reply must actually have been emitted (as a bare, targeted refusal).
-      await vi.waitFor(() => expect(queued.some((m) => (m as { frame?: Frame }).frame?.type === 'agent_handoff_prepare_result')).toBe(true))
-      expect(queued.filter((m) => (m as { frame?: Frame }).frame?.type === 'agent_handoff_prepare_result'))
-        .toEqual([{ t: 'up', targetConnId: 'local:w', frame: { type: 'agent_handoff_prepare_result', payload: { requestId: 'r-1', error: 'E2EE_REQUIRED' } } }])
+      // ...and the late reply must actually have been made. The window it was for has gone, so it goes
+      // nowhere: it used to be queued for the relay as a targeted refusal, for a connection the backend
+      // has never heard of (e2e/windows.e2e.ts).
+      await vi.waitFor(() => expect(replied).toHaveBeenCalledWith('local:w', 'agent_handoff_prepare', 'r-1', expect.anything()))
+      expect(queued.filter((m) => (m as { frame?: Frame }).frame?.type === 'agent_handoff_prepare_result')).toEqual([])
       expect(JSON.stringify(other)).not.toContain('SECRETFILE')
       expect(JSON.stringify(queued)).not.toContain('SECRETFILE')
       const seen = [...other, ...queued.map((m) => (m as { frame?: Frame }).frame)]

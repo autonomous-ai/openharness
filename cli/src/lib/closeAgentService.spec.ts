@@ -103,6 +103,52 @@ it('joins repeated clicks and cancels a pending close when reopened during its b
   expect((await first).error).toBeTruthy()
   expect(registry.byAgent(row.agentId)).toBe(row)
 })
+// Two windows on one agent (e2e/windows.e2e.ts): a request is answered by a job of its own kind only.
+it('a close asked for while another window\'s inspect is still reading is carried out, and each is answered for itself', async () => {
+  let read!: (activity: CloseActivity) => void
+  vi.mocked(deps.activity).mockImplementationOnce(() => new Promise(resolve => { read = resolve }))
+  const inspecting = service.request(request('inspect'))
+  await vi.waitFor(() => expect(read).toBeTypeOf('function'))
+  const closing = service.request(request('now'))
+  expect(closing).not.toBe(inspecting)
+  read('idle')
+  expect(await inspecting).toEqual({ activity: 'idle' })
+  expect(await closing).toEqual({ closed: true })
+  expect(registry.byAgent(row.agentId)).toBeUndefined()
+})
+it('an inspect asked for while a close is saving waits for it, and is never answered as the close', async () => {
+  let finish!: () => void
+  vi.mocked(deps.checkpoint).mockImplementation(() => new Promise(resolve => { finish = resolve }))
+  const closing = service.request(request('now'))
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+  const inspecting = service.request(request('inspect'))
+  finish()
+  expect(await closing).toEqual({ closed: true })
+  expect(await inspecting).toEqual({ error: 'AGENT_CHANGED' })
+})
+it('a close now asked for while a close after the task is being planned closes now', async () => {
+  let read!: (activity: CloseActivity) => void
+  vi.mocked(deps.activity).mockImplementationOnce(() => new Promise(resolve => { read = resolve }))
+  const deferring = service.request(request('after_task'))
+  await vi.waitFor(() => expect(read).toBeTypeOf('function'))
+  const closing = service.request(request('now'))
+  read('working')
+  expect(await deferring).toEqual({ deferred: true })
+  expect(await closing).toEqual({ closed: true })
+  expect(deps.stop).toHaveBeenCalledOnce()
+})
+it('a person\'s own close is not answered by a cleanup that finds the agent on screen again', async () => {
+  let shown!: () => void
+  deps.openTabs = { isHidden: () => false, assertHidden: vi.fn(() => new Promise<void>((_, reject) => {
+    shown = () => reject(Object.assign(new Error('Now in a tab'), { code: 'SESSION_IN_TAB' }))
+  })) }
+  const cleanup = service.request({ ...request('now'), onlyIfHidden: true })
+  await vi.waitFor(() => expect(shown).toBeTypeOf('function'))
+  const closing = service.request(request('now'))
+  shown()
+  expect(await cleanup).toMatchObject({ error: 'SESSION_IN_TAB' })
+  expect(await closing).toEqual({ closed: true })
+})
 it('persists a deferred close, survives a daemon restart and waits for sustained idle', async () => {
   vi.mocked(deps.activity).mockResolvedValue('working')
   expect(await service.request(request('after_task'))).toEqual({ deferred: true })

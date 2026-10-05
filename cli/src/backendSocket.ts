@@ -297,6 +297,8 @@ export class BackendSocket {
   /** Requests waiting at the gate, per connection: a client that floods a starting daemon is closed. */
   private readonly waitingAtGate = new Map<string, number>()
   private readonly localClients = new Map<string, LocalClientSink>()
+  /** The last window found gone when a reply for it came: its queued replies come in a burst, said once. */
+  private goneReplyConn = ''
   /**
    * Loopback clients that are TOOLS, not windows (`machine_select { tool: true }`): `harness pair`, the
    * `harnessd` MCP server. They get their RPC replies like any local client, but they are not a person at
@@ -1096,6 +1098,9 @@ export class BackendSocket {
       if (!local.sendFrame(frame)) void this.unregisterLocalClient(connId)
       return
     }
+    // Only its own socket ever reached a window on this computer, and that socket has closed: queued for
+    // the relay, the frame would wait for a connection the backend has never heard of.
+    if (isLocalClientId(connId)) return
     this.enqueue({ t: 'up', targetConnId: connId, frame })
   }
 
@@ -1474,6 +1479,17 @@ export class BackendSocket {
     if (env.LOG_FRAMES && !TEAM_REQUEST_TYPES.has(type) && !OWNER_COMMAND_TYPES.has(type) && !type.startsWith('viewer_') && type !== 'phone_pair' && type !== 'api_connections' && type !== 'orchestrator' && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'agent_handoff_prepare' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
     if (this.localClients.has(connId)) {
       this.sendTo(connId, { type: resultType, payload: { requestId, ...payload } })
+      return
+    }
+    // A window on this computer that has gone: its reply goes nowhere. What a window asked before it
+    // closed is still carried out, and the replies used to fall through to the paths below: a plaintext
+    // one such as `terminal_info_result` went out through `send()` to every other window and, unsealed,
+    // into the relay's queue; the rest were queued for the relay as errors (e2e/windows.e2e.ts). Said
+    // once per window, in the daemon's diagnostic mode only (it has no debug level of its own): a window
+    // closing with requests in flight is ordinary.
+    if (isLocalClientId(connId)) {
+      if (env.LOG_FRAMES && this.goneReplyConn !== connId) console.log(`[backend] conn:${sid(connId)} has gone · its ${resultType} and later replies dropped`)
+      this.goneReplyConn = connId
       return
     }
     if (connId && this.e2ee.hasSession(connId) && encryptRpcResult(resultType)) {

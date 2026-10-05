@@ -34,6 +34,7 @@ import { LocalModels } from './lib/localModels.js'
 import type { GridAttachResult } from './lib/gridAttach.js'
 import { STRICT_DOWN_TYPES, encryptDownFrame, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
 import { CloseAgentService } from './lib/closeAgentService.js'
+import { env } from './config/env.js'
 
 describe('safe session close RPC', () => {
   it('seals cleanup previews and passes the open-tab condition to Close', async () => {
@@ -896,6 +897,55 @@ describe('BackendSocket outbound queue', () => {
     await vi.waitFor(() => expect(handleFrame).toHaveBeenCalledTimes(3))
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(frames.filter((frame) => frame.type !== 'terminal_info_result')).toEqual([])
+    await socket.stop()
+  })
+
+  it('drops a reply for a window that has gone: no other window hears it, and nothing of it is queued for the relay', async () => {
+    // A window that closes with requests in flight has them carried out, and their replies used to fall
+    // through to the broadcast: a plaintext one to every other window and, unsealed, to the relay; a
+    // sealed type to the relay as a targeted error (e2e/windows.e2e.ts). One answer of each kind.
+    const socket = new BackendSocket('token')
+    const answers = new Map<string, (result: Record<string, unknown>) => void>()
+    socket.serviceRouter = (type, payload, _asker, reply) => {
+      if (type !== 'terminal_info' && type !== 'session_search') return false
+      answers.set(String(payload.requestId), reply)
+      return true
+    }
+    // Signed out, as on a computer nobody signed in to: whatever is meant for the relay waits in the queue.
+    socket.connect()
+    const ws = wsMock.instances[0]
+    const stays: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:stays', { sendFrame: (frame) => { stays.push(frame as Record<string, unknown>); return true }, sendBinary: () => true })
+    socket.registerLocalClient('local:gone', { sendFrame: () => true, sendBinary: () => true })
+    socket.handleLocalFrame('local:gone', { type: 'terminal_info', payload: { requestId: 'gone-info', agentId: 'a1' } })
+    socket.handleLocalFrame('local:gone', { type: 'session_search', payload: { requestId: 'gone-search', query: 'dial' } })
+    socket.handleLocalFrame('local:stays', { type: 'terminal_info', payload: { requestId: 'stays-info', agentId: 'a1' } })
+    await vi.waitFor(() => expect(answers.size).toBe(3))
+    await socket.unregisterLocalClient('local:gone')
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const wasOn = env.LOG_FRAMES
+    env.LOG_FRAMES = true
+    try {
+      answers.get('gone-info')!({ command: 'node', path: '/work/app', pid: 4242, tty: '/dev/ttys001' })
+      answers.get('gone-search')!({ hits: [], indexed: 0, pending: 0, ready: true, tookMs: 1 })
+    } finally {
+      env.LOG_FRAMES = wasOn
+    }
+    answers.get('stays-info')!({ command: 'node', path: '/work/app', pid: 4242, tty: '/dev/ttys001' })
+    // The window that stayed hears its own answer and nothing else.
+    expect(stays.map((frame) => (frame.payload as { requestId?: unknown } | undefined)?.requestId).filter(Boolean)).toEqual(['stays-info'])
+    // The gone window's answers are said once, in the diagnostic log, and go nowhere: not into the
+    // relay's queue, and not up the link once it opens.
+    expect(log.mock.calls.filter(([line]) => String(line).includes('has gone'))).toHaveLength(1)
+    expect(JSON.stringify((socket as unknown as { queue: unknown[] }).queue)).not.toContain('gone-')
+    ws.open()
+    expect(JSON.stringify(parseSent(ws))).not.toContain('gone-')
+    // A request from the relay is still answered on the relay, as before.
+    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValueOnce({ type: 'terminal_info', payload: { requestId: 'relay-info', agentId: 'a1' } })
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'terminal_info', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } } })
+    await vi.waitFor(() => expect(answers.has('relay-info')).toBe(true))
+    answers.get('relay-info')!({ error: 'AGENT_NOT_FOUND' })
+    expect(parseSent(ws)).toContainEqual({ t: 'up', frame: { type: 'terminal_info_result', payload: { requestId: 'relay-info', error: 'AGENT_NOT_FOUND' } } })
     await socket.stop()
   })
 
