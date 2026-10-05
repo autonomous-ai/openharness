@@ -171,7 +171,7 @@ import { runViewersService } from './services/viewersProcess.js'
 import { SEARCH_REQUESTS, startSearch } from './services/search.js'
 import { STORE_REQUESTS, startStore } from './services/store.js'
 import { startViewers } from './services/viewers.js'
-import { startModels } from './services/models.js'
+import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { startWorkspaces } from './services/workspaces.js'
 import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
@@ -1905,15 +1905,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   ensureBundledCoreHarnesses()
 
-  // Models: grid access, the model pictures on agents' frames, the keystroke prewarm (services/models.ts).
-  serviceHost.start('models', startModels, coreApi, MODELS_FALLBACKS)
+  // Models: grid access, the model pictures on agents' frames, the keystroke prewarm, and the models
+  // requests the apps send (services/models.ts).
+  serviceHost.start('models', startModels, coreApi, MODELS_FALLBACKS, MODELS_REQUESTS)
   const models = ports.models
   backend.ensureGrid = models ? (request) => models.ensure(request) : null
-  // Offline, for every list read: is there a `grid` here holding a sign-in? What decides whether the
-  // picker offers local and shared models or a Set up row.
-  backend.gridSetUp = models ? () => models.setUp() : null
   // Models switched off: the socket reads grid as it stands, as it does with no models at all.
-  serviceHost.onOff('models', () => { backend.ensureGrid = null; backend.gridSetUp = null })
+  serviceHost.onOff('models', () => { backend.ensureGrid = null })
 
   /**
    * Is ANY device surface watching this machine?
@@ -2252,7 +2250,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const agentIdFor = (sessionId: string): string => registry.bySession(sessionId)?.agentId ?? sessionId
 
 
-  backend.runtimeModelsProvider = runtimeModels
   backend.runtimeProfileProvider = (session) => runtimeProfiles.selectedModel(session)
   backend.dshFrameProvider = (s) => ports.viewers?.frameContext(s) ?? null
   // `harness remote` names the tile it was typed in by its tmux pane; the registry knows whose it is.
@@ -4039,7 +4036,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     // The same provider the web and the WiFi device read, so the dial's picker cannot show a different
     // catalog from the one the machine will actually honour.
-    listModels: async (agentId) => (await backend.runtimeModelsProvider?.(agentId)) ?? [],
+    listModels: runtimeModels,
     // Both of these are LOCAL-ONLY on purpose (backend.sendLocal, not backend.send): they describe a hand
     // at this desk, not a change in what the machine is doing, and the cloud web audience may be sitting
     // at another computer entirely.

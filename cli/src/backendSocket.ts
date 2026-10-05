@@ -36,20 +36,17 @@ import { VERSION } from './version.js'
 import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
 import { AgentStopError } from './lib/stopAgentService.js'
 import type { CloseAgentService, CloseMode } from './lib/closeAgentService.js'
-import { MODEL_MANAGER_ID, isHiddenBuiltin } from './dsh/builtins.js'
+import { isHiddenBuiltin } from './dsh/builtins.js'
 import { ENGINES, PROCESS_ENGINES, isTerminalEngine, type AgentEngine, type ProcessEngine } from './engines/types.js'
 import { listDir } from './lib/fsBrowse.js'
 import { linkCodexProfile, listCodexProfiles } from './lib/codexProfiles.js'
 import { gridCliPresence } from './lib/gridExec.js'
 import { GridFleetRpc, GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS, parseGridFleetRequest } from './lib/gridFleetRpc.js'
-import { LocalModels } from './lib/localModels.js'
-import { appEngineOps, scanAppModels } from './lib/appModels.js'
 import { ApiConnectionError, ApiConnections, apiConnectionsRequest } from './lib/apiConnections.js'
 import { apiModelsRequest, rememberSavedApis, resolveApiTarget } from './lib/apiModels.js'
-import { gridCapableEngines, isApiLaunch, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunch.js'
-import {
-  forgetGridModels, gridInventory, listAllGridModels, onGridModelsChanged, presentGridSections, retargetPrewarm, type GridSection,
-} from './lib/gridModels.js'
+import { isApiLaunch, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunch.js'
+import { listAllGridModels, onGridModelsChanged, retargetPrewarm } from './lib/gridModels.js'
+import { gridModelsPayload } from './lib/gridModelsPayload.js'
 import { resolveGridTarget } from './lib/gridTarget.js'
 import type { GridAttachResult } from './lib/gridAttach.js'
 import { parseNewAgentModel, resolveNewAgentModel } from './lib/newAgentModel.js'
@@ -112,7 +109,6 @@ import { tmuxPaneInfo } from './lib/tmux.js'
 import { DEVICE_RECENT_SAFE_FRAME_BYTES, fitRecentReplyPayloadForDevice } from './lib/deviceRecentTrim.js'
 import { shouldReplayCommander } from './lib/commanderReplay.js'
 import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from './lib/runtimeProfileController.js'
-import { parseRuntimeProfile, type RuntimeModelOption } from './lib/runtimeProfile.js'
 import { sid, preview, logFrame } from './lib/log.js'
 import {
   TerminalP2pResponderPool,
@@ -257,106 +253,9 @@ export function deviceAgentRow(raw: unknown): boolean {
   return !isTerminalEngine(typeof o.engine === 'string' ? o.engine : undefined)
 }
 
-/**
- * How many models the DEVICE picker may receive. It has room for 48 (`models[48]` in ui_habitat.c) and
- * is handed half of that, so the list it draws is never one it was not built for; the web picker is
- * unbounded and still gets everything.
- */
-const DEVICE_PICKER_MAX_MODELS = 24
-
-export function compactRuntimePickerModels(
-  models: RuntimeModelOption[],
-  sessionId: string | undefined,
-  pickerMode: unknown,
-  selectedModel: unknown,
-): Array<{ id: string }> {
-  const compact = models.map(({ id }) => ({ id }))
-  if ((pickerMode !== 'model' && pickerMode !== 'effort') || !sessionId) return compact
-
-  const profiles = models.flatMap((item) => {
-    const profile = parseRuntimeProfile(item.id)
-    return profile?.sessionId === sessionId ? [{ item, profile }] : []
-  })
-  const selected = parseRuntimeProfile(selectedModel)
-  const current = selected?.sessionId === sessionId ? selected : null
-
-  if (pickerMode === 'effort') {
-    if (!current) return []
-    const seen = new Set<string>()
-    return profiles.flatMap(({ item, profile }) => {
-      if (profile.model !== current.model || profile.effort === 'auto' || seen.has(profile.effort)) return []
-      seen.add(profile.effort)
-      return [{ id: item.id }]
-    })
-  }
-
-  const byModel = new Map<string, typeof profiles>()
-  for (const entry of profiles) {
-    const group = byModel.get(entry.profile.model) ?? []
-    group.push(entry)
-    byModel.set(entry.profile.model, group)
-  }
-  const rows = [...byModel.values()].map((group) => {
-    const target = group.find(({ profile }) => current && profile.effort === current.effort)
-      ?? group.find(({ profile }) => profile.effort === 'auto')
-      ?? group[0]
-    return { id: target.item.id, model: target.profile.model }
-  })
-  // Top N only. The picker is a scroll wheel on a 1.9" round screen, and a 49-row one was enough to stall
-  // the device's the device UI task into a task-watchdog reset; devin alone publishes 72
-  // models. The catalog arrives in the engine's own order — its curated/most-used first — so "top" is that
-  // order, with the model the agent is RUNNING pinned in front so the list can never hide it.
-  const ordered = current
-    ? [...rows].sort((a, b) => Number(b.model === current.model) - Number(a.model === current.model))
-    : rows
-  return ordered.slice(0, DEVICE_PICKER_MAX_MODELS).map(({ id }) => ({ id }))
-}
-
-/** Sections one `grid_models_list` may ask to wake — a person presses one "Show models" at a time. */
-const MAX_WAKES_PER_ASK = 8
-
-/** What `grid_models_list` answers and `grid_models_changed` pushes — one shape, so a window parses both
- *  with one reader. `gridName` and `models` keep naming the own grid alone, for an app that predates
- *  `grids`; each section's `state`, `seenAt`, `lastKnownAge` and `wakeOutcome` are additive, and a row's
- *  offline label is `unavailable` for a window that asked for row state, its node text for one that did
- *  not (`presentGridSections`). */
-function gridModelsPayload(gridName: string | null, sections: GridSection[], rowState: boolean): Record<string, unknown> {
-  const grids = presentGridSections(sections, { rowState })
-  return {
-    gridName,
-    models: grids.find((g) => g.own)?.models ?? [],
-    grids,
-    // Which engines a Local model can be offered to at all. Static per CLI version — it is
-    // the set of launch contracts in `gridLaunch.ts` — and answered here, beside the list,
-    // so the picker can say "Cursor runs only on its own login" instead of offering a row
-    // whose retarget the daemon would refuse. An older app ignores the field; an older
-    // daemon omits it, which the app reads as "offer everything", as before.
-    localModelEngines: gridCapableEngines(),
-    supportsModelLaunch: true,
-    // Whether this MACHINE has a `grid` to run at all — `managed`, `path` or `missing` —
-    // as distinct from `gridName`, which is about the account. The Local model dialog was
-    // gating on the account alone and starting an agent whose second step is `grid`; this
-    // is what lets it, and the picker, say so first. An older app ignores the field.
-    gridCli: gridCliPresence(),
-  }
-}
-
 export class BackendSocket {
   harnessDevices: HarnessDevicesService | null = null
   private readonly gridFleet = new GridFleetRpc()
-  // The Model Manager reads the grid it runs on through the same credential-less reader as every picker
-  // (never `grid engines`, which carries the grid credential and so wakes a sleeping grid on every tick),
-  // and a start or stop it finishes makes every list read again — pushed to the window when it changes.
-  private readonly localModels = new LocalModels({
-    stateDir: join(env.ADAPTER_DATA_DIR, 'local-models'),
-    machineName: () => this.machineDisplayName,
-    inventory: gridInventory,
-    onChanged: () => { forgetGridModels(); void this.pushGridModels() },
-    // Models Ollama, LM Studio and llama.cpp downloaded here, found by the Model Manager's own scan (the
-    // bundled harness), so the picker and that harness agree on what is here and what starts it.
-    appModels: () => scanAppModels({ node: process.execPath, packageDir: installedDsh(MODEL_MANAGER_ID)?.realDir ?? null, env: process.env }),
-    appEngines: appEngineOps(process.env),
-  })
   /** This machine's name as Harness shows it (Machines), from the backend's `machine_meta`. Null
    *  until the first one arrives. */
   private machineDisplayName: string | null = null
@@ -685,18 +584,14 @@ export class BackendSocket {
     Promise<{ file: string | null; gitRepo: boolean; cwd: string; degraded: string[] }>) | null = null
   monitorActivityProvider: ((sessionId: string) => MonitorActivity) | null = null
   private readonly monitorCompletions = new MonitorCompletions()
-  /** Runtime Model/Effort integration, wired by cli.ts for registered tmux sessions. */
-  runtimeModelsProvider: ((sessionId?: string) => Promise<RuntimeModelOption[]>) | null = null
   /** Answers `usage_read` — this machine's own agent-account usage (lib/accountUsage.ts). A field
    *  rather than a direct call so a spec answers it without a real home, Keychain or network. */
   accountUsageReader: () => Promise<AccountUsageReading[]> = readAccountUsage
   harnessResourcesReader = createHarnessResourcesReader(() => registry.advertised())
   harnessStorageReader = createHarnessStorageReader()
-  /** The grid listing currently out, shared by every `grid_models_list` for the same own grid
-   *  that lands meanwhile. */
-  private gridModelsInFlight: { gridName: string | null; grids: ReturnType<typeof listAllGridModels> } | null = null
   /** The windows on this computer that draw row state (`grid_models_list` with `rowState: true`) and so
-   *  are pushed labels as `unavailable` rather than in the node text. */
+   *  are pushed labels as `unavailable` rather than in the node text. Kept here, by connection: the
+   *  models service answers the list, and a request reaches it without its connection. */
   private readonly rowStateWindows = new Set<string>()
   /** Receives `theme_set` — the desktop's pane colours, to become this machine's tmux
    *  `window-style` (lib/hostTheme.ts). Wired by cli.ts; null answers with UNSUPPORTED. */
@@ -912,12 +807,10 @@ export class BackendSocket {
   deriveGridName: () => Promise<string | null> = deriveHarnessGridName
   /** Have grid ready for a grid feature the person is using now (`lib/gridAttach.ts`): `grid` installed,
    *  signed in as this account with its harness token, and — `ownGrid` — the account's own grid there.
-   *  Asked by acts only (Set up, Get, Use, a move onto a grid model, a Model Manager command), never by
-   *  a read. Set by `cli.ts`; null (tests) reads grid as it stands. */
+   *  Asked by acts only (here a move onto a grid model, and making a Model Manager; the models service
+   *  asks its own for Set up, Get and Use), never by a read. Set by `cli.ts`; null (tests) reads grid as
+   *  it stands. */
   ensureGrid: ((request?: { ownGrid?: boolean }) => Promise<GridAttachResult>) | null = null
-  /** Offline, cheap: is there a `grid` here holding a sign-in? Answers the list read's
-   *  `gridSetupNeeded`. Null (tests) reads as set up. */
-  gridSetUp: (() => boolean) | null = null
 
   /** Set the account's private grid name from the reconcile that just confirmed it, so the RPCs
    *  answer with it at once rather than waiting for the next `machine_meta` (`lib/gridAttach.ts`). */
@@ -1964,6 +1857,10 @@ export class BackendSocket {
     // SERVICE_UNAVAILABLE while it is off. Never waited on in line: the next frame is not held for it.
     // Who asked is established here, after the gates above, and the service trusts only that.
     const asker: Asker = { local, owner: local || this.e2ee.sessionRole(connId) === 'web' }
+    // A window that draws row state asks for the models list with `rowState`, and the list's changes are
+    // pushed to it in that form (`pushGridModels`). Noted here, by connection: the models service answers
+    // the list, and a request reaches it without its connection.
+    if (type === 'grid_models_list' && payload.rowState === true && this.localClients.has(connId)) this.rowStateWindows.add(connId)
     if (this.serviceRouter?.(type, payload, asker, (result) => reply(type, requestId, result))) return
 
     try {
@@ -1980,35 +1877,13 @@ export class BackendSocket {
             .then(resources => reply(type, requestId, { ...resources }))
             .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
           return
-        case 'grid_fleet_models_list':
-        case 'grid_fleet_model_download':
-        case 'grid_fleet_model_start':
-        case 'grid_fleet_model_stop': {
-          // A daemon-owned operation survives panel closure and a lost reply.
-          // Keep hardware/catalog/network reads off the ordered terminal queue.
-          //
-          // Grid is set up here only for an ACT: the picker's Set up (a list read carrying `setup`),
-          // a Get, a Use. The list read the app polls while a picker is open never sets anything up —
-          // it says whether it is needed (`gridSetupNeeded`). A Get needs a sign-in (the catalog is
-          // grid's); a Use serves on the account's own grid, and so does the Set up that offers it.
-          void (async () => {
-            const list = type === 'grid_fleet_models_list'
-            const setup = list ? payload.setup === true : type !== 'grid_fleet_model_stop'
-            const notReady = setup ? await this.gridNotReady(type !== 'grid_fleet_model_download') : null
-            const grid = await this.resolveGridName()
-            if (list) {
-              const snapshot = await this.localModels.list(grid, payload.refresh === true || setup)
-              const needed = this.gridSetUp ? !this.gridSetUp() : false
-              if (setup && !notReady) void this.pushGridModels()
-              return { ...snapshot, ...(needed ? { gridSetupNeeded: true } : {}), ...(notReady ? { gridSetupError: notReady } : {}) }
-            }
-            if (notReady) return { error: notReady }
-            return this.localModels.act(grid, payload.modelId, type === 'grid_fleet_model_download' ? 'download' : type === 'grid_fleet_model_start' ? 'start' : 'stop')
-          })()
-            .then(result => reply(type, requestId, { ...result }))
-            .catch(() => reply(type, requestId, { error: 'Models are unavailable. Try again.' }))
-          return
-        }
+        // The Model Manager's grid commands stay here while the rest of models answers from its service
+        // (services/models.ts). A command is a job of the connection that started it, keyed by that
+        // connection, and a cancel stops only that connection's own (lib/gridFleetRpc.ts); a request the
+        // service answers knows who asked (`Asker`) but not over which connection. `grid_fleet_capabilities`
+        // is the commands' handshake (their protocol, longest timeout and thinking control): the Grid
+        // harness sends `grid_fleet_run` only once it answers protocol 1, and reads anything else as
+        // "update Harness", so it stays beside them rather than go off with the models service.
         case 'grid_fleet_capabilities':
           reply(type, requestId, { protocol: GRID_FLEET_PROTOCOL, gridCli: gridCliPresence(), maxTimeoutMs: GRID_FLEET_MAX_TIMEOUT_MS, thinkingControl: true })
           return
@@ -2129,70 +2004,6 @@ export class BackendSocket {
         case 'session_get':
           reply(type, requestId, this.historyProvider ? await this.historyProvider(payload) : { error: 'UNSUPPORTED' })
           return
-
-        case 'grid_models_list': {
-          // Every grid this computer is signed into, in sections, the account's own first. `gridName`
-          // and `models` keep naming the own grid alone, for an app that predates `grids`.
-          //
-          // DETACHED from this connection's ordered RPC chain, like `engines_probe`: it waits on a
-          // grid reconcile (up to 6s), then a `grid ls` spawn and — for a grid this daemon has never
-          // read — up to 4s of its first read (`gridModels.ts`); every other grid answers from its picture.
-          // The desktop asks for it in the same breath as `terminal_capabilities` and `agents_list`
-          // on every connect, and awaited here it held both behind it — with no network, past the
-          // app's 10s request timeout, on which the app forces a reconnect and asks all three again.
-          // Measured 2026-09-18, wifi off, daemon restarted: every local RPC timed out for as long
-          // as the backend stayed unreachable; the terminal on the SAME computer sat on "offline"
-          // until the wifi came back. Request ids make the reply safe to land out of order.
-          //
-          // One computation at a time: detached, a second ask that lands while the first is still
-          // out (the app re-asks on every connect) would spawn another `grid ls` for the same answer.
-          // Later askers share the one in flight; each grid's reads are single-flight in the service.
-          //
-          // `rowState: true` — a window that draws row state gets offline labels as `unavailable` (and
-          // its pushes in that form); `wake: [name]` — a person pressed "Show models" / "Wake now", and
-          // the answer (with those sections "waking") comes back at once while the wake runs behind it
-          // (grid-reads-without-waking issue 03). A wake never joins a listing already out: that one
-          // was built before the wake began, and would not say "waking".
-          const rowState = payload.rowState === true
-          if (rowState && this.localClients.has(connId)) this.rowStateWindows.add(connId)
-          const wake = Array.isArray(payload.wake)
-            ? payload.wake.filter((name): name is string => typeof name === 'string' && !!name.trim()).map((name) => name.trim()).slice(0, MAX_WAKES_PER_ASK)
-            : []
-          void (async () => {
-            const gridName = await this.resolveGridName()
-            const inFlight = this.gridModelsInFlight
-            const listing = wake.length
-              ? listAllGridModels(gridName, { wake })
-              : inFlight && inFlight.gridName === gridName
-                ? inFlight.grids
-                : (this.gridModelsInFlight = {
-                    gridName,
-                    grids: listAllGridModels(gridName).finally(() => {
-                      if (this.gridModelsInFlight?.gridName === gridName) this.gridModelsInFlight = null
-                    }),
-                  }).grids
-            reply(type, requestId, gridModelsPayload(gridName, await listing, rowState))
-          })().catch(() => reply(type, requestId, { error: 'GRID_MODELS_FAILED' }))
-          return
-        }
-
-
-        case 'models_list': {
-          const sessionId = typeof payload.agentId === 'string' && payload.agentId
-            ? payload.agentId
-            : undefined
-          const models = this.runtimeModelsProvider
-            ? await this.runtimeModelsProvider(sessionId)
-            : [{ id: 'default', displayName: 'Remote CLI default' }]
-          reply(type, requestId, {
-            // The device derives labels from the opaque runtime-v1 id. Omitting the duplicate
-            // displayName keeps the encrypted picker response below its 16 KiB decrypt cap.
-            models: payload.compact === true
-              ? compactRuntimePickerModels(models, sessionId, payload.pickerMode, payload.selectedModel)
-              : models,
-          })
-          return
-        }
 
         case 'remote_terminal_handoff': {
           // `harness remote`, typed INSIDE one of this machine's terminal tiles, opened a terminal on
