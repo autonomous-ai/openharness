@@ -14,6 +14,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 })
 
 const HOOK = fileURLToPath(new URL('../hook/notify.mjs', import.meta.url))
+/** A preload that moves `Date` by the milliseconds in a file (e2e/harness/clockShift.mjs). */
+const CLOCK_SHIFT = fileURLToPath(new URL('../e2e/harness/clockShift.mjs', import.meta.url))
 const servers: ReturnType<typeof createServer>[] = []
 const netServers: ReturnType<typeof createNetServer>[] = []
 const tmpDirs: string[] = []
@@ -929,6 +931,46 @@ describe('hook notify terminal scope', () => {
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toMatchObject([
       { sessionId: 'fresh', tmuxPane: '%12' },
     ])
+  })
+
+  it('does not take a step of the wall clock for a reboot, and keeps every other agent', async () => {
+    // A boot named by the moment it began moved with the clock, and a hook that fell back to the
+    // registry hours after a laptop slept, or after an NTP step, took it for a reboot and wrote a
+    // registry of its one agent (round 29).
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-clock-'))
+    tmpDirs.push(dir)
+    const claudeProjectsDir = join(dir, 'claude-projects')
+    const dataDir = join(dir, 'data')
+    mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+    mkdirSync(dataDir, { recursive: true })
+    chmodSync(dataDir, 0o755)
+    const otherTranscript = join(claudeProjectsDir, 'demo', 'other.jsonl')
+    writeFileSync(otherTranscript, '{}\n')
+    writeLegacyStateFile(join(dataDir, 'registry.json'), JSON.stringify([{
+      schemaVersion: 2, active: true, agentId: 'agent-other', sessionId: 'other', boundAt: 1, engine: 'claude',
+      gateway: null, grid: null, codexHome: null, transcriptPath: otherTranscript, projectDir: 'demo', cwd: '/tmp/demo',
+      runtimes: [{ backend: 'tmux', paneId: '%1' }], primaryRuntimeKey: 'tmux\u0000%1', tmuxPane: '%1',
+      source: null, title: null, model: null, cliVersion: null,
+      processIdentity: { pid: 5001, executable: 'claude', startMarker: 'Mon Aug 10 09:00:00 2026' },
+      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    }]))
+    const register = (sessionId: string, env?: Record<string, string>) => {
+      const transcriptPath = join(claudeProjectsDir, 'demo', `${sessionId}.jsonl`)
+      writeFileSync(transcriptPath, '{}\n')
+      return runHook({
+        port: 9, tmuxPane: '%12', processEngine: 'claude', dataDir, claudeProjectsDir, env,
+        input: { hook_event_name: 'SessionStart', session_id: sessionId, transcript_path: transcriptPath },
+      })
+    }
+    // This boot's mark is written by the first offline write; then the clock moves three hours on, in
+    // the hook as in the engine that runs it.
+    await register('before')
+    expect(statSync(join(dataDir, 'registry-boot')).isFile()).toBe(true)
+    const shift = join(dir, 'shift')
+    writeFileSync(shift, String(3 * 3_600_000))
+    await register('after', { NODE_OPTIONS: `--import ${CLOCK_SHIFT}`, E2E_CLOCK_SHIFT_FILE: shift })
+    const rows = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8')) as Array<{ sessionId: string }>
+    expect(rows.map((row) => row.sessionId).sort()).toEqual(['after', 'other'])
   })
 })
 

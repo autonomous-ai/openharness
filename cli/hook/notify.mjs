@@ -758,12 +758,24 @@ function bootTimeSec() {
   return Math.round(Date.now() / 1000 - uptime())
 }
 
+// Which boot this is, named as src/lib/bootId.ts names it: the two read and write the same boot file, so
+// they must agree. macOS has a per-boot id too; without it a boot was named by the moment it began, which
+// moves with every step of the wall clock, and a hook that fell back to the registry after an NTP step
+// or a long sleep took the step for a reboot and wrote a registry of its one agent (round 29).
+let bootId = null
 function currentBootId() {
+  if (bootId) return bootId
   try {
     const value = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()
-    if (/^[0-9a-f-]{36}$/i.test(value)) return `linux:${value}`
-  } catch { /* non-Linux fallback below */ }
-  return `time:${bootTimeSec()}`
+    if (/^[0-9a-f-]{36}$/i.test(value)) return (bootId = `linux:${value}`)
+  } catch { /* not Linux */ }
+  if (process.platform === 'darwin') {
+    try {
+      const value = execFileSync('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'], { encoding: 'utf8', timeout: 1000 }).trim()
+      if (/^[0-9a-f-]{36}$/i.test(value)) return (bootId = `macos:${value}`)
+    } catch { /* sysctl unavailable: the moment the boot began, below */ }
+  }
+  return (bootId = `time:${bootTimeSec()}`)
 }
 
 function readSavedBoot(bootFile) {
@@ -807,6 +819,8 @@ function rebootedSinceSnapshot(bootFile) {
   if (saved === null) return false
   const current = currentBootId()
   if (saved.startsWith('linux:')) return saved !== current
+  // A macOS id that cannot be read now is no evidence of a reboot.
+  if (saved.startsWith('macos:')) return !current.startsWith('time:') && saved !== current
   const savedNumber = Number(saved.replace(/^time:/, ''))
   const currentNumber = current.startsWith('time:') ? Number(current.slice(5)) : bootTimeSec()
   return !Number.isFinite(savedNumber) || Math.abs(currentNumber - savedNumber) > BOOT_TOLERANCE_SEC
