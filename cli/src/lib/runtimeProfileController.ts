@@ -462,7 +462,9 @@ const CODEX_TRANSCRIPT_BROWSING = /^\s*Browsing(?: transcript)?(?:\s+·|\s*$)/m
  * A message pasted into it is dropped either way. Its focused row is drawn `❯ (current)` in italics,
  * which read as an empty, idle prompt.
  */
-const CLAUDE_REWIND_BODY = /^(?:Restore the code and\/or conversation to the point before|Restore and fork the conversation to the point before|Confirm you want to restore|Nothing to rewind to yet)/
+// Their opening words only: a pane narrower than a line wraps the rest onto the next, and the menu went
+// unseen, its Enter picking a message (with checkpoints off, rewinding to it).
+const CLAUDE_REWIND_BODY = /^(?:Restore the code\b|Restore and fork\b|Confirm you want to restore\b|Nothing to rewind to\b)/
 
 function claudeRewindMenuOpen(capture: string): boolean {
   const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n').map((line) => line.trim())

@@ -105,6 +105,10 @@ describe('what a message is not typed into', () => {
   it('is, in Claude Code and Codex, a menu, a picker for a point to rewind to, or Claude Code\'s transcript view', () => {
     expect(messageHold('codex', CODEX_MODEL_MENU)).toBe('menu_open')
     expect(messageHold('claude', CLAUDE_REWIND_LIST)).toBe('rewind_picker_open')
+    // In a pane narrower than its body line, which wraps.
+    const narrow = CLAUDE_REWIND_LIST.replace(' Restore the code and/or conversation to the point before', ' Restore the code and/or conversation to\n the point before')
+    expect(narrow).not.toBe(CLAUDE_REWIND_LIST)
+    expect(messageHold('claude', narrow)).toBe('rewind_picker_open')
     expect(messageHold('claude', CLAUDE_REWIND_CONFIRM)).toBe('rewind_picker_open')
     expect(messageHold('codex', CODEX_BROWSING_FULLSCREEN)).toBe('rewind_picker_open')
     expect(messageHold('codex', CODEX_BROWSING_SCROLLBACK)).toBe('rewind_picker_open')
