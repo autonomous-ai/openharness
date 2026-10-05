@@ -53,6 +53,9 @@ StandardError=tty
 TTYPath=/dev/ttyAMA0
 TTYReset=yes
 TTYVHangup=yes
+# Interactive bash ignores SIGTERM. End this private console like a getty,
+# rather than delaying guest shutdown until systemd's service timeout.
+KillSignal=SIGHUP
 Restart=always
 [Install]
 WantedBy=multi-user.target

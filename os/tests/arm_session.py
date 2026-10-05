@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import select
 import shlex
 import shutil
 import subprocess
@@ -149,7 +150,9 @@ class SessionVM(VM):
         self.serial = self.connect('serial.sock')
         self.qmp = self.connect('qmp.sock')
         self.qmp.settimeout(10)
-        self.qmp_file = self.qmp.makefile('rb')
+        # Keep asynchronous shutdown events on the socket for poweroff(),
+        # rather than prefetching them into a buffered response reader.
+        self.qmp_file = self.qmp.makefile('rb', buffering=0)
         json.loads(self.qmp_file.readline())
         self.monitor('qmp_capabilities')
         if offline:
@@ -201,6 +204,51 @@ class SessionVM(VM):
         self.wait_user('hn capture-pane -p | grep -Fx ' + shlex.quote(marker))
         self.frame(name, marker)
         self.keys('ctrl', 'd')
+
+    def poweroff(self, timeout=60):
+        started = time.monotonic()
+        report = {'status': 'waiting', 'events': []}
+        streams = {self.serial: 'serial', self.qmp: 'qmp'}
+        pending = b''
+        try:
+            # The test console may terminate before printing a command result.
+            # Require the guest's actual shutdown event and clean QEMU exit.
+            self.send('sync; systemctl poweroff --no-block\n')
+            while True:
+                remaining = timeout - (time.monotonic() - started)
+                exited = self.process.poll() is not None
+                if remaining <= 0 and not exited:
+                    raise TimeoutError('Guest poweroff did not finish; see shutdown.json and serial.log')
+                # Read until EOF after exit too, retaining the final guest event.
+                ready, _, _ = select.select(list(streams), [], [], 0 if exited else min(.2, max(0, remaining)))
+                if not ready and exited:
+                    break
+                for stream in ready:
+                    data = stream.recv(65536)
+                    if not data:
+                        del streams[stream]
+                    elif streams[stream] == 'serial':
+                        self.log.write(data)
+                    else:
+                        pending += data
+                        while b'\n' in pending:
+                            line, pending = pending.split(b'\n', 1)
+                            event = json.loads(line)
+                            report['events'].append(event)
+            if self.process.returncode != 0:
+                raise RuntimeError('QEMU exited unsuccessfully during guest poweroff')
+            if not any(event.get('event') == 'SHUTDOWN' and
+                       event.get('data', {}).get('guest') is True and
+                       event['data'].get('reason') == 'guest-shutdown' for event in report['events']):
+                raise RuntimeError('QEMU exit lacks a completed guest poweroff event')
+            report['status'] = 'passed'
+            return report
+        except BaseException as error:
+            report.update(status='failed', error=str(error))
+            raise
+        finally:
+            report.update(seconds=round(time.monotonic() - started, 3), exit_code=self.process.poll())
+            (self.folder / 'shutdown.json').write_text(json.dumps(report, indent=2) + '\n')
 
     def close(self):
         self.stop()
@@ -267,10 +315,7 @@ def exercise(vm, result):
     result['checks'].append('Sandboxed native Chromium renders the agent page; mouse click increments it; Super+b returns to the same agent and keyboard works')
     vm.command('uname -r; getconf PAGESIZE; systemd-analyze; df -B1 /')
     result['projects'] = {name: digest(vm.folder / name) for name in ['hello.py', 'index.html']}
-    vm.command('sync; systemctl poweroff --no-block')
-    vm.process.wait(timeout=60)
-    if vm.process.returncode != 0:
-        raise RuntimeError('Guest did not shut down cleanly')
+    result['first_shutdown'] = vm.poweroff()
 
 
 def exercise_reboot(machine, receipt, output):
@@ -285,24 +330,25 @@ def exercise_reboot(machine, receipt, output):
         if digest(target) != expected:
             raise ValueError('Project changed across cold boot: ' + name)
     machine.user('test "$(python3 ' + shlex.quote(receipt['project'] + '/hello.py') + ')" = "harness arm ready"')
-    machine.command('sync; systemctl poweroff --no-block')
-    machine.process.wait(timeout=60)
-    if machine.process.returncode != 0:
-        raise RuntimeError('Second boot did not shut down cleanly')
+    receipt['second_shutdown'] = machine.poweroff()
     receipt['checks'].append('Second cold boot reaches Harness, accepts graphical typing and preserves byte-identical working projects')
 
 
 def failure_evidence(machine):
     if not machine:
         return
-    try:
-        machine.screenshot('failure')
-        machine.command('ps -eo pid,ppid,stat,pcpu,pmem,wchan:32,comm; '
+    errors = []
+    for collect in [lambda: machine.screenshot('failure'),
+                    lambda: machine.command('ps -eo pid,ppid,stat,pcpu,pmem,wchan:32,comm; '
                         'journalctl -b --no-pager -n 250; '
                         'cat /home/me/.local/state/harness-os/display.log; '
-                        'tail -n 80 /home/me/.local/share/opencode/log/*.log', check=False, timeout=30)
-    except (OSError, RuntimeError, TimeoutError):
-        pass
+                        'tail -n 80 /home/me/.local/share/opencode/log/*.log', check=False, timeout=30)]:
+        try:
+            collect()
+        except (OSError, RuntimeError, TimeoutError, ValueError) as error:
+            errors.append(str(error))
+    if errors:
+        (machine.folder / 'diagnostic-errors.json').write_text(json.dumps(errors, indent=2) + '\n')
 
 
 def fixture_identity(folder, source):

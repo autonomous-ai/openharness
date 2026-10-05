@@ -1,11 +1,15 @@
 """Keep the graphical ARM fixture separate from PC installation/update artifacts."""
 import json
+import io
 from pathlib import Path
+import socket
+import subprocess
+import sys
 import tempfile
 import unittest
 
 from arm_boot import digest
-from arm_session import fixture_identity, frame_contains, runtime_identity, stage
+from arm_session import SessionVM, fixture_identity, frame_contains, runtime_identity, stage
 
 
 class ARMFixture(unittest.TestCase):
@@ -129,6 +133,66 @@ class VisibleBrowser(unittest.TestCase):
         self.assertFalse(frame_contains('Harness ARM Demo', expected, absent=['me@harness']))
         browser = 'Harness ARM Demo\n/home/me/projects/demo/index.html\nHarness ARM Demo\nCount: 0\nIncrement'
         self.assertTrue(frame_contains(browser, expected, absent=['me@harness']))
+
+
+class GuestPoweroff(unittest.TestCase):
+    def machine(self, event, exit_code=0):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        machine = object.__new__(SessionVM)
+        machine.folder = Path(temporary.name)
+        machine.log = io.BytesIO()
+        machine.serial, console = socket.socketpair()
+        machine.qmp, monitor = socket.socketpair()
+        self.addCleanup(machine.serial.close)
+        self.addCleanup(machine.qmp.close)
+        # A real child/socket pair exposes serial backpressure: merely waiting
+        # for process exit without draining output cannot complete this probe.
+        producer = '''import json,socket,sys,time
+serial=socket.socket(fileno=int(sys.argv[1]))
+qmp=socket.socket(fileno=int(sys.argv[2]))
+request=b''
+while not request.endswith(b'\\n'):
+ request+=serial.recv(1024)
+assert request==b'sync; systemctl poweroff --no-block\\n'
+serial.sendall(b'x'*(2*1024*1024))
+qmp.sendall((sys.argv[3]+'\\n').encode())
+time.sleep(.02)
+sys.exit(int(sys.argv[4]))
+'''
+        machine.process = subprocess.Popen(
+            [sys.executable, '-c', producer, str(console.fileno()), str(monitor.fileno()),
+             json.dumps(event), str(exit_code)], pass_fds=(console.fileno(), monitor.fileno()))
+        console.close()
+        monitor.close()
+
+        def cleanup():
+            if machine.process.poll() is None:
+                machine.process.terminate()
+            machine.process.wait(timeout=5)
+        self.addCleanup(cleanup)
+        return machine
+
+    def test_drains_console_and_requires_guest_shutdown(self):
+        event = {'event': 'SHUTDOWN', 'data': {'guest': True, 'reason': 'guest-shutdown'}}
+        machine = self.machine(event)
+        receipt = machine.poweroff(timeout=5)
+        self.assertEqual(receipt['status'], 'passed')
+        self.assertEqual(machine.log.getvalue(), b'x' * (2 * 1024 * 1024))
+        self.assertEqual(receipt['events'], [event])
+        self.assertEqual(receipt['exit_code'], 0)
+
+    def test_host_quit_is_not_successful_guest_poweroff(self):
+        machine = self.machine({'event': 'SHUTDOWN', 'data': {'guest': False, 'reason': 'host-qmp-quit'}})
+        with self.assertRaisesRegex(RuntimeError, 'guest poweroff event'):
+            machine.poweroff(timeout=5)
+        receipt = json.loads((machine.folder / 'shutdown.json').read_text())
+        self.assertEqual(receipt['status'], 'failed')
+
+    def test_guest_event_does_not_hide_unsuccessful_exit(self):
+        machine = self.machine({'event': 'SHUTDOWN', 'data': {'guest': True, 'reason': 'guest-shutdown'}}, exit_code=1)
+        with self.assertRaisesRegex(RuntimeError, 'exited unsuccessfully'):
+            machine.poweroff(timeout=5)
 
 
 if __name__ == '__main__':
