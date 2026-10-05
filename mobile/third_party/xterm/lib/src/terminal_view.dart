@@ -57,6 +57,10 @@ class TerminalView extends StatefulWidget {
     this.hardwareKeyboardOnly = false,
     this.simulateScroll = true,
     this.onAltBufferScroll,
+    this.altBufferScrollPhysics,
+    this.altBufferScrollPaced = false,
+    this.altBufferScrollAnimated = false,
+    this.onAltBufferScrollShift,
   });
 
   /// The underlying terminal that this widget renders.
@@ -185,6 +189,31 @@ class TerminalView extends StatefulWidget {
   /// backend-native way to scroll instead of the emulator's own mouse/key simulation.
   final void Function(bool up)? onAltBufferScroll;
 
+  /// AUTONOMOUS PATCH: the physics of the alternate buffer's scroll — the one
+  /// that turns a drag into wheel events for the program — layered over the
+  /// platform's own. Null keeps the platform's.
+  final ScrollPhysics? altBufferScrollPhysics;
+
+  /// AUTONOMOUS PATCH: the alternate buffer's scroll sends its wheel events
+  /// only as fast as the program answers them — at most two batches without a
+  /// write back — and lines scrolled meanwhile go together in the next batch.
+  /// A remote program redraws at the far end of a link, and wheel events sent
+  /// faster than that queue up, moving its screen long after the finger
+  /// stopped. False sends each line as it is scrolled, as upstream.
+  final bool altBufferScrollPaced;
+
+  /// AUTONOMOUS PATCH: a full-screen program's redraw that answers the wheel
+  /// slides into place over a few frames, rather than jumping there a line or
+  /// more at a time — see `RemoteScrollAnimator`. Purely visual: the emulator
+  /// holds the new screen at once. False draws each redraw as it lands, as
+  /// upstream.
+  final bool altBufferScrollAnimated;
+
+  /// AUTONOMOUS PATCH: with [altBufferScrollAnimated], told of each redraw
+  /// that answered the wheel — the rows it slid, or 0 when it could not be read
+  /// as a scroll and jumped. For measuring; nothing depends on it.
+  final void Function(int rows)? onAltBufferScrollShift;
+
   @override
   State<TerminalView> createState() => TerminalViewState();
 }
@@ -210,6 +239,13 @@ class TerminalViewState extends State<TerminalView> {
 
   RenderTerminal get renderTerminal =>
       _viewportKey.currentContext!.findRenderObject() as RenderTerminal;
+
+  /// AUTONOMOUS PATCH: [lines] wheel lines just went to a full-screen program —
+  /// see [TerminalView.altBufferScrollAnimated].
+  void _expectAltBufferScroll(int lines) {
+    final render = _viewportKey.currentContext?.findRenderObject();
+    if (render is RenderTerminal) render.expectRemoteScroll(lines);
+  }
 
   @override
   void initState() {
@@ -301,6 +337,8 @@ class TerminalViewState extends State<TerminalView> {
           onEditableRect: _onEditableRect,
           composingText: _composingText,
           composingBacktrackCells: _composingBacktrackCells,
+          animateRemoteScroll: widget.altBufferScrollAnimated,
+          onRemoteScrollShift: widget.onAltBufferScrollShift,
         );
       },
     );
@@ -309,6 +347,10 @@ class TerminalViewState extends State<TerminalView> {
       terminal: widget.terminal,
       simulateScroll: widget.simulateScroll,
       onAltBufferScroll: widget.onAltBufferScroll,
+      physics: widget.altBufferScrollPhysics,
+      paced: widget.altBufferScrollPaced,
+      onWheelsSent:
+          widget.altBufferScrollAnimated ? _expectAltBufferScroll : null,
       getCellOffset: (offset) => renderTerminal.getCellOffset(offset),
       getLineHeight: () => renderTerminal.lineHeight,
       child: child,
@@ -706,6 +748,8 @@ class _TerminalView extends LeafRenderObjectWidget {
     this.onEditableRect,
     this.composingText,
     this.composingBacktrackCells = 0,
+    this.animateRemoteScroll = false,
+    this.onRemoteScrollShift,
   });
 
   final Terminal terminal;
@@ -740,6 +784,10 @@ class _TerminalView extends LeafRenderObjectWidget {
 
   final int composingBacktrackCells;
 
+  final bool animateRemoteScroll;
+
+  final void Function(int rows)? onRemoteScrollShift;
+
   @override
   RenderTerminal createRenderObject(BuildContext context) {
     return RenderTerminal(
@@ -760,6 +808,9 @@ class _TerminalView extends LeafRenderObjectWidget {
       onEditableRect: onEditableRect,
       composingText: composingText,
       composingBacktrackCells: composingBacktrackCells,
+      devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1.0,
+      animateRemoteScroll: animateRemoteScroll,
+      onRemoteScrollShift: onRemoteScrollShift,
     );
   }
 
@@ -782,6 +833,9 @@ class _TerminalView extends LeafRenderObjectWidget {
       ..alwaysShowCursor = alwaysShowCursor
       ..onEditableRect = onEditableRect
       ..composingText = composingText
-      ..composingBacktrackCells = composingBacktrackCells;
+      ..composingBacktrackCells = composingBacktrackCells
+      ..devicePixelRatio = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1.0
+      ..animateRemoteScroll = animateRemoteScroll
+      ..onRemoteScrollShift = onRemoteScrollShift;
   }
 }

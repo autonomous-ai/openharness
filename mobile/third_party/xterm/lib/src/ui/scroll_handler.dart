@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:math' show max;
+
 import 'package:flutter/widgets.dart';
 import 'package:xterm/core.dart';
 import 'package:xterm/src/ui/infinite_scroll_view.dart';
@@ -14,6 +17,9 @@ class TerminalScrollGestureHandler extends StatefulWidget {
     required this.getLineHeight,
     this.simulateScroll = true,
     this.onAltBufferScroll,
+    this.physics,
+    this.paced = false,
+    this.onWheelsSent,
     required this.child,
   });
 
@@ -38,6 +44,19 @@ class TerminalScrollGestureHandler extends StatefulWidget {
   /// need the emulator's own mouse/key simulation at all.
   final void Function(bool up)? onAltBufferScroll;
 
+  /// AUTONOMOUS PATCH: the scroll's physics, layered over the platform's — see
+  /// `TerminalView.altBufferScrollPhysics`.
+  final ScrollPhysics? physics;
+
+  /// AUTONOMOUS PATCH: wheel events go out as fast as the program redraws for
+  /// them, not as fast as the finger moves — see
+  /// `TerminalView.altBufferScrollPaced`.
+  final bool paced;
+
+  /// AUTONOMOUS PATCH: told of each batch of wheel lines as it goes out,
+  /// negative for up — see `TerminalView.altBufferScrollAnimated`.
+  final void Function(int lines)? onWheelsSent;
+
   final Widget child;
 
   @override
@@ -59,6 +78,23 @@ class _TerminalScrollGestureHandlerState
   /// Used to calculate the cell offset of the terminal mouse event.
   var lastPointerPosition = Offset.zero;
 
+  /// AUTONOMOUS PATCH ([TerminalScrollGestureHandler.paced]): lines scrolled
+  /// and not yet sent, negative for up.
+  var _unsentLines = 0;
+
+  /// Batches of wheel events sent that no write from the program has answered.
+  var _batchesInFlight = 0;
+
+  /// Lets the next batch go when no answer comes: a program already at the top
+  /// of its history has nothing to redraw, and a scroll that waited for it
+  /// would never move again.
+  Timer? _answerWait;
+
+  /// Two, so the next batch is on its way while the program redraws the last.
+  static const _maxBatchesInFlight = 2;
+
+  static const _answerWaitLimit = Duration(milliseconds: 120);
+
   @override
   void initState() {
     widget.terminal.addListener(_onTerminalUpdated);
@@ -69,6 +105,7 @@ class _TerminalScrollGestureHandlerState
   @override
   void dispose() {
     widget.terminal.removeListener(_onTerminalUpdated);
+    _resetPacing();
     super.dispose();
   }
 
@@ -78,6 +115,9 @@ class _TerminalScrollGestureHandlerState
       oldWidget.terminal.removeListener(_onTerminalUpdated);
       widget.terminal.addListener(_onTerminalUpdated);
       isAltBuffer = widget.terminal.isUsingAltBuffer;
+      _resetPacing();
+    } else if (!widget.paced) {
+      _resetPacing();
     }
     super.didUpdateWidget(oldWidget);
   }
@@ -85,7 +125,20 @@ class _TerminalScrollGestureHandlerState
   void _onTerminalUpdated() {
     if (isAltBuffer != widget.terminal.isUsingAltBuffer) {
       isAltBuffer = widget.terminal.isUsingAltBuffer;
+      _resetPacing();
       setState(() {});
+      return;
+    }
+    // AUTONOMOUS PATCH: the program wrote — on the alternate buffer, its redraw
+    // for the wheel events in flight — so another batch may go. Any write
+    // counts: one that answers nothing only lets the next batch go sooner.
+    if (_batchesInFlight > 0) {
+      _batchesInFlight--;
+      if (_batchesInFlight == 0) {
+        _answerWait?.cancel();
+        _answerWait = null;
+      }
+      _sendUnsentLines();
     }
   }
 
@@ -119,11 +172,58 @@ class _TerminalScrollGestureHandlerState
 
     final delta = currentLineOffset - lastLineOffset;
 
-    for (var i = 0; i < delta.abs(); i++) {
-      _sendScrollEvent(delta < 0);
+    if (widget.paced) {
+      _queueLines(delta);
+    } else {
+      if (delta != 0) widget.onWheelsSent?.call(delta);
+      for (var i = 0; i < delta.abs(); i++) {
+        _sendScrollEvent(delta < 0);
+      }
     }
 
     lastLineOffset = currentLineOffset;
+  }
+
+  /// AUTONOMOUS PATCH ([TerminalScrollGestureHandler.paced]): [delta] more
+  /// lines to scroll — sent now if the program has kept up, else in the next
+  /// batch, together with the lines scrolled while it caught up.
+  void _queueLines(int delta) {
+    if (delta == 0) return;
+    // Turned back: what still waits would carry the screen away from the finger.
+    if (_unsentLines != 0 && (_unsentLines < 0) != (delta < 0)) {
+      _unsentLines = 0;
+    }
+    // At most a screen waits. On a slow link the rest of a fast fling is
+    // dropped, rather than played out long after the fling has stopped.
+    final screen = max(1, widget.terminal.viewHeight);
+    _unsentLines = (_unsentLines + delta).clamp(-screen, screen);
+    _sendUnsentLines();
+  }
+
+  void _sendUnsentLines() {
+    if (_unsentLines == 0 || _batchesInFlight >= _maxBatchesInFlight) return;
+    final lines = _unsentLines;
+    _unsentLines = 0;
+    _batchesInFlight++;
+    _answerWait?.cancel();
+    _answerWait = Timer(_answerWaitLimit, _onAnswerWaitOver);
+    widget.onWheelsSent?.call(lines);
+    for (var i = 0; i < lines.abs(); i++) {
+      _sendScrollEvent(lines < 0);
+    }
+  }
+
+  void _onAnswerWaitOver() {
+    _answerWait = null;
+    _batchesInFlight = 0;
+    _sendUnsentLines();
+  }
+
+  void _resetPacing() {
+    _answerWait?.cancel();
+    _answerWait = null;
+    _unsentLines = 0;
+    _batchesInFlight = 0;
   }
 
   @override
@@ -141,6 +241,7 @@ class _TerminalScrollGestureHandlerState
       },
       child: InfiniteScrollView(
         onScroll: _onScroll,
+        physics: widget.physics,
         child: widget.child,
       ),
     );

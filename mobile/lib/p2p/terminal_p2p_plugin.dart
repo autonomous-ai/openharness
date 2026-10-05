@@ -130,6 +130,22 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
   /// streamId → when its migration to p2p started.
   final _migrating = <String, DateTime>{};
 
+  /// streamId → the sequence number of the first frame it delivered over the channel. A relay
+  /// frame numbered below it was already on its way when the responder moved the stream onto
+  /// the channel — see [_lateOnRelay].
+  final _p2pFloor = <String, int>{};
+
+  /// streamId → when its migration was confirmed by a frame that carries no sequence number, until
+  /// a numbered one pins [_p2pFloor] — see [_lateOnRelay].
+  final _confirmedAt = <String, DateTime>{};
+
+  /// Streams whose late relay frames have been logged once already.
+  final _lateNoted = <String>{};
+
+  /// How long after a migration was confirmed with no numbered frame to go by a relay frame is still
+  /// taken for a late one — the relay's own lag behind the channel, with room to spare.
+  static const _lateRelayGrace = Duration(seconds: 2);
+
   final _retryTimestamps = <DateTime>[];
   Timer? _retryTimer;
   late final Timer _sweep;
@@ -227,6 +243,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     _promoteAfterFirstFrame.clear();
     _streams.clear();
     _migrating.clear();
+    _forgetFloors();
     unawaited(shadow?.stop(reason: 'relay_closed', notifyPeer: notifyPeer));
     unawaited(orphan?.stop(reason: 'relay_closed', notifyPeer: notifyPeer));
     unawaited(link?.stop(reason: 'relay_closed', notifyPeer: notifyPeer));
@@ -409,6 +426,8 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
         !_migrating.containsKey(streamId)) {
       // Suppressed while migrating: during phase 2 the responder may still emit
       // relay-routed output until ITS flip lands, and that is not p2p breaking.
+      // Nor after it, for what the relay was already carrying — see [_lateOnRelay].
+      if (_lateOnRelay(streamId, localFrame)) return;
       await _demote('relay_binary_received');
     } else if (firstKeyframe && _link?.isReady == true) {
       // Came up on the relay after the channel was already up — nothing else would move it.
@@ -456,6 +475,14 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
           return;
       }
       final streamId = header.streamId;
+      // The first numbered frame the channel brings for this stream: the line below which a relay
+      // frame is a late one — see [_lateOnRelay].
+      if (!_p2pFloor.containsKey(streamId)) {
+        if (peekTerminalLocalSeq(local) case final seq?) {
+          _p2pFloor[streamId] = seq;
+          _confirmedAt.remove(streamId);
+        }
+      }
       // Phase 2 of a live migration confirmed: this stream's bytes are genuinely
       // arriving over p2p — re-arm the ordinary demote-on-mismatch rule for it.
       await _confirmMigration(streamId);
@@ -511,6 +538,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
       _streams.remove(streamId);
       _migrating.remove(streamId);
       _promoteAfterFirstFrame.remove(streamId);
+      _forgetFloor(streamId);
     }
     // A frame for a stream still marked p2p but physically delivered over the relay:
     // a quieter, single-stream demotion than [_demote] — still worth telling the app.
@@ -518,6 +546,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
         streamId.isNotEmpty &&
         !_migrating.containsKey(streamId) &&
         _p2pStreams.remove(streamId)) {
+      _forgetFloor(streamId);
       await _dispatchLinkMode(streamId, 'relay');
     }
   }
@@ -606,6 +635,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
         _p2pStreams.remove(closing);
         _streams.remove(closing);
         _migrating.remove(closing);
+        _forgetFloor(closing);
       }
       return true;
     }
@@ -617,6 +647,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
       _streams.remove(closing);
       _migrating.remove(closing);
       _promoteAfterFirstFrame.remove(closing);
+      _forgetFloor(closing);
     }
     return false;
   }
@@ -670,6 +701,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     _link = null;
     final streamIds = List.of(_p2pStreams);
     _p2pStreams.clear();
+    _forgetFloors();
     _pendingOpens.clear();
     for (final streamId in streamIds) {
       _migrating.remove(streamId);
@@ -730,11 +762,58 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
   Future<void> _confirmMigration(String streamId) async {
     final startedAt = _migrating.remove(streamId);
     if (startedAt == null) return;
+    if (!_p2pFloor.containsKey(streamId)) _confirmedAt[streamId] = _now();
     _log(
       'migrate · done stream=${_short(streamId)} via=${linkModeFor(streamId)}'
       ' took=${_now().difference(startedAt).inMilliseconds}ms',
     );
     await _dispatchLinkMode(streamId, linkModeFor(streamId));
+  }
+
+  /// Whether [localFrame], delivered over the relay for [streamId] — a stream on the channel — is a
+  /// late one: sent before the responder moved the stream, and only now arriving.
+  ///
+  /// ⚠️ **One of these used to take the channel down for a minute.** Phase 2 of a migration flips
+  /// the responder's routing, but what it had already put on the relay is still on its way — and
+  /// the relay is the slower wire, so that output routinely lands AFTER the channel's first frame.
+  /// Taken for p2p breaking, it demoted the whole channel and scheduled the retry a minute out; the
+  /// session read the same frame as a sequence gap and asked for a resync. Measured on a phone
+  /// (2026-10-02): migrated in 546 ms, demoted at once, every stream on the relay for 60 s.
+  ///
+  /// Late is told by number: everything the responder sent before its flip is numbered below the
+  /// channel's first frame for the stream ([_p2pFloor]). A relay frame numbered at or above it
+  /// means the responder really is back on the relay, and demotes as before. Until a numbered frame
+  /// has come — a migration confirmed by a frame that carries none — a short grace after the
+  /// confirmation stands in ([_lateRelayGrace]).
+  bool _lateOnRelay(String streamId, Uint8List localFrame) {
+    final floor = _p2pFloor[streamId];
+    final seq = peekTerminalLocalSeq(localFrame);
+    final late = floor != null
+        ? seq != null && seq < floor
+        : switch (_confirmedAt[streamId]) {
+            final confirmedAt? =>
+              _now().difference(confirmedAt) < _lateRelayGrace,
+            null => false,
+          };
+    if (late && _lateNoted.add(streamId)) {
+      _log(
+        'late relay frame · stream=${_short(streamId)} seq=$seq'
+        '${floor == null ? '' : ' < $floor'} · kept on p2p',
+      );
+    }
+    return late;
+  }
+
+  void _forgetFloor(String streamId) {
+    _p2pFloor.remove(streamId);
+    _confirmedAt.remove(streamId);
+    _lateNoted.remove(streamId);
+  }
+
+  void _forgetFloors() {
+    _p2pFloor.clear();
+    _confirmedAt.clear();
+    _lateNoted.clear();
   }
 
   /// Enough of a stream id to tell a launch's few streams apart in the log.

@@ -259,6 +259,15 @@ Uint8List? encodeTerminalLocal(TerminalBinaryFrame frame) {
   );
 }
 
+/// The sequence number of a loopback (HTRL) frame from its headers alone, as
+/// [peekTerminalLocal] reads its kind and stream — or null when the frame is too
+/// short to carry one. It follows the stream id, as [decodeTerminalPlain] reads it.
+int? peekTerminalLocalSeq(Uint8List bytes) {
+  if (bytes.length < terminalLocalHeaderBytes + 24) return null;
+  return ByteData.sublistView(bytes)
+      .getUint64(terminalLocalHeaderBytes + 16, Endian.big);
+}
+
 TerminalBinaryFrame? decodeTerminalLocal(List<int> raw) {
   final bytes = Uint8List.fromList(raw);
   if (bytes.length < terminalLocalHeaderBytes) return null;

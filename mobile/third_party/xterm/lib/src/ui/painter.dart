@@ -1,6 +1,8 @@
 import 'dart:ui';
 import 'package:flutter/painting.dart';
 
+import 'package:xterm/src/ui/glyph_run.dart';
+import 'package:xterm/src/ui/line_picture_cache.dart';
 import 'package:xterm/src/ui/palette_builder.dart';
 import 'package:xterm/src/ui/paragraph_cache.dart';
 import 'package:xterm/xterm.dart';
@@ -37,6 +39,14 @@ class TerminalPainter {
   /// [_textStyle] is changed, or when the system font changes.
   final _paragraphCache = ParagraphCache(10240);
 
+  /// AUTONOMOUS PATCH: each line's drawing, replayed while the line is
+  /// unchanged — see [paintLineCached].
+  late final _linePictures = LinePictureCache(paintLine);
+
+  /// Reused by every line drawn: painting is synchronous and never re-entrant.
+  final _cell = CellData.empty();
+  final _run = GlyphRun();
+
   TerminalStyle get textStyle => _textStyle;
   TerminalStyle _textStyle;
   set textStyle(TerminalStyle value) {
@@ -44,6 +54,7 @@ class TerminalPainter {
     _textStyle = value;
     _cellSize = _measureCharSize();
     _paragraphCache.clear();
+    clearLinePictures();
   }
 
   TextScaler get textScaler => _textScaler;
@@ -53,6 +64,7 @@ class TerminalPainter {
     _textScaler = value;
     _cellSize = _measureCharSize();
     _paragraphCache.clear();
+    clearLinePictures();
   }
 
   TerminalTheme get theme => _theme;
@@ -62,6 +74,7 @@ class TerminalPainter {
     _theme = value;
     _colorPalette = PaletteBuilder(value).build();
     _paragraphCache.clear();
+    clearLinePictures();
   }
 
   Size _measureCharSize() {
@@ -94,7 +107,12 @@ class TerminalPainter {
   void clearFontCache() {
     _cellSize = _measureCharSize();
     _paragraphCache.clear();
+    clearLinePictures();
   }
+
+  /// Drops every recorded line — the font, the scale or the colours changed, or
+  /// the lines themselves belong to an emulator that is gone.
+  void clearLinePictures() => _linePictures.clear();
 
   /// Paints the cursor based on the current cursor type.
   void paintCursor(
@@ -148,29 +166,156 @@ class TerminalPainter {
     );
   }
 
+  /// AUTONOMOUS PATCH: [paintLine], replayed from the line's last recording while
+  /// it has not changed since — see [LinePictureCache].
+  void paintLineCached(Canvas canvas, Offset offset, BufferLine line) =>
+      _linePictures.draw(canvas, offset, line);
+
+  /// AUTONOMOUS PATCH: [line]'s last recording, handed over to the caller if it
+  /// still shows [version] — see [LinePictureCache.take].
+  Picture? takeLinePicture(BufferLine line, int version) =>
+      _linePictures.take(line, version);
+
   /// Paints [line] to [canvas] at [offset]. The x offset of [offset] is usually
   /// 0, and the y offset is the top of the line.
+  ///
+  /// AUTONOMOUS PATCH: the fills first, then the characters — each in runs
+  /// rather than a cell at a time. See [_paintBackground] and [_paintForeground].
   void paintLine(
     Canvas canvas,
     Offset offset,
     BufferLine line,
   ) {
-    final cellData = CellData.empty();
-    final cellWidth = _cellSize.width;
-
-    for (var i = 0; i < line.length; i++) {
-      line.getCellData(i, cellData);
-
-      final charWidth = cellData.content >> CellContent.widthShift;
-      final cellOffset = offset.translate(i * cellWidth, 0);
-
-      paintCell(canvas, cellOffset, cellData);
-
-      if (charWidth == 2) {
-        i++;
-      }
-    }
+    _paintBackground(canvas, offset, line);
+    _paintForeground(canvas, offset, line);
   }
+
+  /// The line's fills: one rectangle per run of cells that share a colour,
+  /// where it was one per cell — a highlighted prompt row is one, not eighty.
+  void _paintBackground(Canvas canvas, Offset offset, BufferLine line) {
+    final cell = _cell;
+    Color? color;
+    var start = 0;
+    var index = 0;
+    while (index < line.length) {
+      line.getCellData(index, cell);
+      final next = _backgroundColorOf(cell);
+      if (next != color) {
+        _fillCells(canvas, offset, start, index, color);
+        color = next;
+        start = index;
+      }
+      // A wide character's fill covers its second cell too, whatever that holds.
+      index += cell.content >> CellContent.widthShift == 2 ? 2 : 1;
+    }
+    _fillCells(canvas, offset, start, index, color);
+  }
+
+  /// Cells [start] to [end] filled with [color]; nothing for the default ground.
+  void _fillCells(
+    Canvas canvas,
+    Offset offset,
+    int start,
+    int end,
+    Color? color,
+  ) {
+    if (color == null || end <= start) return;
+    canvas.drawRect(
+      Rect.fromLTWH(
+        offset.dx + start * _cellSize.width,
+        offset.dy,
+        // One pixel past the run, as each cell's own fill was: no hairline
+        // between it and whatever is drawn next to it.
+        (end - start) * _cellSize.width + 1,
+        _cellSize.height,
+      ),
+      Paint()..color = color,
+    );
+  }
+
+  /// The fill [cellData] calls for, or null for the default ground — which is
+  /// left to the render object's own clear (see [paintCellBackground]).
+  Color? _backgroundColorOf(CellData cellData) {
+    if (cellData.flags & CellFlags.inverse != 0) {
+      return resolveForegroundColor(cellData.foreground);
+    }
+    if (cellData.background & CellColor.typeMask == CellColor.normal) {
+      return null;
+    }
+    return resolveBackgroundColor(cellData.background);
+  }
+
+  /// The line's characters: a run of printable ASCII in one style as ONE
+  /// paragraph ([GlyphRun]), anything else — a wide or non-ASCII character, an
+  /// underlined cell — a cell at a time, as before.
+  void _paintForeground(Canvas canvas, Offset offset, BufferLine line) {
+    final cell = _cell;
+    final run = _run..close();
+    for (var i = 0; i < line.length; i++) {
+      line.getCellData(i, cell);
+      if (GlyphRun.takes(cell)) {
+        if (!run.add(i, cell)) {
+          _paintRun(canvas, offset, run);
+          run.open(i, cell);
+        }
+        continue;
+      }
+      _paintRun(canvas, offset, run);
+      paintCellForeground(
+          canvas, offset.translate(i * _cellSize.width, 0), cell);
+      if (cell.content >> CellContent.widthShift == 2) i++;
+    }
+    _paintRun(canvas, offset, run);
+  }
+
+  /// Draws [run], when one is open, and closes it.
+  void _paintRun(Canvas canvas, Offset offset, GlyphRun run) {
+    if (!run.isOpen) return;
+    final at = offset.translate(run.start * _cellSize.width, 0);
+    if (run.length == 1) {
+      // A lone character: the single-cell paragraph, cached across lines.
+      paintCellForeground(
+        canvas,
+        at,
+        CellData(
+          foreground: run.foreground,
+          background: run.background,
+          flags: run.flags,
+          content: run.content,
+        ),
+      );
+    } else {
+      final paragraph = _layoutRun(run);
+      canvas.drawParagraph(paragraph, at);
+      // The recording holds what it drew; the paragraph itself is not kept.
+      paragraph.dispose();
+    }
+    run.close();
+  }
+
+  /// [run]'s characters laid out as one paragraph, in its style.
+  Paragraph _layoutRun(GlyphRun run) {
+    final style = _textStyle
+        .toTextStyle(
+          color: _foregroundColorOf(run.foreground, run.background, run.flags),
+          bold: run.flags & CellFlags.bold != 0,
+          italic: run.flags & CellFlags.italic != 0,
+        )
+        .copyWith(fontFeatures: _gridFeatures);
+    final builder = ParagraphBuilder(style.getParagraphStyle());
+    builder.pushStyle(style.getTextStyle(textScaler: _textScaler));
+    builder.addText(run.text);
+    return builder.build()
+      ..layout(ParagraphConstraints(width: double.infinity));
+  }
+
+  /// No ligatures, contextual alternates or kerning in a run: each would move
+  /// or merge glyphs that a terminal draws one per cell.
+  static const _gridFeatures = [
+    FontFeature.disable('liga'),
+    FontFeature.disable('calt'),
+    FontFeature.disable('kern'),
+  ];
 
   @pragma('vm:prefer-inline')
   void paintCell(Canvas canvas, Offset offset, CellData cellData) {
@@ -196,16 +341,12 @@ class TerminalPainter {
     if (paragraph == null) {
       final cellFlags = cellData.flags;
 
-      var color = cellFlags & CellFlags.inverse == 0
-          ? resolveForegroundColor(cellData.foreground)
-          : resolveBackgroundColor(cellData.background);
-
-      if (cellData.flags & CellFlags.faint != 0) {
-        color = color.withOpacity(0.5);
-      }
-
       final style = _textStyle.toTextStyle(
-        color: color,
+        color: _foregroundColorOf(
+          cellData.foreground,
+          cellData.background,
+          cellFlags,
+        ),
         bold: cellFlags & CellFlags.bold != 0,
         italic: cellFlags & CellFlags.italic != 0,
         underline: cellFlags & CellFlags.underline != 0,
@@ -253,6 +394,15 @@ class TerminalPainter {
     final widthScale = doubleWidth ? 2 : 1;
     final size = Size(_cellSize.width * widthScale + 1, _cellSize.height);
     canvas.drawRect(offset & size, paint);
+  }
+
+  /// The colour a cell's character is drawn in: its foreground, or its
+  /// background when inverse, at half strength when faint.
+  Color _foregroundColorOf(int foreground, int background, int flags) {
+    final color = flags & CellFlags.inverse == 0
+        ? resolveForegroundColor(foreground)
+        : resolveBackgroundColor(background);
+    return flags & CellFlags.faint != 0 ? color.withOpacity(0.5) : color;
   }
 
   /// Get the effective foreground color for a cell from information encoded in

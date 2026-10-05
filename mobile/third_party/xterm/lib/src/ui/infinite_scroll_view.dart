@@ -12,16 +12,22 @@ class InfiniteScrollView extends StatelessWidget {
   const InfiniteScrollView({
     super.key,
     required this.onScroll,
+    this.physics,
     required this.child,
   });
 
   final ScrollCallback onScroll;
+
+  /// AUTONOMOUS PATCH: layered over the platform's physics by the [Scrollable];
+  /// null keeps the platform's.
+  final ScrollPhysics? physics;
 
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
     return Scrollable(
+      physics: physics,
       viewportBuilder: (context, position) {
         return _InfiniteScrollView(
           position: position,

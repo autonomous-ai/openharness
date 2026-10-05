@@ -1,4 +1,4 @@
-import 'dart:math' show max;
+import 'dart:math' show max, min;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
@@ -11,6 +11,7 @@ import 'package:xterm/src/terminal.dart';
 import 'package:xterm/src/ui/controller.dart';
 import 'package:xterm/src/ui/cursor_type.dart';
 import 'package:xterm/src/ui/painter.dart';
+import 'package:xterm/src/ui/remote_scroll_animator.dart';
 import 'package:xterm/src/ui/selection_mode.dart';
 import 'package:xterm/src/ui/terminal_size.dart';
 import 'package:xterm/src/ui/terminal_text_style.dart';
@@ -36,7 +37,13 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     EditableRectCallback? onEditableRect,
     String? composingText,
     int composingBacktrackCells = 0,
+    double devicePixelRatio = 1.0,
+    bool animateRemoteScroll = false,
+    void Function(int rows)? onRemoteScrollShift,
   })  : _terminal = terminal,
+        _devicePixelRatio = devicePixelRatio,
+        _animateRemoteScroll = animateRemoteScroll,
+        _onRemoteScrollShift = onRemoteScrollShift,
         _controller = controller,
         _offset = offset,
         _padding = padding,
@@ -63,6 +70,9 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     }
     _terminal = terminal;
     _reportedViewportSize = null;
+    // The recorded lines are the old emulator's: none of them is drawn again.
+    _painter.clearLinePictures();
+    _remoteScroll?.reset();
     if (attached && _renderingEnabled) _terminal.addListener(_onTerminalChange);
     _resizeTerminalIfNeeded();
     markNeedsLayout();
@@ -112,6 +122,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   set renderingEnabled(bool value) {
     if (value == _renderingEnabled) return;
     _renderingEnabled = value;
+    _remoteScroll?.reset();
     if (attached) {
       if (value) {
         _terminal.addListener(_onTerminalChange);
@@ -127,18 +138,21 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   set textStyle(TerminalStyle value) {
     if (value == _painter.textStyle) return;
     _painter.textStyle = value;
+    _remoteScroll?.reset();
     markNeedsLayout();
   }
 
   set textScaler(TextScaler value) {
     if (value == _painter.textScaler) return;
     _painter.textScaler = value;
+    _remoteScroll?.reset();
     markNeedsLayout();
   }
 
   set theme(TerminalTheme value) {
     if (value == _painter.theme) return;
     _painter.theme = value;
+    _remoteScroll?.reset();
     markNeedsPaint();
   }
 
@@ -184,6 +198,81 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     if (value == _composingBacktrackCells) return;
     _composingBacktrackCells = value;
     markNeedsPaint();
+  }
+
+  /// AUTONOMOUS PATCH: the screen's pixels per logical pixel — the grid each
+  /// line's top is placed on, see [_snapLineTop].
+  double _devicePixelRatio;
+  set devicePixelRatio(double value) {
+    if (value == _devicePixelRatio) return;
+    _devicePixelRatio = value;
+    markNeedsPaint();
+  }
+
+  /// AUTONOMOUS PATCH: whether a full-screen program's scroll slides into place
+  /// rather than jumping — `TerminalView.altBufferScrollAnimated`.
+  bool _animateRemoteScroll;
+  set animateRemoteScroll(bool value) {
+    if (value == _animateRemoteScroll) return;
+    _animateRemoteScroll = value;
+    if (!value) {
+      _remoteScroll?.dispose();
+      _remoteScroll = null;
+      markNeedsPaint();
+    }
+  }
+
+  void Function(int rows)? _onRemoteScrollShift;
+  set onRemoteScrollShift(void Function(int rows)? value) {
+    _onRemoteScrollShift = value;
+    _remoteScroll?.onShift = value;
+  }
+
+  /// Made the first time a wheel event goes out with [_animateRemoteScroll] on.
+  RemoteScrollAnimator? _remoteScroll;
+
+  /// AUTONOMOUS PATCH: [lines] wheel lines just went to the program, negative
+  /// for up. Its next redraw may be that scroll's answer, and then slides into
+  /// place instead of jumping — see [RemoteScrollAnimator].
+  void expectRemoteScroll(int lines) {
+    if (!_animateRemoteScroll ||
+        !_renderingEnabled ||
+        !attached ||
+        !_isWholeAltScreen) {
+      return;
+    }
+    final animator = _remoteScroll ??= RemoteScrollAnimator(
+      onFrame: markNeedsPaint,
+      takePicture: _painter.takeLinePicture,
+      onShift: _onRemoteScrollShift,
+    );
+    animator.expect(
+      lines,
+      _terminal.buffer.lines,
+      _terminal.viewHeight,
+      _painter.cellSize.height,
+    );
+  }
+
+  /// On the alternate screen, with no history: buffer line `i` is screen row
+  /// `i`, which is what a slide's rows are counted in.
+  bool get _isWholeAltScreen =>
+      _terminal.isUsingAltBuffer &&
+      _terminal.buffer.lines.length == _terminal.viewHeight;
+
+  /// The screen was laid out again: a slide starts, carries on or ends here.
+  void _updateRemoteScroll() {
+    final animator = _remoteScroll;
+    if (animator == null) return;
+    if (!_isWholeAltScreen) {
+      animator.reset();
+      return;
+    }
+    animator.update(
+      _terminal.buffer.lines,
+      _terminal.viewHeight,
+      _painter.cellSize.height,
+    );
   }
 
   TerminalSize? _viewportSize;
@@ -248,6 +337,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     _terminal.removeListener(_onTerminalChange);
     _controller.removeListener(_onControllerUpdate);
     _focusNode.removeListener(_onFocusChange);
+    _remoteScroll?.reset();
   }
 
   @override
@@ -259,6 +349,14 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   void systemFontsDidChange() {
     _painter.clearFontCache();
     super.systemFontsDidChange();
+  }
+
+  @override
+  void dispose() {
+    _remoteScroll?.dispose();
+    _remoteScroll = null;
+    _painter.clearLinePictures();
+    super.dispose();
   }
 
   @override
@@ -279,6 +377,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     _updateScrollOffset();
     if (followTail) _stickToBottom = true;
     _laidOutMaxScrollExtent = _maxScrollExtent;
+    _updateRemoteScroll();
     _scheduleEditableRect();
   }
 
@@ -538,24 +637,40 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     final effectFirstLine = firstLine.clamp(0, lines.length - 1);
     final effectLastLine = lastLine.clamp(0, lines.length - 1);
 
+    // AUTONOMOUS PATCH: a full-screen program's scroll, still sliding into
+    // place — its rows are drawn by [_paintSlide], the rest as ever.
+    final slide = _remoteScroll?.isSliding == true ? _remoteScroll : null;
+
     for (var i = effectFirstLine; i <= effectLastLine; i++) {
-      _painter.paintLine(
+      if (slide != null && i >= slide.top && i <= slide.bottom) continue;
+      _painter.paintLineCached(
         canvas,
-        offset.translate(0, (i * charHeight + _lineOffset).truncateToDouble()),
+        offset.translate(0, _snapLineTop(i * charHeight + _lineOffset)),
         lines[i],
       );
     }
 
-    if (_terminal.buffer.absoluteCursorY >= effectFirstLine &&
-        _terminal.buffer.absoluteCursorY <= effectLastLine) {
+    if (slide != null) {
+      _paintSlide(canvas, offset, slide, effectFirstLine, effectLastLine);
+    }
+
+    final cursorY = _terminal.buffer.absoluteCursorY;
+    if (cursorY >= effectFirstLine && cursorY <= effectLastLine) {
+      // A cursor inside the sliding rows moves with them.
+      final cursorAt = slide != null &&
+              cursorY >= slide.top &&
+              cursorY <= slide.bottom
+          ? offset + cursorOffset.translate(0, slide.offset)
+          : offset + cursorOffset;
+
       if (_isComposingText) {
-        _paintComposingText(canvas, offset + cursorOffset);
+        _paintComposingText(canvas, cursorAt);
       }
 
       if (_shouldShowCursor) {
         _painter.paintCursor(
           canvas,
-          offset + cursorOffset,
+          cursorAt,
           cursorType: _cursorType,
           hasFocus: _focusNode.hasFocus,
         );
@@ -581,6 +696,61 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     }
 
     canvas.restore();
+  }
+
+  /// AUTONOMOUS PATCH: the rows of a scroll still sliding into place — each
+  /// drawn [RemoteScrollAnimator.offset] from where it belongs, with the rows
+  /// that left the screen sliding out after them, all clipped to the rows the
+  /// scroll moved so the program's fixed rows above and below stay put.
+  void _paintSlide(
+    Canvas canvas,
+    Offset offset,
+    RemoteScrollAnimator slide,
+    int firstLine,
+    int lastLine,
+  ) {
+    final lines = _terminal.buffer.lines;
+    final lineHeight = _painter.cellSize.height;
+    final shift = slide.offset;
+    final top = offset.dy + _snapLineTop(slide.top * lineHeight + _lineOffset);
+    final bottom =
+        offset.dy + _snapLineTop((slide.bottom + 1) * lineHeight + _lineOffset);
+
+    canvas.save();
+    canvas.clipRect(
+      Rect.fromLTRB(offset.dx, top, offset.dx + size.width, bottom),
+    );
+    final from = max(slide.top, firstLine);
+    final to = min(slide.bottom, lastLine);
+    for (var i = from; i <= to; i++) {
+      _painter.paintLineCached(
+        canvas,
+        offset.translate(0, _snapLineTop(i * lineHeight + _lineOffset + shift)),
+        lines[i],
+      );
+    }
+    for (final ghost in slide.ghosts) {
+      canvas.save();
+      canvas.translate(
+        offset.dx,
+        offset.dy + _snapLineTop(ghost.key * lineHeight + _lineOffset + shift),
+      );
+      canvas.drawPicture(ghost.value);
+      canvas.restore();
+    }
+    canvas.restore();
+  }
+
+  /// AUTONOMOUS PATCH: a line's top, on the screen's own pixel grid.
+  ///
+  /// It was truncated to whole LOGICAL pixels, which on a 3× phone is three
+  /// device pixels: a slow scroll moved the text in visible three-pixel steps,
+  /// holding still for frames in between, while the finger moved smoothly. On
+  /// the device grid it moves a pixel at a time and stays as crisp.
+  double _snapLineTop(double y) {
+    final ratio = _devicePixelRatio;
+    if (ratio <= 0) return y.truncateToDouble();
+    return (y * ratio).roundToDouble() / ratio;
   }
 
   /// Paints the text that is currently being composed in IME to [canvas] at

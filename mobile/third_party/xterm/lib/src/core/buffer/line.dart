@@ -38,6 +38,18 @@ class BufferLine with IndexedItem {
   int get textVersion => _textVersion;
   int _textVersion = 0;
 
+  /// AUTONOMOUS PATCH: what a painter's recording of this line is checked against
+  /// (`TerminalPainter.paintLineCached`). Bumped by every change to what the line
+  /// draws — text, colours, attributes, length — where [textVersion] skips colour.
+  int get paintVersion => _paintVersion;
+  int _paintVersion = 0;
+
+  /// The text changed, and with it what the line draws.
+  void _textChanged() {
+    _textVersion++;
+    _paintVersion++;
+  }
+
   final _anchors = <CellAnchor>[];
 
   List<CellAnchor> get anchors => _anchors;
@@ -75,7 +87,7 @@ class BufferLine with IndexedItem {
   }
 
   CellData createCellData(int index) {
-    _textVersion++;
+    _textChanged();
     final cellData = CellData.empty();
     final offset = index * _cellSize;
     _data[offset + _cellForeground] = cellData.foreground;
@@ -86,19 +98,22 @@ class BufferLine with IndexedItem {
   }
 
   void setForeground(int index, int value) {
+    _paintVersion++;
     _data[index * _cellSize + _cellForeground] = value;
   }
 
   void setBackground(int index, int value) {
+    _paintVersion++;
     _data[index * _cellSize + _cellBackground] = value;
   }
 
   void setAttributes(int index, int value) {
+    _paintVersion++;
     _data[index * _cellSize + _cellAttributes] = value;
   }
 
   void setContent(int index, int value) {
-    _textVersion++;
+    _textChanged();
     _data[index * _cellSize + _cellContent] = value;
   }
 
@@ -108,7 +123,7 @@ class BufferLine with IndexedItem {
   }
 
   void setCell(int index, int char, int witdh, CursorStyle style) {
-    _textVersion++;
+    _textChanged();
     final offset = index * _cellSize;
     _data[offset + _cellForeground] = style.foreground;
     _data[offset + _cellBackground] = style.background;
@@ -117,7 +132,7 @@ class BufferLine with IndexedItem {
   }
 
   void setCellData(int index, CellData cellData) {
-    _textVersion++;
+    _textChanged();
     final offset = index * _cellSize;
     _data[offset + _cellForeground] = cellData.foreground;
     _data[offset + _cellBackground] = cellData.background;
@@ -126,7 +141,7 @@ class BufferLine with IndexedItem {
   }
 
   void eraseCell(int index, CursorStyle style) {
-    _textVersion++;
+    _textChanged();
     final offset = index * _cellSize;
     _data[offset + _cellForeground] = style.foreground;
     _data[offset + _cellBackground] = style.background;
@@ -135,7 +150,7 @@ class BufferLine with IndexedItem {
   }
 
   void resetCell(int index) {
-    _textVersion++;
+    _textChanged();
     final offset = index * _cellSize;
     _data[offset + _cellForeground] = 0;
     _data[offset + _cellBackground] = 0;
@@ -169,6 +184,7 @@ class BufferLine with IndexedItem {
     assert(count >= 0 && start + count <= _length);
 
     style ??= CursorStyle.empty;
+    _paintVersion++;
 
     if (start + count < _length) {
       final moveStart = start * _cellSize;
@@ -203,6 +219,7 @@ class BufferLine with IndexedItem {
   /// Inserts [count] cells at [start]. New cells are initialized with [style].
   void insertCells(int start, int count, [CursorStyle? style]) {
     style ??= CursorStyle.empty;
+    _paintVersion++;
 
     if (start > 0 && getWidth(start - 1) == 2) {
       eraseCell(start - 1, style);
@@ -257,7 +274,7 @@ class BufferLine with IndexedItem {
       }
     }
 
-    _textVersion++;
+    _textChanged();
     _length = length;
 
     for (var i = 0; i < _anchors.length; i++) {
@@ -299,7 +316,7 @@ class BufferLine with IndexedItem {
   /// Copies [len] cells from [src] starting at [srcCol] to [dstCol] at this
   /// line.
   void copyFrom(BufferLine src, int srcCol, int dstCol, int len) {
-    _textVersion++;
+    _textChanged();
     resize(dstCol + len);
 
     // data.setRange(
