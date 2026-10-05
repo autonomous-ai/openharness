@@ -218,6 +218,14 @@ describe('production resume handler', () => {
     error.mockRestore()
   })
 
+  it('attaches nothing for a resume that started a new conversation: the engine has yet to name it', async () => {
+    // A stopped harness that never had a conversation resumes into a new one.
+    rewrite({ sessionId: '', transcriptPath: '' })
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity)
+    expect(await start()).toMatchObject({ ok: true, resumed: false, session: { launch: { state: 'ready' } } })
+    expect(deps.attachSession).not.toHaveBeenCalled()
+  })
+
   it('leaves the attach to the hook that registered the resume first', async () => {
     // The fixture's probe imitates a hook that already landed (`lastHookAt`): its registration attached it.
     expect(await start()).toMatchObject({ ok: true, session: { launch: { state: 'ready' } } })

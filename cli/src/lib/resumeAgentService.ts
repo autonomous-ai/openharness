@@ -113,8 +113,10 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       // Only the hook's registration attached it: discovery attaches a row it finds still launching,
       // and this one is ready already. With its SessionStart refused (round 23: the hook beat the
       // process being recorded) or never sent, nothing attached it, and the resumed agent never showed
-      // a turn. A hook that registers later attaches it again, as one does a created agent.
-      if (!hooked) {
+      // a turn. A hook that registers later attaches it again, as one does a created agent. Only the
+      // conversation it reopened: a resume that started a new one has nothing to follow until the engine
+      // names it, and the row's old conversation is not being written any more.
+      if (!hooked && result.resumed) {
         void attachSession(ready).catch((error) => {
           console.error(`[resume] ${sid(saved.agentId)} attach failed:`, error instanceof Error ? error.message : error)
         })
