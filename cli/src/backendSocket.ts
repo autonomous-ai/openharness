@@ -26,7 +26,7 @@ import type { AutonomousDeviceService, AutonomousDeviceFrame } from './lib/auton
 
 import { WebSocket } from 'ws'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } from './lib/wsLiveness.js'
-import { stat, readdir } from 'fs/promises'
+import { readdir } from 'fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'path'
 import { hostname, homedir } from 'os'
@@ -89,37 +89,13 @@ import { DSH_ID_RE, dshSupportedEngines } from './dsh/manifest.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
 import { routeVoiceTask } from './lib/voiceRouter.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
-import { messagesToEvents, windowRawLines, SubagentStats, type SessionEvent } from './lib/normalize.js'
 import { TranscriptPager } from './lib/transcriptPages.js'
-import { streamRecords, tailFileCapped, WHOLE_READ_CAP_BYTES } from './lib/transcriptTail.js'
 import { MediaPreviewError, readMediaPreviewChunk } from './lib/mediaPreview.js'
 import { ViewerForwarder } from './lib/viewerForwarder.js'
 import { InteractiveViewers } from './lib/interactiveViewer.js'
 import { OwnerCommands, OWNER_COMMAND_TYPES } from './lib/ownerCommands.js'
 import { VIEWER_DOWN_TYPES } from './lib/viewerWire.js'
-import { codexMessagesToEvents } from './engines/codex/normalizer.js'
-import { codexSubagentResolverFor } from './engines/codex/subagent.js'
 import { parseHostTheme, type HostTheme } from './lib/hostTheme.js'
-import { cursorMessagesToEvents, windowCursorLines } from './engines/cursor/normalizer.js'
-import { cursorConfigDir, cursorDataDir } from './engines/cursor/home.js'
-import { loadCursorReplayTaskLinks } from './engines/cursor/subagent.js'
-import { opencodeMessagesToEvents, windowOpencodeMessages } from './engines/opencode/normalizer.js'
-import { kiloMessagesToEvents, windowKiloMessages } from './engines/kilo/normalizer.js'
-import { museMessagesToEvents } from './engines/muse/normalizer.js'
-import { ampMessagesToEvents } from './engines/amp/normalizer.js'
-import { grokMessagesToEvents } from './engines/grok/normalizer.js'
-import { agyMessagesToEvents } from './engines/agy/normalizer.js'
-import { copilotMessagesToEvents } from './engines/copilot/normalizer.js'
-import { ampThreadToEvents, readAmpThread } from './engines/amp/threadExport.js'
-import { piMessagesToEvents, windowPiLines } from './engines/pi/normalizer.js'
-import { commandcodeMessagesToEvents, windowCommandCodeLines } from './engines/commandcode/normalizer.js'
-import { hermesMessagesToEvents, windowHermesMessages } from './engines/hermes/normalizer.js'
-import { devinMessagesToEvents, windowDevinMessages } from './engines/devin/normalizer.js'
-import { readHermesMessages } from './engines/hermes/reader.js'
-import { hermesDbForSession } from './lib/hermesHome.js'
-import { readDevinMessages } from './engines/devin/reader.js'
-import { readOpencodeMessages } from './engines/opencode/reader.js'
-import { readKiloMessages } from './engines/kilo/reader.js'
 import { E2eeManager, type LinkedPeer, type PairResult } from './lib/e2ee/manager.js'
 import { MachinePeerStore } from './lib/e2ee/machinePeers.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
@@ -145,16 +121,6 @@ import {
   type TerminalP2pData,
   type TerminalP2pSignal,
 } from './lib/terminalP2p.js'
-
-// OpenCode has no per-session transcript file — its history is read from this SQLite store.
-const OPENCODE_DB = join(env.OPENCODE_DATA_DIR, 'opencode.db')
-/** History pages and line counts for the threads clients read (lib/transcriptPages.ts). */
-const transcriptPages = new TranscriptPager()
-// Kilo keeps history the same way opencode does, in its own store.
-const KILO_DB = join(env.KILO_DATA_DIR, 'kilo.db')
-const DEVIN_DB = join(env.DEVIN_HOME, 'sessions.db')
-// Hermes history likewise comes from a SQLite store, not a per-session file — one per HOME, so the
-// path is the session's own (`hermesDbForSession`) rather than this machine's default.
 
 /** Answers the device `project_recent` RPC — set by cli.ts to the CommanderMirror's `recent`. */
 export type RecentProvider = (sessionId: string, n: number) => Array<{ kind: string; text: string; recap?: string }>
@@ -266,50 +232,6 @@ function clipDeviceAgentName(input: string): string {
   return `${out}${DEVICE_ELLIPSIS}`
 }
 
-/**
- * Amp history comes from AMP's store, not from ours.
- *
- * The plugin's JSONL is a record of what the plugin saw; a thread that ran before the integration existed
- * — or in a pane still holding an older plugin — is simply not in it, and no local file can rebuild those
- * turns. `amp threads export` returns the thread complete, including the tools Amp runs server-side.
- *
- * The local file stays as the FALLBACK, because an export is a network call and a pane with no history at
- * all is worse than a partial one. Which source answered is logged either way: silently serving the lesser
- * record is exactly how the missing tool cards went unnoticed for a day.
- */
-async function ampHistory(sessionId: string, lines: string[]): Promise<SessionEvent[]> {
-  const messages = await readAmpThread(sessionId)
-  if (messages) {
-    console.log(`[history] ${sessionId.slice(0, 12)} amp · ${messages.length} message(s) from amp's own store`)
-    return ampThreadToEvents(messages)
-  }
-  console.warn(`[history] ${sessionId.slice(0, 12)} amp · export unavailable — falling back to the local transcript`)
-  return ampMessagesToEvents(lines)
-}
-
-/** Grok has no transcript windower yet. Keep BOTH `session_get` shapes on the same real-record replay:
- * web always sends a limit, while legacy callers omit it. Returning the whole small transcript for a
- * page is honest (`hasMore:false`) and cannot fall through to Claude's incompatible line cursor. */
-export function grokHistoryPage(lines: string[], paginated: boolean):
-  { events: SessionEvent[]; hasMore?: false; oldestCursor?: null } {
-  const events = grokMessagesToEvents(lines)
-  return paginated ? { events, hasMore: false, oldestCursor: null } : { events }
-}
-
-/** agy has no transcript windower either; same both-shapes replay as grok, for the same reason. */
-export function agyHistoryPage(lines: string[], paginated: boolean):
-  { events: SessionEvent[]; hasMore?: false; oldestCursor?: null } {
-  const events = agyMessagesToEvents(lines)
-  return paginated ? { events, hasMore: false, oldestCursor: null } : { events }
-}
-
-/** Copilot has no transcript windower either; same both-shapes replay as grok and agy. */
-export function copilotHistoryPage(lines: string[], paginated: boolean):
-  { events: SessionEvent[]; hasMore?: false; oldestCursor?: null } {
-  const events = copilotMessagesToEvents(lines)
-  return paginated ? { events, hasMore: false, oldestCursor: null } : { events }
-}
-
 export function deviceAgentListItem(
   raw: unknown,
 ): { id: unknown; name?: string; engine?: ProcessEngine; selectedModel?: string | null } {
@@ -388,29 +310,6 @@ export function compactRuntimePickerModels(
     ? [...rows].sort((a, b) => Number(b.model === current.model) - Number(a.model === current.model))
     : rows
   return ordered.slice(0, DEVICE_PICKER_MAX_MODELS).map(({ id }) => ({ id }))
-}
-
-/** Fill in missing sub-agent aggregates on tool_end events by reading the sub-agent's own transcript
- *  (`<session>/subagents/agent-<id>.jsonl`). Async/background launchers only record
- *  `{status:'async_launched', agentId}` in the main transcript — without this join the delegation
- *  card shows "0 tools · worked for 0s" forever. Best-effort per agent; missing files are skipped. */
-async function enrichSubagentStats(events: SessionEvent[], transcriptPath: string): Promise<void> {
-  const subagentsDir = join(transcriptPath.replace(/\.jsonl$/, ''), 'subagents')
-  for (const e of events) {
-    if (e.type !== 'tool_end') continue
-    const sub = e.payload.subagent
-    if (!sub?.agentId || typeof sub.totalToolUseCount === 'number') continue
-    try {
-      // A line at a time: a long sub-agent's transcript is never held whole to count its calls.
-      const file = join(subagentsDir, `agent-${sub.agentId}.jsonl`)
-      const totals = new SubagentStats()
-      await streamRecords(file, 0, (await stat(file)).size, (line) => { totals.push(line) }, () => true)
-      const stats = totals.result()
-      sub.totalToolUseCount = stats.totalToolUseCount
-      if (sub.totalDurationMs === undefined) sub.totalDurationMs = stats.totalDurationMs
-      if (sub.totalTokens === undefined) sub.totalTokens = stats.totalTokens
-    } catch { /* subagent transcript absent (still spawning / pruned) — leave as-is */ }
-  }
 }
 
 /** Sections one `grid_models_list` may ask to wake — a person presses one "Show models" at a time. */
@@ -771,6 +670,13 @@ export class BackendSocket {
   recentProvider: RecentProvider | null = null
   /** The person's own last questions for an agent, newest first. See the `agent_recent` case. */
   recentAsksProvider: ((agentId: string, n: number) => string[]) | null = null
+  /** Answers `session_get` with the whole reply: a conversation's history, a page at a time (cli.ts binds
+   *  core/transcripts/history.ts). Null answers UNSUPPORTED. */
+  historyProvider: ((payload: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null
+  /** History pages and line counts for the threads clients read (lib/transcriptPages.ts). `sessions_list`
+   *  counts lines with it here, and cli.ts hands it to the core's history for `session_get`'s pages, so a
+   *  transcript's line index is built once for both. */
+  readonly transcriptPages = new TranscriptPager()
   /** Writes the structured handoff file for an agent whose engine is about to change (the
    *  `agent_handoff_prepare` case; cli.ts wires lib/agentHandoff.ts). It resolves with where the file is,
    *  never with text for the next engine (the desktop words that prompt itself). A `HandoffError`'s `code`
@@ -2203,7 +2109,7 @@ export class BackendSocket {
           // lands, instead of pinning `currentSessionId` to an id no event will ever carry.
           if (!s || !s.sessionId) { reply(type, requestId, { sessions: [] }); return }
           // Counted from an index kept as the file grows (lib/transcriptPages.ts), not by reading it whole.
-          const messageCount = s.transcriptPath ? await transcriptPages.lineCount(s.transcriptPath) : 0
+          const messageCount = s.transcriptPath ? await this.transcriptPages.lineCount(s.transcriptPath) : 0
           reply(type, requestId, {
             sessions: [{
               id: s.sessionId,
@@ -2217,259 +2123,10 @@ export class BackendSocket {
           return
         }
 
-        case 'session_get': {
-          const sessionId = payload.sessionId as string | undefined
-          if (!sessionId) { reply(type, requestId, { error: 'MISSING_SESSION_ID' }); return }
-          // Only serve transcripts for a REGISTERED tmux session, read from its own trusted
-          // transcriptPath — never resolve an arbitrary request-supplied id to a file (that let a
-          // caller read any *.jsonl on the computer, incl. unshared claude history / traversal).
-          const s = registry.resolve(sessionId)
-          if (!s) { reply(type, requestId, { error: 'NOT_FOUND' }); return }
-          if (s.engine === 'devin') {
-            // Devin history comes from its SQLite store (no transcript file). Same replay/window shape.
-            const rawLimit = payload.limit
-            const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
-            const before = typeof payload.before === 'string' ? payload.before : undefined
-            const messages = await readDevinMessages(DEVIN_DB, sessionId)
-            const timestamp = new Date(s.touchedAt).toISOString()
-            if (!limit) {
-              reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: devinMessagesToEvents(messages), timestamp, engine: s.engine })
-              return
-            }
-            const w = windowDevinMessages(messages, { limit, before })
-            if (w.staleCursor) {
-              reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true })
-              return
-            }
-            const events = devinMessagesToEvents(w.window)
-            if (before && events[events.length - 1]?.type === 'done') events.pop()
-            reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events, timestamp, engine: s.engine, hasMore: w.hasMore, oldestCursor: w.oldestCursor })
-            return
-          }
-          if (s.engine === 'hermes') {
-            // Hermes history lives in its SQLite store (no transcript file). Same replay/window shape.
-            const rawLimit = payload.limit
-            const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
-            const before = typeof payload.before === 'string' ? payload.before : undefined
-            const messages = await readHermesMessages(await hermesDbForSession(s), sessionId)
-            const timestamp = new Date(s.touchedAt).toISOString()
-            if (!limit) {
-              reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: hermesMessagesToEvents(messages), timestamp, engine: s.engine })
-              return
-            }
-            const w = windowHermesMessages(messages, { limit, before })
-            if (w.staleCursor) {
-              reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true })
-              return
-            }
-            const events = hermesMessagesToEvents(w.window)
-            if (before && events[events.length - 1]?.type === 'done') events.pop()
-            reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events, timestamp, engine: s.engine, hasMore: w.hasMore, oldestCursor: w.oldestCursor })
-            return
-          }
-          if (s.engine === 'opencode') {
-            // OpenCode history comes from its SQLite DB (no transcript file). Same replay/window shape.
-            const rawLimit = payload.limit
-            const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
-            const before = typeof payload.before === 'string' ? payload.before : undefined
-            const messages = await readOpencodeMessages(OPENCODE_DB, sessionId)
-            const timestamp = new Date(s.touchedAt).toISOString()
-            if (!limit) {
-              reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: opencodeMessagesToEvents(messages), timestamp, engine: s.engine })
-              return
-            }
-            const w = windowOpencodeMessages(messages, { limit, before })
-            if (w.staleCursor) {
-              reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true })
-              return
-            }
-            const events = opencodeMessagesToEvents(w.window)
-            if (before && events[events.length - 1]?.type === 'done') events.pop()
-            reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events, timestamp, engine: s.engine, hasMore: w.hasMore, oldestCursor: w.oldestCursor })
-            return
-          }
-          if (s.engine === 'kilo') {
-            // Kilo history likewise comes from its SQLite DB. BOTH branches below are load-bearing: the
-            // web client always sends a `limit`, so handling only the full-transcript one opens an empty
-            // pane — the exact half-dispatch this file has been caught on before. Cursors are namespaced
-            // `kilo:<index>` by `windowKiloMessages`, so a cursor from another engine reads as stale
-            // rather than silently indexing into the wrong conversation.
-            const rawLimit = payload.limit
-            const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
-            const before = typeof payload.before === 'string' ? payload.before : undefined
-            const messages = await readKiloMessages(KILO_DB, sessionId)
-            const timestamp = new Date(s.touchedAt).toISOString()
-            if (!limit) {
-              reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: kiloMessagesToEvents(messages), timestamp, engine: s.engine })
-              return
-            }
-            const w = windowKiloMessages(messages, { limit, before })
-            if (w.staleCursor) {
-              reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true })
-              return
-            }
-            const events = kiloMessagesToEvents(w.window)
-            if (before && events[events.length - 1]?.type === 'done') events.pop()
-            reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events, timestamp, engine: s.engine, hasMore: w.hasMore, oldestCursor: w.oldestCursor })
-            return
-          }
-          if (!s.transcriptPath) {
-            reply(type, requestId, {
-              id: sessionId,
-              title: projectDisplayName(s),
-              events: [],
-              timestamp: new Date(s.touchedAt).toISOString(),
-              engine: s.engine,
-              hasMore: false,
-              oldestCursor: null,
-            })
-            return
-          }
-          // Optional pagination: `limit` = window size; `before` = uuid cursor (oldest line the
-          // client already holds). Absent → full transcript (legacy). Clamp limit defensively.
-          const rawLimit = payload.limit
-          const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
-          const before = typeof payload.before === 'string' ? payload.before : undefined
-          if (s.engine === 'claude' || s.engine === 'codex') {
-            // Only the page asked for is read (lib/transcriptPages.ts): the whole history of a long session
-            // is more memory than the daemon has. Without a limit, the newest lines that fit a page, and
-            // the cursor to the rest when they do not all fit — a cursor the full-transcript reply never had.
-            const opts = limit ? { limit, before } : {}
-            const page = s.engine === 'codex'
-              ? await transcriptPages.codex(s.transcriptPath, opts)
-              : await transcriptPages.claude(s.transcriptPath, opts)
-            const st = await stat(s.transcriptPath).catch(() => null)
-            const timestamp = new Date(st?.mtimeMs ?? Date.now()).toISOString()
-            if (page.staleCursor) {
-              reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true })
-              return
-            }
-            const events = s.engine === 'codex'
-              ? codexMessagesToEvents(page.lines, codexSubagentResolverFor(s.codexHome))
-              : messagesToEvents(page.lines)
-            await enrichSubagentStats(events, s.transcriptPath)
-            // Older pages must not inject a spurious end-of-transcript marker mid-scroll.
-            if (limit && before && events[events.length - 1]?.type === 'done') events.pop()
-            reply(type, requestId, {
-              id: sessionId,
-              title: projectDisplayName(s),
-              events,
-              timestamp,
-              engine: s.engine,
-              ...(limit || page.hasMore ? { hasMore: page.hasMore, oldestCursor: page.oldestCursor } : {}),
-            })
-            return
-          }
-          // Read from the end and bounded: these engines have no pages of their own yet, and one huge
-          // transcript read whole would take the whole daemon down (lib/transcriptTail.ts). History past
-          // the cap is not shown, and the reply says so.
-          const { lines, truncated: capped } = await tailFileCapped(s.transcriptPath)
-          if (capped) console.warn(`[backend] session_get ${sid(sessionId)}: the transcript is over ${WHOLE_READ_CAP_BYTES / 1024 / 1024} MB · its oldest history is not shown`)
-          const truncated = capped ? { truncated: true } : {}
-          const st = await stat(s.transcriptPath).catch(() => null)
-          const timestamp = new Date(st?.mtimeMs ?? Date.now()).toISOString()
-
-          if (!limit) {
-            const fullEvents = s.engine === 'cursor'
-                ? cursorMessagesToEvents(lines, sessionId, await loadCursorReplayTaskLinks(cursorConfigDir(), sessionId, cursorDataDir()))
-                : s.engine === 'muse'
-                  ? museMessagesToEvents(lines)
-                  : s.engine === 'amp'
-                  ? await ampHistory(sessionId, lines)
-                  : s.engine === 'grok'
-                    ? grokHistoryPage(lines, false).events
-                  : s.engine === 'agy'
-                    ? agyHistoryPage(lines, false).events
-                  : s.engine === 'copilot'
-                    ? copilotHistoryPage(lines, false).events
-                  : s.engine === 'pi'
-                  ? piMessagesToEvents(lines)
-                  : s.engine === 'commandcode'
-                    ? commandcodeMessagesToEvents(lines)
-                    : messagesToEvents(lines)
-            if (s.engine !== 'cursor' && s.engine !== 'pi' && s.engine !== 'commandcode' && s.engine !== 'muse' && s.engine !== 'amp' && s.engine !== 'grok' && s.engine !== 'agy' && s.engine !== 'copilot') await enrichSubagentStats(fullEvents, s.transcriptPath)
-            reply(type, requestId, {
-              id: sessionId,
-              title: projectDisplayName(s),
-              events: fullEvents,
-              timestamp,
-              engine: s.engine,
-              ...truncated,
-            })
-            return
-          }
-
-          // Muse has no windower, so it must not fall through to the raw one: that pairs claude's
-          // line-uuid cursor with claude's normalizer, and a muse transcript comes back EMPTY — the web
-          // pane opened blank with no error anywhere. Until a muse window exists, answer the page with
-          // the whole transcript (`hasMore: false` ends the scroll honestly, and these sessions are
-          // small: a real one measured 271 lines).
-          // Amp is in the same position as muse and for the same reason: no windower, so falling
-          // through would pair claude's line-uuid cursor with claude's normalizer and return nothing.
-          if (s.engine === 'muse' || s.engine === 'amp' || s.engine === 'grok' || s.engine === 'agy' || s.engine === 'copilot') {
-            const wholePage = s.engine === 'grok'
-              ? grokHistoryPage(lines, true)
-              : s.engine === 'agy'
-                ? agyHistoryPage(lines, true)
-                : s.engine === 'copilot'
-                  ? copilotHistoryPage(lines, true)
-                  : null
-            reply(type, requestId, {
-              id: sessionId,
-              title: projectDisplayName(s),
-              events: s.engine === 'amp'
-                ? await ampHistory(sessionId, lines)
-                : wholePage
-                  ? wholePage.events
-                  : museMessagesToEvents(lines),
-              timestamp,
-              engine: s.engine,
-              hasMore: wholePage?.hasMore ?? false,
-              oldestCursor: wholePage?.oldestCursor ?? null,
-              ...truncated,
-            })
-            return
-          }
-          const w = s.engine === 'cursor'
-              ? windowCursorLines(lines, { limit, before })
-              : s.engine === 'pi'
-                ? windowPiLines(lines, { limit, before })
-                : s.engine === 'commandcode'
-                  ? windowCommandCodeLines(lines, { limit, before })
-                  : windowRawLines(lines, { limit, before })
-          if (w.staleCursor) {
-            reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true, ...truncated })
-            return
-          }
-          const events = s.engine === 'cursor'
-              ? cursorMessagesToEvents(
-                  w.window,
-                  sessionId,
-                  await loadCursorReplayTaskLinks(cursorConfigDir(), sessionId, cursorDataDir()),
-                  'startIndex' in w && typeof w.startIndex === 'number' ? w.startIndex : 0,
-                  'initialTodos' in w && Array.isArray(w.initialTodos) ? w.initialTodos : [],
-                )
-              : s.engine === 'pi'
-                ? piMessagesToEvents(w.window)
-                : s.engine === 'commandcode'
-                  ? commandcodeMessagesToEvents(w.window)
-                  : messagesToEvents(w.window)
-          // muse and amp are answered above and never reach here, so both are absent by design.
-          if (s.engine !== 'cursor' && s.engine !== 'pi' && s.engine !== 'commandcode') await enrichSubagentStats(events, s.transcriptPath)
-          // Older pages must not inject a spurious end-of-transcript marker mid-scroll.
-          if (before && events[events.length - 1]?.type === 'done') events.pop()
-          reply(type, requestId, {
-            id: sessionId,
-            title: projectDisplayName(s),
-            events,
-            timestamp,
-            engine: s.engine,
-            hasMore: w.hasMore,
-            oldestCursor: w.oldestCursor,
-            ...truncated,
-          })
+        // A conversation's history, a page at a time (core/transcripts/history.ts, bound by cli.ts).
+        case 'session_get':
+          reply(type, requestId, this.historyProvider ? await this.historyProvider(payload) : { error: 'UNSUPPORTED' })
           return
-        }
 
         case 'grid_models_list': {
           // Every grid this computer is signed into, in sections, the account's own first. `gridName`

@@ -6,6 +6,7 @@ import { codexMessagesToEvents, windowCodexLines } from './engines/codex/normali
 import { messagesToEvents, subagentStatsFromRawLines, windowRawLines } from './lib/normalize.js'
 import { registry } from './lib/registry.js'
 import { tailFile } from './lib/transcriptTail.js'
+import { bindHistory } from './testing/socketHistory.js'
 import { cl, claude, claudeScenario, codexScenario } from './testing/transcriptScenarios.js'
 
 // Transcripts are only served from the engines' own folders. Those default to this computer's real
@@ -41,6 +42,7 @@ describe.each([
     file = join(dir, 'transcript.jsonl')
     writeFileSync(file, scenario().join('\n') + '\n')
     socket = new BackendSocket('fixture')
+    bindHistory(socket)
     frames = []
     socket.registerLocalClient('local:history', { sendFrame: (frame) => { frames.push(frame as never); return true }, sendBinary: () => true })
     const paneId = `%${++pane}`

@@ -142,6 +142,7 @@ import { createAgyBackstop } from './core/turns/agyBackstop.js'
 import { createIngest } from './core/transcripts/ingest.js'
 import { createTurnHooks } from './core/turns/turnHooks.js'
 import { createAttach } from './core/transcripts/attach.js'
+import { createHistory } from './core/transcripts/history.js'
 import { createRelaunchMarks, transcriptSize } from './core/transcripts/relaunch.js'
 import { createForgetSession } from './core/agents/forget.js'
 import { createBinding } from './core/agents/bind.js'
@@ -2066,6 +2067,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const attachSession = attach.attachSession
   const neverFoldedHistory = attach.neverFoldedHistory
   const replayedFirstTurn = attach.replayedFirstTurn
+  // A conversation's history, a page at a time, for a window that asks (core/transcripts/history.ts).
+  backend.historyProvider = createHistory({
+    resolve: (id) => registry.resolve(id),
+    pages: backend.transcriptPages,
+    dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
+    hermesDb: (s) => hermesDbForSession(s),
+  }).sessionGet
   // Everything the core writes into a pane, and the device's pane lock (core/input.ts).
   const inputs = createInput({
     resolve: (id) => registry.resolve(id),
