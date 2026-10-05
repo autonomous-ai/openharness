@@ -34,6 +34,7 @@ FEEDS = {
 }
 FILES = ('harness-tui', 'cli.mjs', 'notify.mjs')
 LIMIT = 64 * 1024 * 1024
+DOWNLOAD_CHUNK = 1024 * 1024
 RESTART_REQUIRED = Path('/run/harness-os-restart-required')
 SYSTEM_LOCK = Path('/run/lock/hn-os.lock')
 BOOT_ID = Path('/proc/sys/kernel/random/boot_id')
@@ -142,17 +143,47 @@ def allowed_url(value):
     return value
 
 
-def fetch(url, limit):
+@contextmanager
+def download_response(url, limit):
     request = Request(allowed_url(url), headers={'User-Agent': 'Harness-Updates/1'})
     with urlopen(request, timeout=20) as response:
         allowed_url(response.url)
         size = response.headers.get('Content-Length')
         if size and (not size.isdigit() or int(size) > limit):
             raise ValueError('Update exceeds its download size limit.')
+        yield response
+
+
+def fetch(url, limit):
+    with download_response(url, limit) as response:
         data = response.read(limit + 1)
         if len(data) > limit:
             raise ValueError('Update exceeds its download size limit.')
         return data
+
+
+def download(ref, destination):
+    """Keep release bytes on disk while the installed workspace remains active."""
+    limit = ref.get('size') or LIMIT
+    size, checksum = 0, hashlib.sha256()
+    created = False
+    try:
+        with download_response(ref['url'], limit) as response, destination.open('xb') as handle:
+            created = True
+            while chunk := response.read(min(DOWNLOAD_CHUNK, limit + 1 - size)):
+                size += len(chunk)
+                if size > limit:
+                    raise ValueError('Update exceeds its download size limit.')
+                checksum.update(chunk)
+                handle.write(chunk)
+        if checksum.hexdigest() != ref['sha256'].lower() or (
+            ref.get('size') is not None and size != ref['size']
+        ):
+            raise ValueError('Download checksum or size does not match the release.')
+    except BaseException:
+        if created:
+            destination.unlink(missing_ok=True)
+        raise
 
 
 def runtime_platform():
@@ -315,41 +346,36 @@ def check(feeds=None, progress=lambda _: None, force_system=False):
         # Releases whose tagged commits are already ancestors of that source are
         # older, even if their public version number is numerically higher.
         baselines = read(BASE_ID, {}).get('release_baselines', {})
-        changes, target_versions, errors = {}, dict(base_versions), []
+        target_versions, errors = dict(base_versions), []
         ignored = read(STATE / 'ignored.json', {})
-        for component, url in (feeds or FEEDS).items():
-            try:
-                candidate, refs = release(url, component)
-                if ignored.get(component) == candidate:
-                    continue
-                baseline = baselines.get(component, {}).get('version', '0.0.0')
-                if version(candidate) > max(version(base_versions[component]), version(baseline)):
-                    progress('Downloading hn…' if component == 'hn' else 'Downloading Harness…')
-                    component_files = {}
-                    for name, ref in refs.items():
-                        data = fetch(ref['url'], ref.get('size', LIMIT))
-                        if hashlib.sha256(data).hexdigest() != ref['sha256'].lower() or (
-                            ref.get('size') is not None and len(data) != ref['size']
-                        ):
-                            raise ValueError('Download checksum or size does not match the release.')
-                        if name == 'harness-tui':
-                            verify_hn(data)
-                        component_files[name] = data
-                    changes.update(component_files)
-                    target_versions[component] = candidate
-            except (ValueError, OSError, KeyError, TypeError) as error:
-                errors.append(f'{component}: {error}')
-        # Each component is complete before staging; an unavailable CLI release
-        # must not hold up an independent hn fix (or leave only half a CLI pair).
-        if changes:
-            builds = STATE / 'builds'
-            builds.mkdir(exist_ok=True)
-            with tempfile.TemporaryDirectory(prefix='.download-', dir=builds) as temp:
-                folder = Path(temp)
+        builds = STATE / 'builds'
+        builds.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='.download-', dir=builds) as temp:
+            folder, changes = Path(temp), set()
+            for component, url in (feeds or FEEDS).items():
+                try:
+                    candidate, refs = release(url, component)
+                    if ignored.get(component) == candidate:
+                        continue
+                    baseline = baselines.get(component, {}).get('version', '0.0.0')
+                    if version(candidate) > max(version(base_versions[component]), version(baseline)):
+                        progress('Downloading hn…' if component == 'hn' else 'Downloading Harness…')
+                        component_files = set()
+                        for name, ref in refs.items():
+                            download(ref, folder / name)
+                            if name == 'harness-tui':
+                                with (folder / name).open('rb') as handle:
+                                    verify_hn(handle.read(64))
+                            component_files.add(name)
+                        changes.update(component_files)
+                        target_versions[component] = candidate
+                except (ValueError, OSError, KeyError, TypeError) as error:
+                    errors.append(f'{component}: {error}')
+            # Publish only complete components. A failed CLI pair is overwritten
+            # from the base before an independent hn update can become ready.
+            if changes:
                 for name in FILES:
-                    if name in changes:
-                        (folder / name).write_bytes(changes[name])
-                    else:
+                    if name not in changes:
                         shutil.copyfile(base / name, folder / name)
                     (folder / name).chmod(0o755 if name == 'harness-tui' else 0o644)
                     with (folder / name).open('rb') as handle:

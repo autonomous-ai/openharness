@@ -2,6 +2,7 @@ import hashlib
 import curses
 import fcntl
 import importlib.util
+import io
 import json
 from pathlib import Path
 import struct
@@ -19,6 +20,79 @@ def elf_fixture(machine=62, payload=b''):
     """A synthetic ELF header; version execution is stubbed in staging tests."""
     return struct.pack('<16sHHIQQQIHHHHHH', b'\x7fELF\x02\x01\x01' + b'\0' * 9,
                        2, machine, 1, 0, 64, 0, 0, 64, 56, 0, 0, 0, 0) + payload
+
+
+class Response(io.BytesIO):
+    def __init__(self, data, url='https://example.test/runtime', headers=None):
+        super().__init__(data)
+        self.url, self.headers, self.reads = url, headers or {}, []
+
+    def read(self, size=-1):
+        self.reads.append(size)
+        return super().read(size)
+
+
+class Downloads(unittest.TestCase):
+    def test_large_release_is_streamed_in_bounded_reads(self):
+        data = b'payload' * 400000
+        for declared_size in (True, False):
+            with self.subTest(declared_size=declared_size), tempfile.TemporaryDirectory() as temp:
+                target = Path(temp) / 'runtime'
+                ref = {'url': 'https://example.test/runtime', 'sha256': hashlib.sha256(data).hexdigest()}
+                if declared_size:
+                    ref['size'] = len(data)
+                response = Response(data)
+                with patch.object(update, 'urlopen', return_value=response):
+                    update.download(ref, target)
+                self.assertEqual(target.read_bytes(), data)
+                self.assertGreater(len(response.reads), 2)
+                self.assertTrue(all(0 < size <= 1024 * 1024 for size in response.reads))
+
+    def test_invalid_downloads_leave_no_partial_file(self):
+        data = b'payload'
+        correct = hashlib.sha256(data).hexdigest()
+        cases = [
+            ({'size': len(data) - 1}, {}),  # Oversize without Content-Length.
+            ({'size': len(data) + 1}, {}),  # Truncated with a correct checksum.
+            ({'sha256': '0' * 64}, {}),
+            ({}, {'Content-Length': 'invalid'}),
+            ({'size': len(data)}, {'Content-Length': str(len(data) + 1)}),
+        ]
+        for fields, headers in cases:
+            with self.subTest(fields=fields, headers=headers), tempfile.TemporaryDirectory() as temp:
+                target = Path(temp) / 'runtime'
+                ref = dict({'url': 'https://example.test/runtime', 'sha256': correct}, **fields)
+                with patch.object(update, 'urlopen', return_value=Response(data, headers=headers)):
+                    with self.assertRaises(ValueError):
+                        update.download(ref, target)
+                self.assertFalse(target.exists())
+        with tempfile.TemporaryDirectory() as temp, patch.object(update, 'LIMIT', len(data) - 1):
+            target = Path(temp) / 'runtime'
+            with patch.object(update, 'urlopen', return_value=Response(data)), self.assertRaises(ValueError):
+                update.download({'url': 'https://example.test/runtime', 'sha256': correct}, target)
+            self.assertFalse(target.exists())
+
+    def test_stream_failure_cleans_its_file_but_never_removes_an_existing_file(self):
+        ref = {'url': 'https://example.test/runtime', 'sha256': '0' * 64}
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / 'runtime'
+            response = Response(b'')
+            with (patch.object(response, 'read', side_effect=[b'partial', OSError('connection lost')]),
+                  patch.object(update, 'urlopen', return_value=response), self.assertRaises(OSError)):
+                update.download(ref, target)
+            self.assertFalse(target.exists())
+            target.write_bytes(b'existing')
+            with patch.object(update, 'urlopen', return_value=Response(b'')), self.assertRaises(FileExistsError):
+                update.download(ref, target)
+            self.assertEqual(target.read_bytes(), b'existing')
+
+    def test_unsafe_redirect_is_rejected_before_creating_a_file(self):
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / 'runtime'
+            with (patch.object(update, 'urlopen', return_value=Response(b'', url='http://example.test/runtime')),
+                  self.assertRaisesRegex(ValueError, 'HTTPS')):
+                update.download({'url': 'https://example.test/runtime', 'sha256': '0' * 64}, target)
+            self.assertFalse(target.exists())
 
 
 class FastUpdates(unittest.TestCase):
@@ -62,11 +136,12 @@ class FastUpdates(unittest.TestCase):
             update.FEEDS['hn']: json.dumps(dict(version='1.1.0', builds={target: refs['harness-tui']})).encode(),
             update.FEEDS['cli']: json.dumps(dict(cli=dict(version='1.1.0', cli=refs['cli.mjs'], notify=refs['notify.mjs']))).encode(),
         }
-        def fetch(url, limit):
+        def fetch(request, timeout):
+            url = request.full_url
             if fail and fail in url:
-                return b'broken download'
-            return manifests[url] if url in manifests else assets[url.rsplit('/', 1)[1]]
-        return patch.object(update, 'fetch', side_effect=fetch)
+                return Response(b'broken download', url)
+            return Response(manifests[url] if url in manifests else assets[url.rsplit('/', 1)[1]], url)
+        return patch.object(update, 'urlopen', side_effect=fetch)
 
     def test_version_and_transport_reject_malformed_and_unsafe_releases(self):
         for value in ['1.0', '1.0.1-dev.local', '999999999.0.0', '../1.0.0', None]:
@@ -116,6 +191,16 @@ class FastUpdates(unittest.TestCase):
         self.assertEqual((target / 'notify.mjs').read_bytes(), b'old notify.mjs')
         self.assertTrue(update.read(self.state / 'check.json')['errors'])
 
+    def test_interrupted_download_check_cleans_staging_without_publishing(self):
+        def progress(message):
+            if message == 'Downloading Harness…':
+                raise KeyboardInterrupt()
+        with self.feed(), self.assertRaises(KeyboardInterrupt):
+            update.check(progress=progress)
+        self.assertIsNone(update.prepared())
+        self.assertEqual(update.selected(), self.bundled)
+        self.assertEqual(list((self.state / 'builds').iterdir()), [])
+
     def test_corrupt_hn_does_not_replace_current_build_and_valid_cli_can_still_stage(self):
         with self.feed(fail='harness-tui'):
             self.assertTrue(update.check())
@@ -138,7 +223,7 @@ class FastUpdates(unittest.TestCase):
             self.assertTrue(update.check())
         self.assertEqual(update.verify(update.prepared())['versions'], {'hn': '1.0.0', 'cli': '1.1.0'})
         self.assertEqual((update.prepared() / 'harness-tui').read_bytes(), original)
-        self.assertNotIn('https://example.test/harness-tui', [call.args[0] for call in fetch.call_args_list])
+        self.assertNotIn('https://example.test/harness-tui', [call.args[0].full_url for call in fetch.call_args_list])
         self.assertIn('No hn build is available for linux-arm64', str(update.read(self.state / 'check.json')['errors']))
         self.assertEqual(update.selected(), self.bundled)
 
