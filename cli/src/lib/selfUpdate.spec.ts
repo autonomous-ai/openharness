@@ -149,6 +149,33 @@ describe('startSelfUpdater', () => {
     expect(events).toEqual(['lock', 'staged:9.9.9', 'handoff-done', 'unlock'])
   })
 
+  it('stopped while a check is under way, swaps nothing and hands nothing over', async () => {
+    // A daemon shutting down (`harness stop`, a sign-out) while the updater waits on a download or a
+    // canary. Here the canary: the build answers after a moment, and the stop lands before it does.
+    const slow = Buffer.from('setTimeout(() => console.log("9.9.9"), 400)\n')
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url === 'https://updates.test/metadata.json') {
+        return new Response(JSON.stringify({ adapter: { version: '9.9.9', cli: { url: 'https://updates.test/cli.js', sha256: sha(slow) }, notify: { url: 'https://updates.test/notify.mjs', sha256: sha(notifySource) } } }))
+      }
+      if (url === 'https://updates.test/cli.js') return new Response(slow)
+      if (url === 'https://updates.test/notify.mjs') return new Response(notifySource)
+      return new Response('', { status: 404 })
+    })
+    const dir = tempDir()
+    const staged: string[] = []
+    const canarying = () => readdirSync(dir).some((name) => name.startsWith('.canary-'))
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 20,
+      onStaged: (version) => { staged.push(version) },
+    })
+    await vi.waitFor(() => expect(canarying()).toBe(true), { timeout: 5_000 })
+    poller.stop()
+    await vi.waitFor(() => expect(canarying()).toBe(false), { timeout: 5_000 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(staged).toEqual([])
+    expect(existsSync(join(dir, 'cli.js'))).toBe(false)
+  })
+
   it('is already stopped when onStaged runs — a handler that defers loses the updater for good', async () => {
     // `done = true` and `stop()` happen BEFORE `onStaged`, so a handler that returns without handing
     // the machine over leaves no timer and no way back. This is why the daemon's boot-time handler

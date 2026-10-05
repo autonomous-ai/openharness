@@ -510,6 +510,10 @@ export function startSelfUpdater(opts: {
     idleMs: Math.min(download.idleMs, MANIFEST_LIMITS.idleMs), deadlineMs: Math.min(download.deadlineMs, MANIFEST_LIMITS.deadlineMs),
   }
   const stop = (): void => { if (timer) { clearTimeout(timer); timer = null } }
+  // Stopped from outside: a check under way goes no further than the step it is on. Before, only the
+  // next check was cancelled, and one waiting on a download or a canary went on to swap the bundle and
+  // hand the machine over (`onStaged`) on a daemon that was shutting down.
+  let halted = false
   const schedule = (): void => {
     stop()
     timer = setTimeout(() => void tick(), msUntilSlot(now(), opts.slotSecond, opts.intervalMs))
@@ -527,7 +531,7 @@ export function startSelfUpdater(opts: {
     checking = true
     try {
       const entry = await fetchManifest(opts.url, opts.key, manifest)
-      if (!entry || !shouldAutoUpdate(entry.version, opts.currentVersion)) return
+      if (halted || !entry || !shouldAutoUpdate(entry.version, opts.currentVersion)) return
       const unremembered = settleRolledBack(opts.dir)
       if (unremembered === entry.version || rejectedVersions(opts.dir).includes(entry.version)) {
         if (toldRejected !== entry.version) console.log(`[update] ${entry.version} was rolled back on this machine — waiting for a newer build (\`harness update\` installs it anyway)`)
@@ -558,8 +562,10 @@ export function startSelfUpdater(opts: {
         }
         verified = { entry: key, version: entry.version, cliBuf, notifyBuf, canaried: false }
       }
+      if (halted) return
       if (!verified.canaried) {
         const result = await runCanary(verified.cliBuf, opts.dir, entry.version)
+        if (halted) return
         if (!result.ok && result.problem === 'unwritable') {
           console.error(`[update] could not write the canary for ${entry.version} (${result.detail}) — trying again next check`)
           return
@@ -571,6 +577,7 @@ export function startSelfUpdater(opts: {
       // Downloaded and verified OUTSIDE the lock (that can take a while on a slow link and touches
       // nothing shared); swapped and handed off INSIDE it.
       await withLock(async () => {
+        if (halted) return
         stage(opts.dir, ready.cliBuf, ready.notifyBuf, ready.version)
         done = true
         stop()
@@ -590,5 +597,5 @@ export function startSelfUpdater(opts: {
   }
 
   schedule()
-  return { stop }
+  return { stop: () => { halted = true; stop() } }
 }
