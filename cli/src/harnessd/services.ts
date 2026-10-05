@@ -286,26 +286,20 @@ export class ServiceSupervisor {
   }
 }
 
-/** A service this build can run in its own process. `optIn`: only when `HARNESSD_SERVICES` names it. */
-export type KnownService = Omit<ServiceSpec, 'name'> & { optIn?: boolean }
-
 /**
- * The services this build runs in their own processes, with their memory budgets: every one but those
- * marked opt-in, unless `HARNESSD_SERVICES` names a subset (`search,viewers`) or `none` (see
- * `serviceSpecs`). A service that is not out here runs inside the core's process, behind the service
- * host's guard, as before.
+ * The services this build runs in their own processes, with their memory budgets: every one, unless
+ * `HARNESSD_SERVICES` names a subset (`search,viewers`) or `none` (see `serviceSpecs`). A service that
+ * is not out here runs inside the core's process, behind the service host's guard, as before.
  */
-export const KNOWN_SERVICES: Readonly<Record<string, KnownService>> = {
+export const KNOWN_SERVICES: Readonly<Record<string, Omit<ServiceSpec, 'name'>>> = {
   search: { heapLimitMiB: 1_024, rssLimitMiB: 2_048 },
   // Its file watches on every harness's workspace; the viewer servers it starts are processes of their
   // own, outside this budget.
   viewers: { heapLimitMiB: 512, rssLimitMiB: 1_024 },
   // The git work runs in git's own processes; this one only holds the agents the core sent it.
   workspaces: { heapLimitMiB: 256, rssLimitMiB: 512 },
-  // The prompt scopes hold a few drafts and fingerprints per agent: small, bounded state. Opt-in: teams
-  // is experimental, and a restarted teams process loses the scopes it had acknowledged (a review
-  // finding left for later, 2026-10-05), so by default the scopes stay in the core's process.
-  teams: { heapLimitMiB: 256, rssLimitMiB: 512, optIn: true },
+  // The prompt scopes hold a few drafts and fingerprints per agent: small, bounded state.
+  teams: { heapLimitMiB: 256, rssLimitMiB: 512 },
 }
 
 /** Service timings from the environment (for tests and support); anything unset or invalid keeps its default. */
@@ -364,13 +358,12 @@ export function servicesTheMasterRuns(env: NodeJS.ProcessEnv, known: Readonly<Re
  * default, not an opt-in. Only names this build knows. `HARNESSD_SERVICE_HEAP_LIMIT_MIB` gives every
  * one the same heap limit instead (tests, support).
  */
-export function serviceSpecs(env: NodeJS.ProcessEnv, known: Readonly<Record<string, KnownService>>): ServiceSpec[] {
+export function serviceSpecs(env: NodeJS.ProcessEnv, known: Readonly<Record<string, Omit<ServiceSpec, 'name'>>>): ServiceSpec[] {
   const names = env.HARNESSD_SERVICES === undefined
-    ? Object.keys(known).filter((name) => !known[name].optIn)
+    ? Object.keys(known)
     : env.HARNESSD_SERVICES.split(',').map((name) => name.trim()).filter((name) => name && name !== 'none')
   const heap = Number(env.HARNESSD_SERVICE_HEAP_LIMIT_MIB)
-  return [...new Set(names)].filter((name) => Object.hasOwn(known, name)).map((name) => {
-    const { optIn: _optIn, ...spec } = known[name]
-    return { name, ...spec, ...(Number.isInteger(heap) && heap > 0 ? { heapLimitMiB: heap } : {}) }
-  })
+  return [...new Set(names)].filter((name) => Object.hasOwn(known, name)).map((name) => ({
+    name, ...known[name], ...(Number.isInteger(heap) && heap > 0 ? { heapLimitMiB: heap } : {}),
+  }))
 }
