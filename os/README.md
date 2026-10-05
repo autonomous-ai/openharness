@@ -11,7 +11,7 @@ audience, not its name.
 
 Product names and interface copy follow the [Naming System](../docs/naming-system.md).
 
-**Preview 12:** the USB opens the installer directly. Installation works offline.
+**Preview 14:** the USB opens the installer directly. Installation works offline.
 After shutdown, remove the USB and boot the installed disk. If disconnected,
 the Wi-Fi page opens first and advances automatically when connected; Ethernet
 skips that step. OpenCode starts on the left with two real terminals on the right.
@@ -32,7 +32,7 @@ a confirmation or password prompt. Running agents and terminals stay alive.
 The update checker records release ancestry so a source-built runtime cannot be
 replaced by an older public CLI with a higher development version number.
 
-[Download preview 13](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.13)
+[Download Harness](https://github.com/autonomous-ai/openharness/releases/tag/os-latest)
 · [Mac → USB → ThinkPad installation guide](INSTALL.md)
 · [Standalone HTML/CSS landing page](../website/public/os/README.md)
 · [Development feedback loop and Mac support targets](DEVELOPMENT.md)

@@ -828,12 +828,14 @@ if status:
         vm.screenshot('install-03-ready')
         # Finishing password entry only focuses Install. No disk has changed yet.
         vm.command('test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
+        install_started = time.monotonic()
         vm.keys('ret')
         if progress_status == 0:
             progress = wait_screen('Preparing the disk|Setting up encryption|Copying Harness|Setting up your account', timeout=30)
             assert 'Keep this computer powered on' not in progress and 'Installing Harness' not in progress
             vm.screenshot('install-04-progress')
         output = wait_screen('Harness is installed', timeout=900)
+        install_seconds = round(time.monotonic() - install_started, 3)
         vm.screenshot('install-05-complete')
         if direct:
             assert 'Back to Harness' not in output
@@ -844,6 +846,8 @@ if status:
         output, _ = vm.command('cat /var/log/harness-install.log 2>/dev/null', check=False)
         (folder / 'installer-commands.log').write_text(output)
         assert config['password'] not in output, 'Installation diagnostics must not contain the password'
+    # This includes input delivery and success-screen observation, not form entry.
+    return install_seconds
 
 
 def check_installer_cleanup(vm, folder):
@@ -1007,7 +1011,7 @@ def main():
             (folder / 'trial-project.html').write_bytes(vm.read_file(trial_project))
         vm.command(user('sh -c ' + shlex.quote('mkdir -p "$HOME/.config"; printf trial-only > "$HOME/.config/hn-trial-credential"')))
         vm.command('nmcli networking off')
-        install_interactively(vm, config, folder, direct=direct)
+        result['install_action_to_success_seconds'] = install_interactively(vm, config, folder, direct=direct)
         result['checks'].append('Keyboard disk selection, encryption checkbox, masked password entry and a single Install action work on the guest terminal')
         result['checks'].append('Offline installer completed on disposable disk')
         if config['encrypt']:

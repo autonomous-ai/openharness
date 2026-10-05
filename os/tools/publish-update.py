@@ -12,6 +12,8 @@ from urllib.request import urlopen
 import zipfile
 
 REPO = 'autonomous-ai/openharness'
+# Preserve the installed previews' feed URL/schema so their next update can
+# migrate directly to an official release without reflashing.
 CHANNEL = 'os-preview-updates'
 
 
@@ -30,8 +32,8 @@ def validate(bundle, receipt, run):
     spec.loader.exec_module(updater)
     manifest = json.loads((bundle / 'package-manifest.json').read_text())
     updater.validate_bundle(bundle, {'version': manifest['requires_os_version'], 'arch_snapshot': manifest['arch_snapshot']})
-    if not re.fullmatch(r'\d+\.\d+\.\d+-preview\.\d+', manifest['requires_os_version']):
-        raise ValueError('Only explicitly versioned previews can use this channel.')
+    if not re.fullmatch(r'\d+\.\d+\.\d+(?:-preview\.\d+)?', manifest['requires_os_version']):
+        raise ValueError('Only explicit OS releases or numbered previews can use this channel.')
     versions = manifest['runtime'].get('versions', {})
     if set(versions) != {'hn', 'cli'} or any(not isinstance(value, str) or value.startswith('999.') for value in versions.values()):
         raise ValueError('The public package must contain production runtime versions, never private fixtures.')
@@ -115,7 +117,7 @@ def main():
     # assets only after that release exists; never replace its ISO or manifest.
     release = json.loads(gh('api', f'repos/{REPO}/releases/tags/{tag}'))
     if release['draft']:
-        raise ValueError('Publish the validated OS preview before advancing its update feed.')
+        raise ValueError('Publish the validated OS release before advancing its update feed.')
     existing = {asset['name']: asset for asset in release['assets']}
     missing = []
     for path in assets:

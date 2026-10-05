@@ -3,7 +3,9 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('hn_publish', Path(__file__).parents[1] / 'tools/publish.py')
 publish = importlib.util.module_from_spec(spec)
@@ -11,6 +13,71 @@ spec.loader.exec_module(publish)
 
 
 class PublicationGuards(unittest.TestCase):
+    def test_only_numbered_previews_and_official_versions_can_publish(self):
+        self.assertTrue(publish.is_preview('0.1.0-preview.13'))
+        self.assertFalse(publish.is_preview('0.1.0'))
+        for value in ['latest', '0.1', '0.1.0-beta', '0.1.0-preview', '../0.1.0', None]:
+            with self.subTest(version=value), self.assertRaises(ValueError):
+                publish.is_preview(value)
+
+    def test_pointer_uses_verified_versioned_downloads_and_only_moves_its_own_tag(self):
+        for existing, version, prior in [(False, '0.2.0', '0.1.0'), (True, '0.2.0', '0.1.0'),
+                                         (False, '0.1.0-preview.14', '0.1.0-preview.9'),
+                                         (True, '0.1.0-preview.14', '0.1.0-preview.9')]:
+            with self.subTest(existing=existing, version=version):
+                manifest = dict(version=version, source_commit='a' * 40,
+                                iso={'name': f'harness-{version}-x86_64.iso'})
+                release = {'html_url': f'https://github.com/owner/repo/releases/tag/os-v{version}'}
+                endpoint = 'repos/owner/repo/releases/tags/os-latest'
+                state = {'draft': False, 'prerelease': publish.is_preview(version),
+                         'html_url': 'https://github.com/owner/repo/releases/tag/os-latest',
+                         'body': '<!-- harness-os-latest:' + json.dumps({'version': prior, 'source_commit': 'old'}) + ' -->'}
+                previous = SimpleNamespace(returncode=0 if existing else 1,
+                                           stdout=json.dumps(state), stderr='' if existing else 'HTTP 404')
+                calls = []
+                def github(*args):
+                    calls.append(args)
+                    if args[:2] in [('release', 'create'), ('release', 'edit')] and '--notes-file' in args:
+                        state['body'] = Path(args[args.index('--notes-file') + 1]).read_text()
+                    if args == ('api', endpoint):
+                        return json.dumps(state)
+                    if args == ('api', 'repos/owner/repo/git/ref/tags/os-latest'):
+                        return json.dumps({'object': {'sha': 'a' * 40}})
+                    return ''
+                with patch.object(publish.subprocess, 'run', return_value=previous), patch.object(publish, 'gh', side_effect=github):
+                    result = publish.publish_latest_pointer('owner/repo', manifest, release)
+                self.assertEqual(result['status'], 'published')
+                self.assertIn(f'/releases/download/os-v{version}/harness-{version}-x86_64.iso', state['body'])
+                self.assertIn(f'/releases/download/os-v{version}/INSTALL.md', state['body'])
+                self.assertIn(release['html_url'], state['body'])
+                latest = [c for c in calls if '--latest=true' in c]
+                self.assertEqual(latest, [] if publish.is_preview(version) else [
+                    ('release', 'edit', 'os-v' + version, '--repo', 'owner/repo', '--latest=true')])
+                mutations = [c for c in calls if c[:3] == ('api', '--method', 'PATCH')]
+                self.assertEqual(len(mutations), int(existing))
+                if mutations:
+                    self.assertEqual(mutations[0][3], 'repos/owner/repo/git/refs/tags/os-latest')
+
+    def test_preview_or_late_older_publication_cannot_replace_the_official_pointer(self):
+        manifest = dict(version='0.1.0-preview.14', source_commit='a' * 40)
+        old = {'body': '<!-- harness-os-latest:{"version":"0.1.0","source_commit":"old"} -->'}
+        with patch.object(publish, 'gh') as github, patch.object(publish.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=json.dumps(old))):
+            self.assertEqual(publish.publish_latest_pointer('owner/repo', manifest, {})['status'], 'official-release-retained')
+            github.assert_not_called()
+        manifest['version'] = '0.9.0'
+        old = {'body': '<!-- harness-os-latest:{"version":"0.10.0","source_commit":"old"} -->'}
+        with patch.object(publish.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=json.dumps(old))), patch.object(publish, 'gh') as github:
+            self.assertEqual(publish.publish_latest_pointer('owner/repo', manifest, {})['status'], 'newer-release-retained')
+            github.assert_not_called()
+
+    def test_unknown_pointer_or_rewritten_version_fails_before_any_public_mutation(self):
+        manifest = dict(version='0.1.0', source_commit='a' * 40)
+        for body in ['unmanaged release', '<!-- harness-os-latest:{"version":"0.1.0","source_commit":"different"} -->']:
+            with self.subTest(body=body), patch.object(publish.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=json.dumps({'body': body}))), patch.object(publish, 'gh') as github:
+                with self.assertRaises(ValueError):
+                    publish.publish_latest_pointer('owner/repo', manifest, {})
+                github.assert_not_called()
+
     def test_nvidia_requires_exact_image_authenticated_offline_install_and_reboot(self):
         manifest = {'source_commit': 'source-one', 'iso': {'sha256': 'image-one'},
                     'hardware': {'nvidia': {'kernel': 'exact-kernel', 'driver_version': '615.71.09',
