@@ -141,3 +141,18 @@ export function logFrame(direction: '→' | '←', audience: string, frame: { ty
   if (typeof payload.error === 'string') bits.push(`error=${payload.error}`)
   console.log(`[frame] ${direction} ${audience} ${type}${bits.length ? ` · ${bits.join(' · ')}` : ''}`)
 }
+
+/**
+ * A log write that fails is dropped, never fatal.
+ *
+ * The master's stdout and stderr are the daemon's log file (`harness start`, launchd's StandardOutPath,
+ * systemd's `append:`), on the disk everything else is on. Node writes a file stdout synchronously, and a
+ * write that fails there, on a full disk (ENOSPC) or past a size limit (EFBIG), is an 'error' event the
+ * stream emits after `console.log` has returned; with no listener it is thrown, and the master died of
+ * it: no master and no core until the disk had room, with a re-exec marker left to roll a good update
+ * back on the next start. The same for a service, which shares the file.
+ */
+export function ignoreLogWriteErrors(streams: Pick<NodeJS.EventEmitter, 'on'>[] = [process.stdout, process.stderr]): void {
+  for (const stream of streams) stream.on('error', dropLogWriteError)
+}
+function dropLogWriteError(): void { /* the line is lost; the process lives */ }

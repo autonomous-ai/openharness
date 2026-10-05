@@ -7,7 +7,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { performance } from 'node:perf_hooks'
-import { trimLogFile, ts } from '../lib/log.js'
+import { ignoreLogWriteErrors, trimLogFile, ts } from '../lib/log.js'
 import { folderFingerprint } from './leanBundle.js'
 import { leanServices } from './leanServices.js'
 import { platformFromEnv, type PlatformName } from './platform.js'
@@ -226,7 +226,9 @@ export function probeMaster(config: { env: NodeJS.ProcessEnv; execArgv: string[]
   }
 }
 
+
 export function runMaster(config: MasterConfig): Supervisor {
+  ignoreLogWriteErrors()
   const { env: given, exit, onSignal, execve } = masterDefaults(config)
   process.title = 'harnessd'
   // What the master this process was a moment ago handed on, if it was one (./reexec.ts). Taken out of
@@ -323,7 +325,11 @@ export function runMaster(config: MasterConfig): Supervisor {
     writeStatus: (status) => { if (config.statusFile) writeStatusFile(config.statusFile, { ...status, masterPid: process.pid, ...(platform ? { platform } : {}) }) },
     setTimer: (run, ms) => setTimeout(run, ms),
     clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
-    claimPidFile: () => writeFileSync(config.pidFile, `${process.pid}\n`),
+    // On a full disk the claim fails, and the master carries on without it: it was thrown out of the
+    // core's `bound` message, and took the master down.
+    claimPidFile: () => {
+      try { writeFileSync(config.pidFile, `${process.pid}\n`) } catch (error) { log(`[harnessd] could not write the pid file: ${(error as Error).message}`) }
+    },
     releasePidFile: () => { if (readPid() === process.pid) rmSync(config.pidFile, { force: true }) },
     restoreUpdate: config.restoreUpdate,
     confirmUpdate: config.confirmUpdate,
