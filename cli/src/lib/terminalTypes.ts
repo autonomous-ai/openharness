@@ -180,6 +180,10 @@ export const TERMINAL_ACTION_SUCCEEDED: TerminalActionResult = {
   dispatch: 'executed',
 }
 
+/** The reason a write is refused when the pane's control lease cannot be taken: the agent's process is
+ *  not the one the registry holds (just relaunched, not yet confirmed) or another writer holds it. */
+export const TERMINAL_LEASE_REFUSED = 'terminal control lease is unavailable or changed'
+
 export function terminalActionNotStarted(reason: string): {
   state: 'failed'; dispatch: 'not_started'; reason: string
 } {

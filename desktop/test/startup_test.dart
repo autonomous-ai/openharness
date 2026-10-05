@@ -180,6 +180,7 @@ void main() {
           'harness_start_background',
           'harness_custom_background',
           'harness_background_behind_harnesses',
+          'harness_shade_inactive_panes',
           'workspace_prompt_v1',
         },
       ]);
@@ -189,10 +190,12 @@ void main() {
         'app_ui_font_family': null,
         'app_ui_font_size': '18',
         'app_color_palette': 'midnight',
+        'harness_shade_inactive_panes': 'true',
       });
       await Future<void>.delayed(Duration.zero);
       expect(appearance.value.uiSize, 18);
       expect(appearance.value.palette, HarnessPalette.midnight);
+      expect(appearance.value.shadeInactivePanes, isTrue);
       expect(finished, isFalse);
 
       fontStorage.ready.complete({

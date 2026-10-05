@@ -49,6 +49,9 @@ repo-add "$BUILD_DIR/repo/harness-build.db.tar.gz" "$BUILD_DIR/repo/"*.pkg.tar.g
 python3 tools/build-hardware.py --config "$PROFILE/pacman.conf" \
     --work "$BUILD_DIR/hardware-build" \
     --output "$PROFILE/airootfs/usr/share/harness-os/hardware/broadcom"
+python3 tools/build-nvidia.py --config "$PROFILE/pacman.conf" \
+    --work "$BUILD_DIR/nvidia-build" \
+    --output "$PROFILE/airootfs/usr/share/harness-os/hardware/nvidia"
 cp -a live/. "$PROFILE/airootfs/"
 mkdir -p "$PROFILE/airootfs/root" "$PROFILE/airootfs/etc/pacman.d/hooks"
 cp tools/customize-live.sh "$PROFILE/airootfs/root/setup-live.sh"
@@ -70,7 +73,8 @@ iso_publisher="OpenHarness"
 iso_application="Harness: boot into hn"
 iso_version="$VERSION"
 airootfs_image_type="squashfs"
-airootfs_image_tool_options=("-comp" "zstd" "-Xcompression-level" "6" "-b" "1M")
+# Match the measured compression profile and bound builder CPU/cache use.
+airootfs_image_tool_options=("-comp" "zstd" "-Xcompression-level" "19" "-b" "1M" "-processors" "2" "-mem" "1G")
 file_permissions=(
   ["/root"]="0:0:750"
 )
@@ -86,7 +90,7 @@ for d in ['syslinux', 'efiboot', 'grub']:
             try: s = f.read_text()
             except UnicodeDecodeError: continue
             s = s.replace('vmlinuz-linux', 'vmlinuz-linux-lts').replace('initramfs-linux.img', 'initramfs-linux-lts.img')
-            s = s.replace('Arch Linux install medium', 'Harness - try or install')
+            s = s.replace('Arch Linux install medium', 'Install Harness')
             # The 256 MiB Archiso default cannot install even one current agent.
             # tmpfs grows on demand; this is a ceiling, not reserved memory.
             s = s.replace('archisobasedir=%INSTALL_DIR%', 'archisobasedir=%INSTALL_DIR% cow_spacesize=50%')

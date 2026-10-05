@@ -7,7 +7,7 @@ import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show createApp;
 
 /// Opening a harness stamps it on its own daemon (`agent_update {opened}`), so
-/// every client's "last used" order moves with it.
+/// every client records the visit separately from conversation activity.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late RenameConnection connection;
@@ -45,7 +45,7 @@ void main() {
       await pumpEventQueue();
       final agent = app.stateOf('m')!.agents.firstWhere((a) => a.id == 'a0');
       expect(agent.lastOpenedAt, stamp);
-      expect(agent.lastUsedAt, stamp);
+      expect(agent.lastActivityAt, isNull);
       expect(agent.name, 'Agent 0');
     },
   );

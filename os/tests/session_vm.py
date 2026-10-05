@@ -14,7 +14,7 @@ from vm import VM
 
 
 PROBE = '''import os, pathlib, sys, threading, time
-root = pathlib.Path.home() / 'Projects/session-probe'
+root = pathlib.Path.home() / 'projects/session-probe'
 root.mkdir(exist_ok=True)
 (root / 'pid').write_text(str(os.getpid()))
 (root / 'input').write_text('')
@@ -80,18 +80,18 @@ def live_lock(vm, user):
 def installed_session(vm, config, result):
     put(vm, '/tmp/harness-session-probe.py', PROBE)
     vm.command('hn new-window -n session-probe ' + shlex.quote('python3 /tmp/harness-session-probe.py'))
-    vm.command('for n in $(seq 1 60); do test -s ~/Projects/session-probe/pid && test -s ~/Projects/session-probe/heartbeat && exit 0; sleep 0.25; done; exit 1')
-    vm.command('cp ~/Projects/session-probe/pid /tmp/session-original-pid')
+    vm.command('for n in $(seq 1 60); do test -s ~/projects/session-probe/pid && test -s ~/projects/session-probe/heartbeat && exit 0; sleep 0.25; done; exit 1')
+    vm.command('cp ~/projects/session-probe/pid /tmp/session-original-pid')
     time.sleep(1)
     assert 'visible lock probe' in screen_text(vm, 'session-before-lock'), 'The visible terminal probe was not rendered'
     accepted = []
 
     def work_survives():
-        vm.command('test "$(cat ~/Projects/session-probe/pid)" = "$(cat /tmp/session-original-pid)" && kill -0 "$(cat /tmp/session-original-pid)"')
-        vm.command('before=$(cat ~/Projects/session-probe/heartbeat); sleep 0.5; test "$before" != "$(cat ~/Projects/session-probe/heartbeat)"')
+        vm.command('test "$(cat ~/projects/session-probe/pid)" = "$(cat /tmp/session-original-pid)" && kill -0 "$(cat /tmp/session-original-pid)"')
+        vm.command('before=$(cat ~/projects/session-probe/heartbeat); sleep 0.5; test "$before" != "$(cat ~/projects/session-probe/heartbeat)"')
         expected = ''.join(word + '\n' for word in accepted)
         expression = ('from pathlib import Path; import time\n'
-            'p = Path.home()/"Projects/session-probe/input"\n'
+            'p = Path.home()/"projects/session-probe/input"\n'
             'expected = ' + repr(expected) + '\n'
             'deadline = time.monotonic() + 3\n'
             'while p.read_text() != expected and time.monotonic() < deadline: time.sleep(.05)\n'
@@ -217,16 +217,17 @@ def main():
         vm.wait(r'root@[^\r\n]*[#] ')
         vm.shell_ready = True
         vm.command('stty -echo')
-        vm.command(user('/usr/lib/harness-os/wait-runtime'))
-        vm.command(user('systemctl --user is-active --quiet hn-screen harness-idle'))
-        time.sleep(2)
-        try:
-            result['live_lock_observations'] = live_lock(vm, user)
-        except Exception as error:
-            result['live_lock_error'] = str(error)
-            vm.screenshot('live-lock-failure')
-            # Recover this disposable fixture so installed locking can still be diagnosed.
-            vm.command('pkill -u 1000 -x swaylock || true')
+        if 'install-first' not in manifest.get('capabilities', []):
+            vm.command(user('/usr/lib/harness-os/wait-runtime'))
+            vm.command(user('systemctl --user is-active --quiet hn-screen harness-idle'))
+            time.sleep(2)
+            try:
+                result['live_lock_observations'] = live_lock(vm, user)
+            except Exception as error:
+                result['live_lock_error'] = str(error)
+                vm.screenshot('live-lock-failure')
+                # Recover this disposable fixture so installed locking can still be diagnosed.
+                vm.command('pkill -u 1000 -x swaylock || true')
         put(vm, '/tmp/install-config.json', json.dumps(config))
         vm.command('nmcli networking off')
         print('Installing offline into the disposable test disk', flush=True)
@@ -282,7 +283,7 @@ def main():
                     'cat ~/.local/state/harness-os/display.log; ps -eo pid,ppid,sid,comm,args --width 240; '
                     'cat /sys/class/drm/card*-*/status /sys/class/drm/card*-*/dpms; '
                     'sudo -n sh -c "cat /sys/kernel/debug/dri/*/state"; '
-                    'cat ~/Projects/session-probe/input',
+                    'cat ~/projects/session-probe/input',
                     check=False, timeout=15)
                 (folder / 'session-diagnostics.log').write_text(output)
         except Exception:

@@ -115,10 +115,192 @@ class LivePayload(unittest.TestCase):
                 self.assertEqual(installer.live_payload(explicit), explicit)
 
 
+class EncryptionMemory(unittest.TestCase):
+    def budget(self, total_mib, available_mib, swap_mib=0):
+        with tempfile.TemporaryDirectory() as temp:
+            info = Path(temp) / 'meminfo'
+            info.write_text(f'MemTotal: {total_mib * 1024} kB\nMemAvailable: {available_mib * 1024} kB\nSwapFree: {swap_mib * 1024} kB\n')
+            return installer.encryption_memory(info)
+
+    def test_ram_backed_swap_does_not_increase_encryption_budget(self):
+        self.assertEqual(self.budget(960, 400, swap_mib=480), 200 * 1024)
+        self.assertEqual(self.budget(960, 400, swap_mib=4096), 200 * 1024)
+        self.assertEqual(self.budget(960, 400), 200 * 1024)
+
+    def test_budget_preserves_headroom_and_the_normal_one_gib_ceiling(self):
+        self.assertEqual(self.budget(960, 224), 96 * 1024)
+        self.assertEqual(self.budget(960, 192), 64 * 1024)
+        self.assertEqual(self.budget(16384, 12000), 1024 * 1024)
+        with self.assertRaisesRegex(ValueError, 'Close other harnesses'):
+            self.budget(960, 191)
+
+    def test_missing_or_invalid_memory_is_not_treated_as_available(self):
+        with tempfile.TemporaryDirectory() as temp:
+            info = Path(temp) / 'meminfo'
+            for content in [None, '', 'MemTotal: 1000 kB\n',
+                            'MemTotal: 1000 kB\nMemAvailable: 1001 kB\n']:
+                if content is not None:
+                    info.write_text(content)
+                with self.assertRaisesRegex(ValueError, 'No disk has been erased'):
+                    installer.encryption_memory(info)
+
+    def test_insufficient_memory_stops_before_creating_or_erasing_the_target(self):
+        config = dict(username='me', hostname='harness', password='test-password',
+                      encrypt=True, disk='/dev/vda', confirm_erase='/dev/vda')
+        with tempfile.TemporaryDirectory() as temp:
+            source, target = Path(temp) / 'payload', Path(temp) / 'target'
+            source.touch()
+            with patch.object(installer, 'selected_disk'), \
+                 patch.object(installer, 'preflight'), \
+                 patch.object(installer, 'trial_source'), \
+                 patch.object(installer, 'encryption_memory', side_effect=ValueError('Not enough free memory')), \
+                 patch.object(installer, 'run') as commands:
+                with self.assertRaisesRegex(ValueError, 'Not enough free memory'):
+                    installer.install(config, source, target)
+                commands.assert_not_called()
+                self.assertFalse(target.exists())
+
+    def test_format_uses_the_budget_without_overriding_time_or_algorithm(self):
+        config = dict(username='me', hostname='harness', password='test-password',
+                      encrypt=True, disk='/dev/vda', confirm_erase='/dev/vda')
+        def stop_at_open(*args, **kwargs):
+            if args[:2] == ('cryptsetup', 'open'):
+                raise OSError('stop before mapping a real disk')
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'payload'
+            source.touch()
+            with patch.object(installer, 'selected_disk'), \
+                 patch.object(installer, 'preflight'), \
+                 patch.object(installer, 'trial_source', return_value=None), \
+                 patch.object(installer, 'encryption_memory', return_value=192 * 1024), \
+                 patch.object(installer, 'run', side_effect=stop_at_open) as commands:
+                with self.assertRaisesRegex(OSError, 'stop before mapping'):
+                    installer.install(config, source, Path(temp) / 'target')
+            call = next(c for c in commands.call_args_list if c.args[:2] == ('cryptsetup', 'luksFormat'))
+            self.assertEqual(call.args[call.args.index('--pbkdf-memory') + 1], 192 * 1024)
+            self.assertEqual(call.args[call.args.index('--type') + 1], 'luks2')
+            self.assertEqual(call.kwargs['input'], b'test-password')
+            for option in ['--iter-time', '--pbkdf-force-iterations', '--pbkdf', '--cipher', '--key-size']:
+                self.assertNotIn(option, call.args)
+
+    def test_plain_install_does_not_require_an_encryption_budget(self):
+        config = dict(username='me', hostname='harness', password='test-password',
+                      encrypt=False, disk='/dev/vda', confirm_erase='/dev/vda')
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'payload'
+            source.touch()
+            with patch.object(installer, 'selected_disk'), \
+                 patch.object(installer, 'preflight'), \
+                 patch.object(installer, 'trial_source', return_value=None), \
+                 patch.object(installer, 'encryption_memory') as budget, \
+                 patch.object(installer, 'run', side_effect=OSError('stop before erasing')):
+                with self.assertRaisesRegex(OSError, 'stop before erasing'):
+                    installer.install(config, source, Path(temp) / 'target')
+                budget.assert_not_called()
+
+
+class InstallerCleanup(unittest.TestCase):
+    def test_mapping_state_comes_from_kernel_names_and_tolerates_a_last_close(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            name = root / 'dm-0/dm/name'
+            name.parent.mkdir(parents=True)
+            name.write_text('hn-install-test\n')
+            (root / 'sda').mkdir()
+            with patch.object(installer, 'Path', return_value=root):
+                self.assertTrue(installer.mapping_active('hn-install-test'))
+                self.assertFalse(installer.mapping_active('another-mapping'))
+                name.unlink()
+                self.assertFalse(installer.mapping_active('hn-install-test'))
+
+    def test_deferred_close_does_not_wait_for_or_force_a_remaining_reader(self):
+        with patch.object(installer, 'run') as command:
+            installer.close_install_mapping('hn-install-test')
+        command.assert_called_once_with('cryptsetup', 'close', '--deferred', 'hn-install-test', timeout=10)
+
+    def test_slow_udev_or_busy_close_queues_kernel_removal_without_waiting_for_udev(self):
+        for error in [subprocess.CalledProcessError(5, ['cryptsetup', 'close']),
+                      subprocess.TimeoutExpired(['cryptsetup', 'close'], 4.66)]:
+            with self.subTest(error=error), patch.object(installer, 'mapping_active', return_value=True), \
+                 patch.object(installer, 'run', side_effect=[error, None]) as command:
+                installer.close_install_mapping('hn-install-test')
+                self.assertEqual(command.call_args_list[-1].args,
+                                 ('dmsetup', 'remove', '--deferred', '--noudevsync', 'hn-install-test'))
+                self.assertEqual(command.call_args_list[-1].kwargs, {'timeout': 3})
+
+    def test_timeout_after_successful_removal_is_already_clean(self):
+        with patch.object(installer, 'mapping_active', return_value=False), \
+             patch.object(installer, 'run', side_effect=subprocess.TimeoutExpired(['cryptsetup'], 10)) as command:
+            installer.close_install_mapping('hn-install-test')
+            self.assertEqual(command.call_count, 1)
+
+    def test_last_reader_can_close_between_kernel_check_and_deferred_removal(self):
+        with patch.object(installer, 'mapping_active', side_effect=[True, False]), \
+             patch.object(installer, 'run', side_effect=[subprocess.TimeoutExpired(['cryptsetup'], 10),
+                                                       subprocess.CalledProcessError(1, ['dmsetup'])]):
+            installer.close_install_mapping('hn-install-test')
+
+    def test_unexpected_close_error_and_failed_deferred_removal_remain_errors(self):
+        error = subprocess.CalledProcessError(4, ['cryptsetup', 'close'])
+        with patch.object(installer, 'run', side_effect=error) as command:
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                installer.close_install_mapping('hn-install-test')
+            self.assertIs(caught.exception, error)
+            self.assertEqual(command.call_count, 1)
+        with patch.object(installer, 'mapping_active', return_value=True), \
+             patch.object(installer, 'run', side_effect=[subprocess.TimeoutExpired(['cryptsetup'], 10), error]):
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                installer.close_install_mapping('hn-install-test')
+            self.assertIs(caught.exception, error)
+
+    def failed_install(self, unmount_failure=False, log_failure=False):
+        config = dict(username='me', hostname='harness', password='private-password',
+                      encrypt=True, disk='/dev/vda', confirm_erase='/dev/vda')
+        original = subprocess.CalledProcessError(1, ['unsquashfs', 'payload.sfs'])
+        cleanup = subprocess.CalledProcessError(5, ['cryptsetup', 'close', 'hn-install-test'])
+        def command(*args, **kwargs):
+            if args[0] == 'unsquashfs':
+                raise original
+            if unmount_failure and args[:2] == ('umount', '-R'):
+                raise OSError('target is still mounted')
+            return 'test-uuid'
+        with tempfile.TemporaryDirectory() as temp:
+            source, target, log = (Path(temp) / name for name in ('payload', 'target', 'install.log'))
+            source.touch()
+            with patch.object(installer, 'selected_disk'), \
+                 patch.object(installer, 'preflight'), \
+                 patch.object(installer, 'trial_source', return_value=None), \
+                 patch.object(installer, 'encryption_memory', return_value=128 * 1024), \
+                 patch.object(installer, 'run', side_effect=command), \
+                 patch.object(installer, 'close_install_mapping', side_effect=cleanup) as close, \
+                 installer.command_log(log), redirect_stdout(io.StringIO()) as output, ExitStack() as stack:
+                if log_failure:
+                    stack.enter_context(patch.object(installer.COMMAND_LOG, 'write', side_effect=OSError('log is full')))
+                with self.assertRaises(subprocess.CalledProcessError) as caught:
+                    installer.install(config, source, target)
+            self.assertIs(caught.exception, original)
+            self.assertIn('Disk cleanup also failed', original.__notes__[0])
+            if not log_failure:
+                self.assertIn('unsquashfs', log.read_text())
+            self.assertNotIn('private-password', log.read_text())
+            self.assertNotIn('Installed in', output.getvalue())
+            self.assertEqual(close.call_count, 0 if unmount_failure else 1)
+
+    def test_close_failure_never_hides_the_original_installation_error(self):
+        self.failed_install()
+
+    def test_failed_unmount_never_closes_a_still_mounted_mapping_or_hides_the_error(self):
+        self.failed_install(unmount_failure=True)
+
+    def test_failed_diagnostic_write_preserves_the_error_and_still_attempts_cleanup(self):
+        self.failed_install(log_failure=True)
+
+
 class Screen:
     """Capture drawn text and supply keys; never expose a real disk or terminal."""
     def __init__(self):
         self.keys, self.frames, self.drawn = [], [], []
+        self.drawn_rows, self.attributes = {}, []
         self.size = (24, 80)
 
     def getmaxyx(self):
@@ -126,17 +308,21 @@ class Screen:
 
     def erase(self):
         self.drawn = []
+        self.drawn_rows = {}
 
     clear = erase
 
-    def addnstr(self, row, column, text, length, attr):
+    def addnstr(self, row, column, text, length, attr=0):
         self.drawn.append(text[:length])
+        self.drawn_rows.setdefault(row, []).append((column, text[:length]))
+        self.attributes.append((row, column, text[:length], attr))
 
     def addstr(self, row, column, text, attr):
         self.drawn.append(text)
 
     def refresh(self):
-        self.frames.append('\n'.join(self.drawn))
+        self.frames.append('\n'.join(''.join(text for _, text in sorted(parts))
+                                     for _, parts in sorted(self.drawn_rows.items())))
 
     def keypad(self, enabled):
         pass
@@ -151,6 +337,24 @@ class Screen:
 
 
 class InstallationCompletion(unittest.TestCase):
+    def test_usb_success_has_only_shutdown_and_cannot_return_to_trial(self):
+        screen = Screen()
+        screen.keys = ['\x1b', '\x03', '\t', '\n']
+        with patch.object(installer.curses, 'curs_set'), patch.object(installer.curses, 'flushinp'), \
+             patch.object(installer.curses, 'raw'):
+            self.assertTrue(installer.completion(screen, boot=True))
+        self.assertNotIn('Back to Harness', '\n'.join(screen.frames))
+
+    def test_failed_usb_shutdown_keeps_success_and_does_not_reinstall(self):
+        with patch.object(installer.curses, 'wrapper', return_value=True) as view, \
+             patch.object(installer, 'run', side_effect=[OSError('fixture poweroff failure'), None]) as command, \
+             patch.object(installer, 'install') as install, patch('builtins.input'), \
+             patch.object(installer.sys, 'stderr'):
+            installer.finish_installation(boot=True)
+        self.assertEqual(view.call_count, 2)
+        self.assertEqual(command.call_count, 2)
+        install.assert_not_called()
+
     def test_success_stays_visible_until_shutdown_or_return_is_chosen(self):
         for keys, shutdown in [(['\n'], True), (['\t', '\n'], False), (['\x1b'], False)]:
             screen = Screen()
@@ -159,7 +363,7 @@ class InstallationCompletion(unittest.TestCase):
                 self.assertEqual(installer.completion(screen), shutdown)
                 flush.assert_called_once()
                 self.assertIn('Harness is installed.', screen.frames[0])
-                self.assertIn('Remove the USB after shutdown.', screen.frames[0])
+                self.assertIn('remove the USB', screen.frames[0])
 
 
 class InteractiveInstall(unittest.TestCase):
@@ -190,8 +394,8 @@ class InteractiveInstall(unittest.TestCase):
         self.secret = 'test-password-123'
 
     def fill_passwords(self):
-        # Disk -> encryption -> password -> repeat -> Install button via Enter.
-        self.screen.keys.extend(['\t', '\t', *self.secret, '\n', *self.secret, '\n'])
+        # The safe disk is selected and Password is focused immediately.
+        self.screen.keys.extend([*self.secret, '\n', *self.secret, '\n'])
 
     def confirm(self):
         self.screen.keys.append('\n')  # Activate Install; no second confirmation screen.
@@ -206,6 +410,9 @@ class InteractiveInstall(unittest.TestCase):
         self.assertEqual(config['expected_serial'], 'HN_TEST')
         self.assertEqual(config['password'], self.secret)
         self.assertIn('Encryption        [x]', self.screen.frames[0])
+        for _, _, text, attr in self.screen.attributes:
+            if text.strip() in ('Disk', 'Encryption', 'Password', 'Repeat password'):
+                self.assertFalse(attr & installer.curses.A_REVERSE)
         first = self.screen.frames[0]
         for clutter in ('me@', '/dev/', 'HN_TEST', 'Tab move', 'Space toggle', 'eight characters'):
             self.assertNotIn(clutter, first)
@@ -252,7 +459,7 @@ class InteractiveInstall(unittest.TestCase):
         self.assertIn('Encryption        [ ]', self.screen.frames[0])
 
     def test_main_form_checkbox_can_disable_encryption(self):
-        self.screen.keys.extend(['\t', ' ', '\t', *self.secret, '\n', *self.secret, '\n'])
+        self.screen.keys.extend([installer.curses.KEY_BTAB, ' ', '\t', *self.secret, '\n', *self.secret, '\n'])
         self.confirm()
         installer.main()
         self.assertFalse(self.install.call_args.args[0]['encrypt'])
@@ -267,7 +474,7 @@ class InteractiveInstall(unittest.TestCase):
 
     def test_selecting_another_disk_does_not_start_installation(self):
         self.inventory.return_value.append(dict(self.disk, name='/dev/vdb', serial='SECOND_DISK'))
-        self.screen.keys.extend(['\n', installer.curses.KEY_DOWN, '\n'])
+        self.screen.keys.extend([installer.curses.KEY_BTAB, installer.curses.KEY_BTAB, '\n', installer.curses.KEY_DOWN, '\n', '\t', '\t'])
         self.fill_passwords()
         self.confirm()
         installer.main()
@@ -283,7 +490,7 @@ class InteractiveInstall(unittest.TestCase):
     def test_long_disk_model_keeps_size_and_device_visible_on_a_small_screen(self):
         self.screen.size = (18, 54)
         self.disk['model'] = 'A very long manufacturer and model name' * 3
-        self.screen.keys.extend(['\n', '\n'])
+        self.screen.keys.extend([installer.curses.KEY_BTAB, installer.curses.KEY_BTAB, '\n', '\n', '\t', '\t'])
         self.fill_passwords()
         self.confirm()
         installer.main()
@@ -296,14 +503,14 @@ class InteractiveInstall(unittest.TestCase):
 
     def test_escaping_disk_picker_preserves_original_selection(self):
         self.inventory.return_value.append(dict(self.disk, name='/dev/vdb', serial='SECOND_DISK'))
-        self.screen.keys.extend(['\n', installer.curses.KEY_DOWN, '\x1b'])
+        self.screen.keys.extend([installer.curses.KEY_BTAB, installer.curses.KEY_BTAB, '\n', installer.curses.KEY_DOWN, '\x1b', '\t', '\t'])
         self.fill_passwords()
         self.confirm()
         installer.main()
         self.assertEqual(self.install.call_args.args[0]['disk'], '/dev/vda')
 
     def test_password_mismatch_can_be_corrected_without_restarting(self):
-        self.screen.keys.extend(['\t', '\t', *self.secret, '\n', *'different', '\n', '\n', installer.curses.KEY_BTAB, '\x15', *self.secret, '\n'])
+        self.screen.keys.extend([*self.secret, '\n', *'different', '\n', '\n', installer.curses.KEY_BTAB, '\x15', *self.secret, '\n'])
         self.confirm()
         installer.main()
         self.assertTrue(any('Passwords do not match.' in frame for frame in self.screen.frames))
@@ -311,7 +518,7 @@ class InteractiveInstall(unittest.TestCase):
 
     def test_live_usb_is_excluded_from_picker(self):
         self.inventory.return_value.insert(0, dict(self.disk, name='/dev/sda', mountpoints=['/run/archiso/bootmnt']))
-        self.screen.keys.extend(['\n', '\n'])
+        self.screen.keys.extend([installer.curses.KEY_BTAB, installer.curses.KEY_BTAB, '\n', '\n', '\t', '\t'])
         self.fill_passwords()
         self.confirm()
         installer.main()
@@ -366,6 +573,20 @@ class InteractiveInstall(unittest.TestCase):
 
 
 class InstallerExit(unittest.TestCase):
+    def test_usb_cancel_or_failure_returns_to_installer(self):
+        for failure in [KeyboardInterrupt(), ValueError('Fixture disk disappeared')]:
+            with self.subTest(failure=failure), \
+                 patch.object(installer, 'arguments', return_value=installer.argparse.Namespace(config=None, boot=True)), \
+                 patch.object(installer, 'main', side_effect=[failure, None]) as main, \
+                 patch.object(installer.sys.stdin, 'isatty', return_value=True), \
+                 patch.object(installer.sys, 'stderr'), patch('builtins.input') as acknowledge:
+                self.assertEqual(installer.entrypoint(), 0)
+                self.assertEqual(main.call_count, 2)
+                if isinstance(failure, ValueError):
+                    acknowledge.assert_called_once_with('Press Enter to try again.')
+                else:
+                    acknowledge.assert_not_called()
+
     def exercise(self, failure, config=None, tty=True):
         with patch.object(installer, 'arguments', return_value=installer.argparse.Namespace(config=config)), \
              patch.object(installer, 'main', side_effect=failure), \
@@ -389,6 +610,15 @@ class InstallerExit(unittest.TestCase):
                 self.assertEqual(status, 1)
                 self.assertIn('fixture read failure', error)
                 acknowledge.assert_not_called()
+
+    def test_cleanup_context_and_command_timeout_remain_visible(self):
+        failure = subprocess.TimeoutExpired(['cryptsetup', 'close', 'hn-install-test'], 10)
+        failure.add_note('Harness was written and synced. Shut down normally.')
+        status, acknowledge, error = self.exercise(failure)
+        self.assertEqual(status, 1)
+        self.assertIn('cryptsetup', error)
+        self.assertIn('Harness was written and synced. Shut down normally.', error)
+        acknowledge.assert_called_once()
 
     def test_deliberate_cancel_does_not_open_an_error_prompt(self):
         status, acknowledge, error = self.exercise(KeyboardInterrupt())

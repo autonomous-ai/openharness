@@ -51,6 +51,7 @@ class _Connection extends WsConn {
         onStatus: (_) {},
       );
   final starts = <Map<String, dynamic>>[];
+  final sessions = <Map<String, dynamic>>[];
   Completer<Map<String, dynamic>>? pending;
   @override
   Future<Map<String, dynamic>> request(
@@ -65,6 +66,11 @@ class _Connection extends WsConn {
       ],
     },
     'dsh_list' => {'dsh': []},
+    'session_search' => {
+      'hits': sessions,
+      'indexed': sessions.length,
+      'pending': 0,
+    },
     'fs_list_dir' => {'path': payload['path'] ?? '/work', 'entries': []},
     'agent_create' => _create(payload),
     _ => {},
@@ -124,7 +130,12 @@ void main() {
     newHarnessOpensInBox = true;
     addTearDown(() => newHarnessOpensInBox = old);
     connection = _Connection('m');
-    app = createApp(store: storage, connectionForTest: (_) => connection);
+    final connections = {'m': connection};
+    app = createApp(
+      store: storage,
+      connectionForTest: (id) =>
+          connections.putIfAbsent(id, () => _Connection(id)),
+    );
     map = MemoryKeymap();
     seedMixedAgents(app);
     app.machineStates['m']!.localOnly = true;
@@ -326,6 +337,9 @@ void main() {
               lastOpenedAt: DateTime.now().subtract(
                 Duration(minutes: index * 23),
               ),
+              lastActivityAt: DateTime.now().subtract(
+                Duration(minutes: index * 23),
+              ),
               project: const AgentProject(
                 name: 'openharness',
                 cwd: '/work/openharness',
@@ -333,6 +347,24 @@ void main() {
               ),
             ),
         ];
+        connection.sessions.add({
+          'agentId': '',
+          'sessionId': 'claude-conversation',
+          'engine': 'claude',
+          'field': 'ask',
+          'snippet': '',
+          'score': .5,
+          'lastAt': DateTime.now()
+              .subtract(const Duration(minutes: 10))
+              .millisecondsSinceEpoch,
+          'external': {
+            'title': 'Pane connection losses',
+            'cwd': '/work/openharness',
+            'origin': 'terminal',
+            'open': true,
+            'openIn': 'terminal',
+          },
+        });
         tester.view.physicalSize = size;
         final previous = grid.AppTheme.brightness.value;
         final previousPalette = grid.AppTheme.palette.value;
@@ -381,6 +413,36 @@ void main() {
           findsNothing,
         );
         expect(find.text('Older session seven'), findsNothing);
+        expect(find.text('Pane connection losses'), findsOneWidget);
+        final contextLines = tester
+            .widgetList<StatusLine>(
+              find.descendant(of: recent, matching: find.byType(StatusLine)),
+            )
+            .toList();
+        expect(contextLines, hasLength(6));
+        expect(contextLines[1].parts.text, 'M2 in openharness');
+        final paragraphs = find
+            .descendant(of: recent, matching: find.byType(StatusLine))
+            .evaluate()
+            .map(
+              (element) => tester.renderObject<RenderParagraph>(
+                find.descendant(
+                  of: find.byWidget(element.widget),
+                  matching: find.byType(RichText),
+                ),
+              ),
+            )
+            .toList();
+        expect(
+          paragraphs[1].text.style?.fontFamily,
+          paragraphs.first.text.style?.fontFamily,
+        );
+        expect(
+          paragraphs[1].text.style?.fontSize,
+          paragraphs.first.text.style?.fontSize,
+        );
+        expect(find.textContaining('not in Harness'), findsNothing);
+        expect(find.textContaining('terminal'), findsNothing);
         expect(find.text('now'), findsOneWidget);
         expect(find.text('0m'), findsNothing);
         expect(
@@ -428,6 +490,7 @@ void main() {
         );
         expect(connection.starts, isEmpty);
         if (scale == 1) {
+          connection.sessions.clear();
           for (final machine in app.machineStates.values) {
             machine.agents = [];
           }

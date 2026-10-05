@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 INPUTS=$(cd -- "$(dirname -- "$0")" && pwd)
-ROOT="$HOME/Projects/os-dsh"
+ROOT="$HOME/projects/os-dsh"
 REPORT="$HOME/.local/state/harness-os/dsh-check"
 mkdir -p "$REPORT" "$ROOT/qa"
 trap 'printf "%s\n" "$?" > "$REPORT/status"' EXIT

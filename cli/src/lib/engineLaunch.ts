@@ -509,11 +509,15 @@ export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tm
   const mark = tmuxBinary && isAbsolute(tmuxBinary)
     ? `  [ -n "\${TMUX_PANE:-}" ] && ${shellSingleQuote(tmuxBinary)} set-option -p -t "$TMUX_PANE" ${ENGINE_EXIT_PANE_OPTION} "$harness_status" >/dev/null 2>&1 || true\n`
     : ''
-  return 'harness_engine() {\n'
-    + (engine === 'codex' ? codexOwnedLaunchPrelude() : '')
+  // A function has its own positional parameters. Reprobe each replacement
+  // binary without adding --no-daemon to the saved launch arguments repeatedly.
+  return (engine === 'codex'
+    ? 'harness_codex_launch() {\n' + codexOwnedLaunchPrelude() + '  "$@"\n}\n'
+    : '')
+    + 'harness_engine() {\n'
     + (engine === 'codex' && tmuxBinary && isAbsolute(tmuxBinary)
       ? codexStartupRetryScript(tmuxBinary)
-      : '  harness_status=0\n  "$@" || harness_status=$?\n')
+      : `  harness_status=0\n  ${engine === 'codex' ? 'harness_codex_launch ' : ''}"$@" || harness_status=$?\n`)
     + '  if [ "$harness_status" -eq 127 ]; then exit 127; fi\n'
     + mark
     // Only a pane — something with a terminal on stdin — gets a shell to type into. Run without one
@@ -524,18 +528,27 @@ export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tm
     + '}\n'
 }
 
-/** Keep a transient pre-session account lookup failure inside the original launch.
+/** Keep a successful startup update or transient account lookup failure in the original launch.
  * Only the final exit gets the pane's engine-exit marker. The short backoff also
  * keeps discovery from archiving the row between attempts. Never reparse "$@": it
- * includes the original prompt, model, permissions and resume/fork arguments. */
+ * includes the original prompt, images, model, permissions and resume/fork arguments.
+ * Codex's updater runs before the conversation opens, so replay that exact launch
+ * once, without choosing an unrelated conversation via `resume --last`. */
 function codexStartupRetryScript(tmuxBinary: string): string {
   const probe = `${shellSingleQuote(process.execPath)} -e ${shellSingleQuote(CODEX_STARTUP_RETRY_PROBE)}`
   return '  harness_codex_attempt=1\n'
+    + '  harness_codex_updated=0\n'
     + '  while :; do\n'
     + '    harness_codex_before=\n'
     + `    if [ -n "\${TMUX_PANE:-}" ]; then harness_codex_before=$(${probe} before ${shellSingleQuote(tmuxBinary)} "$TMUX_PANE") || harness_codex_before=; fi\n`
     + '    harness_status=0\n'
-    + '    "$@" || harness_status=$?\n'
+    + '    harness_codex_launch "$@" || harness_status=$?\n'
+    + '    if [ "$harness_status" -eq 0 ] && [ "$harness_codex_updated" -eq 0 ] && [ -n "$harness_codex_before" ] &&\n'
+    + `      ${probe} after-update ${shellSingleQuote(tmuxBinary)} "$TMUX_PANE" "$harness_codex_before"; then\n`
+    + '      harness_codex_updated=1\n'
+    + `      printf '\\n%s\\n' 'harness: Codex updated. Continuing startup…'\n`
+    + '      continue\n'
+    + '    fi\n'
     + '    [ "$harness_status" -eq 1 ] && [ "$harness_codex_attempt" -lt 3 ] && [ -n "$harness_codex_before" ] || break\n'
     + `    ${probe} after ${shellSingleQuote(tmuxBinary)} "$TMUX_PANE" "$harness_codex_before" || break\n`
     + '    harness_codex_delay=$((harness_codex_attempt * 2))\n'

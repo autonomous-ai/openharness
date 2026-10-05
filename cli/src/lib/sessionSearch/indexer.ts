@@ -107,7 +107,11 @@ export interface SessionSearchIndexOptions {
    * Which sessions are open in a running process right now (external.ts `OpenSessions`), so a
    * conversation Harness did not start says whether a terminal still has it. `known` never waits.
    */
-  openSessions?: { known(): ReadonlyMap<string, 'terminal' | 'app' | 'harness' | 'maybe'>; fresh(): Promise<ReadonlyMap<string, 'terminal' | 'app' | 'harness' | 'maybe'>> }
+  openSessions?: {
+    known(): ReadonlyMap<string, 'terminal' | 'app' | 'harness' | 'maybe'>
+    fresh(): Promise<ReadonlyMap<string, 'terminal' | 'app' | 'harness' | 'maybe'>>
+    working?(sessionId: string): Promise<boolean | null>
+  }
   /** Looks again for conversations Harness did not start, before each sweep lists its sources. */
   discover?: () => Promise<unknown>
   /** Between full sweeps. */
@@ -143,6 +147,7 @@ export class SessionSearchIndex {
   private discovering = false
   private discoveryFailed = false
   private discoveryStartedAt: number | undefined
+  private discoveryFinishedAt: number | undefined
   /** Callers waiting for a session's next pass (`tail`). */
   private readonly waiters = new Map<string, Array<() => void>>()
 
@@ -213,6 +218,7 @@ export class SessionSearchIndex {
       }
       this.initialized = true
       this.discovering = false
+      this.discoveryFinishedAt = Date.now()
     }
     if (this.opts.discover) {
       // Which of them are open, looked at now: a search reads it without waiting.
@@ -240,9 +246,10 @@ export class SessionSearchIndex {
 
   search(query: string, options: { limit?: number; from?: number; to?: number } = {}): SessionSearchResult {
     const started = performance.now()
-    // Opening welcome/search is an explicit demand for history. Start the first scan now,
-    // without blocking this request or waiting for the daemon's deferred boot sweep.
-    if ((!this.initialized || this.discoveryFailed) && !this.discovering &&
+    // Opening welcome/search is an explicit demand for current history, including sessions
+    // started since boot. Keep a short cache across typing/retries, not the ten-minute idle sweep.
+    const stale = this.discoveryFinishedAt === undefined || Date.now() - this.discoveryFinishedAt >= 5_000
+    if ((!this.initialized || this.discoveryFailed || stale) && !this.discovering && !this.running &&
         (this.discoveryStartedAt === undefined || Date.now() - this.discoveryStartedAt >= 1_000)) this.sweep()
     const hits = this.opts.store.search(query, options)
     // Whether a terminal still has it, as last looked: a search never waits for a process table.
@@ -290,7 +297,12 @@ export class SessionSearchIndex {
       // A preview of a conversation Harness did not start says whether a terminal has it, as of now.
       const open = await this.opts.openSessions?.fresh().catch(() => null)
       const where = open?.get(sessionId)
-      tail.external = { title: session.title ?? '', cwd: session.cwd ?? '', origin: session.origin ?? '', open: open?.has(sessionId) ?? false, ...(where ? { openIn: where } : {}) }
+      const working = open?.has(sessionId) ? await this.opts.openSessions?.working?.(sessionId).catch(() => null) : null
+      tail.external = {
+        title: session.title ?? '', cwd: session.cwd ?? '', origin: session.origin ?? '',
+        open: open?.has(sessionId) ?? false, ...(where ? { openIn: where } : {}),
+        ...(typeof working === 'boolean' ? { working } : {}),
+      }
     }
     return tail
   }

@@ -12,8 +12,10 @@ import time
 import zipfile
 
 REQUIRED_CHECKS = ['Live hn ready;', 'Wayland clipboard round trip',
-                   'USB Enter opens Install offline;',
+                   'USB opens network setup; Super+i opens Install offline;',
                    'USB first agent conversation accepts physical keyboard input',
+                   'Bundled OpenCode loads the local TUI guide',
+                   'Agent-created USB trial project survives offline installation',
                    'Bundled OpenCode starts offline and its upstream-default clean-profile conversation',
                    'Keyboard disk selection, encryption checkbox, masked password entry and a single Install action',
                    'Browser starts only on shortcut', 'Dated package repositories are queryable',
@@ -22,6 +24,14 @@ REQUIRED_CHECKS = ['Live hn ready;', 'Wayland clipboard round trip',
                    'Terminal process survives screen restart', 'Offline installer completed',
                    'Installed disk boots to hn', 'A real offline package transaction',
                    'Offline checkpoint restored', 'Recovered disk boots to hn']
+
+
+INSTALL_FIRST_CHECKS = [check for check in REQUIRED_CHECKS if not check.startswith((
+    'Live hn', 'USB ', 'Agent-created USB', 'Bundled OpenCode starts offline'))] + [
+    'USB opens the installer directly with no trial, network page, hn runtime or agent',
+    'Installed Wi-Fi first use advances into three real panes and the bundled default agent answers keyboard input',
+    "Bundled OpenCode's upstream-default clean-profile conversation",
+]
 
 
 def digest(path):
@@ -64,6 +74,32 @@ def validate_hardware(manifest, receipt):
         raise ValueError('Installed driver dependencies have not passed an offline rebuild.')
 
 
+def validate_nvidia(manifest, receipt):
+    if (receipt.get('status') != 'passed' or receipt.get('iso_sha256') != manifest['iso']['sha256'] or
+            receipt.get('image_source_commit') != manifest['source_commit'] or
+            receipt.get('test_source_commit') != manifest['source_commit'] or
+            receipt.get('candidate_injected') is not False):
+        raise ValueError('NVIDIA evidence must pass against the exact unmodified image.')
+    bundle = manifest['hardware']['nvidia']
+    installed = receipt.get('installation', {})
+    if (installed.get('status') != 'passed' or installed.get('kernel') != bundle['kernel'] or
+            installed.get('driver_version') != bundle['driver_version']):
+        raise ValueError('The NVIDIA installation does not match the bundled kernel and driver.')
+    for check in ['cache_extraction_excluded', 'corrupted_archive_rejected', 'invalid_signature_rejected',
+                  'negative_selections_unchanged', 'cache_absent', 'base_packages_unchanged']:
+        if installed.get(check) is not True:
+            raise ValueError('Missing NVIDIA installation check: ' + check)
+    expected = {value['name']: value['version'] for value in bundle['packages'].values()}
+    if installed.get('optional_packages') != expected:
+        raise ValueError('Installed NVIDIA packages differ from the image manifest.')
+    for check in ['keyboard', 'return_keyboard']:
+        if not isinstance(receipt.get(check), dict) or receipt[check].get('confirmed_seconds_since_boot', 0) <= 0:
+            raise ValueError('NVIDIA package acceptance has not passed actual keyboard input.')
+    for check in ['early_display_modules_and_firmware', 'generic_browser_after_driver_reboot']:
+        if receipt.get(check) != 'passed':
+            raise ValueError('Missing NVIDIA boot or browser acceptance: ' + check)
+
+
 def validate_receipts(manifest, receipts):
     rows = {(r['firmware'], r['encrypted']): r for r in receipts}
     if set(rows) != {('bios', False), ('uefi', True)} or len(receipts) != 2:
@@ -74,11 +110,15 @@ def validate_receipts(manifest, receipts):
         if receipt['iso_sha256'] != manifest['iso']['sha256'] or receipt['image_source_commit'] != manifest['source_commit']:
             raise ValueError('Machine receipt covers a different image or source.')
         checks = receipt.get('checks', [])
-        if any(not any(check.startswith(prefix) for check in checks) for prefix in REQUIRED_CHECKS):
+        required = INSTALL_FIRST_CHECKS if 'install-first' in manifest.get('capabilities', []) else REQUIRED_CHECKS
+        if any(not any(check.startswith(prefix) for check in checks) for prefix in required):
             raise ValueError('A required live, installation or recovery check is absent.')
         if 'broadcom-offline' in manifest.get('capabilities', []) and not any(
                 check.startswith('Unrelated hardware receives no optional Wi-Fi packages') for check in checks):
             raise ValueError('The generic installation has not passed optional-driver exclusion.')
+        if 'nvidia-offline' in manifest.get('capabilities', []) and not any(
+                check.startswith('Unrelated hardware receives no NVIDIA packages, boot configuration or USB GPU cache') for check in checks):
+            raise ValueError('The generic installation has not passed NVIDIA-driver exclusion.')
     if not any(check.startswith('Harness unlock screen renders, masks input, accepts a retry') for check in rows[('uefi', True)]['checks']):
         raise ValueError('The encrypted graphical unlock and retry checks have not passed.')
     if not any(check.startswith('Claude Code, Codex and pi install on demand; bundled OpenCode') for check in rows[('bios', False)]['checks']):
@@ -147,6 +187,13 @@ def main():
         gh('run', 'download', args.image, '--repo', args.repo, '--name', 'harness-os-hardware', '--dir', root / 'hardware')
         hardware = read(root / 'hardware/receipt.json')
         validate_hardware(manifest, hardware)
+    nvidia = None
+    if 'nvidia-offline' in manifest.get('capabilities', []):
+        if not any(j['name'] == 'nvidia' and j['conclusion'] == 'success' for j in jobs['jobs']):
+            raise ValueError('The image build has no successful NVIDIA installation job.')
+        gh('run', 'download', args.image, '--repo', args.repo, '--name', 'harness-os-nvidia-install', '--dir', root / 'nvidia')
+        nvidia = read(root / 'nvidia/receipt.json')
+        validate_nvidia(manifest, nvidia)
     examples = {}
     if list((root / 'machines').rglob('workloads/reports')):
         examples['workloads'] = {'run': run['html_url'], 'browser_checks': validate_examples(root / 'machines', 'workloads')}
@@ -165,6 +212,8 @@ def main():
                   'machines': receipts, 'examples': examples, 'limitations': limitations}
     if hardware is not None:
         validation['hardware'] = hardware
+    if nvidia is not None:
+        validation['nvidia'] = nvidia
     (folder / 'validation.json').write_text(json.dumps(validation, indent=2) + '\n')
     manifest['validation'] = {'status': 'passed', 'receipt': 'validation.json', 'machine_run': run['html_url'], 'limitations': limitations}
     (folder / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
@@ -172,17 +221,17 @@ def main():
     validate_install_guide(manifest, guide)
     (folder / 'INSTALL.md').write_text(guide)
     with zipfile.ZipFile(folder / 'machine-evidence.zip', 'w', compression=zipfile.ZIP_DEFLATED) as archive:
-        for directory in ['machines', 'dsh-machines', 'hardware']:
+        for directory in ['machines', 'dsh-machines', 'hardware', 'nvidia']:
             for path in sorted((root / directory).rglob('*')):
                 include = path.suffix in {'.png', '.json', '.txt', '.jsonl'} or path.name.endswith('-boot-journal.log')
-                if path.is_file() and include and 'Projects' not in path.relative_to(root / directory).parts:
+                if path.is_file() and include and not {'Projects', 'projects'} & set(path.relative_to(root / directory).parts):
                     archive.write(path, path.relative_to(root))
     if examples:
         with zipfile.ZipFile(folder / 'harness-examples.zip', 'w', compression=zipfile.ZIP_DEFLATED) as archive:
             for directory, kind in [('machines', 'workloads'), ('dsh-machines', 'dsh')]:
                 if kind not in examples:
                     continue
-                for project_root in (root / directory).rglob('Projects'):
+                for project_root in (path for path in (root / directory).rglob('*') if path.name in {'Projects', 'projects'} and path.is_dir()):
                     for path in sorted(project_root.rglob('*')):
                         if path.is_file() and not set(path.relative_to(project_root).parts) & {'node_modules', '.git', '.harness', '__pycache__'}:
                             archive.write(path, path.relative_to(project_root))
@@ -193,25 +242,28 @@ def main():
     interactive_install = all(any(c.startswith('Keyboard disk selection, encryption checkbox') for c in r['checks']) for r in receipts)
     update_retry = all(any(c.startswith('Failed full update blocks package changes') for c in r['checks']) for r in receipts)
     in_place_updates = {'runtime-updates', 'system-updates'}.issubset(manifest.get('capabilities', []))
+    single_action_updates = 'single-action-updates' in manifest.get('capabilities', [])
     project_source_runs = sorted({str(r['workload_project_source_run_id']) for r in receipts if r.get('workload_project_source_run_id')})
     reuse_note = ('Completed project sources were retained from ' + ', '.join(
         f'[run {source}](https://github.com/{args.repo}/actions/runs/{source})' for source in project_source_runs) +
         '. The game agent ran again; all four projects\' unit tests and independent acceptance checks reran on this exact image.') if project_source_runs else ''
-    notes.write_text(f'''Boot directly into hn. Open agents with Ctrl+B, then N. Super+B opens Chromium or returns to hn.
+    notes.write_text(f'''Harness is a Linux operating system built by agents, for agents. Boot into the terminal, start another agent with Super+n, and open the browser with Super+b.
 
 Arch Linux with the LTS kernel, labwc, foot, and an on-demand browser. No desktop panels or preinstalled development stacks.
 
-To try it: follow the included `INSTALL.md` for Mac → USB → ThinkPad instructions. Verify the ISO's SHA-256, write the whole ISO to a USB stick, and boot an x86-64 PC with Secure Boot disabled. On the USB welcome screen, press Enter to install or T to try Harness. Try opens Wi-Fi setup when needed, then bundled OpenCode with its upstream default settings. Ctrl+B then T opens a terminal directly; Ctrl+B then I opens the installer from a live session. This preview's installer erases the entire selected disk; it does not resize another OS. Encryption is enabled by default.
+To install: follow the included `INSTALL.md` for Mac → USB → ThinkPad instructions. Verify the ISO's SHA-256, write the whole ISO to a USB stick, and boot an x86-64 PC with Secure Boot disabled. The USB opens the installer directly; installation works offline. Select the disk, enter the password twice and choose Install Harness. Shut down, remove the USB and boot the installed disk. The existing Wi-Fi page appears when disconnected, then bundled OpenCode opens on the left beside two terminal panes. Working Ethernet skips Wi-Fi setup. OpenCode retains its upstream model defaults and the local Harness guide. Super+n opens New Harness, Super+m connects a computer, and Super+t opens a shell directly. These shortcuts require no Shift; existing Ctrl+b bindings remain available. The installer erases the entire selected disk and does not resize another OS. Encryption is enabled by default.
 
 {'The installer has four aligned fields: disk, encryption, password, repeat password. Disk choices fit on one line. Activate Install to begin; there is no second confirmation screen or minimum password length. Empty passwords are rejected. The account is me@harness. The password initially protects both the local account and, when enabled, the encrypted disk. There is no first-boot account wizard.' if interactive_install else ''}
 
 {'Interrupted full OS updates block ordinary package transactions until a full retry succeeds. Retrying keeps the original recovery checkpoint. This was exercised with a real failed repository refresh, blocked package upgrade, successful retry, and offline recovery. hn-os update upgrades Arch packages.' if update_retry else ''}
 
-{'Super+U opens Updates. hn and CLI releases are prepared automatically; Enter activates an available runtime update. hn reconnects to the local tabs while agent processes keep running. System updates are a separate action in the same screen, with a checkpoint and a restart when you are ready. Neither channel automatically interrupts your work. Older preview 4 installations need the matching small bootstrap bundle once; routine updates do not require reflashing.' if in_place_updates else ''}
+{'Super+u starts the update immediately. The Update button is clickable too. No confirmation or password prompt is needed. Running agents and terminals stay alive; system updates keep a recovery checkpoint and leave restarting to you. After that reboot, the same request finishes any remaining runtime update. Background checks otherwise prepare downloads without activating them. Older previews use their existing Super+u, then s action to receive this change once; routine updates do not require reflashing.' if single_action_updates else 'Super+u opens Updates. hn and CLI releases are prepared automatically; Enter activates an available runtime update. System updates are a separate action in the same screen, with a checkpoint and a restart when ready. Routine updates do not require reflashing.' if in_place_updates else ''}
 
 BIOS/plain and UEFI/encrypted VM boot, clipboard, browser switching, offline installation and package-checkpoint recovery passed. The BIOS VM uses a Nehalem CPU profile without AVX2, starts bundled OpenCode, installs the other agent executables, installs a compiler on demand, builds C, and serves a local Node preview. See `validation.json` and `machine-evidence.zip` for the exact checks and measurements.
 
 {'The USB carries an optional Broadcom Wi-Fi module and signed offline dependencies for selected BCM4331/BCM4360 radios. Fresh installations retain those packages only when needed; other computers receive no additional compiler or driver packages. The exact module and offline installation/rebuild path passed native VM checks with synthetic PCI selection. Physical Mac radio association and sleep/wake remain unverified.' if hardware is not None else ''}
+
+{'Supported NVIDIA machines install a snapshot-matched open kernel driver and userspace offline. The installer uses the bundled driver support table and leaves mixed legacy GPUs and passthrough assignments unchanged. Other computers receive no NVIDIA packages or package cache. Signed package installation, early display modules and firmware, encrypted reboot and a browser on a virtual GPU passed; physical NVIDIA rendering and inference remain unverified.' if nvidia is not None else ''}
 
 {'Real free OpenCode agents built a Python CLI, a conference website, a keyboard game and a Fastify/SQLite application. Their unit tests and independent browser/API checks passed. The retained projects are in `harness-examples.zip`, separate from the minimal ISO.' if 'workloads' in examples else ''}
 

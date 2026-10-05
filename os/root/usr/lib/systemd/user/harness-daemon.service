@@ -1,5 +1,6 @@
 [Unit]
 Description=Harness agent runtime
+ConditionPathExists=!/etc/harness-live
 
 [Service]
 Type=exec

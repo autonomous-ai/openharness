@@ -42,6 +42,10 @@ def stage(source, runtime, destination, commit):
     special = {
         'LICENSE': 'usr/share/licenses/harness-os/LICENSE',
         'os/installer.py': 'usr/lib/harness-os/install.py',
+        'os/onboarding.py': 'usr/lib/harness-os/onboarding.py',
+        'os/network.py': 'usr/lib/harness-os/network.py',
+        'os/projects.py': 'usr/lib/harness-os/projects.py',
+        'os/trial_projects.py': 'usr/lib/harness-os/trial_projects.py',
         'os/system.py': 'usr/lib/harness-os/system.py',
         'os/runtime_update.py': 'usr/lib/harness-os/runtime_update.py',
         'os/live_update.py': 'usr/lib/harness-os/live_update.py',
@@ -49,12 +53,18 @@ def stage(source, runtime, destination, commit):
         'os/hardware.py': 'usr/lib/harness-os/hardware.py',
         'os/tools/hn-os': 'usr/bin/hn-os',
         'os/lock.json': 'usr/share/harness-os/lock.json',
+        'tui/README.md': 'usr/share/harness-os/guide/tui.md',
+        'docs/naming-system.md': 'usr/share/harness-os/guide/naming.md',
     }
     for local, target in special.items():
         path = destination / target
         path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source / local, path)
         path.chmod(0o644)
+    (destination / 'usr/share/harness-os/guide/source.json').write_text(
+        json.dumps({'source_commit': commit, 'tui_reference': 'tui/README.md'}, indent=2) + '\n')
+    # The regular skel AGENTS.md points OpenCode to the current packaged guide.
+    # Archive symlinks outside their directory are rejected by the updater.
     library = destination / 'usr/lib/harness'
     library.mkdir(parents=True)
     for local, target in [('harness-tui', 'harness-tui'), ('cli.js', 'cli.mjs'), ('notify.mjs', 'notify.mjs')]:
@@ -67,6 +77,9 @@ def stage(source, runtime, destination, commit):
                 path.chmod(0o755)
     for name in ['autostart', 'shutdown']:
         (destination / 'usr/share/harness-os/labwc' / name).chmod(0o755)
+    (destination / 'usr/share/harness-os/labwc-install/autostart').chmod(0o755)
+    for path in (destination / 'etc/sudoers.d').iterdir():
+        path.chmod(0o440)
     info.update(mode='source', files={p.name: {'sha256': digest(p), 'bytes': p.stat().st_size}
                                     for p in library.iterdir() if p.is_file() and not p.is_symlink()})
     (destination / 'usr/share/harness-os/runtime.json').write_text(json.dumps(info, indent=2) + '\n')

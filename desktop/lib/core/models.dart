@@ -353,18 +353,6 @@ class Agent {
   /// the field.
   final DateTime? lastOpenedAt;
 
-  /// What harness lists sort by: the later of [lastActivityAt] and
-  /// [lastOpenedAt], so a harness someone just looked at rises even while it
-  /// is quiet. The order is global — every client and machine reads the same
-  /// daemon stamps.
-  DateTime? get lastUsedAt {
-    final activity = lastActivityAt;
-    final opened = lastOpenedAt;
-    if (activity == null) return opened;
-    if (opened == null) return activity;
-    return opened.isAfter(activity) ? opened : activity;
-  }
-
   /// Cached conversation usage reported by this agent's owning machine.
   final int? tokensUsed;
   final DateTime? tokensUpdatedAt;

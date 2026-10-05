@@ -31,13 +31,19 @@ def inspect(iso):
             return subprocess.check_output(['unsquashfs', '-cat', str(payload), path])
         files = {str(p.relative_to(source / 'root')): p for p in (source / 'root').rglob('*') if p.is_file()}
         files.update({'usr/lib/harness-os/install.py': source / 'installer.py',
+                      'usr/lib/harness-os/onboarding.py': source / 'onboarding.py',
+                      'usr/lib/harness-os/network.py': source / 'network.py',
+                      'usr/lib/harness-os/projects.py': source / 'projects.py',
+                      'usr/lib/harness-os/trial_projects.py': source / 'trial_projects.py',
                       'usr/lib/harness-os/system.py': source / 'system.py',
                       'usr/lib/harness-os/runtime_update.py': source / 'runtime_update.py',
                       'usr/lib/harness-os/live_update.py': source / 'live_update.py',
                       'usr/lib/harness-os/release_update.py': source / 'release_update.py',
                       'usr/lib/harness-os/hardware.py': source / 'hardware.py',
                       'usr/bin/hn-os': source / 'tools/hn-os',
-                      'usr/share/harness-os/lock.json': source / 'lock.json'})
+                      'usr/share/harness-os/lock.json': source / 'lock.json',
+                      'usr/share/harness-os/guide/tui.md': source.parent / 'tui/README.md',
+                      'usr/share/harness-os/guide/naming.md': source.parent / 'docs/naming-system.md'})
         for path, expected in files.items():
             assert read(path) == expected.read_bytes(), f'Payload does not match source: {path}'
             checked.append(path)
@@ -51,6 +57,10 @@ def inspect(iso):
         for path in [*files, '', 'etc', 'usr', 'usr/bin', 'usr/lib/harness-os', 'usr/share/harness-os']:
             assert owners.get(path) == '0/0', f'Packaged system path is not owned by root: {path}'
         runtime = json.loads(read('usr/share/harness-os/runtime.json'))
+        guide = json.loads(read('usr/share/harness-os/guide/source.json'))
+        assert guide == {'source_commit': manifest['source_commit'], 'tui_reference': 'tui/README.md'}, 'Agent guide belongs to a different source'
+        assert read('home/me/.config/opencode/AGENTS.md') == read('etc/skel/.config/opencode/AGENTS.md')
+        assert read('home/me/.config/opencode/opencode.json') == read('etc/skel/.config/opencode/opencode.json')
         assert runtime == manifest['harness_inputs'] and runtime['source_commit'] == manifest['source_commit']
         assert not runtime['dirty'] and runtime['target'] == 'x86_64-unknown-linux-musl'
         for name, identity in runtime['files'].items():
@@ -70,7 +80,7 @@ def inspect(iso):
         expected_version = re.escape(version.replace('-preview.', 'pre')) + r'\.r\d+\.g' + manifest['source_commit'][:10] + '-1'
         assert re.fullmatch(expected_version, package_version), 'OS package version differs from the image source'
         assert package_version == manifest['package_version'], 'OS package version differs from the manifest'
-        assert set(manifest['capabilities']) == {'runtime-updates', 'system-updates', 'broadcom-offline'}, 'Image capabilities differ from the manifest'
+        assert set(manifest['capabilities']) == {'runtime-updates', 'system-updates', 'single-action-updates', 'broadcom-offline', 'nvidia-offline', 'install-first'}, 'Image capabilities differ from the manifest'
         hardware_root = 'usr/share/harness-os/hardware/broadcom/'
         hardware = json.loads(read(hardware_root + 'manifest.json'))
         assert hardware == manifest['hardware']['broadcom'], 'Hardware manifest differs from the payload'
@@ -84,6 +94,19 @@ def inspect(iso):
             data = read(path)
             assert len(data) == expected['bytes'] and hashlib.sha256(data).hexdigest() == expected['sha256'], f'Hardware bundle mismatch: {name}'
             assert owners.get(path) == '0/0', f'Hardware file is not root-owned: {name}'
+        nvidia_root = 'usr/share/harness-os/hardware/nvidia/'
+        nvidia = json.loads(read(nvidia_root + 'manifest.json'))
+        assert nvidia == manifest['hardware']['nvidia']
+        assert nvidia['kernel'] == Path(kernel['path']).parent.name
+        assert nvidia['arch_snapshot'] == manifest['arch_snapshot']
+        assert all(inventory.get(name) == version for name, version in nvidia['base_packages'].items())
+        assert not names & {'nvidia-utils', 'nvidia-open-lts'}, 'Optional GPU packages entered the generic image'
+        for name, expected in nvidia['files'].items():
+            assert not Path(name).is_absolute() and '..' not in Path(name).parts
+            path = nvidia_root + name
+            data = read(path)
+            assert len(data) == expected['bytes'] and hashlib.sha256(data).hexdigest() == expected['sha256'], f'NVIDIA bundle mismatch: {name}'
+            assert owners.get(path) == '0/0', f'NVIDIA file is not root-owned: {name}'
         wanted = {row.strip() for row in (source / 'packages.x86_64').read_text().splitlines() if row.strip() and not row.startswith('#')}
         assert wanted.issubset(names), f'Missing packages: {wanted - names}'
         config = read('etc/pacman.conf').decode()

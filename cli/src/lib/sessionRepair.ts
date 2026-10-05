@@ -25,6 +25,7 @@ import { copilotSessionCwd, copilotSessionForPid, findCopilotTranscript } from '
 import { hermesDbPath, listHermesHomes } from '../engines/hermes/home.js'
 import { sqlitePreflightMessage } from './sqliteAvailability.js'
 import { sqliteReadAll, type SqliteParam } from './sqliteRead.js'
+import { piSessionFolder, readPiHead } from './sessionSearch/externals/pi.js'
 
 /**
  * Clock granularity only. `ps` reports start time to the second, so a file created in the same second
@@ -560,8 +561,28 @@ export async function claudeContinuation(transcriptPath: string): Promise<Repair
 export async function findResumedTranscript(
   engine: AgentEngine,
   sessionId: string,
-  opts?: { codexHome?: string },
+  opts?: { codexHome?: string; cwd?: string },
 ): Promise<string | null> {
+  if (engine === 'pi') {
+    // Pi allocates an ID before its first reply creates the file. Look up that
+    // exact ID again at Close, including after exit, without guessing by mtime.
+    if (!opts?.cwd || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,126}[A-Za-z0-9]$/.test(sessionId)
+      || sessionId.endsWith('.jsonl')) throw new Error('The Pi conversation location is unavailable.')
+    const directory = join(env.PI_HOME, 'agent', 'sessions', piSessionFolder(opts.cwd))
+    let files: string[]
+    try { files = await readdir(directory) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw error // An unreadable store is not an unwritten conversation.
+    }
+    const matches: string[] = []
+    for (const file of files.filter(file => file.endsWith(`_${sessionId}.jsonl`))) {
+      const head = await readPiHead(join(directory, file))
+      if (!head || typeof head === 'symbol') throw new Error('The Pi conversation file could not be read.')
+      if (head.sessionId === sessionId && await sameDir(head.cwd, opts.cwd)) matches.push(file)
+    }
+    if (matches.length > 1) throw new Error('More than one file matches this Pi conversation.')
+    return matches.length ? join(directory, matches[0]) : null
+  }
   if (!/^[0-9a-f-]{16,}$/i.test(sessionId)) return null
   if (engine === 'codex') return resolveCodexRollout(sessionId, join(opts?.codexHome || env.CODEX_HOME, 'sessions'))
   if (engine !== 'claude') return null

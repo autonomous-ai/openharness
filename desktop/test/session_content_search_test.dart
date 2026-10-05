@@ -36,7 +36,7 @@ SessionContentHit hit(
 
 /// A daemon that answers only `session_search`, from [answers] by query.
 class SearchConnection extends WsConn {
-  SearchConnection(this.answers)
+  SearchConnection(this.answers, {this.replies = const []})
     : super(
         wsBaseUrl: 'ws://fixture.invalid',
         autonomousEnv: 'test',
@@ -48,6 +48,7 @@ class SearchConnection extends WsConn {
       );
 
   final Map<String, List<Map<String, dynamic>>> answers;
+  final List<Map<String, dynamic>> replies;
   final asked = <String>[];
 
   @override
@@ -59,6 +60,9 @@ class SearchConnection extends WsConn {
     if (type != 'session_search') return {'error': 'UNSUPPORTED'};
     final query = payload['query'] as String;
     asked.add(query);
+    if (replies.isNotEmpty) {
+      return replies[(asked.length - 1).clamp(0, replies.length - 1)];
+    }
     return {'hits': answers[query] ?? const [], 'indexed': 3, 'pending': 0};
   }
 }

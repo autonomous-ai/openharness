@@ -9710,23 +9710,41 @@ class AppNotifier extends ChangeNotifier {
     int limit = 30,
   }) async {
     if (!searchableMachineIds.contains(machineId)) return null;
+    final elapsed = Stopwatch()..start();
+    const budget = Duration(seconds: 4);
+    List<SessionContentHit>? hits;
     try {
-      final reply = await _conn(machineId).request(
-        'session_search',
-        payload: {
-          'query': query,
-          'limit': limit,
-          if (when != null) ...{
-            'from': when.from.millisecondsSinceEpoch,
-            'to': when.to.millisecondsSinceEpoch,
+      // Discovery is asynchronous. An unfinished index is not a final empty
+      // answer; ask again briefly, within the same budget as one slow request.
+      for (var attempt = 0; attempt < 20; attempt++) {
+        if (_disposed || !searchableMachineIds.contains(machineId)) return hits;
+        final remaining = budget - elapsed.elapsed;
+        if (remaining <= Duration.zero) return hits;
+        final reply = await _conn(machineId).request(
+          'session_search',
+          payload: {
+            'query': query,
+            'limit': limit,
+            if (when != null) ...{
+              'from': when.from.millisecondsSinceEpoch,
+              'to': when.to.millisecondsSinceEpoch,
+            },
           },
-        },
-        timeout: const Duration(seconds: 4),
-      );
-      if (reply['error'] != null) return null;
-      return SessionContentHit.listFromReply(machineId, reply);
+          timeout: remaining,
+        );
+        if (reply['error'] != null) return hits;
+        hits = SessionContentHit.listFromReply(machineId, reply);
+        // Older daemons omit ready; retain their single-request behavior.
+        if (reply['ready'] != false || reply['discoveryError'] == true)
+          return hits;
+        if (attempt == 19 ||
+            budget - elapsed.elapsed < const Duration(milliseconds: 200))
+          return hits;
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      return hits;
     } catch (_) {
-      return null;
+      return hits;
     }
   }
 
@@ -9738,12 +9756,17 @@ class AppNotifier extends ChangeNotifier {
     String machineId,
     String sessionId, {
     int? beforeTurn,
+    int? maxChars,
   }) async {
     if (!searchableMachineIds.contains(machineId)) return null;
     try {
       final reply = await _conn(machineId).request(
         'session_tail',
-        payload: {'sessionId': sessionId, 'beforeTurn': ?beforeTurn},
+        payload: {
+          'sessionId': sessionId,
+          'beforeTurn': ?beforeTurn,
+          'maxChars': ?maxChars,
+        },
         timeout: const Duration(seconds: 4),
       );
       if (reply['error'] != null) return null;
@@ -10830,12 +10853,12 @@ class AppNotifier extends ChangeNotifier {
   (String, String)? _touchedFocus;
 
   /// Tell a harness's own daemon that a person just opened or focused it, so
-  /// its `lastOpenedAt` moves and with it "last used" order in EVERY client
+  /// its `lastOpenedAt` records the visit in every client
   /// (`agent_update {agentId, opened: true}`, sealed like any agent_update).
   ///
   /// Fire-and-forget. Nothing waits on it and nothing is said when it fails:
-  /// an older daemon answers MISSING_UPDATE and the list simply keeps sorting
-  /// by activity; a socket that is down loses one stamp. Never dials a socket
+  /// an older daemon answers MISSING_UPDATE; a socket that is down loses one
+  /// stamp. Conversation recency is independent of this. Never dials a socket
   /// for it, and never for a view-only shared harness — its owner's order is
   /// not this window's to move.
   void touchAgent(String machineId, String agentId) {
@@ -10875,8 +10898,7 @@ class AppNotifier extends ChangeNotifier {
         timeout: const Duration(seconds: 10),
       );
       if (!_machineWorkCurrent(machine, revision)) return;
-      // The daemon's own stamp, taken now rather than on the next push, so the
-      // list this window just opened from is already in its new order. Only
+      // The daemon's own visit stamp, taken now rather than on the next push. Only
       // this one field: the reply is not a frame to rebuild the agent from.
       final returned = result['agent'];
       final raw = returned is Map && (returned['id'] ?? agentId) == agentId

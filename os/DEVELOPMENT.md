@@ -5,9 +5,11 @@ boot changes. Reflashing is a release/install test, not the intended way to try
 every interface fix. Keep the development tools on the build/test host; the
 installed OS keeps the same minimal interface.
 
-This plan was recorded on October 3, 2026. Preview 6 and its small bootstrap bundle
-and update channel are published. Native upgrades from previews 4 and 5 passed; remote-launcher
-argument tests passed but remote display/SSH interaction is still unverified.
+The USB image and the small installed-system update bundle ship separately.
+Each candidate must pass native installation and upgrade checks before publication.
+Preview 12 adds one-action updates, including mouse activation, while preserving
+running agents and terminals. Remote-launcher argument tests passed but remote
+display/SSH interaction is still unverified.
 
 ## Next release priorities
 
@@ -16,7 +18,7 @@ Keep the existing terminal, agents and optional browser. Hardware integration mu
 not introduce a desktop, control panel or extra launcher. Update checks use a
 short-lived user timer; there is no resident update process.
 
-1. Refine USB welcome, offline installation, Wi-Fi setup, trial, first conversation
+1. Refine direct USB installation, first-boot Wi-Fi setup, first conversation
    and disk unlock. Review actual screens, keyboard navigation, narrow displays,
    cancellation and recoverable errors. Keep the Naming System and text artwork
    consistent across these steps.
@@ -56,6 +58,52 @@ keys, and checks DHCP, DNS, HTTP, reconnection and non-silent audio output. Acce
 point tools are installed only inside the disposable guest, never in the ISO.
 Physical radio, backlight, speaker and microphone tests remain separate.
 
+The **Harness OS laptop input** workflow exercises both compositor configurations
+on an exact image: USB installation, then an encrypted installed session. A
+test-only uinput keyboard sends real display/keyboard brightness events. The
+packaged brightnessctl writes a synthetic panel fixture and a real kernel
+`uleds` keyboard light. The latter retains normal device permissions, so the test
+also checks access from the active graphical session. It checks a nonzero display
+floor, small-range panels, independent keyboard illumination, absent displays,
+unrelated LEDs and ordinary typing afterward. No test devices or tools enter the
+image. This establishes input routing and driver-interface behavior, not physical
+panel brightness or Apple firmware support.
+
+Display controls explicitly select the backlight class and keep a minimum value
+of one; keyboard controls select only `*::kbd_backlight` LEDs. These use the
+existing [brightnessctl options](https://github.com/Hummer12007/brightnessctl).
+No extra daemon, package, widget or screen is required.
+
+The same workflow's `probe=apple-boot` check installs a checksum-verified image
+to an encrypted 1 GiB VM. It uses private mount-namespace DMI fixtures and the
+actual `mkinitcpio -P` presets to inspect both pre-T2 SPI controller families.
+The baseline includes `applespi` but omits its host controllers; the candidate
+must include the controllers, their dependency closure and early module loading,
+while retaining existing explicit modules. Negative model fixtures check that
+USB-only Macs, T2, Apple Silicon and other PCs are unaffected. Finally it removes
+the fixtures, regenerates the generic initramfs and verifies graphical disk
+unlock and typing in hn after reboot. Logs, module lists and image hashes are
+retained; this is preparation for physical Mac tests, not proof of Apple input.
+
+The small `20-harness-apple-keyboard.conf` mkinitcpio drop-in uses the model and
+controller mapping documented by [Linux KEYBOARD_APPLESPI](https://github.com/torvalds/linux/blob/master/drivers/input/keyboard/Kconfig).
+It adds the existing in-tree drivers during installation and subsequent initramfs
+rebuilds. Do not replace them with the obsolete macbook12 SPI DKMS driver.
+
+`checks=browser` with an `image_run_id` exercises the installed terminal/browser
+session in BIOS/plain and UEFI/encrypted VMs. It records and applies only the
+candidate `hn-browser` script and labwc configuration over the checksum-verified
+image. The observer checks actual Wayland window states, local-page rendering,
+keyboard input destinations, repeated Super+b switching, an explicit URL request,
+and browser close/reopen while the same terminal process remains alive. The host's
+`wlrctl` binary is copied to the disposable guest's `/tmp`; it is not added to the
+image. Every candidate and observer hash is retained with screenshots and input
+logs. These focused checks do not replace a changed image's release acceptance.
+
+Boot readiness is recorded before first-use Wi-Fi and model conversations. Keep
+password wait, diagnostic login, onboarding, and active model latency separate
+when reporting startup. Native VM timings do not establish laptop power-on times.
+
 The **Harness OS optional local AI assessment** workflow reuses an exact image
 artifact and installs it to an encrypted disposable disk. Its two independent
 checks add packages only inside their guests:
@@ -90,6 +138,36 @@ python3 os/tests/local_ai_vm.py --iso os/dist/IMAGE.iso --probe local-ai
 python3 os/tests/local_ai_vm.py --iso os/dist/IMAGE.iso --probe nvidia
 ```
 
+The **Harness OS installed footprint assessment** workflow reuses a checksum-verified
+published image in fresh encrypted 1 GiB and 4 GiB Nehalem VMs. It samples the
+default OpenCode workspace, stops the disposable agent to measure the terminal,
+then renders a local Chromium page. Each state settles for 20 seconds before ten
+samples at two-second intervals. Receipts retain MemAvailable-based system usage,
+swap, interval CPU, process PSS/RSS, package metadata and screenshots. Actual
+graphical keyboard checks run after agent shutdown and return from the browser.
+The background update timer is stopped during sampling and restarted afterward.
+
+Dispatch `os-footprint.yml` with `image_run_id`, or use a native x86 KVM host:
+
+```sh
+python3 os/tests/footprint_vm.py --iso os/dist/IMAGE.iso --memory-mib 1024
+python3 os/tests/footprint_vm.py --iso os/dist/IMAGE.iso --memory-mib 4096
+```
+
+[Preview 10 results](https://github.com/autonomous-ai/openharness/actions/runs/37212080839)
+are summarized in the [footprint table](README.md#measured-preview-footprint).
+The two runs passed; test source was `f00ab7429584c982ed7a1b5a23ad82f3d4de579f`.
+Terminal-only median CPU was about 0.75%; the observer and diagnostic login remain
+included. This is one ordered sequence per VM with a software-rendered display,
+not a randomized comparison, physical hardware benchmark or model throughput test.
+
+The inventory records 405 packages. Its largest logical sizes belong to Chromium
+(422 MiB), OpenCode (195 MiB), LLVM (165 MiB), the LTS kernel (156 MiB), and device
+firmware. The installed USB boot/recovery tools examined total about 10.84 MiB
+logical size; that is not a demonstrated saving. Package sizes are uncompressed,
+and missing metadata remains unknown. Retain hardware support and recovery tools
+until a candidate removal has dependency, actual disk-saving and recovery evidence.
+
 The **Harness OS runtime memory assessment** workflow compares Node flags in one
 installed 1 GiB VM. It alternates two default and two candidate rounds, samples
 RSS/PSS and local status latency with four persistent terminal streams, records
@@ -104,6 +182,67 @@ were 1.19–1.25 ms. Memory drifted across this short interleaved run, so it doe
 establish a precise causal difference. It provides no evidence for a saving from
 these flags; the shipped defaults remain unchanged. Retain raw per-round data
 and use representative long-running agent work before adopting a memory limit.
+
+The **Harness OS compression assessment** workflow compares Zstandard levels 6,
+15, and 19 on the same checksum-verified ISO filesystem. It rebuilds level 6 with
+the same runner tools as the alternatives, then measures three extractions per
+level using the installer's 64 MiB SquashFS cache. Receipts include compression
+time and peak process memory, payload bytes, extraction timings, tool versions,
+and a filesystem manifest. Every extraction must preserve file hashes, ownership,
+permissions, timestamps, symlink targets, hardlink groups, device numbers and
+extended attributes, including capabilities. A small native roundtrip checks the
+verifier before the full image download.
+
+Ubuntu's 4.6.1 extractor uses explicit 32 MiB data and fragment queues; these
+match the queue allocation of `-mem 64M` in newer SquashFS tools. The installed
+OS keeps its existing extractor and command.
+
+The default assessment uses an unconstrained Linux host with a warm/uncontrolled
+page cache. It does not measure a complete installation or low-memory boot.
+Enable `native_comparison` to repack the same source ISO at levels 6 and 19,
+preserving its boot layout and regenerating its payload checksum. It runs three
+alternating BIOS/plain installations per level and one UEFI/encrypted installation
+per level. Every trial uses a fresh 1 GiB KVM guest, Nehalem CPU profile, private
+disk and USB overlay, and disconnected network. It verifies the actual media
+checksum, saves a trial project, installs offline, reboots, checks that project
+and sends real keyboard input through the graphical terminal. Guest caches are
+dropped after the integrity read and before installation. Guest memory/swap is
+sampled every 250 ms; install, live boot and installed boot measurements remain
+separate. Retain every trial, including failures.
+
+The native comparison still uses an unthrottled virtual USB and uncontrolled host
+cache; it cannot establish physical USB throughput or laptop boot time. It calls
+no models and does not replace the full release journey. Run either assessment
+through Actions with the existing image's `image_run_id` and independently trusted
+`iso_sha256`. It retains receipts/screenshots, discards candidate images and changes
+no release defaults. Adopting a candidate requires a production image build and
+the normal plain/encrypted installation, agent trial and recovery checks.
+
+The [October 4 preview 7 comparison](https://github.com/autonomous-ai/openharness/actions/runs/37177303376)
+verified 87,985 paths and 1,035 hardlink groups through all nine extractions. All
+eight native installations passed. Level 19 saved 80.14 MiB (5.30%) versus the
+same-tool level-6 payload. Full BIOS install medians were 31.937/32.684 seconds;
+the encrypted pair was 56.353/57.787 seconds, including final sync and unmount.
+Preview 8 adopts level 19 for the USB only; installed Btrfs compression is unchanged.
+
+Both encrypted trials fell below 128 MiB available RAM (69.20/94.07 MiB minimum),
+with 105.34/91.69 MiB peak swap. That baseline pressure is not a regression caused
+by the new compression in these samples, nor proof of a memory improvement.
+Per-command timing was not captured in that assessment. A later full preview 8
+journey ([37181312268](https://github.com/autonomous-ai/openharness/actions/runs/37181312268))
+identified the failure directly: during encryption after an agent trial, the
+kernel killed `cryptsetup luksFormat` at 485,232 KiB anonymous RSS. The 1 GiB guest's
+RAM-backed swap was almost full. The plain and separate hardware installations passed.
+
+The installer now limits PBKDF memory to half of available RAM, leaves at least
+128 MiB for the live session, and retains cryptsetup's 1 GiB ceiling. It refuses
+to erase the disk if the resulting budget is below 64 MiB. Cipher, key size,
+Argon2id and the normal time/iteration benchmark remain intact; lower-memory
+machines can get a lower memory cost. Existing encrypted disks are never changed.
+This follows cryptsetup's supported [memory budgeting](https://gitlab.com/cryptsetup/cryptsetup/-/blob/main/man/common_options.adoc)
+and accounts for its [swap-dependent free-memory check](https://gitlab.com/cryptsetup/cryptsetup/-/blob/main/lib/utils_pbkdf.c).
+The native journey records actual keyslot costs and checks unlock/recovery.
+Shared-host VMs do not establish physical 1 GiB hardware reliability.
 
 ## The feedback loop
 
@@ -132,8 +271,11 @@ a clean USB install to verify that upgrades have not hidden an installation bug.
   UEFI/encrypted install, boot, wrong-password retry, update and recovery checks.
   It retains screenshots, boot-stage timestamps, logs and source/image identity.
 - `image_run_id` tests an existing image without rebuilding it. `memory_mib=1024`
-  exercises a constrained machine; `memory_mib=4096` and `live_transport=usb`
-  exercise automatic copy-to-RAM. `workloads=true` or `dsh=true` runs the relevant
+  exercises a constrained machine; `memory_mib=6144` and `live_transport=usb`
+  require automatic copy-to-RAM. The USB test verifies its actual payload mount
+  and refuses the boot USB as an installation target in both modes. The 4 GiB
+  check permits either mode: Archiso copies only when available memory exceeds
+  the compressed payload plus 2 GiB. `workloads=true` or `dsh=true` runs the relevant
   real-agent exercises. See the [measured evidence](README.md#real-programmer-exercises).
 - `workload_seed_run_id` preserves generated projects and reruns their acceptance
   checks without another model turn. Enable `workloads=true` as well only when
@@ -165,31 +307,36 @@ OS windows use hn's local session storage (`HARNESS_TUI_DESK=off`), so their
 layout and pane references survive reconnects without signing into the cloud.
 This setting is confined to the OS launcher; ordinary hn installs are unchanged.
 
-`Update ready · Super+U` appears in the bottom bar. Super+U opens the keyboard
-update action (Ctrl+B, Shift+U remains an alias). Enter applies the prepared
-runtime through a transient user service. An hn-only change reconnects just the
-screen; a CLI change also restarts its supervised service. Failure restores the
-previous selection. Restore previous version holds the rejected versions until
-a newer release arrives. Ordinary macOS/Linux hn shortcuts are unchanged.
+The installed system keeps hn's standard status bar. Super+u records an update
+request and selects the Updates terminal; the request starts checking/applying
+without another key. `harness updates` opens the same screen for inspection,
+with a clickable **Update** button. An hn-only change reconnects the screen;
+a CLI change also restarts its supervised service. Failure restores the previous
+selection. `harness updates rollback` restores the previous runtime and holds
+rejected versions until a newer release arrives. Ordinary macOS/Linux hn is unchanged.
 
-This fast track is independent of OS releases. The system channel is checked
-once daily; S in Updates installs the published OS package with an administrator
-password. Root independently fetches the official release metadata, verifies a
-private download, makes a checkpoint, updates any required Arch base first, and
-rebuilds the encrypted boot image. System packages never apply or reboot on a
-timer. After an OS package changes, fast updates wait for a reboot. Publishing an
-ISO is not a requirement for a TUI update. The public preview
-4 ISO predates this feature and needs the small integration bundle from the
-validated preview 5 release; it does not need to be flashed again.
+The system channel is checked daily. The same action applies an available OS
+package first, using `sudo -n harness upgrade`. A narrowly scoped sudoers rule
+permits only that exact command and `harness rollback`, with no extra arguments.
+Root independently fetches official metadata, verifies a private download,
+creates a checkpoint, updates any required Arch base and rebuilds initramfs.
+A local bundle, custom feed or arbitrary administrator command still requires
+normal authentication. No blanket passwordless sudo is installed.
 
-`development_update=true` builds a private, deliberately unpublished `999.0.1`
-hn/CLI fixture. The installed VM's actual timer stages it, then real Super+U and
-Enter keys apply hn and CLI independently. Acceptance checks the same terminal
-process, a live OpenCode process, keyboard input, rollback and an unchanged boot
-ID. Those fixture binaries are never included in the package or public channel.
-The same installed VM restores the public package and upgrades through a private
-loopback OS channel, rejects a corrupt asset, keeps its running agent alive, and
-reboots the rebuilt encrypted image. This does not depend on a public test release.
+A system update leaves the current processes alone. **Done** is selected by
+default; **Restart** is a separate deliberate action. The user's update request
+is retained with the new base identity and original boot ID. After a real reboot,
+the timer prepares compatible hn/CLI releases against that base and completes
+that one requested update. Failures require attention, not repeated activation.
+Ordinary later checks download without activating. Publishing an ISO remains
+independent from frequent TUI releases.
+
+`development_update=true` builds private, unpublished `999.0.1` hn/CLI releases.
+The native fixture exercises timer staging, Super+u alone, a real mouse click on
+Update, failed activation/rollback, live terminal and OpenCode PIDs, keyboard input
+and boot identity. The same installed VM tests the OS channel, cleared sudo
+credentials, a corrupt asset and the encrypted reboot. Fixture binaries and
+loopback feeds never enter a published package.
 
 The OS feed is `os-preview-updates/metadata.json` in the repository's release
 assets. It names the exact package and manifest, their byte sizes and SHA-256
@@ -270,6 +417,47 @@ change, explicitly approved for all platforms. Publishing the ISO did not releas
 these through the general TUI channel. The small updater adds no changes to `tui/`
 or `cli/`.
 
+## Installation and first-use onboarding
+
+The USB starts `harness-install.service`: foot runs the offline installer directly.
+The agent daemon, hn screen, idle lock and update timer do not start on live media.
+The compositor has a small installation-only key configuration. A failed graphical
+startup opens the same installer on the console. Cancelling resets the form;
+success keeps Shut down visible. A failed shutdown never restarts installation.
+There is no trial choice, network prerequisite, dock or agent session on the USB.
+
+The installed system starts the usual hn screen. On first use, `hn-os welcome`
+opens the existing full-page Wi-Fi form when disconnected. Working Ethernet or a
+saved connection skips that form; connection success advances automatically to
+OpenCode on the left and two terminal panes on the right. Later launches restore
+work. The standard hn footer and shared Ctrl+b shortcuts remain intact.
+
+OpenCode reads the packaged guide through its global
+`~/.config/opencode/AGENTS.md`, linked to `/usr/share/harness-os/guide.md`.
+The account skeleton supplies this link; Start OpenCode also adds it on older
+installations when no personal instructions file exists. Existing instructions
+are never replaced. OpenCode 2 accepts the legacy JSON `instructions` field but
+does not load it; see its [instructions reference](https://opencode.ai/v2/docs/instructions/).
+The guide
+points to the exact shipped `tui/README.md`, with a source revision, and tells the
+agent to inspect current bindings before answering. Model/provider selection is
+left to upstream. The package-owned OpenCode executable is updated by full system
+updates; new accounts disable its self-updater through the global config.
+Existing user preferences are preserved. No download blocks the first conversation.
+Independent background agent updates remain future work and must preserve the
+packaged fallback, validate provenance, avoid downgrades, and activate on a later
+launch rather than replacing an active executable.
+
+The previous trial-file transfer helper remains compatible with explicit installer
+commands from older sessions. It does not create a trial path in the new USB UX.
+
+Validation covers boot directly into the installer with networking disabled,
+masked keyboard entry, cancellation and errors, graphical fallback, plain and
+encrypted installation, installed Wi-Fi and Ethernet skip, the three-pane layout,
+real default-agent conversation, browser use, updates and recovery. Image manifests
+identify this journey with `install-first`; historical trial images retain their
+own acceptance checks. Native screenshots are required before publication.
+
 ## Optional remote VM controls
 
 `run-vm.py --vnc-port 5901 --ssh-port 2222 --remote-host me@build-host
@@ -286,6 +474,35 @@ by blindly copying its file.
 `hn-os update` currently upgrades Arch packages and keeps a recovery checkpoint;
 it does **not** update the pinned Harness runtime. Preview 4's ISO does not contain
 the small updater; install its separately validated development bundle to add it.
+
+## Native ARM runtime development
+
+`os/tools/build-runtime.sh` builds the same CLI and static hn on native x86-64 or
+aarch64 Linux. Rust's matching `*-unknown-linux-musl` target and native Node are
+required. The output records the clean source commit, release ancestry, CPU/ELF
+architecture, versions and file hashes. Use a fresh `HARNESS_OS_RUNTIME_DIR` to
+retain another build; the default is `os/work/runtime`.
+
+The **Harness OS native runtimes** workflow builds both architectures on separate
+native Linux runners. It runs the existing complete native terminal fixture set,
+then starts the exact bundled daemon with an isolated home and no account. Its
+real hn panes accept PTY input, run upstream-default OpenCode to create a Python
+project, and preserve the shell process/project through daemon restart and screen
+reattachment. Independent checks execute the generated code. Agent packages and
+test dependencies stay on disposable runners; their exact lockfile accompanies
+the receipt.
+
+This establishes a userspace test path, not an ARM operating-system release.
+The PC package builder, installer and public updater still reject ARM payloads.
+Raspberry Pi board boot and Apple Silicon's Asahi kernel, firmware, partitioning,
+graphics and audio integration remain required. An ARM Ubuntu runner does not
+establish compatibility with either device, or with a different distribution's
+packages. Retain that boundary when reporting the workflow's results.
+The reference tmux uses the OS's checksum-pinned 3.7c source on both runners.
+The receipt records the actual kernel page size and hn's ELF load alignment.
+An aligned ARM executable still needs execution on a 16 KiB-page kernel before
+claiming Apple Silicon userspace compatibility; see
+[Asahi's page-size requirements](https://asahilinux.org/docs/sw/broken-software/).
 
 ## Mac support targets
 
@@ -335,7 +552,7 @@ or network addresses. No additional daemon or settings application is needed.
 | Raspberry Pi | Evaluate a maintained ARM64 board kernel, firmware and boot image with the same Harness session | Separate board image required; not covered by the PC ISO or an ARM VM |
 | Native Harness app/TUI on macOS | Existing arm64 and x64 app/runtime releases | Separate from installing the Linux OS |
 
-The initial Intel scope excludes 32-bit-only CPUs/EFI. The bundled OpenCode trial
+The initial Intel scope excludes 32-bit-only CPUs/EFI. Bundled OpenCode
 also requires SSE4.2. October 3 CPU checks used the unchanged preview 4 ISO under
 QEMU TCG with `-cpu core2duo`: a Core 2 Duo T7700 instruction set with SSSE3,
 without SSE4.1, SSE4.2 or AVX. The later check used 4 GiB of guest RAM and installed
@@ -354,10 +571,11 @@ These checks establish specific CPU startup limits, not physical Mac support,
 authenticated agent turns or full browser/media/GPU compatibility. They do not
 replace preview 6 installation testing or show that every future vendor binary
 will retain the same baseline. Codex and pi still need real model-turn validation
-on this CPU before being recommended as its trial path.
+on this CPU before being recommended as its first-agent path.
 
-The OS Try action detects the OpenCode limitation before Wi-Fi setup and explains
-it, instead of launching a binary that immediately fails with an illegal instruction.
+The agent launcher detects the OpenCode limitation and explains it instead of
+launching a binary that immediately fails with an illegal instruction. This does
+not make Core 2 a supported bundled-agent target.
 [Bun's executable targets](https://bun.com/docs/bundler/executables) document the
 SSE4.2 baseline used by its compiled runtime.
 

@@ -164,7 +164,8 @@ const dial = { said: {}, replies: [], messages: [] }
 const counts = {}
 const welcomeTest = process.env.MOCK_WELCOME === '1'
 if (welcomeTest && !(port >= 19780 && port <= 19789)) throw new Error('unsafe welcome test port')
-const welcome = { history: 'loading', delay: 0, searches: [] }
+const welcome = { history: 'loading', delay: 0, searches: [], holdTerminals: false, pendingTerminals: 0 }
+const welcomeTerminalReplies = []
 if (welcomeTest) { agents[LOCAL] = []; agents[REMOTE] = [] }
 const windows = new Set()
 // Opt-in faults for reconnect.py. No real daemon or agent is involved.
@@ -191,7 +192,14 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET') return json(res, welcome)
     let body = ''
     req.on('data', (part) => { body += part })
-    req.on('end', () => { const update = JSON.parse(body); Object.assign(welcome, update); json(res, welcome) })
+    req.on('end', () => {
+      const { releaseTerminal, ...update } = JSON.parse(body)
+      Object.assign(welcome, update)
+      if (releaseTerminal === 'first') welcomeTerminalReplies.shift()?.()
+      if (releaseTerminal === 'last') welcomeTerminalReplies.pop()?.()
+      welcome.pendingTerminals = welcomeTerminalReplies.length
+      json(res, welcome)
+    })
     return
   }
   if (layoutTest && req.url === '/test/layout') {
@@ -489,6 +497,11 @@ wss.on('connection', (ws) => {
           const outcome = { state: 'created', agent: created }
           creationReceipts.set(receiptKey, { fingerprint, outcome, pendingChecks: payload.projectName === 'lose-reply' ? 1 : 0 })
           if (payload.projectName === 'lose-reply') return ws.terminate()
+          if (welcomeTest && welcome.holdTerminals && payload.engine === 'terminal') {
+            welcomeTerminalReplies.push(() => reply({ creationId: payload.creationId, ...outcome }))
+            welcome.pendingTerminals = welcomeTerminalReplies.length
+            return
+          }
           if (welcomeTest && welcome.delay && payload.engine !== 'terminal') return setTimeout(() => reply({ creationId: payload.creationId, ...outcome }), welcome.delay)
           return reply({ creationId: payload.creationId, ...outcome })
         }

@@ -2,9 +2,9 @@
 # Run in a fresh installed VM's hn pane after installing gcc/make on demand.
 set -euo pipefail
 REPORT_DIR="$HOME/.local/state/harness-os/development-check"
-mkdir -p "$REPORT_DIR" "$HOME/Projects/os-validation"
+mkdir -p "$REPORT_DIR" "$HOME/projects/os-validation"
 trap 'printf "%s\n" "$?" > "$REPORT_DIR/status"' EXIT
-cd "$HOME/Projects/os-validation"
+cd "$HOME/projects/os-validation"
 git init -q
 cat > main.c <<'C'
 #include <stdio.h>

@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { CommanderMirror, type CommanderFrame } from './commander.js'
 import type { LiveEvent } from './normalize.js'
-import { BODY_MAX_CHARS, RECAP_MAX_CHARS, deriveTurnSummary } from './summarize.js'
+import { BODY_MAX_CHARS, RECAP_MAX_CHARS, deriveTurnSummary } from './deviceRecap.js'
 
 let dataDir = ''
 

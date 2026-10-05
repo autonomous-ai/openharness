@@ -15,7 +15,7 @@ export type ProjectFolder = { source: 'new'; name?: string; suggested?: boolean 
 /** Where this daemon and the desktop app put the workspaces they make. A folder directly inside it is
  *  one of those; anywhere else is a folder the person chose and answers for themselves. */
 export function projectsRoot(home = homedir()): string {
-  return join(home, 'harnesses')
+  return join(home, process.env.HARNESS_OS === '1' ? 'projects' : 'harnesses')
 }
 
 export class ProjectFolderError extends Error {

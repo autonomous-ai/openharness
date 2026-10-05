@@ -157,7 +157,7 @@ def main(argv=None):
         print(f'Virtual disk: {disk} ({info["virtual-size"] / 1024 ** 3:g} GiB capacity; grows only as used)', flush=True)
         print(f'Guest: {args.memory} MiB RAM, 2 CPUs, {accel}; control: {control}', flush=True)
         if not args.installed:
-            print('Press Enter on the Harness welcome screen to install (choose /dev/vda), or T to try it.', flush=True)
+            print('The USB opens the installer. Install to the virtual disk (/dev/vda).', flush=True)
         reboot = ['python3', 'os/tools/run-vm.py', '--installed', '--directory', str(folder),
                   '--firmware', args.firmware, '--memory', str(args.memory)]
         for flag, value in [('--vnc-port', args.vnc_port), ('--ssh-port', args.ssh_port), ('--remote-host', args.remote_host)]:

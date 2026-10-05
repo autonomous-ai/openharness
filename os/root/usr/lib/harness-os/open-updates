@@ -1,4 +1,5 @@
 #!/bin/sh
 # Reuse hn's existing surface, including when the browser has focus.
 [ ! -f /etc/harness-live ] || exit 0
+harness updates request || exit
 hn select-window -t Updates 2>/dev/null || hn new-window -n Updates '/usr/bin/harness updates'

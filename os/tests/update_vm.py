@@ -82,20 +82,34 @@ def main():
         vm.login_installed(config)
         manifest = json.loads((bundle / 'package-manifest.json').read_text())
         vm.command('test "$(pacman -Q harness-os)" = ' + shlex.quote('harness-os ' + manifest['package']['version']))
-        vm.command('test -s ~/Projects/update-survivor/keep.txt')
+        vm.command('test -s ~/projects/update-survivor/keep.txt')
         receipt['keyboard'] = check_graphical_keyboard(vm, 'updated')
+        vm.command('hn show-options -gv status-right > /tmp/updated-footer.txt')
+        bar = vm.read_file('/tmp/updated-footer.txt').decode()
+        assert 'local_machine' in bar and '%H:%M' in bar and '@harness-update' not in bar, bar
+        vm.keys('ctrl', 'b')
+        vm.keys('c')
+        time.sleep(1)
+        vm.type_probe('echo updated-tab-ready')
+        vm.keys('ret')
+        vm.command('for n in $(seq 1 20); do hn capture-pane -p | grep -qx updated-tab-ready && exit 0; sleep .5; done; exit 1', timeout=15)
+        vm.screenshot('updated-standard-footer-terminal-tab')
+        vm.keys('ctrl', 'd')
+        receipt['checks'].append('A rebooted upgrade preserves hn’s standard footer and Ctrl+b, c opens a real terminal tab')
         receipt['checks'].append('Updated encrypted machine reboots to hn, accepts physical-keyboard input and retains the project')
         if args.fast_fixture:
             vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
             from fast_update_vm import exercise
             receipt['fast_updates'] = exercise(vm, args.fast_fixture, url)
             from release_update_vm import exercise as release_exercise
-            receipt['system_channel'] = release_exercise(vm, manifest)
+            receipt['system_channel'] = release_exercise(vm, manifest, config)
             vm.command('sync')
             vm.stop()
             vm.start(live=False)
             vm.login_installed(config)
-            vm.command('test ! -e /run/harness-os-restart-required; test -s ~/Projects/update-survivor/keep.txt')
+            vm.command('test ! -e /run/harness-os-restart-required; test -s ~/projects/update-survivor/keep.txt')
+            from release_update_vm import finish_after_reboot
+            receipt['system_channel']['checks'].append(finish_after_reboot(vm))
             receipt['system_channel']['reboot_keyboard'] = check_graphical_keyboard(vm, 'system-channel-reboot')
             receipt['checks'].append('The OS-channel update boots its rebuilt encrypted image and accepts keyboard input')
         receipt['status'] = 'passed'
@@ -104,7 +118,12 @@ def main():
         receipt['error'] = str(error)
         try:
             vm.screenshot('failure')
-            output, _ = vm.command('sudo journalctl _UID=1000 --no-pager; '
+            # Collect diagnostics after the failed assertion. The actual update
+            # test cleared credentials; never block its error path on a prompt.
+            vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+            output, _ = vm.command('sudo -n journalctl _UID=1000 --no-pager; '
+                'sudo -n cat /var/lib/harness-os/runtime-updates/*/receipt.json; '
+                'tail -n 100 /var/log/pacman.log; hn capture-pane -p -S -200 -t Updates; '
                 'cat ~/.local/state/harness-os/updates/*.json; hn list-windows -a; hn list-panes -a; '
                 'ps -u 1000 -o pid,ppid,args --width 200', timeout=30, check=False)
             (folder / 'update-diagnostics.log').write_text(output)

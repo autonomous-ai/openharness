@@ -30,11 +30,11 @@ on:
         required: false
         type: string
       memory_mib:
-        description: 'VM RAM; 1024 exercises constrained machines, 4096 enables automatic USB copy-to-RAM'
+        description: 'VM RAM; 1024 exercises constrained machines, 6144 requires USB copy-to-RAM'
         required: false
         default: '2048'
         type: choice
-        options: ['2048', '1024', '4096']
+        options: ['2048', '1024', '4096', '6144']
       live_transport:
         description: 'Boot the ISO as a virtual optical disc or a writable USB with a private overlay'
         required: false
@@ -47,11 +47,11 @@ on:
         default: false
         type: boolean
       checks:
-        description: 'Image journey, lock/suspend, Wi-Fi/audio essentials, or offline hardware installation; image_run_id reuses an image'
+        description: 'Image journey, browser focus, lock/suspend, Wi-Fi/audio, or offline hardware installation; image_run_id reuses an image'
         required: false
         default: image
         type: choice
-        options: [image, session, essentials, hardware]
+        options: [image, browser, session, essentials, hardware]
   push:
     branches: ['os/**']
     paths: ['os/**', 'tui/**', 'cli/**', '.github/workflows/os.yml']
@@ -61,7 +61,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'session' && 'session' || inputs.checks == 'essentials' && 'essentials' || inputs.checks == 'hardware' && 'hardware' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
+  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'browser' && 'browser' || inputs.checks == 'session' && 'session' || inputs.checks == 'essentials' && 'essentials' || inputs.checks == 'hardware' && 'hardware' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
   cancel-in-progress: false
 
 jobs:
@@ -71,6 +71,8 @@ jobs:
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - name: Record start and capacity
         run: |
           date -u
@@ -93,10 +95,17 @@ jobs:
           workspaces: tui
           shared-key: tui-x86_64-unknown-linux-musl
           cache-bin: false
-      - name: Build Harness from the exact OS source
+      - name: Prepare native build tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y musl-tools tmux
+          sudo apt-get install -y musl-tools tmux cryptsetup-bin btrfs-progs
+      - name: Check encrypted cleanup with real device readers and stalled udev
+        run: |
+          # Fail early on real cleanup semantics, before compressing an ISO.
+          # The fixture owns a temporary file/loop device, never a host disk.
+          sudo python3 os/tests/installer-cleanup-native.py --output os/test-results/cleanup-host
+      - name: Build Harness from the exact OS source
+        run: |
           make -C os runtime
       - name: Validate hn session behavior and native terminal lifecycle
         run: |
@@ -135,6 +144,7 @@ jobs:
           name: programmer-os-build-diagnostics
           path: |
             .harness/validation/
+            os/test-results/cleanup-host/receipt.json
             os/work/profile/profiledef.sh
             os/work/profile/pacman.conf
             os/work/archiso/x86_64/airootfs/var/log/pacman.log
@@ -172,8 +182,11 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
           if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
+      - name: Install the disposable browser observer
+        if: ${{ inputs.checks == 'browser' }}
+        run: sudo apt-get install -y wlrctl
       - name: Check the focused session test and workflow
-        if: ${{ inputs.checks == 'session' }}
+        if: ${{ inputs.checks == 'session' || inputs.checks == 'browser' }}
         run: |
           make -C os check
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
@@ -186,15 +199,28 @@ jobs:
           run-id: ${{ inputs.workload_seed_run_id }}
           github-token: ${{ github.token }}
       - name: Boot, operate, install and reboot the real image
-        if: ${{ inputs.checks != 'session' }}
+        if: ${{ inputs.checks != 'session' && inputs.checks != 'browser' }}
         env:
           OS_WORKLOAD_SOURCE_RUN: ${{ inputs.workload_seed_run_id }}
           OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
           OS_LIVE_TRANSPORT: ${{ inputs.live_transport || 'cdrom' }}
-        run: python3 os/tests/vm.py --iso os/dist/*.iso --memory "$OS_MEMORY_MIB" --live-transport "$OS_LIVE_TRANSPORT" --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ matrix.cpu }} ${{ (inputs.workloads || inputs.workload_seed_run_id != '') && matrix.firmware == 'bios' && '--workloads' || '' }} ${{ inputs.dsh && matrix.firmware == 'bios' && '--dsh' || '' }} ${{ inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-seed os/work/workload-seed' || '' }} ${{ inputs.workloads && inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-repair-game' || '' }}
+        run: |
+          live_mode=()
+          if [[ "$OS_LIVE_TRANSPORT" == usb ]]; then
+            case "$OS_MEMORY_MIB" in
+              1024) live_mode=(--expect-live-mode media) ;;
+              6144) live_mode=(--expect-live-mode ram) ;;
+            esac
+          fi
+          python3 os/tests/vm.py --iso os/dist/*.iso --memory "$OS_MEMORY_MIB" --live-transport "$OS_LIVE_TRANSPORT" "${live_mode[@]}" --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ matrix.cpu }} ${{ (inputs.workloads || inputs.workload_seed_run_id != '') && matrix.firmware == 'bios' && '--workloads' || '' }} ${{ inputs.dsh && matrix.firmware == 'bios' && '--dsh' || '' }} ${{ inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-seed os/work/workload-seed' || '' }} ${{ inputs.workloads && inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-repair-game' || '' }}
       - name: Exercise password lock and actual suspend/resume
         if: ${{ inputs.checks == 'session' }}
         run: python3 os/tests/session_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --session-file os/root/usr/lib/harness-os/session --theme-directory os/root/usr/share/plymouth/themes/harness
+      - name: Exercise installed browser focus and physical keyboard routing
+        if: ${{ inputs.checks == 'browser' }}
+        env:
+          OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
+        run: python3 os/tests/browser_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --memory-mib "$OS_MEMORY_MIB" --wlrctl /usr/bin/wlrctl --browser-script os/root/usr/bin/hn-browser --compositor-config os/root/usr/share/harness-os/labwc/rc.xml
       - name: Show machine failure diagnostics
         if: failure()
         run: |
@@ -248,6 +274,39 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+  nvidia:
+    needs: image
+    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && (needs.image.result == 'success' || inputs.checks == 'hardware' && inputs.image_run_id != '') && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Check the fixture and install VM tools
+        run: |
+          python3 -m py_compile os/tests/nvidia_install_guest.py os/tests/nvidia_install_vm.py
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+      - name: Install the selected NVIDIA driver offline and reboot encrypted
+        run: python3 os/tests/nvidia_install_vm.py --iso os/dist/*.iso
+      - name: Retain exact-image NVIDIA installation evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-nvidia-install
+          path: |
+            os/test-results/nvidia-install/
+            !os/test-results/nvidia-install/*.qcow2
+            !os/test-results/nvidia-install/OVMF_VARS.fd
+          retention-days: 14
+          compression-level: 0
+
   essentials:
     needs: image
     if: ${{ always() && inputs.checks == 'essentials' && !inputs.publish_run_id && !inputs.development_update && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}
@@ -291,6 +350,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - name: Check package and updater contracts
         env:
           OS_IMAGE_RUN: ${{ inputs.image_run_id }}

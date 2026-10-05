@@ -450,7 +450,7 @@ fn menu_position(app: &App, args: &crate::cmd::Args, target: Option<(usize, u64)
 
 
 pub fn is_command_name(name: &str) -> bool {
-    COMMANDS.iter().any(|(full, alias, _)| *full == name || *alias == name)
+    name == "os-action" || COMMANDS.iter().any(|(full, alias, _)| *full == name || *alias == name)
         || matches!(name, "display" | "send" | "neww" | "splitw" | "killp" | "killw" | "selectw" | "selectp" | "lsw" | "lsp" | "ls" | "capturep" | "showw" | "show" | "set" | "bind" | "unbind" | "source" | "run" | "if"
             | "run-shell" | "if-shell" | "wait-for" | "wait" | "pipe-pane" | "pipep" | "set-hook" | "show-hooks" | "resize-window" | "resizew" | "kill-session" | "send-prefix" | "display-menu" | "menu"
             | "set-option" | "set-window-option" | "setw" | "bind-key" | "unbind-key" | "source-file" | "kill-server" | "detach-client" | "detach"
@@ -1204,7 +1204,7 @@ fn rest(words: &Words) -> String {
 
 /// hn's own commands, and the tmux names hn gives its own meaning (checked before tmux's table).
 pub fn hn_owned(name: &str) -> bool {
-    COMMANDS.iter().any(|(full, alias, _)| (*full == name || *alias == name) && crate::cmd::find(full).map(|e| e.name != *full).unwrap_or(true))
+    name == "os-action" || COMMANDS.iter().any(|(full, alias, _)| (*full == name || *alias == name) && crate::cmd::find(full).map(|e| e.name != *full).unwrap_or(true))
 }
 
 /// A command that names another session (`-t work:2`, `has-session -t work`, a pane's `%12`)
@@ -1815,6 +1815,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
     let client_only = matches!(command, "switch-client" | "detach-client" | "refresh-client" | "suspend-client" | "lock-client" | "display-panes" | "command-prompt" | "confirm-before" | "display-menu" | "display-popup");
     if app.headless && client_only && !(command == "detach-client" && opt(words, "-s").is_some()) { return app.error("no current client") }
     match command {
+        "os-action" => crate::os_welcome::command(app, &words[1..]),
         "new-window" => {
             // tmux's new-window [-abdkPS] [-c dir] [-n name] [-t index] [-F fmt] [command]: a
             // window with a shell, at -t's index (else the first free one); -a after the target

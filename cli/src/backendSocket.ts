@@ -1,4 +1,5 @@
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
+import { ServiceUnavailableError } from './core/serviceHost.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { readSessionGitPullRequest } from './lib/sessionGitPullRequest.js'
 import { MonitorCompletions, type MonitorActivity } from './lib/harnessMonitor.js'
@@ -24,7 +25,7 @@ import type { AutonomousDeviceService, AutonomousDeviceFrame } from './lib/auton
 
 import { WebSocket } from 'ws'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } from './lib/wsLiveness.js'
-import { stat, readFile, readdir } from 'fs/promises'
+import { stat, readdir } from 'fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'path'
 import { hostname, homedir } from 'os'
@@ -91,13 +92,15 @@ import { terminalHandoffRequest } from './lib/terminalHandoff.js'
 import { routeVoiceTask } from './lib/voiceRouter.js'
 import { tailFile } from './lib/sessions.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
-import { messagesToEvents, windowRawLines, subagentStatsFromRawLines, type SessionEvent } from './lib/normalize.js'
+import { messagesToEvents, windowRawLines, SubagentStats, type SessionEvent } from './lib/normalize.js'
+import { TranscriptPager } from './lib/transcriptPages.js'
+import { streamRecords } from './lib/transcriptTail.js'
 import { MediaPreviewError, readMediaPreviewChunk } from './lib/mediaPreview.js'
 import { ViewerForwarder } from './lib/viewerForwarder.js'
 import { InteractiveViewers } from './lib/interactiveViewer.js'
 import { OwnerCommands, OWNER_COMMAND_TYPES } from './lib/ownerCommands.js'
 import { VIEWER_DOWN_TYPES } from './lib/viewerWire.js'
-import { codexMessagesToEvents, windowCodexLines } from './engines/codex/normalizer.js'
+import { codexMessagesToEvents } from './engines/codex/normalizer.js'
 import { codexSubagentResolverFor } from './engines/codex/subagent.js'
 import { parseHostTheme, type HostTheme } from './lib/hostTheme.js'
 import { cursorMessagesToEvents, windowCursorLines } from './engines/cursor/normalizer.js'
@@ -150,6 +153,8 @@ import {
 
 // OpenCode has no per-session transcript file — its history is read from this SQLite store.
 const OPENCODE_DB = join(env.OPENCODE_DATA_DIR, 'opencode.db')
+/** History pages and line counts for the threads clients read (lib/transcriptPages.ts). */
+const transcriptPages = new TranscriptPager()
 // Kilo keeps history the same way opencode does, in its own store.
 const KILO_DB = join(env.KILO_DATA_DIR, 'kilo.db')
 const DEVIN_DB = join(env.DEVIN_HOME, 'sessions.db')
@@ -179,6 +184,9 @@ export const AGENT_OPENED_THROTTLE_MS = 3_000
 const BASE_DELAY_MS = 1_000
 const MAX_DELAY_MS = 30_000
 const QUEUE_MAX = 2_000
+/** Requests one local connection may queue before the daemon is ready (see `openRequests`). The app
+ *  sends a handful on connect; hundreds is a client looping, not a person. */
+const MAX_REQUESTS_BEFORE_READY = 256
 const DEVICE_AGENT_LIST_LIMIT = 100
 const DEVICE_AGENT_NAME_MAX_CODEPOINTS = 15
 const DEVICE_AGENT_NAME_MAX_BYTES = 39 // device project_t.name[40], including trailing NUL on-device.
@@ -398,8 +406,11 @@ async function enrichSubagentStats(events: SessionEvent[], transcriptPath: strin
     const sub = e.payload.subagent
     if (!sub?.agentId || typeof sub.totalToolUseCount === 'number') continue
     try {
-      const txt = await readFile(join(subagentsDir, `agent-${sub.agentId}.jsonl`), 'utf8')
-      const stats = subagentStatsFromRawLines(txt.split('\n'))
+      // A line at a time: a long sub-agent's transcript is never held whole to count its calls.
+      const file = join(subagentsDir, `agent-${sub.agentId}.jsonl`)
+      const totals = new SubagentStats()
+      await streamRecords(file, 0, (await stat(file)).size, (line) => { totals.push(line) }, () => true)
+      const stats = totals.result()
       sub.totalToolUseCount = stats.totalToolUseCount
       if (sub.totalDurationMs === undefined) sub.totalDurationMs = stats.totalDurationMs
       if (sub.totalTokens === undefined) sub.totalTokens = stats.totalTokens
@@ -481,6 +492,17 @@ export class BackendSocket {
   // real and must be counted once, so it is owed to the next link — not turned into a `ping`.
   private appOpenOwed = false
   private readonly downChains = new Map<string, Promise<void>>()
+  /**
+   * Requests wait here until the daemon is ready (`openRequests`), each in its connection's own order.
+   * The port answers long before start-up has wired every handler and confirmed the agents it
+   * restored; a request answered in between met a handler that was not there yet — refused with
+   * UNSUPPORTED_ON_REMOTE, or for `message` silently dropped — or a registry not yet reconciled.
+   */
+  private requestsOpen = true
+  private openRequestGate: () => void = () => {}
+  private requestGate: Promise<void> = Promise.resolve()
+  /** Requests waiting at the gate, per connection: a client that floods a starting daemon is closed. */
+  private readonly waitingAtGate = new Map<string, number>()
   private readonly localClients = new Map<string, LocalClientSink>()
   /**
    * Loopback clients that are TOOLS, not windows (`machine_select { tool: true }`): `harness pair`, the
@@ -1549,11 +1571,40 @@ export class BackendSocket {
     console.warn(`[terminal-p2p] conn=${sid(connId)} fallback=relay reason=${reason}`)
   }
 
+  /** Hold requests at the gate until `openRequests`. The daemon calls this the moment it builds this
+   *  socket, before anything can reach it; a socket built without it answers at once. */
+  holdRequests(): void {
+    if (!this.requestsOpen) return
+    this.requestsOpen = false
+    this.requestGate = new Promise<void>((resolve) => { this.openRequestGate = resolve })
+  }
+
+  /** Let requests through: every handler is wired and the agents the daemon restored are confirmed.
+   *  Idempotent. Called once at the end of start-up — and by safe mode, so a daemon that could not
+   *  start still answers rather than leaving its clients waiting. */
+  openRequests(): void {
+    if (this.requestsOpen) return
+    this.requestsOpen = true
+    this.waitingAtGate.clear()
+    this.openRequestGate()
+  }
+
   private enqueueDown(frame: Frame, connId: string, transport: DownTransport = 'relay'): void {
     const key = connId || '__backend__'
+    if (!this.requestsOpen) {
+      const waiting = (this.waitingAtGate.get(key) ?? 0) + 1
+      this.waitingAtGate.set(key, waiting)
+      if (waiting > MAX_REQUESTS_BEFORE_READY && transport === 'local') {
+        console.warn(`[backend] local client ${key} sent ${waiting} requests before the daemon was ready — closing it`)
+        this.waitingAtGate.delete(key)
+        void this.unregisterLocalClient(connId)
+        return
+      }
+    }
     const previous = this.downChains.get(key) ?? Promise.resolve()
     const next = previous
       .catch(() => { /* prior failure is already logged */ })
+      .then(() => this.requestGate)
       .then(() => this.dispatchDown(frame, connId, transport))
       .catch((err) => {
         console.error('[backend] down-frame dispatch failed:', err instanceof Error ? err.message : err)
@@ -2157,13 +2208,14 @@ export class BackendSocket {
           // plainly beats inventing one: the web then shows the tab with an empty thread until the bind
           // lands, instead of pinning `currentSessionId` to an id no event will ever carry.
           if (!s || !s.sessionId) { reply(type, requestId, { sessions: [] }); return }
-          const lines = s.transcriptPath ? await tailFile(s.transcriptPath, Infinity) : []
+          // Counted from an index kept as the file grows (lib/transcriptPages.ts), not by reading it whole.
+          const messageCount = s.transcriptPath ? await transcriptPages.lineCount(s.transcriptPath) : 0
           reply(type, requestId, {
             sessions: [{
               id: s.sessionId,
               title: projectDisplayName(s),
               timestamp: new Date(s.registeredAt).toISOString(),
-              messageCount: lines.length,
+              messageCount,
               lastActivity: new Date(await lastActivityAt(s)).toISOString(),
               participants: [],
             }],
@@ -2284,14 +2336,42 @@ export class BackendSocket {
           const rawLimit = payload.limit
           const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
           const before = typeof payload.before === 'string' ? payload.before : undefined
+          if (s.engine === 'claude' || s.engine === 'codex') {
+            // Only the page asked for is read (lib/transcriptPages.ts): the whole history of a long session
+            // is more memory than the daemon has. Without a limit, the newest lines that fit a page, and
+            // the cursor to the rest when they do not all fit — a cursor the full-transcript reply never had.
+            const opts = limit ? { limit, before } : {}
+            const page = s.engine === 'codex'
+              ? await transcriptPages.codex(s.transcriptPath, opts)
+              : await transcriptPages.claude(s.transcriptPath, opts)
+            const st = await stat(s.transcriptPath).catch(() => null)
+            const timestamp = new Date(st?.mtimeMs ?? Date.now()).toISOString()
+            if (page.staleCursor) {
+              reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true })
+              return
+            }
+            const events = s.engine === 'codex'
+              ? codexMessagesToEvents(page.lines, codexSubagentResolverFor(s.codexHome))
+              : messagesToEvents(page.lines)
+            await enrichSubagentStats(events, s.transcriptPath)
+            // Older pages must not inject a spurious end-of-transcript marker mid-scroll.
+            if (limit && before && events[events.length - 1]?.type === 'done') events.pop()
+            reply(type, requestId, {
+              id: sessionId,
+              title: projectDisplayName(s),
+              events,
+              timestamp,
+              engine: s.engine,
+              ...(limit || page.hasMore ? { hasMore: page.hasMore, oldestCursor: page.oldestCursor } : {}),
+            })
+            return
+          }
           const lines = await tailFile(s.transcriptPath, Infinity)
           const st = await stat(s.transcriptPath).catch(() => null)
           const timestamp = new Date(st?.mtimeMs ?? Date.now()).toISOString()
 
           if (!limit) {
-            const fullEvents = s.engine === 'codex'
-              ? codexMessagesToEvents(lines, codexSubagentResolverFor(s.codexHome))
-              : s.engine === 'cursor'
+            const fullEvents = s.engine === 'cursor'
                 ? cursorMessagesToEvents(lines, sessionId, await loadCursorReplayTaskLinks(cursorConfigDir(), sessionId, cursorDataDir()))
                 : s.engine === 'muse'
                   ? museMessagesToEvents(lines)
@@ -2349,9 +2429,7 @@ export class BackendSocket {
             })
             return
           }
-          const w = s.engine === 'codex'
-            ? windowCodexLines(lines, { limit, before })
-            : s.engine === 'cursor'
+          const w = s.engine === 'cursor'
               ? windowCursorLines(lines, { limit, before })
               : s.engine === 'pi'
                 ? windowPiLines(lines, { limit, before })
@@ -2362,9 +2440,7 @@ export class BackendSocket {
             reply(type, requestId, { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true })
             return
           }
-          const events = s.engine === 'codex'
-            ? codexMessagesToEvents(w.window, codexSubagentResolverFor(s.codexHome))
-            : s.engine === 'cursor'
+          const events = s.engine === 'cursor'
               ? cursorMessagesToEvents(
                   w.window,
                   sessionId,
@@ -3414,6 +3490,13 @@ export class BackendSocket {
           return
       }
     } catch (err) {
+      // A service on the core boundary that failed or is off (core/serviceHost.ts): the host has logged
+      // it, and the client may ask again — the service can be back after the daemon restarts.
+      if (err instanceof ServiceUnavailableError) {
+        console.warn(`[backend] ${type}: ${err.message}`)
+        if (requestId !== undefined) reply(type, requestId, { error: 'SERVICE_UNAVAILABLE', service: err.service, retryable: true })
+        return
+      }
       console.error(`[backend] dispatch ${type} failed:`, err)
       if (requestId !== undefined) reply(type, requestId, { error: 'INTERNAL' })
     }

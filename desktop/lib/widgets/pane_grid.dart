@@ -15,6 +15,7 @@ import '../core/dsh_catalog.dart' show DshEntry;
 import '../core/models.dart' show Agent, kUntitledPane;
 import '../clipboard/native_clipboard.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/appearance_prefs_store.dart';
 // `hide TerminalKey`: this file's own shortcut-label class, unused here, collides with xterm's
 // `TerminalKey` (needed for the local image-drop Ctrl+V nudge — see `_dropImage`).
 import '../shortcuts/app_shortcuts.dart' hide TerminalKey;
@@ -1271,22 +1272,28 @@ class _PaneCell extends StatelessWidget {
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
     return RepaintBoundary(
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          if (visible) pane.lastViewSize = constraints.biggest;
-          return _build(context);
-        },
+      child: ValueListenableBuilder<AppearancePrefs>(
+        valueListenable: appearancePrefsStore,
+        builder: (context, prefs, _) => LayoutBuilder(
+          builder: (context, constraints) {
+            if (visible) pane.lastViewSize = constraints.biggest;
+            return _build(context, prefs);
+          },
+        ),
       ),
     );
   }
 
-  Widget _build(BuildContext context) {
+  Widget _build(BuildContext context, AppearancePrefs prefs) {
     grid.AppTheme.watch(context);
     final focused = visible && notifier.isPaneFocused(pane.id);
     final remote = notifier.stateOf(pane.machineId)?.isLocalMachine == false;
     // Keep the selected harness's terminal and viewers clear, including while
     // a menu owns input. This changes paint, never the keyboard's destination.
-    final dimmed = !_single && !notifier.isPaneEmphasized(pane);
+    final dimmed =
+        prefs.shadeInactivePanes &&
+        !_single &&
+        !notifier.isPaneEmphasized(pane);
     final agentId = pane.agentId;
     final blocked =
         agentId != null &&

@@ -6,7 +6,7 @@ import { CodexNormalizer, lastCodexTurnText, selectCodexRecapLine } from './norm
 import { readLastCodexTurnText } from './lastTurn.js'
 import { tailFile } from '../../lib/transcriptTail.js'
 import { CommanderMirror, type CommanderFrame } from '../../lib/commander.js'
-import { deriveTurnSummary } from '../../lib/summarize.js'
+import { deriveTurnSummary } from '../../lib/deviceRecap.js'
 
 const event = (payload: unknown) => JSON.stringify({ type: 'event_msg', payload })
 const ask = (message: string) => event({ type: 'user_message', message })

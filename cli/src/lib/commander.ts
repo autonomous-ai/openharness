@@ -14,7 +14,7 @@
  *   turn_ended (empty text) → {kind:'done'}                          (clear busy)
  *
  * Every frame carries top-level `agentId` + `dbSessionId` (= the tmux session id). The recap
- * (`summarizeTurnText`) is injected so it's unit-testable with a stub. Mirrors the hosted runtime's
+ * writer (`summarize`) is injected so it's unit-testable with a stub; the daemon's is an excerpt. Mirrors the hosted runtime's
  * device-gated recap (recap.ts / manager.ts triggerTurnRecap / websocket.ts handleBrainSummaryEvent).
  */
 
@@ -638,8 +638,7 @@ export class CommanderMirror {
     //     nothing rides the wire to an absent device. This is the fix for the back-fill gap — a device
     //     that pairs LATER restores real tiles from what was persisted here, instead of blank ones,
     //     because replayAll() only re-emits stored recaps and never regenerates a past turn.
-    // Cost: with SUMMARY_MODE=model this is one engine one-shot per turn, per agent, forever — the very
-    // cost the device gate used to avoid. SUMMARY_MODE=local makes it free (no model, same-tick excerpt).
+    // Free: the recap is an excerpt cut the moment the turn ends, with no model in the loop.
     const alwaysGenerate = typeof this.opts.alwaysGenerate === 'function' ? this.opts.alwaysGenerate() : this.opts.alwaysGenerate
     const localOnly = !device && !this.opts.recapForce && !alwaysGenerate
     if (localOnly && !this.opts.notifyWithoutDevice) {

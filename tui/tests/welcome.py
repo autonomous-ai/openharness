@@ -260,6 +260,50 @@ try:
     keys('Escape'); hn('kill-window')
     print('PASS welcome: discovery recovery, browse all, existing-session resume and explicit terminal', flush=True)
 
+    # A USB welcome can finish after a person has already requested another
+    # terminal. Release both replies in each order: neither may steal the other's
+    # window, change current focus, or make the CLI creation request fail.
+    for order in ['first', 'last']:
+        hn('kill-server', ok=False)
+        tmux('kill-server')
+        fresh = BASE / ('usb-startup-' + order)
+        fresh.mkdir()
+        ENV.update(HOME=str(fresh), HN_TMPDIR=str(fresh), HARNESS_OS='1', HARNESS_OS_LIVE='1',
+                   ADAPTER_DATA_DIR=str(BASE / '.harness/cli/data'))
+        state('welcome', {'holdTerminals': True})
+        launch()
+        wait(lambda: state('welcome')['pendingTerminals'] == 1, 'USB welcome creation held')
+        first_window = window()
+        creation = subprocess.Popen(
+            [str(HN), '-L', PREFIX, '--port', str(PORT), '-f', '/dev/null',
+             'new-window', '-n', 'early-terminal', 'printf terminal-ready'],
+            env=ENV, cwd=PROJECT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            wait(lambda: state('welcome')['pendingTerminals'] == 2, 'concurrent terminal creation held')
+            second_window = window()
+            assert first_window != second_window
+            state('welcome', {'releaseTerminal': order})
+            expected_window = first_window if order == 'first' else second_window
+            wait(lambda: hn('display', '-p', '-t', expected_window, '#{window_panes}') == '1',
+                 'first completion belongs to its originating window')
+            assert window() == second_window, 'completion stole focus'
+            state('welcome', {'releaseTerminal': 'first'})
+            stdout, stderr = creation.communicate(timeout=5)
+            assert creation.returncode == 0, (stdout, stderr)
+            wait(lambda: hn('display', '-p', '-t', first_window, '#{window_panes}') == '1', 'USB pane placed')
+            assert hn('display', '-p', '-t', second_window, '#{window_panes}') == '1'
+            for target, command in [(first_window, '/usr/bin/hn-os welcome'),
+                                    (second_window, 'printf terminal-ready')]:
+                actual = hn('display', '-p', '-t', target, '#{pane_start_command}')
+                assert shlex.split(actual) == [command], (order, target, actual, command)
+            assert window() == second_window
+        finally:
+            if creation.poll() is None:
+                creation.kill(); creation.communicate(timeout=5)
+        state('welcome', {'holdTerminals': False})
+    ENV.pop('HARNESS_OS'); ENV.pop('HARNESS_OS_LIVE'); ENV.pop('ADAPTER_DATA_DIR')
+    print('PASS welcome: USB startup and concurrent terminal creation stay in their own windows in both reply orders', flush=True)
+
     # A new user can arrive without the daemon. Keep the task, explain how to connect,
     # and let Open Terminal use a real local PTY without executing any draft text.
     hn('kill-server', ok=False)

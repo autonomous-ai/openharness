@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small, on-demand hardware diagnosis and selected Broadcom Wi-Fi preparation."""
+"""On-demand hardware diagnosis and selected offline Wi-Fi/GPU preparation."""
 import argparse
 import fcntl
 import hashlib
@@ -18,6 +18,7 @@ import tempfile
 # https://wireless.docs.kernel.org/en/latest/en/users/drivers/b43.html
 BROADCOM_IDS = {'14e4:4331': 'BCM4331', '14e4:43a0': 'BCM4360'}
 BUNDLE = Path('/usr/share/harness-os/hardware/broadcom')
+NVIDIA_BUNDLE = Path('/usr/share/harness-os/hardware/nvidia')
 PCI_NAME = re.compile(r'[0-9a-f]{4,8}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]')
 
 
@@ -77,7 +78,98 @@ def report(sysfs=Path('/sys'), proc=Path('/proc')):
                              'available': 'sse4_2' in flags.split() if flags is not None else None},
             'pci': pci_devices(sysfs),
             'backlights': [p.name for p in sorted((sysfs / 'class/backlight').glob('*'))],
-            'broadcom_bundle_available': (BUNDLE / 'manifest.json').is_file()}
+            'broadcom_bundle_available': (BUNDLE / 'manifest.json').is_file(),
+            'nvidia_bundle_available': (NVIDIA_BUNDLE / 'manifest.json').is_file()}
+
+
+def nvidia_bundle_manifest(folder, all_files=False):
+    manifest = json.loads((folder / 'manifest.json').read_text())
+    if manifest.get('schema') != 1 or manifest.get('driver') != 'nvidia-open' or manifest.get('architecture') != 'x86_64':
+        raise ValueError('Unsupported NVIDIA bundle.')
+    supported = manifest.get('supported_devices', {})
+    if not supported or any(not re.fullmatch(r'10de:[0-9a-f]{4}', key) or not isinstance(value, list) or
+                            not value or any(not isinstance(name, str) or not name for name in value)
+                            for key, value in supported.items()):
+        raise ValueError('Invalid NVIDIA support table.')
+    if not re.fullmatch(r'\d+\.\d+\.\d+', manifest.get('driver_version', '')):
+        raise ValueError('Invalid NVIDIA driver version.')
+    if all_files:
+        for name, expected in manifest.get('files', {}).items():
+            relative = Path(name)
+            if relative.is_absolute() or '..' in relative.parts or len(relative.parts) > 2:
+                raise ValueError('Invalid NVIDIA bundle path.')
+            path = folder / name
+            if path.is_symlink() or not path.resolve().is_relative_to(folder.resolve()):
+                raise ValueError('NVIDIA bundle files must stay inside their directory.')
+            if not path.is_file() or path.stat().st_size != expected['bytes'] or digest(path) != expected['sha256']:
+                raise ValueError('NVIDIA bundle checksum mismatch: ' + name)
+    return manifest
+
+
+def nvidia_selection(devices, supported):
+    cards = [d for d in devices if d['id'].startswith('10de:') and d['class'] in {'030000', '030200'}]
+    if not cards:
+        return None
+    # nvidia-utils blacklists nouveau globally. Do not break a second legacy
+    # NVIDIA display, or take over a GPU explicitly assigned to passthrough.
+    if any(card['id'] not in supported for card in cards):
+        return {'status': 'unchanged', 'reason': 'An NVIDIA GPU needs a different driver.'}
+    if any(card['driver'] not in {None, 'nouveau', 'nvidia'} for card in cards):
+        return {'status': 'unchanged', 'reason': 'Keep the existing GPU assignment.'}
+    return {'status': 'selected', 'devices': [card['id'] for card in cards]}
+
+
+def configure_nvidia_install(target, devices, bundle=NVIDIA_BUNDLE):
+    target = target.resolve()
+    if target == Path('/') or not target.is_mount() or not (target / 'etc/harness-live').is_file():
+        raise ValueError('GPU preparation requires the mounted installation image.')
+    if not any(d['id'].startswith('10de:') and d['class'] in {'030000', '030200'} for d in devices):
+        return None
+    manifest = nvidia_bundle_manifest(bundle)
+    selected = nvidia_selection(devices, manifest['supported_devices'])
+    if selected['status'] != 'selected':
+        return selected
+    manifest = nvidia_bundle_manifest(bundle, all_files=True)
+    lock = json.loads((target / 'usr/share/harness-os/lock.json').read_text())
+    if manifest['arch_snapshot'] != lock['arch_snapshot']:
+        raise ValueError('NVIDIA bundle and installed package snapshot differ.')
+    output = run('arch-chroot', target, 'pacman', '-Q', *manifest['base_packages'], capture=True)
+    if dict(line.split(' ', 1) for line in output.splitlines()) != manifest['base_packages']:
+        raise ValueError('NVIDIA dependencies differ from the validated base.')
+    names = sorted(manifest['packages'])
+    if not names or any(not re.fullmatch(r'[a-zA-Z0-9_+.:\-]+\.pkg\.tar\.zst', name) for name in names):
+        raise ValueError('Invalid offline NVIDIA package list.')
+    for name in names:
+        if 'packages/' + name not in manifest['files'] or 'packages/' + name + '.sig' not in manifest['files']:
+            raise ValueError('Offline NVIDIA packages require signatures.')
+    # Read directly from the live USB. Neither generic nor GPU installations
+    # copy this large compressed package cache into their permanent filesystem.
+    with tempfile.TemporaryDirectory(prefix='harness-gpu-', dir=target / 'var/tmp') as temporary:
+        folder = Path(temporary)
+        packages = folder / 'packages'
+        packages.mkdir()
+        config = folder / 'pacman.conf'
+        config.write_text('[options]\nArchitecture = auto\nCheckSpace\nSigLevel = Required\nLocalFileSigLevel = Required\n')
+        config.chmod(0o600)
+        run('mount', '--bind', bundle / 'packages', packages)
+        try:
+            run('mount', '-o', 'remount,bind,ro', packages)
+            prefix = '/' + str(packages.relative_to(target))
+            run('arch-chroot', target, 'pacman', '--config', '/' + str(config.relative_to(target)),
+                '-U', '--needed', '--noconfirm', *[prefix + '/' + name for name in names], timeout=600)
+        finally:
+            run('umount', packages)
+    for module in ['nvidia', 'nvidia_modeset', 'nvidia_uvm', 'nvidia_drm']:
+        magic = run('arch-chroot', target, 'modinfo', '-k', manifest['kernel'], '-F', 'vermagic', module, capture=True)
+        version = run('arch-chroot', target, 'modinfo', '-k', manifest['kernel'], '-F', 'version', module, capture=True)
+        if magic.split()[0] != manifest['kernel'] or version != manifest['driver_version']:
+            raise ValueError('Installed NVIDIA modules do not match the kernel and userspace.')
+    config = target / 'etc/mkinitcpio.conf.d/30-harness-nvidia.conf'
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text('# Display driver must be ready for disk unlock and the Harness session.\n'
+                      'MODULES+=(nvidia nvidia_modeset nvidia_drm)\n')
+    return dict(selected, status='installed', driver='nvidia-open-lts',
+                kernel=manifest['kernel'], driver_version=manifest['driver_version'], packages=manifest['packages'])
 
 
 def bundle_manifest(folder, all_files=False):
@@ -147,7 +239,8 @@ def configure_install(target, devices=None):
     # It must never install a compiler into the running live overlay by mistake.
     if target == Path('/') or not target.is_mount() or not (target / 'etc/harness-live').is_file():
         raise ValueError('Wi-Fi preparation requires the mounted installation image.')
-    selected = [d for d in (pci_devices() if devices is None else devices) if needs_broadcom(d)]
+    devices = pci_devices() if devices is None else devices
+    selected = [d for d in devices if needs_broadcom(d)]
     folder = target / BUNDLE.relative_to('/')
     result = {'drivers': [], 'devices': [d['id'] for d in selected]}
     if selected:
@@ -178,6 +271,12 @@ def configure_install(target, devices=None):
     # The USB keeps the offline cache; the installed computer does not. Unrelated
     # machines receive neither wl nor its compiler/kernel-header dependencies.
     shutil.rmtree(folder, ignore_errors=False)
+    nvidia = configure_nvidia_install(target, devices)
+    if nvidia is not None:
+        result['nvidia'] = nvidia
+        if nvidia['status'] == 'installed':
+            result['drivers'].append(nvidia['driver'])
+            result['devices'].extend(nvidia['devices'])
     state = target / 'var/lib/harness-os/hardware.json'
     state.parent.mkdir(parents=True, exist_ok=True)
     state.write_text(json.dumps(result, indent=2) + '\n')

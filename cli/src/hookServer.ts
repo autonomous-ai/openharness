@@ -877,7 +877,15 @@ export function startHookServer(
       }
 
       json(404, { error: 'not found' })
-    })()
+    })().catch((error: unknown) => {
+      // Whatever a handler throws, the request is answered: an engine's hook that waits on this server
+      // holds up that engine's turn until its own timeout, and the desktop waits out thirty seconds.
+      console.error(`[hooks] ${req.method} ${(req.url ?? '').split('?')[0].slice(0, 80)} failed:`, error instanceof Error ? error.message : error)
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'INTERNAL' }))
+      } else if (!res.writableEnded) res.end()
+    })
   }
   const server = http.createServer(handle)
 

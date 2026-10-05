@@ -68,10 +68,12 @@ Desktop 1.2.27 and must not be merged without the user's approval.
   traversal while preserving a carried message.
 - In the task editor, Enter submits; Shift-Enter inserts a newline. Cmd-Enter
   remains a remappable launch shortcut. Opening a chooser does not submit the task.
-  Escape and outside clicks dismiss the innermost chooser, then the main form,
-  preserving its draft. X directly dismisses the composer and remains available while
-  a chooser is open. Existing pending-launch checks still protect unresolved
-  creation receipts.
+  Outside clicks close an open chooser but keep the main form open. Escape
+  dismisses the innermost chooser first, then the main form on another press.
+  X directly dismisses the composer and remains available while a chooser is open.
+  Explicit dismissal discards the unfinished task and attachments; reopening starts
+  fresh with the usual launch defaults. Existing pending-launch checks still
+  protect unresolved creation receipts.
   A choice or cancellation returns focus to the originating control. Tab and
   Shift-Tab dismiss a chooser without applying a value and continue form traversal.
 - Focus stays inside the active dialog. The prompt receives initial focus;

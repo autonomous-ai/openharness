@@ -8,12 +8,15 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
+import textwrap
 import time
 
 MIN_DISK_BYTES = 12 * 1024**3
@@ -23,6 +26,26 @@ WORDMARK = ('█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀', '�
 COMMAND_LOG = None
 INSTALL_LOG = Path('/var/log/harness-install.log')
 LAST_LOG = None
+
+
+def encryption_memory(meminfo=Path('/proc/meminfo')):
+    """Budget Argon2 against RAM, not zram advertised as additional swap."""
+    try:
+        values = {name: int(value) for name, value in re.findall(
+            r'^(MemTotal|MemAvailable):\s+(\d+) kB$', meminfo.read_text(), re.M)}
+        total, available = values['MemTotal'], values['MemAvailable']
+        if not 0 < available <= total:
+            raise ValueError('Invalid memory information')
+    except (OSError, KeyError, ValueError) as error:
+        raise ValueError('Cannot check available memory for encryption. No disk has been erased.') from error
+    # Cryptsetup normally uses at most half of physical RAM, up to 1 GiB.
+    # Its extra free-memory limit applies only without swap. Zram is RAM too:
+    # leave half of available RAM and at least 128 MiB for the live session.
+    budget = min(1024 * 1024, total // 2, available // 2, available - 128 * 1024)
+    budget = budget // 1024 * 1024
+    if budget < 64 * 1024:
+        raise ValueError('Not enough free memory for encryption. Close other harnesses and browser windows, then try again. No disk has been erased.')
+    return budget
 
 
 @contextmanager
@@ -43,14 +66,64 @@ def command_log(path):
             os.close(fd)
 
 
-def run(*args, input=None, capture=False):
+def run(*args, input=None, capture=False, timeout=None):
     if COMMAND_LOG:
         COMMAND_LOG.write('\n$ ' + shlex.join(str(a) for a in args) + '\n')
         COMMAND_LOG.flush()
-    result = subprocess.run([str(a) for a in args], input=input, check=True,
+    result = subprocess.run([str(a) for a in args], input=input, check=True, timeout=timeout,
                             stdout=subprocess.PIPE if capture else COMMAND_LOG,
                             stderr=COMMAND_LOG if capture else subprocess.STDOUT if COMMAND_LOG else None)
     return result.stdout.decode().strip() if capture else None
+
+
+def log_diagnostic(message):
+    if COMMAND_LOG:
+        try:
+            COMMAND_LOG.write(message + '\n')
+            COMMAND_LOG.flush()
+        except OSError:
+            # A failed diagnostic write must not replace the installation error.
+            pass
+
+
+def mapping_active(mapper):
+    # /dev nodes can outlive a successful removal while udev is stalled. Ask
+    # the kernel through sysfs, not the stale node which caused the timeout.
+    root = Path('/sys/class/block')
+    if not root.is_dir():
+        raise OSError('Cannot inspect the installed disk mapping.')
+    for device in root.iterdir():
+        if not device.name.startswith('dm-'):
+            continue
+        try:
+            if (device / 'dm/name').read_text().strip() == mapper:
+                return True
+        except FileNotFoundError:
+            pass  # A concurrent last close removed this mapping.
+    return False
+
+
+def close_install_mapping(mapper, timeout=10):
+    """After successful unmount, let the kernel close any remaining device reader."""
+    try:
+        # A filesystem probe may outlive unmount. Deferred removal is immediate
+        # when unused, otherwise the kernel removes the device on its last close.
+        # Never force removal, and never call this after a failed unmount.
+        run('cryptsetup', 'close', '--deferred', mapper, timeout=timeout)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        if isinstance(error, subprocess.CalledProcessError) and error.returncode != 5:
+            raise
+        log_diagnostic(f'Device close is waiting for a reader or udev: {error}')
+        if not mapping_active(mapper):
+            return  # The ioctl completed before cryptsetup's udev wait timed out.
+        # Do not wait for unrelated udev work again. This uses the same deferred
+        # kernel removal, with no force, table replacement or skipped disk flush.
+        try:
+            run('dmsetup', 'remove', '--deferred', '--noudevsync', mapper, timeout=3)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            if mapping_active(mapper):
+                raise
+            # The final reader can also leave between the check and removal.
 
 
 def partitions(disk):
@@ -138,7 +211,7 @@ def validate_image_account(passwd, username):
 
 
 def preflight(config, source):
-    for command in ['sgdisk', 'udevadm', 'mkfs.fat', 'mkfs.btrfs', 'cryptsetup',
+    for command in ['sgdisk', 'udevadm', 'mkfs.fat', 'mkfs.btrfs', 'cryptsetup', 'dmsetup',
                     'mount', 'umount', 'btrfs', 'unsquashfs', 'arch-chroot', 'blkid']:
         if not shutil.which(command):
             raise ValueError(f'The installer is missing {command}. Boot an intact Harness image.')
@@ -155,6 +228,65 @@ def preflight(config, source):
     return kernel
 
 
+def trial_command(action, source, account, destination_fd=None):
+    # Project paths are user-controlled. Read and write them without installer
+    # privileges; a symlink/race must never let the installer copy a root secret.
+    command = ['/usr/bin/python3', '/usr/lib/harness-os/trial_projects.py', action, str(source)]
+    descriptors = ()
+    if destination_fd is not None:
+        command += ['--destination-fd', str(destination_fd)]
+        descriptors = (destination_fd,)
+    result = subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=COMMAND_LOG,
+                            user=account.pw_uid, group=account.pw_gid, extra_groups=[],
+                            pass_fds=descriptors, env={'PATH': '/usr/bin', 'LANG': 'C.UTF-8'})
+    return json.loads(result.stdout)
+
+
+def trial_source(config):
+    if not Path('/etc/harness-live').is_file():
+        return None
+    account = pwd.getpwnam('me')
+    source = Path(account.pw_dir) / 'projects'
+    if not source.exists():
+        return None
+    required = trial_command('size', source, account)['bytes']
+    available = int(selected_disk(config)['size']) - 5 * 1024**3
+    if required > available:
+        raise ValueError('This disk needs more space for your trial projects. Choose a larger disk or save the projects elsewhere first.')
+    return source, account
+
+
+def preserve_trial(trial, target, home):
+    if trial is None:
+        return None
+    source, account = trial
+    # A root-owned parent keeps other live processes from changing the destination.
+    # Only this child receives the open writable directory, then drops privileges.
+    with tempfile.TemporaryDirectory(prefix='.harness-trial-', dir=target / 'home') as temp:
+        staging = Path(temp) / 'projects'
+        staging.mkdir(mode=0o700)
+        os.chown(staging, account.pw_uid, account.pw_gid)
+        descriptor = os.open(staging, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            receipt = trial_command('copy', source, account, descriptor)
+        finally:
+            os.close(descriptor)
+        shutil.rmtree(home / 'projects')  # Only the new account's pristine skeleton.
+        staging.rename(home / 'projects')
+    detail = home / '.local/state/harness-os/trial-projects.json'
+    detail.parent.mkdir(parents=True, exist_ok=True)
+    detail.write_text(json.dumps(receipt, indent=2) + '\n')
+    detail.chmod(0o600)
+    return {key: value for key, value in receipt.items() if key != 'entries'}
+
+
+def copy_image(source, target):
+    # Bound extraction memory and skip the optional GPU archive cache entirely.
+    # Selected hardware reads its signed packages directly from the live USB.
+    run('unsquashfs', '-mem', '64M', '-f', '-no-progress', '-excludes', '-d', target, source,
+        'usr/share/harness-os/hardware/nvidia')
+
+
 def install(config, source, target, progress=None):
     report = progress or (lambda message: print(message, flush=True))
     validate_config(config)
@@ -168,7 +300,9 @@ def install(config, source, target, progress=None):
         raise ValueError('Explicit confirmation of the exact disk is required.')
     report('Checking installation files…')
     kernel = preflight(config, source)
+    trial = trial_source(config)
     selected_disk(config)
+    pbkdf_memory = encryption_memory() if config['encrypt'] else None
     started = time.monotonic()
     disk = config['disk']
     _, boot, root_partition = partitions(disk)
@@ -187,8 +321,10 @@ def install(config, source, target, progress=None):
         root_device = root_partition
         luks_uuid = None
         if config['encrypt']:
+            report('Setting up encryption…')
             secret = config['password'].encode()
-            run('cryptsetup', 'luksFormat', '--type', 'luks2', '--batch-mode', '--key-file=-', root_partition, input=secret)
+            run('cryptsetup', 'luksFormat', '--type', 'luks2', '--batch-mode',
+                '--pbkdf-memory', pbkdf_memory, '--key-file=-', root_partition, input=secret)
             run('cryptsetup', 'open', '--key-file=-', root_partition, mapper, input=secret)
             opened = True
             root_device = f'/dev/mapper/{mapper}'
@@ -208,7 +344,7 @@ def install(config, source, target, progress=None):
         report('Copying Harness…')
         # Unsquashfs defaults to 512 MiB of caches. Bound them so installation
         # still fits on a 1 GiB machine after trying the bundled agent/browser.
-        run('unsquashfs', '-mem', '64M', '-f', '-no-progress', '-d', target, source)
+        copy_image(source, target)
         # Extract on Btrfs first: FAT cannot represent the image's Unix metadata.
         # Copy boot contents without that metadata before regenerating initramfs.
         boot_staging = target / 'boot.from-image'
@@ -227,7 +363,8 @@ def install(config, source, target, progress=None):
         # disk initramfs around this verified, package-owned kernel instead.
         shutil.copyfile(target / kernel['path'], target / 'boot/vmlinuz-linux-lts')
         report('Setting up your account…')
-        # The live image is immutable. No live passwords, SSH keys or sessions are copied.
+        # The live image is immutable. Only projects is transferred explicitly;
+        # live account passwords, agent credentials, SSH keys and sessions stay out.
         for path in ['etc/sudoers.d/10-live', 'etc/mkinitcpio.conf.d/archiso.conf',
                      'etc/systemd/system/serial-getty@ttyS0.service.d/live.conf',
                      'etc/pacman.d/hooks/99-harness-live.hook', 'root/setup-live.sh']:
@@ -242,8 +379,11 @@ def install(config, source, target, progress=None):
         (target / 'var/lib/systemd/linger/me').unlink(missing_ok=True)
         write(target, f'/var/lib/systemd/linger/{config["username"]}', '')
         home = target / 'home' / config['username']
-        (home / 'Projects').mkdir(exist_ok=True)
-        chroot(target, 'chown', '-R', f"{config['username']}:{config['username']}", f"/home/{config['username']}")
+        (home / 'projects').mkdir(exist_ok=True)
+        if trial is not None:
+            report('Keeping your trial projects…')
+        trial_receipt = preserve_trial(trial, target, home)
+        chroot(target, 'chown', '-Rh', f"{config['username']}:{config['username']}", f"/home/{config['username']}")
         write(target, '/etc/sudoers.d/10-harness', '%wheel ALL=(ALL:ALL) ALL\n', 0o440)
         write(target, '/etc/hostname', config['hostname'] + '\n')
         write(target, '/etc/hosts', f"127.0.0.1 localhost\n::1 localhost\n127.0.1.1 {config['hostname']}\n")
@@ -306,16 +446,33 @@ def install(config, source, target, progress=None):
         receipt = {'version': lock['version'], 'installed_at': datetime.now(timezone.utc).isoformat(),
                    'duration_seconds': round(time.monotonic() - started, 3), 'encrypted': config['encrypt'],
                    'disk_bytes': selected_size(config), 'root_uuid': root_uuid, 'boot_uuid': boot_uuid}
+        if pbkdf_memory is not None:
+            receipt['pbkdf_memory_limit_kib'] = pbkdf_memory
+        if trial_receipt is not None:
+            receipt['trial_projects'] = trial_receipt
         write(target, '/var/lib/harness-os/install.json', json.dumps(receipt, indent=2) + '\n')
         report('Finishing installation…')
         run('sync')
-        if progress is None:
-            print(f"Installed in {receipt['duration_seconds']:.1f}s. Shut down, remove the USB, and boot the disk.", flush=True)
     finally:
-        if mounted:
-            run('umount', '-R', target)
-        if opened:
-            run('cryptsetup', 'close', mapper)
+        original_error = sys.exception()
+        if original_error is not None:
+            log_diagnostic(f'\nInstallation failed: {original_error}')
+        try:
+            if mounted:
+                run('umount', '-R', target)
+            if opened:
+                close_install_mapping(mapper)
+        except (OSError, subprocess.SubprocessError) as cleanup_error:
+            if original_error is None:
+                cleanup_error.add_note('Harness was written and synced. Shut down normally before removing the USB, then try booting the installed disk.')
+                raise
+            # Keep the actual installation failure visible. Cleanup is still
+            # attempted and its failure is retained as additional information.
+            detail = f'Disk cleanup also failed: {cleanup_error}'
+            original_error.add_note(detail)
+            log_diagnostic(detail)
+    if progress is None:
+        print(f"Installed in {receipt['duration_seconds']:.1f}s. Shut down, remove the USB, and boot the disk.", flush=True)
 
 
 def selected_size(config):
@@ -342,7 +499,7 @@ class InstallForm:
     def __init__(self, screen, candidates, username, hostname, encrypt):
         self.screen, self.disks = screen, candidates
         self.username, self.hostname, self.encrypt = username, hostname, encrypt
-        self.selected, self.focus = 0, 0
+        self.selected, self.focus = 0, 2
         self.passwords, self.positions = ['', ''], [0, 0]
         self.error = ''
         self.title = None
@@ -358,13 +515,26 @@ class InstallForm:
         except curses.error:
             pass
 
-    def line(self, row, text, active=False, bold=False, accent=False):
+    def line(self, row, text, active=False, bold=False, accent=False, offset=0, span=None):
         height, width = self.screen.getmaxyx()
         row += self.top
-        if row >= height or width < 5:
+        length = min(self.width - offset, width - self.left - offset - 1)
+        if span is not None:
+            length = min(length, span)
+        if not 0 <= row < height or length <= 0:
             return
-        attr = curses.A_REVERSE if active else self.accent if accent else curses.A_BOLD if bold else curses.A_NORMAL
-        self.screen.addnstr(row, self.left, text, min(self.width, width - self.left - 1), attr)
+        attr = (curses.A_REVERSE if active else self.accent if accent else curses.A_NORMAL) | (curses.A_BOLD if bold else 0)
+        if active:
+            text = text.ljust(length)
+        self.screen.addnstr(row, self.left + offset, text, length, attr)
+
+    def field(self, row, label, value, active=False):
+        self.line(row, f'{label:18}', span=18)
+        self.line(row, value, active=active, offset=18)
+
+    def button(self, row, text, active=False):
+        label = '[ ' + text + ' ]'
+        self.line(row, label, active=active, offset=(self.width - len(label)) // 2, span=len(label))
 
     def cursor(self, visible):
         if visible == self.cursor_visible:
@@ -398,7 +568,8 @@ class InstallForm:
             for row, word in enumerate(WORDMARK):
                 self.line(row, word.center(self.width), accent=True)
             self.top += 4
-        self.line(1, title, bold=True)
+        if title:
+            self.line(1, title, bold=True)
         return True
 
     def key(self):
@@ -462,24 +633,23 @@ class InstallForm:
     def run(self):
         self.screen.keypad(True)
         while True:
-            if not self.begin('Install Harness'):
+            if not self.begin(''):
                 continue
             disk = self.disks[self.selected]
             # Identical models/capacities need a visible discriminator after selection.
             duplicate = sum(disk_label(d) == disk_label(disk) for d in self.disks) > 1
             suffix = '  ' + Path(disk['name']).name if duplicate else ''
             label = disk_label(disk, self.width - 18 - len(suffix)) + suffix
-            self.line(4, f"{'Disk':18}{label}", self.focus == 0)
-            self.line(6, f"{'Encryption':18}[{'x' if self.encrypt else ' '}]", self.focus == 1)
-            capacity = min(32, self.width - 21)
+            self.field(4, 'Disk', label, self.focus == 0)
+            self.field(6, 'Encryption', f"[{'x' if self.encrypt else ' '}]", self.focus == 1)
+            capacity = self.width - 20
             for index, label in enumerate(('Password', 'Repeat password')):
                 position = self.positions[index]
                 offset = max(0, position - capacity + 1)
                 mask = '*' * len(self.passwords[index][offset:offset + capacity])
-                self.line(8 + index * 2, f'{label:<18}[{mask:<{capacity}}]', self.focus == index + 2)
+                self.field(8 + index * 2, label, f'[{mask:<{capacity}}]', self.focus == index + 2)
             self.line(12, self.error)
-            self.line(14, f"{'':18}[ Install ]", self.focus == 4)
-            self.line(16, 'All data on this disk will be erased.')
+            self.line(14, 'Install Harness'.center(self.width), active=True, bold=self.focus == 4)
             self.cursor(self.focus in (2, 3))
             if self.focus in (2, 3):
                 position = self.positions[self.focus - 2]
@@ -538,25 +708,29 @@ def interactive(username='me', hostname='harness', encrypt=True):
     return curses.wrapper(lambda screen: InstallForm(screen, candidates, username, hostname, encrypt).run())
 
 
-def completion(screen):
+def completion(screen, boot=False):
     """Keep success visible when the installer owns an hn pane, then shut down on request."""
     screen.keypad(True)
+    if boot:
+        curses.raw()
     curses.flushinp()
     view = InstallForm(screen, [], 'me', 'harness', True)
     view.cursor(False)
     selected = 0
     while True:
-        if not view.begin('Harness is installed.'):
+        if not view.begin(''):
             continue
-        view.line(4, 'Remove the USB after shutdown.')
-        view.line(5, 'Then turn on this computer.')
-        view.line(8, '[ Shut down ]', active=selected == 0)
-        view.line(10, 'Back to Harness', active=selected == 1)
+        paragraph = 'Harness is installed. Shut down, remove the USB, then turn on your computer.'
+        for row, line in enumerate(textwrap.wrap(paragraph, min(48, view.width))):
+            view.line(4 + row, line.center(view.width))
+        view.button(8, 'Shut down', active=selected == 0)
+        if not boot:
+            view.button(10, 'Back to Harness', active=selected == 1)
         screen.refresh()
         key = screen.get_wch()
-        if key in ('\x1b', '\x03'):
+        if key in ('\x1b', '\x03') and not boot:
             return False
-        if key in ('\t', curses.KEY_BTAB, curses.KEY_UP, curses.KEY_DOWN):
+        if key in ('\t', curses.KEY_BTAB, curses.KEY_UP, curses.KEY_DOWN) and not boot:
             selected = 1 - selected
         elif InstallForm.enter(key):
             return selected == 0
@@ -571,16 +745,13 @@ def install_with_progress(screen, config, source, target):
         # A resize must never pause a disk operation waiting for keyboard input.
         screen.erase()
         height, width = screen.getmaxyx()
-        view.width = max(1, min(60, width - 4))
-        view.left = max(0, (width - view.width) // 2)
-        view.top = max(0, (height - 12) // 2)
-        if height >= 18:
-            for row, word in enumerate(WORDMARK):
-                view.line(row, word.center(view.width), accent=True)
-            view.top += 4
-        view.line(1, 'Installing Harness', bold=True)
-        view.line(4, message)
-        view.line(6, 'Keep this computer powered on.')
+        if height > 0 and width > 1:
+            middle = height // 2
+            if height >= 8:
+                for row, word in enumerate(WORDMARK):
+                    screen.addnstr(middle - 3 + row, max(0, (width - len(word)) // 2), word,
+                                   width - 1, view.accent)
+            screen.addnstr(min(height - 1, middle + 1), max(0, (width - len(message)) // 2), message, width - 1)
         screen.refresh()
 
     def progress(message):
@@ -608,7 +779,27 @@ def arguments():
     parser.add_argument('--no-encryption', action='store_true', help='Explicitly install without disk encryption')
     parser.add_argument('--yes-erase-disk', action='store_true')
     parser.add_argument('--source', type=Path, help='Override the automatically detected live system image')
-    return parser.parse_args()
+    parser.add_argument('--boot', action='store_true', help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    if args.boot and (args.config or not Path('/etc/harness-live').is_file()):
+        parser.error('--boot is only for the interactive Harness USB installer.')
+    return args
+
+
+def finish_installation(boot=False):
+    # A failed poweroff must return to success, never restart disk installation.
+    while curses.wrapper(lambda screen: completion(screen, boot=boot)):
+        try:
+            run('systemctl', 'poweroff')
+            return
+        except (OSError, subprocess.SubprocessError) as error:
+            if not boot:
+                raise
+            print(f'Harness is installed. Could not shut down: {error}', file=sys.stderr)
+            try:
+                input('Press Enter to try shutting down again.')
+            except (EOFError, KeyboardInterrupt):
+                pass
 
 
 def main(args=None):
@@ -635,30 +826,34 @@ def main(args=None):
         install(config, source, Path('/mnt/harness-os'))
     else:
         curses.wrapper(lambda screen: install_with_progress(screen, config, source, Path('/mnt/harness-os')))
-        if curses.wrapper(completion):
-            run('systemctl', 'poweroff')
+        finish_installation(boot=getattr(args, 'boot', False))
 
 
 def entrypoint():
     args = arguments()
-    try:
-        main(args)
-    except KeyboardInterrupt:
-        return 130
-    except (ValueError, OSError, curses.error, subprocess.CalledProcessError) as error:
-        print(f'Installation stopped: {error}', file=sys.stderr, flush=True)
-        if not args.config and LAST_LOG is not None:
-            print(f'Details: {LAST_LOG}', file=sys.stderr, flush=True)
-        # An installer launched from the USB welcome owns its pane. Retain the
-        # error until it has been read instead of closing the pane immediately.
-        # Unattended configuration files and piped callers never wait for input.
-        if not args.config and sys.stdin.isatty() and sys.stderr.isatty():
-            try:
-                input('Press Enter to return to Harness.')
-            except (EOFError, KeyboardInterrupt):
-                pass
-        return 1
-    return 0
+    boot = getattr(args, 'boot', False)
+    while True:
+        try:
+            main(args)
+            return 0
+        except KeyboardInterrupt:
+            if not boot:
+                return 130
+        except (ValueError, OSError, curses.error, subprocess.SubprocessError) as error:
+            print(f'Installation stopped: {error}', file=sys.stderr, flush=True)
+            for note in getattr(error, '__notes__', ()):
+                print(note, file=sys.stderr, flush=True)
+            if not args.config and LAST_LOG is not None:
+                print(f'Details: {LAST_LOG}', file=sys.stderr, flush=True)
+            # Interactive failures stay visible until acknowledged. On USB,
+            # cancellation or failure returns to a fresh form, never a trial.
+            if not args.config and sys.stdin.isatty() and sys.stderr.isatty():
+                try:
+                    input('Press Enter to try again.' if boot else 'Press Enter to return to Harness.')
+                except (EOFError, KeyboardInterrupt):
+                    pass
+            if not boot:
+                return 1
 
 
 if __name__ == '__main__':

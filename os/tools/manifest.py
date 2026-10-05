@@ -19,15 +19,22 @@ with iso.open('rb') as handle:
 packages = (root / 'usr/share/harness-os/packages.txt').read_text()
 (out / 'packages.txt').write_text(packages)
 capabilities = []
+if (root / 'usr/lib/systemd/user/harness-install.service').is_file():
+    capabilities.append('install-first')
 if all((root / path).is_file() for path in [
         'usr/lib/harness-os/live_update.py',
         'usr/lib/systemd/user/harness-update.timer']):
     capabilities.append('runtime-updates')
 if (root / 'usr/lib/harness-os/release_update.py').is_file():
     capabilities.append('system-updates')
-hardware = root / 'usr/share/harness-os/hardware/broadcom/manifest.json'
-if hardware.is_file():
-    capabilities.append('broadcom-offline')
+if (root / 'etc/sudoers.d/30-harness-updates').is_file():
+    capabilities.append('single-action-updates')
+hardware = {}
+for driver in ['broadcom', 'nvidia']:
+    path = root / f'usr/share/harness-os/hardware/{driver}/manifest.json'
+    if path.is_file():
+        capabilities.append(driver + '-offline')
+        hardware[driver] = json.loads(path.read_text())
 manifest = {
     'version': lock['version'], 'architecture': 'x86_64',
     'source_commit': os.environ.get('HARNESS_OS_SOURCE_SHA') or subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
@@ -36,6 +43,6 @@ manifest = {
     'capabilities': capabilities,
     'package_version': dict(row.split(maxsplit=1) for row in packages.splitlines())['harness-os'],
     'harness_inputs': json.loads((root / 'usr/share/harness-os/runtime.json').read_text()), 'validation': 'pending',
-    'hardware': {'broadcom': json.loads(hardware.read_text())} if hardware.is_file() else {},
+    'hardware': hardware,
 }
 (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')

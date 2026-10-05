@@ -346,6 +346,11 @@ jobs:
       - name: Require complete harness updater coverage
         run: npm run test:dsh-updates
 
+      # The daemon's supervisor and its core modules are held to 100% in every file
+      # (docs/design/2026-10-03-harnessd.md#testing).
+      - name: Require complete harnessd and core coverage
+        run: npm run test:harnessd && npm run test:core
+
   cli-tests:
     if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
     strategy:

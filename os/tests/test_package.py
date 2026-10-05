@@ -13,6 +13,37 @@ spec.loader.exec_module(package)
 
 
 class PackageIdentity(unittest.TestCase):
+    def test_new_accounts_discover_the_packaged_guide_without_model_overrides(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            runtime = base / 'runtime'
+            runtime.mkdir()
+            for name in ['harness-tui', 'cli.js', 'notify.mjs']:
+                (runtime / name).write_bytes(b'runtime fixture')
+            destination = base / 'stage'
+            with patch.object(package, 'validate_runtime', return_value={'source_commit': 'a' * 40}):
+                identity = package.stage(Path(__file__).resolve().parents[2], runtime, destination, 'a' * 40)
+            config = destination / 'etc/skel/.config/opencode'
+            self.assertFalse((config / 'AGENTS.md').is_symlink())
+            self.assertIn('/usr/share/harness-os/guide.md', (config / 'AGENTS.md').read_text())
+            self.assertIn('Super+n', (destination / 'usr/share/harness-os/guide.md').read_text())
+            settings = json.loads((config / 'opencode.json').read_text())
+            self.assertEqual(settings['update'], 'disable')
+            self.assertFalse(set(settings) & {'model', 'provider', 'providers', 'instructions'})
+            self.assertEqual(settings['permissions'], [
+                {'action': 'external_directory', 'resource': '/usr/share/harness-os/*', 'effect': 'allow'},
+                {'action': 'read', 'resource': '/usr/share/harness-os/*', 'effect': 'allow'},
+                {'action': 'edit', 'resource': '/usr/share/harness-os/*', 'effect': 'deny'},
+            ], 'Only the packaged reference directory gets a read exception, never arbitrary filesystem access')
+            # Validate the real staged package with the same guard that protects
+            # installed systems, not only an isolated archive fixture.
+            output = base / 'harness-os.pkg.tar.gz'
+            package.archive_package(destination, output, 'pkgname = harness-os\npkgver = 1-1\narch = x86_64\n', 123456)
+            spec = importlib.util.spec_from_file_location('runtime_package_check', Path(__file__).parents[1] / 'runtime_update.py')
+            updater = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(updater)
+            updater.inspect_package(output, '1-1', identity)
+
     def test_same_source_is_byte_identical_across_build_times_and_output_names(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / 'stage'
@@ -38,7 +69,8 @@ class PackageIdentity(unittest.TestCase):
                 (root / name).write_text('runtime fixture')
             (root / 'source.json').write_text(json.dumps(good))
             self.assertEqual(package.validate_runtime(root, 'a' * 40), good)
-            for changes in [{'dirty': True}, {'source_commit': 'b' * 40}, {'target': 'aarch64-apple-darwin'}]:
+            for changes in [{'dirty': True}, {'source_commit': 'b' * 40}, {'target': 'aarch64-apple-darwin'},
+                            {'target': 'aarch64-unknown-linux-musl', 'architecture': 'aarch64'}]:
                 (root / 'source.json').write_text(json.dumps(dict(good, **changes)))
                 with self.subTest(changes=changes), self.assertRaises(ValueError):
                     package.validate_runtime(root, 'a' * 40)

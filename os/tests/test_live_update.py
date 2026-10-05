@@ -1,4 +1,5 @@
 import hashlib
+import curses
 import fcntl
 import importlib.util
 import json
@@ -26,14 +27,17 @@ class FastUpdates(unittest.TestCase):
             (self.bundled / name).write_bytes(('old ' + name).encode())
         self.patches = [patch.object(update, 'STATE', self.state), patch.object(update, 'BUNDLED', self.bundled),
                         patch.object(update, 'BASE_ID', self.base),
+                        patch.object(update, 'BOOT_ID', self.root / 'boot-id'),
                         patch.object(update, 'RESTART_REQUIRED', self.root / 'restart-required'),
                         patch.object(update, 'SYSTEM_LOCK', self.root / 'system.lock'),
                         patch.object(update, 'check_system', return_value={}),
                         patch.object(update, 'screen_ready'),
+                        patch.object(update, 'capture_view', return_value=None),
                         patch.object(update, 'notice'), patch.object(update, 'versions', side_effect=self.versions)]
         for item in self.patches:
             item.start()
             self.addCleanup(item.stop)
+        update.BOOT_ID.write_text('first-boot')
 
     def versions(self, folder):
         return {component: '1.1.0' if (folder / name).read_bytes().startswith(b'new') else '1.0.0'
@@ -74,6 +78,23 @@ class FastUpdates(unittest.TestCase):
             self.assertTrue(update.check())
             self.assertEqual(update.prepared(), target)
             self.assertEqual(len(list((self.state / 'builds').iterdir())), 1)
+
+    def test_public_release_already_included_in_os_source_cannot_replace_newer_fixes(self):
+        self.base.write_text(json.dumps({'source_commit': 'source-built',
+                                        'release_baselines': {'cli': {'version': '1.1.0', 'commit': 'a' * 40}}}))
+        with self.feed():
+            self.assertTrue(update.check())
+        # The independent TUI update still arrives; the older public CLI does not.
+        ready = update.verify(update.prepared())
+        self.assertEqual(ready['versions'], {'hn': '1.1.0', 'cli': '1.0.0'})
+        self.assertEqual((update.prepared() / 'cli.mjs').read_bytes(), b'old cli.mjs')
+        self.assertEqual((update.prepared() / 'notify.mjs').read_bytes(), b'old notify.mjs')
+
+    def test_release_newer_than_the_os_source_baseline_is_still_downloaded(self):
+        self.base.write_text(json.dumps({'release_baselines': {'cli': {'version': '1.0.5', 'commit': 'a' * 40}}}))
+        with self.feed():
+            self.assertTrue(update.check())
+        self.assertEqual(update.verify(update.prepared())['versions']['cli'], '1.1.0')
 
     def test_bad_cli_hook_does_not_stage_half_a_pair_or_block_independent_hn(self):
         with self.feed(fail='notify.mjs'):
@@ -211,6 +232,135 @@ class FastUpdates(unittest.TestCase):
         with update.locked():
             update.prune()
         self.assertTrue(old_runtime.is_dir())
+
+    def show(self, keys, mouse=None, refresh=False):
+        class Window:
+            def __init__(self): self.drawn, self.keys = [], iter(keys)
+            def keypad(self, _): pass
+            def timeout(self, _): pass
+            def getmaxyx(self): return 30, 90
+            def erase(self): self.drawn.clear()
+            def refresh(self): pass
+            def addnstr(self, row, col, text, length, style): self.drawn.append((row, col, text[:length]))
+            def getch(self): return next(self.keys)
+        window = Window()
+        def event():
+            row, col, text = next(item for item in window.drawn if item[2] == '[ Update ]')
+            return 0, col + (2 if mouse == 'inside' else len(text) + 1), row, 0, curses.BUTTON1_CLICKED
+        with patch.object(update.curses, 'curs_set'), patch.object(update.curses, 'has_colors', return_value=False), \
+             patch.object(update.curses, 'mousemask'), patch.object(update.curses, 'mouseinterval'), \
+             patch.object(update.curses, 'getmouse', side_effect=event):
+            return update.screen(window, refresh=refresh)
+
+    def test_update_button_click_and_keyboard_use_the_same_action_without_a_confirmation(self):
+        with self.feed(): update.check()
+        self.assertEqual(self.show([10]), 'update')
+        self.assertEqual(self.show([curses.KEY_MOUSE], mouse='inside'), 'update')
+        self.assertIsNone(self.show([curses.KEY_MOUSE, 27], mouse='outside'))
+        self.assertIsNone(self.show([27]))
+        self.assertEqual(update.selected(), self.bundled)
+
+    def test_shortcut_request_starts_update_without_waiting_for_a_key(self):
+        with self.feed(): update.check()
+        update.write(self.state / 'request.json', {'requested_at': 1})
+        self.assertEqual(self.show([]), 'update')
+        self.assertFalse((self.state / 'request.json').exists())
+
+    def test_restart_is_never_the_default_action_or_triggered_by_update_shortcut(self):
+        self.state.mkdir()
+        update.RESTART_REQUIRED.write_text('{"status":"ready"}')
+        update.write(self.state / 'request.json', {'requested_at': 1})
+        self.assertIsNone(self.show([10]))
+        self.assertEqual(self.show([curses.KEY_RIGHT, 10]), 'reboot')
+
+    def test_one_action_uses_exact_passwordless_system_command_and_defers_runtime_until_reboot(self):
+        with self.feed(): update.check()
+        update.write(self.state / 'system.json', {'available': True})
+        def system(args, **kwargs):
+            self.assertEqual(args, ['sudo', '-n', '/usr/bin/harness', 'upgrade'])
+            self.assertTrue(kwargs['check'])
+            update.RESTART_REQUIRED.write_text('{"status":"ready"}')
+        with patch.object(update.subprocess, 'run', side_effect=system), patch.object(update, 'apply') as apply:
+            update.update_all()
+            update.finish_approved_update()
+            apply.assert_not_called()
+        self.assertEqual(update.read(self.state / 'approved.json')['status'], 'after-reboot')
+        update.RESTART_REQUIRED.unlink()
+        update.BOOT_ID.write_text('second-boot')
+        with patch.object(update, 'restart') as restart:
+            update.finish_approved_update()
+            self.assertEqual(restart.call_count, 1)
+            update.finish_approved_update()
+            self.assertEqual(restart.call_count, 1)
+        self.assertFalse((self.state / 'approved.json').exists())
+
+    def test_failed_privileged_update_does_not_authorize_later_activation(self):
+        self.state.mkdir()
+        update.write(self.state / 'system.json', {'available': True})
+        with patch.object(update.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'sudo')):
+            with self.assertRaises(subprocess.CalledProcessError): update.update_all()
+        self.assertFalse((self.state / 'approved.json').exists())
+
+    def test_later_timer_cannot_activate_without_a_request_or_after_base_changes(self):
+        with self.feed(): update.check()
+        with patch.object(update, 'apply') as apply:
+            update.finish_approved_update()
+            apply.assert_not_called()
+        update.write(self.state / 'approved.json', {'status':'after-reboot', 'boot_id':'earlier', 'base_sha256':'changed'})
+        with patch.object(update, 'apply') as apply, self.assertRaisesRegex(ValueError, 'system changed'):
+            update.finish_approved_update()
+        apply.assert_not_called()
+        self.assertEqual(update.read(self.state / 'approved.json')['status'], 'failed')
+
+    def test_explicit_recheck_clears_failed_completion_when_no_updates_remain(self):
+        self.state.mkdir()
+        update.write(self.state / 'approved.json', {'status': 'failed'})
+        with patch.object(update, 'check', return_value=False):
+            self.assertIsNone(self.show([10], refresh=True))
+        self.assertFalse((self.state / 'approved.json').exists())
+
+    def test_retry_keeps_the_request_so_recovered_downloads_apply_without_another_key(self):
+        with patch.object(update.os, 'geteuid', return_value=1000), \
+             patch.object(update.curses, 'wrapper', side_effect=['check', None]):
+            update.main(['screen'])
+        self.assertTrue((self.state / 'request.json').exists())
+        with self.feed():
+            self.assertEqual(self.show([], refresh=True), 'update')
+        self.assertFalse((self.state / 'request.json').exists())
+
+
+class ScreenSelection(unittest.TestCase):
+    def test_capture_chooses_os_screen_among_other_clients_and_rejects_bad_ids(self):
+        rows = '201\t$1\t@2\t%3\t/dev/pts/8\n202\t$4\t@5\t%6\t/dev/pts/9'
+        def groups(path):
+            if path == Path('/proc/201/cgroup'):
+                return '0::/user.slice/ssh-session.scope\n'
+            return '0::/user.slice/app.slice/hn-screen.service\n'
+        with patch.object(update, 'run', return_value=rows), \
+                patch.object(update.Path, 'read_text', autospec=True, side_effect=groups):
+            self.assertEqual(update.capture_view(), {'session': '$4', 'window': '@5', 'pane': '%6', 'tty': '/dev/pts/9'})
+        with patch.object(update, 'run', return_value=rows.replace('$4', '--all')), \
+                patch.object(update.Path, 'read_text', autospec=True, side_effect=groups):
+            self.assertIsNone(update.capture_view())
+
+    def test_restore_targets_reconnected_os_client_and_existing_objects(self):
+        view = {'session': '$4', 'window': '@5', 'pane': '%6', 'tty': '/dev/pts/9'}
+        commands = []
+        def run(*args, **kwargs):
+            commands.append(args)
+            return {'list-sessions': '$0\n$4', 'list-windows': '@5', 'list-panes': '%6'}.get(args[1], '')
+        with patch.object(update, 'run', side_effect=run), \
+                patch.object(update, 'capture_view', return_value=dict(view, tty='/dev/pts/20')):
+            update.restore_view(view)
+        self.assertIn(('/usr/bin/hn', 'switch-client', '-c', '/dev/pts/20', '-t', '$4'), commands)
+        self.assertIn(('/usr/bin/hn', 'select-window', '-t', '@5'), commands)
+        self.assertIn(('/usr/bin/hn', 'select-pane', '-t', '%6'), commands)
+        with patch.object(update, 'run', return_value='$0') as run:
+            update.restore_view(view)
+        run.assert_called_once_with('/usr/bin/hn', 'list-sessions', '-F', '#{session_id}')
+        with patch.object(update, 'run') as run, self.assertRaises(ValueError):
+            update.restore_view(dict(view, pane='--all'))
+        run.assert_not_called()
 
 
 if __name__ == '__main__':

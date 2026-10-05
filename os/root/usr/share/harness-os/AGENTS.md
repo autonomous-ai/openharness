@@ -5,15 +5,17 @@ for the current task, and use terminal output, diffs and tests to review the wor
 Open `hn-browser URL` only when a browser helps. Add tools and services when the
 current task needs them; run extra services on demand unless the task needs them
 persistently. Keep the desktop shell, launcher and panels absent unless the user
-requests that interface. Open a new terminal immediately with Ctrl+B, then T. No agent or project setup
+requests that interface. Open a new terminal immediately with Ctrl+b, then Shift+t. No agent or project setup
 is required.
 
 ## System operations
 
-- `Super+U` opens Updates inside hn; `harness updates` is the shell equivalent.
+- `Super+u` starts the update inside hn. `harness updates` opens its screen;
+  click Update to start the same action. No confirmation or password is needed.
   The user timer checks hn and CLI releases and prepares verified downloads.
   Activation is explicit. An hn-only change restarts its screen, keeping terminal
-  owners and agents alive. System packages use the separate checkpointed action.
+  owners and agents alive. The same action handles checkpointed system packages. A restart is always
+  deferred until the user chooses it; Done keeps working processes alive.
   Do not replace `/usr/lib/harness` manually or enable the CLI's independent
   daemon handoff updater: this OS supervises activation with systemd.
 - This is Arch Linux with systemd, the LTS kernel, labwc, foot and Chromium.
@@ -41,7 +43,8 @@ is required.
   first use `sudo cryptsetup open /dev/sda3 hn-recovery`, then use
   `/dev/mapper/hn-recovery` in the recovery command. Device names vary; inspect
   `lsblk -f` first. Recovery changes the installed system, not user projects.
-- The user's account has password-protected sudo. Do not disable authentication,
+- The user's account has password-protected sudo, with narrow exceptions for
+  the root-owned network form and official update/recovery commands. Do not disable authentication,
   browser sandboxing, disk encryption or the session lock to make a task easier.
 
 ## Network and hardware
@@ -61,13 +64,18 @@ is required.
 - npm installs into `~/.local`. The initial npm configuration permits the vendor
   install scripts for Claude Code, Codex and OpenCode. When another package needs
   an install script, approve that package explicitly; keep npm's other defaults.
-- `Super+B` opens/focuses Chromium or returns to hn; `Super+Enter` focuses hn;
-  `Super+L` locks the screen. `sudo systemctl poweroff` shuts down cleanly.
+- `Super+b` opens/focuses Chromium or returns to hn; `Super+Enter` focuses hn;
+  `Super+l` locks the screen. `sudo systemctl poweroff` shuts down cleanly.
 - On supported NVIDIA Turing and newer GPUs, including RTX 4090/5090 and RTX 6000
   generations, the LTS-kernel packages are `nvidia-open-lts nvidia-utils`.
-  Install both from the same repository snapshot, regenerate initramfs with
-  `sudo mkinitcpio -P`, reboot, and verify `nvidia-smi` before claiming GPU compute
-  works. Older NVIDIA GPUs need a different driver assessment.
+  New USB images carrying the NVIDIA bundle install them offline when the exact
+  GPU IDs match the bundled support table. Check `pacman -Q` and
+  `/var/lib/harness-os/hardware.json` before installing anything. Other machines
+  receive no NVIDIA packages. Mixed legacy GPUs and passthrough assignments are
+  left alone. On older installations, install both from the same repository
+  snapshot, regenerate initramfs with `sudo mkinitcpio -P`, and reboot. Verify
+  `nvidia-smi` and the actual workload before claiming GPU compute works.
+  Older NVIDIA GPUs need a different driver assessment.
 - CUDA SDKs, model weights and model servers are installed only when a task needs
   them. A driver working is not evidence that a particular AI framework supports
   the GPU; test the actual framework and workload.

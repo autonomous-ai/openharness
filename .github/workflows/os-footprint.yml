@@ -1,0 +1,55 @@
+name: Harness OS installed footprint assessment
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_run_id:
+        description: 'Exact existing image artifact to assess'
+        type: string
+        default: '37207405290'
+        required: true
+  push:
+    branches: ['os-polish/footprint-audit']
+    paths: ['os/tests/footprint_*.py', 'os/tests/test_footprint.py', '.github/workflows/os-footprint.yml']
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  footprint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        memory: [1024, 4096]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id || '37207405290' }}
+          github-token: ${{ github.token }}
+      - name: Check the observer and install VM tools
+        run: |
+          python3 -m py_compile os/tests/footprint_guest.py os/tests/footprint_vm.py
+          python3 -m unittest discover -s os/tests -p test_footprint.py -v
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os-footprint.yml
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+      - name: Measure working agent, agent-free terminal, and browser separately
+        run: python3 os/tests/footprint_vm.py --iso os/dist/*.iso --memory-mib '${{ matrix.memory }}'
+      - name: Retain measurements without disposable disks
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-footprint-${{ matrix.memory }}
+          path: |
+            os/test-results/footprint-${{ matrix.memory }}/
+            !os/test-results/footprint-${{ matrix.memory }}/*.qcow2
+            !os/test-results/footprint-${{ matrix.memory }}/OVMF_VARS.fd
+          retention-days: 14
+          compression-level: 0

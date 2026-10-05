@@ -918,8 +918,7 @@ class Registry {
     try {
       const stored = JSON.parse(readPrivateStateFile(FILE)) as unknown
       if (!Array.isArray(stored)) {
-        this.writeBlocked = true
-        console.error('[registry] registry root is not an array; refusing to overwrite it')
+        this.quarantine('root is not an array')
         return
       }
       const { rows: parsed, dropped, changed: strippedRetired } = withoutRetiredRows(stored)
@@ -931,15 +930,13 @@ class Registry {
       }
       const legacyRows = parsed.filter((row) => !row || typeof row !== 'object' || !Object.hasOwn(row, 'schemaVersion'))
       if (legacyRows.some((row) => !validLegacyRegistryRow(row))) {
-        this.writeBlocked = true
-        console.error('[registry] registry contains a malformed legacy row; refusing to overwrite it')
+        this.quarantine('contains a malformed legacy row')
         return
       }
       const v2Rows = parsed.filter((row) => !!row && typeof row === 'object'
         && (row as { schemaVersion?: unknown }).schemaVersion === 2)
       if (v2Rows.length && !validatedRows(v2Rows)) {
-        this.writeBlocked = true
-        console.error('[registry] registry contains a malformed v2 row; refusing to overwrite it')
+        this.quarantine('contains a malformed v2 row')
         return
       }
       const arr = parsed as Array<Partial<RegisteredSession>>
@@ -1085,32 +1082,49 @@ class Registry {
           || legacyLauncherId !== ''
         ) changed = true
         if (this.agents.has(s.agentId)) {
-          this.agents.clear()
-          this.sessionIndex.clear()
-          this.runtimeIndex.clear()
-          this.processIndex.clear()
-          this.writeBlocked = true
-          console.error('[registry] registry contains duplicate agent identities; refusing to load or overwrite it')
+          this.quarantine('contains duplicate agent identities')
           return
         }
         this.index(s)
       }
       if (!validatedRows(this.list().map(persistedRow))) {
-        this.agents.clear()
-        this.sessionIndex.clear()
-        this.runtimeIndex.clear()
-        this.processIndex.clear()
-        this.writeBlocked = true
-        console.error('[registry] registry violates global identity invariants; refusing to load or overwrite it')
+        this.quarantine('violates global identity invariants')
         return
       }
       if (changed) this.save()
     } catch (error) {
-      if (existsSync(FILE)) {
+      if (error instanceof SyntaxError) this.quarantine(`is not JSON (${error.message})`)
+      else if (existsSync(FILE)) {
         this.writeBlocked = true
         console.error('[registry] registry is unreadable; refusing to overwrite it:', error instanceof Error ? error.message : error)
       }
-      // A genuinely absent file starts empty. Any existing unreadable file is preserved byte-for-byte.
+      // A genuinely absent file starts empty. A file that cannot be opened safely (a symlink, another
+      // owner, open permissions) is left exactly as it is, and nothing is written over it.
+    }
+  }
+
+  /**
+   * Bytes no version of the registry can load — not JSON, the wrong shape, malformed or contradictory
+   * rows — are moved aside, kept byte-for-byte for an operator, and the daemon starts empty: discovery
+   * finds the agents still running in tmux again. Refusing every write instead left a daemon that could
+   * not start a single agent until someone repaired the file by hand. A newer version's rows (an
+   * unknown schema) are not corruption, and are still never touched.
+   */
+  private quarantine(reason: string): void {
+    this.agents.clear()
+    this.sessionIndex.clear()
+    this.runtimeIndex.clear()
+    this.processIndex.clear()
+    this.persistedBaseline.clear()
+    this.persistedContents = null
+    const aside = `${FILE}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`
+    try {
+      renameSync(FILE, aside)
+      this.writeBlocked = false
+      console.error(`[registry] registry ${reason}; moved it aside to ${aside} and started empty`)
+    } catch (error) {
+      this.writeBlocked = true
+      console.error(`[registry] registry ${reason}, and it could not be moved aside (${error instanceof Error ? error.message : error}); refusing to overwrite it`)
     }
   }
 

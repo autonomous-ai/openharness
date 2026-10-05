@@ -23,6 +23,7 @@ class AppearancePrefs {
     this.background = HarnessBackground.plain,
     this.custom = const CustomBackground(),
     this.paneOpacity = paneOpacityDefault,
+    this.shadeInactivePanes = false,
     this.prompt = const PromptPrefs(),
   });
 
@@ -38,6 +39,9 @@ class AppearancePrefs {
   final double paneOpacity;
   static const double paneOpacityDefault = 0.5;
   static const double paneOpacityMin = 0;
+
+  /// Whether panes outside the current focus receive a neutral-gray veil.
+  final bool shadeInactivePanes;
 
   /// Whether a running harness tab paints the background at all: Blank has
   /// nothing to show through.
@@ -65,6 +69,7 @@ class AppearancePrefs {
     HarnessBackground? background,
     CustomBackground? custom,
     double? paneOpacity,
+    bool? shadeInactivePanes,
     PromptPrefs? prompt,
     bool clearUiFamily = false,
   }) => AppearancePrefs(
@@ -74,6 +79,7 @@ class AppearancePrefs {
     background: background ?? this.background,
     custom: custom ?? this.custom,
     paneOpacity: paneOpacity ?? this.paneOpacity,
+    shadeInactivePanes: shadeInactivePanes ?? this.shadeInactivePanes,
     prompt: prompt ?? this.prompt,
   );
 
@@ -86,6 +92,7 @@ class AppearancePrefs {
       other.background == background &&
       other.custom == custom &&
       other.paneOpacity == paneOpacity &&
+      other.shadeInactivePanes == shadeInactivePanes &&
       other.prompt == prompt;
 
   @override
@@ -96,6 +103,7 @@ class AppearancePrefs {
     background,
     custom,
     paneOpacity,
+    shadeInactivePanes,
     prompt,
   );
 }
@@ -121,12 +129,14 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
   static const _customKey = 'harness_custom_background';
   // Named for the retired on/off choice; it now holds only pane opacity.
   static const _paneOpacityKey = 'harness_background_behind_harnesses';
+  static const _shadeInactivePanesKey = 'harness_shade_inactive_panes';
   static const _promptKey = 'workspace_prompt_v1';
   Future<void>? _promptSave;
   Future<void>? _paletteSave;
   Future<void>? _backgroundSave;
   Future<void>? _customSave;
   Future<void>? _paneOpacitySave;
+  Future<void>? _shadeInactivePanesSave;
 
   final LocalKeyValueStore _storage;
   final Directory? _backgroundsDirectory;
@@ -157,6 +167,7 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
         _backgroundKey,
         _customKey,
         _paneOpacityKey,
+        _shadeInactivePanesKey,
         _promptKey,
       ]);
       final custom = _customFrom(saved[_customKey]);
@@ -172,6 +183,7 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
             : background,
         custom: custom,
         paneOpacity: _paneOpacityFrom(saved[_paneOpacityKey]),
+        shadeInactivePanes: saved[_shadeInactivePanesKey] == 'true',
         prompt: _promptFrom(saved[_promptKey]),
       );
     } catch (_) {
@@ -302,6 +314,29 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
     }
   }
 
+  /// Apply immediately and serialize writes so the final choice survives.
+  Future<void> setShadeInactivePanes(bool enabled) {
+    if (value.shadeInactivePanes == enabled) {
+      return _shadeInactivePanesSave ?? Future.value();
+    }
+    value = value.copyWith(shadeInactivePanes: enabled);
+    return _shadeInactivePanesSave ??= _saveShadeInactivePanes();
+  }
+
+  Future<void> _saveShadeInactivePanes() async {
+    try {
+      while (true) {
+        final enabled = value.shadeInactivePanes;
+        await _storage.write(_shadeInactivePanesKey, enabled.toString());
+        if (value.shadeInactivePanes == enabled) break;
+      }
+    } catch (_) {
+      // Keep the choice for this run if storage is unavailable.
+    } finally {
+      _shadeInactivePanesSave = null;
+    }
+  }
+
   /// Older builds also saved an `on` flag here; it is ignored.
   static double _paneOpacityFrom(String? raw) {
     try {
@@ -394,6 +429,7 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
     await _backgroundSave;
     await _customSave;
     await _paneOpacitySave;
+    await _shadeInactivePanesSave;
     await _promptSave;
     try {
       await _storage.delete(_familyKey);
@@ -402,6 +438,7 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
       await _storage.delete(_backgroundKey);
       await _storage.delete(_customKey);
       await _storage.delete(_paneOpacityKey);
+      await _storage.delete(_shadeInactivePanesKey);
       await _storage.delete(_promptKey);
     } catch (_) {
       // See above.

@@ -43,9 +43,9 @@ export interface StopAgentOptions {
 
 // Hooks rebuild registry objects. Compare stable values, never JavaScript object
 // identity or property ordering, while retaining the exact PID-reuse guard.
-const runtimeIdentity = (entry: RegisteredSession | undefined) => entry ? JSON.stringify([
-  entry.engine, entry.registeredAt, entry.processIdentity?.pid,
-  entry.processIdentity?.executable, entry.processIdentity?.startMarker,
+const runtimeIdentity = (entry: RegisteredSession | undefined, withProcess = true) => entry ? JSON.stringify([
+  entry.engine, entry.registeredAt,
+  ...(withProcess ? [entry.processIdentity?.pid, entry.processIdentity?.executable, entry.processIdentity?.startMarker] : []),
   entry.runtimes.map(terminalRouteKey).sort(),
 ]) : null
 
@@ -60,11 +60,16 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
     const job = Promise.resolve().then(async () => {
       const live = registry.resolve(sessionId)
       if (!live) return
-      const identity = runtimeIdentity(live)
+      // A row still starting has no process yet, and the one it gains while this stop runs is the engine
+      // it launched, not a replacement. Comparing it refused every Stop pressed on a starting agent with
+      // "Harness changed… Try stopping again" (e2e/races.e2e.ts). The process is still checked exactly
+      // before it is signalled; a row with no process at all is retired with its pane.
+      const starting = !live.processIdentity
+      const identity = runtimeIdentity(live, !starting)
       const conversation = live.sessionId
       const sameTarget = () => {
         const current = registry.resolve(sessionId)
-        return runtimeIdentity(current) === identity && (!conversation || current!.sessionId === conversation)
+        return runtimeIdentity(current, !starting) === identity && (!conversation || current!.sessionId === conversation)
       }
       const captured = await captureResumeIdentity({ ...live })
       // Discovery or a hook may have updated this row while reading the native store.

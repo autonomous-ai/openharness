@@ -664,6 +664,8 @@ pub struct App {
     pub os_session: bool,
     /// A disposable USB session offers direct try, install and network actions on its home.
     pub os_live: bool,
+    pub os_welcome: crate::os_welcome::State,
+    pub os_first_use: bool,
     /// While a command runs in another session (`-t work:2`): the session to come back to.
     pub swap_back: Option<u32>,
     /// The session asked for at start (`hn new -A -s main`, `hn attach -t work`).
@@ -871,6 +873,8 @@ impl App {
             headless: false,
             os_session: std::env::var("HARNESS_OS").as_deref() == Ok("1"),
             os_live: std::env::var("HARNESS_OS").as_deref() == Ok("1") && std::env::var("HARNESS_OS_LIVE").as_deref() == Ok("1"),
+            os_welcome: Default::default(),
+            os_first_use: std::env::var("HARNESS_OS_FIRST_USE").as_deref() == Ok("1"),
             wait_channels: HashMap::new(),
             cli_held: std::collections::VecDeque::new(),
             last_cli: Instant::now(),
@@ -5269,7 +5273,17 @@ impl App {
         if self.headless { self.shell_asked = true; return }
         // The OS opens on the agent launcher. An explicit `hn new ...` still gets
         // its requested shell; reconnecting to existing work is handled by the desk.
-        if self.os_session && self.start_session.is_none() { self.shell_asked = true; return }
+        if self.os_session && self.start_session.is_none() {
+            if (self.os_live || self.os_first_use) && self.tabs.len() == 1 && self.tabs[0].root.is_none() {
+                if self.link(&self.fleet.local_id).is_none() { return }
+                self.shell_asked = true;
+                // The welcome reply may arrive after another terminal is requested.
+                // Fill its original tab instead of whichever tab is now active.
+                let tab = self.tab().id.clone();
+                crate::input::new_shell_from(self, None, Placement::Fill(tab), None, Some("/usr/bin/hn-os welcome".into()));
+            } else { self.shell_asked = true; }
+            return;
+        }
         // `hn new -s work` (a session besides the desk's): made here, with its shell.
         if self.start_session.as_ref().map(|s| s.create && self.session_alias.as_deref() != s.name.as_deref()).unwrap_or(false) {
             if self.link(&self.fleet.local_id).is_none() { return }
@@ -5746,6 +5760,7 @@ impl App {
     }
 
     pub fn on_tick(&mut self) {
+        crate::os_welcome::tick(self);
         self.run_start_then();
         crate::new_harness::welcome_tick(self);
         self.ask_said();

@@ -28,7 +28,9 @@ applicable design system, including the [desktop Design System](../desktop/desig
 | Open source project and repository | **OpenHarness** | Use for the source project and repository identity; the product interface says Harness. |
 
 Use **Harness** in prose. Wordmarks and ASCII artwork may use their established
-lettering. `hn` and `harness` are commands, not additional product brands.
+lettering. `hn` and `harness` are commands, and `harnessd` is the name of the
+daemon's process (the way `dockerd` is Docker's); none of them is an additional
+product brand. Prose says "the Harness daemon".
 Keep vendor names intact: **Claude Code**, **Codex**, **OpenCode**, and **pi**.
 
 The roadmap can be explained in one sentence:
@@ -89,7 +91,7 @@ task form.
 | Manage a workspace group | **Rename Tab**, **Close Tab**, **Next Tab**, **Previous Tab** |
 | Manage a running harness | **Rename Harness**, **Pause Harness**, **Resume Harness**, **Restart Harness**, **Stop Harness** |
 | Author a reusable Store package | **Create Harness** |
-| Start the bundled agent from the OS welcome | **Start OpenCode** |
+| Start the bundled agent from the installed OS home | **Start OpenCode** |
 | Set up wireless networking | **Connect to Wi-Fi** |
 
 Use the object's own name where possible: **Blender**, **Web Viewer**, or the
@@ -101,25 +103,41 @@ configuration where it affects a decision.
 | Surface | Wording |
 | --- | --- |
 | Boot and unlock branding | **Harness** |
+| First-use description | **The operating system built by agents, for agents.** |
 | Disk unlock prompt | **Enter your password** |
-| USB welcome primary action | **Install Harness** |
-| USB welcome secondary action | **Try without installing** |
-| Installer title | **Install Harness** |
+| USB install action | **Install Harness** |
+| USB startup | Open **Install Harness** directly; no trial choice or network step. |
+| First installed boot | **Connect to Wi-Fi to get started** when disconnected, then the agent workspace. |
+| USB session label | Omit from the single installation footer. |
+| Connect another execution machine | **Connect a computer** |
+| Installer title | Omit the redundant heading; label the action. |
 | Installer fields | **Disk**, **Encryption**, **Password**, **Repeat password** |
-| Installer action | **Install** |
+| Installer action | **Install Harness** |
 | Installation completion | **Harness is installed.** |
 | Completion actions | **Shut down**, **Back to Harness** |
+| Defer installed Wi-Fi setup | **Set up later** |
+| Apply available OS/runtime releases | **Update** |
+| Update needs a reboot | **Updated. Restart when ready.** |
+| Update completion actions | **Done**, **Restart** |
 | Default account | `me` |
 | Default computer name | `harness` |
 | Default shell identity | `me@harness` |
-| Command equivalent of installation | `sudo harness install` |
-| OS page description | **An operating system built around agents.** |
+| Open installation from a conversation or shell | `harness install` |
+| Direct administrative installation command | `sudo harness install` |
+| OS page description | **A Linux operating system built by agents, for agents.** |
 | Audience description | **Built for programmers first.** |
 
-Installation is directly accessible from the USB welcome. Trying Harness may
-require network setup; offline installation does not. An installed system and
-ordinary hn on macOS or another Linux distribution never show the USB installation
-actions. The `harness install` system command belongs to the OS integration.
+The USB opens the installer directly and works offline. There is no trial option.
+After rebooting the installed disk, the existing Wi-Fi page appears when needed;
+a working connection advances to the agent and two terminal panes. Ordinary hn
+on macOS or another Linux distribution never shows OS installation actions.
+The `harness install` system command belongs to the OS integration.
+
+Write OS shortcuts with lowercase letters: **Super+n**, **Super+t**, **Super+m**,
+**Super+i**, **Super+w**, **Super+b**, **Super+u**, **Super+l**. They require no Shift
+and no prefix. The existing shared TUI prefix shortcuts remain available; write
+**Ctrl+b, then Shift+n** when that binding requires Shift. Super means the Windows
+key on PC keyboards and the Command key on Mac keyboards running Harness OS.
 
 The terminal and optional browser are the OS's working surfaces. This does not
 replace the desktop app's design system or require every Harness interface to

@@ -103,6 +103,26 @@ describe('production resume handler', () => {
     expect(registry.byAgent(saved.agentId)?.permissionMode).toBe(permissionMode)
   })
 
+  it('notes where the relaunched engine\'s writing begins, after the history is prepared and before the launch', async () => {
+    writeFileSync(saved.transcriptPath!, '{"type":"session_meta"}\n')
+    const note = vi.fn((_sessionId: string, _offset: number) => {
+      // The pane is not allocated yet: the engine has written nothing of its own.
+      expect(create).not.toHaveBeenCalled()
+    })
+    vi.mocked(deps.prepareSessionResume).mockImplementation(() => { writeFileSync(saved.transcriptPath!, '{"type":"session_meta"}\n{"prepared":true}\n') })
+    deps = { ...deps, relaunchMarks: { note } }
+    expect(await start()).toMatchObject({ ok: true, resumed: true })
+    expect(note).toHaveBeenCalledWith(saved.sessionId, Buffer.byteLength('{"type":"session_meta"}\n{"prepared":true}\n'))
+  })
+
+  it('notes nothing for a conversation with no file to tail, or a file that is gone', async () => {
+    const note = vi.fn()
+    deps = { ...deps, relaunchMarks: { note } }
+    // history.jsonl was never written: there is no byte to begin at.
+    expect(await start()).toMatchObject({ ok: true, resumed: true })
+    expect(note).not.toHaveBeenCalled()
+  })
+
   it('refuses an unsupported explicit permission choice before allocating a pane', async () => {
     rewrite({ engine: 'opencode', permissionMode: 'ask' })
     expect(await createResumeAgentService(deps)(saved.agentId, 'full')).toMatchObject({ error: 'INVALID_PERMISSION_MODE' })
