@@ -101,6 +101,9 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   @override
   void dispose() {
     widget.focusNode.removeListener(_onFocusChange);
+    // Not settled: the terminal it would type into is going with this widget.
+    _rewriteSettle?.cancel();
+    _rewriteSettle = null;
     _closeInputConnectionIfNeeded();
     super.dispose();
   }
@@ -132,6 +135,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   }
 
   void setEditingState(TextEditingValue value) {
+    _settleRewrite();
     _cancelPendingDeletes();
     _currentEditingState = value;
     _terminalText = value.text;
@@ -142,6 +146,8 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   /// It intentionally stays intact between ordinary key presses: Vietnamese
   /// Telex needs the preceding `u` available to convert it into `ư`.
   void resetEditingState() {
+    // What the keyboard was rewriting reaches the terminal before the buffer is emptied under it.
+    _settleRewrite();
     _cancelPendingDeletes();
     _currentEditingState = _initEditingState.copyWith();
     _terminalText = _currentEditingState.text;
@@ -167,6 +173,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   }
 
   KeyEventResult _onKeyEvent(FocusNode focusNode, KeyEvent event) {
+    _settleRewrite();
     if (_currentEditingState.composing.isCollapsed) {
       if (_isBufferBackspace(event)) {
         _cancelPendingDeletes();
@@ -347,10 +354,70 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   @override
   void updateEditingValue(TextEditingValue value) {
     if (_consumeActionEcho(value)) return;
+    if (_holdRewrite(value)) return;
     _applyEditingValue(
       value,
       hasTextMutation: value.text != _currentEditingState.text,
     );
+  }
+
+  /// Set while the keyboard is rewriting a run of its buffer — see
+  /// [_holdRewrite] — and fires once it has gone quiet ([_settleRewrite]).
+  Timer? _rewriteSettle;
+
+  /// How long the keyboard must go quiet before a rewrite counts as done. Its
+  /// steps arrive a millisecond or two apart; a person's next key is a hundred
+  /// or more behind.
+  static const _rewriteQuiet = Duration(milliseconds: 30);
+
+  /// AUTONOMOUS PATCH: holds back the steps of a word the keyboard is
+  /// rewriting, so only where it ends up reaches the terminal.
+  ///
+  /// ⚠️ **iOS rewrites the whole word on every key typed into it** — with
+  /// autocorrect on, which Telex needs (see [_openInputConnection]). It selects
+  /// the word WITH the space before it (a selection change, the text untouched),
+  /// deletes that, then types the space and the word back a letter or a few at a
+  /// time: "  b" + `a` arrived as "  b" [1..3] → " " → "  " → "  ba". Forwarded
+  /// step by step, every key became a run of deletes and retypes on the
+  /// terminal — the word visibly vanishing and coming back — and a word at the
+  /// start of the buffer lost more than that: the space it deleted is one of the
+  /// buffer's padding spaces ([_initEditingState]), which stand for text the
+  /// terminal had BEFORE the buffer, so the step deleted a character the person
+  /// typed earlier; and the step, no longer starting with the padding, reset the
+  /// buffer under the keyboard while it was still mid-rewrite, after which its
+  /// next edit was read against a buffer it no longer had and the word just
+  /// typed was deleted ("ban" came out "n"). Measured on a phone, 2026-10-05.
+  ///
+  /// So the selection change that starts a rewrite starts a hold: every edit
+  /// after it only updates the buffer, until [_rewriteQuiet] passes with none,
+  /// and then the terminal gets one edit — from what it had to where the
+  /// keyboard ended. Typing that is not a rewrite (an ordinary key appended, a
+  /// Backspace, a composition) never waits.
+  bool _holdRewrite(TextEditingValue value) {
+    final holding = _rewriteSettle != null;
+    if (!holding) {
+      final startsRewrite = _composesThroughSoftwareKeyboard &&
+          value.composing.isCollapsed &&
+          !value.selection.isCollapsed &&
+          value.text == _currentEditingState.text &&
+          value.text == _terminalText;
+      if (!startsRewrite) return false;
+    }
+    _currentEditingState = value;
+    _rewriteSettle?.cancel();
+    _rewriteSettle = Timer(_rewriteQuiet, _settleRewrite);
+    return true;
+  }
+
+  /// The rewrite [_holdRewrite] is holding, applied now: the terminal goes from
+  /// what it has to what the buffer ended on, in one edit. Nothing without one.
+  void _settleRewrite() {
+    final timer = _rewriteSettle;
+    if (timer == null) return;
+    timer.cancel();
+    _rewriteSettle = null;
+    final value = _currentEditingState;
+    _applyEditingValue(value, hasTextMutation: value.text != _terminalText);
   }
 
   /// Drops the newline described by [_pendingActionEcho] and puts the native
@@ -448,6 +515,8 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   @override
   void performAction(TextInputAction action) {
+    // The line goes as the keyboard ended it, before the action acts on it.
+    _settleRewrite();
     // Captured before the handler runs: it is what the pty has been sent, and
     // what iOS is about to append its newline to. See [_pendingActionEcho].
     _pendingActionEcho = _currentEditingState.text;
@@ -456,6 +525,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   @override
   void performSelector(String selectorName) {
+    _settleRewrite();
     if (!selectorName.startsWith('deleteBackward')) return;
 
     // A marked string belongs entirely to the IME. It will send a fresh

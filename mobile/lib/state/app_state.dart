@@ -1114,7 +1114,16 @@ class AppNotifier extends ChangeNotifier {
   String get autonomousEnv => _autonomousEnv;
 
   static const offlineRetryInterval = Duration(seconds: 5);
-  static const agentSyncInterval = Duration(seconds: 60);
+
+  /// How often a connected machine's agent list is read again, under the pushes — see
+  /// [_syncAgentsIfChanged].
+  ///
+  /// ⚠️ **Two minutes, not one.** The pushes keep the list live; this catches only what they miss,
+  /// and a relay session gone stale ([agentSyncStaleTicks] of these timing out in a row). And it is
+  /// not cheap where it lands: the machine reads every agent's git state and history to answer —
+  /// one to two seconds for 150 of them — and every keystroke sent to it meanwhile waits behind
+  /// that answer. Once a minute, on each machine, was a stall in somebody's typing every minute.
+  static const agentSyncInterval = Duration(seconds: 120);
 
   MachineState? stateOf(String machineId) => machineStates[machineId];
 
@@ -1922,7 +1931,7 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// One tick of the agent-list safety net ([_syncAgentsIfChanged]), which the
-  /// app itself only reaches through a 60-second timer.
+  /// app itself only reaches through its [agentSyncInterval] timer.
   @visibleForTesting
   Future<void> syncAgentsForTest(String machineId) async {
     final machine = machineStates[machineId];
@@ -2103,18 +2112,61 @@ class AppNotifier extends ChangeNotifier {
 
   void _startAgentSyncTimer(String machineId) {
     if (_agentSyncTimers.containsKey(machineId)) return;
-    _agentSyncTimers[machineId] = Timer.periodic(agentSyncInterval, (_) {
-      final machine = machineStates[machineId];
-      if (machine == null) {
-        _stopAgentSyncTimer(machineId);
-        return;
-      }
-      unawaited(_syncAgentsIfChanged(machine));
-    });
+    _agentSyncTimers[machineId] = Timer.periodic(
+      agentSyncInterval,
+      (_) => _agentSyncTick(machineId, DateTime.now()),
+    );
+  }
+
+  /// How recently a keystroke must have gone to a machine for its agent-list tick to wait.
+  static const _typingQuiet = Duration(seconds: 8);
+
+  /// The longest a tick waits on somebody typing before it goes anyway: a safety net held back
+  /// for as long as somebody keeps typing would never run at all.
+  static const _typingWaitLimit = Duration(seconds: 60);
+
+  /// Per machine, a tick waiting for the typing on it to stop — see [_agentSyncTick].
+  final Map<String, Timer> _agentSyncHolds = {};
+
+  /// Whether somebody is typing into a terminal on [machineId]: a keystroke sent to it in the last
+  /// [_typingQuiet].
+  bool _typingOn(String machineId, DateTime now) =>
+      panesFor(machineId).any((pane) {
+        final at = pane.session?.lastInputAt;
+        return at != null && now.difference(at) < _typingQuiet;
+      });
+
+  /// One tick of the agent-list safety net, first due at [dueSince].
+  ///
+  /// ⚠️ **Held while somebody types on that machine.** The machine answers `agents_list` on the
+  /// same queue it takes keystrokes from, and the answer takes it a second or two (see
+  /// [agentSyncInterval]) — a tick landing mid-sentence froze the echo for that long. So a tick
+  /// that finds a keystroke gone in the last [_typingQuiet] waits that long and looks again, up to
+  /// [_typingWaitLimit] from when it was due; the periodic ticks meanwhile leave it to the one
+  /// waiting.
+  void _agentSyncTick(String machineId, DateTime dueSince) {
+    final machine = machineStates[machineId];
+    if (machine == null) {
+      _stopAgentSyncTimer(machineId);
+      return;
+    }
+    if (_agentSyncHolds.containsKey(machineId)) return;
+    final now = DateTime.now();
+    if (_typingOn(machineId, now) &&
+        now.difference(dueSince) < _typingWaitLimit) {
+      _agentSyncHolds[machineId] = Timer(_typingQuiet, () {
+        _agentSyncHolds.remove(machineId);
+        if (_disposed || !_agentSyncTimers.containsKey(machineId)) return;
+        _agentSyncTick(machineId, dueSince);
+      });
+      return;
+    }
+    unawaited(_syncAgentsIfChanged(machine));
   }
 
   void _stopAgentSyncTimer(String machineId) {
     _agentSyncTimers.remove(machineId)?.cancel();
+    _agentSyncHolds.remove(machineId)?.cancel();
     _agentSyncTimeouts.remove(machineId);
   }
 
@@ -2123,6 +2175,10 @@ class AppNotifier extends ChangeNotifier {
       timer.cancel();
     }
     _agentSyncTimers.clear();
+    for (final hold in _agentSyncHolds.values) {
+      hold.cancel();
+    }
+    _agentSyncHolds.clear();
     _agentSyncTimeouts.clear();
   }
 
@@ -2130,8 +2186,8 @@ class AppNotifier extends ChangeNotifier {
   /// is treated as gone and redialled ([_recoverStaleSession]).
   ///
   /// Two, not one: a single missed tick is a busy machine or a slow relay, and a
-  /// forced redial costs every terminal on it a resync. Two in a row is a minute
-  /// of a machine not answering the cheapest request there is, which nothing
+  /// forced redial costs every terminal on it a resync. Two in a row is minutes
+  /// of a machine not answering a request it always answers, which nothing
   /// healthy does.
   @visibleForTesting
   static const agentSyncStaleTicks = 2;
@@ -2237,7 +2293,16 @@ class AppNotifier extends ChangeNotifier {
     final byId = {for (final agent in a) agent.id: agent};
     for (final agent in b) {
       final prev = byId[agent.id];
-      if (prev == null ||
+      if (prev == null || !agentEqual(prev, agent)) return false;
+    }
+    return true;
+  }
+
+  /// One agent of [agentsEqual]: the same agent, with nothing the UI reads changed. The same
+  /// hand-kept list, and the same rule — a field added to [Agent] is added here.
+  @visibleForTesting
+  static bool agentEqual(Agent prev, Agent agent) =>
+      !(prev.id != agent.id ||
           prev.name != agent.name ||
           // What search and the Recent list read: a turn that ends moves
           // `updatedAt` and often `title`, and a sync that ignored them left
@@ -2272,12 +2337,7 @@ class AppNotifier extends ChangeNotifier {
           prev.tokensUpdatedAt != agent.tokensUpdatedAt ||
           prev.outputStats != agent.outputStats ||
           // Whether a stopped row can be opened at all ([Agent.canPauseAndResume]).
-          prev.resumeMode != agent.resumeMode) {
-        return false;
-      }
-    }
-    return true;
-  }
+          prev.resumeMode != agent.resumeMode);
 
   /// Public retry hook used by the offline join guide's "Retry now" action.
   Future<void> retryOfflineMachine(String machineId) =>
@@ -4041,7 +4101,7 @@ class AppNotifier extends ChangeNotifier {
 
   /// A machine whose list timed out while it was plainly alive — see the catch in
   /// [_performMachineDataLoad] — is asked again after a short pause, rather than left to the
-  /// minute-long sync. Only a list never confirmed: a confirmed one stands until that sync.
+  /// next sync tick. Only a list never confirmed: a confirmed one stands until that sync.
   void _askSlowMachineAgain(MachineState machine, int revision) {
     Timer(const Duration(seconds: 2), () {
       if (_disposed || !_machineWorkCurrent(machine, revision)) return;
@@ -4315,7 +4375,12 @@ class AppNotifier extends ChangeNotifier {
 
   /// [json] is [agent] as the daemon sent it, where the caller has it: kept for the next launch
   /// ([_cacheAgentJson]).
-  void _upsertAgent(
+  ///
+  /// False when it changed nothing — the agent is held already, equal in everything a screen reads
+  /// ([agentEqual]), with the machine's list loaded and no turn waiting on its session — and then
+  /// nothing here is touched either. See `agent_synced` in [_handleEvent], the caller that skips
+  /// its redraw for it.
+  bool _upsertAgent(
     MachineState machine,
     Agent agent, {
     Map<String, dynamic>? json,
@@ -4324,6 +4389,16 @@ class AppNotifier extends ChangeNotifier {
     final index = machine.agents.indexWhere((item) => item.id == agent.id);
     final previous = index == -1 ? null : machine.agents[index];
     agent = retainNewerGitContext(agent, previous);
+    final heldSession = agent.sessionId;
+    if (previous != null &&
+        agentEqual(previous, agent) &&
+        machine.agentLoadStatus == AgentLoadStatus.loaded &&
+        machine.agentsLoadError == null &&
+        (heldSession == null ||
+            (machine.sessionAgentIds[heldSession] == agent.id &&
+                !machine.pendingProcessingSessions.contains(heldSession)))) {
+      return false;
+    }
     if (index == -1) {
       machine.agents = [...machine.agents, agent];
     } else {
@@ -4352,6 +4427,7 @@ class AppNotifier extends ChangeNotifier {
       // install failed) — reloading the machine list will not install it.
       _lastErrorRetryable = false;
     }
+    return true;
   }
 
   void _renameAgent(MachineState machine, String agentId, String name) {
@@ -7134,13 +7210,18 @@ class AppNotifier extends ChangeNotifier {
           try {
             final json = Map<String, dynamic>.from(raw);
             final agent = Agent.fromJson(json);
-            _upsertAgent(machine, agent, json: json);
+            final changed = _upsertAgent(machine, agent, json: json);
             if (agent.terminalAvailable) {
               // A pane created before this agent's terminal was verified is still sitting on
               // "Attaching…" with no session — nothing else re-checks it once agentLoadStatus is
               // already `loaded`, so this push is the only signal that it can attach now.
               // A push about an agent synced elsewhere.
               _attachPendingPanes(machine, intent: AttachIntent.automatic);
+              // ⚠️ **No redraw for a push that changed nothing**, which is most of them: the
+              // machine re-sends every agent it has every five minutes (its reconcile), and a
+              // fleet of eighty was eighty redraws of every screen in two seconds — under
+              // somebody typing. An attach started above redraws for itself when it lands.
+              if (!changed) return;
             } else {
               // ⚠️ **Kept, not removed — the desktop's rule.** This is how a STOP arrives
               // (`publishStoppedAgent` pushes the agent with `status: 'stopped'`), and also how an
@@ -7148,10 +7229,14 @@ class AppNotifier extends ChangeNotifier {
               // stopped work vanish from the phone until the next full reload, so there was no row
               // left to resume. `agent_deleted` is what removes an agent; this only lets go of the
               // streams, which have no terminal behind them any more.
+              var detached = false;
               for (final pane in panesFor(machine.machine.machineId).toList()) {
                 if (pane.agentId != agent.id) continue;
+                // `_detachSession` redraws nothing itself — the redraw below is this one's.
+                if (pane.session != null) detached = true;
                 await _detachSession(pane, sendClose: false);
               }
+              if (!changed && !detached) return;
             }
           } catch (_) {
             unawaited(_loadMachineData(machine, force: true));
@@ -7195,7 +7280,7 @@ class AppNotifier extends ChangeNotifier {
         // stopped harness in the same breath, and says only this; the stopped
         // row is in the next `agents_list` (`includeStopped`), never in a push.
         // Without the read the harness vanished from the phone until the
-        // 60-second sync — the one row somebody opens to resume it.
+        // next sync tick — the one row somebody opens to resume it.
         if (agentId == null || payload['retained'] == true) {
           unawaited(_loadMachineData(machine, force: true));
         }

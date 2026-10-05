@@ -255,6 +255,17 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
     _armPrefetch();
   }
 
+  /// The page of a pager with no neighbours — made once, and handed back unchanged by every [build]
+  /// after.
+  ///
+  /// ⚠️ **The same widget, so a rebuild of this pager stops here.** [AgentHome] holds this pager at
+  /// the root and rebuilds it on every tick of the notifier — an agent synced on any machine, a
+  /// turn starting — and a new [TerminalPage] each time rebuilt the whole page with it: header,
+  /// dock and terminal, under somebody typing. The page listens to the notifier for itself and
+  /// rebuilds only for what it draws ([TerminalPage]'s `_onNotifier`), so nothing is lost by it.
+  /// Made again only if what it was made from changes.
+  TerminalPage? _single;
+
   /// Takes in a new neighbour list without leaving the page on screen.
   ///
   /// ⚠️ **In place, and that is the whole point.** The list is retaken whenever the tab's agents
@@ -272,6 +283,11 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
   @override
   void didUpdateWidget(AgentSwipeHost oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.notifier, widget.notifier) ||
+        oldWidget.machineId != widget.machineId ||
+        oldWidget.agentId != widget.agentId) {
+      _single = null;
+    }
     final next = widget.neighbours;
     final held = _neighbours;
     if (next == null || held == null || identical(next, held)) return;
@@ -349,7 +365,7 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
     final neighbours = _neighbours;
     final controller = _controller;
     if (neighbours == null || controller == null || neighbours.isEmpty) {
-      return TerminalPage(
+      return _single ??= TerminalPage(
         notifier: widget.notifier,
         machineId: widget.machineId,
         agentId: widget.agentId,

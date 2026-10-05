@@ -195,6 +195,12 @@ typedef _PageFacts = ({
   TerminalSession? session,
   TerminalSessionStatus? status,
   bool rendered,
+  bool hasScreen,
+  Terminal? terminal,
+  bool watching,
+  bool acceptsInput,
+  String? tabId,
+  String? branch,
   String? agentName,
   String? agentEngine,
   AgentProject? agentProject,
@@ -702,6 +708,17 @@ class _TerminalPageState extends State<TerminalPage>
       session: session,
       status: session?.status,
       rendered: session?.hasRenderedFrame ?? false,
+      // ⚠️ Everything below to `branch` is read by [build] too, and has to be compared here: this
+      // page is no longer rebuilt from above on every tick of the notifier (see
+      // `AgentSwipeHost._single`), so a fact left out is a fact drawn stale. The terminal itself is
+      // replaced by every keyframe — each keyboard raised or lowered ends in one — and the page
+      // anchors and reads the one it is handed.
+      hasScreen: session?.hasScreen ?? false,
+      terminal: session?.terminal,
+      watching: session?.watching ?? false,
+      acceptsInput: session?.acceptsInput ?? false,
+      tabId: notifier.activeSwarmId,
+      branch: agent?.gitContext?.branchLabel,
       agentName: agent?.displayName,
       agentEngine: agent?.engine,
       agentProject: agent?.displayProject,
@@ -3382,6 +3399,10 @@ class _SlideAway extends StatelessWidget {
 /// keeps the whole screen, so reading back through the history uses every row: while it is read
 /// ([enabled] off) the terminal eases back to where it is drawn. Nothing moves on the alternate
 /// screen, where a full-screen program owns its own layout.
+/// What [_AnchoredTerminal] places the terminal by: the buffer's height and its last line with
+/// anything on it.
+typedef _Anchor = ({int height, int last});
+
 class _AnchoredTerminal extends StatefulWidget {
   const _AnchoredTerminal({
     required this.terminal,
@@ -3416,16 +3437,17 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
   @override
   void initState() {
     super.initState();
-    widget.terminal?.addListener(_changed);
+    widget.terminal?.addListener(_output);
     widget.reading.addListener(_toggled);
+    terminalFontStore.addListener(_changed);
   }
 
   @override
   void didUpdateWidget(_AnchoredTerminal old) {
     super.didUpdateWidget(old);
     if (!identical(old.terminal, widget.terminal)) {
-      old.terminal?.removeListener(_changed);
-      widget.terminal?.addListener(_changed);
+      old.terminal?.removeListener(_output);
+      widget.terminal?.addListener(_output);
     }
     if (!identical(old.reading, widget.reading)) {
       old.reading.removeListener(_toggled);
@@ -3437,8 +3459,9 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
 
   @override
   void dispose() {
-    widget.terminal?.removeListener(_changed);
+    widget.terminal?.removeListener(_output);
     widget.reading.removeListener(_toggled);
+    terminalFontStore.removeListener(_changed);
     super.dispose();
   }
 
@@ -3454,6 +3477,21 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
 
   void _toggled() {
     _settle(ease: true);
+    _changed();
+  }
+
+  /// What the last layout placed the terminal by — see [_output].
+  _Anchor? _drawnFor;
+
+  /// The terminal changed: output, the cursor's blink, a resize.
+  ///
+  /// ⚠️ **Rebuilt only when that moves where the terminal is drawn.** Every byte of output and every
+  /// blink of the cursor lands here, and each one used to rebuild this widget — and with it ask for
+  /// a fresh layout — even with the keyboard up, when nothing is anchored at all, which is exactly
+  /// while somebody types. What the place is worked out from is a few rows read off the buffer, so
+  /// it is compared first.
+  void _output() {
+    if (!mounted || _anchor() == _drawnFor) return;
     _changed();
   }
 
@@ -3484,15 +3522,13 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
     return height;
   }();
 
-  double _shift(double viewport) {
+  /// What [_shift] places the terminal by, read off it now — null while nothing is anchored.
+  _Anchor? _anchor() {
     final terminal = widget.terminal;
-    if (!_on || terminal == null || terminal.isUsingAltBuffer) {
-      return 0;
-    }
+    if (!_on || terminal == null || terminal.isUsingAltBuffer) return null;
     final buffer = terminal.buffer;
     final height = buffer.height;
-    if (height == 0) return 0;
-    final cell = _cellHeight(terminalFontStore.value);
+    if (height == 0) return null;
     // The last line with anything on it — the cursor's, or below it where a TUI parked the
     // cursor higher up.
     var last = buffer.absoluteCursorY.clamp(0, height - 1);
@@ -3502,6 +3538,14 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
         break;
       }
     }
+    return (height: height, last: last);
+  }
+
+  double _shift(double viewport) {
+    final anchor = _drawnFor = _anchor();
+    if (anchor == null) return 0;
+    final (:height, :last) = anchor;
+    final cell = _cellHeight(terminalFontStore.value);
     // Rows are laid from the top until there is history to scroll, and from the foot after.
     final bottom = height * cell <= viewport
         ? (last + 1) * cell

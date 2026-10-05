@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:io';
 
@@ -19,17 +20,38 @@ import '../core/harness_file_store.dart';
 /// Writes are synchronous and flushed so a line survives even if the app is
 /// force-quit mid-write, and every IO error is swallowed — diagnostic logging
 /// must never break the flow it only observes.
+///
+/// ⚠️ **Unless [batch] is set, which the app's own log does** (`installFileLogs`).
+/// A write and an fsync PER LINE is milliseconds on a phone's flash, on the UI
+/// isolate, and a machine reconciling its agents is a burst of lines: frames
+/// dropped, under somebody typing. Batched, lines wait up to [batch] and go
+/// out in one write, without the fsync — a write that has reached the kernel
+/// survives the app being killed, which is the loss the fsync was there for;
+/// what it adds is surviving the PHONE going down. [flush] puts them out at
+/// once, durably when asked: an error does, and so does the app on its way to
+/// the background.
 class DailyLogFile {
   DailyLogFile(
     this.directory,
     this.base, {
     this.retentionDays = 14,
+    this.batch,
     DateTime Function() clock = DateTime.now,
     // The field is private, so an initialising formal would name the
     // PARAMETER `_clock` — which no caller outside this library could pass.
     // The clock is injected by tests.
     // ignore: prefer_initializing_formals
   }) : _clock = clock;
+
+  /// How long a line may wait to go out with the ones after it. Null — the
+  /// default — writes and flushes every line as it comes.
+  final Duration? batch;
+
+  /// The lines waiting for [batch], and the moment the first of them was
+  /// appended — which names the day's file they go to.
+  final StringBuffer _pending = StringBuffer();
+  DateTime? _pendingSince;
+  Timer? _batchTimer;
 
   /// The app's own log directory, `~/.harness/logs`.
   ///
@@ -64,18 +86,47 @@ class DailyLogFile {
 
   /// Append [block] followed by a newline to today's file. Creates the directory
   /// on demand and prunes stale days on the first write after midnight; any
-  /// failure is swallowed.
+  /// failure is swallowed. With [batch] set the line waits for the next [flush].
   void append(String block) {
+    final now = _clock();
+    final wait = batch;
+    if (wait == null) {
+      _write(now, '$block\n', durable: true);
+      return;
+    }
+    // A line of a new day: what is waiting belongs to the day before, and its file.
+    final since = _pendingSince;
+    if (since != null && _ymd(since) != _ymd(now)) flush();
+    _pendingSince ??= now;
+    _pending
+      ..write(block)
+      ..write('\n');
+    _batchTimer ??= Timer(wait, flush);
+  }
+
+  /// Writes every line [batch] is holding, now, in one write — and to disk
+  /// before returning when [durable]. Nothing to do without [batch].
+  void flush({bool durable = false}) {
+    _batchTimer?.cancel();
+    _batchTimer = null;
+    final since = _pendingSince;
+    if (since == null) return;
+    final text = _pending.toString();
+    _pending.clear();
+    _pendingSince = null;
+    _write(since, text, durable: durable);
+  }
+
+  void _write(DateTime at, String text, {required bool durable}) {
     try {
-      final now = _clock();
-      final day = _ymd(now);
-      final file = _fileFor(now);
+      final day = _ymd(at);
+      final file = _fileFor(at);
       file.parent.createSync(recursive: true);
       if (day != _activeDay) {
         _activeDay = day;
-        _pruneOlderThan(now);
+        _pruneOlderThan(at);
       }
-      file.writeAsStringSync('$block\n', mode: FileMode.append, flush: true);
+      file.writeAsStringSync(text, mode: FileMode.append, flush: durable);
     } catch (e) {
       // Best-effort: never surface an IO failure into the caller's flow.
       _debugLog('DailyLogFile.append failed: $e');

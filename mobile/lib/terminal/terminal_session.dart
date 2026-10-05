@@ -372,6 +372,11 @@ class TerminalSession extends ChangeNotifier {
   Timer? _inputTimer;
   Timer? _resizeTimer;
   DateTime? _lastInputFlushAt;
+
+  /// When typing into this terminal last went out to the machine — null before it ever has. What
+  /// the app's agent-list check reads to stay out of the way of somebody typing
+  /// (`AppNotifier._typingOn`).
+  DateTime? get lastInputAt => _lastInputFlushAt;
   DateTime? _lastResizeFlushAt;
   Timer? _resyncTimer;
   Timer? _scrollTimer;

@@ -801,9 +801,35 @@ class WsConn {
     }
     final eventType = message['type'];
     if (eventType is String && worthLogging(eventType)) {
-      appLog.debug('ws', '↓ $eventType ${summariseForLog(payload)}');
+      appLog.debug('ws', '↓ $eventType ${_summaryOf(eventType, payload)}');
     }
     await onEvent({...message, 'payload': payload});
+  }
+
+  /// [payload] for the log line of a [type] frame.
+  ///
+  /// ⚠️ **The two that come in bursts say which agent and what state, not the whole agent.** A
+  /// machine re-sends every agent it has as `agent_synced` each time it reconciles (every five
+  /// minutes), and `agent_activity` beats for every agent mid-turn: rendered in full, each was a
+  /// whole agent — project, git context, model — turned into 1,200 characters on the UI thread,
+  /// four thousand lines a day of it. Which agent, and whether it is up, is what the timeline is
+  /// read for.
+  static String _summaryOf(String type, Map<String, dynamic> payload) {
+    switch (type) {
+      case 'agent_synced':
+        final agent = payload['agent'];
+        if (agent is! Map) break;
+        final launch = agent['launch'];
+        final terminal = agent['terminal'];
+        return '{id: ${agent['id']}, status: ${agent['status']}'
+            '${launch is Map ? ', launch: ${launch['state']}' : ''}'
+            '${terminal is Map ? ', terminal: ${terminal['available']}' : ''}}';
+      case 'agent_activity':
+        final activity = payload['activity'];
+        return '{agentId: ${payload['agentId']}'
+            '${activity is Map ? ', state: ${activity['state']}' : ''}}';
+    }
+    return summariseForLog(payload);
   }
 
   Future<void> _handleE2ee(Map<String, dynamic> frame) async {

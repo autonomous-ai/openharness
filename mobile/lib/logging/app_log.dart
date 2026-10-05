@@ -59,7 +59,8 @@ extension AppLogX on AppLog {
 }
 
 /// [AppLog] backed by a per-day file under `~/.harness/logs`. Writes are
-/// synchronous and flushed (see [DailyLogFile]); IO errors are swallowed.
+/// synchronous — flushed per line, or batched when the file is (see
+/// [DailyLogFile.batch]); IO errors are swallowed.
 class FileAppLog implements AppLog {
   FileAppLog(this._file, {ErrorBurstFilter? burst, DateTime Function()? clock})
     : _burst = burst ?? ErrorBurstFilter(),
@@ -103,6 +104,10 @@ class FileAppLog implements AppLog {
     if (admitted == null) return;
     _file.append('[${logStamp(_clock())}] $admitted');
     _appendStack(stackTrace);
+    // On disk now, with every line held for a batch before it: an error is what
+    // the log is opened for, and the lines before it are why it happened — they
+    // must not wait on a timer an app about to go down may never see fire.
+    _file.flush(durable: true);
   }
 
   void _appendStack(StackTrace? stackTrace) {

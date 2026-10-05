@@ -257,7 +257,15 @@ class RootShell extends ConsumerWidget {
     final app = ref.watch(appStateProvider);
     return ListenableBuilder(
       listenable: app,
-      builder: (context, _) => switch (app.status) {
+      // ⚠️ **Made here and handed through, never made in the builder.** The notifier ticks for
+      // everything on the account — an agent synced, a turn starting on another machine — and
+      // the signed-in screen rebuilt from the top on each one: the shell, its navigator, every
+      // route on it, down to the terminal being typed into. Everything in that screen that draws
+      // from the notifier listens to it for itself, so the tick has nothing to bring it. Made
+      // here, it is the same widget on every tick and Flutter stops at it; it is made again
+      // only when this shell is (a theme or text-size change), which still rebuilds it whole.
+      child: _SignedInScreen(app: app, screen: authenticatedScreen),
+      builder: (context, signedIn) => switch (app.status) {
         // `bootstrapping` covers two unrelated moments: the app starting
         // cold, and a sign-in the user just began. The second keeps the
         // signed-out screen, which carries the wait as a state of its own
@@ -268,8 +276,20 @@ class RootShell extends ConsumerWidget {
         AppStatus.bootstrapping =>
           app.signingIn ? signedOutScreen(app) : bootScreen(app),
         AppStatus.unauthenticated => signedOutScreen(app),
-        AppStatus.authenticated => authenticatedScreen(app),
+        AppStatus.authenticated => signedIn!,
       },
     );
   }
+}
+
+/// [screen] for [app] as a widget of its own, so [RootShell] can make it once and hand it through
+/// its [ListenableBuilder] — and so the screen itself is only built when it is shown.
+class _SignedInScreen extends StatelessWidget {
+  const _SignedInScreen({required this.app, required this.screen});
+
+  final AppNotifier app;
+  final AuthenticatedScreenBuilder screen;
+
+  @override
+  Widget build(BuildContext context) => screen(app);
 }

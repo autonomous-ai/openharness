@@ -254,13 +254,37 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     await confirmExitApp(context);
   }
 
+  /// The page stack. A fresh widget each call — what makes the [Navigator] tell every route on it
+  /// that the world may have changed (`Route.changedExternalState`), and so rebuild every page.
+  Widget _pages() => HeroControllerScope(
+    controller: _heroController,
+    child: Navigator(
+      key: _navigator,
+      // ⚠️ The controller goes in the SCOPE ONLY, never also in `observers`.
+      // `NavigatorState._updateEffectiveObservers` appends the scope's controller
+      // to `widget.observers` itself, so listing it here registers it twice and
+      // trips "A HeroController can not be shared by multiple Navigators" — which
+      // reads like a sharing bug and is really a double-subscription by one
+      // navigator.
+      onGenerateRoute: (_) => MaterialPageRoute<void>(
+        builder: (_) => AgentHome(
+          notifier: widget.notifier,
+          openMachineId: _linkedMachineId,
+          openAgent: _openAgentRequest,
+        ),
+      ),
+    ),
+  );
+
   @override
-  Widget build(BuildContext context) => PhoneShellScope(
-    onMachineLinked: _followLinkedMachine,
-    onOpenAgent: _openAgentAtHome,
-    child: ListenableBuilder(
-      listenable: widget.notifier,
-      builder: (context, _) => PopScope<Object?>(
+  Widget build(BuildContext context) {
+    // Made once per build of the shell, and handed through the [ListenableBuilder] below — see the
+    // note there.
+    final pages = _pages();
+    return PhoneShellScope(
+      onMachineLinked: _followLinkedMachine,
+      onOpenAgent: _openAgentAtHome,
+      child: PopScope<Object?>(
         // False while the stack has somewhere to go back to, so the gesture reaches [_handleBack]
         // instead of leaving the app. True at its root: the press then belongs to the system —
         // except on Android, where the root asks before the app is left ([confirmExitApp]), so
@@ -275,57 +299,55 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
             //
             // `MaterialApp` installs one controller for the ROOT navigator only; a nested
             // `Navigator` inherits nothing, so its routes have no observer to drive a flight.
-            body: Column(
-              children: [
-                // A device this phone had never trusted joined the account (device key log).
-                NewDeviceBanner(
-                  notifier: widget.notifier,
-                  navigator: _navigator,
-                ),
-                Expanded(
-                  // While a band shows it has taken the status-bar inset, so the pages under it must
-                  // not take it again (a blank gap the height of the notch otherwise).
-                  //
-                  // ⚠️ **Read under the Scaffold, through this Builder — never through the shell's
-                  // own context.** The Scaffold has resized its body for the keyboard, and hands the
-                  // body a MediaQuery with the keyboard's inset taken out so nothing below takes it
-                  // again. The shell's context sits ABOVE the Scaffold and still holds that inset:
-                  // rebuilt from it, every page in this navigator read the keyboard afresh and its
-                  // own Scaffold shrank for it a second time. The terminal page lost twice the
-                  // keyboard's height, its key bar left floating halfway up the screen over an
-                  // empty band. See `TerminalPage.didChangeMetrics`, which relies on the inset
-                  // being gone here.
-                  child: Builder(
-                    builder: (context) => MediaQuery.removePadding(
-                      context: context,
-                      removeTop: NewDeviceBanner.showing(widget.notifier),
-                      child: HeroControllerScope(
-                        controller: _heroController,
-                        child: Navigator(
-                          key: _navigator,
-                          // ⚠️ The controller goes in the SCOPE ONLY, never also in `observers`.
-                          // `NavigatorState._updateEffectiveObservers` appends the scope's controller
-                          // to `widget.observers` itself, so listing it here registers it twice and
-                          // trips "A HeroController can not be shared by multiple Navigators" — which
-                          // reads like a sharing bug and is really a double-subscription by one
-                          // navigator.
-                          onGenerateRoute: (_) => MaterialPageRoute<void>(
-                            builder: (_) => AgentHome(
-                              notifier: widget.notifier,
-                              openMachineId: _linkedMachineId,
-                              openAgent: _openAgentRequest,
-                            ),
-                          ),
-                        ),
+            //
+            // ⚠️ **Only the bands and the inset under them are rebuilt by the notifier, and the
+            // page stack is not — while the home screen is all there is.** This used to wrap the
+            // whole shell, so every tick of the notifier (an agent synced on any machine, a turn
+            // starting) handed the [Navigator] a new widget, which rebuilds EVERY route on it:
+            // the home screen down to the terminal being typed into, several times a second in a
+            // burst. The home screen listens to the notifier for itself ([AgentHome]), so at the
+            // root the stack is handed through untouched. A page PUSHED over it may not listen —
+            // it may read the notifier in `build` and count on being rebuilt — so while one is up
+            // the stack is rebuilt on every tick exactly as before.
+            body: ListenableBuilder(
+              listenable: widget.notifier,
+              child: pages,
+              builder: (context, pages) => Column(
+                children: [
+                  // A device this phone had never trusted joined the account (device key log).
+                  NewDeviceBanner(
+                    notifier: widget.notifier,
+                    navigator: _navigator,
+                  ),
+                  Expanded(
+                    // While a band shows it has taken the status-bar inset, so the pages under it must
+                    // not take it again (a blank gap the height of the notch otherwise).
+                    //
+                    // ⚠️ **Read under the Scaffold, through this Builder — never through the shell's
+                    // own context.** The Scaffold has resized its body for the keyboard, and hands the
+                    // body a MediaQuery with the keyboard's inset taken out so nothing below takes it
+                    // again. The shell's context sits ABOVE the Scaffold and still holds that inset:
+                    // rebuilt from it, every page in this navigator read the keyboard afresh and its
+                    // own Scaffold shrank for it a second time. The terminal page lost twice the
+                    // keyboard's height, its key bar left floating halfway up the screen over an
+                    // empty band. See `TerminalPage.didChangeMetrics`, which relies on the inset
+                    // being gone here.
+                    child: Builder(
+                      builder: (context) => MediaQuery.removePadding(
+                        context: context,
+                        removeTop: NewDeviceBanner.showing(widget.notifier),
+                        child: (_navigator.currentState?.canPop() ?? false)
+                            ? _pages()
+                            : pages!,
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
