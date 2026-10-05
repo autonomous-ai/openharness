@@ -1385,7 +1385,7 @@ const RESOLVE_ON_START_TIMEOUT_MS = 10_000
 async function downloadCanaryStage(entry: UpdateEntry, dir: string, log: (m: string) => void): Promise<boolean> {
   const cliBuf = await downloadVerified(entry.cli)
   const notifyBuf = await downloadVerified(entry.notify)
-  if (!canary(cliBuf, dir)) { log(`  ✗ the new build failed its self-check — keeping v${VERSION}`); return false }
+  if (!canary(cliBuf, dir, entry.version)) { log(`  ✗ the new build failed its self-check — keeping v${VERSION}`); return false }
   // Asked for by name, so a version this machine once rolled back is installed and no longer rejected.
   stage(dir, cliBuf, notifyBuf, entry.version)
   confirmUpdate(dir) // canary passed + bytes already verified ⇒ drop the .prev backups
