@@ -23,11 +23,11 @@ describe('selfUpdate packaging', () => {
     dirs = []
   })
 
-  it('canary runs installed cli.js as ESM', () => {
+  it('canary runs installed cli.js as ESM', async () => {
     const dir = tempDir()
     const cli = Buffer.from('#!/usr/bin/env node\nimport { createRequire } from "module";\nconsole.log(createRequire(import.meta.url) ? "1.2.3" : "nope")\n')
 
-    expect(canary(cli, dir)).toBe(true)
+    expect(await canary(cli, dir)).toBe(true)
   })
 
   it('stages the module package metadata next to cli.js', () => {
@@ -383,14 +383,14 @@ describe('the updater when things go wrong', () => {
       .rejects.toThrow('sha256 mismatch')
   })
 
-  it('fails the canary of a build that will not run, or that it cannot even write down', () => {
+  it('fails the canary of a build that will not run, or that it cannot even write down', async () => {
     const broken = Buffer.from('#!/usr/bin/env node\nprocess.exit(3)\n')
     const dir = tempDir()
-    expect(canary(broken, dir)).toBe(false)
+    expect(await canary(broken, dir)).toBe(false)
     expect(readdirSync(dir), 'the canary cleans up after itself').toEqual([])
     const file = join(dir, 'not-a-folder')
     writeFileSync(file, '')
-    expect(canary(Buffer.from('console.log(1)\n'), file)).toBe(false)
+    expect(await canary(Buffer.from('console.log(1)\n'), file)).toBe(false)
   })
 
   it('skips a build that fails its canary, says why, and stages nothing', async () => {
@@ -556,20 +556,38 @@ describe('the canary\'s verdicts', () => {
     dirs = []
   })
 
-  it('tells a build that failed or names another version from a canary that could not be written', () => {
+  it('tells a build that failed or names another version from a canary that could not be written', async () => {
     const dir = tempDir()
-    expect(runCanary(Buffer.from('console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true })
-    expect(runCanary(Buffer.from('console.log("loading…"); console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true })
-    expect(runCanary(Buffer.from('console.log("9.9.8")\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is 9.9.8' })
-    expect(runCanary(Buffer.from(''), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is nothing' })
-    expect(runCanary(Buffer.from('process.exit(3)\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'failed', detail: 'exit 3' })
-    expect(runCanary(Buffer.from('process.kill(process.pid, "SIGKILL")\n'), dir)).toEqual({ ok: false, problem: 'failed', detail: 'signal SIGKILL' })
-    expect(canary(Buffer.from('console.log("anything")\n'), dir)).toBe(true)
-    expect(canary(Buffer.from('console.log("9.9.8")\n'), dir, '9.9.9')).toBe(false)
+    expect(await runCanary(Buffer.from('console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true })
+    expect(await runCanary(Buffer.from('console.log("loading…"); console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true })
+    expect(await runCanary(Buffer.from('console.log("9.9.8")\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is 9.9.8' })
+    expect(await runCanary(Buffer.from(''), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is nothing' })
+    expect(await runCanary(Buffer.from('process.exit(3)\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'failed', detail: 'exit 3' })
+    expect(await runCanary(Buffer.from('process.kill(process.pid, "SIGKILL")\n'), dir)).toEqual({ ok: false, problem: 'failed', detail: 'signal SIGKILL' })
+    expect(await canary(Buffer.from('console.log("anything")\n'), dir)).toBe(true)
+    expect(await canary(Buffer.from('console.log("9.9.8")\n'), dir, '9.9.9')).toBe(false)
     const file = join(dir, 'not-a-folder')
     writeFileSync(file, '')
-    expect(runCanary(Buffer.from('console.log(1)\n'), file, '1')).toMatchObject({ ok: false, problem: 'unwritable' })
+    expect(await runCanary(Buffer.from('console.log(1)\n'), file, '1')).toMatchObject({ ok: false, problem: 'unwritable' })
     expect(readdirSync(dir)).toEqual(['not-a-folder'])
+  })
+
+  it('keeps the event loop it shares with every session turning while the new build loads', async () => {
+    // It ran with spawnSync inside the core: no terminal byte, hook or heartbeat for as long as the new
+    // build took to answer, up to 15 s.
+    let ticks = 0
+    const timer = setInterval(() => { ticks++ }, 20)
+    try {
+      expect(await runCanary(Buffer.from('setTimeout(() => console.log("9.9.9"), 600)\n'), tempDir(), '9.9.9')).toEqual({ ok: true })
+    } finally { clearInterval(timer) }
+    expect(ticks).toBeGreaterThan(10)
+  })
+
+  it('gives up on a build that does not answer in time, in seconds as in milliseconds', async () => {
+    expect(await runCanary(Buffer.from('setInterval(() => {}, 1000)\n'), tempDir(), '9.9.9', 300))
+      .toEqual({ ok: false, problem: 'failed', detail: 'no answer within 300 ms' })
+    expect(await runCanary(Buffer.from('setInterval(() => {}, 1000)\n'), tempDir(), '9.9.9', 1_000))
+      .toEqual({ ok: false, problem: 'failed', detail: 'no answer within 1 s' })
   })
 
   it('says why a canary that never ran failed', async () => {
@@ -577,7 +595,7 @@ describe('the canary\'s verdicts', () => {
     vi.doMock('./nodeRuntime.js', () => ({ managedNodePath: () => '/nonexistent/node' }))
     try {
       const { runCanary: runWithoutNode } = await import('./selfUpdate.js')
-      expect(runWithoutNode(Buffer.from('console.log(1)\n'), tempDir(), '1')).toMatchObject({ ok: false, problem: 'failed', detail: expect.stringContaining('ENOENT') })
+      expect(await runWithoutNode(Buffer.from('console.log(1)\n'), tempDir(), '1')).toMatchObject({ ok: false, problem: 'failed', detail: expect.stringContaining('ENOENT') })
     } finally {
       vi.doUnmock('./nodeRuntime.js')
       vi.resetModules()
