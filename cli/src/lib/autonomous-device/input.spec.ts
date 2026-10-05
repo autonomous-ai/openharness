@@ -296,6 +296,26 @@ describe('native input write evidence', () => {
   })
 })
 
+it('lets the next message through once a write could not be checked after its paste', async () => {
+  // The check before pressing Enter again could not see the agent (gone, or a probe that failed): the
+  // first message is unknown, and the one behind it used to wait until a turn began or ended.
+  vi.useFakeTimers()
+  const answers = [true, false]
+  const inject = vi.fn(async (_target: string, _text: string): Promise<TerminalActionResult> => ({ state: 'succeeded', dispatch: 'executed' }))
+  const onDelivery = vi.fn()
+  const device = makeDevice({
+    getSession: () => ({ agentId: 'agent', engine: 'codex', cliVersion: '0.106.0' }) as RegisteredSession,
+    validateRuntime: async () => answers.length ? answers.shift()! : true,
+    inject, capture: async () => '› A', onDelivery,
+  })
+  device.submit('agent', 'A', 'delivery-A')
+  device.submit('agent', 'B', 'delivery-B')
+  await vi.advanceTimersByTimeAsync(5_000)
+  expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'delivery-A', state: 'unknown', reason: 'runtime_gone_post_paste' }))
+  expect(inject).toHaveBeenLastCalledWith('agent', 'B')
+  device.forget('agent')
+})
+
 it('preserves A/B order if a dialog appears during the first preflight check', async () => {
   vi.useFakeTimers()
   let release!: (blocked: boolean) => void
