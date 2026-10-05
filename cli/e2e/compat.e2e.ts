@@ -291,7 +291,11 @@ describe.skipIf(!FROM)('what the apps see, compared with the released build', ()
     const released = sides.released!
     const current = sides.this!
     const found = differences(released.answers, current.answers)
-    const explained = (path: string) => Object.keys(CHANGED).find((prefix) => path === prefix || path.startsWith(`${prefix}.`) || path.startsWith(`${prefix}[`))
+    // Paths read `.<step>.<field>…`; a CHANGED entry names a step, or a path under one.
+    const explained = (path: string) => Object.keys(CHANGED).find((prefix) => {
+      const step = `.${prefix}`
+      return path === step || path.startsWith(`${step}.`) || path.startsWith(`${step}[`)
+    })
     const added = found.filter((difference) => difference.from === undefined)
     const unexplained = found.filter((difference) => difference.from !== undefined && !explained(difference.path))
     if (process.env.COMPAT_REPORT) {
