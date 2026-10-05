@@ -73,7 +73,7 @@ function setup(over: Partial<AttachDeps> = {}) {
   const service = { needsTranscript: vi.fn(() => false), observeTranscript: vi.fn() }
   const profile = { ingest: vi.fn(), commit: vi.fn() }
   const deps: AttachDeps = {
-    validateTerminal: vi.fn(async () => true),
+    terminalGone: vi.fn(async () => false),
     normalizers,
     watcher: { addSession: vi.fn(async () => {}), hold: vi.fn(async () => null), tails: vi.fn(() => false) },
     cursorDiscovery: { add: vi.fn(async () => {}) },
@@ -111,7 +111,7 @@ describe('attaching a session', () => {
   })
 
   it('refuses a session whose pane is gone', async () => {
-    const { attach, deps } = setup({ validateTerminal: vi.fn(async () => false) })
+    const { attach, deps } = setup({ terminalGone: vi.fn(async () => true) })
     expect(await attach.attachSession(session('pi', transcript()))).toBe(false)
     expect(deps.watcher.addSession).not.toHaveBeenCalled()
   })
@@ -416,7 +416,7 @@ describe('attaching a session', () => {
   it('says when an attach is slow', async () => {
     vi.useFakeTimers()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const run = setup({ validateTerminal: () => new Promise<boolean>(() => {}) })
+    const run = setup({ terminalGone: () => new Promise<boolean>(() => {}) })
     void run.attach.attachSession(session('pi', '/t/pi.jsonl'))
     await vi.advanceTimersByTimeAsync(15_000)
     expect(String(warn.mock.calls[0][0])).toMatch(/attach still running · engine=pi · session=.* · 15s/)

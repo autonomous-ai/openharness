@@ -118,9 +118,17 @@ export function createTerminalControl({ resolve, terminals }: TerminalControlDep
   }
   const validateTerminal = async (session: RegisteredSession): Promise<boolean> =>
     (await terminals.validate(session)).state === 'alive'
+  /**
+   * Whether a session's terminal is known to be gone: the agent is dormant, tmux has no such pane, or
+   * another process is in it. Not the same question as `validateTerminal`, which is the one to ask before
+   * writing to a pane: a probe that could not answer (it timed out, or the process table could not be
+   * read) is no reason to write, and no evidence either that the terminal is gone.
+   */
+  const terminalGone = async (session: RegisteredSession): Promise<boolean> =>
+    (await terminals.validate(session)).state === 'gone'
   return {
     pinnedControls, pinTerminalControl, invalidateTerminalControl, captureTerminal, submitTerminalAction,
-    submitTerminal, typeTerminal, keyTerminalAction, keyTerminal, validateTerminal,
+    submitTerminal, typeTerminal, keyTerminalAction, keyTerminal, validateTerminal, terminalGone,
   }
 }
 

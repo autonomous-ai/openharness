@@ -38,7 +38,8 @@ import type { SessionNormalizers } from './normalizers.js'
 import type { RelaunchMarks } from './relaunch.js'
 
 export interface AttachDeps {
-  validateTerminal: (session: RegisteredSession) => Promise<boolean>
+  /** Whether the session's terminal is known to be gone (core/terminals/control.ts `terminalGone`). */
+  terminalGone: (session: RegisteredSession) => Promise<boolean>
   normalizers: SessionNormalizers
   watcher: Pick<Watcher, 'addSession' | 'hold' | 'tails'>
   cursorDiscovery: Pick<CursorTranscriptDiscovery, 'add'>
@@ -65,7 +66,7 @@ export interface AttachDeps {
 }
 
 export function createAttach({
-  validateTerminal, normalizers, watcher, cursorDiscovery, device, runtimeProfiles, captureTerminal, emit,
+  terminalGone, normalizers, watcher, cursorDiscovery, device, runtimeProfiles, captureTerminal, emit,
   announceTurnAborted, questionWatcher, terminalLabel, dbs, devinHome, hermesDb, concurrency, relaunchMarks,
   wholeReadCapBytes = WHOLE_READ_CAP_BYTES,
 }: AttachDeps) {
@@ -116,7 +117,12 @@ export function createAttach({
      *  its normalizer stopped — the byte the tail resumes from. */
     handover: { hold: TailHold | null; next: number | null } = { hold: null, next: null },
   ): Promise<boolean> => {
-    if (!await validateTerminal(session)) return false
+    // Only a terminal known to be gone refuses an attach, never a probe that could not answer. A failed
+    // attach costs the agent its binding (agents/bind.ts) or its place among the active (discovery.ts),
+    // and a probe in flight when the machine slept times out at the wake before its answer is read: the
+    // session of an agent still at work was unbound that way two seconds after a laptop woke (round 29,
+    // e2e/clockjump.e2e.ts). A terminal that really is gone is retired by the reconciler's confirmed scans.
+    if (await terminalGone(session)) return false
     // Taken whichever way this attach goes: a mark is for the next attach of the conversation only.
     const relaunchedAt = relaunchMarks?.take(session.sessionId)
     if (!reset && normalizers.hasState(session.sessionId)) {

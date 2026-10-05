@@ -1485,6 +1485,30 @@ describe('registry across a reboot and pane loss', () => {
     expect(registry.byProcess('claude', processIdentity(4242))?.agentId).toBe('agent-a')
   })
 
+  it('does not take a step of the wall clock for a reboot', async () => {
+    // A boot named by the moment it began moved with the clock: a daemon restarted after an NTP step,
+    // a virtual machine resumed or a long sleep marked every agent dormant (round 29). macOS has a
+    // per-boot id; Linux always used its own.
+    const transcriptPath = join(dataDir, 'session-a.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    chmodSync(dataDir, 0o755)
+    writeLegacyStateFile(join(dataDir, 'registry.json'), JSON.stringify([persistedRow(transcriptPath)]))
+    const first = await loadRegistryModule()
+    first.registry.load()
+    expect(first.registry.rebootedSinceLastRun).toBe(false)
+
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(Date.now() + 3 * 3_600_000)
+      const again = await loadRegistryModule()
+      again.registry.load()
+      expect(again.registry.rebootedSinceLastRun).toBe(false)
+      expect(again.registry.byAgent('agent-a')?.processIdentity).toEqual(processIdentity(4242))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps the permission mode from agent_create through a bind and a reload', async () => {
     const transcriptPath = join(dataDir, 'session-p.jsonl')
     writeFileSync(transcriptPath, '{}\n')

@@ -37,7 +37,7 @@ import {
 } from 'fs'
 import { randomUUID } from 'crypto'
 import { join, basename, dirname, relative, isAbsolute } from 'path'
-import { hostname, uptime } from 'os'
+import { hostname } from 'os'
 import { cursorDataDir } from '../engines/cursor/home.js'
 import { env } from '../config/env.js'
 import { claudeProjectsRoots, codexHomeRoots } from './engineHomes.js'
@@ -48,6 +48,7 @@ import { parseGridLaunchOverride, type GridLaunchOverride, type GridLaunchRecord
 import { commandcodeTranscriptPath } from '../engines/commandcode/transcript.js'
 import { agyTranscriptPath } from '../engines/agy/session.js'
 import { copilotTranscriptPath } from '../engines/copilot/session.js'
+import { bootChanged, currentBootId } from './bootId.js'
 import { lockOwnerAlive, lockStartMarker, processLockIdentity } from './processLiveness.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from './secureState.js'
 import { mergeTerminalRuntimes, processIdentityKey, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
@@ -799,18 +800,7 @@ export function validTranscriptPath(engine: AgentEngine, filePath: string, codex
   }
 }
 
-/** Prefer the kernel boot UUID; retain numeric marker compatibility for one migration. */
-const BOOT_TOLERANCE_SEC = 120 // clock/NTP drift is seconds; a reboot shifts boot time by the whole uptime
-function bootTimeSec(): number {
-  return Math.round(Date.now() / 1000 - uptime())
-}
-function currentBootId(): string {
-  try {
-    const value = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()
-    if (/^[0-9a-f-]{36}$/i.test(value)) return `linux:${value}`
-  } catch { /* non-Linux fallback below */ }
-  return `time:${bootTimeSec()}`
-}
+/** The boot the registry was last loaded in (lib/bootId.ts says how a boot is named). */
 function readSavedBoot(): string | null {
   try {
     const raw = readPrivateStateFile(BOOT_FILE, 256).trim()
@@ -820,13 +810,6 @@ function readSavedBoot(): string | null {
       return typeof parsed === 'string' ? parsed : raw
     } catch { return raw }
   } catch { return null }
-}
-function bootChanged(saved: string | null, current: string): boolean {
-  if (!saved) return false
-  if (saved.startsWith('linux:')) return saved !== current
-  const savedNumber = Number(saved.replace(/^time:/, ''))
-  const currentNumber = current.startsWith('time:') ? Number(current.slice(5)) : bootTimeSec()
-  return !Number.isFinite(savedNumber) || Math.abs(currentNumber - savedNumber) > BOOT_TOLERANCE_SEC
 }
 function writeBoot(bootId: string): void {
   try {
