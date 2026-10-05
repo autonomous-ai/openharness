@@ -21,12 +21,14 @@
 // process is, `!goal` and `!goal done` (Codex) start and achieve a goal the way Codex 0.160 shows one
 // under its composer, `!browse` (Codex) leaves Codex browsing its transcript in its default fullscreen
 // mode, and `!browse scrollback` in its scrollback mode, `!transcript` (Claude Code) leaves it in its
-// transcript view, as ctrl+o does, `!exit` ends the process.
+// transcript view, as ctrl+o does, `!overlay` (Codex) in its transcript overlay, as ctrl+t does in its
+// scrollback mode, `!search` searching its prompt history, as ctrl+r does, `!exit` ends the process.
 // Everything else is echoed as the answer.
 //
 // Which release is installed is the config's business, so a test can update an engine in place by
 // rewriting its wrapper: `version` is what it reports and writes, `without` lists the flags and
-// subcommands that release no longer has, and `startDelayMs` is how long it takes, once started, before
+// subcommands that release no longer has, `updateAvailable` (Codex) names a newer release it asks to update
+// to before it starts, and `startDelayMs` is how long it takes, once started, before
 // it draws or announces anything (an engine's first run after an update). `firstHookDelayMs` is how long
 // its first SessionStart takes to reach the daemon once the engine is up: the hook command starting on a
 // loaded machine, while the daemon has already found the engine and its conversation. `realHooks` runs
@@ -82,6 +84,32 @@ export async function run(engine, config) {
   // Slow to start, as an engine is on its first run after an update: the process is there and holds
   // the terminal, and nothing is drawn, announced or read until it is ready.
   if (config.startDelayMs) await new Promise((resolve) => setTimeout(resolve, config.startDelayMs))
+  // A newer release out (`updateAvailable`): Codex 0.160 asks first, before its session starts
+  // (update_prompt.rs, snapshot `update_prompt_modal`). It drops a paste; Enter takes the highlighted row,
+  // `Update now`, runs the update and asks to be restarted; Esc, 2 or ctrl+c skip it.
+  if (engine === 'codex' && config.updateAvailable) {
+    process.stdout.write(`\r\n  \x1b[1mUpdate available\x1b[0m\x1b[2m · \x1b[0m${config.version ?? '0.159.0'} → ${config.updateAvailable}\r\n`
+      + '  \x1b[2mRelease notes: \x1b[0mhttps://github.com/openai/codex/releases/latest\r\n\r\n'
+      + '\x1b[36m› 1. Update now (runs `npm install -g @openai/codex`)\x1b[39m\r\n  2. Skip\r\n  3. Skip until next version\r\n\r\n'
+      + '  enter\x1b[2m continue · \x1b[0mesc\x1b[2m skip\x1b[0m\r\n')
+    // Input that came before the prompt was drawn is thrown away, as Codex does
+    // (`discard_pending_input_before_interactive_screen`).
+    while (process.stdin.read() !== null) { /* discarded */ }
+    const updateNow = await new Promise((resolve) => {
+      const keys = (chunk) => {
+        for (const token of String(chunk).match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[0-9;]*[A-Za-z~]|\x1b|[\s\S]/g) ?? []) {
+          if (token === '\r' || token === '\n' || token === '1') { process.stdin.off('data', keys); resolve(true); return }
+          if (token === '\x1b' || token === '2' || token === '3' || token === '\x03') { process.stdin.off('data', keys); resolve(false); return }
+        }
+      }
+      process.stdin.on('data', keys)
+    })
+    if (updateNow) {
+      process.stdout.write('\x1b[H\x1b[2JUpdating Codex via `npm install -g @openai/codex`...\r\n\r\n🎉 Update ran successfully! Please restart Codex.\r\n')
+      process.exit(0)
+    }
+    process.stdout.write('\x1b[H\x1b[2J')
+  }
 
   const resumeAt = engine === 'claude' ? args.indexOf('--resume') : args.indexOf('resume')
   const resumed = resumeAt >= 0 && args[resumeAt + 1] && !args[resumeAt + 1].startsWith('-') ? args[resumeAt + 1] : null
@@ -219,6 +247,22 @@ export async function run(engine, config) {
   // hidden, and its footer row under a dim rule.
   const transcriptBottom = (prompt, answer) => ({ transcript: true, pager: `\x1b[?1049h\x1b[H\x1b[2J\x1b[48;5;237m❯ ${prompt}\x1b[49m`
     + `\r\n\r\n⏺ ${answer}\x1b[998;1H\x1b[2m${'─'.repeat(60)}\x1b[0m\x1b[999;1H  \x1b[2mShowing detailed transcript · ctrl+o to toggle · ctrl+e to show all\x1b[0m` })
+  // Codex's transcript overlay, ctrl+t, in its scrollback mode (pager_overlay/transcript.rs, snapshot
+  // `transcript_flag_off_viewer`): over the whole pane, its hints on the last rows.
+  const overlayBottom = (prompt, answer) => ({ overlay: true, prompt, answer, pager: `\x1b[?1049h\x1b[H\x1b[2J\x1b[2m/ T R A N S C R I P T ${'/ '.repeat(30)}\x1b[0m`
+    + `\r\n\r\n\x1b[1m›\x1b[0m ${prompt}\r\n\r\n\x1b[2m•\x1b[0m ${answer}\x1b[997;1H\x1b[2mCtrl+Space select\x1b[0m`
+    + '\x1b[998;1H\x1b[2m ↑/↓ to scroll · pgup/pgdn to page · home/end to jump\x1b[0m\x1b[999;1H\x1b[2m q close · f3 find · esc browse prompts\x1b[0m' })
+  // The prompts sent so far, newest last, which a search through the prompt history (ctrl+r) looks in.
+  const history = []
+  // Searching them, as each engine draws it under its composer: the match in the composer, and Claude
+  // Code's `search prompts: …` (or `no matching prompt: …`) or Codex's `reverse-i-search: …` footer.
+  const searchBottom = (query) => {
+    const match = query ? history.findLast((sent) => sent.toLowerCase().includes(query.toLowerCase())) ?? null : null
+    const footer = engine === 'claude'
+      ? `  \x1b[2m${query && !match ? 'no matching prompt:' : 'search prompts:'}\x1b[0m ${query}`
+      : `  \x1b[2mreverse-i-search: \x1b[0m${query}  \x1b[2menter accept · esc cancel\x1b[0m`
+    return { search: true, query, match, composer: `› ${match ?? ''}`, footer }
+  }
   const draw = (line = '') => {
     if (bottom?.pager) { process.stdout.write(bottom.pager); return }
     if (bottom && !line) {
@@ -341,6 +385,7 @@ export async function run(engine, config) {
   const handle = async (raw) => {
     const prompt = raw.trim()
     if (!prompt) { draw(); return }
+    history.push(prompt)
     if (prompt === '!exit') { process.stdout.write('\x1b[?2004l\r\n'); process.exit(0) }
     if (prompt === '!compact') {
       // `/compact` is a command, not a turn: a summary replaces the history, and Claude Code announces
@@ -487,6 +532,16 @@ export async function run(engine, config) {
       finish(`answer ${turn}: ${prompt}`)
       return
     }
+    if (engine === 'codex' && directive?.[1] === 'overlay') {
+      bottom = overlayBottom(prompt, `answer ${turn}: ${prompt}`)
+      finish(`answer ${turn}: ${prompt}`)
+      return
+    }
+    if (directive?.[1] === 'search') {
+      bottom = searchBottom(directive[2] ?? '')
+      finish(`answer ${turn}: ${prompt}`)
+      return
+    }
     if (engine === 'codex' && directive?.[1] === 'browse') {
       // Reached in Codex by Esc twice on an empty composer; the directive goes straight there.
       bottom = directive[2] === 'scrollback' ? pagerBottom(prompt, `answer ${turn}: ${prompt}`) : browsingBottom
@@ -515,6 +570,44 @@ export async function run(engine, config) {
       for (const token of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[0-9;]*[A-Za-z~]|\x1b|[\s\S]/g) ?? []) {
         if (!bottom?.transcript) rest += token
         else if (token === '\x1b' || token === 'q' || token === '\x03') { process.stdout.write('\x1b[?1049l'); bottom = null; draw() }
+      }
+      if (!rest) return
+      chunk = rest
+    }
+    if (bottom?.overlay) {
+      // As Codex 0.160 takes input in its transcript overlay: q, ctrl+c or ctrl+t close it, Esc starts
+      // browsing prompts in it; a paste is dropped and Enter does nothing, so a message is lost there.
+      let rest = ''
+      for (const token of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[0-9;]*[A-Za-z~]|\x1b|[\s\S]/g) ?? []) {
+        if (!bottom?.overlay) rest += token
+        else if (token === 'q' || token === '\x03' || token === '\x14') { process.stdout.write('\x1b[?1049l'); bottom = null; draw() }
+        else if (token === '\x1b') { bottom = pagerBottom(bottom.prompt, bottom.answer); draw() }
+      }
+      if (!rest) return
+      chunk = rest
+    }
+    if (bottom?.search) {
+      // As each engine takes input while searching its prompt history. A paste and typing extend the
+      // search. Claude Code's Enter SENDS the earlier prompt found (2.1.289, historySearch:execute), its Esc
+      // puts it in the prompt, its ctrl+c leaves the prompt as it was; Codex's Enter puts the match in the
+      // composer (chat_composer/history_search.rs), its Esc and ctrl+c leave the composer as it was.
+      let rest = ''
+      const leave = (draft) => {
+        process.stdout.write('\r\n\x1b[2K\x1b[1A')
+        bottom = null
+        buffer = draft
+        draw(buffer)
+      }
+      for (const token of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[0-9;]*[A-Za-z~]|\x1b|[\s\S]/g) ?? []) {
+        if (!bottom?.search) { rest += token; continue }
+        const { query, match } = bottom
+        if (token.startsWith('\x1b[200~')) { bottom = searchBottom(query + token.slice(6).replace(/\x1b\[201~$/, '')); draw() }
+        else if (token === '\r' || token === '\n') {
+          if (engine === 'claude') { leave(''); if (query && match) queue = queue.then(() => handle(match)) }
+          else leave(match ?? '')
+        } else if (token === '\x03') leave('')
+        else if (token === '\x1b') leave(engine === 'claude' ? match ?? '' : '')
+        else if (token.length === 1 && token >= ' ') { bottom = searchBottom(query + token); draw() }
       }
       if (!rest) return
       chunk = rest

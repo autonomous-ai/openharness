@@ -4,6 +4,7 @@ import { isMessageHold, messageHold, messageHoldText, type MessageHold } from '.
 import {
   CLAUDE_PROMPT, CLAUDE_REWIND_CONFIRM, CLAUDE_REWIND_LIST, CODEX_BROWSING_FULLSCREEN, CODEX_BROWSING_SCROLLBACK, CODEX_PROMPT,
 } from './__fixtures__/rewindPickers.js'
+import * as TAKEOVER from './__fixtures__/takeoverScreens.js'
 
 const fixture = (name: string) => readFileSync(new URL(`./__fixtures__/${name}`, import.meta.url), 'utf8')
 const RULE = '─'.repeat(100)
@@ -69,8 +70,63 @@ describe('what a message is not typed into', () => {
   })
 })
 
+describe('the engines\' own screens that take the composer\'s place', () => {
+  it('holds a message back from each one, where its Enter would do something else or it would be lost', () => {
+    const expected: Record<keyof typeof TAKEOVER, MessageHold> = {
+      CODEX_UPDATE_PROMPT: 'update_prompt_open',
+      CODEX_TRUST_PROMPT: 'trust_open',
+      CODEX_TRUST_PROMPT_0147: 'trust_open',
+      CODEX_MODEL_MIGRATION: 'model_prompt_open',
+      CODEX_SIGN_IN: 'sign_in_open',
+      CODEX_HISTORY_SEARCH: 'search_open',
+      CODEX_TRANSCRIPT_FIND: 'search_open',
+      CODEX_TRANSCRIPT_OVERLAY: 'transcript_open',
+      CLAUDE_HISTORY_SEARCH: 'search_open',
+      CLAUDE_HISTORY_SEARCH_NO_MATCH: 'search_open',
+      CLAUDE_TRUST_PROMPT: 'trust_open',
+      CLAUDE_SIGN_IN: 'sign_in_open',
+    }
+    for (const [name, hold] of Object.entries(expected)) {
+      const engine = name.startsWith('CLAUDE') ? 'claude' : 'codex'
+      expect(messageHold(engine, TAKEOVER[name as keyof typeof TAKEOVER]), name).toBe(hold)
+    }
+  })
+
+  it('is not fooled by their words in the conversation, above a ready composer', () => {
+    // The conversation can say anything; the screens are matched on their own rows and footers.
+    // (The pager's header counts only as the top row of the screen, which is the pager's own.)
+    const said = [
+      '• Its transcript pager has this header:',
+      '/ T R A N S C R I P T',
+      '  reverse-i-search: is what ctrl+r shows',
+      'Find: the cookie bug',
+      '  Update available · 0.160.0 → 0.161.0',
+      '› 1. Update now (runs `npm install -g @openai/codex`)',
+      '  Trust this folder? Codex can read, edit, and run files here, it said.',
+      '› 1. Try new model',
+      '› 1. Sign in with ChatGPT',
+    ].join('\n')
+    expect(messageHold('codex', `${said}\n\n${CODEX_PROMPT}`)).toBeNull()
+    const claudeSaid = [
+      '⏺ search prompts: is what ctrl+r shows',
+      '  Quick safety check: Is this a project you created or one you trust?',
+      '  Select login method:',
+    ].join('\n')
+    expect(messageHold('claude', `${claudeSaid}\n${CLAUDE_PROMPT}`)).toBeNull()
+    // A startup question answered, the composer below it, is no longer open.
+    expect(messageHold('codex', `${TAKEOVER.CODEX_TRUST_PROMPT}\n\n${CODEX_PROMPT}`)).toBeNull()
+    expect(messageHold('codex', `${TAKEOVER.CODEX_UPDATE_PROMPT}\n\n${CODEX_PROMPT}`)).toBeNull()
+    expect(messageHold('claude', `${TAKEOVER.CLAUDE_TRUST_PROMPT}\n${CLAUDE_PROMPT}`)).toBeNull()
+    expect(messageHold('claude', `${TAKEOVER.CLAUDE_SIGN_IN}\n${CLAUDE_PROMPT}`)).toBeNull()
+    // Another engine's pane is not read for them.
+    expect(messageHold('cursor', TAKEOVER.CODEX_UPDATE_PROMPT)).toBeNull()
+    expect(messageHold('cursor', TAKEOVER.CLAUDE_HISTORY_SEARCH)).toBeNull()
+  })
+})
+
 describe('what the person is told', () => {
-  const holds: MessageHold[] = ['permission_open', 'question_open', 'menu_open', 'rewind_picker_open', 'transcript_open']
+  const holds: MessageHold[] = ['permission_open', 'question_open', 'menu_open', 'rewind_picker_open', 'transcript_open',
+    'search_open', 'trust_open', 'update_prompt_open', 'model_prompt_open', 'sign_in_open']
 
   it('names the engine, what is open, and exactly what lets the message through', () => {
     expect(holds.map((hold) => messageHoldText('claude', hold))).toEqual([
@@ -79,7 +135,15 @@ describe('what the person is told', () => {
       'Claude Code has a menu open, where Enter would pick from it. Close it with Esc in its terminal, then send the message again.',
       'Claude Code has its Rewind menu open, where Enter would pick a point to rewind to. Close it with Esc in its terminal, then send the message again.',
       'Claude Code is showing its transcript (ctrl+o), where a message is not typed. Close it with Esc in its terminal, then send the message again.',
+      'Claude Code is searching its prompt history (ctrl+r), where Enter would send an earlier prompt. Close it with ctrl+c in its terminal, then send the message again.',
+      'Claude Code is asking whether to trust this folder. Answer it in its terminal, then send the message again.',
+      'Claude Code is asking whether to update. Answer it in its terminal, then send the message again.',
+      'Claude Code is asking whether to switch to a new model. Answer it in its terminal, then send the message again.',
+      'Claude Code is asking how to sign in. Sign in in its terminal, then send the message again.',
     ])
+    expect(messageHoldText('codex', 'transcript_open')).toBe('Codex is showing its transcript (ctrl+t), where a message is not typed. Close it with q in its terminal, then send the message again.')
+    expect(messageHoldText('codex', 'search_open')).toBe('Codex has a search open, where a message would become what it searches for. Close it with Esc in its terminal, then send the message again.')
+    expect(messageHoldText('codex', 'update_prompt_open')).toBe('Codex is asking whether to update. Answer it in its terminal, then send the message again.')
     expect(messageHoldText('codex', 'permission_open')).toBe('Codex is asking for approval. Answer it first, in the app or in its terminal, then send the message again.')
     expect(messageHoldText('codex', 'rewind_picker_open')).toBe('Codex is browsing its transcript, where Enter would rewind the conversation. Close it with Esc in its terminal, then send the message again.')
     expect(messageHoldText('commandcode', 'permission_open')).toBe('Command Code is asking for permission. Answer it first, in the app or in its terminal, then send the message again.')

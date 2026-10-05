@@ -18,7 +18,7 @@ type Row = Record<string, any>
 const engines: Engine[] = ['claude', 'codex']
 
 /** A release of the fake engine, as e2e/harness/fakeEngine.mjs reads it from its config. */
-interface Release { version?: string; without?: string[]; startDelayMs?: number }
+interface Release { version?: string; without?: string[]; startDelayMs?: number; updateAvailable?: string }
 const OLD: Record<Engine, string> = { claude: '2.1.270', codex: '0.159.0' }
 const NEW: Record<Engine, string> = { claude: '2.1.271', codex: '0.160.0' }
 const versionLine = (engine: Engine, version: string) => engine === 'claude' ? `${version} (Claude Code)` : `codex-cli ${version}`
@@ -311,6 +311,35 @@ describe('engines updated in place', () => {
     expect((await thread(client, agent.sessionId)).users).toEqual([content])
     expect(errorsFor(client, id, from)).toEqual([])
     expect(await runningVersion(client, id)).toBe(versionLine(engine, NEW[engine]))
+    client.close()
+  })
+
+  it('codex: a message sent while Codex asks whether to update does not update it: refused with the reason, it goes through once the question is answered', async () => {
+    // Codex asks at startup when a newer release is out, before its conversation starts; the prompt drops
+    // a paste and takes the Enter behind it as `Update now`, the highlighted row.
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    install(d, 'codex', { version: OLD.codex, updateAvailable: NEW.codex })
+    const cwd = join(d.projectsDir, 'update-prompt')
+    mkdirSync(cwd, { recursive: true })
+    const created = await client.request('agent_create', { engine: 'codex', cwd, bypassPermission: true }, 90_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const id: string = created.agent.id
+    const pane = String((await until('the engine process', async () => {
+      const now = await row(client, id)
+      return now?.tmuxPane && now.launch?.state === 'ready' ? now : null
+    }, 30_000, 100)).tmuxPane)
+    await until('the update prompt to be drawn', async () => (await d.capture(pane)).includes('Update available') || null, 30_000, 250)
+    const from = client.frames.length
+    const refused = client.next((frame) => frame.type === 'error' && frame.agentId === id, 15_000, 'the refusal')
+    client.send('message', { agentId: id, content: 'what changed?' })
+    expect(String((await refused).payload?.message)).toBe('Codex is asking whether to update. Answer it in its terminal, then send the message again.')
+    expect(await d.capture(pane)).not.toContain('Update ran successfully')
+    // Skipped in its terminal, Codex starts, and the same message goes through.
+    await d.tmux.run('send-keys', '-t', pane, 'Escape')
+    await bound(client, id)
+    await turn(client, id, 'what changed?')
+    expect(errorsFor(client, id, from)).toHaveLength(1)
     client.close()
   })
 })
