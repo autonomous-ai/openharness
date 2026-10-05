@@ -4,20 +4,27 @@
 set -euo pipefail
 test -f /.dockerenv
 test "$(uname -m)" = aarch64
-test -f /inputs/overlay/usr/share/harness-os/runtime.json
+test -f /inputs/session.rpm
 manager=$(command -v dnf5 || command -v microdnf)
 "$manager" install -y --setopt=install_weak_deps=False --setopt=gpgcheck=True --nodocs \
   systemd systemd-udev systemd-pam systemd-resolved dbus-broker dbus-tools \
   NetworkManager sudo python3 shadow-utils util-linux procps-ng kmod iproute \
-  labwc xorg-x11-server-Xwayland foot chromium mesa-dri-drivers \
-  pipewire pipewire-pulseaudio wireplumber swayidle swaylock brightnessctl \
-  wl-clipboard xdg-utils xdg-desktop-portal-wlr dejavu-sans-mono-fonts \
-  google-noto-color-emoji-fonts cascadia-mono-nf-fonts \
-  nodejs22 nodejs22-bin nodejs22-npm nodejs22-npm-bin tmux git curl jq ripgrep less which unzip
+  xorg-x11-server-Xwayland chromium mesa-dri-drivers \
+  nodejs22-npm nodejs22-npm-bin git curl jq ripgrep less which unzip
+# This unsigned private package was checked against the exact-source manifest by
+# the host builder. Repository dependencies still require Fedora signatures.
+"$manager" install -y --setopt=install_weak_deps=False --setopt=gpgcheck=True \
+  --setopt=localpkg_gpgcheck=False --nodocs /inputs/session.rpm
 "$manager" clean all
-cp -a --no-preserve=ownership /inputs/overlay/. /
+install -D -m 644 /inputs/session-login /etc/profile.d/harness-os.sh
+install -D -m 440 /inputs/network-sudoers /etc/sudoers.d/20-harness-network
+install -D -m 644 /inputs/dns.conf /etc/NetworkManager/conf.d/10-dns.conf
+install -D -m 644 /inputs/browser-policy.json /etc/chromium/policies/managed/harness.json
+install -D -m 644 /inputs/project-AGENTS.md /etc/skel/projects/AGENTS.md
 cp -a --no-preserve=ownership /inputs/modules /usr/lib/
 depmod -a "$(cat /inputs/kernel-release)"
+# Agent provisioning remains separate from the session RPM. Capture its lock
+# below; this mutable test input is not an image release or a bundled-agent RPM.
 npm install --prefix /opt/harness-agent --no-audit --no-fund opencode-ai
 ln -s /opt/harness-agent/node_modules/.bin/opencode /usr/bin/opencode
 opencode --version

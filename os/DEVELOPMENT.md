@@ -561,7 +561,7 @@ the writable private disk/container are removed. A passing run establishes this 
 only, not hardware installation, GPU acceleration, suspend or Fedora recovery.
 
 ```sh
-python3 os/tests/arm_session.py --runtime os/work/runtime \
+python3 os/tests/arm_session.py --package os/work/fedora-package \
   --output os/test-results/arm-session
 ```
 
@@ -569,6 +569,41 @@ Use a native ARM Linux runner with the tools listed in `os-arm-session.yml`.
 The two recorded hosted ARM runs lacked KVM; the second TCG run reached Wi-Fi and
 accepted real keyboard input, but failed with a blank OpenCode pane. That failure
 is retained and is not graphical acceptance.
+
+Fresh fixtures install the native `harness-os-session` RPM instead of copying an
+unowned overlay. The RPM is a component of the future Fedora/Asahi Harness image:
+it owns the shared session, verified ARM runtime, Fedora guidance and per-user
+update units. It contains no installer, base-system updater, kernel, firmware,
+boot files, `/etc` configuration, account provisioning or service scriptlets.
+Package installation does not start or restart a session. Chromium is optional;
+the private fixture still provisions OpenCode separately and records its npm lock.
+That agent input is not yet a pinned, package-owned image component.
+
+Build in the pinned Fedora aarch64 container from `arm-session.lock.json`, with
+`python3`, `git` and `rpm-build` installed from signed Fedora repositories:
+
+```sh
+python3 os/tools/build-fedora-package.py --runtime /path/to/runtime \
+  --runtime-source FULL_RUNTIME_PRODUCER_SHA --output /path/to/fresh-package
+python3 os/tests/arm_session.py --package /path/to/fresh-package \
+  --output os/test-results/arm-session --prepare-only
+```
+
+The package source and explicitly selected runtime producer remain separate in
+the manifest. Both must be clean, with native ARM ELF and runtime hashes checked.
+An older immutable runtime can therefore validate packaging without rebuilding
+unrelated TUI/CLI sources. Payload timestamps, RPM build time and buildhost are
+fixed; compare actual RPM bytes with the same recorded Fedora RPM toolchain.
+These private artifacts are unsigned and unpublished; their manifest checksums
+are checked before fixture installation. This is not a product update channel.
+
+The Fedora profile reports runtime provenance through `hn-os status`. The
+`harness install/upgrade/rollback` and `hn-os install/checkpoint/update/recover`
+commands reject this profile before invoking PC helpers. `harness updates` and
+Super+u retain verified per-user updates, while the system channel is explicitly
+unavailable. Fedora/Asahi retains base-system and platform update/recovery
+responsibility. The test-only login, networking policy, empty-password account,
+root console and autologin remain in `arm_session_root.sh`, outside the RPM.
 
 The workflow defaults to `prepare_only=true`, which uploads an unbooted, compressed
 private test disk and kernel with their hashes and exact source identity. Its
