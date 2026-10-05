@@ -3,7 +3,6 @@ import './config/loadEnv.js'
 import { ensureBundledCoreHarnesses } from './dsh/builtins.js'
 import { runDevicesCommand } from './devices/client.js'
 import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
-import { mutateDsh } from './dsh/service.js'
 import { HarnessShareOwner } from './sharing/owner.js'
 import { HarnessGrantStore } from './sharing/grants.js'
 import { HarnessCollaborationStore } from './sharing/collaboration.js'
@@ -74,7 +73,7 @@ import { ensureHarnessGrid, type EnsureStatus } from './lib/gridEnsure.js'
 import { passThroughToGridLogout } from './lib/gridLogout.js'
 import { warnIfGridSignInRemains } from './lib/gridCredentials.js'
 import { observeMachineList } from './lib/gridModels.js'
-import { managedGridPath } from './lib/gridExec.js'
+import { gridExec, managedGridPath } from './lib/gridExec.js'
 import { ENGINE_CLI_COMMANDS, ENGINES, PROCESS_ENGINES, enginePathOverride } from './lib/engineBin.js'
 import { isTerminalEngine } from './engines/types.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
@@ -103,7 +102,6 @@ import { type LaunchOverridesDeps } from './lib/launchOverrides.js'
 import { buildHarnessSessionLabel } from './lib/harnessSessionLabel.js'
 import { adoptLegacyHarnessSessions, listTmuxPanes } from './lib/tmuxAgentDiscovery.js'
 import { installedDsh } from './dsh/installed.js'
-import { removeDsh } from './dsh/install.js'
 import { prepareHarnessLaunch } from './dsh/runtime.js'
 import { dshCommand, dshUsage } from './dsh/command.js'
 import { ApiConnections } from './lib/apiConnections.js'
@@ -164,7 +162,11 @@ import { createCursorTaskHooks } from './core/engines/cursorTasks.js'
 import { databaseHistory } from './core/transcripts/databaseHistory.js'
 import { createCoreApi, emptyPorts, MODELS_FALLBACKS, SEARCH_FALLBACKS, TEAMS_FALLBACKS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type TeamsPort } from './core/api.js'
 import { createServiceHost, testFaults } from './core/serviceHost.js'
-import { startSearch } from './services/search.js'
+import { createServiceLinks } from './core/serviceLinks.js'
+import { KNOWN_SERVICES, serviceSpecs } from './harnessd/services.js'
+import { runSearchService } from './services/searchProcess.js'
+import { SEARCH_REQUESTS, startSearch } from './services/search.js'
+import { STORE_REQUESTS, startStore } from './services/store.js'
 import { startViewers } from './services/viewers.js'
 import { startModels } from './services/models.js'
 import { startWorkspaces } from './services/workspaces.js'
@@ -372,6 +374,8 @@ Grid (the fleet of AI engines the \`grid\` CLI serves — needs \`grid\` on PATH
   harness grid logout [flags]  sign out of your grid — the whole of \`grid logout\`, which stops what
                                this box is serving BEFORE deleting anything. Flags go straight to it:
                                --force signs out over a serve child it could not confirm stopped
+  harness grid env <grid>      print <grid>'s relay address and key as shell exports, for
+                               eval "$(harness grid env <grid>)" — through the harness's own \`grid\`
 
 ${dshUsage()}
 
@@ -1182,6 +1186,27 @@ async function gridLogoutCommand(args: string[]): Promise<void> {
 }
 
 /**
+ * `harness grid env <grid>` — `grid --remote info <grid> --env` through the harness's own `grid`, so a
+ * shell can `eval` a grid's relay address and key with no `grid` of its own on PATH, or an older one
+ * that refuses a resting grid. The Models view's Jev pane builds its copy-paste request on it.
+ *
+ * A passthrough like `grid logout`: the exports, the refusals and the exit code are `grid`'s. The key
+ * goes to this process's stdout only — the explicit disclosure `info --env` exists for — never a log.
+ */
+async function gridEnvCommand(grid: string | undefined): Promise<void> {
+  if (!grid?.trim() || grid.startsWith('-')) {
+    console.error('Usage: harness grid env <grid>')
+    process.exitCode = 2
+    return
+  }
+  const result = await gridExec(['--remote', 'info', grid, '--env'])
+  if (result.stdout) process.stdout.write(result.stdout)
+  if (result.stderr) process.stderr.write(result.stderr)
+  if (result.code === 'GRID_CLI_MISSING') console.error(`\n  ✗ ${result.message}\n`)
+  process.exitCode = result.exitCode
+}
+
+/**
  * Fallback for a browser that cannot reach this machine's loopback callback (running `harness login`
  * over SSH: the user's browser is on a different box, so its own 127.0.0.1 has nothing listening).
  * Prompts on stdin until the pasted text yields `code`+`state` (or `error`) — see
@@ -1771,6 +1796,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       backendRef?.interactiveViewers.refresh(agentId)
     },
     gridNamed: (name) => backendRef?.setHarnessGridName(name),
+    dshInstallStatus: (status) => backendRef?.send({ type: 'dsh_install_status', payload: status }),
     // The backend mints and remembers the account's grid name; this CLI holds neither the account's
     // email nor its id. An older backend (no route) answers nothing, which the grid reconcile treats as
     // "no grid yet". Bounded so a stalled control-plane connection cannot hold the attempt open.
@@ -2147,13 +2173,41 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   backend.handoffProvider = (req) => prepareAgentHandoff(handoffDeps, req)
 
-  // Session search (services/search.ts).
-  serviceHost.start('search', startSearch, coreApi, SEARCH_FALLBACKS)
+  // The services harnessd's master runs in their own processes (harnessd/services.ts, `HARNESSD_SERVICES`):
+  // only under a master, which is what gives this core the token they connect with. Their requests are
+  // routed to them, and answered SERVICE_UNAVAILABLE while they are down (core/serviceLinks.ts).
+  const serviceToken = process.env.HARNESSD_SUPERVISED === '1' ? process.env.HARNESSD_SERVICE_TOKEN : undefined
+  const outOfProcess = new Set(serviceToken ? serviceSpecs(process.env, KNOWN_SERVICES).map((spec) => spec.name) : [])
+  // The requests each service that can run in its own process answers (its own module declares them).
+  const requestsOf: Record<string, readonly string[]> = { search: SEARCH_REQUESTS }
+  const serviceLinks = createServiceLinks({
+    token: serviceToken,
+    owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
+    // Every agent, live then stopped, with the name the apps show for it: what search indexes.
+    answer: (_service, query) => query === 'agents'
+      ? { agents: coreApi.agents.all().map((session) => ({ ...session, displayName: coreApi.agents.displayName(session) })) }
+      : { error: 'UNKNOWN_QUERY' },
+  })
+  // A request a service declared goes to it: in its own process, or in this one (core/serviceHost.ts).
+  backend.serviceRouter = (type, payload, asker, reply) =>
+    serviceLinks.route(type, payload, asker, reply) || serviceHost.route(type, payload, asker, reply)
+
+  // Session search (services/search.ts): in this process, or in its own (services/searchProcess.ts),
+  // where the core tells it what changed. A purge's forgetting waits for it if it is down.
+  if (outOfProcess.has('search')) {
+    ports.search = {
+      touch: (sessionId) => { serviceLinks.notify('search', { type: 'service_event', payload: { kind: 'touch', sessionId } }) },
+      deleteHistory: (sessionId) => { serviceLinks.notify('search', { type: 'service_event', payload: { kind: 'deleteHistory', sessionId } }, { untilDelivered: true }) },
+      session: () => undefined,
+      stop: () => {},
+    }
+  } else {
+    serviceHost.start('search', startSearch, coreApi, SEARCH_FALLBACKS, SEARCH_REQUESTS)
+  }
+  // What the core calls search through: guarded, so it answers its fallbacks once search is switched off.
   const sessionSearch = ports.search
-  backend.sessionSearchProvider = sessionSearch ? (query, options) => sessionSearch.search(query, options) : null
-  backend.sessionTailProvider = sessionSearch ? (sessionId, options) => sessionSearch.tail(sessionId, options) : null
-  // Search switched off: both requests say search is unavailable, as on a Node without an index.
-  serviceHost.onOff('search', () => { backend.sessionSearchProvider = null; backend.sessionTailProvider = null })
+  // The harnesses installed here, and installing, updating and removing one (services/store.ts).
+  serviceHost.serve('store', startStore, coreApi, STORE_REQUESTS)
 
   const runtimeController = new RuntimeProfileController({
     manager: runtimeProfiles,
@@ -2180,13 +2234,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   backend.runtimeProfileProvider = (session) => runtimeProfiles.selectedModel(session)
   backend.dshFrameProvider = (s) => ports.viewers?.frameContext(s) ?? null
-  backend.onDshRemove = (id) => removeDsh(id)
   // `harness remote` names the tile it was typed in by its tmux pane; the registry knows whose it is.
   backend.onTerminalHandoff = (tmuxPane) => registry.advertised()
     .find((session) => session.tmuxPane === tmuxPane
       || session.runtimes.some((runtime) => runtime.backend === 'tmux' && runtime.paneId === tmuxPane))?.agentId ?? null
-  backend.onDshInstall = (input, progress) => mutateDsh(input, progress)
-  backend.onDshUpdate = (id, progress) => mutateDsh({ id, update: true }, progress)
   backend.onAgentRename = (session, name) => { void terminals.setTitle(session, name) }
   backend.onRuntimeProfileUpdate = (sessionId, selectedModel) => runtimeController.setProfile(sessionId, selectedModel)
   runtimeProfiles.onChanged = (sessionId) => {
@@ -2908,6 +2959,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const localWsServer = attachLocalWsServer(hookServer, {
     localSocketServer: localSocket?.server ?? null,
     shareRelay,
+    services: serviceLinks,
     onSelectionReply: (connId, machineId, payload) => devices('window', () => windowSelection.reply(connId, machineId, payload)),
     onVisitReply: (connId, machineId, payload) => devices('window', () => windowVisit.reply(connId, machineId, payload)),
     onFormReply: (connId, machineId, payload) => devices('window', () => windowForm.reply(connId, machineId, payload)),
@@ -5511,6 +5563,16 @@ switch (cmd) {
       confirmUpdate: () => confirmUpdate(env.ADAPTER_CLI_DIR),
     })
     break
+  case '__service': { // internal: a service harnessd's master runs in its own process (services/process.ts)
+    const socketPath = localSocketPath(env.ADAPTER_DATA_DIR, env.PORT)
+    if (rest[0] !== 'search' || !socketPath) {
+      console.error(`[service] ${rest[0] ?? '(none)'}: ${socketPath ? 'no such service in this build' : 'the core has no local socket to reach'}`)
+      process.exit(2)
+    }
+    process.title = `harnessd ${rest[0]}`
+    runSearchService({ dataDir: env.ADAPTER_DATA_DIR, socketPath, machineId: computerId(), token: process.env.HARNESSD_SERVICE_TOKEN ?? '' })
+    break
+  }
   case '__run': // internal: the detached daemon child reads the durable SSO session — or runs without one
     // NOT `onError`: a daemon that dies here can never be updated. See `enterSafeMode`.
     runForeground(readAuthSession()).catch(enterSafeMode)
@@ -5554,6 +5616,7 @@ switch (cmd) {
     // token goes: filtering by value instead would eat an option's *value* the day `grid logout`
     // takes one, forwarding the flag with nothing behind it.
     else if (args[0] === 'logout') gridLogoutCommand(withoutFirst(rest, 'logout')).catch(onError)
+    else if (args[0] === 'env') gridEnvCommand(args[1]).catch(onError)
     else { console.error(`Unknown command: grid ${args[0] ?? ''}`); usage(1) }
     break
   case 'dsh':

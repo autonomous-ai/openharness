@@ -462,6 +462,42 @@ describe('the grid list', () => {
   })
 })
 
+describe('Jev (System One) decision models', () => {
+  const kinds = (s: GridSection) => Object.fromEntries(s.models.map((m) => [m.id, m.kind ?? 'chat']))
+
+  it('are the rows the overview lists in a node\'s systemone_models; every other row is chat', async () => {
+    answer(TEAM_ID, OVERVIEW, awake([node('rig', ['qwen', 'laya-english'], { systemone_models: ['laya-english'] })]))
+
+    expect(kinds(section(await look(), TEAM))).toEqual({ qwen: 'chat', 'laya-english': 'decision' })
+  })
+
+  it('keep the mark while a missed read retains them, lose it once listed as chat, and never gain it unlisted', async () => {
+    answer(TEAM_ID, OVERVIEW, awake([node('rig', ['laya'], { systemone_models: ['laya', 'ghost'] })]))
+    await look()
+    later(20)
+    answer(TEAM_ID, OVERVIEW, awake([]))
+    expect(kinds(section(await look(), TEAM))).toEqual({ laya: 'decision' })
+
+    later(20)
+    answer(TEAM_ID, OVERVIEW, awake([node('rig', ['laya'])]))
+    expect(kinds(section(await look(), TEAM))).toEqual({ laya: 'chat' })
+  })
+
+  it('keep the mark through the CLI fallback, which cannot tell, and through a daemon restart', async () => {
+    answer(TEAM_ID, OVERVIEW, awake([node('rig', ['Laya'], { systemone_models: ['laya'] })]))
+    await look()
+    grid.replan(plan({ teamUrl: 'ftp://nowhere.example', models: { stdout: JSON.stringify([
+      { model: 'Laya', engine: 'llama.cpp', node: 'rig' },
+    ]) } }))
+    forgetGridModels()
+    later()
+    expect(kinds(section(await look(), TEAM))).toEqual({ Laya: 'decision' })
+
+    service = resetGridModels({ now: () => clock, dataDir: () => join(root, 'data'), gridHome: () => gridHome, email: () => EMAIL })
+    expect(kinds(section(await listAllGridModels(OWN), TEAM))).toEqual({ Laya: 'decision' })
+  })
+})
+
 describe('what an older desktop reads', () => {
   it('every section stays a valid {name, own, models:[{id,node}]}, and a sleeping one keeps its models', async () => {
     answer(OWN_ID, OVERVIEW, asleep(record(60, [{ name: 'mac', models: ['small-q4'] }])))

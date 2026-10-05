@@ -9,11 +9,13 @@ import os
 from pathlib import Path
 import platform
 import pty
+import re
 import select
 import shlex
 import shutil
 import signal
 import socket
+import sqlite3
 import struct
 import subprocess
 import tempfile
@@ -41,6 +43,72 @@ def wait(predicate, label, seconds=30):
 def checksum(path):
     with path.open('rb') as handle:
         return hashlib.file_digest(handle, 'sha256').hexdigest()
+
+
+def agent_transcript(home):
+    """Read only conversation rows from the fixture's fresh, isolated agent home."""
+    database = home / '.local/share/opencode/opencode.db'
+    if not database.is_file():
+        return {'status': 'unavailable', 'reason': 'No agent conversation database'}
+    with sqlite3.connect(database.as_uri() + '?mode=ro', uri=True, timeout=2) as db:
+        db.row_factory = sqlite3.Row
+        # Do not archive the database, auth/config files, or unrelated tables.
+        return {table: [dict(row) for row in db.execute(sql)] for table, sql in [
+            ('messages', 'SELECT id, session_id, time_created, data FROM message ORDER BY time_created, id'),
+            ('parts', 'SELECT id, message_id, session_id, time_created, data FROM part ORDER BY time_created, id'),
+        ]}
+
+
+def finish_fixture_processes(home):
+    """Drain only this fixture's private-HOME processes before removing their files.
+
+    Closing a tmux server does not wait for its children to finish writing. Pin
+    each matching process with a Linux pidfd so PID reuse cannot target another
+    process, and never include an unrelated runner's command line in evidence.
+    """
+    expected = b'HOME=' + os.fsencode(home)
+    signalled = []
+    for action, seconds in [(None, 2), (signal.SIGTERM, 3), (signal.SIGKILL, 3)]:
+        deadline = time.monotonic() + seconds
+        while True:
+            pending = {}
+            try:
+                for process in Path('/proc').iterdir():
+                    if not process.name.isdigit() or int(process.name) == os.getpid():
+                        continue
+                    fd = None
+                    try:
+                        if process.stat().st_uid != os.getuid():
+                            continue
+                        fd = os.pidfd_open(int(process.name))
+                        if expected not in (process / 'environ').read_bytes().split(b'\0'):
+                            continue
+                        if select.select([fd], [], [], 0)[0]:
+                            continue
+                        pending[fd] = int(process.name)
+                        fd = None
+                    except (ProcessLookupError, FileNotFoundError, PermissionError):
+                        continue
+                    finally:
+                        if fd is not None:
+                            os.close(fd)
+                if not pending:
+                    return signalled
+                if action is not None:
+                    for fd, pid in pending.items():
+                        try:
+                            signal.pidfd_send_signal(fd, action)
+                            signalled.append({'pid': pid, 'signal': action.name})
+                        except ProcessLookupError:
+                            pass
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                select.select(list(pending), [], [], min(remaining, .2))
+            finally:
+                for fd in pending:
+                    os.close(fd)
+    raise RuntimeError('Fixture processes did not exit before cleanup')
 
 
 class Screen:
@@ -94,6 +162,7 @@ def main():
     parser.add_argument('--opencode', type=Path, required=True)
     parser.add_argument('--architecture', choices=['x86_64', 'aarch64'], required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--source-commit', help='Expected clean producer commit when testing an exported VM payload')
     args = parser.parse_args()
     if platform.system() != 'Linux' or platform.machine() != args.architecture or os.geteuid() == 0:
         parser.error('Run as an ordinary user on the matching native Linux runner.')
@@ -101,7 +170,9 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     info = json.loads((runtime / 'source.json').read_text())
-    source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+    source = args.source_commit or subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+    if not re.fullmatch(r'[0-9a-f]{40}', source):
+        parser.error('A complete source commit is required.')
     assert info['source_commit'] == source and info['dirty'] is False
     assert info['architecture'] == args.architecture
     assert info['target'] == args.architecture + '-unknown-linux-musl'
@@ -109,7 +180,7 @@ def main():
     for name, identity in info['files'].items():
         assert (runtime / name).stat().st_size == identity['bytes']
         assert checksum(runtime / name) == identity['sha256']
-    assert subprocess.check_output(['node', '-p', 'process.arch'], text=True).strip() == {
+    assert subprocess.check_output(['node', '-p', 'process.arch'], text=True, timeout=30).strip() == {
         'x86_64': 'x64', 'aarch64': 'arm64'}[args.architecture]
     with (runtime / 'harness-tui').open('rb') as handle:
         header = handle.read(64)
@@ -139,14 +210,15 @@ def main():
     receipt = {'status': 'running', 'scope': 'native userspace; no boot, drivers or platform installation',
                'architecture': args.architecture, 'kernel': platform.release(), 'runtime': info,
                'page_size': os.sysconf('SC_PAGE_SIZE'), 'hn_load_alignments': load_alignments,
-               'tmux': subprocess.check_output(['tmux', '-V'], text=True).strip(),
+               'tmux': subprocess.check_output(['tmux', '-V'], text=True, timeout=15).strip(),
                'checks': ['Exact source, native ELF/Node architecture, complete hashes and PC packaging boundary verified'],
                'started_at_unix': time.time()}
     report = output / 'receipt.json'
     report.write_text(json.dumps(receipt, indent=2) + '\n')
     daemon = screen = None
     logs = []
-    with tempfile.TemporaryDirectory(prefix='harness-native-', dir='/tmp') as temporary:
+    temporary_directory = tempfile.TemporaryDirectory(prefix='harness-native-', dir='/tmp')
+    with temporary_directory as temporary:
         base = Path(temporary)
         home, binaries = base / 'home', base / 'bin'
         project = home / 'projects/native-agent'
@@ -212,9 +284,35 @@ def main():
 
         def type_into_screen(pane, line):
             hn('select-pane', '-t', pane)
-            time.sleep(.2)
+            wait(lambda: hn('display-message', '-p', '-t', pane, '#{pane_active}') == '1',
+                 'Selected input pane ' + pane)
             assert screen.process.poll() is None, 'Native terminal closed'
             screen.write(line + '\r')
+
+        def record_state(label):
+            state = {'at_unix': time.time()}
+            for key, argv in [
+                ('hn', [*command, 'list-panes', '-a', '-F',
+                        '#{pane_id}|#{pane_active}|#{pane_current_path}|#{pane_current_command}']),
+                ('tmux', ['tmux', '-S', str(base / f'tmux-{os.getuid()}' / 'default'),
+                          'list-panes', '-a', '-F',
+                          '#{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}|#{pane_dead}']),
+                ('processes', ['ps', '-eo', 'pid,ppid,pgid,lstart,comm']),
+            ]:
+                try:
+                    result = subprocess.run(argv, env=env, cwd=project, text=True,
+                                            capture_output=True, timeout=15)
+                    state[key] = {'exit': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr}
+                except (OSError, subprocess.SubprocessError) as error:
+                    state[key] = {'error': str(error)}
+            (output / (label + '.json')).write_text(json.dumps(state, indent=2) + '\n')
+
+        def wait_for_shell():
+            # Escape sequences alone are not proof that the reattached screen
+            # has received its terminal replay. Wait for our real shell prompt.
+            wait(lambda: b'HN_NATIVE_READY>' in screen.data, 'Restored shell prompt', 45)
+            wait(lambda: set(hn('list-panes', '-t', 'runtime', '-F', '#{pane_id}').splitlines())
+                 == {shell, right, agent}, 'All three original pane identities', 30)
 
         try:
             receipt['opencode_version'] = subprocess.check_output([str(binaries / 'opencode'), '--version'],
@@ -237,22 +335,44 @@ def main():
                 wait(lambda: hn('display-message', '-p', '-t', pane, '#{pane_current_path}') == str(project),
                      'Project working directory in ' + pane)
             type_into_screen(shell, 'printf "%s" "$$" > ' + shlex.quote(str(project / 'shell.pid')) +
-                             '; printf before > ' + shlex.quote(str(project / 'keyboard.txt')))
+                             '; printf before > ' + shlex.quote(str(project / 'keyboard.txt')) +
+                             "; PS1='HN_NATIVE_READY> '")
             wait(lambda: (project / 'keyboard.txt').read_text() == 'before', 'PTY keyboard input')
             # A daemon-backed pane is not a local PTY owner and need not expose
             # pane_pid. Ask the actual shell, independently of UI metadata.
             pid = int((project / 'shell.pid').read_text())
             start_time = Path(f'/proc/{pid}/stat').read_text().split()[21]
             receipt['checks'].append('Three real hn shell panes open; the attached terminal accepts native PTY keyboard input')
-            prompt = ('Create sum.py here using only the Python standard library. It must accept zero or more '
+            # Diagnose idle-terminal restoration before spending time on a model
+            # request. A later restart separately checks a running agent.
+            record_state('idle-before-restart')
+            stop_daemon()
+            daemon = start_daemon()
+            wait(ready, 'Restarted idle daemon readiness', 90)
+            assert Path(f'/proc/{pid}/stat').read_text().split()[21] == start_time
+            screen.close()
+            (output / 'idle-before-reconnect.ansi').write_bytes(screen.data)
+            screen = None
+            screen = Screen([*command, 'attach-session', '-t', 'runtime'], env, project)
+            wait_for_shell()
+            type_into_screen(shell, 'printf restored > keyboard.txt')
+            wait(lambda: (project / 'keyboard.txt').read_text() == 'restored', 'Idle shell input after restart')
+            receipt['checks'].append('Idle shell processes and all three panes survive daemon/screen restart and accept new keyboard input')
+            record_state('idle-after-restart')
+            prompt = (f'Use your file tools to create {project / "sum.py"} using only the Python standard library. '
+                      'Write the actual file to that absolute path. It must accept zero or more '
                       'signed integer command-line arguments, print their sum as one integer, and exit successfully. '
                       'No arguments must print 0. Test it. Do the work now without questions or subagents.')
+            receipt['agent_prompt'] = prompt
             # Keep the agent open as it is on the OS. A completed `opencode run`
             # process is archived by Harness; that is not a running pane to retain.
             agent_command = shlex.join(['opencode', '--prompt', prompt])
             type_into_screen(agent, 'printf "%s" "$$" > agent.pid; exec ' + agent_command)
 
             def project_passes():
+                identity = project / 'agent.pid'
+                if identity.is_file() and not Path('/proc/' + identity.read_text().strip()).exists():
+                    raise RuntimeError('The agent exited before completing its project')
                 if not (project / 'sum.py').is_file():
                     return False
                 before = checksum(project / 'sum.py')
@@ -280,6 +400,7 @@ def main():
             assert set(before_panes) == expected_panes, ('Before restart', before_panes, expected_panes)
             (output / 'agent-before-restart.txt').write_text(hn('capture-pane', '-p', '-t', agent) + '\n')
             project_digest = checksum(project / 'sum.py')
+            record_state('agent-before-restart')
             stop_daemon()
             daemon = start_daemon()
             wait(ready, 'Restarted native daemon readiness', 90)
@@ -290,7 +411,7 @@ def main():
             (output / 'before-reconnect.ansi').write_bytes(screen.data)
             screen = None
             screen = Screen([*command, 'attach-session', '-t', 'runtime'], env, project)
-            wait(lambda: screen.data, 'Reattached native screen')
+            wait_for_shell()
             type_into_screen(shell, 'printf after > keyboard.txt')
             wait(lambda: (project / 'keyboard.txt').read_text() == 'after', 'Keyboard input after daemon/screen restart')
             assert Path(f'/proc/{pid}/stat').read_text().split()[21] == start_time
@@ -307,6 +428,29 @@ def main():
             raise
         finally:
             cleanup_errors = []
+            try:
+                record_state('final-state')
+            except OSError as error:
+                cleanup_errors.append('State capture: ' + str(error))
+            if 'agent' in locals():
+                try:
+                    (output / 'agent-final.txt').write_text(hn('capture-pane', '-p', '-t', agent) + '\n')
+                except (OSError, subprocess.SubprocessError) as error:
+                    (output / 'agent-capture-error.txt').write_text(str(error) + '\n')
+            # This isolated home has no user account or credentials. Retain the
+            # agent's own diagnostic logs, never auth/provider configuration.
+            agent_logs = home / '.local/share/opencode/log'
+            try:
+                if agent_logs.is_dir():
+                    shutil.copytree(agent_logs, output / 'opencode-logs')
+                try:
+                    transcript = agent_transcript(home)
+                except (OSError, sqlite3.Error) as error:
+                    transcript = {'status': 'unavailable', 'reason': str(error)}
+                (output / 'opencode-transcript.json').write_text(json.dumps(transcript, indent=2) + '\n')
+                receipt['discovered_project_files'] = [str(path.relative_to(base)) for path in base.rglob('sum.py')]
+            except OSError as error:
+                cleanup_errors.append('Agent log capture: ' + str(error))
             if screen:
                 (output / 'terminal.ansi').write_bytes(screen.data)
                 try:
@@ -323,6 +467,11 @@ def main():
             for name in ['sum.py', 'agent.pid', 'shell.pid']:
                 if (project / name).is_file():
                     shutil.copy2(project / name, output / name)
+            try:
+                receipt['cleanup_signals'] = finish_fixture_processes(home)
+                temporary_directory.cleanup()
+            except (OSError, RuntimeError) as error:
+                cleanup_errors.append('Private workspace cleanup: ' + str(error))
             receipt['finished_at_unix'] = time.time()
             if cleanup_errors:
                 receipt.update(status='failed', cleanup_errors=cleanup_errors)

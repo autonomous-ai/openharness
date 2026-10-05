@@ -21,6 +21,7 @@ describe('the core API services stand on', () => {
       syncSession: vi.fn(),
       viewerChanged: vi.fn(),
       gridNamed: vi.fn(),
+      dshInstallStatus: vi.fn(),
       mintGridName: vi.fn(async () => 'grid-1'),
       accessToken: vi.fn(async () => 'token'),
     }
@@ -37,6 +38,7 @@ describe('the core API services stand on', () => {
     expect(core.agents.terminalAvailable('live')).toBe(true)
     expect(core.agents.sync).toBe(deps.syncSession)
     expect(core.clients.viewerChanged).toBe(deps.viewerChanged)
+    expect(core.clients.dshInstallStatus).toBe(deps.dshInstallStatus)
     expect(core.agents.advertised().map((s) => s.agentId)).toEqual(['live'])
     expect(core.clients.gridNamed).toBe(deps.gridNamed)
     expect(core.account.mintGridName).toBe(deps.mintGridName)
