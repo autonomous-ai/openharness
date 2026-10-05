@@ -253,6 +253,23 @@ describe('re-executing', () => {
     expect(calls).toContain('[harnessd] could not re-execute this master (odd) — keeping it')
   })
 
+  it('carries on as itself, and does not end, when its marker cannot be written (a full disk)', async () => {
+    const full = make({ writeMarker: () => { throw new Error('ENOSPC: no space left on device, write') } })
+    full.reexec(state(), (outcome) => outcomes.push(outcome))
+    stopped[0]()
+    await settle({ ok: true, detail: PROBE_ANSWER })
+    expect(execs).toEqual([])
+    expect(outcomes).toEqual(['kept'])
+    expect(calls.slice(-2)).toEqual(['[harnessd] could not leave the re-execution marker (ENOSPC: no space left on device, write) — keeping this master', 'start children'])
+
+    const odd = make({ writeMarker: () => { throw 'read-only' } })
+    odd.reexec(state(), (outcome) => outcomes.push(outcome))
+    stopped[1]()
+    await settle({ ok: true, detail: PROBE_ANSWER })
+    expect(outcomes).toEqual(['kept', 'kept'])
+    expect(calls).toContain('[harnessd] could not leave the re-execution marker (read-only) — keeping this master')
+  })
+
   it('does nothing more once the master is stopping, at any step, and abandons its probe', async () => {
     const first = make()
     first.reexec(state(), (outcome) => outcomes.push(outcome))

@@ -482,6 +482,82 @@ describe('Supervisor', () => {
       expect(calls).toEqual(['claim', 'restore'])
     })
 
+    it('judges the newer build a core on probation staged, instead of rolling it back as a failure', () => {
+      let disk = 'v1'
+      const supervisor = make({}, { bundle: () => disk })
+      supervisor.start()
+      core().up()
+      disk = 'v2'
+      core().exit(CORE_EXIT_UPDATE)
+      vi.advanceTimersByTime(0)
+      core().up()
+      vi.advanceTimersByTime(options.updateProbationMs - 1)
+      // v2, on probation, finds v3 and stages it.
+      disk = 'v3'
+      core().exit(CORE_EXIT_UPDATE)
+      expect(calls).toEqual(['claim'])
+      expect(lines.at(-1)).toBe(`[harnessd] the updated core staged a newer build before it was kept (code ${CORE_EXIT_UPDATE}) — restarting onto that one`)
+      vi.advanceTimersByTime(0)
+      expect(cores).toHaveLength(3)
+      core().up()
+      vi.advanceTimersByTime(options.updateProbationMs)
+      expect(calls).toEqual(['claim', 'confirm'])
+      expect(supervisor.status()).toMatchObject({ state: 'running', restarts: 2, lastExitReason: 'update' })
+    })
+
+    it('judges the newer build a core still starting on an update staged, and rolls that one back if it fails', () => {
+      let disk = 'v1'
+      make({}, { bundle: () => disk }).start()
+      core().up()
+      disk = 'v2'
+      core().exit(CORE_EXIT_UPDATE)
+      vi.advanceTimersByTime(0)
+      core().bind()
+      disk = 'v3'
+      core().exit(CORE_EXIT_UPDATE)
+      expect(calls).toEqual(['claim'])
+      vi.advanceTimersByTime(0)
+      core().exit(1)
+      expect(calls).toEqual(['claim', 'restore'])
+    })
+
+    it('rolls back an update whose core exits for an update without a newer bundle on disk, or one it cannot read', () => {
+      for (const after of ['v2', null]) {
+        calls = []
+        let disk: string | null = 'v1'
+        make({}, { bundle: () => disk }).start()
+        core().up()
+        disk = 'v2'
+        core().exit(CORE_EXIT_UPDATE)
+        vi.advanceTimersByTime(0)
+        core().up()
+        disk = after
+        core().exit(CORE_EXIT_UPDATE)
+        expect(calls, String(after)).toEqual(['claim', 'restore'])
+      }
+    })
+
+    it('judges, from its first core, an update it starts on that no master kept or rolled back', () => {
+      make({}, {}, { unjudgedUpdate: '9.9.9' }).start()
+      core().up()
+      vi.advanceTimersByTime(options.updateProbationMs - 1)
+      expect(calls).toEqual(['claim'])
+      vi.advanceTimersByTime(1)
+      expect(calls).toEqual(['claim', 'confirm'])
+
+      calls = []
+      make({}, {}, { unjudgedUpdate: '9.9.9' }).start()
+      core().exit(3)
+      expect(calls).toEqual(['restore'])
+
+      // A master handed its state by the one it replaced carries that one's judgement instead.
+      calls = []
+      make({}, {}, { unjudgedUpdate: '9.9.9', resume: { restarts: 0, lastExit: null, lastExitReason: null, update: null, claimed: true, reexecs: 1, unproven: 1 } }).start()
+      core().up()
+      vi.advanceTimersByTime(options.updateProbationMs)
+      expect(calls).toEqual([])
+    })
+
     it('leaves the update unconfirmed when stopped while on probation', () => {
       const supervisor = make()
       supervisor.start()

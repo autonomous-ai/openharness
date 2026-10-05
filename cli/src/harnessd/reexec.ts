@@ -234,7 +234,17 @@ export function createReexec(deps: ReexecDeps): {
             carryOn('refused')
             return
           }
-          deps.writeMarker({ pid: deps.pid, from: deps.own, to: next, at: now })
+          try {
+            deps.writeMarker({ pid: deps.pid, from: deps.own, to: next, at: now })
+          } catch (error) {
+            // A full disk (e2e/updateHostile.e2e.ts). Thrown from here, it was a rejection nothing handles,
+            // which ends a master that has no core and no services running at this point. Without the
+            // marker a re-execution that never came up would be taken for one in progress, so this master
+            // keeps its code and starts the core on the new bundle itself, judging it as every update.
+            deps.log(`[harnessd] could not leave the re-execution marker (${error instanceof Error ? error.message : String(error)}) — keeping this master`)
+            carryOn('kept')
+            return
+          }
           try {
             // Never returns: from here this process is the new bundle's master, with the same pid.
             deps.execve!(deps.nodePath, [deps.nodePath, ...args, '__harnessd'], env)

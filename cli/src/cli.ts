@@ -217,7 +217,7 @@ import { DeviceLogSyncer, type DeviceLogFetched } from './lib/e2ee/deviceLogSync
 import { DeviceLogStore } from './lib/e2ee/deviceLogStore.js'
 import { TrustGroupStore, type GroupMember } from './lib/e2ee/trustGroup.js'
 import {
-  startSelfUpdater, restore as restoreUpdate, confirm as confirmUpdate,
+  startSelfUpdater, restore as restoreUpdate, confirm as confirmUpdate, unjudgedUpdate,
   fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild,
   type Poller, type UpdateEntry,
 } from './lib/selfUpdate.js'
@@ -1385,7 +1385,7 @@ const RESOLVE_ON_START_TIMEOUT_MS = 10_000
 async function downloadCanaryStage(entry: UpdateEntry, dir: string, log: (m: string) => void): Promise<boolean> {
   const cliBuf = await downloadVerified(entry.cli)
   const notifyBuf = await downloadVerified(entry.notify)
-  if (!canary(cliBuf, dir)) { log(`  ✗ the new build failed its self-check — keeping v${VERSION}`); return false }
+  if (!canary(cliBuf, dir, entry.version)) { log(`  ✗ the new build failed its self-check — keeping v${VERSION}`); return false }
   // Asked for by name, so a version this machine once rolled back is installed and no longer rejected.
   stage(dir, cliBuf, notifyBuf, entry.version)
   confirmUpdate(dir) // canary passed + bytes already verified ⇒ drop the .prev backups
@@ -5522,6 +5522,7 @@ switch (cmd) {
       confirmUpdate: () => confirmUpdate(env.ADAPTER_CLI_DIR),
       version: VERSION,
       reexecMarkerFile: HARNESSD_REEXEC_FILE,
+      unjudgedUpdate: (bundle) => unjudgedUpdate(env.ADAPTER_CLI_DIR, bundle),
     })
     break
   case '__harnessd-probe': // internal: a master about to re-execute on this bundle asks it first (harnessd/reexec.ts)

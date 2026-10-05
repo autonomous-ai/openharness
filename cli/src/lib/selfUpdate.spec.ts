@@ -1,9 +1,12 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createHash } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { canary, confirm, downloadVerified, fetchManifest, isLocalDevBuild, msUntilSlot, rejectedVersions, restore, semverGt, shouldAutoUpdate, stage, startSelfUpdater } from './selfUpdate.js'
+import {
+  REFUSED_RETRY_MAX_MS, canary, confirm, downloadVerified, fetchManifest, isLocalDevBuild, msUntilSlot, rejectedVersions, restore, runCanary, semverGt,
+  settleRolledBack, shouldAutoUpdate, stage, startSelfUpdater, unjudgedUpdate,
+} from './selfUpdate.js'
 import { SpawnLockBusyError } from './daemonSpawnLock.js'
 
 let dirs: string[] = []
@@ -301,7 +304,8 @@ describe('a rolled-back version', () => {
   })
 
   it('is never staged again by the background updater, which says so once and waits for a newer build', async () => {
-    const cli = Buffer.from('#!/usr/bin/env node\nconsole.log("x")\n')
+    // A release says the version it is published as (scripts/upload-cli.sh checks it; so does the canary).
+    const cli = Buffer.from('#!/usr/bin/env node\nconsole.log("9.9.10")\n')
     const notify = Buffer.from('export {}\n')
     const sha = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
     let offered = '9.9.9'
@@ -402,14 +406,14 @@ describe('the updater when things go wrong', () => {
       onStaged: (version) => { staged.push(version) },
     })
     await vi.waitFor(() => expect(errors).toHaveLength(1), { timeout: 5_000 })
-    expect(errors[0]).toContain('canary failed for the new build')
+    expect(errors[0]).toBe('[update] 9.9.9 failed its canary (exit 3) — not trying it again for 20 ms')
     expect(staged).toEqual([])
     expect(readdirSync(dir)).toEqual([])
   })
 
   it('waits out a busy spawn lock with the build it already verified, and reports any other failure', async () => {
     let downloads = 0
-    serve(Buffer.from('#!/usr/bin/env node\nconsole.log("x")\n'), () => { downloads++ })
+    serve(Buffer.from('#!/usr/bin/env node\nconsole.log("9.9.9")\n'), () => { downloads++ })
     const logs: string[] = []
     vi.spyOn(console, 'log').mockImplementation((line: string) => { logs.push(String(line)) })
     vi.spyOn(console, 'error').mockImplementation((line: string) => { logs.push(String(line)) })
@@ -431,5 +435,367 @@ describe('the updater when things go wrong', () => {
     expect(downloads, 'downloaded once: later checks reuse the bytes already verified').toBe(2)
     expect(logs).toContain('[update] 9.9.9 is ready but the daemon spawn lock is held by an unknown process — trying again next check')
     expect(logs.filter((line) => line === '[update] check failed (will retry):')).toHaveLength(2)
+  })
+})
+
+describe('staging, all or nothing (e2e/updateHostile.e2e.ts)', () => {
+  const sha = (b: Buffer | string): string => createHash('sha256').update(b).digest('hex')
+  afterEach(() => {
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+    dirs = []
+  })
+
+  /** An install holding v1, as the last build kept. */
+  const installed = (): string => {
+    const dir = tempDir()
+    writeFileSync(join(dir, 'cli.js'), 'v1')
+    writeFileSync(join(dir, 'notify.mjs'), 'n1')
+    writeFileSync(join(dir, 'package.json'), '{"type":"module"}\n')
+    return dir
+  }
+  const files = (dir: string) => Object.fromEntries(readdirSync(dir).sort().map((name) => {
+    const path = join(dir, name)
+    return [name, statSync(path).isDirectory() ? '<dir>' : readFileSync(path, 'utf8')]
+  }))
+
+  it('backs up with hard links, and notes the update with the sha256 of the cli.js it put in place', () => {
+    const dir = installed()
+    const before = statSync(join(dir, 'cli.js')).ino
+    stage(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0')
+    expect(statSync(join(dir, 'cli.js.prev')).ino).toBe(before)
+    expect(files(dir)).toEqual({
+      'cli.js': 'v2', 'cli.js.prev': 'v1', 'notify.mjs': 'n2', 'notify.mjs.prev': 'n1', 'package.json': '{"type":"module"}\n',
+      'update-pending.json': expect.stringContaining(`"sha256":"${sha('v2')}"`),
+    })
+  })
+
+  it('leaves the install exactly as it was when a write fails, at any step', () => {
+    for (const blocked of ['cli.js.tmp', 'notify.mjs.tmp', 'update-pending.json.tmp']) {
+      const dir = installed()
+      // A folder where the file would go: the write fails there, as on a full disk.
+      mkdirSync(join(dir, blocked))
+      writeFileSync(join(dir, blocked, 'x'), '')
+      expect(() => stage(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0'), blocked).toThrow()
+      expect(files(dir), blocked).toEqual({ 'cli.js': 'v1', 'notify.mjs': 'n1', 'package.json': '{"type":"module"}\n', [blocked]: '<dir>' })
+    }
+  })
+
+  it('mends a package.json emptied by an earlier write, and leaves a sound one untouched', () => {
+    const dir = installed()
+    const sound = statSync(join(dir, 'package.json')).ino
+    stage(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0')
+    expect(statSync(join(dir, 'package.json')).ino).toBe(sound)
+    writeFileSync(join(dir, 'package.json'), '')
+    confirm(dir)
+    stage(dir, Buffer.from('v3'), Buffer.from('n3'), '3.0.0')
+    expect(readFileSync(join(dir, 'package.json'), 'utf8')).toBe('{"type":"module"}\n')
+  })
+
+  it('copies the backup whole where the disk has no hard links', async () => {
+    vi.resetModules()
+    vi.doMock('fs', async (importOriginal) => ({ ...await importOriginal<typeof import('fs')>(), linkSync: () => { throw Object.assign(new Error('EPERM'), { code: 'EPERM' }) } }))
+    try {
+      const { stage: stageCopying } = await import('./selfUpdate.js')
+      const dir = installed()
+      const before = statSync(join(dir, 'cli.js')).ino
+      stageCopying(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0')
+      expect(readFileSync(join(dir, 'cli.js.prev'), 'utf8')).toBe('v1')
+      expect(statSync(join(dir, 'cli.js.prev')).ino).not.toBe(before)
+      expect(readdirSync(dir).filter((name) => name.endsWith('.tmp'))).toEqual([])
+    } finally {
+      vi.doUnmock('fs')
+      vi.resetModules()
+    }
+  })
+
+  it('keeps the last build kept as the backup while the bundle is an update still being judged, so a rollback goes back to it', () => {
+    const dir = installed()
+    stage(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0')
+    // v2, on probation, stages v3 before it is kept.
+    stage(dir, Buffer.from('v3'), Buffer.from('n3'), '3.0.0')
+    expect(readFileSync(join(dir, 'cli.js.prev'), 'utf8')).toBe('v1')
+    expect(readFileSync(join(dir, 'notify.mjs.prev'), 'utf8')).toBe('n1')
+    restore(dir)
+    expect(files(dir)).toEqual({ 'cli.js': 'v1', 'notify.mjs': 'n1', 'package.json': '{"type":"module"}\n', 'update-rejected.json': '["3.0.0"]\n' })
+  })
+
+  it('backs up the bundle on disk when it was kept, or when a pending note does not describe it', () => {
+    const dir = installed()
+    stage(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0')
+    confirm(dir)
+    stage(dir, Buffer.from('v3'), Buffer.from('n3'), '3.0.0')
+    expect(readFileSync(join(dir, 'cli.js.prev'), 'utf8')).toBe('v2')
+    // A note from a stage before this one recorded what it put in place: it names no bundle.
+    writeFileSync(join(dir, 'update-pending.json'), '{"version":"3.0.0","at":1}\n')
+    stage(dir, Buffer.from('v4'), Buffer.from('n4'), '4.0.0')
+    expect(readFileSync(join(dir, 'cli.js.prev'), 'utf8')).toBe('v3')
+    // Nor does one whose backups are gone.
+    rmSync(join(dir, 'notify.mjs.prev'))
+    stage(dir, Buffer.from('v5'), Buffer.from('n5'), '5.0.0')
+    expect(readFileSync(join(dir, 'cli.js.prev'), 'utf8')).toBe('v4')
+  })
+
+  it('tells which update the bundle on disk is, while no master has kept or rolled it back', () => {
+    const dir = installed()
+    expect(unjudgedUpdate(dir, sha('v1'))).toBeNull()
+    stage(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0')
+    expect(unjudgedUpdate(dir, sha('v2'))).toBe('2.0.0')
+    expect(unjudgedUpdate(dir, sha('v1'))).toBeNull()
+    expect(unjudgedUpdate(dir, null)).toBeNull()
+    confirm(dir)
+    expect(unjudgedUpdate(dir, sha('v2'))).toBeNull()
+    writeFileSync(join(dir, 'update-pending.json'), '{"version":"2.0.0","at":1}\n')
+    expect(unjudgedUpdate(dir, sha('v2'))).toBeNull()
+  })
+})
+
+describe('the canary\'s verdicts', () => {
+  afterEach(() => {
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+    dirs = []
+  })
+
+  it('tells a build that failed or names another version from a canary that could not be written', () => {
+    const dir = tempDir()
+    expect(runCanary(Buffer.from('console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true })
+    expect(runCanary(Buffer.from('console.log("loading…"); console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true })
+    expect(runCanary(Buffer.from('console.log("9.9.8")\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is 9.9.8' })
+    expect(runCanary(Buffer.from(''), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is nothing' })
+    expect(runCanary(Buffer.from('process.exit(3)\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'failed', detail: 'exit 3' })
+    expect(runCanary(Buffer.from('process.kill(process.pid, "SIGKILL")\n'), dir)).toEqual({ ok: false, problem: 'failed', detail: 'signal SIGKILL' })
+    expect(canary(Buffer.from('console.log("anything")\n'), dir)).toBe(true)
+    expect(canary(Buffer.from('console.log("9.9.8")\n'), dir, '9.9.9')).toBe(false)
+    const file = join(dir, 'not-a-folder')
+    writeFileSync(file, '')
+    expect(runCanary(Buffer.from('console.log(1)\n'), file, '1')).toMatchObject({ ok: false, problem: 'unwritable' })
+    expect(readdirSync(dir)).toEqual(['not-a-folder'])
+  })
+
+  it('says why a canary that never ran failed', async () => {
+    vi.resetModules()
+    vi.doMock('./nodeRuntime.js', () => ({ managedNodePath: () => '/nonexistent/node' }))
+    try {
+      const { runCanary: runWithoutNode } = await import('./selfUpdate.js')
+      expect(runWithoutNode(Buffer.from('console.log(1)\n'), tempDir(), '1')).toMatchObject({ ok: false, problem: 'failed', detail: expect.stringContaining('ENOENT') })
+    } finally {
+      vi.doUnmock('./nodeRuntime.js')
+      vi.resetModules()
+    }
+  })
+})
+
+describe('a build that fails on its own merits (e2e/updateHostile.e2e.ts)', () => {
+  const sha = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
+  const notify = Buffer.from('export {}\n')
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+    dirs = []
+  })
+
+  /** A manifest naming `cli` (or, with `named`, another sha256 than the bytes served), counting downloads. */
+  function serve(state: { cli: Buffer; named?: string; downloads: number }): void {
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url.endsWith('/metadata.json')) {
+        return new Response(JSON.stringify({ adapter: {
+          version: '9.9.9',
+          cli: { url: 'https://updates.test/cli.js', sha256: state.named ?? sha(state.cli) },
+          notify: { url: 'https://updates.test/notify.mjs', sha256: sha(notify) },
+        } }))
+      }
+      if (url.endsWith('cli.js')) { state.downloads++; return new Response(state.cli) }
+      return new Response(notify)
+    })
+  }
+  const ticks = (n: number) => new Promise((resolve) => setTimeout(resolve, n * 10 + 5))
+
+  it.each([
+    ['whose bytes do not match its manifest', (state: { cli: Buffer; named?: string }) => { state.named = sha(Buffer.from('other bytes')) }, 'does not match its manifest (sha256 mismatch'],
+    ['that fails its canary', (state: { cli: Buffer; named?: string }) => { state.cli = Buffer.from('process.exit(3)\n') }, 'failed its canary (exit 3)'],
+    ['that says it is another version', (state: { cli: Buffer; named?: string }) => { state.cli = Buffer.from('console.log("9.9.8")\n') }, 'failed its canary (it says it is 9.9.8)'],
+  ])('is not downloaded again at every check: a build %s waits two intervals, then four, eight, …', async (_, breakIt, why) => {
+    const state = { cli: Buffer.from('console.log("9.9.9")\n'), named: undefined as string | undefined, downloads: 0 }
+    breakIt(state)
+    serve(state)
+    const errors: string[] = []
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation((line: string) => { errors.push(String(line)) })
+    let clock = 0
+    const staged: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: tempDir(), intervalMs: 10, now: () => clock,
+      onStaged: (version) => { staged.push(version) },
+    })
+    try {
+      await vi.waitFor(() => expect(state.downloads).toBe(1), { timeout: 5_000 })
+      await ticks(5)
+      expect(state.downloads).toBe(1)
+      expect(errors).toEqual([expect.stringContaining(`[update] 9.9.9 ${why}`)])
+      expect(errors[0]).toMatch(/— not trying it again for 20 ms$/)
+      clock = 20
+      await vi.waitFor(() => expect(state.downloads).toBe(2), { timeout: 5_000 })
+      await vi.waitFor(() => expect(errors[1]).toMatch(/— not trying it again for 40 ms$/), { timeout: 5_000 })
+      clock = 59
+      await ticks(5)
+      expect(state.downloads).toBe(2)
+      // Published again, fixed: a new entry in the manifest is tried at once.
+      state.cli = Buffer.from('console.log("9.9.9")\n')
+      state.named = undefined
+      await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
+      expect(state.downloads).toBe(3)
+    } finally { poller.stop() }
+  })
+
+  it('downloads again at the next check, without waiting, when the network dropped the last download', async () => {
+    const cli = Buffer.from('console.log("9.9.9")\n')
+    let attempts = 0
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url.endsWith('/metadata.json')) {
+        return new Response(JSON.stringify({ adapter: {
+          version: '9.9.9',
+          cli: { url: 'https://updates.test/cli.js', sha256: sha(cli) },
+          notify: { url: 'https://updates.test/notify.mjs', sha256: sha(notify) },
+        } }))
+      }
+      if (url.endsWith('cli.js') && ++attempts <= 2) throw new TypeError('terminated')
+      return new Response(url.endsWith('cli.js') ? cli : notify)
+    })
+    const errors: string[] = []
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation((...parts: unknown[]) => { errors.push(parts.join(' ')) })
+    const staged: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: tempDir(), intervalMs: 10, now: () => 0,
+      onStaged: (version) => { staged.push(version) },
+    })
+    try {
+      await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
+      expect(attempts).toBe(3)
+      expect(errors).toEqual(['[update] check failed (will retry): terminated', '[update] check failed (will retry): terminated'])
+    } finally { poller.stop() }
+  })
+
+  it('waits at most an hour, however long the build stays broken', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const state = { cli: Buffer.from('process.exit(3)\n'), downloads: 0 }
+      serve(state)
+      const errors: string[] = []
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.spyOn(console, 'error').mockImplementation((line: string) => { errors.push(String(line)) })
+      // The real interval: ten minutes.
+      const poller = startSelfUpdater({
+        currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: tempDir(), intervalMs: 600_000,
+        onStaged: () => {},
+      })
+      for (const [tries, wait] of [[1, '1200 s'], [2, '2400 s'], [3, '3600 s'], [4, '3600 s']] as const) {
+        while (errors.length < tries) await vi.advanceTimersByTimeAsync(600_000)
+        expect(errors[tries - 1]).toMatch(new RegExp(`not trying it again for ${wait}$`))
+      }
+      expect(state.downloads).toBe(4)
+      expect(REFUSED_RETRY_MAX_MS).toBe(3_600_000)
+      poller.stop()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('writes the canary again at the next check when it could not, without downloading the build again', async () => {
+    const state = { cli: Buffer.from('console.log("9.9.9")\n'), downloads: 0 }
+    serve(state)
+    const errors: string[] = []
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation((line: string) => { errors.push(String(line)) })
+    const dir = tempDir()
+    // The install folder is not a folder: the canary cannot be written there, as on a full disk.
+    const install = join(dir, 'install')
+    writeFileSync(install, '')
+    const staged: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: install, intervalMs: 10,
+      onStaged: (version) => { staged.push(version) },
+    })
+    try {
+      await vi.waitFor(() => expect(errors.length).toBeGreaterThanOrEqual(2), { timeout: 5_000 })
+      expect(errors[0]).toMatch(/^\[update\] could not write the canary for 9\.9\.9 \(.+\) — trying again next check$/)
+      rmSync(install)
+      await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
+      expect(state.downloads).toBe(1)
+    } finally { poller.stop() }
+  })
+})
+
+describe('a rollback a full disk kept from being remembered (e2e/updateHostile.e2e.ts)', () => {
+  const sha = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+    dirs = []
+  })
+
+  /** v2 staged over v1 and rolled back while the rejected list could not be written. */
+  const rolledBackUnremembered = (): string => {
+    const dir = tempDir()
+    writeFileSync(join(dir, 'cli.js'), 'v1')
+    writeFileSync(join(dir, 'notify.mjs'), 'n1')
+    stage(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0')
+    // Where the list's temporary file would go, a folder: its write fails, as on a full disk.
+    mkdirSync(join(dir, 'update-rejected.json.tmp'))
+    restore(dir)
+    return dir
+  }
+
+  it('keeps the note of the build that failed, and puts it on the list once it can', () => {
+    const dir = rolledBackUnremembered()
+    expect(readFileSync(join(dir, 'cli.js'), 'utf8')).toBe('v1')
+    expect(rejectedVersions(dir)).toEqual([])
+    // Still no room: named all the same.
+    expect(settleRolledBack(dir)).toBe('2.0.0')
+    expect(existsSync(join(dir, 'update-pending.json'))).toBe(true)
+    rmSync(join(dir, 'update-rejected.json.tmp'), { recursive: true })
+    expect(settleRolledBack(dir)).toBe('2.0.0')
+    expect(rejectedVersions(dir)).toEqual(['2.0.0'])
+    expect(existsSync(join(dir, 'update-pending.json'))).toBe(false)
+    expect(settleRolledBack(dir)).toBeNull()
+    // Already on the list: the note only goes.
+    writeFileSync(join(dir, 'update-pending.json'), JSON.stringify({ version: '2.0.0', sha256: sha(Buffer.from('v2')), at: 1 }))
+    expect(settleRolledBack(dir)).toBe('2.0.0')
+    expect(rejectedVersions(dir)).toEqual(['2.0.0'])
+    // The note of an update still being judged names the bundle on disk; one from before notes named none.
+    stage(dir, Buffer.from('v3'), Buffer.from('n3'), '3.0.0')
+    expect(settleRolledBack(dir)).toBeNull()
+    writeFileSync(join(dir, 'update-pending.json'), '{"version":"3.0.0","at":1}\n')
+    expect(settleRolledBack(dir)).toBeNull()
+  })
+
+  it('is never staged by the background updater meanwhile', async () => {
+    const dir = rolledBackUnremembered()
+    const cli = Buffer.from('console.log("2.0.0")\n')
+    const notify = Buffer.from('export {}\n')
+    let downloads = 0
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url.endsWith('/metadata.json')) {
+        return new Response(JSON.stringify({ adapter: {
+          version: '2.0.0',
+          cli: { url: 'https://updates.test/cli.js', sha256: sha(cli) },
+          notify: { url: 'https://updates.test/notify.mjs', sha256: sha(notify) },
+        } }))
+      }
+      downloads++
+      return new Response(url.endsWith('cli.js') ? cli : notify)
+    })
+    const logs: string[] = []
+    vi.spyOn(console, 'log').mockImplementation((line: string) => { logs.push(String(line)) })
+    const staged: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 10,
+      onStaged: (version) => { staged.push(version) },
+    })
+    try {
+      await vi.waitFor(() => expect(logs).toContain('[update] 2.0.0 was rolled back on this machine — waiting for a newer build (`harness update` installs it anyway)'), { timeout: 5_000 })
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      expect(staged).toEqual([])
+      expect(downloads).toBe(0)
+    } finally { poller.stop() }
   })
 })

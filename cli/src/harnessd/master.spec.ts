@@ -536,6 +536,42 @@ describe('runMaster', () => {
       await master.stop()
     })
 
+    it('judges, when it starts fresh, an update on disk that no master kept or rolled back: kept once its core stays up, rolled back when it crashes', async () => {
+      const lines: string[] = []
+      const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+      try {
+        const good = bundle('')
+        const asked: Array<string | null> = []
+        const kept = start(good, { reexecMarkerFile: undefined, unjudgedUpdate: (fingerprintOnDisk: string | null) => { asked.push(fingerprintOnDisk); return '2.0.0' } })
+        await until('the update to be kept', () => kept.calls.includes('confirm'))
+        expect(asked).toEqual([fingerprint(good)])
+        expect(lines.some((line) => line.endsWith('[harnessd] the bundle on disk is 2.0.0, an update no master kept or rolled back — its first core is on probation'))).toBe(true)
+        await kept.stop()
+
+        const crashing = start(bundle('process.exit(3)'), { reexecMarkerFile: undefined, unjudgedUpdate: () => '2.0.1' })
+        await until('the update to be rolled back', () => crashing.calls.includes('restore'))
+        expect(crashing.calls).toEqual(['restore'])
+        await crashing.stop()
+
+        // Nothing unjudged: a core like any other.
+        const plain = start(bundle(''), { reexecMarkerFile: undefined, unjudgedUpdate: () => null })
+        await until('its core', () => plain.supervisor.status().state === 'running')
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        expect(plain.calls).toEqual([])
+        await plain.stop()
+      } finally { log.mockRestore() }
+    })
+
+    it('judges the newer build a core on probation staged, instead of rolling it back as a failure', async () => {
+      // Its first core stages a build and exits for the update; the next, on probation, stages another before it is kept.
+      const script = bundle(`if (process.env.HARNESSD_RESTARTS !== '2') setTimeout(() => { fs.appendFileSync(__filename, '\\n// a newer build\\n'); process.exit(75) }, process.env.HARNESSD_RESTARTS === '0' ? 100 : 20)`)
+      const master = start(script, { reexecMarkerFile: undefined })
+      await until('the newest build to be kept', () => master.calls.includes('confirm'))
+      expect(master.calls).toEqual(['confirm'])
+      expect(master.supervisor.status()).toMatchObject({ state: 'running', restarts: 2 })
+      await master.stop()
+    })
+
     it('removes its marker once its core is up, and leaves alone what it does not judge', async () => {
       const script = bundle('')
       writeMarker(marker(), { pid: process.pid, from: 'the one before', to: fingerprint(script)!, at: 1 })
