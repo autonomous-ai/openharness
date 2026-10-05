@@ -466,11 +466,21 @@ def check_first_use(vm, user, folder, installed=False):
     assert defaults.get('update') == 'disable', 'The packaged agent must remain managed by system updates'
     if installed:
         vm.command('test ! -e /etc/harness-live && test "$(id -un)" = me')
-        vm.command('for n in $(seq 1 40); do hn capture-pane -p | grep -q "Connect to Wi-Fi to get started" && exit 0; sleep .5; done; exit 1', timeout=30)
+        vm.command('for n in $(seq 1 40); do hn capture-pane -p | grep -q "Connect to Wi-Fi" && exit 0; sleep .5; done; exit 1', timeout=30)
         vm.screenshot('installed-network-first')
         vm.command('! pgrep -u 1000 -x opencode')
         vm.keys('esc')
-        vm.command('hn capture-pane -p | grep -q "Connect to Wi-Fi to get started"')
+        vm.command('hn capture-pane -p | grep -q "Connect to Wi-Fi"')
+        # Networking must never trap the owner. Use the compositor shortcut,
+        # then prove real keyboard input reaches a shell while still offline.
+        vm.keys('meta_l', 't')
+        vm.command("for n in $(seq 1 30); do hn capture-pane -p | grep -Eq '\\[me@harness [^]]*\\]\\$ ' && exit 0; sleep .25; done; exit 1", timeout=15)
+        vm.type_probe('echo offline-terminal-ready')
+        vm.keys('ret')
+        vm.command('for n in $(seq 1 30); do hn capture-pane -p | grep -qx offline-terminal-ready && exit 0; sleep .5; done; exit 1', timeout=20)
+        vm.screenshot('installed-offline-terminal')
+        vm.keys('ctrl', 'd')
+        vm.command('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Connect to Wi-Fi" && exit 0; sleep .5; done; exit 1', timeout=20)
     else:
         vm.command('test "$(uname -n)" = harness && test "$(id -nu 1000)" = me && test -f /etc/harness-live')
         vm.command('nmcli networking off')

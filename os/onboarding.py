@@ -10,13 +10,9 @@ def welcome():
     if live:
         os.execv('/usr/lib/harness-os/open-install', ['open-install'])
         return
-    while True:
-        # The installed first-use page advances as soon as connected.
-        result = subprocess.run(['sudo', '/usr/bin/python3', '/usr/lib/harness-os/network.py', '--first-use'])
-        if result.returncode == 0:
-            break
-        if result.returncode == 11:
-            break
+    # The installed first-use page advances as soon as connected.
+    result = subprocess.run(['sudo', '/usr/bin/python3', '/usr/lib/harness-os/network.py', '--first-use'])
+    if result.returncode != 0:
         raise SystemExit('Could not open Wi-Fi. Press Super+w to try again, or Super+t for a terminal.')
     pane = os.environ.get('TMUX_PANE', '')
     try:

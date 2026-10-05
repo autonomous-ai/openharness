@@ -73,23 +73,26 @@ class Network(unittest.TestCase):
             self.assertEqual(command.call_count, 1)
             self.assertEqual(command.call_args.args, ('connection', 'up', 'uuid', 'existing', 'ifname', 'wlan0'))
 
-    def page(self, keys, live=True):
+    def page(self, keys, first_use=True):
         screen = Screen(keys)
         self.enterContext(patch.object(network.curses, 'curs_set'))
         self.enterContext(patch.object(network, 'connected', return_value=False))
         self.enterContext(patch.object(network, 'scan', return_value=[WIFI]))
         self.enterContext(patch.object(network, 'wired_devices', return_value=[['eth0', 'ethernet', 'disconnected']]))
         self.enterContext(patch.object(network, 'nmcli', return_value=result()))
-        return screen, network.NetworkPage(screen, first_use=True, live=live)
+        return screen, network.NetworkPage(screen, first_use=first_use)
 
-    def test_first_page_has_wifi_above_wired_rescan_and_always_visible_offline_install(self):
-        screen, page = self.page(['\x1b', '\x03', 'r', 'i'])
-        self.assertEqual(page.run(), network.INSTALL)
+    def test_first_page_keeps_wifi_above_wired_and_advances_only_after_connection(self):
+        screen, page = self.page(['\x1b', '\x03', 'r', '\n'])
+        with patch.object(network, 'connect', return_value=True):
+            self.assertEqual(page.run(), 0)
         text = '\n'.join(text for _, text in screen.lines)
-        self.assertIn('The operating system built by agents, for agents.', text)
+        self.assertIn('Connect to Wi-Fi', text)
+        self.assertNotIn('The operating system', text)
         self.assertLess(text.index('a:network'), text.index('Ethernet'))
         self.assertIn('Rescan', text)
-        self.assertIn('Install without connecting', text)
+        self.assertNotIn('Install without connecting', text)
+        self.assertNotIn('Set up later', text)
         self.assertNotIn('Quit', text)
         self.assertNotIn('Activate', text)
 
@@ -116,29 +119,28 @@ class Network(unittest.TestCase):
             self.assertEqual(page.run(), 0)
             scan.assert_not_called()
 
-    def test_crowded_scan_scrolls_to_last_network_and_keeps_escape_reachable(self):
+    def test_crowded_scan_scrolls_to_last_network_and_keeps_rescan_reachable(self):
         for size in [(24, 54), (45, 160)]:
-            screen, page = self.page([], live=False)
+            screen, page = self.page([], first_use=False)
             screen.size = size
             networks = [dict(WIFI, ssid=f'network-{i:02}') for i in range(23)]
-            # 23 networks, Rescan, Ethernet, Set up later. Move directly to the
-            # last network, escape its password, then wrap to Set up later.
-            screen.keys = iter([curses.KEY_DOWN] * 22 + ['\n', '\x1b', curses.KEY_DOWN, curses.KEY_DOWN, curses.KEY_DOWN, '\n'])
+            # Move to the last network, escape its password, then close the
+            # on-demand form. Rescan remains visible while the list scrolls.
+            screen.keys = iter([curses.KEY_DOWN] * 22 + ['\n', '\x1b', '\x1b'])
             with patch.object(network, 'scan', return_value=networks), patch.object(network, 'connect', return_value=False) as connect:
-                self.assertEqual(page.run(), network.OFFLINE)
+                self.assertEqual(page.run(), 1)
                 self.assertEqual(connect.call_args.args[0]['ssid'], 'network-22')
             for frame in screen.frames:
                 names = [text for _, _, text, _ in frame if text.startswith('network-')]
                 self.assertLessEqual(len(names), 10)
                 if names:
                     self.assertTrue(any('Rescan' in text for _, _, text, _ in frame))
-                    self.assertTrue(any('Set up later' in text for _, _, text, _ in frame))
 
     def test_open_network_failure_does_not_ask_for_a_nonexistent_password(self):
-        screen, page = self.page(['\n', 'i'])
+        screen, page = self.page(['\n', '\x1b'], first_use=False)
         with patch.object(network, 'scan', return_value=[dict(WIFI, security='--')]), \
              patch.object(network, 'connect', return_value=False), patch.object(page, 'password') as password:
-            self.assertEqual(page.run(), network.INSTALL)
+            self.assertEqual(page.run(), 1)
             password.assert_not_called()
 
     def test_wide_and_control_characters_fit_the_terminal(self):
