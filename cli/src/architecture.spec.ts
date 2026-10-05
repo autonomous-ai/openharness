@@ -60,9 +60,13 @@ function runForegroundLines(): number {
  * The most each may grow to: its size when it last shrank, and a little room for wiring. Lower a budget
  * when you move code out; raising one needs a reason a reviewer agrees with, and the usual one is wrong:
  * the code belongs in a module or a service.
+ *
+ * RUN_FOREGROUND_BUDGET went up from 2,572 on 5 October, when the socket's request cases moved into core
+ * modules: binding each of them is the wiring this function is for. backendSocket.ts lost 615 lines in
+ * those moves, and runForeground gained 28.
  */
-const RUN_FOREGROUND_BUDGET = 2_572
-const BACKEND_SOCKET_BUDGET = 2_975
+const RUN_FOREGROUND_BUDGET = 2_600
+const BACKEND_SOCKET_BUDGET = 2_370
 
 /** Exceptions, each with its reason. Keep this short. */
 const SERVICE_MAY_IMPORT: Record<string, string> = {

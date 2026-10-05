@@ -62,3 +62,16 @@ export function createCancel({
   }
   return cancelAgent
 }
+
+/**
+ * Takes a `cancel` frame: the person interrupted an agent's turn (C-c from the app), the agent named by
+ * agent id or session id. Nothing is answered: every window reads the agent as idle once it is.
+ *
+ * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md).
+ */
+export function createCancelRequest(cancel: (id: string) => void) {
+  return (payload: Record<string, unknown>): void => {
+    const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
+    if (target) cancel(target)
+  }
+}

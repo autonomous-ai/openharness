@@ -4,7 +4,6 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
 import { homedir } from 'node:os'
-import type { BackendSocket } from '../../backendSocket.js'
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
@@ -21,6 +20,7 @@ import { clearPaneRemainOnExit } from '../../lib/tmux.js'
 import type { TmuxBackend } from '../../lib/tmuxBackend.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import type { createLaunchHelpers } from './launch.js'
+import type { RestartAgent } from './launches.js'
 import type { PaneSwap } from './swap.js'
 
 type LaunchHelpers = ReturnType<typeof createLaunchHelpers>
@@ -43,7 +43,7 @@ async function engineInstalled(engine: AgentEngine): Promise<boolean | null> {
   return installed || Date.now() - startedAt < ENGINE_CHECK_GAVE_UP_MS ? installed : null
 }
 
-type RestartAgentHandler = NonNullable<BackendSocket['onRestartAgent']>
+type RestartAgentHandler = RestartAgent
 
 export interface RestartDeps {
   restartJobs: PaneSwap['restartJobs']

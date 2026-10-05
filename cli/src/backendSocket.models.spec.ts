@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BackendSocket } from './backendSocket.js'
+import { bindLaunchRequests } from './testing/socketCore.js'
 import { env } from './config/env.js'
 import { resolveNewAgentModel } from './lib/newAgentModel.js'
 
@@ -17,6 +18,7 @@ beforeEach(() => {
   previous = env.ADAPTER_DATA_DIR
   env.ADAPTER_DATA_DIR = root
   socket = new BackendSocket('token')
+  bindLaunchRequests(socket)
   frames = []
   socket.registerLocalClient('local:models', { sendFrame: frame => { frames.push(frame as typeof frames[number]); return true }, sendBinary: () => true })
   socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'TEST_STOP' }))

@@ -113,6 +113,7 @@ import type { AgentDshContext } from './lib/agentFrame.js'
 import {
   clearPaneRemainOnExit,
   resolvePaneEngineProcess,
+  tmuxPaneInfo,
   tmuxPaneState,
 } from './lib/tmux.js'
 import { ALL_TERMINAL_BACKENDS } from './config/terminalConfig.js'
@@ -130,6 +131,7 @@ import { Watcher } from './watcher/watcher.js'
 import { startHookServer } from './hookServer.js'
 import { connectToMaster } from './harnessd/coreLink.js'
 import { createTerminalControl } from './core/terminals/control.js'
+import { createTerminalRequests } from './core/terminals/requests.js'
 import { createAgentEvents } from './core/agents/events.js'
 import { createSessionNormalizers } from './core/transcripts/normalizers.js'
 import { createInput } from './core/input.js'
@@ -149,7 +151,7 @@ import { createForgetSession } from './core/agents/forget.js'
 import { createBinding } from './core/agents/bind.js'
 import { createDiscoveryHandlers } from './core/agents/discovery.js'
 import { createLaunchHelpers } from './core/agents/launch.js'
-import { createCancel } from './core/turns/cancel.js'
+import { createCancel, createCancelRequest } from './core/turns/cancel.js'
 import { createPaneWatcher } from './core/agents/newPane.js'
 import { createAdoption } from './core/agents/adopt.js'
 import { createAgentCreator } from './core/agents/create.js'
@@ -157,8 +159,12 @@ import { createAgentForker } from './core/agents/fork.js'
 import { createPaneSwap } from './core/agents/swap.js'
 import { createAgentRetargeter } from './core/agents/retarget.js'
 import { createAgentRestarter } from './core/agents/restart.js'
-import { createAgentLifecycle } from './core/agents/lifecycle.js'
-import { createAgentClosing } from './core/agents/close.js'
+import { createAgentLifecycle, createPurgeRequest, createStopRequest } from './core/agents/lifecycle.js'
+import { createAgentClosing, createCloseRequests } from './core/agents/close.js'
+import { createHandoffRequest } from './core/agents/handoff.js'
+import { createLaunchRequests } from './core/agents/launches.js'
+import { createAgentList } from './core/agents/list.js'
+import { createAgentUpdate } from './core/agents/update.js'
 import { createEngineHooks, installEngineHooks } from './core/engines/hooks.js'
 import { createCursorTaskHooks } from './core/engines/cursorTasks.js'
 import { databaseHistory } from './core/transcripts/databaseHistory.js'
@@ -223,6 +229,8 @@ import { cursorDataDir } from './engines/cursor/home.js'
 import { loadCursorPendingTasks } from './engines/cursor/pendingTasks.js'
 import { opencodeMajorVersion } from './engines/opencode/version.js'
 import { hermesDbForSession } from './lib/hermesHome.js'
+import { TranscriptPager } from './lib/transcriptPages.js'
+import { AgentCreationReceipts } from './lib/agentCreationReceipt.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from './lib/agentFrame.js'
 import { forgetAgentProject } from './lib/agentProject.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
@@ -1838,7 +1846,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     setRuntime: (agentId, model, effort) => {
       const s = registry.resolve(agentId)
       if (!s || !model) return
-      backendRef?.onRuntimeProfileUpdate?.(s.sessionId || agentId, `runtime-v1:${s.sessionId || agentId}:${s.engine}:${model}@${effort || 'auto'}`)
+      void runtimeController.setProfile(s.sessionId || agentId, `runtime-v1:${s.sessionId || agentId}:${s.engine}:${model}@${effort || 'auto'}`)
     },
     // The same path the window's `agent_fork` takes.
     fork: async (agentId) => {
@@ -1854,8 +1862,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     questions: {
       // The device's own object, verbatim: rebuilt as `{ [requestId]: optionId }` it was keyed by the
-      // REQUEST id, not the question key `onQuestionAnswer` expects, and named a question that does not exist.
-      answer: (agentId, requestId, answers) => { void backendRef?.onQuestionAnswer?.({ agentId, requestId, answers }) },
+      // REQUEST id, not the question key `asking.answer` expects, and named a question that does not exist.
+      answer: (agentId, requestId, answers) => { void asking.answer({ agentId, requestId, answers }) },
       answerReviewed: async (answer) => (await questions.answer({ agentId: answer.agentId, requestId: answer.requestId,
         answers: answer.answers, expectedQuestions: answer.questions, selectedLabels: answer.selections, freeTextKeys: answer.freeTextKeys })).ok,
     },
@@ -2015,17 +2023,22 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
   })
   backend.setTerminalStreamManager(terminalStreams)
-  // `agentReconciler` is declared further down; this closure only ever runs for a frame, and no
-  // socket is connected until well after that declaration (backend.connect() is the last thing
-  // this function does).
-  backend.hostThemeSink = (theme) => {
-    if (theme.background === hostTheme.background && theme.foreground === hostTheme.foreground) return
-    hostTheme = theme
-    saveHostTheme(theme)
-    console.log(`[theme] panes now bg=${theme.background} fg=${theme.foreground}`)
-    // Existing sessions pick it up on the next scan (TmuxBackend.inventory restyles); nudge one now.
-    void agentReconciler.trigger()
-  }
+  // What a harness's pane runs and where, and the desktop's pane colours (core/terminals/requests.ts). A
+  // theme is applied only for a frame, well after `agentReconciler` below exists (connect() comes last).
+  const terminalRequests = createTerminalRequests({
+    resolve: (id) => registry.resolve(id),
+    paneInfo: (pane) => tmuxPaneInfo(pane),
+    applyTheme: (theme) => {
+      if (theme.background === hostTheme.background && theme.foreground === hostTheme.foreground) return
+      hostTheme = theme
+      saveHostTheme(theme)
+      console.log(`[theme] panes now bg=${theme.background} fg=${theme.foreground}`)
+      // Existing sessions pick it up on the next scan (TmuxBackend.inventory restyles); nudge one now.
+      void agentReconciler.trigger()
+    },
+  })
+  backend.terminalInfoProvider = terminalRequests.terminalInfo
+  backend.themeProvider = terminalRequests.themeSet
 
   // Each session's engine state, in one table (core/transcripts/normalizers.ts).
   const normalizers = createSessionNormalizers()
@@ -2112,14 +2125,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const attachSession = attach.attachSession
   const neverFoldedHistory = attach.neverFoldedHistory
   const replayedFirstTurn = attach.replayedFirstTurn
-  // A conversation's history, a page at a time, for a window that asks (core/transcripts/history.ts).
-  backend.historyProvider = createHistory({
-    resolve: (id) => registry.resolve(id),
-    stopped: () => stoppedAgents.list(),
-    pages: backend.transcriptPages,
-    dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
-    hermesDb: (s) => hermesDbForSession(s),
-  }).sessionGet
+  // A conversation's history, a page at a time, and how long it is (core/transcripts/history.ts).
+  const history = createHistory({ resolve: (id) => registry.resolve(id), stopped: () => stoppedAgents.list(),
+    pages: new TranscriptPager(), dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
+    hermesDb: (s) => hermesDbForSession(s) })
+  backend.historyProvider = history.sessionGet
+  backend.sessionsProvider = history.sessionsList
   // Everything the core writes into a pane, and the device's pane lock (core/input.ts).
   const inputs = createInput({
     resolve: (id) => registry.resolve(id),
@@ -2170,9 +2181,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     deviceInput,
   })
   const questions = asking.questions
-  backend.onQuestionAnswer = asking.answer
+  backend.questionProvider = asking.questionResponse
   const openQuestions = asking.openQuestions
-  backend.monitorActivityProvider = asking.monitorActivity
+  // The agents on this machine (core/agents/list.ts), in the socket's frames, with its monitor readings.
+  backend.agentsProvider = createAgentList({
+    registry, stoppedAgents, monitorActivityProvider: asking.monitorActivity, monitorCompletions: backend.monitorCompletions,
+    toProject: (s) => backend.toProject(s), toStoppedProject: (s) => backend.toStoppedProject(s),
+    harnessResourcesReader: () => backend.harnessResourcesReader(), harnessStorageReader: (agents, invalidate) => backend.harnessStorageReader(agents, invalidate),
+  }).agentsList
   const agentNotifications = asking.agentNotifications
   const questionWatcher = asking.questionWatcher
 
@@ -2205,7 +2221,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // back under a brand-new agent — but they are ASKED FOR by agent id, which is the only id the device
   // and the voice router know. Resolve across the two, or every tile restores empty.
   backend.recentProvider = recaps.recent
-  backend.recentAsksProvider = recaps.recentAsks
+  backend.agentRecentProvider = recaps.agentRecent
 
   // "Change agent": the desktop asks for the structured handoff file (lib/agentHandoff.ts) before it
   // closes the old engine; the new one is then told to read it.
@@ -2225,7 +2241,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     findResumedTranscript,
     validTranscriptPath,
   })
-  backend.handoffProvider = (req) => prepareAgentHandoff(handoffDeps, req)
+  backend.handoffRequestProvider = createHandoffRequest({ prepare: (req) => prepareAgentHandoff(handoffDeps, req) })
 
   // The services harnessd's master runs in their own processes (harnessd/services.ts, `HARNESSD_SERVICES`):
   // only under a master, which is what gives this core the token they connect with. Their requests are
@@ -2304,8 +2320,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.onTerminalHandoff = (tmuxPane) => registry.advertised()
     .find((session) => session.tmuxPane === tmuxPane
       || session.runtimes.some((runtime) => runtime.backend === 'tmux' && runtime.paneId === tmuxPane))?.agentId ?? null
-  backend.onAgentRename = (session, name) => { void terminals.setTitle(session, name) }
-  backend.onRuntimeProfileUpdate = (sessionId, selectedModel) => runtimeController.setProfile(sessionId, selectedModel)
+  // A rename, a model and effort, or an app opening an agent (core/agents/update.ts).
+  backend.agentUpdateProvider = createAgentUpdate({
+    registry, clients: backend, toProject: (s) => backend.toProject(s), closeAgentService: () => backend.closeAgentService,
+    onAgentRename: (session, name) => { void terminals.setTitle(session, name) },
+    onRuntimeProfileUpdate: (sessionId, selectedModel) => runtimeController.setProfile(sessionId, selectedModel),
+  }).agentUpdate
   runtimeProfiles.onChanged = (sessionId) => {
     const session = registry.resolve(sessionId)
     if (session) syncSession(session)
@@ -3480,6 +3500,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     clients: backend,
   })
   backend.onCancel = id => { void cancelAgent(id) }
+  backend.cancelProvider = createCancelRequest((id) => { void cancelAgent(id) })
 
   /**
    * Web requested a new agent (`agent_create`): spawn a fresh tmux session running the chosen engine in
@@ -3603,8 +3624,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   const stopJobs = lifecycle.stopJobs
   const stopAgent = lifecycle.stopAgent
-  backend.onDeleteAgent = stopAgent
+  backend.stopProvider = createStopRequest({ byAgent: (id) => registry.byAgent(id), stop: stopAgent })
   backend.purgeAgentService = lifecycle.purgeAgentService
+  backend.purgeProvider = createPurgeRequest({ purgeAgentService: () => lifecycle.purgeAgentService, invalidateStorage: () => { void backend.harnessStorageReader([], true) } })
   // Closing agents no window shows, and the cleanup preview (core/agents/close.ts).
   const closing = createAgentClosing({
     registry,
@@ -3620,11 +3642,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   backend.closeAgentService = closing.closeAgentService
   backend.closeAgentService.start()
-  backend.cleanupPreview = closing.cleanupPreview
-  backend.onResumeAgent = lifecycle.resumeAgent
+  const closeRequests = createCloseRequests({ cleanupPreview: closing.cleanupPreview, closeAgentService: () => closing.closeAgentService })
+  backend.cleanupPreviewProvider = closeRequests.preview
+  backend.closeProvider = closeRequests.close
 
   // Restarting an agent in its own pane (core/agents/restart.ts).
-  backend.onRestartAgent = createAgentRestarter({
+  const restartAgent = createAgentRestarter({
     restartJobs,
     registry,
     purgeBusy: (agentId) => backend.purgeAgentService?.busy(agentId),
@@ -3641,9 +3664,22 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     liveBypassPermission,
     paneSwapDeps,
   })
+  // The requests that start an agent's process, and the receipts of those asked with a creationId
+  // (core/agents/launches.ts). The orchestrator and the cable create and fork through the socket's slots.
+  const launches = createLaunchRequests({
+    receipts: new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations')),
+    createAgent: () => backend.onCreateAgent, forkAgent: () => backend.onForkAgent,
+    resumeAgent: () => lifecycle.resumeAgent, restartAgent: () => restartAgent,
+    byAgent: (id) => registry.byAgent(id), toProject: (s) => backend.toProject(s),
+  })
+  backend.createProvider = launches.create
+  backend.createStatusProvider = launches.createStatus
+  backend.restartProvider = launches.relaunch
+  backend.forkProvider = launches.fork
 
   const submitAgent = inputs.submitAgent
   backend.onMessage = (id, content, deliveryId, tabId) => submitAgent(id, content, deliveryId, tabId)
+  backend.messageProvider = inputs.messageRequest
   backend.onCancelOrchestratorMessage = id => input.cancelDelivery(id)
   backend.readChannelDesk = async () => {
     const response = await proxyBackend('GET', '/api/tab-channels')
