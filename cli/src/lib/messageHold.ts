@@ -13,7 +13,13 @@
  *   - a menu (model, effort and the other pickers) picks its highlighted row;
  *   - a picker for a point to rewind to rewinds, or loses the message (Codex's transcript browser,
  *     Claude Code's Rewind menu);
- *   - Claude Code's transcript view (ctrl+o) loses it.
+ *   - a transcript view loses it (Claude Code's, ctrl+o; Codex's overlay, ctrl+t, in its scrollback
+ *     mode);
+ *   - a search takes it as what to search for, and Claude Code's prompt-history search then SENDS the
+ *     earlier prompt it found (ctrl+r);
+ *   - the questions asked at startup take the Enter as their highlighted answer: trust the folder
+ *     (Claude Code's highlights `No, exit`, and quits), run Codex's update, switch Codex's model, start
+ *     a sign-in.
  * So none of them is typed into. A question is answered through its own path (`question_response`),
  * never by a message.
  *
@@ -26,23 +32,19 @@ import { paneModal } from './runtimeProfileController.js'
 
 /** Why a message was not typed, as the reason its delivery is refused with. */
 export type MessageHold = 'permission_open' | 'question_open' | 'menu_open' | 'rewind_picker_open' | 'transcript_open'
+  | 'search_open' | 'trust_open' | 'update_prompt_open' | 'model_prompt_open' | 'sign_in_open'
 
-const HOLDS: ReadonlySet<string> = new Set<MessageHold>(['permission_open', 'question_open', 'menu_open', 'rewind_picker_open', 'transcript_open'])
+const HOLDS: ReadonlySet<string> = new Set<MessageHold>(['permission_open', 'question_open', 'menu_open', 'rewind_picker_open',
+  'transcript_open', 'search_open', 'trust_open', 'update_prompt_open', 'model_prompt_open', 'sign_in_open'])
+
+/** The hold for each of the engines' own screens and modals (runtimeProfileController.ts `paneModal`). */
+const MODAL_HOLDS: Record<NonNullable<ReturnType<typeof paneModal>>, MessageHold> = {
+  rewind: 'rewind_picker_open', transcript: 'transcript_open', search: 'search_open', trust: 'trust_open',
+  update: 'update_prompt_open', model: 'model_prompt_open', sign_in: 'sign_in_open', permission: 'permission_open', menu: 'menu_open',
+}
 
 /** The engines whose screens are read for more than a question: the menus, rewind pickers and views. */
 const MODAL_ENGINES: ReadonlySet<string> = new Set(['claude', 'codex'])
-
-/**
- * Claude Code's transcript view (ctrl+o): the prompt is hidden, and the footer row starts
- * `Showing detailed transcript · ctrl+o to toggle`, after `dialog waiting · ` when a dialog sits behind
- * it (2.1.289). It has no Enter, so a message typed there is lost. Esc, q or ctrl+c close it.
- */
-const CLAUDE_TRANSCRIPT_FOOTER = /^\s*(?:dialog waiting · )?Showing detailed transcript\b/
-
-function claudeTranscriptOpen(capture: string): boolean {
-  const lines = capture.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').split('\n').filter((line) => line.trim())
-  return lines.slice(-3).some((line) => CLAUDE_TRANSCRIPT_FOOTER.test(line))
-}
 
 /** What the pane shows that a message must not be typed into, or null when it can be typed. */
 export function messageHold(engine: RegisteredSession['engine'], capture: string | null): MessageHold | null {
@@ -50,9 +52,8 @@ export function messageHold(engine: RegisteredSession['engine'], capture: string
   const view = parseEngineQuestionPane(engine, capture)
   if (view) return view.kind === 'question' && isApprovalDialog(view) ? 'permission_open' : 'question_open'
   if (!MODAL_ENGINES.has(engine)) return null
-  if (engine === 'claude' && claudeTranscriptOpen(capture)) return 'transcript_open'
   const modal = paneModal(engine, capture)
-  return modal === 'rewind' ? 'rewind_picker_open' : modal === 'permission' ? 'permission_open' : modal === 'menu' ? 'menu_open' : null
+  return modal ? MODAL_HOLDS[modal] : null
 }
 
 export function isMessageHold(reason: string): reason is MessageHold {
@@ -78,6 +79,20 @@ export function messageHoldText(engine: string, hold: MessageHold): string {
         ? 'Codex is browsing its transcript, where Enter would rewind the conversation. Close it with Esc in its terminal, then send the message again.'
         : `${name} has its Rewind menu open, where Enter would pick a point to rewind to. Close it with Esc in its terminal, then send the message again.`
     case 'transcript_open':
-      return `${name} is showing its transcript (ctrl+o), where a message is not typed. Close it with Esc in its terminal, then send the message again.`
+      return engine === 'codex'
+        ? 'Codex is showing its transcript (ctrl+t), where a message is not typed. Close it with q in its terminal, then send the message again.'
+        : `${name} is showing its transcript (ctrl+o), where a message is not typed. Close it with Esc in its terminal, then send the message again.`
+    case 'search_open':
+      return engine === 'codex'
+        ? 'Codex has a search open, where a message would become what it searches for. Close it with Esc in its terminal, then send the message again.'
+        : `${name} is searching its prompt history (ctrl+r), where Enter would send an earlier prompt. Close it with ctrl+c in its terminal, then send the message again.`
+    case 'trust_open':
+      return `${name} is asking whether to trust this folder. Answer it in its terminal, then send the message again.`
+    case 'update_prompt_open':
+      return `${name} is asking whether to update. Answer it in its terminal, then send the message again.`
+    case 'model_prompt_open':
+      return `${name} is asking whether to switch to a new model. Answer it in its terminal, then send the message again.`
+    case 'sign_in_open':
+      return `${name} is asking how to sign in. Sign in in its terminal, then send the message again.`
   }
 }

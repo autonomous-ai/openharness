@@ -16,6 +16,7 @@ import {
   CLAUDE_PROMPT, CLAUDE_REWIND_CONFIRM, CLAUDE_REWIND_EMPTY, CLAUDE_REWIND_LIST, CLAUDE_REWIND_LIST_MESSAGE_FOCUSED,
   CODEX_BROWSING_FULLSCREEN, CODEX_BROWSING_SCROLLBACK, CODEX_PROMPT,
 } from './__fixtures__/rewindPickers.js'
+import { CLAUDE_HISTORY_SEARCH, CLAUDE_TRUST_PROMPT, CODEX_TRANSCRIPT_FIND, CODEX_TRANSCRIPT_OVERLAY, CODEX_UPDATE_PROMPT } from './__fixtures__/takeoverScreens.js'
 
 // The id inside a `runtime-v1:` string is the AGENT id ('h1' here) — a client only ever echoes back an id
 // the catalog minted, and the catalog is agent-scoped. `setProfile` is still addressed with either id.
@@ -88,6 +89,18 @@ describe('runtime pane parsing', () => {
     }
     expect(paneModal('codex', CODEX_PROMPT)).toBeNull()
     expect(paneModal('claude', '')).toBeNull()
+  })
+
+  it('reads the engines\' own screens that take the composer\'s place as dialogs, so no work is typed into them', () => {
+    // A ready-looking composer stays on screen under Codex's find and Claude Code's history search.
+    expect(inspectRuntimePane('codex', CODEX_TRANSCRIPT_FIND)).toMatchObject({ dialog: true, idle: false })
+    expect(paneModal('codex', CODEX_TRANSCRIPT_FIND)).toBe('search')
+    expect(inspectRuntimePane('claude', CLAUDE_HISTORY_SEARCH)).toMatchObject({ dialog: true, idle: false })
+    expect(paneModal('codex', CODEX_TRANSCRIPT_OVERLAY)).toBe('transcript')
+    expect(paneModal('codex', CODEX_UPDATE_PROMPT)).toBe('update')
+    expect(paneModal('claude', CLAUDE_TRUST_PROMPT)).toBe('trust')
+    // Codex browsing its transcript in its scrollback mode draws the same header: a rewind picker still.
+    expect(paneModal('codex', CODEX_BROWSING_SCROLLBACK)).toBe('rewind')
   })
 
   it('tells an approval prompt and a menu from the MCP boot notice, which takes typing and is no modal for a message', () => {
