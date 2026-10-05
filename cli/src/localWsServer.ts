@@ -279,6 +279,9 @@ function withLocalClient(frame: Frame, localClient: LocalWsServerOptions['localC
  * no credential: loopback-only, no Origin header, and the desktop computer-id validation identify the
  * local process without placing SSO credentials on this transport.
  */
+/** How long a closing server waits for its clients to answer the close before it drops them. */
+export const LOCAL_WS_CLOSE_GRACE_MS = 1_000
+
 export function attachLocalWsServer(server: http.Server, options: LocalWsServerOptions): LocalWsServer {
   const wss = new WebSocketServer({
     noServer: true,
@@ -774,7 +777,12 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     close: async () => {
       for (const each of servers) each.off('upgrade', onUpgrade)
       for (const client of wss.clients) client.close(1001, 'server shutting down')
+      // A client that does not answer the close (a suspended `hn`, a window whose process is hung) held
+      // this for ws's own close timeout, 30 s, and with it every shutdown: an update's teardown, and the
+      // core of a master that is gone, whose successor waits for its socket only 20 s.
+      const grace = setTimeout(() => { for (const client of wss.clients) client.terminate() }, LOCAL_WS_CLOSE_GRACE_MS)
       await new Promise<void>((resolve) => wss.close(() => resolve()))
+      clearTimeout(grace)
     },
   }
 }

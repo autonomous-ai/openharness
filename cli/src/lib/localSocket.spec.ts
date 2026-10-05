@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writ
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  askDataFolderServer, isLocalSocketName, isTrustedLocal, listenLocalSocket, localSocketName, localSocketPath, ORPHAN_WAIT_MS,
+  askDataFolderServer, isLocalSocketName, isTrustedLocal, listenLocalSocket, localSocketName, localSocketPath, ORPHAN_STILL_SERVING, ORPHAN_WAIT_MS,
   refuseServedDataFolder, type DataFolderServer, type LocalSocketServer, type ServedFolderDeps,
 } from './localSocket.js'
 
@@ -286,8 +286,9 @@ describe('refuseServedDataFolder', () => {
     expect(await run([{ pid: 7, corePid: 8 }], () => true)).toMatchObject({ outcome: 'EADDRINUSE', waited: 0 })
     expect(await run([{ pid: 8, corePid: 8 }])).toMatchObject({ outcome: 'EADDRINUSE', waited: 0 })
     // One that never leaves is refused once the wait is over.
+    // Refused as the orphan it is, which its master starts again, never as another daemon (an exit for good).
     const lingering = await run([{ pid: 7, corePid: 8 }])
-    expect(lingering).toMatchObject({ outcome: 'EADDRINUSE', waited: ORPHAN_WAIT_MS })
+    expect(lingering).toMatchObject({ outcome: ORPHAN_STILL_SERVING, waited: ORPHAN_WAIT_MS })
     expect(lingering.lines).toHaveLength(1)
   })
 })

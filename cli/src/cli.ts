@@ -3845,9 +3845,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     await watcher.stop()
     shareRelay.close()
     sharedViewers.stop()
+    // The data folder's socket first: a successor waiting for this core to leave (lib/localSocket.ts) can
+    // start as soon as it is gone, whatever the clients below take to close.
+    await localSocket?.close()
     await localWsServer.close()
     hookServer.close()
-    await localSocket?.close()
     codexActivity.close()
     shutdownVoiceRouter()
     await ports.viewers?.stop()
@@ -5391,8 +5393,9 @@ const enterSafeMode = (err: unknown): void => {
   if (!disposition.stay) {
     console.error(`[safe-mode] not staying up — ${disposition.reason}`)
     // Under harnessd, said for good: any other exit, the master restarts, and a core that another daemon
-    // keeps from running was restarted for as long as its master lived (e2e/twodaemons.e2e.ts).
-    onError(err, coreLink.supervised ? CORE_EXIT_STOP : 1)
+    // keeps from running was restarted for as long as its master lived (e2e/twodaemons.e2e.ts). Except
+    // what stands in the way is leaving too: then the master starts this core again.
+    onError(err, coreLink.supervised && !disposition.retry ? CORE_EXIT_STOP : 1)
   }
   const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
   console.error('Failed to start adapter:', err)
