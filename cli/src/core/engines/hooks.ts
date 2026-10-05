@@ -28,21 +28,39 @@ export interface EngineHookDeps {
   registry: Pick<typeof registry, 'byRuntimeEngine'>
 }
 
-export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: EngineHookDeps) {
-  const resolveHookAgent: ResolveHookAgent = async ({ engine, runtimeHints, callerPid }) => {
-    if (!callerPid) return null
-    const resolved: TerminalRuntimeRef[] = []
-    for (const hint of runtimeHints ?? []) {
-      if (tmuxBackend) resolved.push({ backend: 'tmux', paneId: hint.paneId })
-    }
-    for (const runtime of resolved) await agentReconciler.triggerHint(runtime, engine)
+/**
+ * The longest a hook waits for the agent on its pane to record the process it came from. Every relaunch
+ * starts its engine before it records it: a resume looks for the process every 250ms, a create or a
+ * fork backs off to 750ms, and a restart finds it the same way and then probes it, twice over when it
+ * falls back to a new conversation (two 8s discovery budgets, swap.ts). Bounded all the same: the engine
+ * kills its own hook command at 5s, and an answer later than that only keeps the daemon's record.
+ */
+export const PROCESS_RECORD_WAIT_MS = 20_000
+/** How often a waiting hook reads the rows on its panes again: memory, not a process table. */
+const PROCESS_RECORD_POLL_MS = 100
 
+type HookQuery = Parameters<ResolveHookAgent>[0]
+
+/** Which agent holds a pane, and the process it has recorded: what a waiting hook watches change. */
+const recordKey = (session: RegisteredSession | undefined): string =>
+  session ? `${session.agentId}\u0000${session.processIdentity?.pid ?? ''}\u0000${session.processIdentity?.startMarker ?? ''}` : ''
+
+export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: EngineHookDeps) {
+  /**
+   * The agents on the hinted panes: those whose recorded process the caller descends from, the rest,
+   * and of the rest those with no live process recorded at all (none yet, or one that has exited).
+   */
+  const matchCaller = async (resolved: TerminalRuntimeRef[], engine: HookQuery['engine'], callerPid: number) => {
     const rows = await processRows()
     if (!rows) return null
+    const byPid = new Map(rows.map((row) => [row.pid, row.parentPid]))
+    const recordedAlive = (session: RegisteredSession): boolean => {
+      const recorded = session.processIdentity
+      return !!recorded && rows.some((row) => row.pid === recorded.pid && row.startMarker === recorded.startMarker)
+    }
     const callerBelongsTo = (session: RegisteredSession): boolean => {
       const expectedPid = session.processIdentity?.pid
       if (!expectedPid) return false
-      const byPid = new Map(rows.map((row) => [row.pid, row.parentPid]))
       let pid = callerPid
       const visited = new Set<number>()
       while (pid > 0 && !visited.has(pid)) {
@@ -66,13 +84,54 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
      * Codex (or other engine's) old transcript belongs to the new process.
      */
     const onHintedRuntime = new Map<string, RegisteredSession>()
+    const unrecorded: RegisteredSession[] = []
     for (const runtime of resolved) {
       const candidate = registry.byRuntimeEngine(runtime, engine)
       if (!candidate) continue
       if (callerBelongsTo(candidate)) candidates.set(candidate.agentId, candidate)
-      else onHintedRuntime.set(candidate.agentId, candidate)
+      else {
+        onHintedRuntime.set(candidate.agentId, candidate)
+        if (!recordedAlive(candidate)) unrecorded.push(candidate)
+      }
     }
-    const choice = chooseHookAgent([...candidates.values()], [...onHintedRuntime.values()], engine)
+    return { candidates, onHintedRuntime, unrecorded }
+  }
+
+  /** Resolves when the row on any of these panes records another process (or another agent takes the
+   *  pane), or when the wait is over. */
+  const recordChanged = async (resolved: TerminalRuntimeRef[], engine: HookQuery['engine']): Promise<void> => {
+    const before = resolved.map((runtime) => recordKey(registry.byRuntimeEngine(runtime, engine)))
+    const deadline = Date.now() + PROCESS_RECORD_WAIT_MS
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, PROCESS_RECORD_POLL_MS))
+      if (resolved.some((runtime, i) => recordKey(registry.byRuntimeEngine(runtime, engine)) !== before[i])) return
+    }
+  }
+
+  const resolveHookAgent: ResolveHookAgent = async ({ engine, runtimeHints, callerPid }) => {
+    if (!callerPid) return null
+    const resolved: TerminalRuntimeRef[] = []
+    for (const hint of runtimeHints ?? []) {
+      if (tmuxBackend) resolved.push({ backend: 'tmux', paneId: hint.paneId })
+    }
+    for (const runtime of resolved) await agentReconciler.triggerHint(runtime, engine)
+
+    let found = await matchCaller(resolved, engine, callerPid)
+    if (!found) return null
+    let choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine)
+    // Every relaunch starts its engine before it records the new process — create, fork, resume, a
+    // restart and the new conversation it falls back to, a retarget — so a SessionStart in between came
+    // from a pid no agent had yet, and was dropped. A resumed Codex agent then never showed its turns
+    // (round 23), and a restart's new conversation was never bound (round 24). While the agent on the
+    // hook's pane has no live process recorded, the hook now waits for it to record one, and is matched
+    // again against that: one rule for every relaunch, with nothing for any of them to remember to do.
+    if (!choice.agent && choice.reason === 'none' && found.unrecorded.length) {
+      await recordChanged(resolved, engine)
+      found = await matchCaller(resolved, engine, callerPid)
+      if (!found) return null
+      choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine)
+    }
+    const { candidates } = found
     if (choice.agent) {
       if (choice.reason === 'runtime') {
         console.log(`[hooks] ${engine} hook accepted on runtime evidence alone`
