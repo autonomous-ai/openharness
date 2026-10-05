@@ -78,7 +78,7 @@ describe('what a message is not typed into', () => {
       RULE, '❯ ', RULE, '  ? for shortcuts',
     ].join('\n')
     expect(messageHold('claude', working)).toBeNull()
-    const codex = ['› tidy up the release script', '', '• Plan:', '  1. Run the existing tests first', '  2. Stop publishing the debug build', '', '◦ Working (5s • esc to interrupt)', '', '› ', '', '  ? for shortcuts'].join('\n')
+    const codex = ['› tidy up the release script', '', '• Plan:', '  1. Run the existing tests first', '  2. Stop publishing the debug build', '', '◦ Working (5s • esc to interrupt)', '', '\u001b[1m›\u001b[0m ', '', '  ? for shortcuts'].join('\n')
     expect(messageHold('codex', codex)).toBeNull()
   })
 

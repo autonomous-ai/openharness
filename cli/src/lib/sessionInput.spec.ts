@@ -17,6 +17,13 @@ function session(engine: 'claude' | 'codex' | 'cursor' | 'commandcode' = 'codex'
   }
 }
 
+/**
+ * The composers as the engines draw them, which a message is typed into only when on screen
+ * (composerScreen.ts): Claude Code's ruled box and Codex's bold `›` row under a blank one.
+ */
+const claudeBox = (draft: string, above = '') => `${above}${'─'.repeat(40)}\n❯ ${draft}\n${'─'.repeat(40)}\n  ? for shortcuts`
+const codexComposer = (draft: string, footer = '  ? for shortcuts') => `\n\u001b[1m›\u001b[0m ${draft}\n\n${footer}`
+
 describe('SessionInputController', () => {
   afterEach(() => vi.useRealTimers())
 
@@ -464,7 +471,7 @@ describe('SessionInputController', () => {
       validateRuntime: async () => true,
       inject: async () => true,
       sendKey,
-      capture: async () => '❯ \n✻ Working (esc to interrupt)',
+      capture: async () => claudeBox('', '✻ Working (esc to interrupt)\n\n'),
       onError,
     })
 
@@ -601,7 +608,7 @@ describe('SessionInputController', () => {
       validateRuntime: async () => true,
       inject: async () => true,
       sendKey,
-      capture: async () => '❯ hello',
+      capture: async () => claudeBox('hello'),
       onError,
     })
 
@@ -622,7 +629,7 @@ describe('SessionInputController', () => {
       validateRuntime: async () => true,
       inject: async () => true,
       sendKey,
-      capture: async () => '› Find and fix a bug in @filename\n  gpt-5.5 medium ·',
+      capture: async () => codexComposer('\u001b[2mFind and fix a bug in @filename\u001b[0m', '  gpt-5.5 medium ·'),
       onError,
     })
 
@@ -643,7 +650,7 @@ describe('SessionInputController', () => {
       validateRuntime: async () => true,
       inject: async () => true,
       sendKey,
-      capture: async () => '› hello',
+      capture: async () => codexComposer('hello'),
       onError,
     })
 
@@ -709,7 +716,7 @@ describe('SessionInputController', () => {
       validateRuntime: async () => true,
       inject: async () => ambiguous,
       sendKey,
-      capture: async () => '› hello',
+      capture: async () => codexComposer('hello'),
       onError: vi.fn(),
     })
 
@@ -746,7 +753,7 @@ describe('SessionInputController', () => {
 
   it('requires fresh draft evidence before retrying an ambiguously completed Enter', async () => {
     vi.useFakeTimers()
-    const captures = ['› hello', null]
+    const captures = [codexComposer('hello'), null]
     const sendKey = vi.fn(async (_target: string, _key: string): Promise<TerminalActionResult> => ({
       state: 'unknown', dispatch: 'possibly_executed', reason: 'Enter response was lost',
     }))
