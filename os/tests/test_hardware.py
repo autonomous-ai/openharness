@@ -19,10 +19,10 @@ class HardwarePolicy(unittest.TestCase):
         self.root = Path(self.temp.name).resolve()
         self.sysfs = self.root / 'sys'
 
-    def device(self, address='0000:03:00.0', device='43a0', driver=None, wireless=False, kind='028000', override='(null)'):
+    def device(self, address='0000:03:00.0', device='43a0', driver=None, wireless=False, kind='028000', override='(null)', vendor='14e4'):
         path = self.sysfs / 'bus/pci/devices' / address
         path.mkdir(parents=True)
-        for name, value in [('vendor', '14e4'), ('device', device), ('class', kind)]:
+        for name, value in [('vendor', vendor), ('device', device), ('class', kind)]:
             (path / name).write_text('0x' + value)
         (path / 'driver_override').write_text(override + '\n')
         if driver:
@@ -38,6 +38,25 @@ class HardwarePolicy(unittest.TestCase):
             (interface / 'device').symlink_to(child)
             (interface / 'wireless').mkdir()
         return path
+
+    def test_t2_installation_blocker_uses_bce_device_even_without_known_dmi(self):
+        self.device(vendor='106b', device='1801', kind='088000', driver='vfio-pci')
+        expected = 'This Harness image does not support Apple T2 Macs yet.'
+        self.assertEqual(hardware.installation_blocker(self.sysfs), expected)
+        dmi = self.sysfs / 'class/dmi/id'
+        dmi.mkdir(parents=True)
+        (dmi / 'product_name').write_text('Unrecognized Apple model')
+        self.assertEqual(hardware.report(self.sysfs, self.root / 'proc')['installation_blocker'], expected)
+
+    def test_t2_installation_blocker_does_not_guess_from_missing_dmi_or_other_ids(self):
+        self.assertIsNone(hardware.installation_blocker(self.sysfs))
+        self.device(vendor='106b', device='1803', kind='040100')  # T2 audio is not the BCE selector.
+        self.device(address='0000:04:00.0', vendor='14e4', device='1801')
+        dmi = self.sysfs / 'class/dmi/id'
+        dmi.mkdir(parents=True)
+        (dmi / 'product_name').write_text('MacBookPro14,3')
+        self.assertIsNone(hardware.installation_blocker(self.sysfs))
+        self.assertIsNone(hardware.report(self.sysfs, self.root / 'proc')['installation_blocker'])
 
     def bundle(self, folder=None):
         folder = folder or self.root / 'bundle'

@@ -72,7 +72,9 @@ and Password focused. Installation needs no network connection or Harness accoun
 Intel Macs with a 64-bit EFI and no T2 chip are an experimental target. The USB
 includes optional support for selected Broadcom radios, but no physical Mac
 model has passed our complete hardware checks yet. This image is not the
-Apple Silicon or T2 installation path. Core 2 CPUs cannot run bundled OpenCode; this is not a supported bundled-agent target.
+Apple Silicon or T2 installation path. The installer refuses detected Apple T2 Macs
+before collecting passwords or changing the disk; their required driver stack is
+not bundled. Core 2 CPUs cannot run bundled OpenCode; this is not a supported bundled-agent target.
 
 Shut down, insert the USB, then hold **Option (⌥)** while turning on the Mac.
 Choose the external **EFI Boot** entry. Apple's

@@ -90,6 +90,50 @@ class DiskSafety(unittest.TestCase):
                 installer.validate_config(dict(good, **change))
 
 
+class PlatformSafety(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.sysfs = self.root / 'sys'
+        device = self.sysfs / 'bus/pci/devices/0000:03:00.0'
+        device.mkdir(parents=True)
+        (device / 'vendor').write_text('0x106b\n')
+        (device / 'device').write_text('0x1801\n')
+        (device / 'class').write_text('0x088000\n')
+
+    def test_t2_is_rejected_before_the_form_or_payload_read(self):
+        check = installer.require_install_platform
+        with patch.object(installer.os, 'geteuid', return_value=0), \
+             patch.object(installer, 'require_install_platform', side_effect=lambda: check(self.sysfs)), \
+             patch.object(installer, 'live_payload') as payload, \
+             patch.object(installer, 'interactive') as form, \
+             patch.object(installer, 'install') as install:
+            with self.assertRaisesRegex(ValueError, 'does not support Apple T2 Macs yet'):
+                installer.main(installer.argparse.Namespace(config=None))
+        payload.assert_not_called()
+        form.assert_not_called()
+        install.assert_not_called()
+
+    def test_backend_rejects_t2_before_target_inspection_or_disk_commands(self):
+        config = dict(username='me', hostname='harness', password='test-password', encrypt=True,
+                      disk='/dev/vda', confirm_erase='/dev/vda')
+        check = installer.require_install_platform
+        with patch.object(installer, 'require_install_platform', side_effect=lambda: check(self.sysfs)), \
+             patch.object(installer, 'selected_disk') as selected, \
+             patch.object(installer, 'preflight') as preflight, \
+             patch.object(installer, 'run') as commands:
+            with self.assertRaisesRegex(ValueError, 'does not support Apple T2 Macs yet'):
+                installer.install(config, self.root / 'payload.sfs', self.root / 'target')
+        selected.assert_not_called()
+        preflight.assert_not_called()
+        commands.assert_not_called()
+        self.assertFalse((self.root / 'target').exists())
+
+    def test_missing_sysfs_does_not_classify_an_ordinary_computer_as_t2(self):
+        installer.require_install_platform(self.root / 'missing-sysfs')
+
+
 class LivePayload(unittest.TestCase):
     def test_usb_ram_copy_and_mounted_media_are_both_supported(self):
         with tempfile.TemporaryDirectory() as temp:
