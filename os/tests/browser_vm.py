@@ -70,15 +70,18 @@ def new_tab_ready(vm, name):
 
 
 def state(vm, *, path=None, value=None, ready=False, timeout=10):
-    expression = 'import json; d=json.load(open("/tmp/harness-browser-probe/state.json")); '
+    filename = 'states.json' if path is not None else 'state.json'
+    expression = 'import json; d=json.load(open("/tmp/harness-browser-probe/' + filename + '")); '
     if path is not None:
+        expression += 'd=d[' + repr(path) + ']; '
         expression += 'assert d["path"] == ' + repr(path) + '; '
     if value is not None:
         expression += 'assert d["input"] == ' + repr(value) + '; '
     if ready:
         expression += 'assert d["focused"] and d["inputFocused"] and d["outerWidth"] > 0; '
     wait_command(vm, 'python3 -c ' + shlex.quote(expression), timeout)
-    return json.loads(vm.read_file('/tmp/harness-browser-probe/state.json'))
+    data = json.loads(vm.read_file('/tmp/harness-browser-probe/' + filename))
+    return data[path] if path is not None else data
 
 
 def page_fills_display(vm, name):
@@ -164,6 +167,10 @@ def check_browser(vm, result):
     focused(vm, 'chromium', 'explicit-url-browser')
     state(vm, path='/second')
     page_fills_display(vm, 'explicit-url-full-display')
+    vm.click_word('first-window-input', 'Keyboard')
+    state(vm, path='/second', ready=True)
+    vm.type_probe('window-one')
+    state(vm, path='/second', value='window-one')
     result['checks'].append('An explicit hn-browser URL raises the already running browser from behind Harness')
     vm.keys('ctrl', 'n')
     new_tab_ready(vm, 'new-browser-window')
@@ -172,6 +179,20 @@ def check_browser(vm, result):
     vm.keys('ret')
     state(vm, path='/new-window')
     page_fills_display(vm, 'new-window-full-display')
+    vm.click_word('second-window-input', 'Keyboard')
+    state(vm, path='/new-window', ready=True)
+    vm.type_probe('window-two')
+    state(vm, path='/new-window', value='window-two')
+    vm.keys('meta_l', 'b')
+    focused(vm, 'hn', 'two-window-terminal')
+    terminal('with-two-browser-windows')
+    vm.keys('meta_l', 'b')
+    focused(vm, 'chromium', 'two-window-return', title='Harness browser check /new-window - Chromium')
+    state(vm, path='/new-window', value='window-two', ready=True)
+    vm.type_probe('-returned')
+    state(vm, path='/new-window', value='window-two-returned')
+    state(vm, path='/second', value='window-one')
+    result['checks'].append('With two browser windows open, Super+b returns to the window the user left and typing leaves the other window unchanged')
     vm.keys('ctrl', 'shift', 'w')
     focused(vm, 'chromium', 'original-browser-restored')
     vm.keys('ctrl', 'shift', 'w')
@@ -263,7 +284,7 @@ def main():
         raise
     finally:
         if vm.shell_ready:
-            for name in ['events.jsonl', 'state.json', 'terminal-input']:
+            for name in ['events.jsonl', 'state.json', 'states.json', 'terminal-input']:
                 try:
                     (folder / name).write_bytes(vm.read_file('/tmp/harness-browser-probe/' + name))
                 except Exception:
