@@ -51,7 +51,7 @@ import { registry, projectDisplayName, validTranscriptPath, type RegisteredSessi
 import { engineSessionTitle } from './lib/sessionTitle.js'
 import { machineNames } from './lib/machineNames.js'
 import { installCodexHooks } from './lib/hooks.js'
-import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
+import { DAEMON_LOG_FILE, HARNESSD_REEXEC_FILE, HARNESSD_STATUS_FILE, PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
 import { clearSafeModeMarker, readSafeModeMarker, runBootHandoff, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from './lib/daemonSafeMode.js'
 import { awakeTimeout } from './lib/sleepAware.js'
 import {

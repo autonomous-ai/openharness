@@ -46,6 +46,29 @@ describe('stopDaemonProcess', () => {
     expect(existsSync(PID_FILE)).toBe(false)
   })
 
+  it('clears the re-execution marker of the master it stopped, and no other', async () => {
+    // Stopped in the moment after it re-executed, the master dies of the signal before it can clear its
+    // marker; the next start must not take that for an update that never came up.
+    const { stopDaemonProcess } = await load()
+    const { HARNESSD_REEXEC_FILE, PID_FILE } = await import('./daemonState.js')
+    const marker = (pid: number) => JSON.stringify({ pid, from: 'a'.repeat(64), to: 'b'.repeat(64), at: 1 })
+    writeFileSync(PID_FILE, '500\n')
+    writeFileSync(HARNESSD_REEXEC_FILE, marker(500))
+    await stopDaemonProcess(fakeDeps({ pid: 500, alive: new Set([500]), killed: [], locked: 0, released: 0 }))
+    expect(existsSync(HARNESSD_REEXEC_FILE)).toBe(false)
+    // Another master's marker (one stopped beside it, or a pid file gone stale) is not this stop's.
+    writeFileSync(PID_FILE, '501\n')
+    writeFileSync(HARNESSD_REEXEC_FILE, marker(777))
+    await stopDaemonProcess(fakeDeps({ pid: 501, alive: new Set([501]), killed: [], locked: 0, released: 0 }))
+    expect(existsSync(HARNESSD_REEXEC_FILE)).toBe(true)
+    // Stopped through launchd or systemd, likewise.
+    writeFileSync(HARNESSD_REEXEC_FILE, marker(600))
+    await stopDaemonProcess(fakeDeps({ pid: 600, alive: new Set(), killed: [], locked: 0, released: 0 }, {
+      stopPlatform: () => ({ ok: true, stopped: 600 }) as never,
+    }))
+    expect(existsSync(HARNESSD_REEXEC_FILE)).toBe(false)
+  })
+
   it('does not delete a pid file that a different daemon wrote meanwhile', async () => {
     const { stopDaemonProcess } = await load()
     const { PID_FILE } = await import('./daemonState.js')
