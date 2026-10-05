@@ -30,7 +30,7 @@ const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms))
  * gets the new one. The config is the one IsolatedDaemon gave the engine, plus the release.
  */
 function install(d: IsolatedDaemon, engine: Engine, release: Release = {}): void {
-  const config = { port: d.port, dataDir: d.dataDir, claudeProjectsDir: d.env.CLAUDE_PROJECTS_DIR, codexHome: d.env.CODEX_HOME, ...release }
+  const config = { ...d.engineConfig, ...release }
   const module = pathToFileURL(join(CLI_ROOT, 'e2e', 'harness', 'fakeEngine.mjs')).href
   const wrapper = join(d.root, 'bin', engine)
   writeFileSync(`${wrapper}.new`, `#!${process.execPath}\nimport(${JSON.stringify(module)}).then((m) => m.run(${JSON.stringify(engine)}, ${JSON.stringify(config)}))\n`, { mode: 0o755 })

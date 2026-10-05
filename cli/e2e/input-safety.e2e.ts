@@ -160,6 +160,28 @@ describe('what a message must never do', () => {
     client.close()
   })
 
+  it.each(engines)('%s: what reached the pane as its engine went down never runs in the shell it leaves', async (engine) => {
+    // An engine on its way out reads no more input: Claude Code runs its SessionEnd hooks first. What was
+    // typed for it then, a message right behind \`/exit\` among them, waits in the terminal, and the shell
+    // the pane becomes must not run it. Typed here once the engine has taken its \`!exit\`.
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, engine, `went-down-${engine}`)
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, '-l', '!exit')
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, 'Enter')
+    await until('the engine to take its exit', async () => (await d.capture(agent.tmuxPane)).includes('> !exit') || null, 15_000, 20)
+    const marker = join(d.root, `pwned-on-the-way-out-${engine}`)
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, command(marker), 'Enter')
+    await until('the pane to be a shell', async () => (await d.capture(agent.tmuxPane)).includes('This pane is a shell now') || null, 30_000, 100)
+    await new Promise((resolve) => setTimeout(resolve, 3_000))
+    expect(existsSync(marker), 'what was typed for the engine ran in the shell').toBe(false)
+    // The shell is the person's from here: what they type runs.
+    const typed = join(d.root, `typed-in-the-shell-${engine}`)
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, command(typed), 'Enter')
+    await until('the shell to run what was typed into it', () => existsSync(typed) || null, 10_000, 100)
+    client.close()
+  })
+
   it.each(engines)('%s: keystrokes queued for a terminal whose engine exited are the person\'s own to send', async (engine) => {
     // The terminal is a terminal: what a person types into the pane goes to whatever runs there. The
     // composer is what must never type into a shell; this pins that the two stay apart.

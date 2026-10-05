@@ -133,6 +133,14 @@ describe('the teams\' prompt scopes in their own process', () => {
     const [moving, still] = [await create(d, client, 'scopes-moving'), await create(d, client, 'scopes-still')]
     await say(client, moving.id, 'hello from the alpha tab', 'tab-alpha')
     await say(client, still.id, 'hello from the gamma tab', 'tab-gamma')
+    // A message's prompt hook can be heard after its turn: the hook gives the daemon 500 ms and the engine
+    // goes on (hook/notify.mjs). A start still on its way to the teams process when it dies is a change on
+    // its way, and its scope rightly reads as no team. The claim below is about a scope with nothing on its
+    // way, so both hooks are heard and delivered first.
+    for (const agent of [moving, still]) {
+      const sid = agent.sessionId.slice(0, 8)
+      await until(`${sid}'s prompt hook to be heard`, () => d.log().includes(`[hooks] ${sid} UserPromptSubmit `) || null, 30_000, 100)
+    }
     await scopeBecomes(client, still.id, channelTeamId('tab-gamma'), 'the gamma team')
     await scopeBecomes(client, moving.id, channelTeamId('tab-alpha'), 'the alpha team')
     process.kill(teamsPid(d)!, 'SIGKILL')
