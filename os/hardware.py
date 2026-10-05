@@ -61,6 +61,15 @@ def pci_devices(sysfs=Path('/sys')):
     return devices
 
 
+def installation_blocker(sysfs=Path('/sys')):
+    # The T2 BCE controller identifies this platform independently of DMI names
+    # and the currently bound driver. The stock image does not ship its stack.
+    # https://github.com/t2linux/linux-t2-patches/blob/main/1001-Add-t2bce-driver-stack.patch
+    if any(device['id'] == '106b:1801' for device in pci_devices(sysfs)):
+        return 'This Harness image does not support Apple T2 Macs yet.'
+    return None
+
+
 def needs_broadcom(device):
     if device['id'] not in BROADCOM_IDS or device['class'] != '028000':
         return False
@@ -88,6 +97,7 @@ def report(sysfs=Path('/sys'), proc=Path('/proc')):
             'opencode_cpu': {'required_x86_feature': 'sse4_2',
                              'available': 'sse4_2' in flags.split() if flags is not None else None},
             'pci': pci_devices(sysfs),
+            'installation_blocker': installation_blocker(sysfs),
             'backlights': [p.name for p in sorted((sysfs / 'class/backlight').glob('*'))],
             'broadcom_bundle_available': (BUNDLE / 'manifest.json').is_file(),
             'nvidia_bundle_available': (NVIDIA_BUNDLE / 'manifest.json').is_file()}

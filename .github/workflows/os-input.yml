@@ -9,9 +9,9 @@ on:
         default: '37222390225'
         required: true
       probe:
-        description: 'Laptop media controls or Apple encrypted-boot module closure'
+        description: 'Laptop controls, Apple boot modules or unsupported-platform install refusal'
         type: choice
-        options: [laptop-input, apple-boot]
+        options: [laptop-input, apple-boot, install-preflight]
         default: laptop-input
         required: true
   push:
@@ -39,18 +39,29 @@ jobs:
           run-id: ${{ inputs.image_run_id || '37222390225' }}
           github-token: ${{ github.token }}
       - name: Check source and install native VM tools
+        env:
+          PROBE: ${{ inputs.probe }}
         run: |
-          make -C os check
+          if [[ "$PROBE" == install-preflight ]]; then
+            PYTHONPATH=os/tests python3 -m unittest test_hardware test_installer
+            python3 -m py_compile os/tests/platform_preflight_vm.py os/tests/platform_preflight_guest.py
+            python3 os/tools/check.py
+          else
+            make -C os check
+          fi
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os-input.yml
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
           sudo chmod a+rw /dev/kvm
       - name: Check actual media-key input on USB and installed sessions
-        if: ${{ inputs.probe != 'apple-boot' }}
+        if: ${{ inputs.probe != 'apple-boot' && inputs.probe != 'install-preflight' }}
         run: python3 os/tests/input_vm.py --iso os/dist/*.iso
       - name: Check Apple initramfs selection and encrypted boot
         if: ${{ inputs.probe == 'apple-boot' }}
         run: python3 os/tests/apple_boot_vm.py --iso os/dist/*.iso
+      - name: Check unsupported-platform refusal without disk writes
+        if: ${{ inputs.probe == 'install-preflight' }}
+        run: python3 os/tests/platform_preflight_vm.py --iso os/dist/*.iso
       - name: Retain actual input, module and display evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -59,9 +70,12 @@ jobs:
           path: |
             os/test-results/input/
             os/test-results/apple-boot/
+            os/test-results/install-preflight/
             !os/test-results/input/*.qcow2
             !os/test-results/input/OVMF_VARS.fd
             !os/test-results/apple-boot/*.qcow2
             !os/test-results/apple-boot/OVMF_VARS.fd
+            !os/test-results/install-preflight/*.qcow2
+            !os/test-results/install-preflight/OVMF_VARS.fd
           retention-days: 14
           compression-level: 0

@@ -6,6 +6,7 @@ from contextlib import contextmanager
 import curses
 from datetime import datetime, timezone
 import hashlib
+import importlib.util
 import json
 import os
 import pwd
@@ -26,6 +27,17 @@ WORDMARK = ('█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀', '�
 COMMAND_LOG = None
 INSTALL_LOG = Path('/var/log/harness-install.log')
 LAST_LOG = None
+
+
+def require_install_platform(sysfs=Path('/sys')):
+    # Load the root-owned packaged sibling, never a module from the working
+    # directory. Only tests supply a different sysfs root.
+    spec = importlib.util.spec_from_file_location('harness_os_hardware', Path(__file__).with_name('hardware.py'))
+    hardware = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hardware)
+    blocker = hardware.installation_blocker(sysfs)
+    if blocker:
+        raise ValueError(blocker)
 
 
 def encryption_memory(meminfo=Path('/proc/meminfo')):
@@ -317,6 +329,7 @@ def copy_image(source, target, broadcom=Path('/usr/share/harness-os/hardware/bro
 def install(config, source, target, progress=None):
     report = progress or (lambda message: print(message, flush=True))
     validate_config(config)
+    require_install_platform()
     # Inspect again immediately before partitioning, rather than trusting the picker.
     selected_disk(config)
     if not source.is_file():
@@ -833,6 +846,7 @@ def main(args=None):
     args = arguments() if args is None else args
     if os.geteuid() != 0:
         raise SystemExit('Run sudo harness install from the live USB.')
+    require_install_platform()
     if args.config:
         if args.username is not None or args.hostname is not None or args.no_encryption:
             raise ValueError('With --config, set account names and encryption in that file instead of command-line overrides.')
