@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -10,6 +11,37 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location('hardware', Path(__file__).resolve().parents[1] / 'hardware.py')
 hardware = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(hardware)
+
+
+class OpenCodeCpu(unittest.TestCase):
+    def supported(self, content, architecture='x86_64'):
+        with tempfile.TemporaryDirectory() as folder:
+            proc = Path(folder)
+            if content is not None:
+                (proc / 'cpuinfo').write_text(content)
+            with patch.object(hardware.os, 'uname', return_value=SimpleNamespace(machine=architecture)):
+                return hardware.opencode_cpu_supported(proc)
+
+    def test_core2_and_penryn_lack_the_bundled_requirement(self):
+        for flags in ['sse sse2 pni ssse3', 'sse sse2 pni ssse3 sse4_1']:
+            with self.subTest(flags=flags):
+                self.assertIs(self.supported('flags : ' + flags + '\n'), False)
+
+    def test_nehalem_needs_no_avx(self):
+        self.assertIs(self.supported('flags : sse2 ssse3 sse4_1 sse4_2\n'), True)
+
+    def test_missing_empty_or_non_x86_information_is_unknown(self):
+        for content in [None, '', 'processor : 0\n', 'flags : \n', 'Features : fp asimd\n']:
+            with self.subTest(content=content):
+                self.assertIsNone(self.supported(content))
+        for architecture in ['aarch64', 'armv7l', 'riscv64']:
+            with self.subTest(architecture=architecture):
+                self.assertIsNone(self.supported('flags : sse2\n', architecture))
+
+    def test_all_reported_cpus_must_have_the_feature(self):
+        self.assertIs(self.supported('flags : sse2 sse4_2\n\nflags : sse2\n'), False)
+        self.assertIs(self.supported('flags : sse2 sse4_2\n\nflags : sse2 sse4_2\n'), True)
+        self.assertIsNone(self.supported('flags : sse2 sse4_2\n\nflags : \n'))
 
 
 class HardwarePolicy(unittest.TestCase):
@@ -277,6 +309,9 @@ class HardwarePolicy(unittest.TestCase):
         hardware.bundle_manifest(live, all_files=True)
 
     def test_report_does_not_collect_serials_network_addresses_or_ssids(self):
+        uname = hardware.os.uname()
+        self.enterContext(patch.object(hardware.os, 'uname',
+                                       return_value=SimpleNamespace(machine='x86_64', release=uname.release)))
         self.device()
         dmi = self.sysfs / 'class/dmi/id'
         dmi.mkdir(parents=True)
