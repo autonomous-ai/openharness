@@ -293,6 +293,12 @@ function readProcStat(pid: number): string | null {
  */
 let processRowsInFlight: Promise<ProcessRow[] | null> | null = null
 
+/** A running process's command line as the process table shows it; '' once it is not that process. */
+export async function processArgs(identity: ProcessIdentity): Promise<string> {
+  const rows = await processRows()
+  return rows?.find((row) => row.pid === identity.pid && row.startMarker === identity.startMarker)?.args ?? ''
+}
+
 /** The process table, or null when `ps` itself failed — "we could not look" is not "nothing is there". */
 export function processRows(): Promise<ProcessRow[] | null> {
   if (processRowsInFlight) return processRowsInFlight
