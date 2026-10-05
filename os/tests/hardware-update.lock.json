@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "baseline": {
+    "image_run_id": 37257481538,
+    "artifact": "programmer-os-x86_64",
+    "source_commit": "b6cbaf3e3090f43106ad1ee47606349bd1a0ae89",
+    "manifest_sha256": "140bd40e6507bf367b8b227b688a9a3a81da2ac40420041aff64abd118c27064",
+    "iso": {
+      "name": "harness-0.1.0-preview.14-x86_64.iso",
+      "bytes": 2007023616,
+      "sha256": "fa4f282644ac81e9e3b7de55276edd7dc08405e50875da544dc7f9fd6d50ba12"
+    },
+    "snapshot": "2026/10/01",
+    "kernel": "6.18.54-1-lts",
+    "packages": {
+      "linux-lts": "6.18.54-1",
+      "linux-lts-headers": "6.18.54-1",
+      "nvidia-open-lts": "1:615.71.09-5",
+      "nvidia-utils": "615.71.09-1",
+      "broadcom-wl-dkms": "6.30.223.271-50",
+      "dkms": "3.4.3-2",
+      "harness-os": "0.1.0pre14.r1791169013.gb6cbaf3e30-1"
+    },
+    "runtime_files": {
+      "notify.mjs": {
+        "sha256": "5690159e964f9ce022bdb2a5e4bc9d853e595e822f254478df241e1386dde68e",
+        "bytes": 72444
+      },
+      "harness-tui": {
+        "sha256": "bd221059a24d7f7ca8ce69bb3b6d69c2fb66cb655aae6658627c278a548a8fa8",
+        "bytes": 16521264
+      },
+      "cli.mjs": {
+        "sha256": "23b46a7c498fd1ef8ff5936aeb431f1de08b959b957141fa732d2cede870d147",
+        "bytes": 4419875
+      }
+    }
+  },
+  "candidate": {
+    "snapshot": "2026/10/04",
+    "kernel": "6.18.55-1-lts",
+    "repositories": {
+      "core": {
+        "url": "https://archive.archlinux.org/repos/2026/10/04/core/os/x86_64/core.db",
+        "bytes": 130360,
+        "sha256": "373a91595792d33d02ef809742d109db27b2a5039152904f808f7943f6d0b6cb"
+      },
+      "extra": {
+        "url": "https://archive.archlinux.org/repos/2026/10/04/extra/os/x86_64/extra.db",
+        "bytes": 8854164,
+        "sha256": "823815022358b353e960223ea9d6abdfdf916b166d223c9190e71adcb9702cc9"
+      }
+    },
+    "packages": {
+      "archlinux-keyring": {
+        "version": "20260909-1",
+        "filename": "archlinux-keyring-20260909-1-any.pkg.tar.zst",
+        "sha256": "6a8ea16f51d3b305c18322d5884ca959f12c32a3f186873090fdc18465605293",
+        "bytes": 1273532,
+        "repository": "core"
+      },
+      "linux-lts": {
+        "version": "6.18.55-1",
+        "filename": "linux-lts-6.18.55-1-x86_64.pkg.tar.zst",
+        "sha256": "d7b80550feb4309cd812bb21d0965d6e26f5ec72241c96a7ad57a3eb8b5f7e12",
+        "bytes": 162981884,
+        "repository": "core"
+      },
+      "linux-lts-headers": {
+        "version": "6.18.55-1",
+        "filename": "linux-lts-headers-6.18.55-1-x86_64.pkg.tar.zst",
+        "sha256": "e4ef03c9a97d40cc8f58c8c4f731aa80d132b2290e0854709b82ef8bfa68bd7d",
+        "bytes": 61794036,
+        "repository": "core"
+      },
+      "broadcom-wl-dkms": {
+        "version": "6.30.223.271-50",
+        "filename": "broadcom-wl-dkms-6.30.223.271-50-x86_64.pkg.tar.zst",
+        "sha256": "e3f2532c3519c6267c93724046e27cf7ec70b4028db537bd22dc2813447b4ed9",
+        "bytes": 1724160,
+        "repository": "extra"
+      },
+      "dkms": {
+        "version": "3.4.3-2",
+        "filename": "dkms-3.4.3-2-any.pkg.tar.zst",
+        "sha256": "469d1abf762c5bb22e43cad8c63fbec5250cfd9fe958ae9e842c251956dc5faa",
+        "bytes": 51451,
+        "repository": "extra"
+      },
+      "nvidia-open-lts": {
+        "version": "1:615.71.09-7",
+        "filename": "nvidia-open-lts-1:615.71.09-7-x86_64.pkg.tar.zst",
+        "sha256": "feded1790abb3787db6cf677658597cc8e7ae431ae8cd6d96b75cff883dce2f6",
+        "bytes": 10160617,
+        "repository": "extra"
+      },
+      "nvidia-utils": {
+        "version": "615.71.09-1",
+        "filename": "nvidia-utils-615.71.09-1-x86_64.pkg.tar.zst",
+        "sha256": "0e32f81f52ac7b9516faa5eeef79c277212f6c65df545eeb54d64257963352a5",
+        "bytes": 329970574,
+        "repository": "extra"
+      }
+    },
+    "metadata_only": true
+  }
+}
