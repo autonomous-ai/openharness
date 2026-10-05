@@ -958,3 +958,45 @@ describe('a client\'s sessions with one machine never open the same broadcast tw
     }
   })
 })
+
+describe('RemoteRelayPool retires a session the machine no longer has', () => {
+  const fakeAuth = { accessToken: async () => 'unused-in-this-fake' } as unknown as import('../authSession.js').AuthSessionManager
+
+  it('e2e_session_unknown closes the local connection as for node_status offline, keeps the pin, and the next acquire dials a new session', async () => {
+    const E2eeStore = (await import('./store.js')).E2eeStore
+    const wss = new WebSocketServer({ port: 0 })
+    const sockets = new Map<string, import('ws').WebSocket>()
+    const client = C.newIdentity()
+    const manager = new E2eeManagerCtor({ machineId: MACHINE_ID, isConnected: () => true, sendTo: (id, frame) => sockets.get(id)?.send(JSON.stringify(frame)) })
+    manager.trustPeer({ pub: C.b64e(client.pub), label: 'desktop' })
+    let connections = 0
+    wss.on('connection', (ws) => {
+      const id = `conn-${++connections}`
+      sockets.set(id, ws)
+      ws.on('message', (raw) => {
+        const frame = JSON.parse(raw.toString()) as Frame
+        if (frame.type === 'machine_select') ws.send(JSON.stringify({ type: 'connected', payload: { machineId: MACHINE_ID } }))
+        else if (String(frame.type).startsWith('e2e_')) manager.handleFrame(id, frame)
+      })
+    })
+    const peers = new MachinePeerStore()
+    peers.pin(MACHINE_ID, C.b64e(new E2eeStore().getIdentity().pub), 'test')
+    const pool = new RemoteRelayPool(fakeAuth, `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`, client, peers, { p2p: false })
+    const select = { type: 'machine_select', payload: { machineId: MACHINE_ID } }
+    const sink = { sendFrame: () => true, sendBinary: () => true }
+    try {
+      const closed = new Promise<number>((resolve) => { void pool.acquire(MACHINE_ID, 'prod', select, sink, (code) => resolve(code)) })
+      for (let n = 0; n < 100 && !manager.hasSession('conn-1'); n++) await new Promise((resolve) => setTimeout(resolve, 20))
+      sockets.get('conn-1')!.send(JSON.stringify({ type: 'e2e_session_unknown', payload: { refused: { type: 'message', n: 4 } } }))
+      expect(await closed).toBe(1012)
+      expect(peers.get(MACHINE_ID)).toBeDefined()
+      await pool.acquire(MACHINE_ID, 'prod', select, sink, () => {})
+      expect(connections).toBe(2)
+      expect(manager.hasSession('conn-2')).toBe(true)
+    } finally {
+      pool.invalidate(MACHINE_ID)
+      for (const ws of wss.clients) ws.terminate()
+      await new Promise<void>((resolve) => wss.close(() => resolve()))
+    }
+  })
+})

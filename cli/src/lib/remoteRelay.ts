@@ -626,6 +626,14 @@ export class RemoteRelayPool {
           try { ws.close(1012, 'remote machine disconnected') } catch { ws.terminate() }
           return
         }
+        if (frame.type === 'e2e_session_unknown') {
+          // The machine's daemon has no session for this connection: it restarted while the relay kept
+          // our socket, and nothing sent on these keys will open there. Retired as for node_status
+          // offline, so the next select opens a new session. The pin stays: nothing was revoked.
+          if (this.entries.get(machineId) === entry) this.entries.delete(machineId)
+          try { ws.close(1012, 'remote session gone') } catch { ws.terminate() }
+          return
+        }
         if (frame.type === 'e2e_rekey') { crypto.handleRekey((frame.payload ?? {}) as Record<string, unknown>); return }
         if (frame.type === 'e2e_denied') {
           // Mid-session revoke (e.g. `harness unpair` run on the peer while this relay was already

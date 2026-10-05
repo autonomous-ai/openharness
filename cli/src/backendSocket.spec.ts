@@ -148,6 +148,20 @@ describe('safe session close RPC', () => {
 
 describe('reviewed permanent deletion RPCs', () => {
   afterEach(() => vi.restoreAllMocks())
+  it('tells a relayed client whose sealed frame finds no session that its session is gone, and only then', async () => {
+    const socket = new BackendSocket('fixture')
+    const internals = socket as any
+    const sent = () => internals.queue.map((item: { msg: unknown }) => item.msg)
+    const sealed = { type: 'message', payload: { __e2e: { v: 1, k: 'p', n: 3, ct: 'fixture' } } }
+    await internals.dispatchDown(sealed, 'web:gone')
+    expect(sent()).toContainEqual({ t: 'up', targetConnId: 'web:gone', frame: { type: 'e2e_session_unknown', payload: { refused: { type: 'message', n: 3 } } } })
+    // A frame that does not open on a live session is dropped without a word.
+    const before = sent().length
+    vi.spyOn(internals.e2ee, 'sessionGone').mockReturnValue(null)
+    await internals.dispatchDown(sealed, 'web:live')
+    expect(sent()).toHaveLength(before)
+  })
+
   it.each(['agent_purge', 'agent_worktree_delete'])('%s requires an owner, explicit identity and a review token', async type => {
     const socket = new BackendSocket('fixture')
     const internals = socket as any, frames: any[] = []

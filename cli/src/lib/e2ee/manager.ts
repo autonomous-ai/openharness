@@ -73,6 +73,10 @@ interface Session {
   terminalC2sRecv: ReplayWindow
 }
 
+/** A client told its session is gone is told again no sooner than this, and only so many are
+ *  remembered: a relay injecting sealed frames for made-up connections gets a bounded echo. */
+const SESSION_GONE_EVERY_MS = 1_000
+const SESSION_GONE_REMEMBERED = 256
 const PAIR_TTL_MS = 60_000
 const ROUND_TIMEOUT_MS = 15_000
 const RATE_WINDOW_MS = 5 * 60_000
@@ -149,6 +153,7 @@ export class E2eeManager {
   private sessions = new Map<string, Session>()
   private attempts: number[] = [] // timestamps of FAILED pairings — anti online-guessing rate limit
   private pwSlots = new Map<string, PwPairSlot>() // connId -> in-progress password-PAKE attempt
+  private sessionGoneTold = new Map<string, number>() // connId -> when it was last told its session is gone
   private now: () => number
   /** Local dashboard port (loopback) — surfaced to the web in e2e_status so it can link there to
    *  approve pairing. Not sensitive (a localhost port); set by the adapter after the hook server binds. */
@@ -414,6 +419,30 @@ export class E2eeManager {
     if (plain === null) return null
     s.c2sRecv.commit(env.n)
     return { ...frame, payload: plain }
+  }
+
+  /**
+   * What to tell a client whose sealed frame found no session here, or null when it has one (a frame
+   * that does not open on a live session is the relay's or a replay, and is dropped without a word).
+   *
+   * No session most often means this machine's daemon restarted since the client's hello while the relay
+   * kept the client's socket: the phone app keeps it through `node_status` offline (mobile
+   * app_state.dart `_applyNodeStatus`). Its frames then reached a daemon that could not open them, and
+   * were dropped silently: a message vanished, and a request waited out its timeout before the app
+   * dialled again (round 34, `e2e/relay.e2e.ts`). Told, the client opens a new session at once and
+   * knows the frame was not taken. The frame is named by its outer type and envelope counter, which the
+   * relay already sees; nothing sealed is echoed. At most once a second per connection.
+   */
+  sessionGone(connId: string, frame: Frame): Frame | null {
+    if (this.sessions.has(connId)) return null
+    const now = this.now()
+    const last = this.sessionGoneTold.get(connId)
+    if (last !== undefined && now - last < SESSION_GONE_EVERY_MS) return null
+    this.sessionGoneTold.delete(connId)
+    this.sessionGoneTold.set(connId, now)
+    if (this.sessionGoneTold.size > SESSION_GONE_REMEMBERED) this.sessionGoneTold.delete(this.sessionGoneTold.keys().next().value!)
+    const counter = (frame.payload as { __e2e?: { n?: unknown } } | undefined)?.__e2e?.n
+    return { type: 'e2e_session_unknown', payload: { refused: { type: frame.type, ...(typeof counter === 'number' ? { n: counter } : {}) } } }
   }
 
   // ── e2e_* frame handling (returns true if consumed) ──────────────────────────────────────────────
