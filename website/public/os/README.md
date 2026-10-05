@@ -46,8 +46,8 @@ The additional sections retain the same typography and column edges. The stylesh
 hash so a refresh cannot reuse styling from the previous long page.
 Tiny viewports at extreme text zoom may scroll so content is never inaccessible.
 
-The performance section contains only three labeled numbers: installation time,
-boot time, and idle RAM. No footprint, update instructions, or expanded disclosure.
+The performance section contains only four labeled numbers: installation time,
+boot time, idle RAM, and footprint. No footnote, update instructions, or expanded disclosure.
 The accessible group label identifies the VM measurement and terminal-only idle
 state; full methodology stays here.
 
@@ -55,8 +55,9 @@ state; full methodology stays here.
 measured preview 14 in an encrypted UEFI, 1 GiB Nehalem VM: 57.133 seconds for the
 installation command, 17.683 seconds from boot to Harness readiness including
 automated unlock/login, and 402.30 MiB median terminal-only idle RAM with OpenCode
-and the browser closed (26.53 MiB swap). The page rounds these to 57 s, 18 s, and
-402 MiB. Installation timing excludes entering the form. Ten idle samples follow
+and the browser closed (26.53 MiB swap). Installed root usage including home and
+snapshots is 2,203,791,360 bytes. The page rounds these to 57 s, 18 s, 402 MiB, and
+2.05 GiB. Installation timing excludes entering the form. Ten idle samples follow
 a settling period; the diagnostic login and observer are included. These are VM
 measurements, not physical hardware timings or active-agent memory consumption.
 Image SHA-256:
