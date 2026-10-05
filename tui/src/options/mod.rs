@@ -146,7 +146,9 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
 /// name, `pane` = the window's full name); [star] is whether the window you are on is marked `*`
 /// (`false` for a filled tab, which needs no `*` beside its name).
 pub fn status_window_format(name: &str, star: bool) -> String {
-    let name_part = if name == "pane" { "#{window_name}" } else { "#{window_short_name}" };
+    // `tmux` keeps hn's window name, `pane` the active pane's own title (a harness's task, not the
+    // window's auto-renamed name) — the two can differ, which is the point of the option.
+    let name_part = if name == "pane" { "#{pane_title}" } else { "#{window_short_name}" };
     let mark = if star { "#{?window_active,*,#{?window_last_flag,-,}}" } else { "#{?window_last_flag,-,}" };
     format!("#I:{name_part}{mark}#{{s/[*-]//:window_flags}}#{{?#{{==:#{{window_agent_state}},idle}},,#{{?window_agent_icon, #{{window_agent_icon}},}}")
 }
@@ -162,9 +164,12 @@ pub fn window_status_overrides(name: &str, active: &str) -> Vec<(String, String)
     if normal != default_win { out.push(("window-status-format".into(), normal)) }
     if current != default_win { out.push(("window-status-current-format".into(), current)) }
     if active == "filled" {
-        let pal = crate::theme::pane_palette();
+        // The current tab filled: the status line's own colours swapped — its background becomes a
+        // solid block (the theme's background) with the theme's foreground as the lettering — so it
+        // reads exactly like the Appearance preview, not tmux's stock green.
+        let (bg, fg, _) = crate::theme::palette();
         let pair = |fg, bg| format!("fg={},bg={}", crate::tmuxconf::colour_name(fg), crate::tmuxconf::colour_name(bg));
-        out.push(("window-status-current-style".into(), format!("{},bold", pair(pal.status, pal.status_foreground))));
+        out.push(("window-status-current-style".into(), format!("{},bold", pair(fg, bg))));
     }
     out
 }

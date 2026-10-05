@@ -594,20 +594,33 @@ mod tests {
         assert!(get(&star, "window-status-format").is_none(), "default keeps tmux's format");
         assert!(get(&star, "window-status-current-format").is_none());
         assert!(get(&star, "window-status-current-style").is_none());
-        // `pane` names the window with its full name; `filled` drops the `*` and inverts the tab.
+        // `pane` names the window with its active pane's title; `filled` drops the `*` and the tab
+        // takes the status line's own colours swapped (a solid block, as the preview draws it).
         let filled = Look { window_active: Some("filled".into()), window_name: Some("pane".into()), ..Default::default() }.assignments();
         let normal = get(&filled, "window-status-format").unwrap();
         let current = get(&filled, "window-status-current-format").unwrap();
-        assert!(normal.contains("#{window_name}"), "pane uses the full name: {normal}");
-        assert!(current.contains("#{window_name}"));
+        assert!(normal.contains("#{pane_title}"), "pane uses the active pane's title: {normal}");
+        assert!(current.contains("#{pane_title}"));
         assert!(!current.contains("#{window_active,*"), "filled leaves no `*`: {current}");
         let style = get(&filled, "window-status-current-style").unwrap();
         assert!(style.contains("bold"), "{style}");
-        // The filled tab swaps fg/bg: fg=status, bg=status_foreground.
-        let pal = crate::theme::pane_palette();
-        let fg = crate::tmuxconf::colour_name(pal.status);
-        let bg = crate::tmuxconf::colour_name(pal.status_foreground);
+        // The filled tab swaps the status line's colours: its background the theme foreground's,
+        // its lettering the theme's background.
+        let (bg, fg, _) = crate::theme::palette();
+        let fg = crate::tmuxconf::colour_name(fg);
+        let bg = crate::tmuxconf::colour_name(bg);
         assert!(style.contains(&format!("fg={fg}")) && style.contains(&format!("bg={bg}")), "{style}");
+    }
+
+    #[test]
+    fn window_status_options_round_trip_through_tui_toml() {
+        let look = Look { window_active: Some("filled".into()), window_name: Some("pane".into()), ..Default::default() };
+        let text = format_look(&look);
+        assert!(text.contains("window_active = \"filled\"") && text.contains("window_name = \"pane\""), "{text}");
+        let value: toml::Value = text.parse().unwrap();
+        let mut problems = Vec::new();
+        assert_eq!(look_of(value.get("look").and_then(|v| v.as_table()).unwrap(), &mut problems), look);
+        assert!(problems.is_empty());
     }
 
     // ── keys ──
