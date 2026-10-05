@@ -1851,6 +1851,37 @@ describe('registry across a reboot and pane loss', () => {
     expect(saved.map((row) => row.agentId).sort()).toEqual([a, b].sort())
   })
 
+  it('stops holding saves back for a transaction that outlives its hold, and saves what it has changed', async () => {
+    // A reconcile pass stuck inside its transaction held every save back for as long as it ran.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const saved = () => (JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8')) as Array<Record<string, unknown>>).map((row) => row.agentId)
+    let finish!: () => void
+    let inside!: string
+    const stuck = registry.transaction(async () => {
+      inside = registry.openProcessAgent({ engine: 'claude', tmuxPane: '%7', processIdentity: processIdentity(71) })!.entry.agentId
+      await new Promise<void>((resolve) => { finish = resolve })
+    }, { holdSavesMs: 50 })
+    expect(existsSync(join(dataDir, 'registry.json')) ? saved() : []).not.toContain(inside)
+    await vi.waitFor(() => expect(saved()).toContain(inside))
+    expect(warn).toHaveBeenCalledWith('[registry] a transaction has held saves back for 50 ms; saving without waiting for it')
+    // Saved as they happen from here on, and the stuck apply finishing changes nothing about that.
+    const after = registry.openProcessAgent({ engine: 'claude', tmuxPane: '%8', processIdentity: processIdentity(72) })!.entry.agentId
+    expect(saved()).toContain(after)
+    finish()
+    await stuck
+    // One that finishes in time holds its saves to the end, as before.
+    let during: string[] = []
+    await registry.transaction(() => {
+      registry.openProcessAgent({ engine: 'claude', tmuxPane: '%9', processIdentity: processIdentity(73) })
+      during = saved() as string[]
+    }, { holdSavesMs: 60_000 })
+    expect(during).toHaveLength(2)
+    expect(saved()).toHaveLength(3)
+    warn.mockRestore()
+  })
+
   it('adopts a new process into an agent whose identity was cleared, keeping its id and session', async () => {
     const transcriptPath = join(dataDir, 'session-c.jsonl')
     writeFileSync(transcriptPath, '{}\n')

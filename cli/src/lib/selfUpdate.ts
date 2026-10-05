@@ -15,7 +15,7 @@
 
 import { createHash } from 'crypto'
 import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
-import { spawnSync } from 'child_process'
+import { execFile } from 'child_process'
 import { join } from 'path'
 import { SpawnLockBusyError, describeSpawnLockFailure } from './daemonSpawnLock.js'
 import { managedNodePath } from './nodeRuntime.js'
@@ -236,14 +236,21 @@ export async function downloadVerified(ref: FileRef, limits: TransferLimits = DO
  */
 export type CanaryResult = { ok: true } | { ok: false; problem: 'unwritable' | 'failed' | 'wrong-version'; detail: string }
 
+/** How long the canary may take to answer. */
+export const CANARY_TIMEOUT_MS = 15_000
+
 /** Cheap runnability check: write the new bundle into a temp install-shaped dir and run
  *  `node cli.js version`. This catches broken ESM/CJS packaging before the live install is touched.
  *
  *  Given the version the manifest names, the build must also say it is that version. A manifest that
  *  named an older build's bytes under a newer version (published by mistake, e2e/updateHostile.e2e.ts)
  *  was otherwise installed, came up, still reported the older version, found the newer one in the
- *  manifest again and installed it again: a restart a minute on every machine until it was fixed. */
-export function runCanary(cliBuf: Buffer, dir: string, version?: string): CanaryResult {
+ *  manifest again and installed it again: a restart a minute on every machine until it was fixed.
+ *
+ *  Asynchronous. It ran with `spawnSync` inside the daemon's own updater, on the core's event loop: for
+ *  as long as the new build took to load and answer, up to its 15 s timeout, no terminal byte, hook,
+ *  heartbeat or request was handled, and the master kills a core that stops beating as hung. */
+export async function runCanary(cliBuf: Buffer, dir: string, version?: string, timeoutMs = CANARY_TIMEOUT_MS): Promise<CanaryResult> {
   const tmpDir = join(dir, `.canary-${process.pid}-${Date.now()}`)
   const tmpCli = join(tmpDir, CLI)
   try {
@@ -256,8 +263,20 @@ export function runCanary(cliBuf: Buffer, dir: string, version?: string): Canary
     }
     // The interpreter the NEXT daemon will run on — see managedNodePath(). Canarying on this
     // process's interpreter would assert about a Node the new build may never be started with.
-    const r = spawnSync(managedNodePath(), [tmpCli, 'version'], { timeout: 15_000, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' })
-    if (r.status !== 0) return { ok: false, problem: 'failed', detail: r.error ? r.error.message : r.signal ? `signal ${r.signal}` : `exit ${r.status}` }
+    const r = await new Promise<{ failure: string | null; stdout: string }>((resolve) => {
+      execFile(managedNodePath(), [tmpCli, 'version'], { timeout: timeoutMs, encoding: 'utf8' }, (error, stdout) => {
+        if (!error) { resolve({ failure: null, stdout }); return }
+        const failed = error as NodeJS.ErrnoException & { killed?: boolean; signal?: NodeJS.Signals | null; code?: number | string }
+        resolve({
+          failure: failed.killed && failed.signal === 'SIGTERM' ? `no answer within ${timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)} s` : `${timeoutMs} ms`}`
+            : typeof failed.code === 'number' ? `exit ${failed.code}`
+            : failed.signal ? `signal ${failed.signal}`
+            : failed.message,
+          stdout: '',
+        })
+      })
+    })
+    if (r.failure !== null) return { ok: false, problem: 'failed', detail: r.failure }
     const lines = r.stdout.trim().split('\n')
     const said = lines[lines.length - 1]
     if (version !== undefined && said !== version) return { ok: false, problem: 'wrong-version', detail: `it says it is ${said || 'nothing'}` }
@@ -267,8 +286,8 @@ export function runCanary(cliBuf: Buffer, dir: string, version?: string): Canary
   }
 }
 
-export function canary(cliBuf: Buffer, dir: string, version?: string): boolean {
-  return runCanary(cliBuf, dir, version).ok
+export async function canary(cliBuf: Buffer, dir: string, version?: string): Promise<boolean> {
+  return (await runCanary(cliBuf, dir, version)).ok
 }
 
 /**
@@ -522,7 +541,7 @@ export function startSelfUpdater(opts: {
         verified = { entry: key, version: entry.version, cliBuf, notifyBuf, canaried: false }
       }
       if (!verified.canaried) {
-        const result = runCanary(verified.cliBuf, opts.dir, entry.version)
+        const result = await runCanary(verified.cliBuf, opts.dir, entry.version)
         if (!result.ok && result.problem === 'unwritable') {
           console.error(`[update] could not write the canary for ${entry.version} (${result.detail}) — trying again next check`)
           return

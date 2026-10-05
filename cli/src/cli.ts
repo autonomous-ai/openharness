@@ -10,6 +10,7 @@ import { HarnessShareRelay, type SharedMachineReference } from './sharing/relay.
 import { SharedViewerPool } from './sharing/viewer.js'
 import { fingerprint as e2eeCoreFingerprint, b64d as e2eeCoreDecode } from './lib/e2ee/core.js'
 import { AutonomousDeviceDirect } from './lib/autonomous-device/direct.js'
+import { runningDevicePart, startDevicePart } from './lib/autonomous-device/parts.js'
 /**
  * machine-adapter CLI (the `harness` command) — connect this computer to a "remote" agent.
  *
@@ -123,7 +124,7 @@ import { TerminalBackendCoordinator } from './lib/terminalBackendCoordinator.js'
 import { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { terminalRouteKey, terminalRuntimeLabel } from './lib/terminalRuntime.js'
 import { probeTerminalAgents } from './lib/terminalAgentDiscovery.js'
-import { TerminalAgentReconciler } from './lib/terminalAgentReconciler.js'
+import { RECONCILE_PASS_DEADLINE_MS, TerminalAgentReconciler } from './lib/terminalAgentReconciler.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { newCommand } from './lib/newCommand.js'
@@ -1445,7 +1446,7 @@ const RESOLVE_ON_START_TIMEOUT_MS = 10_000
 async function downloadCanaryStage(entry: UpdateEntry, dir: string, log: (m: string) => void): Promise<boolean> {
   const cliBuf = await downloadVerified(entry.cli)
   const notifyBuf = await downloadVerified(entry.notify)
-  if (!canary(cliBuf, dir, entry.version)) { log(`  ✗ the new build failed its self-check — keeping v${VERSION}`); return false }
+  if (!await canary(cliBuf, dir, entry.version)) { log(`  ✗ the new build failed its self-check — keeping v${VERSION}`); return false }
   // Asked for by name, so a version this machine once rolled back is installed and no longer rejected.
   stage(dir, cliBuf, notifyBuf, entry.version)
   confirmUpdate(dir) // canary passed + bytes already verified ⇒ drop the .prev backups
@@ -2525,7 +2526,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     current: () => registry.list(),
     backends: terminalBackends,
     backendOrder: terminalConfig.backends,
-    transaction: (apply) => registry.transaction(apply),
+    transaction: (apply) => registry.transaction(apply, { holdSavesMs: RECONCILE_PASS_DEADLINE_MS }),
     ...(slowProbeMs > 0 ? {
       probe: async (hints: Parameters<typeof probeTerminalAgents>[3]) => {
         const probe = await probeTerminalAgents(terminalBackends, terminalConfig.backends, process.pid, hints)
@@ -2720,8 +2721,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onAutonomousDeviceRequest: async (method, target, body) => {
       if (!autonomousDeviceService) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
       return autonomousDeviceLocalRequest({
-        discover: async () => ({ devices: await autonomousDeviceDirect!.discover() }),
-        pairStart: ({ code, device }) => autonomousDeviceDirect!.pair(device, code),
+        discover: async () => ({ devices: await runningDevicePart(autonomousDeviceDirect, 'Wi-Fi device link').discover() }),
+        pairStart: ({ code, device }) => runningDevicePart(autonomousDeviceDirect, 'Wi-Fi device link').pair(device, code),
         pairStatus: () => {
           const pending = backend.pendingPair()
           return pending?.role === 'device' ? { state: pending.active ? 'running' : 'waiting', pairId: pending.pairId, deviceLabel: pending.label, expiresAt: pending.expiresAt } : { state: 'idle' }
@@ -3772,6 +3773,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     backend.connect()
     console.log(`[cli] dialing ${env.BACKEND_WS_URL}/api/adapter-ws · watching registered sessions for ${ENGINES.length} engines`)
   } else {
+    backend.serveThisComputerOnly()
     console.log(`[cli] not signed in — serving this computer only · watching registered sessions for ${ENGINES.length} engines`)
   }
 
@@ -3997,7 +3999,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   deviceStoreRef = deviceStore
   deviceStore.startUiDelivery()
-  autonomousDeviceService = new AutonomousDeviceService({
+  autonomousDeviceService = startDevicePart('Wi-Fi device service', () => new AutonomousDeviceService({
     store: deviceStore,
     resultJournal: new DeviceResultJournal(join(env.ADAPTER_DATA_DIR, 'device-results.json')),
     inputConsumed: (id, text) => deviceInput.onTurnStarted(id, text),
@@ -4027,10 +4029,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     recent: (id, n) => mirror.recent(registry.byAgent(id)?.sessionId ?? id, n),
     fullText: id => mirror.lastFullText(registry.byAgent(id)?.sessionId ?? id),
     emit: (frame, deviceId) => backend.emitAutonomousDeviceEvent(frame, deviceId),
-  })
-  if (appVoiceFocus) autonomousDeviceService.appFocus(appVoiceFocus.machineId, appVoiceFocus.agentId, appVoiceFocus.connId)
-  backend.setAutonomousDeviceService(autonomousDeviceService)
-  autonomousDeviceDirect = new AutonomousDeviceDirect({
+  }))
+  if (appVoiceFocus) autonomousDeviceService?.appFocus(appVoiceFocus.machineId, appVoiceFocus.agentId, appVoiceFocus.connId)
+  if (autonomousDeviceService) backend.setAutonomousDeviceService(autonomousDeviceService)
+  autonomousDeviceDirect = startDevicePart('Wi-Fi device link', () => new AutonomousDeviceDirect({
     machineId: backend.machineId, label: hostname(),
     receive: (connId, frame, pairing) => backend.receiveDirectDevice(connId, frame, pairing),
     attach: (connId, send) => backend.attachDirectDevice(connId, send),
@@ -4039,9 +4041,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     authenticatedFingerprint: connId => { const pub = backend.e2ee.sessionIdentity(connId); return pub ? e2eeCoreFingerprint(e2eeCoreDecode(pub)) : null },
     pairedFingerprint: connId => backend.pairedDirectFingerprint(connId),
     pair: code => backend.pair(code), paired: () => backend.listPairs(),
-  }, env.ADAPTER_DATA_DIR)
+  }, env.ADAPTER_DATA_DIR))
   backend.onDirectDeviceRevoked = fp => autonomousDeviceDirect?.revoked(fp)
-  autonomousDeviceDirect.start()
+  autonomousDeviceDirect?.start()
 
   // Worktrees Harness made that no live or stopped harness uses and nothing would miss
   // (services/workspaces.ts): a few minutes after start, once restored agents are back in the

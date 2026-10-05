@@ -36,6 +36,7 @@ import { tailFileCapped, WHOLE_READ_CAP_BYTES } from '../../lib/transcriptTail.j
 import type { TailHold, Watcher } from '../../watcher/watcher.js'
 import type { SessionNormalizers } from './normalizers.js'
 import type { RelaunchMarks } from './relaunch.js'
+import { createSideReads } from './sideReads.js'
 
 export interface AttachDeps {
   /** Whether the session's terminal is known to be gone (core/terminals/control.ts `terminalGone`). */
@@ -74,6 +75,7 @@ export function createAttach({
     turnStates, codexNormalizers, cursorNormalizers, opencodeReaders, kiloReaders, museNormalizers, ampNormalizers,
     grokNormalizers, agyNormalizers, copilotNormalizers, piNormalizers, hermesReaders, devinReaders, commandcodeNormalizers,
   } = normalizers
+  const sideRead = createSideReads()
   /**
    * Sessions that attached before their transcript existed, so nothing was folded and nothing has ever
    * been streamed for them.
@@ -159,8 +161,10 @@ export function createAttach({
       || (session.engine === 'cursor' && replayCursorFromStart))
     const historyEvents: LiveEvent[] = []
     let historyTurnOpen = false
-    const observe = device()?.needsTranscript(session.agentId, session.sessionId, session.engine)
-      ? (line: string): void => device()?.observeTranscript(session.agentId, session.sessionId, session.engine, line)
+    let observed = false
+    sideRead('device', session.sessionId, () => { observed = !!device()?.needsTranscript(session.agentId, session.sessionId, session.engine) })
+    const observe = observed
+      ? (line: string): void => sideRead('device', session.sessionId, () => device()?.observeTranscript(session.agentId, session.sessionId, session.engine, line))
       : undefined
     // Returns `turnOpen` rather than assigning it: every engine folds exactly once, and a second call
     // quietly overwriting the first is the kind of mistake a returned value makes impossible to write.
@@ -237,7 +241,7 @@ export function createAttach({
     }
     if (!fromEnd) {
       if (observe) for (const line of lines) observe(line)
-      runtimeProfiles.hydrate(session, lines)
+      sideRead('runtime profile', session.sessionId, () => runtimeProfiles.hydrate(session, lines))
     }
     await runtimeProfiles.ingestConfig(session, true)
     // From here to the release in `attachSession` nothing is awaited for a held tail, so the hold cannot

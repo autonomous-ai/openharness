@@ -2110,16 +2110,35 @@ class Registry {
     return this.list().filter((entry) => this.terminalAvailableAgents.has(entry.agentId))
   }
 
-  async transaction<T>(apply: () => T | Promise<T>): Promise<T> {
+  /**
+   * Saves are held back while [apply] runs, and made once when it is done. [holdSavesMs] bounds the
+   * hold: a transaction whose apply has not finished by then stops holding saves back — what it has
+   * changed so far is saved, and what it changes after is saved as it changes — instead of the
+   * registry going unsaved for as long as it runs. A reconcile pass stuck on an engine's files did
+   * that (RECONCILE_PASS_DEADLINE_MS).
+   */
+  async transaction<T>(apply: () => T | Promise<T>, options: { holdSavesMs?: number } = {}): Promise<T> {
     this.transactionDepth++
-    try {
-      return await apply()
-    } finally {
+    let holding = true
+    const release = (): void => {
+      if (!holding) return
+      holding = false
       this.transactionDepth--
       if (this.transactionDepth === 0 && this.savePending) {
         this.savePending = false
         this.save()
       }
+    }
+    const timer = options.holdSavesMs === undefined ? undefined : setTimeout(() => {
+      console.warn(`[registry] a transaction has held saves back for ${options.holdSavesMs} ms; saving without waiting for it`)
+      release()
+    }, options.holdSavesMs)
+    timer?.unref?.()
+    try {
+      return await apply()
+    } finally {
+      clearTimeout(timer)
+      release()
     }
   }
 

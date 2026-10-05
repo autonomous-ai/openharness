@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { accessSync, chmodSync, constants, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, sep } from 'node:path'
 
@@ -47,15 +47,54 @@ function artifactFor(document: unknown, name: string, key: string): RuntimeArtif
   return { version: raw.version, url: raw.url, sha256: raw.sha256, size: raw.size, archiveRoot: raw.archiveRoot }
 }
 
+/** How long a child that outlived its deadline has between SIGTERM and SIGKILL. */
+const KILL_GRACE_MS = 2_000
+
+/**
+ * Runs [file] to its end and says whether it exited 0 within [timeoutMs] — WITHOUT holding up the
+ * event loop while it runs.
+ *
+ * This module runs inside the core: on every start, and every ten minutes while it runs
+ * ([startGridPinRecheck]). A synchronous exec here froze the core for as long as the child took — up
+ * to two minutes for an unpack and one for a onefile grid's first `--version` — and a core that does
+ * not turn its event loop answers no client, beats no heartbeat, and is restarted by its master. A
+ * child that outlives its deadline is sent SIGTERM, as the synchronous exec did, and SIGKILL if it
+ * is still there [KILL_GRACE_MS] later; the answer waits for it to be gone, so a staging directory is
+ * never removed under a tar that is still writing into it.
+ */
+export function finishesCleanly(file: string, args: string[], timeoutMs: number, childEnv?: NodeJS.ProcessEnv): Promise<boolean> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(file, args, { stdio: 'ignore', ...(childEnv ? { env: childEnv } : {}) })
+    } catch {
+      resolve(false)
+      return
+    }
+    let timedOut = false
+    let grace: NodeJS.Timeout | undefined
+    const deadline = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGTERM')
+      grace = setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS)
+    }, timeoutMs)
+    let settled = false
+    const settle = (ok: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(deadline)
+      clearTimeout(grace)
+      resolve(ok)
+    }
+    child.once('error', () => settle(false))
+    child.once('close', (code) => settle(!timedOut && code === 0))
+  })
+}
+
 /** Does `binary --version` answer? `env` and `timeout` for a runtime whose first run is slow — a
  *  onefile grid unpacks itself the first time, and must not be told to update itself while it does. */
-function runs(binary: string, timeout: number = 15_000, childEnv?: NodeJS.ProcessEnv): boolean {
-  try {
-    execFileSync(binary, ['--version'], { timeout, stdio: 'ignore', ...(childEnv ? { env: childEnv } : {}) })
-    return true
-  } catch {
-    return false
-  }
+function runs(binary: string, timeout: number = 15_000, childEnv?: NodeJS.ProcessEnv): Promise<boolean> {
+  return finishesCleanly(binary, ['--version'], timeout, childEnv)
 }
 
 /**
@@ -83,7 +122,7 @@ interface ManagedArchive {
   /** A version the manifest may not go below — this daemon's floor, which a manifest cannot lower. */
   acceptsVersion?: (version: string) => boolean
   /** Does the laid-down binary run on this computer? Asked before the pointer is written. */
-  runs: (binary: string) => boolean
+  runs: (binary: string) => Promise<boolean>
   /**
    * Lay the binary and its directory down read-only. For a runtime whose own updater would replace
    * the file in place — `grid update` is an os.replace INTO the directory — a directory it cannot
@@ -132,7 +171,7 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<string | null
         mkdirSync(staging, { recursive: true, mode: 0o700 })
         const archive = join(staging, `${spec.name}.tar.gz`)
         writeFileSync(archive, bytes)
-        execFileSync('/usr/bin/tar', ['-xzf', archive, '-C', staging], { timeout: 120_000, stdio: 'ignore' })
+        if (!await finishesCleanly('/usr/bin/tar', ['-xzf', archive, '-C', staging], 120_000)) return installed
         const unpacked = join(staging, artifact.archiveRoot)
         if (!existsSync(join(unpacked, spec.binary))) return installed
         // Another start may have won the race; theirs is as good as ours.
@@ -153,7 +192,7 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<string | null
     // hung exec each time until the manifest moved. A new pin is a new directory, and starts clean.
     const unrunnable = join(target, '.unrunnable')
     if (spec.followsPin && existsSync(unrunnable)) return installed
-    if (!spec.runs(binary)) {
+    if (!await spec.runs(binary)) {
       if (spec.followsPin) {
         try { writeFileSync(unrunnable, `${new Date().toISOString()}\n`, { mode: 0o600 }) } catch { /* the retry is the cost */ }
       }

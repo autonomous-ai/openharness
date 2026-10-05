@@ -196,6 +196,33 @@ describe('attaching a session', () => {
       expect(await none.attach.attachSession(session('pi', transcript([{}])))).toBe(true)
     })
 
+    it('attaches a session whose device or runtime profile cannot take in its lines, on either path', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      // Asking the device whether it watches the session throws: the attach goes on without it.
+      const asking = setup()
+      asking.service.needsTranscript.mockImplementation(() => { throw new Error('device state unreadable') })
+      expect(await asking.attach.attachSession(session('pi', transcript([{ events: [] }])))).toBe(true)
+      expect(asking.normalizers.piNormalizers.has('pi-s')).toBe(true)
+      expect(asking.service.observeTranscript).not.toHaveBeenCalled()
+      // The device watches, but cannot take a line in; the profile cannot be hydrated either.
+      const run = setup()
+      run.service.needsTranscript.mockReturnValue(true)
+      run.service.observeTranscript.mockImplementation(() => { throw new Error('evidence unreadable') })
+      vi.mocked(run.deps.runtimeProfiles.hydrate).mockImplementation(() => { throw 'profile unreadable' })
+      expect(await run.attach.attachSession(session('pi', transcript([{ events: [] }, { events: [] }])))).toBe(true)
+      expect(await run.attach.attachSession(session('claude', transcript([CLAUDE_PROMPT])))).toBe(true)
+      expect(run.normalizers.piNormalizers.has('pi-s')).toBe(true)
+      expect(run.service.observeTranscript).toHaveBeenCalledWith('claude-agent', 'claude-s', 'claude', expect.any(String))
+      expect(run.profile.commit).toHaveBeenCalled()
+      expect(error.mock.calls).toEqual([
+        ['[transcripts] the device could not take in a line of pi-s; the line goes on to its engine: device state unreadable'],
+        ['[transcripts] the device could not take in a line of pi-s; the line goes on to its engine: evidence unreadable'],
+        ['[transcripts] the runtime profile could not take in a line of pi-s; the line goes on to its engine: profile unreadable'],
+        ['[transcripts] the device could not take in a line of claude-s; the line goes on to its engine: evidence unreadable'],
+      ])
+    })
+
     it('folds a resumed conversation only up to where its relaunched engine began, and tails the rest live', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const take = vi.fn((_sessionId: string): RelaunchMark | undefined => undefined)

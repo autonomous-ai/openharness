@@ -654,3 +654,52 @@ describe('a terminal pane (engine `terminal`)', () => {
     expect(onRemoved).toHaveBeenCalledWith(current, 'terminal runtime absent after 2 confirmed scans')
   })
 })
+
+describe('a pass with a deadline', () => {
+  const available = (roots: Array<{ runtime: TerminalRuntimeRef; rootPid: number; cwd: string }> = []) =>
+    [{ instanceId: 'tmux:default', result: { state: 'available' as const, roots } }]
+
+  it('gives up a probe that has not answered by the deadline, applies nothing, and probes again on the next pass', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const onRemoved = vi.fn()
+    const onDormant = vi.fn()
+    let answer: TerminalAgentProbe | null = null
+    const probed = vi.fn(() => answer ? Promise.resolve(answer) : new Promise<TerminalAgentProbe>(() => {}))
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [session()], backends: [], backendOrder: ['tmux'],
+      onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant, onRemoved, probe: probed, passDeadlineMs: 50,
+    })
+    // Before, this never returned: not to a hook waiting to bind, nor to anything after it.
+    await reconciler.triggerHint(tmux, 'claude')
+    expect(warn).toHaveBeenCalledWith('[discovery] the terminal probe has not answered in 50 ms; this pass is given up, every agent kept as it is')
+    expect(onRemoved).not.toHaveBeenCalled()
+    expect(onDormant).not.toHaveBeenCalled()
+    answer = probe(available())
+    await reconciler.trigger()
+    expect(probed).toHaveBeenCalledTimes(2)
+    // The hint the given-up pass did not use is still there for the one that answered.
+    expect(probed.mock.calls[1]).toEqual([new Map([[terminalRouteKey(tmux), 'claude']])])
+    warn.mockRestore()
+  })
+
+  it('lets whoever waits for a pass go on when its apply does not finish, and keeps passes one at a time', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let release!: () => void
+    const stuck = new Promise<void>((resolve) => { release = resolve })
+    const onDiscovered = vi.fn(() => stuck)
+    const probed = vi.fn(async () => probe(available([{ runtime: tmux, rootPid: 1, cwd: '/work' }]), [observed([tmux])]))
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [], backends: [], backendOrder: ['tmux'],
+      onDiscovered, onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(), probe: probed, passDeadlineMs: 50,
+    })
+    await reconciler.trigger()
+    expect(onDiscovered).toHaveBeenCalledTimes(1)
+    await reconciler.triggerHint(tmux, 'claude')
+    expect(warn.mock.calls).toEqual([['[discovery] a pass has run for 50 ms; whoever waits for it goes on without it']])
+    // No second pass beside the stuck one; the one asked for runs once it is done.
+    expect(probed).toHaveBeenCalledTimes(1)
+    release()
+    await vi.waitFor(() => expect(probed).toHaveBeenCalledTimes(2))
+    warn.mockRestore()
+  })
+})
