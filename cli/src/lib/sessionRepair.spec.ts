@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'fs'
-import { execFileSync } from 'child_process'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'fs'
+import { execFileSync, spawn } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { claudeContinuation } from './sessionRepair.js'
@@ -494,6 +494,48 @@ describe('session repair — Codex profiles', () => {
       await expect(findLiveSession('codex', CWD, STARTED_AT, { bornOnly: true })).resolves.toBeNull()
     } finally {
       delete process.env.CODEX_HOME
+    }
+  })
+})
+
+describe('session repair — a Codex process names its own rollout', () => {
+  it('names a fork among its siblings by the rollout its process holds open, where a scan must refuse', async () => {
+    const profile = tempRoot()
+    const fork = 'a1b2c3d4-1111-4a4a-8a8a-000000000003'
+    const sibling = 'a1b2c3d4-1111-4a4a-8a8a-000000000004'
+    const forkFile = writeCodexRollout(profile, fork, CWD, STARTED_AT + 1_000)
+    const siblingFile = writeCodexRollout(profile, sibling, CWD, STARTED_AT + 2_000)
+    const elsewhere = writeCodexRollout(tempRoot(), 'a1b2c3d4-1111-4a4a-8a8a-000000000005', CWD, STARTED_AT)
+    vi.resetModules()
+    const { codexProcessSession, findLiveSession } = await import('./sessionRepair.js')
+    const sessions = join(profile, 'sessions')
+    // Two born in the folder since the process started: guessing would wire a tile to a sibling.
+    await expect(findLiveSession('codex', CWD, STARTED_AT, { codexHome: profile, bornOnly: true })).resolves.toBeNull()
+    // The process holds one of them open, beside files that are not rollouts or not this profile's.
+    const held = async () => [forkFile, '/dev/null', join(profile, 'notes.jsonl'), elsewhere]
+    await expect(codexProcessSession(42, sessions, CWD, held)).resolves.toEqual({ sessionId: fork, transcriptPath: realpathSync(forkFile) })
+    // Two held, or one for another folder: nothing, rather than a guess.
+    await expect(codexProcessSession(42, sessions, CWD, async () => [forkFile, siblingFile])).resolves.toBeNull()
+    await expect(codexProcessSession(42, sessions, '/Users/demo/elsewhere', held)).resolves.toBeNull()
+    await expect(codexProcessSession(42, sessions, CWD, async () => [])).resolves.toBeNull()
+  })
+
+  it('reads a live process\'s open files, and binds the repair to the rollout it holds', async () => {
+    const profile = tempRoot()
+    const fork = 'a1b2c3d4-1111-4a4a-8a8a-000000000006'
+    const forkFile = writeCodexRollout(profile, fork, CWD, STARTED_AT + 1_000)
+    writeCodexRollout(profile, 'a1b2c3d4-1111-4a4a-8a8a-000000000007', CWD, STARTED_AT + 2_000)
+    // A stand-in for Codex: a process that keeps its rollout open.
+    const holder = spawn(process.execPath, ['-e', 'require("fs").openSync(process.argv[1], "r"); setInterval(() => {}, 60_000)', forkFile], { stdio: 'ignore' })
+    try {
+      vi.resetModules()
+      const { findLiveSession, openFiles } = await import('./sessionRepair.js')
+      await vi.waitFor(async () => expect(await openFiles(holder.pid!)).toContain(realpathSync(forkFile)), { timeout: 10_000, interval: 100 })
+      await expect(findLiveSession('codex', CWD, STARTED_AT, { codexHome: profile, bornOnly: true, pid: holder.pid! }))
+        .resolves.toEqual({ sessionId: fork, transcriptPath: realpathSync(forkFile) })
+      expect(await openFiles(-1)).toEqual([])
+    } finally {
+      holder.kill()
     }
   })
 })

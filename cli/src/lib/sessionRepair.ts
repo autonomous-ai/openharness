@@ -14,7 +14,8 @@
  *     unbound until its next turn, which is recoverable — mis-binding is not.
  */
 
-import { open, readdir, readFile, realpath, stat } from 'fs/promises'
+import { execFile } from 'child_process'
+import { open, readdir, readFile, readlink, realpath, stat } from 'fs/promises'
 import { basename, dirname, join, relative, sep } from 'path'
 import { env } from '../config/env.js'
 import { museEvent, museWorkspaceRoot } from '../engines/muse/normalizer.js'
@@ -291,15 +292,19 @@ export async function findLiveSession(
       const exact = opts?.pid ? await claudeProcessSession(opts.pid, cwd, startedAtMs) : null
       return exact ?? fileEngineSession(env.CLAUDE_PROJECTS_DIR, cwd, startedAtMs, readClaudeTranscriptMeta, opts)
     }
-    case 'codex':
+    case 'codex': {
+      const sessions = join(opts?.codexHome || env.CODEX_HOME, 'sessions')
+      // Exact first, as for Claude: the rollout the process holds open (see `codexProcessSession`).
+      const exact = opts?.pid ? await codexProcessSession(opts.pid, sessions, cwd) : null
       // Codex writes no `cwd` on line one; its rollout meta carries it — and says whether the rollout
       // belongs to a subagent, which must never become an agent of its own.
       // Its session id lives INSIDE the file: the name is `rollout-<timestamp>-<id>.jsonl`, so deriving
       // the id from the filename produced the literal string "rollout-…" (seen on a live pane).
-      return fileEngineSession(join(opts?.codexHome || env.CODEX_HOME, 'sessions'), cwd, startedAtMs, async (path) => {
+      return exact ?? fileEngineSession(sessions, cwd, startedAtMs, async (path) => {
         const meta = readCodexRolloutMeta(path)
         return meta && !meta.isSubagent ? { cwd: meta.cwd, sessionId: meta.id || undefined } : null
       }, opts)
+    }
     case 'pi':
       return fileEngineSession(join(env.PI_HOME, 'agent', 'sessions'), cwd, startedAtMs, readTranscriptMeta, opts)
     case 'commandcode':
@@ -598,6 +603,48 @@ export async function findResumedTranscript(
 }
 
 /** Claude's native process record is removed at exit; capture it before Stop signals the engine. */
+/** The files a process holds open: `/proc` on Linux, `lsof` elsewhere. Empty when neither can say. */
+export async function openFiles(pid: number): Promise<string[]> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return []
+  if (process.platform === 'linux') {
+    const fds = await readdir(`/proc/${pid}/fd`).catch(() => [] as string[])
+    const paths = await Promise.all(fds.map((fd) => readlink(`/proc/${pid}/fd/${fd}`).catch(() => null)))
+    return paths.filter((path): path is string => !!path && path.startsWith('/'))
+  }
+  const stdout = await new Promise<string>((resolve) => {
+    // `-Fn`: one `n<path>` line per open file. A process that is gone answers nothing.
+    execFile('lsof', ['-n', '-P', '-p', String(pid), '-Fn'], { timeout: 3_000 }, (_error, out) => resolve(out ?? ''))
+  })
+  return stdout.split('\n').filter((line) => line.startsWith('n/')).map((line) => line.slice(1))
+}
+
+/**
+ * The conversation a Codex process is writing: the rollout it holds open.
+ *
+ * The one way to name a fork's conversation when its start-up hook was lost (a daemon restart in its
+ * first second). `codex fork <id>` names only its source in argv, and a fork shares its source's
+ * folder with every sibling started near it, so a scan of that folder finds them all and must refuse
+ * to guess — the fork stayed without a conversation for good (e2e/chaos.e2e.ts).
+ */
+export async function codexProcessSession(
+  pid: number,
+  sessionsRoot: string,
+  cwd: string,
+  files: (pid: number) => Promise<string[]> = openFiles,
+): Promise<RepairedSession | null> {
+  const root = await realpath(sessionsRoot).catch(() => sessionsRoot)
+  const found = new Map<string, RepairedSession>()
+  for (const path of await files(pid)) {
+    if (!/rollout-[^/]*\.jsonl$/.test(path)) continue
+    const real = await realpath(path).catch(() => path)
+    if (!real.startsWith(`${root}${sep}`)) continue
+    const meta = readCodexRolloutMeta(real)
+    if (!meta || meta.isSubagent || !meta.id || !meta.cwd || !await sameDir(meta.cwd, cwd)) continue
+    found.set(real, { sessionId: meta.id, transcriptPath: real })
+  }
+  return found.size === 1 ? [...found.values()][0] : null
+}
+
 export async function claudeProcessSession(pid: number, cwd: string, startedAtMs: number): Promise<RepairedSession | null> {
   if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isFinite(startedAtMs)) return null
   try {
