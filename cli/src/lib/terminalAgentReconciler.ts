@@ -12,6 +12,33 @@ import type { TerminalRuntimeRef } from './terminalTypes.js'
 
 const MISS_LIMIT = 2
 
+/**
+ * How long one reconcile pass may take before the core stops waiting on it.
+ *
+ * A pass asks tmux and ps (the probe), then applies what they said inside a registry transaction.
+ * Nothing bounded the whole: a probe that never answered, or an apply stuck on an engine's files,
+ * held the pass forever, and with it every hook waiting for a pass to bind its agent, every later
+ * pass (they are serial), and every registry save (a transaction holds them back). Past this, a probe
+ * that has not answered is given up — nothing is applied, every agent kept as it is, and the next pass
+ * probes again — whoever waits for the pass goes on without it, and the registry stops holding saves
+ * back for it. A pass that is merely slow still finishes, and passes stay one at a time.
+ */
+export const RECONCILE_PASS_DEADLINE_MS = 30_000
+
+const GIVEN_UP = Symbol('given up')
+/** [work]'s value, or GIVEN_UP once [ms] have passed without it. A rejection after that is dropped. */
+function withinDeadline<T>(work: Promise<T>, ms: number): Promise<T | typeof GIVEN_UP> {
+  let timer: NodeJS.Timeout | undefined
+  const deadline = new Promise<typeof GIVEN_UP>((resolve) => {
+    timer = setTimeout(() => resolve(GIVEN_UP), ms)
+    timer.unref?.()
+  })
+  return Promise.race([work, deadline]).then((value) => {
+    if (value === GIVEN_UP) work.catch(() => {})
+    return value
+  }).finally(() => clearTimeout(timer))
+}
+
 export interface TerminalAgentReconcilerDeps {
   current: () => RegisteredSession[]
   backends: readonly TerminalBackend[]
@@ -28,6 +55,8 @@ export interface TerminalAgentReconcilerDeps {
   /** Hooks may arrive while reboot restoration is still allocating panes. Keep their hints,
    * but do not scan or retire any saved owners until start() opens discovery. */
   deferUntilStart?: boolean
+  /** [RECONCILE_PASS_DEADLINE_MS], shorter in tests. */
+  passDeadlineMs?: number
 }
 
 function currentProcessKey(session: RegisteredSession): string | null {
@@ -227,8 +256,18 @@ export class TerminalAgentReconciler {
     // restore is trying to launch. The opening pass consumes every retained hint after restore.
     if (this.waitingForStart) return Promise.resolve()
     if (!this.inFlight) this.inFlight = this.drain().finally(() => { this.inFlight = null })
-    return this.inFlight
+    return this.waitFor(this.inFlight)
   }
+
+  /** A pass, waited for until the pass deadline and no longer: see [RECONCILE_PASS_DEADLINE_MS]. */
+  private async waitFor(pass: Promise<void>): Promise<void> {
+    if (await withinDeadline(pass, this.passDeadlineMs) !== GIVEN_UP) return
+    if (this.overdue === pass) return
+    this.overdue = pass
+    console.warn(`[discovery] a pass has run for ${this.passDeadlineMs} ms; whoever waits for it goes on without it`)
+  }
+  private overdue: Promise<void> | null = null
+  private get passDeadlineMs(): number { return this.deps.passDeadlineMs ?? RECONCILE_PASS_DEADLINE_MS }
 
   private async drain(): Promise<void> {
     while (this.pending) {
@@ -253,14 +292,18 @@ export class TerminalAgentReconciler {
     // anything older matters to no probe still to come.
     const probeSeq = this.routeSeq
     for (const [key, seq] of this.routeTouched) if (seq <= probeSeq) this.routeTouched.delete(key)
-    const probe = await (this.deps.probe
+    const probe = await withinDeadline(this.deps.probe
       ? this.deps.probe(hints)
       : probeTerminalAgents(
         this.deps.backends,
         this.deps.backendOrder,
         this.deps.daemonPid ?? process.pid,
         hints,
-      ))
+      ), this.passDeadlineMs)
+    if (probe === GIVEN_UP) {
+      console.warn(`[discovery] the terminal probe has not answered in ${this.passDeadlineMs} ms; this pass is given up, every agent kept as it is`)
+      return
+    }
     const availableTargets = probe.targets.filter((target) => target.result.state === 'available')
     const livePlacements = new Set(availableTargets.flatMap((target) =>
       target.result.state === 'available'

@@ -124,7 +124,7 @@ import { TerminalBackendCoordinator } from './lib/terminalBackendCoordinator.js'
 import { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { terminalRouteKey, terminalRuntimeLabel } from './lib/terminalRuntime.js'
 import { probeTerminalAgents } from './lib/terminalAgentDiscovery.js'
-import { TerminalAgentReconciler } from './lib/terminalAgentReconciler.js'
+import { RECONCILE_PASS_DEADLINE_MS, TerminalAgentReconciler } from './lib/terminalAgentReconciler.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { newCommand } from './lib/newCommand.js'
@@ -2526,7 +2526,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     current: () => registry.list(),
     backends: terminalBackends,
     backendOrder: terminalConfig.backends,
-    transaction: (apply) => registry.transaction(apply),
+    transaction: (apply) => registry.transaction(apply, { holdSavesMs: RECONCILE_PASS_DEADLINE_MS }),
     ...(slowProbeMs > 0 ? {
       probe: async (hints: Parameters<typeof probeTerminalAgents>[3]) => {
         const probe = await probeTerminalAgents(terminalBackends, terminalConfig.backends, process.pid, hints)
