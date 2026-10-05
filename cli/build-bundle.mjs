@@ -37,9 +37,7 @@ const outDir = process.env.BUNDLE_OUT_DIR || 'dist'
 // Start clean so no stale per-file `dist/*.js` / sourcemaps leak into the release artifact.
 rmSync(outDir, { recursive: true, force: true })
 
-await esbuild.build({
-  entryPoints: ['src/cli.ts'],
-  outfile: `${outDir}/cli.js`,
+const options = {
   bundle: true,
   platform: 'node',
   format: 'esm',
@@ -65,6 +63,15 @@ await esbuild.build({
   keepNames: true,
   legalComments: 'eof',
   logLevel: 'info',
+}
+
+await esbuild.build({
+  ...options,
+  // Still one file, which the self-updater downloads, verifies and swaps whole. Its entry decides what a
+  // process loads: harnessd's master and each service in its own process evaluate only their own
+  // modules, the CLI and the core everything (src/entry.ts).
+  entryPoints: ['src/entry.ts'],
+  outfile: `${outDir}/cli.js`,
 })
 
 copyFileSync('hook/notify.mjs', `${outDir}/notify.mjs`)
