@@ -58,11 +58,26 @@ export async function run(engine, config) {
   const fork = args.includes('--fork-session')
   let sessionId = resumed && !fork ? resumed : randomUUID()
   const cwd = process.cwd()
+  // The person's own data folders, as the real CLIs honour them: CLAUDE_CONFIG_DIR moves Claude Code's
+  // settings (its hooks with them), its transcripts and its process records; CODEX_HOME moves Codex's
+  // hooks.json and its rollouts. Set in the person's shell profile, they reach the engine through the
+  // shell it is launched in, whatever the daemon's own environment says. Unset (or Codex's the same as
+  // the daemon's), everything is where it always was.
+  const claudeHome = engine === 'claude' && process.env.CLAUDE_CONFIG_DIR ? process.env.CLAUDE_CONFIG_DIR : null
+  const ownCodexHome = engine === 'codex' && process.env.CODEX_HOME && process.env.CODEX_HOME !== config.codexHome ? process.env.CODEX_HOME : null
+  const projectsDir = claudeHome ? join(claudeHome, 'projects') : config.claudeProjectsDir
+  const codexHome = ownCodexHome ?? config.codexHome
+  /** Whether this engine's own settings carry the daemon's hooks: a moved home has none unless the daemon put them there. */
+  const hooksInstalled = () => {
+    const file = claudeHome ? join(claudeHome, 'settings.json') : ownCodexHome ? join(ownCodexHome, 'hooks.json') : null
+    if (!file) return true
+    try { return readFileSync(file, 'utf8').includes('notify.mjs') } catch { return false }
+  }
   let transcript = engine === 'claude'
-    ? join(config.claudeProjectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
+    ? join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
     : resumed && !fork && config.rolloutFor?.[resumed]
       ? config.rolloutFor[resumed]
-      : join(config.codexHome, 'sessions', '2026', '10', '03', `rollout-2026-10-03T00-00-00-${sessionId}.jsonl`)
+      : join(codexHome, 'sessions', '2026', '10', '03', `rollout-2026-10-03T00-00-00-${sessionId}.jsonl`)
   mkdirSync(dirname(transcript), { recursive: true })
   if (!existsSync(transcript)) writeFileSync(transcript, '')
   // What each CLI leaves for whoever needs to know which conversation this process is writing, as the
@@ -75,7 +90,7 @@ export async function run(engine, config) {
       if (held !== null) closeSync(held)
       held = openSync(transcript, 'r')
     } else if (procStart) {
-      const sessions = join(dirname(config.claudeProjectsDir), 'sessions')
+      const sessions = join(dirname(projectsDir), 'sessions')
       mkdirSync(sessions, { recursive: true })
       writeFileSync(join(sessions, `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId, cwd: process.cwd(), procStart }))
     }
@@ -95,6 +110,7 @@ export async function run(engine, config) {
   }
 
   const hook = async (path, body) => {
+    if (!hooksInstalled()) return
     const token = readFileSync(join(config.dataDir, 'hook-credential'), 'utf8').trim()
     const pane = process.env.TMUX_PANE
     const response = await fetch(`http://127.0.0.1:${config.port}/api/hook/${path}`, {
@@ -218,8 +234,8 @@ export async function run(engine, config) {
       await hook('session-end', { reason: 'clear' })
       sessionId = randomUUID()
       transcript = engine === 'claude'
-        ? join(config.claudeProjectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
-        : join(config.codexHome, 'sessions', '2026', '10', '03', `rollout-2026-10-03T00-00-00-${sessionId}.jsonl`)
+        ? join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
+        : join(codexHome, 'sessions', '2026', '10', '03', `rollout-2026-10-03T00-00-00-${sessionId}.jsonl`)
       mkdirSync(dirname(transcript), { recursive: true })
       writeFileSync(transcript, '')
       parent = null

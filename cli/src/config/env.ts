@@ -258,6 +258,12 @@ const envSchema = z.object({
   ADAPTER_COMPUTER_ID_FILE: z.string().default(computerIdFile),
   // Set to 'true' to skip auto-installing lifecycle hooks for every supported engine.
   DISABLE_HOOK_INSTALL: z.string().default('false').transform((v) => v === 'true'),
+  // Install only these engines' hooks (comma-separated, e.g. `claude,codex`); every engine's when unset.
+  // For a machine where Harness should leave the other tools' settings alone, and for the end-to-end
+  // suite, which installs Claude Code's and Codex's alone, inside its throwaway home.
+  HOOK_INSTALL_ENGINES: z.string().optional().transform((v) => v === undefined
+    ? null
+    : new Set(v.split(',').map((name) => name.trim()).filter(Boolean))),
   // `harness start` and `harness login` install the `grid` CLI when the machine has none (see
   // lib/gridInstall.ts). Off for tests and for a machine whose grid is managed some other way.
   DISABLE_GRID_INSTALL: z.string().default('false').transform((v) => v === 'true'),
