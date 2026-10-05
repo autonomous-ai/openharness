@@ -170,6 +170,7 @@ import { createCursorTaskHooks } from './core/engines/cursorTasks.js'
 import { databaseHistory } from './core/transcripts/databaseHistory.js'
 import { createCoreApi, emptyPorts, FLEET_FALLBACKS, MODELS_FALLBACKS, SEARCH_FALLBACKS, TEAMS_FALLBACKS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type TeamsPort } from './core/api.js'
 import { createServiceHost, testFaults } from './core/serviceHost.js'
+import { startStalls } from './core/stall.js'
 import { createServiceLinks } from './core/serviceLinks.js'
 import { createViewersLink } from './core/viewersLink.js'
 import { createWorkspacesLink } from './core/workspacesLink.js'
@@ -5544,6 +5545,8 @@ switch (cmd) {
     break
   }
   case '__run': // internal: the detached daemon child reads the durable SSO session — or runs without one
+    // Inert unless the end-to-end suite asks for its event loop to be held (core/stall.ts).
+    startStalls(testFaults(process.env.HARNESSD_TEST_FAULTS))
     // NOT `onError`: a daemon that dies here can never be updated. See `enterSafeMode`.
     runForeground(readAuthSession()).catch(enterSafeMode)
     break
